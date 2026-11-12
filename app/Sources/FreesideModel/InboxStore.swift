@@ -39,23 +39,19 @@ public final class InboxStore {
         /// got no answer at all) so the operator sees a live-but-erroring
         /// daemon for what it is; still a cached read-only view.
         case syncFailing
-        /// The daemon answered `/health` with a contract digest different
-        /// from this client's compiled-in `APIContract.digest`: the client
-        /// and daemon were built from different API specs, so this client
-        /// must not expect to sync. Diagnosed reactively when a sync read
-        /// fails; distinct from `.syncFailing` so the operator sees a
-        /// specific, actionable state (update the daemon or the app) rather
-        /// than a generic failure. Carries the daemon's reported digest for
-        /// display. Cached read-only view. A daemon older than #1265 has no
-        /// digest field, so its health does not decode and the client stays
-        /// in `.syncFailing`; that one transition is accepted.
-        case contractMismatch(daemonContract: String)
+        /// The daemon's `/health` says this app and it can't talk: the
+        /// daemon's compatibility floor is above this app's level, or its
+        /// level is below it (#3109). The round stops at the health read:
+        /// no other sync read, no command, until a later round's health
+        /// read clears it. Only that read sets or clears this state.
+        /// The app shows one refusal screen in place of the inbox.
+        case incompatible(DaemonIncompatibility)
         /// The daemon answered 401: this device's credential no longer
         /// authenticates (revoked, or not yet paired).
         case unauthenticated
 
         /// Whether sync is failing: the daemon is unreachable, its reads
-        /// fail, its contract differs, or this device no longer
+        /// fail, it is incompatible with this app, or this device no longer
         /// authenticates. `.unvalidated` is not a failure: a read ran ahead
         /// of the last full snapshot and the next round settles it, so what
         /// a loaded section shows is no older for it. Every case is named
@@ -63,7 +59,7 @@ public final class InboxStore {
         public var isFailing: Bool {
             switch self {
             case .fresh, .unvalidated: false
-            case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: true
+            case .unreachable, .syncFailing, .incompatible, .unauthenticated: true
             }
         }
     }
@@ -72,6 +68,16 @@ public final class InboxStore {
     public let device: DeviceIdentity
     public private(set) var loadState: LoadState = .idle
     public internal(set) var freshness: Freshness = .unvalidated
+
+    /// Publishes a read's or a command's freshness unless a compatibility
+    /// verdict holds (#3109). Only a refresh round's health read sets or
+    /// clears `.incompatible`, so an answer already in flight when the
+    /// verdict landed, a 401 included, can't reopen the inbox behind the
+    /// refusal. Every freshness write outside that health read goes here.
+    func publish(_ freshness: Freshness) {
+        if case .incompatible = self.freshness { return }
+        self.freshness = freshness
+    }
     /// Reports every canonical `as_of_revision` this store ingests, so
     /// the sync coordinator can advance its observed cursor; a partial
     /// read must never advance the full-snapshot cursor (plan §5.14

@@ -110,29 +110,41 @@
         }
 
         var body: some View {
-            SettingsWindowContent(
-                navigation: navigation,
-                sync: SettingsSync(
-                    devices: devices, routing: routing, usage: usage,
-                    freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt,
-                    revision: coordinator.cursors?.highestObservedServerRevision,
-                    projects: coordinator.unifiedList.knownProjects,
-                    deviceID: coordinator.store.device.deviceID,
-                    unresolvedActionCount: FreesideRootView.unsentActionCount(
-                        pendingCommands: coordinator.store.pendingCommandsByItemID.count,
-                        pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
-                        taskStops: coordinator.pendingTaskStops.values),
-                    store: coordinator.store, unattendedOperation: coordinator.unattendedOperation),
-                flowPreferences: flowPreferences,
-                host: SettingsHost.line(session.serverURL),
-                daemon: daemon,
-                tasks: coordinator.tasks,
-                openTask: openTask
-            )
-            // The Agents pane names devices and the Devices pane lists them:
-            // on open, and again when the heartbeat observes a newer revision.
-            .task(id: devices.observedRevision) {
-                await devices.loadIfStale()
+            if case .incompatible(let incompatibility) = coordinator.store.freshness {
+                // The Settings scene sits outside FreesideRootView, so it
+                // takes the same refusal (#3109): its panes read devices,
+                // resend routing and usage commands, and open System Health
+                // cards, none of which may reach a daemon this app can't
+                // talk to. The window returns once a round finds the two
+                // compatible.
+                CompatibilityRefusalView(incompatibility: incompatibility)
+                    .frame(width: SettingsWindowContent.width)
+                    .frame(minHeight: 520)
+            } else {
+                SettingsWindowContent(
+                    navigation: navigation,
+                    sync: SettingsSync(
+                        devices: devices, routing: routing, usage: usage,
+                        freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt,
+                        revision: coordinator.cursors?.highestObservedServerRevision,
+                        projects: coordinator.unifiedList.knownProjects,
+                        deviceID: coordinator.store.device.deviceID,
+                        unresolvedActionCount: FreesideRootView.unsentActionCount(
+                            pendingCommands: coordinator.store.pendingCommandsByItemID.count,
+                            pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
+                            taskStops: coordinator.pendingTaskStops.values),
+                        store: coordinator.store, unattendedOperation: coordinator.unattendedOperation),
+                    flowPreferences: flowPreferences,
+                    host: SettingsHost.line(session.serverURL),
+                    daemon: daemon,
+                    tasks: coordinator.tasks,
+                    openTask: openTask
+                )
+                // The Agents pane names devices and the Devices pane lists them:
+                // on open, and again when the heartbeat observes a newer revision.
+                .task(id: devices.observedRevision) {
+                    await devices.loadIfStale()
+                }
             }
         }
     }

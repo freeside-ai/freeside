@@ -57,7 +57,8 @@ package final class TaskStopModel {
             return coordinator.cursors == nil ? "Refresh task state before sending Stop." : nil
         case .unauthenticated: return "Pair this device again before sending Stop."
         case .unreachable: return "Offline. Connect to the daemon before sending Stop."
-        case .syncFailing, .contractMismatch: return "Task state is not current. Refresh before sending Stop."
+        case .syncFailing: return "Task state is not current. Refresh before sending Stop."
+        case .incompatible: return "Update the app or the daemon before sending Stop."
         }
     }
 
@@ -172,7 +173,7 @@ package final class TaskStopModel {
                     messages[taskID] =
                         "Stop was rejected by the daemon (status \(status)). Review the refreshed task before confirming again."
                     await coordinator.refreshAfterCommit()
-                case 401, 403: coordinator.store.freshness = .unauthenticated
+                case 401, 403: coordinator.store.publish(.unauthenticated)
                 default: break
                 }
             }

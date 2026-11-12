@@ -153,7 +153,7 @@ package final class DevicesModel {
                     } catch {
                         // The daemon now refuses this credential, so the
                         // banner's Pair Again is the way to retry removal.
-                        coordinator.store.freshness = .unauthenticated
+                        coordinator.store.publish(.unauthenticated)
                         revokeFailure = Self.signOutFailureMessage
                     }
                     return
@@ -225,7 +225,7 @@ package final class DevicesModel {
         if status == 401 {
             // The daemon refused the credential: the same state the
             // heartbeat would report, surfaced without waiting for it.
-            coordinator.store.freshness = .unauthenticated
+            coordinator.store.publish(.unauthenticated)
             loadState = .failed(Self.unauthenticatedMessage)
         } else {
             loadState = .failed(Self.loadFailureMessage)

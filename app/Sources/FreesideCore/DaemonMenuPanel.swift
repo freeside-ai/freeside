@@ -168,8 +168,8 @@
                     row(.openApprovalSettings, "Open Login Items…") { actions.openApprovalSettings() }
                 }
                 if case .running(let health, let restartObserved) = state {
-                    if !health.contractMatchesClient {
-                        mismatchCard(health)
+                    if let incompatibility = health.incompatibility {
+                        incompatibilityCard(incompatibility)
                     }
                     if restartObserved {
                         HStack(spacing: 8) {
@@ -385,12 +385,11 @@
             }
         }
 
-        private func mismatchCard(_ health: DaemonHealth) -> some View {
-            let mismatch = ContractMismatchSentence(daemonContract: health.contractDigest)
-            return panelNotice(
+        private func incompatibilityCard(_ incompatibility: DaemonIncompatibility) -> some View {
+            panelNotice(
                 Notice(
-                    tone: .accent, keyword: "Mismatch", sentence: mismatch.plain,
-                    drawn: mismatch.text))
+                    tone: .accent, keyword: "Update needed",
+                    sentence: CompatibilityWords(incompatibility: incompatibility, platform: .mac).notice))
         }
 
         /// A notice inside the Daemon section, inset to the rows' text edge
@@ -576,7 +575,7 @@
             case .checking, .unsupervised:
                 nil
             case .running(let health, _):
-                health.contractMatchesClient ? nil : NSColor(hex: FreesidePalette.accentText.day)
+                health.incompatibility == nil ? nil : NSColor(hex: FreesidePalette.accentText.day)
             case .stopped, .needsApproval:
                 NSColor(hex: FreesidePalette.accentText.day)
             case .unavailable, .unreachable:
@@ -614,7 +613,7 @@
             case .unsupervised:
                 "no supervised daemon"
             case .running(let health, _):
-                health.contractMatchesClient ? "daemon running" : "daemon running, contract mismatch"
+                health.incompatibility == nil ? "daemon running" : "daemon running, update needed"
             }
         }
     }

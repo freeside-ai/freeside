@@ -146,7 +146,7 @@ enum SettingsSummary {
         case .fresh: "Connected"
         case .unreachable: "Unreachable"
         case .syncFailing: "Sync failing"
-        case .contractMismatch: "Mismatch"
+        case .incompatible: "Update needed"
         case .unauthenticated: "Revoked"
         }
     }

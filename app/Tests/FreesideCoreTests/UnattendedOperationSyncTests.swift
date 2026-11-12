@@ -369,7 +369,7 @@ struct UnattendedStoppedPresentationTests {
         (InboxStore.Freshness.fresh, true),
         (.unvalidated, false), (.unreachable, false), (.syncFailing, false),
         (.unauthenticated, false),
-        (.contractMismatch(daemonContract: "sha256:other"), false),
+        (.incompatible(.appBelowFloor(floor: 1, daemonVersion: "other")), false),
     ])
     func aSnapshotThatIsNotCurrentIsNeverWordedAsCurrent(
         freshness: InboxStore.Freshness, pastThreshold: Bool

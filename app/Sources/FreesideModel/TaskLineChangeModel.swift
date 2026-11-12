@@ -69,7 +69,8 @@ package final class TaskLineChangeModel {
             return coordinator.cursors == nil ? "Refresh before changing the agent." : nil
         case .unauthenticated: return "Pair this device again before changing the agent."
         case .unreachable: return "Offline. Connect to the daemon before changing the agent."
-        case .syncFailing, .contractMismatch: return "The task isn't current. Refresh before changing the agent."
+        case .syncFailing: return "The task isn't current. Refresh before changing the agent."
+        case .incompatible: return "Update the app or the daemon before changing the agent."
         }
     }
 
@@ -149,7 +150,7 @@ package final class TaskLineChangeModel {
                         taskID: payload.task_id,
                         message: "The daemon refused the change (status \(status)). Nothing was changed.")
                     await coordinator.refreshAfterCommit()
-                case 401, 403: coordinator.store.freshness = .unauthenticated
+                case 401, 403: coordinator.store.publish(.unauthenticated)
                 default: break
                 }
             }

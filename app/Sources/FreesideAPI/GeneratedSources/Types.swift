@@ -11,21 +11,23 @@ public import struct Foundation.Date
 #endif
 /// A type that performs HTTP operations defined by the OpenAPI document.
 public protocol APIProtocol: Sendable {
-    /// Process liveness, contract identity, features, version, and start time
+    /// Process liveness, contract identity, compatibility, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
     /// contract, which named features, since when." Supervisors and the
     /// external liveness probe poll it (plan §5.2); the operator client
-    /// uses `contract_digest` for client/daemon contract-skew detection,
-    /// `features` to turn off what this build doesn't serve, `version` for
+    /// uses `contract_digest` to identify the daemon's contract,
+    /// `compatibility_level` and `compatibility_floor` to decide whether
+    /// it can talk to this daemon at all, `features` to turn off what this
+    /// build doesn't serve, `version` for
     /// the human build label, and `started_at` for restart visibility (a
     /// start time that keeps moving under a supervisor is crash-loop
     /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, the build's feature names,
-    /// version, and start time.
+    /// beyond liveness, contract identity and compatibility, the build's
+    /// feature names, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -425,21 +427,23 @@ public protocol APIProtocol: Sendable {
 
 /// Convenience overloads for operation inputs.
 extension APIProtocol {
-    /// Process liveness, contract identity, features, version, and start time
+    /// Process liveness, contract identity, compatibility, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
     /// contract, which named features, since when." Supervisors and the
     /// external liveness probe poll it (plan §5.2); the operator client
-    /// uses `contract_digest` for client/daemon contract-skew detection,
-    /// `features` to turn off what this build doesn't serve, `version` for
+    /// uses `contract_digest` to identify the daemon's contract,
+    /// `compatibility_level` and `compatibility_floor` to decide whether
+    /// it can talk to this daemon at all, `features` to turn off what this
+    /// build doesn't serve, `version` for
     /// the human build label, and `started_at` for restart visibility (a
     /// start time that keeps moving under a supervisor is crash-loop
     /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, the build's feature names,
-    /// version, and start time.
+    /// beyond liveness, contract identity and compatibility, the build's
+    /// feature names, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -9636,11 +9640,21 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/HealthStatus/status`.
             public var status: Components.Schemas.HealthStatus.statusPayload
-            /// Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client compares this with its own compiled-in digest to diagnose a contract skew when a sync read fails, instead of a silent sync failure.
+            /// Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. It names the build's contract for diagnosis only; a client decides compatibility from `compatibility_level` and `compatibility_floor`, never from a digest difference.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/HealthStatus/contract_digest`.
             public var contract_digest: Swift.String
+            /// The `x-compatibility-level` of the spec this daemon was built from: the count of changes that broke apps built before them. An app whose own level is above it is newer than this daemon can serve, so it stops syncing and asks for a daemon update. Optional so an app reads a daemon built before the field existed: a daemon that omits it reads as level 0.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/HealthStatus/compatibility_level`.
+            public var compatibility_level: Swift.Int?
+            /// The lowest app compatibility level this daemon serves, never above `compatibility_level`. An app whose level is below it stops syncing, sends no command, and asks for an app update; an app at or above it syncs. The daemon itself never refuses a client on version. Optional like `compatibility_level`: a daemon that omits it reads as floor 0.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/HealthStatus/compatibility_floor`.
+            public var compatibility_floor: Swift.Int?
             /// The named features this build serves. An app reads it at the start of each sync round and turns off a surface whose feature isn't listed, instead of failing sync on a command the daemon would refuse. It is optional so an app still reads `/health` from a daemon built before the list existed: a daemon that omits it serves none of the named features.
             ///
             ///
@@ -9660,19 +9674,25 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - status: Fixed at `ok`; liveness is proven by answering at all.
-            ///   - contract_digest: Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. A client compares this with its own compiled-in digest to diagnose a contract skew when a sync read fails, instead of a silent sync failure.
+            ///   - contract_digest: Identifies the api/openapi.yaml this daemon was built from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes. It names the build's contract for diagnosis only; a client decides compatibility from `compatibility_level` and `compatibility_floor`, never from a digest difference.
+            ///   - compatibility_level: The `x-compatibility-level` of the spec this daemon was built from: the count of changes that broke apps built before them. An app whose own level is above it is newer than this daemon can serve, so it stops syncing and asks for a daemon update. Optional so an app reads a daemon built before the field existed: a daemon that omits it reads as level 0.
+            ///   - compatibility_floor: The lowest app compatibility level this daemon serves, never above `compatibility_level`. An app whose level is below it stops syncing, sends no command, and asks for an app update; an app at or above it syncs. The daemon itself never refuses a client on version. Optional like `compatibility_level`: a daemon that omits it reads as floor 0.
             ///   - features: The named features this build serves. An app reads it at the start of each sync round and turns off a surface whose feature isn't listed, instead of failing sync on a command the daemon would refuse. It is optional so an app still reads `/health` from a daemon built before the list existed: a daemon that omits it serves none of the named features.
             ///   - version: The daemon build version: a human-readable build label, not a contract identity (see `contract_digest`).
             ///   - started_at: The current process's start time (RFC3339 UTC). Under a supervisor, a start time that keeps advancing across polls is crash-loop evidence.
             public init(
                 status: Components.Schemas.HealthStatus.statusPayload,
                 contract_digest: Swift.String,
+                compatibility_level: Swift.Int? = nil,
+                compatibility_floor: Swift.Int? = nil,
                 features: [Components.Schemas.DaemonFeature]? = nil,
                 version: Swift.String,
                 started_at: Foundation.Date
             ) {
                 self.status = status
                 self.contract_digest = contract_digest
+                self.compatibility_level = compatibility_level
+                self.compatibility_floor = compatibility_floor
                 self.features = features
                 self.version = version
                 self.started_at = started_at
@@ -9680,6 +9700,8 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case status
                 case contract_digest
+                case compatibility_level
+                case compatibility_floor
                 case features
                 case version
                 case started_at
@@ -16597,21 +16619,23 @@ public enum Components {
 
 /// API operations, with input and output types, generated from `#/paths` in the OpenAPI document.
 public enum Operations {
-    /// Process liveness, contract identity, features, version, and start time
+    /// Process liveness, contract identity, compatibility, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
     /// contract, which named features, since when." Supervisors and the
     /// external liveness probe poll it (plan §5.2); the operator client
-    /// uses `contract_digest` for client/daemon contract-skew detection,
-    /// `features` to turn off what this build doesn't serve, `version` for
+    /// uses `contract_digest` to identify the daemon's contract,
+    /// `compatibility_level` and `compatibility_floor` to decide whether
+    /// it can talk to this daemon at all, `features` to turn off what this
+    /// build doesn't serve, `version` for
     /// the human build label, and `started_at` for restart visibility (a
     /// start time that keeps moving under a supervisor is crash-loop
     /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, the build's feature names,
-    /// version, and start time.
+    /// beyond liveness, contract identity and compatibility, the build's
+    /// feature names, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.

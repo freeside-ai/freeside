@@ -92,7 +92,8 @@ jobs:
             images/agent-claude/ images/agent-codex/
           select_component app app/ api/openapi.yaml scripts/check.sh \
             daemon/internal/signet/testdata/action-outcomes.golden
-          select_component api api/ scripts/check.sh scripts/api-contract-digest.sh
+          select_component api api/ scripts/check.sh scripts/api-contract-digest.sh \
+            scripts/api-compatibility-check.sh
           select_component docs docs/plan.md scripts/link-plan-section-refs.sh scripts/check.sh
           select_component scripts scripts/ app/scripts/ .githooks/ \
             app/Apps/iOS/Info.plist app/Freeside.xcodeproj/project.pbxproj

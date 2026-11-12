@@ -39,10 +39,15 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	}
 	health.Status = "ok"
 	// The contract digest identifies the compiled-in spec and must not be
-	// overridable by a caller, the way Status is forced to "ok". The feature
-	// list is the build's registry for the same reason: an app turns a
-	// surface on from it, so it names only what this build serves.
+	// overridable by a caller, the way Status is forced to "ok". The
+	// compatibility level and floor come from the same spec: an app decides
+	// from them whether it may talk to this daemon at all, so they state
+	// only what this build is. The feature list is the build's registry for
+	// the same reason: an app turns a surface on from it, so it names only
+	// what this build serves.
 	health.ContractDigest = APIContractDigest
+	health.CompatibilityLevel = APIContractCompatibilityLevel
+	health.CompatibilityFloor = APIContractCompatibilityFloor
 	health.Features = domain.AllDaemonFeatures
 	h := httpHandler{service: service, authorize: authorize, health: health}
 	mux := http.NewServeMux()
@@ -93,15 +98,21 @@ type httpHandler struct {
 
 // HealthResponse is the deliberately minimal unauthenticated liveness
 // response from plan §5.2. Status is fixed at "ok", ContractDigest at the
-// compiled-in APIContractDigest, and Features at domain.AllDaemonFeatures by
-// the HTTP boundary; richer operational state remains behind authenticated
-// routes.
+// compiled-in APIContractDigest, CompatibilityLevel and CompatibilityFloor
+// at the compiled-in APIContractCompatibilityLevel and
+// APIContractCompatibilityFloor, and Features at domain.AllDaemonFeatures
+// by the HTTP boundary; richer operational state remains behind
+// authenticated routes. The daemon reports its level and floor and reads
+// no client's: the app decides whether it can talk to this daemon, and the
+// daemon serves every paired client (api/README.md, Compatibility Level).
 type HealthResponse struct {
-	Status         string                 `json:"status"`
-	ContractDigest string                 `json:"contract_digest"`
-	Features       []domain.DaemonFeature `json:"features"`
-	Version        string                 `json:"version"`
-	StartedAt      time.Time              `json:"started_at"`
+	Status             string                 `json:"status"`
+	ContractDigest     string                 `json:"contract_digest"`
+	CompatibilityLevel int                    `json:"compatibility_level"`
+	CompatibilityFloor int                    `json:"compatibility_floor"`
+	Features           []domain.DaemonFeature `json:"features"`
+	Version            string                 `json:"version"`
+	StartedAt          time.Time              `json:"started_at"`
 }
 
 func (h httpHandler) getHealth(w http.ResponseWriter, _ *http.Request) {

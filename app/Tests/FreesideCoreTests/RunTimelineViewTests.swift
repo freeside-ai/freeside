@@ -30,7 +30,8 @@ import Testing
             RunReviewSection.availabilityMessage(
                 hasTimeline: true, state: .loaded, answered: false, freshness: .unvalidated) == nil)
         let failing: [InboxStore.Freshness] = [
-            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+            .unreachable, .syncFailing, .incompatible(.appBelowFloor(floor: 1, daemonVersion: "other")),
+            .unauthenticated,
         ]
         for freshness in failing {
             #expect(

@@ -82,15 +82,21 @@
             #expect(model.state == .running(restarted, restartObserved: true))
         }
 
-        @Test func aForeignContractDigestReachesRunningButFlagsAMismatch() async {
+        @Test func anIncompatibleDaemonReachesRunningButFlagsTheUpdate() async {
             let service = FakeDaemonService(status: .enabled)
-            let matching = DaemonHealth(
-                version: "1.0.0", startedAt: Date(timeIntervalSince1970: 1_725_184_800))
-            #expect(matching.contractMatchesClient)
+            let startedAt = Date(timeIntervalSince1970: 1_725_184_800)
+            let matching = DaemonHealth(version: "1.0.0", startedAt: startedAt)
+            #expect(matching.incompatibility == nil)
+            let level = APIContract.compatibilityLevel
             let foreign = DaemonHealth(
-                version: "1.0.0", startedAt: Date(timeIntervalSince1970: 1_725_184_800),
-                contractDigest: "sha256:" + String(repeating: "f", count: 64))
-            #expect(!foreign.contractMatchesClient)
+                version: "1.0.0", startedAt: startedAt,
+                compatibilityLevel: level + 1, compatibilityFloor: level + 1)
+            #expect(foreign.incompatibility == .appBelowFloor(floor: level + 1, daemonVersion: "1.0.0"))
+            // A newer daemon whose floor still admits this app is compatible.
+            let newerServing = DaemonHealth(
+                version: "1.0.0", startedAt: startedAt,
+                compatibilityLevel: level + 1, compatibilityFloor: level)
+            #expect(newerServing.incompatibility == nil)
 
             let health = ScriptedDaemonHealth([.health(foreign)])
             let model = DaemonMenuModel(
@@ -101,14 +107,14 @@
                 readReadiness: { nil })
 
             // The daemon is up, so the state stays .running; the menu reads
-            // the mismatch off the health, not off a separate state.
+            // the incompatibility off the health, not off a separate state.
             await model.refresh()
             #expect(model.state == .running(foreign, restartObserved: false))
             guard case .running(let observed, _) = model.state else {
                 Issue.record("expected .running")
                 return
             }
-            #expect(!observed.contractMatchesClient)
+            #expect(observed.incompatibility != nil)
         }
 
         @Test func startStopAndApprovalActionsUseOnlyTheFacade() async {

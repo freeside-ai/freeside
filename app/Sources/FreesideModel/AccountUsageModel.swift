@@ -78,7 +78,8 @@ package final class AccountUsageModel {
             return coordinator.cursors == nil ? "Refresh before changing usage collection." : nil
         case .unauthenticated: return "Pair this device again before changing usage collection."
         case .unreachable: return "Offline. Connect to the daemon before changing usage collection."
-        case .syncFailing, .contractMismatch: return "Usage isn't current. Refresh before changing collection."
+        case .syncFailing: return "Usage isn't current. Refresh before changing collection."
+        case .incompatible: return "Update the app or the daemon before changing usage collection."
         }
     }
 
@@ -154,7 +155,7 @@ package final class AccountUsageModel {
                     let refused = if case .refresh_usage = entry.command.payload { "refresh" } else { "reassignment" }
                     failure = "The daemon rejected the \(refused) (status \(status)). Nothing was changed."
                     await coordinator.refreshAfterCommit()
-                case 401, 403: coordinator.store.freshness = .unauthenticated
+                case 401, 403: coordinator.store.publish(.unauthenticated)
                 default: break
                 }
             }

@@ -61,7 +61,8 @@ package final class ParkedTaskMoveModel {
             return coordinator.cursors == nil ? "Refresh before moving the task." : nil
         case .unauthenticated: return "Pair this device again before moving the task."
         case .unreachable: return "Offline. Connect to the daemon before moving the task."
-        case .syncFailing, .contractMismatch: return "The task isn't current. Refresh before moving it."
+        case .syncFailing: return "The task isn't current. Refresh before moving it."
+        case .incompatible: return "Update the app or the daemon before moving the task."
         }
     }
 
@@ -140,7 +141,7 @@ package final class ParkedTaskMoveModel {
                     let message = "The daemon refused the move (status \(status)). Nothing was changed."
                     failure = entry.taskID.map { .init(taskID: $0, message: message) }
                     await coordinator.refreshAfterCommit()
-                case 401, 403: coordinator.store.freshness = .unauthenticated
+                case 401, 403: coordinator.store.publish(.unauthenticated)
                 default: break
                 }
             }

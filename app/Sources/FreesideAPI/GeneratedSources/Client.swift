@@ -41,6 +41,13 @@ import HTTPTypes
 /// exempt: a new union arm is a breaking change. The API lint step
 /// enforces these rules (api/README.md, Response Tolerance).
 ///
+/// A change that breaks an older app anyway raises
+/// `x-compatibility-level`. `GET /health` reports the level and
+/// `x-compatibility-floor`, the lowest app level this daemon serves; an
+/// app below the floor, or ahead of the daemon's level, stops syncing and
+/// asks for an update. A different `contract_digest` alone is not a skew
+/// an app acts on.
+///
 public struct Client: APIProtocol {
     /// The underlying HTTP client.
     private let client: UniversalClient
@@ -68,21 +75,23 @@ public struct Client: APIProtocol {
     private var converter: Converter {
         client.converter
     }
-    /// Process liveness, contract identity, features, version, and start time
+    /// Process liveness, contract identity, compatibility, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
     /// contract, which named features, since when." Supervisors and the
     /// external liveness probe poll it (plan §5.2); the operator client
-    /// uses `contract_digest` for client/daemon contract-skew detection,
-    /// `features` to turn off what this build doesn't serve, `version` for
+    /// uses `contract_digest` to identify the daemon's contract,
+    /// `compatibility_level` and `compatibility_floor` to decide whether
+    /// it can talk to this daemon at all, `features` to turn off what this
+    /// build doesn't serve, `version` for
     /// the human build label, and `started_at` for restart visibility (a
     /// start time that keeps moving under a supervisor is crash-loop
     /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, the build's feature names,
-    /// version, and start time.
+    /// beyond liveness, contract identity and compatibility, the build's
+    /// feature names, version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.

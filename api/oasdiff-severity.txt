@@ -1,0 +1,5 @@
+request-property-removed err
+response-body-one-of-added err
+response-property-one-of-added err
+response-property-enum-value-added info
+response-mediatype-enum-value-added info

@@ -33,7 +33,7 @@ struct FreshnessBanner: View {
         case .fresh, .unvalidated:
             guard let lastUpdatedAt else { return false }
             return now.timeIntervalSince(lastUpdatedAt) >= SyncCoordinator.stalenessThreshold
-        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated:
+        case .unreachable, .syncFailing, .incompatible, .unauthenticated:
             return true
         }
     }
@@ -89,13 +89,12 @@ struct FreshnessBanner: View {
                     "Daemon is reachable but sync is failing. Showing cached items; actions are disabled."
             )
             .standingNoticeInset(placement)
-        case .contractMismatch(let daemonContract):
-            let mismatch = ContractMismatchSentence(
-                daemonContract: daemonContract,
-                tail: " Showing cached items; actions are disabled.")
+        case .incompatible(let incompatibility):
+            // The root view draws the refusal screen in place of the inbox;
+            // the banner's form serves any surface still drawn beside it.
             Notice(
-                tone: .accent, keyword: "Mismatch",
-                sentence: mismatch.plain, drawn: mismatch.text
+                tone: .accent, keyword: "Update needed",
+                sentence: CompatibilityWords(incompatibility: incompatibility).notice
             )
             .standingNoticeInset(placement)
         case .unauthenticated:
@@ -108,27 +107,6 @@ struct FreshnessBanner: View {
             )
             .standingNoticeInset(placement)
         }
-    }
-}
-
-/// The contract-mismatch sentence the freshness banner and the menu-bar
-/// panel both draw: the two short digests in mono inside a sans sentence,
-/// and the fix. `tail` is what the surface adds about its own state.
-struct ContractMismatchSentence {
-    let daemonContract: String
-    var tail = ""
-
-    private var daemon: String { ContractDigestDisplay.short(daemonContract) }
-    private var app: String { ContractDigestDisplay.shortClient }
-
-    var plain: String {
-        "Daemon contract \(daemon), app \(app). Update the daemon or the app.\(tail)"
-    }
-
-    var text: Text {
-        Text(
-            "Daemon contract \(Text(daemon).font(FreesideFont.trailingSummary)), app \(Text(app).font(FreesideFont.trailingSummary)). Update the daemon or the app.\(tail)"
-        )
     }
 }
 

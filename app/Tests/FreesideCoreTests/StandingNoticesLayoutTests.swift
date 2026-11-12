@@ -104,10 +104,11 @@
         /// agree, or a card sits a module gap under nothing.
         @Test func theColumnExpectsANoticeExactlyWhenOneDraws() throws {
             let now = Date()
-            let mismatch = InboxStore.Freshness.contractMismatch(
-                daemonContract: "sha256:" + String(repeating: "a", count: 64))
             let states: [InboxStore.Freshness] = [
-                .fresh, .unvalidated, .unreachable, .syncFailing, mismatch, .unauthenticated,
+                .fresh, .unvalidated, .unreachable, .syncFailing,
+                .incompatible(.appBelowFloor(floor: 1, daemonVersion: "1.0.0")),
+                .incompatible(.daemonBelowLevel(level: 0, daemonVersion: "1.0.0")),
+                .unauthenticated,
             ]
             let updates: [Date?] = [
                 nil, now.addingTimeInterval(3_600),

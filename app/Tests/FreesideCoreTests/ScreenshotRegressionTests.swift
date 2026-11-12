@@ -3656,20 +3656,44 @@
                     name: "freshness-banner-stale",
                     lastUpdatedAt: Date().addingTimeInterval(
                         -(SyncCoordinator.stalenessThreshold + 1))))
-            // The contract-mismatch banner shows both short digests and the
-            // fix, distinct from the sync-failing and unreachable banners
-            // (#1265). The daemon digest is a fixed fixture value.
+            // The incompatible banner names who updates (#3109), distinct
+            // from the sync-failing and unreachable banners. The root view
+            // draws the refusal screen instead; the banner is the standing
+            // notice's form of the same words.
             surfaces.append(
                 Surface(
-                    name: "freshness-banner-contract-mismatch",
+                    name: "freshness-banner-incompatible",
                     width: 640,
                     view: AnyView(
                         VStack(spacing: 0) {
                             FreshnessBanner(
-                                freshness: .contractMismatch(
-                                    daemonContract: "sha256:" + String(repeating: "a", count: 64)))
+                                freshness: .incompatible(.appBelowFloor(floor: 4, daemonVersion: "1.0.0")))
                             Text("Inbox").padding()
                         })))
+            // The refusal screen that replaces the whole inbox while the app
+            // and daemon can't talk (#3109), for each side that needs the
+            // update, on the Mac and on the iPhone. The app level is a fixed
+            // fixture value so the frames hold when the spec's level rises.
+            let refusals: [(String, DaemonIncompatibility)] = [
+                ("app-below-floor", .appBelowFloor(floor: 4, daemonVersion: "1.0.0")),
+                ("daemon-below-level", .daemonBelowLevel(level: 2, daemonVersion: "1.0.0")),
+            ]
+            for (name, incompatibility) in refusals {
+                for (platform, width, suffix) in [
+                    (CompatibilityWords.Platform.mac, CGFloat(860), ""), (.phone, 390, "-phone"),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: "compatibility-refusal-\(name)\(suffix)",
+                            width: width,
+                            view: AnyView(
+                                CompatibilityRefusalView(
+                                    incompatibility: incompatibility, platform: platform, appLevel: 3
+                                )
+                                .frame(height: 480)
+                                .background(Color.ground))))
+                }
+            }
 
             // The standing stopped indicator (#980) under the freshness
             // banner, where the root view places it: at the top of the Mac's
@@ -3877,15 +3901,15 @@
                         ConsequenceSheet(action: .decline, item: declineItem, submit: {}, cancel: {}))))
 
             // The menu-bar panel in the states the chrome handoff pins:
-            // healthy by day with the inbox row under the pointer, a
-            // contract mismatch after an observed restart by dusk, stopped
-            // with Start as the one primary, unreachable with a failed stop,
-            // and an ephemeral app's no-supervised-daemon state with no
-            // control. The start instant is the fixture's fixed creation time.
+            // healthy by day with the inbox row under the pointer, a daemon
+            // too new for this app after an observed restart by dusk,
+            // stopped with Start as the one primary, unreachable with a
+            // failed stop, and an ephemeral app's no-supervised-daemon state
+            // with no control. The start instant is the fixture's fixed creation time.
             let panelHealth = DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant)
-            let panelMismatch = DaemonHealth(
+            let panelIncompatible = DaemonHealth(
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
-                contractDigest: "sha256:" + String(repeating: "a", count: 64))
+                compatibilityLevel: 1_000, compatibilityFloor: 1_000)
             let panelActions = DaemonMenuPanel.Actions(
                 openApp: {}, showNeedsYou: {}, showSystemHealth: {}, start: {}, stop: {},
                 openApprovalSettings: {}, quit: {})
@@ -3936,12 +3960,12 @@
             }
             surfaces.append(
                 Surface(
-                    name: "menu-panel-mismatch-restart-dark",
+                    name: "menu-panel-incompatible-restart-dark",
                     width: 320,
                     colorScheme: .dark,
                     view: AnyView(
                         DaemonMenuPanel(
-                            state: .running(panelMismatch, restartObserved: true),
+                            state: .running(panelIncompatible, restartObserved: true),
                             actionError: nil,
                             needsYou: .init(rows: 6),
                             actions: panelActions))))
@@ -3994,7 +4018,7 @@
             }
             for surface in surfaces
             where [
-                "pairing", "freshness-banner-stale", "freshness-banner-contract-mismatch",
+                "pairing", "freshness-banner-stale", "freshness-banner-incompatible",
             ].contains(surface.name) {
                 surfaces.append(
                     Surface(
@@ -4415,8 +4439,8 @@
             // The revoked banner with its recovery action, then the notices
             // stacked: the three the root view can hold at once over a card
             // in the Mac's detail column, and four in the phone's slot.
-            let mismatch = InboxStore.Freshness.contractMismatch(
-                daemonContract: "sha256:" + String(repeating: "a", count: 64))
+            let incompatible = InboxStore.Freshness.incompatible(
+                .appBelowFloor(floor: 4, daemonVersion: "1.0.0"))
             surfaces.append(
                 Surface(
                     name: "freshness-banner-revoked",
@@ -4488,7 +4512,7 @@
                                 },
                                 onOpenSystemHealth: { _ in })
                             FreshnessBanner(freshness: .unauthenticated, onRePair: {})
-                            FreshnessBanner(freshness: mismatch)
+                            FreshnessBanner(freshness: incompatible)
                             Text("Inbox").padding()
                         })))
             // Pairing at phone width, and with under a minute left, where

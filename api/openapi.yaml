@@ -10,6 +10,23 @@ info:
   title: Freeside daemon API
   version: 0.1.0
   x-provisional: true
+  # The compatibility level counts changes that break an app built before
+  # them; the floor is the lowest app level a daemon built from this spec
+  # still serves. scripts/api-contract-digest.sh compiles both into the
+  # daemon and the app, and scripts/api-compatibility-check.sh enforces
+  # these rules against the merge base (api/README.md, Compatibility Level):
+  # - Raise the level with any change that breaks an app built before it:
+  #   a response field removed or retyped, a response enum member removed,
+  #   a one-value response enum widened, a new arm in a response union, a
+  #   request field made required or removed, a route or response status
+  #   removed.
+  # - The level never goes down. The floor never goes down and never
+  #   exceeds the level.
+  # - Raise the floor with the level, unless the daemon deliberately keeps
+  #   serving the old shape; an app below the floor refuses to sync.
+  # Keep each on its own line in exactly this form; the scripts read them.
+  x-compatibility-level: 0
+  x-compatibility-floor: 0
   description: |
     **Provisional.** This schema is provisional until exercised by real
     clients (plan §11 Wave 0; the decision record lives in
@@ -41,6 +58,13 @@ info:
     rejects it in a request. A property a `oneOf` discriminates on is
     exempt: a new union arm is a breaking change. The API lint step
     enforces these rules (api/README.md, Response Tolerance).
+
+    A change that breaks an older app anyway raises
+    `x-compatibility-level`. `GET /health` reports the level and
+    `x-compatibility-floor`, the lowest app level this daemon serves; an
+    app below the floor, or ahead of the daemon's level, stops syncing and
+    asks for an update. A different `contract_digest` alone is not a skew
+    an app acts on.
   contact:
     name: Freeside
     url: https://github.com/freeside-ai/freeside
@@ -116,7 +140,7 @@ paths:
     get:
       operationId: getHealth
       tags: [health]
-      summary: Process liveness, contract identity, features, version, and start time
+      summary: Process liveness, contract identity, compatibility, features, version, and start time
       # Unauthenticated by design, with POST /pairing: the callers are
       # supervisors, external liveness probes, and the operator surface
       # deciding whether a daemon is up at all, none of which holds a
@@ -126,16 +150,18 @@ paths:
         Answers only "is the daemon process up, which build and API
         contract, which named features, since when." Supervisors and the
         external liveness probe poll it (plan §5.2); the operator client
-        uses `contract_digest` for client/daemon contract-skew detection,
-        `features` to turn off what this build doesn't serve, `version` for
+        uses `contract_digest` to identify the daemon's contract,
+        `compatibility_level` and `compatibility_floor` to decide whether
+        it can talk to this daemon at all, `features` to turn off what this
+        build doesn't serve, `version` for
         the human build label, and `started_at` for restart visibility (a
         start time that keeps moving under a supervisor is crash-loop
         evidence). The response deliberately carries no operational state:
         unattended-admission stops, `system_health` items, and everything
         else requiring judgment stay on the authenticated surfaces (plan
         §4), so this route widens what an unpaired caller learns by nothing
-        beyond liveness, contract identity, the build's feature names,
-        version, and start time.
+        beyond liveness, contract identity and compatibility, the build's
+        feature names, version, and start time.
       responses:
         "200":
           description: The process is up.
@@ -5764,9 +5790,29 @@ components:
           description: >
             Identifies the api/openapi.yaml this daemon was built from:
             "sha256:" plus the lowercase hex SHA-256 of the spec's exact
-            bytes. A client compares this with its own compiled-in digest
-            to diagnose a contract skew when a sync read fails, instead of
-            a silent sync failure.
+            bytes. It names the build's contract for diagnosis only; a
+            client decides compatibility from `compatibility_level` and
+            `compatibility_floor`, never from a digest difference.
+        compatibility_level:
+          type: integer
+          minimum: 0
+          description: >
+            The `x-compatibility-level` of the spec this daemon was built
+            from: the count of changes that broke apps built before them.
+            An app whose own level is above it is newer than this daemon
+            can serve, so it stops syncing and asks for a daemon update.
+            Optional so an app reads a daemon built before the field
+            existed: a daemon that omits it reads as level 0.
+        compatibility_floor:
+          type: integer
+          minimum: 0
+          description: >
+            The lowest app compatibility level this daemon serves, never
+            above `compatibility_level`. An app whose level is below it
+            stops syncing, sends no command, and asks for an app update;
+            an app at or above it syncs. The daemon itself never refuses a
+            client on version. Optional like `compatibility_level`: a
+            daemon that omits it reads as floor 0.
         features:
           type: array
           items:
@@ -5794,6 +5840,8 @@ components:
       example:
         status: "ok"
         contract_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        compatibility_level: 0
+        compatibility_floor: 0
         features: [parked_task_move]
         version: "0.1.0"
         started_at: "2026-01-02T03:04:05Z"

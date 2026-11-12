@@ -4,6 +4,17 @@ package signet
 
 // APIContractDigest identifies the api/openapi.yaml this daemon was built
 // from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact
-// bytes. The daemon reports it on GET /health so a client can detect a
-// contract skew. Regenerate with scripts/api-contract-digest.sh --write.
-const APIContractDigest = "sha256:725a62f50609b77986c04037293c2c3b0ec9549ebe4248a84b384ff4c97ec91f"
+// bytes. The daemon reports it on GET /health to name its contract.
+// Regenerate with scripts/api-contract-digest.sh --write.
+const APIContractDigest = "sha256:38081e2b36591a4b81f588c8ecafd8f2771c1de389a94f1f7e5f56ed9797456a"
+
+// APIContractCompatibilityLevel is the spec's x-compatibility-level: the
+// count of changes that broke apps built before them. The daemon reports
+// it on GET /health so a newer app can tell this daemon is too old for it.
+const APIContractCompatibilityLevel = 0
+
+// APIContractCompatibilityFloor is the spec's x-compatibility-floor: the
+// lowest app compatibility level this daemon serves. The daemon reports it
+// on GET /health so an older app can tell it is too old for this daemon;
+// the daemon itself never refuses a client on version.
+const APIContractCompatibilityFloor = 0

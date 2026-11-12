@@ -193,10 +193,18 @@ public struct FreesideRootView: View {
             pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
             taskStops: coordinator.pendingTaskStops.values)
         return VStack(spacing: 0) {
-            if !standingNoticesDrawInDetailColumn {
-                standingNotices(coordinator, placement: .window)
+            // An app and daemon that can't talk get one screen in place of
+            // the whole inbox (#3109); the modifiers below stay, so the
+            // heartbeat keeps reading /health and the inbox returns on its
+            // own once the two are compatible again.
+            if case .incompatible(let incompatibility) = coordinator.store.freshness {
+                CompatibilityRefusalView(incompatibility: incompatibility)
+            } else {
+                if !standingNoticesDrawInDetailColumn {
+                    standingNotices(coordinator, placement: .window)
+                }
+                platformNavigation(coordinator)
             }
-            platformNavigation(coordinator)
         }
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.

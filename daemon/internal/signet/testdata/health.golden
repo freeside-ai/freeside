@@ -1,6 +1,8 @@
 {
   "status": "ok",
   "contract_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "compatibility_level": 1,
+  "compatibility_floor": 0,
   "features": [
     "parked_task_move"
   ],

@@ -270,7 +270,7 @@ public final class DecisionModel {
         // however recently this card validated. Unvalidated carries no
         // signal either way; the per-item validation above decides.
         switch store.freshness {
-        case .unreachable, .syncFailing, .contractMismatch, .unauthenticated: return false
+        case .unreachable, .syncFailing, .incompatible, .unauthenticated: return false
         case .unvalidated, .fresh: break
         }
         switch phase {
@@ -1266,7 +1266,7 @@ public final class DecisionModel {
                     // state, not a card error to retry through.
                     store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                     phase = .idle
-                    store.freshness = .unauthenticated
+                    store.publish(.unauthenticated)
                     submissionError =
                         "the daemon no longer accepts this device's credential; the decision was not submitted"
                 } else if (400..<500).contains(statusCode) {
@@ -1605,7 +1605,7 @@ public final class DecisionModel {
                 case .undocumented(let statusCode, _):
                     switch statusCode {
                     case 401, 403:
-                        store.freshness = .unauthenticated
+                        store.publish(.unauthenticated)
                     case 400..<500:
                         notSent(
                             command, "the daemon refused \(name) (status \(statusCode)), so the message wasn't sent")
@@ -1755,7 +1755,7 @@ public final class DecisionModel {
                     // daemon's choice), so the slot stays held and the
                     // revoked state surfaces instead of a false "not
                     // recorded".
-                    store.freshness = .unauthenticated
+                    store.publish(.unauthenticated)
                     return ownsSlot ? .lost : .displaced
                 }
                 if (400..<500).contains(statusCode) {

@@ -941,11 +941,12 @@ implementation exists.
 
 **Liveness and address.**
 
-- Unauthenticated `GET /health` returns `{status, contract_digest, version,
-  started_at, features}`: liveness, API contract-skew detection
-  (`contract_digest`, the SHA-256 of `api/openapi.yaml`, so a client and
-  daemon built from different specs are diagnosed rather than silently
-  failing to sync), the build version, crash-loop evidence (a moving start
+- Unauthenticated `GET /health` returns `{status, contract_digest,
+  compatibility_level, compatibility_floor, version, started_at,
+  features}`: liveness, the API contract's identity for diagnosis
+  (`contract_digest`, the SHA-256 of `api/openapi.yaml`), the compatibility
+  level and floor a client reads to decide whether it can talk to this
+  daemon at all, the build version, crash-loop evidence (a moving start
   time under a supervisor), and the names of the features the build serves,
   which a client reads to turn off what an older daemon lacks (Section
   [5.14](#514-client-synchronization-and-conversations), Version skew;
@@ -4885,9 +4886,10 @@ change breaks older apps. An app below the floor refuses to work and prompts
 for an update; every other app keeps working. The daemon never refuses a
 client on version: strict command decoding and digest-bound decisions stay as
 they are, and they, not matching versions, keep a stale app from doing harm.
-Tolerance and the feature list are built (#1266); the floor is not (#3109).
-Until it is, a breaking change can fail every sync read, and Section
-[5.2](#52-the-daemon-and-its-supervisor)'s contract digest diagnoses it.
+An app whose level is above the daemon's level likewise prompts for a
+daemon update, since an app's minimum daemon level is its own level.
+Tolerance and the feature list are built (#1266), and so is the floor
+(#3109); a different contract digest alone is never a reason to refuse.
 
 Client caches are part of the threat model:
 

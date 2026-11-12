@@ -131,7 +131,8 @@
             case .fresh, .unvalidated: nil
             case .unreachable: "Daemon unreachable"
             case .syncFailing: "Sync failing"
-            case .contractMismatch: "Daemon and app contracts differ"
+            case .incompatible(.appBelowFloor): "App needs an update"
+            case .incompatible(.daemonBelowLevel): "Daemon needs an update"
             case .unauthenticated: "Device access revoked"
             }
         }

@@ -51,7 +51,12 @@
             #expect(SettingsSummary.daemon(.unvalidated) == "Checking")
             #expect(SettingsSummary.daemon(.unreachable) == "Unreachable")
             #expect(SettingsSummary.daemon(.syncFailing) == "Sync failing")
-            #expect(SettingsSummary.daemon(.contractMismatch(daemonContract: "sha256:a")) == "Mismatch")
+            #expect(
+                SettingsSummary.daemon(.incompatible(.appBelowFloor(floor: 1, daemonVersion: "1.0.0")))
+                    == "Update needed")
+            #expect(
+                SettingsSummary.daemon(.incompatible(.daemonBelowLevel(level: 0, daemonVersion: "1.0.0")))
+                    == "Update needed")
             #expect(SettingsSummary.daemon(.unauthenticated) == "Revoked")
         }
 
