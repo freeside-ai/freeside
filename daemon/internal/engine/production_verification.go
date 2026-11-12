@@ -116,6 +116,8 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 // refusal returns *hostVerificationUnavailable and no room for the class:
 // nothing has run, and the caller records the refusal on its own path. A
 // recipe that does not parse returns only imageRoom, for verify to refuse.
+// The host room records whether the executor refused a command for
+// quarantined slots (hostSlotsRoom).
 func (w *productionPublicationWorkflow) verificationRooms(
 	ctx context.Context, task productionPublicationTask, imageRoom verify.Room, recipe []byte,
 ) (map[verify.ExecutionClass]verify.Room, error) {
@@ -148,7 +150,7 @@ func (w *productionPublicationWorkflow) verificationRooms(
 			"backend", admission.Backend, "configuration_digest", admission.BackendConfigurationDigest,
 			"operating_mode", admission.OperatingMode)
 	}
-	rooms[verify.ClassMacOSHost] = room
+	rooms[verify.ClassMacOSHost] = &hostSlotsRoom{Room: room}
 	return rooms, nil
 }
 
@@ -552,7 +554,9 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 // under the job's one memory reservation, taken before the recipe read and
 // released once every room it used proved its work absent. A recipe that
 // needs the host executor and did not get it releases the reservation, since
-// nothing ran, and becomes a failed verification naming the class.
+// nothing ran, and becomes a failed verification naming the class. A job whose
+// host command the executor did not refuse for quarantined slots retires the
+// run's quarantined-executor notice (retireHostSlotsNotice).
 func (w *productionPublicationWorkflow) runVerification(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -596,6 +600,9 @@ func (w *productionPublicationWorkflow) runVerification(
 	})
 	if releaseErr := w.releaseVerification(ctx, task, binding.run, err); releaseErr != nil {
 		return verify.Result{}, errors.Join(err, releaseErr)
+	}
+	if retireErr := w.retireHostSlotsNotice(ctx, task, rooms, err); retireErr != nil {
+		return verify.Result{}, errors.Join(err, retireErr)
 	}
 	if err != nil {
 		if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {

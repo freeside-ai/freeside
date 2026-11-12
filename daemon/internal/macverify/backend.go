@@ -137,7 +137,7 @@ func New(cfg Config) (*Backend, error) {
 	}
 	return &Backend{
 		cfg: cfg, daemonIdentity: daemonPath + "@" + daemonDigest, daemonPath: daemonPath, daemonDigest: daemonDigest,
-		initialized: true, slots: newSlotPool(cfg.Slots),
+		initialized: true, slots: newSlotPool(cfg.ExecutorRoot, cfg.Slots),
 	}, nil
 }
 
