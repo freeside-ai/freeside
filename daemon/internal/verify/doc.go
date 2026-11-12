@@ -53,7 +53,8 @@
 //   - materialize.go  the head binding and the fresh, proven workspace
 //     materialization
 //   - exact.go        MaterializeExact, a commit tree as exact object bytes
-//   - room.go         the Room seam and a step's observed result
+//   - room.go         the Room and EnvRoom seams and a step's observed
+//     result
 //   - procroom.go     ProcRoom, the weaker process-level room for tests and
 //     bring-up
 //   - finding.go      FindingKind and the risk-flag findings

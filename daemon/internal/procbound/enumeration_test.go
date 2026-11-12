@@ -23,7 +23,7 @@ const procboundPath = "github.com/freeside-ai/freeside/daemon/internal/procbound
 // a command fails too: a stale exemption reads as coverage that is not
 // there.
 var unboundSites = map[string]string{
-	"internal/verify/procroom.go:Run": "hand-rolled bounds predating this package; " +
+	"internal/verify/procroom.go:RunEnv": "hand-rolled bounds predating this package; " +
 		"converging it is a follow-up, not this unit (#544)",
 	"internal/ward/runtime_cli.go:runTo": "builds the command and hands it straight to " +
 		"runPrepared in the same file, which binds it",

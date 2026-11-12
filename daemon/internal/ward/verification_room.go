@@ -106,7 +106,7 @@ func newProjectImageRoom(
 	}
 }
 
-var _ verify.Room = (*ProjectImageRoom)(nil)
+var _ verify.EnvRoom = (*ProjectImageRoom)(nil)
 
 // ReadRecipe extracts the onboarding-bound recipe from the admitted image.
 // The extraction gets no workspace mount, credentials, or network, and the
@@ -117,7 +117,7 @@ func (r *ProjectImageRoom) ReadRecipe(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("project-image verification room is not initialized")
 	}
 	result, err := r.runImageCommand(
-		ctx, "", []string{"/bin/cat", ProjectRecipePath}, verify.DefaultMaxRecipeBytes,
+		ctx, "", []string{"/bin/cat", ProjectRecipePath}, nil, verify.DefaultMaxRecipeBytes,
 		r.readCommand,
 	)
 	if err != nil {
@@ -144,6 +144,17 @@ func (r *ProjectImageRoom) Run(
 	workdir string,
 	argv []string,
 ) (verify.StepResult, error) {
+	return r.RunEnv(ctx, workdir, argv, nil)
+}
+
+// RunEnv is Run with extra KEY=VALUE entries passed to the recipe
+// command's container, one --env each, after the room's own HOME and
+// LC_ALL, which no entry may replace. The preparation command gets none.
+func (r *ProjectImageRoom) RunEnv(
+	ctx context.Context,
+	workdir string,
+	argv, env []string,
+) (verify.StepResult, error) {
 	if r == nil || r.runtime == nil || r.runCommand == nil || r.containerPath == "" {
 		return verify.StepResult{}, errors.New("project-image verification room is not initialized")
 	}
@@ -154,25 +165,28 @@ func (r *ProjectImageRoom) Run(
 	if err := validateVerificationArgv(argv); err != nil {
 		return verify.StepResult{}, err
 	}
-	prepared, err := r.runContainer(ctx, workspace, r.image.PreparationCommand)
+	if err := verify.CheckRoomEnv(env, "HOME", "LC_ALL"); err != nil {
+		return verify.StepResult{}, err
+	}
+	prepared, err := r.runContainer(ctx, workspace, r.image.PreparationCommand, nil)
 	if err != nil || prepared.ExitCode != 0 {
 		return prepared, err
 	}
-	return r.runContainer(ctx, workspace, argv)
+	return r.runContainer(ctx, workspace, argv, env)
 }
 
 func (r *ProjectImageRoom) runContainer(
 	ctx context.Context,
 	workspace string,
-	argv []string,
+	argv, env []string,
 ) (result verify.StepResult, err error) {
-	return r.runImageCommand(ctx, workspace, argv, r.maxOutput, r.runCommand)
+	return r.runImageCommand(ctx, workspace, argv, env, r.maxOutput, r.runCommand)
 }
 
 func (r *ProjectImageRoom) runImageCommand(
 	ctx context.Context,
 	workspace string,
-	argv []string,
+	argv, env []string,
 	maxOutput int64,
 	command verificationCommand,
 ) (result verify.StepResult, err error) {
@@ -205,6 +219,9 @@ func (r *ProjectImageRoom) runImageCommand(
 			"--env", "HOME=/tmp/freeside-home",
 			"--env", "LC_ALL=C",
 		)
+		for _, entry := range env {
+			args = append(args, "--env", entry)
+		}
 	}
 	args = append(args, "--", string(r.image.ImageRef))
 	args = append(args, argv...)
