@@ -4082,10 +4082,32 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   cache entry for the onboarded commit (`freesided swift-cache populate`).
   A deputy run names the executor in its `macos_verification` setting (Run
   Real Work With The Deputy); without it the `macos_host` commands fail.
-- **Executor measurements:** `app format` passes as a slot. The other three
-  `macos_host` commands are unproven as slots: the executor defects in #3009
-  stop a slot after its first job. #3016 measures all four once #3009
-  lands.
+- **Executor measurements:** all four `macos_host` commands pass as slots
+  with networking denied. Measured on 2026-11-12 on the reference host
+  (macOS 27.2 build 26B123, Xcode 27.2 build 27B52) at `main`
+  `0b38be48c`. Each command ran in its own slot job, through
+  `macverify.Room.Run`, from a fresh `git archive` of the whole tree at
+  that commit, served by the Swift cache entry populated from it. The
+  argv was the recipe's, prefixed only by `/usr/bin/time -l`. Wall is
+  `time`'s `real`. Max RSS is its `maximum resident set size`: the largest
+  single process's peak, not the job's total, because the executor has no
+  cgroup.
+
+  | Command | Result | Max RSS | Wall |
+  | --- | --- | --- | --- |
+  | `app format` | passes | 71 MiB | 19 s |
+  | `app test` | passes; flaky under load (#2323) | 1506 MiB | 906 s |
+  | `app build-mac` | passes | 706 MiB | 250 s |
+  | `app build-ios` | passes | 691 MiB | 246 s |
+
+  The host was busy with other work: load average 105 to 132 at the start
+  of each command in the first run, on 10 CPUs, so its walls run long. In
+  that run `app test` failed only `DaemonLifecycleCommandTests`'
+  health-wait test (#2323), whose real 30-second timeout loses to a
+  starved main actor; it peaked at 1693 MiB and took 1079 s. Its row is a
+  rerun at the same commit, load average 66 at the start. The two builds
+  resolve packages offline under `-skipPackageUpdates`, and `build-ios`
+  needs no window-server session.
 - **Protected paths:** none. Pass no `-protected-path` flag, so Freeside's
   profile widens no class, and an agent's edit to the hooks, the recipe,
   the check scripts, `prompts/`, `policy/`, `docs/plan.md`, or a `.github/`
