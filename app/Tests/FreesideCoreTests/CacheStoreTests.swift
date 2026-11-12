@@ -955,6 +955,66 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(migrated.comprehensionDeviceID == "device-1")
     }
 
+    @Test func aCacheFromAnotherContractKeepsOnlyTheCommandLedger() throws {
+        // Responses tolerate additive change (#1266), so a snapshot written
+        // under an older contract still decodes, but lacks what the newer
+        // contract added. Its cursor would skip the bootstrap that supplies
+        // it, so the load keeps only the epoch-independent state.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        state.comprehensionQueue = [
+            .init(
+                eventID: "event-1",
+                input: .init(
+                    item_id: "item-a", kind: .card_opened,
+                    item_decision_surface_digest: "sha256:" + String(repeating: "a", count: 64),
+                    occurred_at: Date(timeIntervalSince1970: 1_700_000_000), sequence: 1))
+        ]
+        state.comprehensionSequence = 1
+        try store.save(state)
+        #expect(try #require(store.load()).cursors == state.cursors)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(object["contract"] as? String == APIContract.digest)
+        object["contract"] = "sha256:an-older-contract"
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.tasks.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        #expect(migrated.comprehensionQueue == state.comprehensionQueue)
+        #expect(migrated.comprehensionSequence == 1)
+
+        // A snapshot written before this build's contract required a field
+        // lacks it, and the ledger still survives: the snapshots of a file
+        // from another contract are never decoded.
+        var cached = try #require(object["state"] as? [String: Any])
+        var items = try #require(cached["attentionItems"] as? [[String: Any]])
+        #expect(!items.isEmpty)
+        items[0].removeValue(forKey: "item")
+        cached["attentionItems"] = items
+        object["state"] = cached
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        let reshaped = try #require(store.load())
+        #expect(reshaped.attentionItems.isEmpty)
+        #expect(reshaped.pendingCommands == state.pendingCommands)
+        #expect(reshaped.comprehensionQueue == state.comprehensionQueue)
+
+        object.removeValue(forKey: "contract")
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        let unmarked = try #require(store.load())
+        #expect(unmarked.cursors == nil)
+        #expect(unmarked.pendingCommands == state.pendingCommands)
+    }
+
     @Test func aPreRunsFormatTwoCachePreservesOnlyTheCommandLedger() throws {
         // Format 2 predates runs and schedules.  Its valid cached cursors
         // must not make an upgraded client consider empty default arrays
