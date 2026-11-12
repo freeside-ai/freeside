@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # test-pre-commit.sh — fixtures for the .githooks/pre-commit API-client
-# regeneration hook.
+# regeneration hook, and for generate-api-client.sh's drift check in a tree
+# without .git, as a verification room holds one.
 #
 # Each case builds an isolated synthetic repository with a fixed identity, a
 # copy of the shipped hook and generate-api-client.sh, and a stand-in `swift`
 # on PATH that records its arguments and regenerates Types.swift as a fixed
-# transform of the schema mirror. No Swift toolchain and no network.
+# transform of the schema mirror. A no-git case exports that repository's
+# commit and runs the script there. No Swift toolchain and no network.
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
 
@@ -25,6 +27,7 @@ CASE=''
 OUT=''
 RC=0
 REPO=''
+EXPORT=''
 BINDIR=''
 ARGSFILE=''
 
@@ -157,6 +160,40 @@ commit_git() { # <git-args...>; runs in REPO with the stub on PATH, sets OUT/RC
   set -e
 }
 
+# setup_export builds the in-sync fixture, exports its commit to a tree with
+# no .git, and sets EXPORT. The fixture commits no contract-digest constants,
+# so they are written here (into the directory the export drops for being
+# empty) to make the export a tree regeneration leaves unchanged.
+setup_export() {
+  local digest_out
+  setup_repo
+  EXPORT=$TMP/export$case_number
+  mkdir -p "$EXPORT"
+  git -C "$REPO" archive HEAD | tar -x -C "$EXPORT"
+  mkdir -p "$EXPORT/daemon/internal/signet"
+  digest_out=$(bash "$EXPORT/scripts/api-contract-digest.sh" --write 2>&1) || {
+    printf '%s\n' "$digest_out" >&2
+    return 1
+  }
+}
+
+generate_export() { # [<args...>]; runs the generator in EXPORT with the stub on PATH, sets OUT/RC
+  set +e
+  OUT=$(PATH="$BINDIR:$PATH" \
+    bash "$EXPORT/app/scripts/generate-api-client.sh" "$@" 2>&1)
+  RC=$?
+  set -e
+}
+
+assert_trees_equal() { # <expected-dir> <actual-dir>
+  local differences
+  if differences=$(diff -r "$1" "$2" 2>&1); then
+    pass=$((pass + 1))
+  else
+    report_failure "trees differ: $differences"
+  fi
+}
+
 begin_case "schema edit staged without regeneration is refused, then succeeds"
 setup_repo
 printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
@@ -248,6 +285,80 @@ rm "$REPO/app/Sources/FreesideAPI/GeneratedSources/Client.swift"
 commit_git commit -q -m 'Change the schema'
 assert_rc 1
 assert_contains 'app/Sources/FreesideAPI/GeneratedSources/Client.swift'
+
+begin_case "default mode in a checkout reports a schema edit as drift"
+setup_repo
+printf 'schema: v2\n' >"$REPO/api/openapi.yaml"
+set +e
+OUT=$(PATH="$BINDIR:$PATH" \
+  bash "$REPO/app/scripts/generate-api-client.sh" 2>&1)
+RC=$?
+set -e
+assert_rc 1
+assert_contains 'Generated API client changed'
+
+begin_case "no-git: an up-to-date tree passes and stays unchanged"
+setup_export
+cp -R "$EXPORT" "$TMP/before$case_number"
+generate_export
+assert_rc 0
+assert_file_exists "$ARGSFILE"
+assert_trees_equal "$TMP/before$case_number" "$EXPORT"
+
+begin_case "no-git: a schema edit without regeneration is drift"
+setup_export
+printf 'schema: v2\n' >"$EXPORT/api/openapi.yaml"
+generate_export
+assert_rc 1
+assert_contains 'Generated API client changed'
+assert_contains 'app/Sources/FreesideAPI/openapi.yaml'
+assert_contains 'app/Sources/FreesideAPI/GeneratedSources/Types.swift'
+assert_contains 'app/Sources/FreesideAPI/ContractDigest.swift'
+assert_contains 'daemon/internal/signet/contract_digest.go'
+
+begin_case "no-git: a stale schema mirror is drift"
+setup_export
+printf 'schema: stale\n' >"$EXPORT/app/Sources/FreesideAPI/openapi.yaml"
+generate_export
+assert_rc 1
+assert_contains 'Generated API client changed'
+assert_contains 'app/Sources/FreesideAPI/openapi.yaml'
+
+begin_case "no-git: a hand-edited generated file is drift"
+setup_export
+printf 'edited by hand\n' \
+  >>"$EXPORT/app/Sources/FreesideAPI/GeneratedSources/Types.swift"
+generate_export
+assert_rc 1
+assert_contains 'Generated API client changed'
+assert_contains 'app/Sources/FreesideAPI/GeneratedSources/Types.swift'
+
+begin_case "no-git: a generated file regeneration creates is drift"
+setup_export
+rm "$EXPORT/app/Sources/FreesideAPI/GeneratedSources/Types.swift"
+generate_export
+assert_rc 1
+assert_contains 'Generated API client changed'
+assert_contains 'app/Sources/FreesideAPI/GeneratedSources/Types.swift'
+
+begin_case "no-git: a tree nested in another repository compares itself"
+setup_export
+git init -q "$TMP/outer$case_number"
+mv "$EXPORT" "$TMP/outer$case_number/tree"
+EXPORT=$TMP/outer$case_number/tree
+generate_export
+assert_rc 0
+printf 'schema: v2\n' >"$EXPORT/api/openapi.yaml"
+generate_export
+assert_rc 1
+assert_contains 'app/Sources/FreesideAPI/openapi.yaml'
+
+begin_case "no-git: --against-index refuses before generating"
+setup_export
+generate_export --against-index
+assert_rc 2
+assert_contains 'needs a git checkout'
+assert_file_absent "$ARGSFILE"
 
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
