@@ -282,6 +282,102 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 	}
 }
 
+// TestOnboardProposesAuditedIssueCommentWorkflows: onboarding proposes the
+// comment operation over the issue_comment workflows the audit observed, none
+// included, so the one review shows them; approving that digest activates a
+// profile that accepts exactly that set.
+func TestOnboardProposesAuditedIssueCommentWorkflows(t *testing.T) {
+	for name, listed := range map[string][]domain.IssueCommentWorkflow{
+		"one workflow": {{Path: ".github/workflows/triage.yml", Digest: "sha256:triage-closure"}},
+		"none":         nil,
+	} {
+		t.Run(name, func(t *testing.T) { onboardProposesIssueCommentWorkflows(t, listed) })
+	}
+}
+
+func onboardProposesIssueCommentWorkflows(t *testing.T, listed []domain.IssueCommentWorkflow) {
+	t.Helper()
+	ctx := t.Context()
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := domain.WorkflowAudit{
+		Repo: "example/repo", AuditedCommitSHA: "0123456789012345678901234567890123456789",
+		AuditedAt:           time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+		WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
+		EffectiveTokenPerms:   domain.TokenPermissionsReadOnly,
+		IssueCommentWorkflows: listed,
+	}
+	onboard := operations.Onboard{
+		Store: st, Builder: &imageBuilderStub{store: st}, Auditor: workflowAuditorStub{audit: audit},
+		Authority: authorityStub{publish.InstallationAuthority{
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 11, InstallationID: 22,
+				Account: "example", AccountID: 33, RepositoryIDs: []int64{44},
+			}},
+		}},
+		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+	}
+	req := operations.OnboardRequest{
+		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
+		BaseRef: "main",
+		Policy: operations.OnboardPolicy{
+			PRExecution: domain.PRExecutionAuditedSameRepo,
+			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		},
+		Image: projectimage.Request{
+			Repository: "example/repo", RepositoryID: 44,
+			CommitSHA: "0123456789012345678901234567890123456789",
+			Recipe:    []byte(`{"commands":[["npm","test"]],"capture":"none"}`),
+			BaseImageRef: domain.ImageRef(
+				"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
+			BaseBuildRef: "local/base:v1", LocalRegistryPort: 5100,
+		},
+	}
+	review, err := onboard.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("review pass: %v", err)
+	}
+	if !review.Profile.AllowIssueCommentWorkflows || !reflect.DeepEqual(review.Profile.IssueCommentWorkflows, listed) {
+		t.Fatalf("proposed profile issue_comment = %t %+v, want true %+v",
+			review.Profile.AllowIssueCommentWorkflows, review.Profile.IssueCommentWorkflows, listed)
+	}
+	body, err := json.Marshal(review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed != nil && !strings.Contains(string(body), `"issue_comment_workflows":[{"path":".github/workflows/triage.yml"`) {
+		t.Fatalf("review JSON does not show the audited set under profile.issue_comment_workflows: %s", body)
+	}
+
+	req.ApprovalDigest = review.ApprovalDigest
+	complete, err := onboard.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("approval pass: %v", err)
+	}
+	if complete.Status != "complete" {
+		t.Fatalf("approval pass status = %q", complete.Status)
+	}
+	var active domain.AutomationTrustProfile
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		active, readErr = tx.LatestTrustProfile(ctx, req.Repository)
+		return readErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if active.ProfileDigest != review.Profile.ProfileDigest ||
+		domain.EvaluateIssueCommentWorkflowDrift(active, listed) != nil {
+		t.Fatalf("active profile = %+v, want the reviewed profile accepting %+v", active, listed)
+	}
+}
+
 // TestOnboardReRunAdmitsExternalReviewers: the allowlist is an owner choice
 // carried by the reviewed profile, so adding a reviewer to an onboarded
 // repository is a second onboard pass with its own approval digest, and the

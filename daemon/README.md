@@ -3425,7 +3425,14 @@ daemon first; onboarding refuses a database it holds. It:
 The selected npm recipe is detected at `.freeside/verify.json` under `-source`,
 or may be supplied explicitly with `-recipe`. Run the command once without
 `-approve`, inspect the complete JSON review, then repeat it with the returned
-approval digest. A changed workflow head or installation coordinate produces a
+approval digest. The review lists every active workflow the repository triggers
+on `issue_comment` under `profile.issue_comment_workflows`, each with a digest
+of its file and the local workflows and actions it uses, and sets
+`profile.allow_issue_comment_workflows`; approving the digest accepts the
+comments Freeside will post over exactly those workflows. A profile approved
+before these keys existed keeps its digest and publishes as before, but
+approves no comment until onboarding runs again and the owner approves the
+new review. A changed workflow head or installation coordinate produces a
 different review, as does replacement of the bounded pending intent, and
 invalidates the earlier approval. Only `-replace-intent` replaces the intent,
 live or expired, and it takes no `-resume` or `-approve`: it records a new
