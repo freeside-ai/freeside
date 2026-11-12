@@ -683,6 +683,10 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Backups that carry credentials and restores that replace data:**
   `internal/store/backup.go`, `internal/store/local_backup*.go`,
   `internal/store/encrypted_checkpoint.go`, `internal/store/restore.go`.
+  The pre-update database check joins them: `internal/store/database_copy.go`
+  (copies the live database, credentials and all, without reading its
+  schema) and `cmd/freesided/check_database.go` (makes, guards, and removes
+  that copy, and decides what of its failures may print).
 - **Migrations that rewrite data:** `internal/store/migrate.go`,
   `internal/store/migration_*.go`, and any `migrations/*.sql` file that
   updates, moves, or drops existing rows or rebuilds a table. A migration

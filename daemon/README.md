@@ -1852,6 +1852,46 @@ holds every row, including device credentials and pairing codes, so delete it
 when you are done. While the copy is written, the daemon's other database work
 waits for it.
 
+### Check A New Build Against The Live Database
+
+Before an update replaces a supervised daemon, `freesided check-database`
+checks that the new build can open, migrate, and decode the tier's data. The
+installer runs it from the new bundle (app/README.md, Installing the Operator
+Client); run it by hand with the binary you are about to install:
+
+```sh
+freesided check-database -environment <tier> -db <live-db> -state-dir <state-dir>
+```
+
+It refuses a path from another tier, as the daemon does at start. It copies
+the live database into `<state-dir>/check-database/`, an owner-only directory
+holding a `0600` file, migrates the copy, reads every stored row through the
+store's own reads, and runs the startup steps that touch only the store, all
+under the options the LaunchAgent daemon opens its store with. With a daemon
+running, the daemon writes the copy over the control socket, as
+`freesided snapshot` does. Without one, the check takes the daemon lock and
+copies the file without reading its schema, so it works when the new build
+adds a migration the live database lacks. It never changes the live
+database's contents, though a stopped database may gain SQLite's `-wal` and
+`-shm` side files, as from any read, and it opens no network connection.
+
+On success it prints the schema versions before and after the migration, the
+number of kinds of stored row it decoded, and the number of tables it did not
+walk; each such table carries its reason in `notWalkedTables`
+(`internal/store/stored_rows.go`), and a test fails when a table is in
+neither list. On failure it exits nonzero and names only the failing
+migration file, the kinds of stored row that failed to decode, or the startup
+step, never a row's content or the underlying error, which can quote stored
+values. To see why a kind failed, take a `freesided snapshot` and read it with
+the new build.
+
+The copy is removed when the check ends, including on `SIGINT`, `SIGTERM`,
+and `SIGHUP`. A `-db` inside the copy's directory is refused.
+A copy that a killed check left behind is removed when the next check starts.
+The check covers whether this build can read this data, not whether it then
+behaves correctly, and it does not cover daemons started with a driver, the
+fake lane, or a scenario.
+
 ### Repair A Quarantined Stage Intent
 
 At each start, restart recovery gives every stage intent in

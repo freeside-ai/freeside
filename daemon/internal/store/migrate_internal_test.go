@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -239,5 +240,29 @@ func TestPragmasOnEveryConnection(t *testing.T) {
 		if !p.ForeignKeys || p.Synchronous != 2 || p.JournalMode != "wal" {
 			t.Fatalf("conn %d pragmas = %+v, want wal/FULL/foreign keys on", i+1, p)
 		}
+	}
+}
+
+// TestMigrationErrorNamesTheFile: a failing migration reports its file
+// through MigrationError, with the text migrate has always returned.
+func TestMigrationErrorNamesTheFile(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := openDB(filepath.Join(t.TempDir(), "store.db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	fsys := fstest.MapFS{
+		"0001_good.sql": {Data: []byte(`CREATE TABLE good (id INTEGER PRIMARY KEY) STRICT;`)},
+		"0002_bad.sql":  {Data: []byte(`CREATE TABLE good (id INTEGER PRIMARY KEY) STRICT;`)},
+	}
+	err = migrate(ctx, db, fsys)
+	var migration *MigrationError
+	if !errors.As(err, &migration) || migration.Name != "0002_bad.sql" {
+		t.Fatalf("migrate: err = %v, want a MigrationError naming 0002_bad.sql", err)
+	}
+	if !strings.HasPrefix(err.Error(), `migration "0002_bad.sql": `) {
+		t.Fatalf("err text = %q, want the established migration prefix", err.Error())
 	}
 }

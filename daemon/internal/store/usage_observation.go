@@ -351,3 +351,26 @@ func observationPricingRevision(binding domain.AdmissionAgentBinding) string {
 	}
 	return binding.PricingRevision
 }
+
+// decodeUsageObservationRows reads every run's usage observations for the
+// stored-row check (stored_rows.go) and discards them. It lives here because
+// the advisory-segregation guard lets only this file name the
+// observation-only reader.
+func decodeUsageObservationRows(ctx context.Context, s *Store) error {
+	var runs []rowKey
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		runs, err = tx.storedKeys(ctx, `SELECT DISTINCT run_id FROM usage_observations`, "s")
+		return err
+	}); err != nil {
+		return err
+	}
+	return s.ReadUsage(ctx, func(tx *UsageReadTx) error {
+		for _, run := range runs {
+			if err := discard(tx.ListRunUsageObservations(ctx, domain.RunID(run.s[0]))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

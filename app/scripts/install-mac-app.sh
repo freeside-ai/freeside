@@ -790,6 +790,23 @@ codesign --force --sign "$identity" --entitlements "$preserved_entitlements" "$b
 final_entitlements="$build_dir/FreesideMac.final.entitlements"
 verify_provisioned_app "$built_app" "$final_entitlements"
 
+# Check the new daemon against a copy of this tier's database before
+# anything running is touched: a build that cannot migrate or decode the
+# operator's data would otherwise fail only after the swap, with the old
+# app gone. The check copies, migrates, and decodes under the state
+# directory, never writes the live database, and removes its copy; it
+# works with the old daemon running or stopped. Nothing above has
+# changed the installed app or the running daemon, so a failure here
+# leaves both as they were. There is no skip flag (#3107).
+if [[ -e "$db_path" ]]; then
+    echo "install-mac-app: checking the new freesided against a copy of the $target database"
+    "$bundled_daemon" check-database -environment "$target" -db "$db_path" \
+        -state-dir "$daemon_state_dir" ||
+        die "the new freesided failed its database check; the installed app and daemon are unchanged"
+else
+    echo "install-mac-app: skipped the database check: the $target tier has no database yet"
+fi
+
 # A running instance holds the bundle open and would keep serving stale
 # code after the swap. The client's disk cache is written atomically
 # (CacheStore), so terminating it cannot tear durable state. The pattern

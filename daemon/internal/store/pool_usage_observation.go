@@ -398,3 +398,12 @@ func (tx *ReadTx) requireEnrollmentsOnPool(ctx context.Context, observation doma
 	}
 	return nil
 }
+
+// decodePoolUsageObservationRows reads every pool usage observation for the
+// stored-row check (stored_rows.go) and discards them. It lives here because
+// the pool usage guard lets only allowlisted files name the record's readers.
+func decodePoolUsageObservationRows(ctx context.Context, s *Store) error {
+	return s.Read(ctx, func(tx *ReadTx) error {
+		return discard(tx.ListPoolUsageObservationSnapshots(ctx))
+	})
+}

@@ -338,6 +338,14 @@ fi
 exit 42
 STUB
 
+# No case runs the installed client, so pgrep finds nothing. The stand-in
+# records the call, which marks when the installer reached its quit step.
+cat >"$STUB_BIN/pgrep" <<'STUB'
+#!/usr/bin/env bash
+printf 'pgrep\n' >>"$STUB_CASE_DIR/install-steps"
+exit 1
+STUB
+
 cat >"$STUB_BIN/ditto" <<'STUB'
 #!/usr/bin/env bash
 cp -R "$1" "$2"
@@ -1513,6 +1521,77 @@ assert_file_contains \
 assert_file_contains \
     "$CASE_DIR/defaults-calls" \
     "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+
+# The bundled-daemon stand-in for the database check: it records its
+# arguments and its place among the install steps, and exits with
+# STUB_CHECK_DATABASE_RC.
+write_check_database_daemon() {
+    cat >"$CASE_DIR/freesided" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$STUB_CASE_DIR/check-database-args"
+printf 'check-database\n' >>"$STUB_CASE_DIR/install-steps"
+exit "${STUB_CHECK_DATABASE_RC:-0}"
+STUB
+    chmod +x "$CASE_DIR/freesided"
+}
+
+# The installer checks the new daemon against the tier's database, with the
+# LaunchAgent's own tier and paths, before it reaches the quit step (#3107).
+begin_case "database check runs with the tier's paths before the quit" check-database
+destination=$CASE_DIR/Applications/Freeside.app
+daemon_dir=$CASE_DIR/home/Library/Application\ Support/Freeside/daemon
+mkdir -p "$daemon_dir"
+printf 'live database\n' >"$daemon_dir/freeside.db"
+write_check_database_daemon
+export STUB_BUILD_SUCCEEDS=true
+run_installer
+assert_rc 0
+assert_contains "checking the new freesided against a copy of the prod database"
+if [[ "$(cat "$CASE_DIR/check-database-args" 2>/dev/null)" == "$(printf '%s\n' \
+    check-database -environment prod -db "$daemon_dir/freeside.db" \
+    -state-dir "$daemon_dir")" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "check-database arguments: $(cat "$CASE_DIR/check-database-args" 2>/dev/null)"
+fi
+if [[ "$(cat "$CASE_DIR/install-steps" 2>/dev/null)" == "$(printf '%s\n' check-database pgrep)" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "install steps: $(cat "$CASE_DIR/install-steps" 2>/dev/null), want the check before the quit"
+fi
+assert_file_contains "$daemon_dir/freeside.db" "live database"
+
+# A failing check stops the update before the quit step and leaves the
+# installed app exactly as it was, with nothing staged beside it.
+begin_case "failed database check leaves the installed app unchanged" check-database-fails
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+daemon_dir=$CASE_DIR/home/Library/Application\ Support/Freeside/daemon
+mkdir -p "$daemon_dir"
+printf 'live database\n' >"$daemon_dir/freeside.db"
+write_check_database_daemon
+export STUB_BUILD_SUCCEEDS=true
+export STUB_CHECK_DATABASE_RC=1
+run_installer
+unset STUB_CHECK_DATABASE_RC
+assert_rc 1
+assert_contains "the new freesided failed its database check; the installed app and daemon are unchanged"
+assert_exists "$destination/Contents/marker"
+assert_inode "$destination" "$old_inode" "a failed database check replaced the installed app"
+assert_absent "$destination.install-staging"
+assert_absent "$destination.install-superseded"
+assert_file_omits "$CASE_DIR/install-steps" "pgrep"
+
+# A tier with no database yet has nothing to check: the install goes on and
+# says so.
+begin_case "tier without a database skips the check and says so" check-database-none
+write_check_database_daemon
+export STUB_BUILD_SUCCEEDS=true
+run_installer
+assert_rc 0
+assert_contains "skipped the database check: the prod tier has no database yet"
+assert_absent "$CASE_DIR/check-database-args"
 
 # A state path bearing a JSON metacharacter must bind byte-for-byte. Here the
 # state root carries a literal backslash before `t`; a raw interpolation into the `-json`
