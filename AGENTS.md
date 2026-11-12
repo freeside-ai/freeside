@@ -304,7 +304,7 @@ handoff and after it: the lander (`land-approved-prs`) refreshes it when it
 selects the PR. Before handoff, refresh it onto `main` yourself only when the
 merge-result audit finds a conflict or a landed change needs a fix in it
 (Integration Ordering and Merge-Result Audit). After handoff, refresh it only
-when the lander hands it back (`needs-human`) or the owner asks
+when the lander hands it back (`needs-rework`) or the owner asks
 (`docs/agent-workflow.md` §handing-off step 3).
 
 Operator
@@ -836,7 +836,7 @@ Decision records: `devlog/2026-10-21-0848-retire-codex-reviewer.md` and
   - **Mechanism:** `label`.
   - **Approval:** `approved`, added by a collaborator with the Approver
     permission; agents never add it.
-  - **Hand-back:** `needs-human`.
+  - **Hand-back:** `needs-rework`.
   - **Approver permission:** `write`.
   - **Stale lock age:** `240` minutes.
   - **Base-advance checks:** none.
@@ -849,10 +849,13 @@ already reruns on the branch updated to the tip, and the lander waits for it
 on that exact commit. The merge-result audit needs each PR's declared scope,
 so the lander runs it per PR (Integration Ordering and Merge-Result Audit);
 a fixed command here cannot. Reviewer is `none` because the project has no
-automated reviewer (Automated Reviewer). Decision records:
+automated reviewer (Automated Reviewer). Hand-back has its own label rather
+than `needs-human`, because `needs-human` is fiat-only (Coordination Gates)
+and Freeside will rework handed-back PRs (#3127). Decision records:
 `devlog/2026-10-19-1500-landing-record.md`,
-`devlog/2026-10-19-1903-permission-based-approval.md`, and
-`devlog/2026-10-21-0848-retire-codex-reviewer.md`.
+`devlog/2026-10-19-1903-permission-based-approval.md`,
+`devlog/2026-10-21-0848-retire-codex-reviewer.md`, and
+`devlog/2026-11-12-1004-lander-hand-back-label.md`.
 
 ## Freeside Review-Loop Bound
 
@@ -1259,6 +1262,9 @@ condition is inert until something else tells you to go look.
   label or by browsing open issues.
 - **`needs-human` is never agent-selected.** It stays unmilestoned and
   fiat-only, and returns to a session by fiat after the maintainer acts.
+  The lander's pull-request hand-back is a different label, `needs-rework`
+  (Landing Record): it marks a PR that could not land and carries no
+  fiat-only rule.
 - **One claim per unit.** Before claiming, check the unit's own claims and
   planning reservation. After posting, repeat that query; among claims on the
   unit, the earliest forge-issued claim comment wins by `created_at`, then
