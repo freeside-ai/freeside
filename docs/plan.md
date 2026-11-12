@@ -5269,7 +5269,7 @@ gated by `gates.issue_comment` and dispatched on this section's intent
 ledger.
 
 The issue-event authority profile is not a filing precondition (revision
-120); it serves intake only (below). It is digest-bound and
+121); it serves intake only (below). It is digest-bound and
 freshness-limited, and it covers a complete enumerated authority surface. An
 unknown or uninspectable surface makes the repository ineligible. The profile
 is revalidated whenever intake relies on it, and it fails closed on drift.
