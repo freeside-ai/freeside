@@ -146,7 +146,10 @@ func (h productionRigHost) ProbeDaemon(
 		Version        string    `json:"version"`
 		StartedAt      time.Time `json:"started_at"`
 	}
-	if err := strictjson.DecodeReader(
+	// /health tolerates added fields (api/README.md, Response Tolerance), and
+	// the daemon answering may be another build, so a field this build
+	// doesn't name never hides the occupant's version.
+	if err := strictjson.DecodeReaderAllowingUnknownFields(
 		response.Body, &health, strictjson.RejectInvalidUTF8, strictjson.Limit(16<<10),
 	); err != nil || health.Status != "ok" || health.Version == "" || health.StartedAt.IsZero() {
 		return "process answering on the Freeside health path", true, nil

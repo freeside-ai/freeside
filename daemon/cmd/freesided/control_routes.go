@@ -118,8 +118,9 @@ func openObservation(ctx context.Context, dbPath string, approvedRecipes ...doma
 const executionReportVersion = "freeside-execution-v1"
 
 // executionReport is what a daemon may run. The control socket serves it, not
-// /health, because /health's schema is closed and paired with generated
-// clients; a real-work run reads it to prove prod runs without a driver.
+// /health, because /health is unauthenticated and its schema is paired with
+// generated clients; a real-work run reads it to prove prod runs without a
+// driver.
 type executionReport struct {
 	Version     string        `json:"version"`
 	Environment environment   `json:"environment"`
