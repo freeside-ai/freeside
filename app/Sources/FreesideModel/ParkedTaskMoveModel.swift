@@ -116,9 +116,18 @@ package final class ParkedTaskMoveModel {
                 // No move refuses with a conflict; an unexpected one leaves
                 // the saved command unresolved.
                 break
+            case .badRequest(let refusal):
+                // The task is no longer parked, the enrollment no longer
+                // qualifies or serves the choice, or this daemon's build
+                // doesn't serve the move: the daemon recorded nothing.
+                coordinator.finishParkedTaskMove()
+                let message = CommandRefusal.message(
+                    refusal, otherwise: "The daemon refused the move (status 400). Nothing was changed.")
+                failure = entry.taskID.map { .init(taskID: $0, message: message) }
+                await coordinator.refreshAfterCommit()
             case .undocumented(let status, _):
                 switch status {
-                case 400, 404:
+                case 404:
                     // The task is no longer parked, or the enrollment no
                     // longer qualifies or serves the choice: the daemon
                     // recorded nothing.

@@ -39,8 +39,11 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	}
 	health.Status = "ok"
 	// The contract digest identifies the compiled-in spec and must not be
-	// overridable by a caller, the way Status is forced to "ok".
+	// overridable by a caller, the way Status is forced to "ok". The feature
+	// list is the build's registry for the same reason: an app turns a
+	// surface on from it, so it names only what this build serves.
 	health.ContractDigest = APIContractDigest
+	health.Features = domain.AllDaemonFeatures
 	h := httpHandler{service: service, authorize: authorize, health: health}
 	mux := http.NewServeMux()
 	// GET /health, POST /pairing, and POST /pairing/preview are the
@@ -89,14 +92,16 @@ type httpHandler struct {
 }
 
 // HealthResponse is the deliberately minimal unauthenticated liveness
-// response from plan §5.2. Status is fixed at "ok" and ContractDigest at
-// the compiled-in APIContractDigest by the HTTP boundary; richer
-// operational state remains behind authenticated routes.
+// response from plan §5.2. Status is fixed at "ok", ContractDigest at the
+// compiled-in APIContractDigest, and Features at domain.AllDaemonFeatures by
+// the HTTP boundary; richer operational state remains behind authenticated
+// routes.
 type HealthResponse struct {
-	Status         string    `json:"status"`
-	ContractDigest string    `json:"contract_digest"`
-	Version        string    `json:"version"`
-	StartedAt      time.Time `json:"started_at"`
+	Status         string                 `json:"status"`
+	ContractDigest string                 `json:"contract_digest"`
+	Features       []domain.DaemonFeature `json:"features"`
+	Version        string                 `json:"version"`
+	StartedAt      time.Time              `json:"started_at"`
 }
 
 func (h httpHandler) getHealth(w http.ResponseWriter, _ *http.Request) {
@@ -469,21 +474,33 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.kind is invalid"})
 		return
 	}
+	// No default: the exhaustive linter makes a newly registered kind take an
+	// arm here, so a kind this build serves never reaches the refusal below,
+	// which tells the app to drop the command.
 	switch kindProbe.Kind {
 	case domain.CommandKindStopTask:
 		h.stopTaskCommand(w, r, request)
+		return
 	case domain.CommandKindSubmitTask:
 		h.submitTaskCommand(w, r, request)
+		return
 	case domain.CommandKindRefreshUsage, domain.CommandKindReassignCollector,
 		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy, domain.CommandKindMoveParkedTask:
 		h.operatorCommand(w, r, request, kindProbe.Kind)
+		return
 	case domain.CommandKindDecision, "":
 		// A missing kind is treated as a decision for clients that predate the
 		// discriminator; the decision arm is otherwise unchanged.
 		h.submitDecisionCommand(w, r, request)
-	default:
-		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "payload.kind is not a known command kind"})
+		return
 	}
+	// A newer app may send a kind this build predates. The typed reason lets
+	// it drop the command instead of retrying; nothing is applied or
+	// recorded, so the refusal is the same on every retry.
+	writeJSON(w, http.StatusBadRequest, commandRequestRejection{
+		Message: "payload.kind is not a command kind this daemon serves",
+		Reason:  domain.CommandRequestRejectionUnknownCommandKind,
+	})
 }
 
 func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Request, request clientCommandRequest) {
@@ -942,6 +959,14 @@ type staleVersionResponse struct {
 
 type errorResponse struct {
 	Message string `json:"message"`
+}
+
+// commandRequestRejection is a POST /commands 400 whose reason the client
+// acts on (api/openapi.yaml CommandRequestRejection). Every other 400 there
+// is an errorResponse, the same shape without a reason.
+type commandRequestRejection struct {
+	Message string                               `json:"message"`
+	Reason  domain.CommandRequestRejectionReason `json:"reason"`
 }
 
 func writeCommandError(w http.ResponseWriter, service *Service, err error) {

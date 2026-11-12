@@ -379,6 +379,12 @@ public struct MockServerTransport: ClientTransport {
                     return try Self.json(status: .conflict, body: rejection)
                 case .stale(let rejection):
                     return try Self.json(status: .conflict, body: rejection)
+                case .unservedKind:
+                    return try Self.json(
+                        status: .badRequest,
+                        body: Components.Schemas.CommandRequestRejection(
+                            message: "payload.kind is not a command kind this daemon serves",
+                            reason: .unknown_command_kind))
                 }
             } catch is MockServer.InactiveStopDeviceError {
                 return try Self.json(

@@ -333,7 +333,7 @@ import Testing
                 scope: facts.scope))
 
         let response = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let status, _) = response else {
+        guard let status = response.refusalStatus else {
             Issue.record("unchanged proposal revision was not definitively rejected: \(response)")
             return
         }
@@ -440,7 +440,7 @@ import Testing
             value1: .init(source_issue_closure: .init(resolves: true)))
 
         let response = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let status, _) = response else {
+        guard let status = response.refusalStatus else {
             Issue.record("unchanged effect revision was not definitively rejected: \(response)")
             return
         }
@@ -568,7 +568,7 @@ import Testing
         let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
 
         let output = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let statusCode, _) = output else {
+        guard let statusCode = output.refusalStatus else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
@@ -600,7 +600,7 @@ import Testing
         let beforeRejected = try await client.getSyncRevision().ok.body.json.revision
         let rejected = try await client.submitCommand(
             body: .json(Self.command(id: "cmd-while-snoozed", against: hidden, action: .start)))
-        guard case .undocumented(let status, _) = rejected else {
+        guard let status = rejected.refusalStatus else {
             Issue.record("active snooze accepted a new command: \(rejected)")
             return
         }
@@ -829,7 +829,7 @@ import Testing
                             replay == first,
                             "\(action.rawValue), choices \(choiceMode), attachments \(attachmentMode)")
                     } else {
-                        guard case .undocumented(let statusCode, _) = output else {
+                        guard let statusCode = output.refusalStatus else {
                             Issue.record(
                                 "expected immutable conflict for \(action.rawValue), choices \(choiceMode), attachments \(attachmentMode)"
                             )
@@ -925,7 +925,7 @@ import Testing
             .getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         let output = try await client.submitCommand(
             body: .json(Self.command(id: "cmd-reused", against: other, action: .stop)))
-        guard case .undocumented(let statusCode, _) = output else {
+        guard let statusCode = output.refusalStatus else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
@@ -949,7 +949,7 @@ import Testing
         var invalid = Self.command(id: "cmd-valid", against: before)
         invalid.expected_entity_version = 0
         let replayed = try await client.submitCommand(body: .json(invalid))
-        guard case .undocumented(let statusCode, _) = replayed else {
+        guard let statusCode = replayed.refusalStatus else {
             Issue.record("expected a malformed rejection, got \(replayed)")
             return
         }
@@ -961,7 +961,7 @@ import Testing
         var emptyDigest = Self.command(id: "cmd-empty-digest", against: before)
         emptyDigest.payload.asDecision.artifact_digests.append("")
         let rejected = try await client.submitCommand(body: .json(emptyDigest))
-        guard case .undocumented(let emptyStatus, _) = rejected else {
+        guard let emptyStatus = rejected.refusalStatus else {
             Issue.record("expected a malformed rejection, got \(rejected)")
             return
         }
@@ -984,7 +984,7 @@ import Testing
         command.payload.asDecision.message = "Show the refusal path."
 
         let output = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let statusCode, _) = output else {
+        guard let statusCode = output.refusalStatus else {
             Issue.record("expected a malformed rejection, got \(output)")
             return
         }
@@ -1066,14 +1066,11 @@ import Testing
         let output = try await client.submitCommand(
             body: .json(
                 Self.command(id: "cmd-order", against: before, action: .convert_to_policy)))
-        guard case .undocumented(let statusCode, let payload) = output, let body = payload.body
-        else {
+        guard case .badRequest(let refusal) = output else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
-        #expect(statusCode == 400)
-        let data = try await Data(collecting: body, upTo: 1 << 20)
-        let message = try JSONDecoder().decode(Components.Schemas._Error.self, from: data).message
+        let message = try refusal.body.json.message
         #expect(message.contains("reused"))
     }
 
@@ -1314,7 +1311,7 @@ import Testing
 
         let output = try await client.submitCommand(
             body: .json(Self.command(id: "cmd-unoffered", against: before, action: .start)))
-        guard case .undocumented(let statusCode, _) = output else {
+        guard let statusCode = output.refusalStatus else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
@@ -1494,7 +1491,7 @@ import Testing
         let output = try await client.submitCommand(
             body: .json(
                 Self.command(id: "cmd-pending", against: before, action: .convert_to_policy)))
-        guard case .undocumented(let statusCode, _) = output else {
+        guard let statusCode = output.refusalStatus else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
@@ -1524,7 +1521,7 @@ import Testing
             let before = try await client.getAttentionItem(path: .init(item_id: itemID)).ok.body.json
             var missing = Self.command(id: "cmd-missing-\(action)", against: before, action: action)
             let rejected = try await client.submitCommand(body: .json(missing))
-            guard case .undocumented(let statusCode, _) = rejected else {
+            guard let statusCode = rejected.refusalStatus else {
                 Issue.record("expected missing-message rejection, got \(rejected)")
                 continue
             }
@@ -1686,7 +1683,7 @@ import Testing
             var command = Self.command(id: "invalid-\(index)", against: seed, action: .adjudicate_findings)
             command.payload.asDecision.finding_routes = invalid
             let response = try await client.submitCommand(body: .json(command))
-            guard case .undocumented(let status, _) = response else {
+            guard let status = response.refusalStatus else {
                 Issue.record("invalid finding routes were accepted")
                 continue
             }
@@ -1696,7 +1693,7 @@ import Testing
         var overlong = Self.command(id: String(repeating: "c", count: 257), against: seed, action: .adjudicate_findings)
         overlong.payload.asDecision.finding_routes = choices
         let rejected = try await client.submitCommand(body: .json(overlong))
-        guard case .undocumented(let status, _) = rejected else {
+        guard let status = rejected.refusalStatus else {
             Issue.record("overlong adjudication command id was accepted")
             return
         }
@@ -1740,7 +1737,7 @@ import Testing
             var command = Self.command(id: "reason-invalid-\(index)", against: seed, action: .adjudicate_findings)
             command.payload.asDecision.finding_routes = choices
             let response = try await client.submitCommand(body: .json(command))
-            guard case .undocumented(let status, _) = response else {
+            guard let status = response.refusalStatus else {
                 Issue.record("invalid reason \(index) was accepted")
                 continue
             }
@@ -1777,7 +1774,7 @@ import Testing
             var command = Self.command(id: "subset-invalid-\(index)", against: seed, action: .adjudicate_findings)
             command.payload.asDecision.finding_routes = choices
             let response = try await client.submitCommand(body: .json(command))
-            guard case .undocumented = response else {
+            guard response.refusalStatus != nil else {
                 Issue.record("invalid subset choice accepted")
                 continue
             }
@@ -1843,7 +1840,7 @@ import Testing
         ]
 
         let response = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let status, _) = response else {
+        guard let status = response.refusalStatus else {
             Issue.record("unoffered adjudication choice was accepted: \(response)")
             return
         }
@@ -1898,7 +1895,7 @@ extension MockServerTests {
         var command = Self.command(id: "cmd-route-missing", against: before, action: .answer_and_retry)
         command.payload.asDecision.message = "Store first."
         let missing = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let missingStatus, _) = missing else {
+        guard let missingStatus = missing.refusalStatus else {
             Issue.record("expected missing-route rejection, got \(missing)")
             return
         }
@@ -1909,7 +1906,7 @@ extension MockServerTests {
         var stop = Self.command(id: "cmd-route-stop", against: before, action: .stop)
         stop.payload.asDecision.answer_route = .init(value1: .retry_implementation)
         let stopped = try await client.submitCommand(body: .json(stop))
-        guard case .undocumented(let stopStatus, _) = stopped else {
+        guard let stopStatus = stopped.refusalStatus else {
             Issue.record("expected a routed stop to be rejected, got \(stopped)")
             return
         }
@@ -2051,7 +2048,7 @@ extension MockServerTests {
         ).ok.body.json
         let response = try await client.submitCommand(
             body: .json(submitTaskCommand("cmd-1", project: "project-1", source: "Different source.")))
-        guard case .undocumented(let status, _) = response else {
+        guard let status = response.refusalStatus else {
             Issue.record("expected an undocumented conflict status")
             return
         }
@@ -2071,7 +2068,7 @@ extension MockServerTests {
                     command_id: "cmd-1", device_id: "device-2",
                     payload: .submit_task(
                         .init(kind: .submit_task, project_id: "project-1", source: "Add retries.")))))
-        guard case .undocumented(let status, _) = response else {
+        guard let status = response.refusalStatus else {
             Issue.record("expected an undocumented conflict status")
             return
         }
@@ -2087,14 +2084,10 @@ extension MockServerTests {
                 .init(kind: .submit_task, project_id: "project-1", source: "Add retries.", task_lines: lines)))
     }
 
-    /// The status of an undocumented response (a refusal), or nil for a
-    /// documented one such as an acceptance or a stale 409. The mock answers
-    /// a refused command 400, as the daemon does.
+    /// The status of a refusal, or nil for an acceptance or a stale 409. The
+    /// mock answers a refused command 400, as the daemon does.
     private func refusalStatus(_ client: Client, _ command: Components.Schemas.ClientCommand) async throws -> Int? {
-        guard case .undocumented(let status, _) = try await client.submitCommand(body: .json(command)) else {
-            return nil
-        }
-        return status
+        try await client.submitCommand(body: .json(command)).refusalStatus
     }
 
     @Test func submitTaskRecordsItsLinesOnTheTask() async throws {
@@ -2403,11 +2396,10 @@ extension MockServerTests {
         let taskID = try #require(try await client.getSyncBootstrap().ok.body.json.tasks.first?.task.id)
         let discovered = UsageFixtures.readingCollectorID
         func message(_ command: Components.Schemas.ClientCommand) async throws -> String? {
-            guard case .undocumented(400, let payload) = try await client.submitCommand(body: .json(command)),
-                let body = payload.body
-            else { return nil }
-            let data = try await Data(collecting: body, upTo: 1 << 16)
-            return try JSONDecoder().decode(Components.Schemas._Error.self, from: data).message
+            guard case .badRequest(let refusal) = try await client.submitCommand(body: .json(command)) else {
+                return nil
+            }
+            return try refusal.body.json.message
         }
         func change(_ id: String, _ selection: Components.Schemas.TaskLineSelection) -> Components.Schemas.ClientCommand
         {

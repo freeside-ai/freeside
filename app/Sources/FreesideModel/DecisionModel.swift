@@ -1248,6 +1248,15 @@ public final class DecisionModel {
                     phase = .superseded
                     markValidated()
                 }
+            case .badRequest(let refusal):
+                // An authoritative daemon rejection (misuse, a command this
+                // build doesn't serve): the command was definitively not
+                // recorded.
+                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                phase = .idle
+                submissionError = CommandRefusal.message(
+                    refusal, otherwise: "the daemon rejected the command (status 400)")
+                await validate()
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The credential gate rejected this first request
@@ -1733,6 +1742,10 @@ public final class DecisionModel {
                 }
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 return .conflicted(applied: isCurrent, awaitingAgent: awaitingAgent)
+            case .badRequest:
+                guard ownsSlot else { return .displaced }
+                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                return .rejected
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The resend died at the credential gate, which

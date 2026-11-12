@@ -131,9 +131,17 @@ package final class TaskLineChangeModel {
                     message: Self.runningMessage(role: payload.role, task: rejection.replacement_task.task))
                 // Refresh through canonical sync; never install a conflict's rows.
                 await coordinator.refreshAfterCommit()
+            case .badRequest(let refusal):
+                // The selection is refused: the daemon recorded nothing.
+                coordinator.finishTaskLineChange()
+                failure = .init(
+                    taskID: payload.task_id,
+                    message: CommandRefusal.message(
+                        refusal, otherwise: "The daemon refused the change (status 400). Nothing was changed."))
+                await coordinator.refreshAfterCommit()
             case .undocumented(let status, _):
                 switch status {
-                case 400, 404:
+                case 404:
                     // The selection or the task is refused: the daemon
                     // recorded nothing.
                     coordinator.finishTaskLineChange()

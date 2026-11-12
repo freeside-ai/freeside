@@ -47,8 +47,10 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	startedAt := time.Date(2026, 8, 10, 12, 13, 14, 0, time.UTC)
+	// A configured digest or feature list is overridden, not served.
 	handler := signet.NewHTTPHandler(f.service, nil, signet.HealthResponse{
 		Status: "ok", Version: "v1.2.3", StartedAt: startedAt,
+		ContractDigest: "sha256:configured", Features: []domain.DaemonFeature{"configured_feature"},
 	})
 	response := bearerRequest(t, handler, http.MethodGet, "/health", "", nil)
 	if response.Code != http.StatusOK {
@@ -58,13 +60,19 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode health: %v", err)
 	}
-	if len(body) != 4 {
-		t.Fatalf("health keys = %v, want exactly status, contract_digest, version, started_at", body)
+	if len(body) != 5 {
+		t.Fatalf("health keys = %v, want exactly status, contract_digest, features, version, started_at", body)
 	}
-	// The handler forces the contract digest to the compiled-in constant, so
-	// no caller can serve a digest that disagrees with the built spec.
+	// The handler forces the contract digest to the compiled-in constant and
+	// the features to the registry, so no caller can serve a digest that
+	// disagrees with the built spec or a feature the build doesn't serve.
 	wantDigest := `"` + signet.APIContractDigest + `"`
+	wantFeatures, err := json.Marshal(domain.AllDaemonFeatures)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(body["status"]) != `"ok"` || string(body["contract_digest"]) != wantDigest ||
+		string(body["features"]) != string(wantFeatures) ||
 		string(body["version"]) != `"v1.2.3"` ||
 		string(body["started_at"]) != `"2026-08-10T12:13:14Z"` {
 		t.Fatalf("health = %s", response.Body.String())
@@ -291,6 +299,7 @@ func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
 		status int
 	}{
 		{"unknown field", strings.Replace(valid, `"command_id"`, `"unexpected":true,"command_id"`, 1), http.StatusBadRequest},
+		{"unknown payload field", strings.Replace(valid, `"item_id"`, `"unexpected":true,"item_id"`, 1), http.StatusBadRequest},
 		// unknown is in the spec's Action enum for an older client to decode
 		// a newer member as; the daemon registers no such action.
 		{"unknown action", strings.Replace(valid, `"action":"open_pr"`, `"action":"unknown"`, 1), http.StatusBadRequest},
@@ -314,6 +323,38 @@ func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
 			}
 			if after := f.revision(t); after != before {
 				t.Fatalf("malformed request moved revision %d -> %d", before, after)
+			}
+		})
+	}
+}
+
+// TestHTTPCommandRefusesAnUnknownKindByReason: a command kind this build
+// doesn't serve, as a newer app may send, answers a 400 whose reason tells
+// the app to drop the command rather than retry it, and changes no state.
+func TestHTTPCommandRefusesAnUnknownKindByReason(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+	for _, kind := range []string{"archive_task", "unknown"} {
+		t.Run(kind, func(t *testing.T) {
+			before := f.revision(t)
+			body := mustJSON(map[string]any{
+				"command_id": "cmd-" + kind, "device_id": "device-1",
+				"payload": map[string]any{"kind": kind, "task_id": "task-1"},
+			})
+			response := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader(body))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", response.Code, response.Body.String())
+			}
+			var rejection map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &rejection); err != nil {
+				t.Fatalf("decode rejection: %v", err)
+			}
+			if rejection["reason"] != string(domain.CommandRequestRejectionUnknownCommandKind) || rejection["message"] == "" {
+				t.Fatalf("rejection = %v, want a message and reason unknown_command_kind", rejection)
+			}
+			if after := f.revision(t); after != before {
+				t.Fatalf("unknown kind moved revision %d -> %d", before, after)
 			}
 		})
 	}

@@ -205,6 +205,11 @@ public final class TaskSubmissionModel {
                 // closed rather than offering a retry that would repeat.
                 state = .rejected("the daemon rejected the submission as out of date")
                 return nil
+            case .badRequest(let refusal):
+                coordinator.finishTaskSubmission(command.command_id)
+                state = .rejected(
+                    CommandRefusal.message(refusal, otherwise: "the daemon rejected the submission (status 400)"))
+                return nil
             case .undocumented(let statusCode, _):
                 if (400..<500).contains(statusCode), statusCode != 401, statusCode != 403 {
                     coordinator.finishTaskSubmission(command.command_id)

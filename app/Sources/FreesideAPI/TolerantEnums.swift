@@ -47,7 +47,9 @@ extension Components.Schemas.ScheduleSubjectType: UnknownTolerantEnum {}
 extension Components.Schemas.RestartBlockerKind: UnknownTolerantEnum {}
 extension Components.Schemas.AlternateAgentQualification: UnknownTolerantEnum {}
 extension Components.Schemas.TaskSubmissionOrigin: UnknownTolerantEnum {}
+extension Components.Schemas.DaemonFeature: UnknownTolerantEnum {}
 extension Components.Schemas.ConnectionMode: UnknownTolerantEnum {}
+extension Components.Schemas.CommandRequestRejectionReason: UnknownTolerantEnum {}
 extension Components.Schemas.ReadinessSummary._classPayload: UnknownTolerantEnum {}
 extension Components.Schemas.ReadinessRequirementState: UnknownTolerantEnum {}
 extension Components.Schemas.VerificationCheckClass: UnknownTolerantEnum {}
@@ -153,7 +155,9 @@ public enum TolerantEnums {
         Components.Schemas.RestartBlockerKind.self,
         Components.Schemas.AlternateAgentQualification.self,
         Components.Schemas.TaskSubmissionOrigin.self,
+        Components.Schemas.DaemonFeature.self,
         Components.Schemas.ConnectionMode.self,
+        Components.Schemas.CommandRequestRejectionReason.self,
         Components.Schemas.ReadinessSummary._classPayload.self,
         Components.Schemas.ReadinessRequirementState.self,
         Components.Schemas.VerificationCheckClass.self,

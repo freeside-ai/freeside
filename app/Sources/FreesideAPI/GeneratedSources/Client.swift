@@ -68,19 +68,21 @@ public struct Client: APIProtocol {
     private var converter: Converter {
         client.converter
     }
-    /// Process liveness, contract identity, version, and start time
+    /// Process liveness, contract identity, features, version, and start time
     ///
     /// Answers only "is the daemon process up, which build and API
-    /// contract, since when." Supervisors and the external liveness probe
-    /// poll it (plan §5.2); the operator client uses `contract_digest`
-    /// for client/daemon contract-skew detection, `version` for the human
-    /// build label, and `started_at` for restart visibility (a start time
-    /// that keeps moving under a supervisor is crash-loop evidence). The
-    /// response deliberately carries no operational state:
+    /// contract, which named features, since when." Supervisors and the
+    /// external liveness probe poll it (plan §5.2); the operator client
+    /// uses `contract_digest` for client/daemon contract-skew detection,
+    /// `features` to turn off what this build doesn't serve, `version` for
+    /// the human build label, and `started_at` for restart visibility (a
+    /// start time that keeps moving under a supervisor is crash-loop
+    /// evidence). The response deliberately carries no operational state:
     /// unattended-admission stops, `system_health` items, and everything
     /// else requiring judgment stay on the authenticated surfaces (plan
     /// §4), so this route widens what an unpaired caller learns by nothing
-    /// beyond liveness, contract identity, version, and start time.
+    /// beyond liveness, contract identity, the build's feature names,
+    /// version, and start time.
     ///
     ///
     /// - Remark: HTTP `GET /health`.
@@ -1739,6 +1741,28 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .ok(.init(body: body))
+                case 400:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.BadRequest.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.CommandRequestRejection.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .badRequest(.init(body: body))
                 case 409:
                     let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
                     let body: Operations.submitCommand.Output.Conflict.Body

@@ -109,6 +109,9 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"WindowStatus":               enumStrings(domain.AllWindowStatuses),
 		"ExhaustedMarkSource":        enumStrings(domain.AllExhaustedMarkSources),
 		"RoutingPolicySource":        enumStrings(domain.AllRoutingPolicySources),
+		"DaemonFeature":              enumStrings(domain.AllDaemonFeatures),
+
+		"CommandRequestRejectionReason": enumStrings(domain.AllCommandRequestRejectionReasons),
 
 		"AdjudicationConfidence":      enumStrings(domain.AllAdjudicationConfidences),
 		"AdjudicationRoute":           enumStrings(domain.AllAdjudicationRoutes),

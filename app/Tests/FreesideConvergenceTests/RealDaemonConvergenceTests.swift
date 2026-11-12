@@ -98,12 +98,10 @@ struct RealDaemonConvergenceTests {
         #expect(replay.record == created.record)
         let sonnet = UsageFixtures.selection("convergence-claude/claude_code", "sonnet", "high")
         let changed = lines.map { Components.Schemas.TaskLineInput(role: $0.role, selection: sonnet) }
-        guard case .undocumented(let status, _) = try await device.client.submitCommand(body: .json(command(changed)))
-        else {
-            Issue.record("expected changed lines to be refused")
+        guard case .badRequest = try await device.client.submitCommand(body: .json(command(changed))) else {
+            Issue.record("expected changed lines to be refused 400")
             return
         }
-        #expect(status == 400)
 
         // A model the enrollment's discovery record doesn't list is refused
         // 400 under a fresh command, as the mock refuses it.
@@ -114,11 +112,10 @@ struct RealDaemonConvergenceTests {
                 .init(
                     kind: .submit_task, project_id: "submission-convergence", source: "# Unserved model",
                     task_lines: [.init(role: .implementer, selection: unserved)])))
-        guard case .undocumented(let refused, _) = try await device.client.submitCommand(body: .json(fresh)) else {
-            Issue.record("expected an unserved model to be refused")
+        guard case .badRequest = try await device.client.submitCommand(body: .json(fresh)) else {
+            Issue.record("expected an unserved model to be refused 400")
             return
         }
-        #expect(refused == 400)
     }
 
     @Test func stopTaskAcceptanceReplayAndStaleBinding() async throws {

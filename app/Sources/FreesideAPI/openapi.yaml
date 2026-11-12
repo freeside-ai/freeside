@@ -116,7 +116,7 @@ paths:
     get:
       operationId: getHealth
       tags: [health]
-      summary: Process liveness, contract identity, version, and start time
+      summary: Process liveness, contract identity, features, version, and start time
       # Unauthenticated by design, with POST /pairing: the callers are
       # supervisors, external liveness probes, and the operator surface
       # deciding whether a daemon is up at all, none of which holds a
@@ -124,16 +124,18 @@ paths:
       security: []
       description: |
         Answers only "is the daemon process up, which build and API
-        contract, since when." Supervisors and the external liveness probe
-        poll it (plan §5.2); the operator client uses `contract_digest`
-        for client/daemon contract-skew detection, `version` for the human
-        build label, and `started_at` for restart visibility (a start time
-        that keeps moving under a supervisor is crash-loop evidence). The
-        response deliberately carries no operational state:
+        contract, which named features, since when." Supervisors and the
+        external liveness probe poll it (plan §5.2); the operator client
+        uses `contract_digest` for client/daemon contract-skew detection,
+        `features` to turn off what this build doesn't serve, `version` for
+        the human build label, and `started_at` for restart visibility (a
+        start time that keeps moving under a supervisor is crash-loop
+        evidence). The response deliberately carries no operational state:
         unattended-admission stops, `system_health` items, and everything
         else requiring judgment stay on the authenticated surfaces (plan
         §4), so this route widens what an unpaired caller learns by nothing
-        beyond liveness, contract identity, version, and start time.
+        beyond liveness, contract identity, the build's feature names,
+        version, and start time.
       responses:
         "200":
           description: The process is up.
@@ -677,6 +679,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CommandResult"
+        "400":
+          description: >
+            The daemon refused the request without applying or recording
+            anything. `reason` names a refusal the client acts on; a 400
+            without one is one of the malformed or invalid commands this
+            operation's description lists, and carries `message` alone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandRequestRejection"
         "409":
           description: >
             Optimistic-concurrency rejection: the command's
@@ -5752,9 +5764,20 @@ components:
           description: >
             Identifies the api/openapi.yaml this daemon was built from:
             "sha256:" plus the lowercase hex SHA-256 of the spec's exact
-            bytes. A client built from a different spec must not expect to
-            sync; it compares this with its own compiled-in digest to
-            diagnose a contract skew instead of a silent sync failure.
+            bytes. A client compares this with its own compiled-in digest
+            to diagnose a contract skew when a sync read fails, instead of
+            a silent sync failure.
+        features:
+          type: array
+          items:
+            $ref: "#/components/schemas/DaemonFeature"
+          description: >
+            The named features this build serves. An app reads it at the
+            start of each sync round and turns off a surface whose feature
+            isn't listed, instead of failing sync on a command the daemon
+            would refuse. It is optional so an app still reads `/health` from
+            a daemon built before the list existed: a daemon that omits it
+            serves none of the named features.
         version:
           type: string
           minLength: 1
@@ -5771,8 +5794,20 @@ components:
       example:
         status: "ok"
         contract_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        features: [parked_task_move]
         version: "0.1.0"
         started_at: "2026-01-02T03:04:05Z"
+
+    DaemonFeature:
+      type: string
+      enum: [parked_task_move, unknown]
+      description: >
+        A feature a daemon build may serve, named in `/health`'s `features`
+        so an app can turn off what an older daemon lacks. A name is
+        registered here once, by the unit that adds an app-visible surface a
+        newer app would otherwise send to a daemon that refuses it.
+        `parked_task_move`: the `move_parked_task` command (plan §4, quota
+        park).
 
     PairingRequest:
       type: object
@@ -5946,6 +5981,33 @@ components:
       properties:
         message:
           type: string
+
+    CommandRequestRejection:
+      type: object
+      description: >
+        A refused command: the daemon applied and recorded nothing. A
+        refusal with reason `unknown_command_kind` meets every retry to the
+        same daemon; any other refusal may clear when state changes, as when
+        a snooze ends.
+      required: [message]
+      properties:
+        message:
+          type: string
+        reason:
+          $ref: "#/components/schemas/CommandRequestRejectionReason"
+      example:
+        message: payload.kind is not a command kind this daemon serves
+        reason: unknown_command_kind
+
+    CommandRequestRejectionReason:
+      type: string
+      enum: [unknown_command_kind, unknown]
+      description: >
+        Why the daemon refused a command, when the client acts on the
+        reason. `unknown_command_kind`: this daemon serves no command of the
+        payload's kind, as when an app newer than the daemon sends a command
+        the daemon's build predates; the client drops the command rather
+        than keeping it for retry.
 
     # --- domain mirrors (daemon/internal/domain, field-for-field) ---
 

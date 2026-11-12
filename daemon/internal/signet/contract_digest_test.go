@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 )
@@ -39,6 +40,7 @@ func TestHealthResponseGolden(t *testing.T) {
 	fixture := signet.HealthResponse{
 		Status:         "ok",
 		ContractDigest: "sha256:" + strings.Repeat("0", 64),
+		Features:       []domain.DaemonFeature{domain.DaemonFeatureParkedTaskMove},
 		Version:        "0.1.0",
 		StartedAt:      time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	}

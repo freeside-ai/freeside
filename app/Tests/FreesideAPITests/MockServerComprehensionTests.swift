@@ -129,8 +129,7 @@ import Testing
         let bogus = "sha256:" + String(repeating: "a", count: 64)
         let rejected = try await p.client.submitCommand(
             body: .json(command(snapshot, id: "cmd-2", action: action, surfaceDigest: bogus)))
-        if case .undocumented(let code, _) = rejected {
-            #expect(code == 400)
+        if case .badRequest = rejected {
         } else {
             Issue.record("an unknown surface digest was accepted")
         }
