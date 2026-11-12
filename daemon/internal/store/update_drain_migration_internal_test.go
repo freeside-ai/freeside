@@ -11,6 +11,7 @@ import (
 // update drain log.
 func rewindUpdateDrain(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindPublishAuditWorkflows(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE update_drain_transitions`,
 		`DELETE FROM schema_migrations WHERE name = '0135_update_drain.sql'`,

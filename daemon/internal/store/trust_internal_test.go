@@ -329,6 +329,53 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 	}
 }
 
+// TestTrustProfileStanceFlipFailsClosed: a stored block profile whose body
+// was flipped to advisory under its bound digest fails the read, so no gate
+// can recompute an advisory stance from it (plan §5.5).
+func TestTrustProfileStanceFlipFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRawTemplate(t)
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       "freeside-ai/candidate-repo",
+		RepositoryID:               123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
+	})
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
+	body, err := encode(profile)
+	if err != nil {
+		t.Fatalf("encode profile: %v", err)
+	}
+	flipped := strings.Replace(body,
+		`"candidate_automation_changes":"block"`, `"candidate_automation_changes":"advisory"`, 1)
+	if flipped == body {
+		t.Fatal("stance tamper did not apply")
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+		profile.ProfileDigest, profile.Repo, formatTime(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)), flipped); err != nil {
+		t.Fatalf("insert flipped profile: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetTrustProfile(ctx, profile.ProfileDigest)
+		return err
+	}); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("flipped profile read error = %v, want ErrProfileDigestMismatch", err)
+	}
+}
+
 // Captured verbatim from the v4 build: encode() of a valid profile before the
 // canonical repository ID became part of the owner-approved content.
 const (

@@ -391,7 +391,9 @@ func (d *Driver) finish(
 		}
 		return exec.StageResult{}, err
 	}
-	if err := d.validateImportFindings(in, imported, opts.Policy.FindingProfile, !blockedPresent); err != nil {
+	if err := d.validateImportFindings(
+		in, imported, opts.Policy.FindingProfile, opts.Policy.CandidateAutomationChanges, !blockedPresent,
+	); err != nil {
 		return exec.StageResult{}, err
 	}
 	if blockedPresent {
@@ -735,7 +737,9 @@ func isDefinitiveImportRejection(err error) bool {
 
 // validateImportFindings decides the released import's fate under the stage's
 // finding profile. Under the default publish-strict profile every finding is
-// fatal, exactly as before; the specification profile tolerates the
+// fatal except an advisory one, under the automation-change stance the import
+// ran with (the digest-verified profile's, copied into its Policy); the
+// specification profile tolerates the
 // workspace-debris classes because it publishes a typed specification, never
 // workspace content. A fatal finding returns a definitiveRejection carrying the
 // diagnostic sample; the ExportRejection itself is recorded later, after the
@@ -743,9 +747,10 @@ func isDefinitiveImportRejection(err error) bool {
 // no store write and cannot fail on one. expectCommit is false only for a
 // blocked terminal, which by contract carries no candidate.
 func (d *Driver) validateImportFindings(
-	in intent, imported importer.Result, profile *importer.FindingProfile, expectCommit bool,
+	in intent, imported importer.Result, profile *importer.FindingProfile,
+	stance domain.AutomationChangePolicy, expectCommit bool,
 ) error {
-	fatal, tolerated := partitionFindings(imported.Findings, profile)
+	fatal, tolerated := partitionFindings(imported.Findings, profile, stance)
 	if len(fatal) > 0 {
 		return newDefinitiveRejection(fatal, tolerated)
 	}
@@ -771,13 +776,13 @@ func profileLabel(profile *importer.FindingProfile) string {
 }
 
 // partitionFindings splits a result's findings into the definitively fatal and
-// the tolerated under the given profile. Both slices preserve the importer's
-// order.
+// the tolerated under the given profile and automation-change stance. Both
+// slices preserve the importer's order.
 func partitionFindings(
-	findings []importer.Finding, profile *importer.FindingProfile,
+	findings []importer.Finding, profile *importer.FindingProfile, stance domain.AutomationChangePolicy,
 ) (fatal, tolerated []importer.Finding) {
 	for _, f := range findings {
-		if f.Fatal(profile) {
+		if f.Fatal(profile, stance) {
 			fatal = append(fatal, f)
 		} else {
 			tolerated = append(tolerated, f)

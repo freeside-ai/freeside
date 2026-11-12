@@ -1166,8 +1166,16 @@ conditions, and five-second sampling can miss brief competing test activity.
 The default publish identity is one public GitHub App owned by the operator's
 personal account. A fresh operator registers it through GitHub's manifest flow;
 Freeside generates the suggested name, requests the publish permission set
-plus `issues: write`, and writes the conversion key directly to the protected
-credentials directory. Publication tokens keep their original permissions.
+plus `workflows: write` and `issues: write`, and writes the conversion key
+directly to the protected credentials directory. A publication token asks for
+`workflows: write` only under a trust profile whose
+`candidate_automation_changes` is `advisory` (the
+`-candidate-automation-changes` onboarding flag); otherwise it keeps its
+original permissions. A grant that differs from the request in either
+direction is refused, so an existing installation must accept the
+`workflows: write` permission change on GitHub before an `advisory` profile
+is approved, or every publication under that profile is refused, not only
+one that edits a workflow.
 
 Follow-up filing mints a separate token with only `issues: write` and
 `metadata: read` for the one target repository. Its issue calls and App bot
@@ -3511,7 +3519,9 @@ path, so an agent's edit to them draws no import finding. A match in
 `reviewer_instruction` is advisory: the candidate publishes with the finding
 surfaced. A match in any other class, `git_metadata` included, fails the
 writer's run at import, before verification or review, and nothing is
-published; no decision or waiver releases it. The operator sees a failed
+published; no decision or waiver releases it. The exception is
+`automation_control` under an `advisory` profile (next paragraph). The
+operator sees a failed
 stage whose outcome counts the publish-blocking findings, and the daemon logs
 each finding's kind and path under `released export definitively rejected by
 gauntlet containment`. So a writer can stop before it spends a run, its
@@ -3519,6 +3529,23 @@ prompt ends with a "Protected paths" section listing every pattern whose
 match fails the run under the run's trust profile; the import gate still
 derives its own patterns at import. Decision record:
 `devlog/2026-11-12-1022-protected-path-edit-fails-run.md`.
+
+**`-candidate-automation-changes block|advisory` sets what an agent's
+automation-control edit does.** That is an edit matching
+`DefaultAutomationControlPatterns` (`.github/workflows/**`,
+`.github/actions/**`, and the rest) or the profile's `automation_control`
+patterns. Under `block`, the default, it fails the writer's run at import
+as above. Under `advisory` it imports with an
+advisory `automation_control_path` finding, which the ready card's
+authorization binds and the pull request's "Freeside Control-Plane
+Advisories" section shows, with a note that GitHub runs the edited workflow
+when the pull request opens, before anyone reviews it (plan §5.5).
+Onboarding refuses any other value before store or network work. The
+review shows the value as `profile.candidate_automation_changes` and the
+approval digest binds it, so changing it needs a fresh review. Every
+publication token under `advisory` asks for `workflows: write`, because
+GitHub refuses a push that changes a workflow file without it; accept that
+permission on the installation first (GitHub App Credential Onboarding).
 
 **Each project image bakes one toolchain, or Go and Swift together.**
 `-go-module-dir <dir>` and `-swift-package-dir <dir>`, on both
@@ -4131,12 +4158,11 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   file outside the defaults below imports with no finding (plan §11,
   revision 118). `TestImportFreesideProtectedPaths` in
   `internal/importer` pins that; change both together. The importer's
-  built-in patterns still apply: an automation-control edit
-  (`.github/workflows/**`, `.github/actions/**`, and the rest of
-  `DefaultAutomationControlPatterns`) fails the writer's run at import until
-  #3125 makes it advisory, a git-metadata edit fails it too, and a
-  reviewer-instruction edit is advisory. The verify stage still flags an
-  edit to the recipe or a script it names directly. The owner's accepted residual risk is in
+  built-in patterns still apply: a reviewer-instruction edit is advisory,
+  a git-metadata edit fails the writer's run at import, and an
+  automation-control edit follows the stance below. The verify stage still
+  flags an edit to the recipe or a script it names directly. The owner's
+  accepted residual risk is in
   `devlog/2026-11-12-0908-freeside-unprotected-paths.md`. A profile approved
   with the flags this section used to list needs a fresh onboarding review,
   because the approval digest binds them.
@@ -4146,6 +4172,17 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   an admitted account's pull request conversation comment is an external
   finding (#3127), which the hand-back cycle (#3160) consumes. A comment from
   an account the profile doesn't list is stored and drives nothing.
+- **Automation control:** `-candidate-automation-changes advisory`, so an
+  edit to `.github/workflows/**`, `.github/actions/**`, or the rest of
+  `DefaultAutomationControlPatterns` publishes with an advisory finding
+  instead of failing the writer's run at import (plan §5.5, revision 118).
+  Before approving that review, accept `workflows: write` on the App's
+  installation (GitHub App Credential Onboarding), and settle the
+  branch-rule question in
+  `devlog/2026-11-12-0840-advisory-automation-control.md`: `main` requires
+  no approving review, so a pull-request job holding a writable token can
+  merge its own pull request once `required` passes. Closing that is the
+  owner's choice.
 - **Deputy scope:** set the deputy's `repository.allowed_paths` to every
   top-level entry:
 

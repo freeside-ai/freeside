@@ -82,6 +82,31 @@ func TestDesiredPRContentRendersAdvisoriesBetweenProseAndHistory(t *testing.T) {
 	}
 }
 
+// TestRenderAdvisoriesExplainsWorkflowEdits: a workflow-configuration
+// advisory (plan §5.5) renders under its own label and adds the sentence that
+// the workflow ran before review; a section with only reviewer-instruction
+// advisories keeps its earlier text.
+func TestRenderAdvisoriesExplainsWorkflowEdits(t *testing.T) {
+	t.Parallel()
+	workflow := advisoryFinding(".github/workflows/ci.yml")
+	category := domain.ControlPlaneWorkflowConfiguration
+	workflow.Category, workflow.Kind = &category, "automation_control_path"
+	const before = "Workflow edits act before review"
+	section := renderAdvisories([]domain.CandidateFinding{advisoryFinding("AGENTS.md"), workflow})
+	for _, want := range []string{
+		before,
+		"- workflow configuration: <code>.github/workflows/ci.yml</code> (<code>automation_control_path</code>)",
+		"- reviewer instructions: <code>AGENTS.md</code> (<code>reviewer_instruction_path</code>)",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("section lacks %q:\n%s", want, section)
+		}
+	}
+	if plain := renderAdvisories([]domain.CandidateFinding{advisoryFinding("AGENTS.md")}); strings.Contains(plain, before) {
+		t.Errorf("instruction-only section explains workflow edits:\n%s", plain)
+	}
+}
+
 // TestRenderAdvisoriesBoundsTheSection: beyond the entry cap the remainder
 // is counted rather than rendered, every claim is byte-bounded, and the
 // whole section stays under its pinned ceiling even when each field is at
@@ -90,8 +115,11 @@ func TestDesiredPRContentRendersAdvisoriesBetweenProseAndHistory(t *testing.T) {
 func TestRenderAdvisoriesBoundsTheSection(t *testing.T) {
 	t.Parallel()
 	findings := make([]domain.CandidateFinding, maxRenderedAdvisories+5)
+	workflow := domain.ControlPlaneWorkflowConfiguration
 	for i := range findings {
 		hostile := advisoryFinding("")
+		// The longer label and the workflow sentence are the worst case.
+		hostile.Category = &workflow
 		hostile.PathHex = strings.Repeat("&", 4096)
 		hostile.Kind = strings.Repeat("&", 4096)
 		hostile.Detail = strings.Repeat("&", 4096)

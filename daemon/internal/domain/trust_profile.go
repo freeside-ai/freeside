@@ -43,6 +43,12 @@ import (
 // build decoding such a body drops the unknown field, recomputes a
 // different digest, and fails closed. A field whose absence would not mean
 // "exactly as before" still needs a new version.
+//
+// The advisory candidate_automation_changes value was added without a bump
+// for the same reason: it is a new value of a key the encoding already
+// carries, so a block profile encodes to the bytes and digest it had, and an
+// older build decoding an advisory profile fails the stance's valid() check
+// and so fails closed.
 const trustProfileEncodingVersion = "freeside-trust-profile/v6"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
@@ -282,6 +288,43 @@ type AutomationTrustProfile struct {
 	// existed (see trustProfileEncodingVersion).
 	ExternalReviewers []ExternalReviewer `json:"external_reviewers,omitempty"`
 	ProfileDigest     Digest             `json:"profile_digest"`
+}
+
+// AdvisoryUnder reports whether a candidate change in this control-plane
+// category is surfaced as an advisory finding instead of blocking
+// publication, under the given profile stance (plan §5.8, revision 42, and
+// §5.5). Reviewer instructions are advisory under every stance: the coding
+// agent and the Freeside-invoked reviewer load them from the exact trusted
+// base, so a candidate's edit cannot govern its own review. Workflow
+// configuration is advisory only under AutomationChangesAdvisory, the opt-in
+// a profile review sets; under block, and for the invalid zero stance, it
+// stays publish-blocking. Every other category is Freeside-owned
+// configuration and is never advisory.
+//
+// The gate re-checks the stance the digest-bound profile holds: every caller
+// passes the stance of the profile its run is bound to (the importer's
+// Policy copies it from the digest-verified profile, the publication replay
+// and the remediation-source gate read it from the bound profile), never a
+// stance read from a stored finding, task payload, or authorization. The
+// switches omit default so a new category or stance must decide; the
+// trailing returns fail closed.
+func (c ControlPlaneCategory) AdvisoryUnder(policy AutomationChangePolicy) bool {
+	switch c {
+	case ControlPlaneReviewerInstructions:
+		return true
+	case ControlPlaneWorkflowConfiguration:
+		switch policy {
+		case AutomationChangesAdvisory:
+			return true
+		case AutomationChangesBlocked:
+			return false
+		}
+		return false
+	case ControlPlanePromptsAndPolicy, ControlPlaneEgressAndTrust,
+		ControlPlaneVerificationRecipes, ControlPlaneMaterialityRules:
+		return false
+	}
+	return false
 }
 
 // AutomationTrustProfileInput carries the caller-supplied fields of an

@@ -127,6 +127,8 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"ALTER TABLE project_images DROP COLUMN environment_digest",
 				"ALTER TABLE publish_mint_audits DROP COLUMN requested_issues",
 				"ALTER TABLE publish_mint_audits DROP COLUMN granted_issues",
+				"ALTER TABLE publish_mint_audits DROP COLUMN requested_workflows",
+				"ALTER TABLE publish_mint_audits DROP COLUMN granted_workflows",
 				"DROP TABLE device_activity",
 				"DROP TABLE review_admissions",
 				"DROP TABLE review_dispute_rows",

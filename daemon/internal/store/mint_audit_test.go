@@ -24,6 +24,7 @@ func mintAuditFixture() store.MintAudit {
 		RequestedPullRequests:   "write",
 		RequestedMetadata:       "read",
 		RequestedIssues:         "write",
+		RequestedWorkflows:      "write",
 		GrantedContents:         "write",
 		GrantedActions:          "read",
 		GrantedAdministration:   "read",
@@ -31,6 +32,7 @@ func mintAuditFixture() store.MintAudit {
 		GrantedPullRequests:     "write",
 		GrantedMetadata:         "read",
 		GrantedIssues:           "write",
+		GrantedWorkflows:        "write",
 		ExpiresAt:               time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC),
 	}
 }
@@ -50,6 +52,7 @@ func TestRecordMintAuditRoundTrip(t *testing.T) {
 	// A mint that never asked for a scope records it empty, and reads back
 	// empty rather than as the scope another row recorded.
 	second.RequestedIssues, second.GrantedIssues = "", ""
+	second.RequestedWorkflows, second.GrantedWorkflows = "", ""
 
 	var recorded []store.MintAudit
 	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {

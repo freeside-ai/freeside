@@ -61,6 +61,7 @@ type onboardConfig struct {
 	BaseBuildRef          string
 	ReviewConfig          string
 	CommitPlan            domain.CommitPlanMode
+	AutomationChanges     domain.AutomationChangePolicy
 	ExternalReviewers     []domain.ExternalReviewer
 	ProtectedPaths        domain.ProtectedPathConfig
 	Approval              string
@@ -409,13 +410,14 @@ func runOnboardCommand(
 // the one-time review shows.
 func onboardPolicy(cfg onboardConfig) operations.OnboardPolicy {
 	return operations.OnboardPolicy{
-		PRExecution:       domain.PRExecutionAuditedSameRepo,
-		CommitPlan:        cfg.CommitPlan,
-		MessageRuleset:    domain.MessageRulesetGitHub1,
-		ReviewMode:        domain.ReviewFreesideInvoked,
-		ReviewConfig:      domain.Digest(cfg.ReviewConfig),
-		ExternalReviewers: cfg.ExternalReviewers,
-		ProtectedPaths:    cfg.ProtectedPaths,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CommitPlan:                 cfg.CommitPlan,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		ReviewMode:                 domain.ReviewFreesideInvoked,
+		ReviewConfig:               domain.Digest(cfg.ReviewConfig),
+		ExternalReviewers:          cfg.ExternalReviewers,
+		ProtectedPaths:             cfg.ProtectedPaths,
+		CandidateAutomationChanges: cfg.AutomationChanges,
 	}
 }
 
@@ -487,7 +489,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.SetOutput(output)
 	configureOnboardUsage(flags)
 	var cfg onboardConfig
-	var commitPlan string
+	var commitPlan, automationChanges string
 	var dns stringList
 	var externalReviewers externalReviewerList
 	var protectedPaths protectedPathList
@@ -525,6 +527,11 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&commitPlan,
 		"commit-plan", string(domain.CommitPlanSingleCommit),
 		"commit-plan mode: single_commit or plan_preferred")
+	flags.StringVar(&automationChanges,
+		"candidate-automation-changes", string(domain.AutomationChangesBlocked),
+		"candidate edits to automation-control paths such as .github/workflows: "+
+			"block refuses them; advisory publishes them with an advisory finding and "+
+			"needs the GitHub App's workflows: write permission")
 	flags.Var(&externalReviewers, "external-reviewer",
 		"reviewer outside Freeside whose findings on a published pull request may start a review round, "+
 			"as github:<account-id>:<login>=drive_round with the login spelled as GitHub returns it; repeatable")
@@ -602,6 +609,13 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 		return onboardConfig{}, fmt.Errorf(
 			"-commit-plan %q is invalid; valid values: %v",
 			commitPlan, domain.AllCommitPlanModes,
+		)
+	}
+	cfg.AutomationChanges = domain.AutomationChangePolicy(automationChanges)
+	if !slices.Contains(domain.AllAutomationChangePolicies, cfg.AutomationChanges) {
+		return onboardConfig{}, fmt.Errorf(
+			"-candidate-automation-changes %q is invalid; valid values: %v",
+			automationChanges, domain.AllAutomationChangePolicies,
 		)
 	}
 	if cfg.RegistrationID <= 0 || cfg.RepositoryID <= 0 {

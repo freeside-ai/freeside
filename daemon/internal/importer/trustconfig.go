@@ -17,8 +17,12 @@ import (
 // with no control-plane widening. The returned globs are still re-checked by
 // Options.validate, so a malformed pattern also fails closed at import.
 //
-// The commit-plan mode and message-ruleset identifier are copied with the
-// Extra* path fields; caps and the allowlist stay untouched. The profile is the
+// The commit-plan mode, message-ruleset identifier, and automation-change
+// stance are copied with the Extra* path fields; caps and the allowlist stay
+// untouched. The stance is recorded only when it is the advisory opt-in: block
+// is the policy's zero value, so a block profile's options keep the bytes they
+// had before the stance crossed this boundary and a recorded replay still
+// matches the options rebuilt from its bound profile. The profile is the
 // trust-anchored source, so any prior profile-derived values on the policy are
 // replaced rather than merged.
 //
@@ -42,6 +46,10 @@ func (p Policy) WithProtectedPaths(profile domain.AutomationTrustProfile) (Polic
 	cfg := profile.ProtectedPaths
 	p.CommitPlan = profile.CommitPlan
 	p.MessageRuleset = profile.MessageRuleset
+	p.CandidateAutomationChanges = ""
+	if profile.CandidateAutomationChanges != domain.AutomationChangesBlocked {
+		p.CandidateAutomationChanges = profile.CandidateAutomationChanges
+	}
 	p.ExtraAutomationControlPatterns = slices.Clone(cfg.ExtraAutomationControlPatterns)
 	p.ExtraReviewerInstructionPatterns = slices.Clone(cfg.ExtraReviewerInstructionPatterns)
 	p.ExtraGitMetadataPatterns = slices.Clone(cfg.ExtraGitMetadataPatterns)

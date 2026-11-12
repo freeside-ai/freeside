@@ -32,7 +32,10 @@
 //     reviewer-instruction paths, allowlist and size policy, path
 //     collisions, and best-effort secret matches. All lift as
 //     publish-blocking except reviewer-instruction paths, which lift as
-//     advisory (§5.8, revision 42) and publish surfaced in the PR body.
+//     advisory (§5.8, revision 42) and publish surfaced in the PR body,
+//     and automation-control paths, which lift as advisory only when the
+//     bound trust profile's candidate_automation_changes is advisory
+//     (§5.5; Policy.CandidateAutomationChanges).
 //
 // Publish-blocking findings still produce the commit when the tree can
 // faithfully represent the candidate: §5.5 routes blocked changes
@@ -79,7 +82,8 @@
 //   - policy.go   §5.5/§5.8 path classes, the declared-scope
 //     allowlist, and size policy over the change set
 //   - trustconfig.go Policy.WithProtectedPaths: widening by the repository's
-//     trust-anchored protected-path configuration
+//     trust-anchored protected-path configuration, and the profile's
+//     commit-plan, message-ruleset, and automation-change stance
 //   - collision.go  case- and Unicode-normalization-fold collisions on
 //     a case-insensitive checkout (the reference deployment is APFS)
 //   - secrets.go  best-effort secret scan of added/modified textual

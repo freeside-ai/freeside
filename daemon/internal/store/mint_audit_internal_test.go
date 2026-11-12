@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -119,6 +120,60 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	}
 }
 
+// rewindPublishAuditWorkflows returns a migrated store to the schema 0135
+// leaves: no workflows columns on the mint audit.
+func rewindPublishAuditWorkflows(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`ALTER TABLE publish_mint_audits DROP COLUMN requested_workflows`,
+		`ALTER TABLE publish_mint_audits DROP COLUMN granted_workflows`,
+		`DELETE FROM schema_migrations WHERE name = '0136_publish_audit_workflows.sql'`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+}
+
+// TestMintAuditWorkflowsMigrationPreservesLegacyRows proves the forward
+// migration applies to a populated ledger and records no workflows scope for
+// a mint that predates the column pair: the row requested none.
+func TestMintAuditWorkflowsMigrationPreservesLegacyRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRawThrough(t, "0136_")
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO publish_mint_audits (
+    minted_at, registration_id, installation_id, repository_id, repo,
+    requested_contents, requested_pull_requests, requested_metadata,
+    granted_contents, granted_pull_requests, granted_metadata,
+    requested_actions, requested_administration, requested_environments,
+    granted_actions, granted_administration, granted_environments,
+    requested_issues, granted_issues,
+    expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"2026-07-17T12:00:00Z", 4365457, 424242, 990011, "freeside-ai/legacy-repo",
+		"write", "write", "read", "write", "write", "read",
+		"read", "read", "read", "read", "read", "read",
+		"", "",
+		"2026-07-17T13:00:00Z"); err != nil {
+		t.Fatalf("insert legacy audit: %v", err)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate current schema: %v", err)
+	}
+
+	var requested, granted string
+	if err := db.QueryRowContext(ctx,
+		`SELECT requested_workflows, granted_workflows FROM publish_mint_audits WHERE repo = ?`,
+		"freeside-ai/legacy-repo").Scan(&requested, &granted); err != nil {
+		t.Fatalf("read migrated audit: %v", err)
+	}
+	if requested != "" || granted != "" {
+		t.Fatalf("legacy workflows scope = requested %q, granted %q, want both empty", requested, granted)
+	}
+}
+
 // TestEncryptedRestoreRoundTripsMintAuditIssues proves a checkpoint carries a
 // mint audit's issues scope and the daemon's restore brings it back. The
 // restore copies each row by column position, so the two columns are read
@@ -138,6 +193,7 @@ func TestEncryptedRestoreRoundTripsMintAuditIssues(t *testing.T) {
 				Repo:              repo,
 				RequestedMetadata: "read", GrantedMetadata: "read",
 				RequestedIssues: requested, GrantedIssues: granted,
+				RequestedWorkflows: granted, GrantedWorkflows: requested,
 				ExpiresAt: time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC),
 			})
 			return err
@@ -163,15 +219,15 @@ func TestEncryptedRestoreRoundTripsMintAuditIssues(t *testing.T) {
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT repo, requested_issues, granted_issues FROM publish_mint_audits`)
+		`SELECT repo, requested_issues, granted_issues, requested_workflows, granted_workflows FROM publish_mint_audits`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = rows.Close() }()
-	var got [][3]string
+	var got [][5]string
 	for rows.Next() {
-		var row [3]string
-		if err := rows.Scan(&row[0], &row[1], &row[2]); err != nil {
+		var row [5]string
+		if err := rows.Scan(&row[0], &row[1], &row[2], &row[3], &row[4]); err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, row)
@@ -179,7 +235,7 @@ func TestEncryptedRestoreRoundTripsMintAuditIssues(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	want := [3]string{"freeside-ai/checkpointed-repo", "write", "read"}
+	want := [5]string{"freeside-ai/checkpointed-repo", "write", "read", "read", "write"}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("restored audits = %q, want only %q", got, want)
 	}

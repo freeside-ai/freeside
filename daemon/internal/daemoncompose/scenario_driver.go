@@ -175,7 +175,7 @@ func (d scenarioStageDriver) deliver(ctx context.Context, id domain.InvocationID
 	if err != nil {
 		return fmt.Errorf("import delivery: %w", err)
 	}
-	if !importer.AllAdvisory(imported.Findings) || imported.CommitSHA == "" {
+	if !importer.AllAdvisory(imported.Findings, options.Policy.CandidateAutomationChanges) || imported.CommitSHA == "" {
 		return fmt.Errorf("import delivery: refused with findings %v", imported.Findings)
 	}
 	record, err := domain.NewExecutionExport(domain.ExecutionExportInput{

@@ -912,7 +912,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		ProjectImage: binding.verificationImage().ID,
 		Outcome:      reentryOutcome(verified.Outcome), RecipeDigest: verified.RecipeDigest,
 		EvidenceSnapshotDigest: evidenceDigest,
-		Findings:               candidateFindings(nil, verified.Findings),
+		Findings:               verificationCandidateFindings(verified.Findings),
 		Artifacts:              artifacts, DiffStats: diffStats,
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -1276,7 +1276,7 @@ func (c productionReentryCheckpoint) reportAgrees(
 		report.EvaluatedSHA == evaluatedSHA &&
 		report.RecipeDigest == c.RecipeDigest &&
 		reentryOutcome(report.Outcome) == c.Outcome &&
-		slices.EqualFunc(candidateFindings(nil, report.Findings), c.Findings,
+		slices.EqualFunc(verificationCandidateFindings(report.Findings), c.Findings,
 			func(reported, stored domain.CandidateFinding) bool {
 				return reflect.DeepEqual(reported, stored)
 			})

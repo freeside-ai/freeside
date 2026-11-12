@@ -2,6 +2,7 @@ package publish
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -57,6 +58,15 @@ func renderAdvisories(findings []domain.CandidateFinding) string {
 		"Freeside composes agent and reviewer instructions from the trusted base, never " +
 		"from a candidate, so these edits could not govern their own review; once merged " +
 		"they govern later runs. Review them deliberately.\n\n")
+	// A workflow edit is advisory only under a profile that opts in (plan
+	// §5.5), and unlike an instruction edit it acts before review, so the
+	// section says so whenever one is present. Without one the section keeps
+	// the bytes it had, so an earlier candidate replays byte-identically.
+	if slices.ContainsFunc(findings, isWorkflowAdvisory) {
+		out.WriteString("Workflow edits act before review: GitHub runs this candidate's workflows " +
+			"when the pull request opens, with a same-repository pull-request job's " +
+			"grants. Check what ran before merging.\n\n")
+	}
 	for i, finding := range findings {
 		if i == maxRenderedAdvisories {
 			fmt.Fprintf(&out, "- %d more advisory findings omitted; the complete set is bound in the candidate authorization.\n",
@@ -79,6 +89,10 @@ func renderAdvisories(findings []domain.CandidateFinding) string {
 	}
 	fmt.Fprintf(&out, "\n%s", advisoriesCloseMarker)
 	return out.String()
+}
+
+func isWorkflowAdvisory(finding domain.CandidateFinding) bool {
+	return finding.Category != nil && *finding.Category == domain.ControlPlaneWorkflowConfiguration
 }
 
 // containsAdvisoriesMarker reports whether prose carries the section's

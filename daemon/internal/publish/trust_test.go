@@ -30,12 +30,21 @@ func trustProfileForRepo(t *testing.T, repo string) domain.AutomationTrustProfil
 
 func trustProfileForRepoID(t *testing.T, repo string, repositoryID int64) domain.AutomationTrustProfile {
 	t.Helper()
+	return trustProfileWithStance(t, repo, repositoryID, domain.AutomationChangesBlocked)
+}
+
+// trustProfileWithStance is trustProfileForRepoID under the given
+// candidate_automation_changes stance.
+func trustProfileWithStance(
+	t *testing.T, repo string, repositoryID int64, stance domain.AutomationChangePolicy,
+) domain.AutomationTrustProfile {
+	t.Helper()
 	evidence := workflowAuditEvidenceForRepo(t, repo)
 	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       repo,
 		RepositoryID:               repositoryID,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
-		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		CandidateAutomationChanges: stance,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,

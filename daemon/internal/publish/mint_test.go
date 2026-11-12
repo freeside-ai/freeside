@@ -211,6 +211,10 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 			`"permissions":{"contents":"write","metadata":"read"},` + wantRepos + `}`},
 		{"extra permission key", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
 			`"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read","issues":"write"},` + wantRepos + `}`},
+		// A block profile never requests workflows, so a grant carrying it
+		// is broader than the request.
+		{"workflows under block", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
+			`"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read","workflows":"write"},` + wantRepos + `}`},
 		{"credential-shaped permission", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
 			`"permissions":{"actions":"read","administration":"read","contents":"` + fixtureTokenValue + `","environments":"read","pull_requests":"write","metadata":"read"},` + wantRepos + `}`},
 		{"all repositories", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +

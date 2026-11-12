@@ -769,28 +769,41 @@ func TestExchangeCodeRejectsMissingCanonicalMetadata(t *testing.T) {
 // credentials can replace the keystore.
 func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
-		if err != nil {
-			t.Errorf("read fixture: %v", err)
-		}
-		var resp map[string]any
-		if err := json.Unmarshal(fixture, &resp); err != nil {
-			t.Errorf("decode fixture: %v", err)
-		}
-		resp["permissions"] = map[string]string{"metadata": "read"}
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(resp)
-	})))
-	defer srv.Close()
+	for name, permissions := range map[string]map[string]string{
+		"metadata only": {"metadata": "read"},
+		// A conversion that withheld workflows:write could never publish
+		// under an advisory profile (plan §5.5), so it is refused too.
+		"no workflows": {
+			"actions": "read", "administration": "read", "contents": "write", "environments": "read",
+			"pull_requests": "write", "metadata": "read", "issues": "write",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
+				if err != nil {
+					t.Errorf("read fixture: %v", err)
+				}
+				var resp map[string]any
+				if err := json.Unmarshal(fixture, &resp); err != nil {
+					t.Errorf("decode fixture: %v", err)
+				}
+				resp["permissions"] = permissions
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(resp)
+			})))
+			defer srv.Close()
 
-	ks := newTestKeystore(t)
-	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
-	if _, err := r.ExchangeCode(context.Background(), "CODE123", testRegistrationTarget()); err == nil {
-		t.Error("conversion with mismatched permissions accepted, want error")
-	}
-	if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
-		t.Error("rejected conversion left credentials in the keystore")
+			ks := newTestKeystore(t)
+			r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
+			if _, err := r.ExchangeCode(context.Background(), "CODE123", testRegistrationTarget()); err == nil {
+				t.Error("conversion with mismatched permissions accepted, want error")
+			}
+			if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
+				t.Error("rejected conversion left credentials in the keystore")
+			}
+		})
 	}
 }
 
