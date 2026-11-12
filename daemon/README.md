@@ -3508,9 +3508,17 @@ them, so adding or removing one needs a fresh review. The default patterns
 always apply. Without the flag the repository-specific classes (verification
 recipes, prompts and policy, egress and trust, materiality rules) protect no
 path, so an agent's edit to them draws no import finding. A match in
-`reviewer_instruction` is advisory and one in `git_metadata` is a waivable
-repository-change finding; a match in any other class holds publication as a
-non-waivable control-plane finding.
+`reviewer_instruction` is advisory: the candidate publishes with the finding
+surfaced. A match in any other class, `git_metadata` included, fails the
+writer's run at import, before verification or review, and nothing is
+published; no decision or waiver releases it. The operator sees a failed
+stage whose outcome counts the publish-blocking findings, and the daemon logs
+each finding's kind and path under `released export definitively rejected by
+gauntlet containment`. So a writer can stop before it spends a run, its
+prompt ends with a "Protected paths" section listing every pattern whose
+match fails the run under the run's trust profile; the import gate still
+derives its own patterns at import. Decision record:
+`devlog/2026-11-12-1022-protected-path-edit-fails-run.md`.
 
 **Each project image bakes one toolchain, or Go and Swift together.**
 `-go-module-dir <dir>` and `-swift-package-dir <dir>`, on both
@@ -4116,10 +4124,10 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   `internal/importer` pins that; change both together. The importer's
   built-in patterns still apply: an automation-control edit
   (`.github/workflows/**`, `.github/actions/**`, and the rest of
-  `DefaultAutomationControlPatterns`) holds publication until #3125 makes it
-  advisory, a reviewer-instruction edit is advisory, and a git-metadata edit
-  is waivable. The verify stage still flags an edit to the recipe or a
-  script it names directly. The owner's accepted residual risk is in
+  `DefaultAutomationControlPatterns`) fails the writer's run at import until
+  #3125 makes it advisory, a git-metadata edit fails it too, and a
+  reviewer-instruction edit is advisory. The verify stage still flags an
+  edit to the recipe or a script it names directly. The owner's accepted residual risk is in
   `devlog/2026-11-12-0908-freeside-unprotected-paths.md`. A profile approved
   with the flags this section used to list needs a fresh onboarding review,
   because the approval digest binds them.
@@ -4142,8 +4150,8 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   Allowed doesn't lift the importer's built-in classes. An edit to
   `AGENTS.md`, `CLAUDE.md`, `.claude/**`, or `.agents/skills/**` draws an
   advisory reviewer-instruction finding and publishes with it surfaced. An
-  edit to `.gitattributes` draws a waivable git-metadata finding. An edit to
-  an automation-control path holds publication. A new top-level entry needs
+  edit to `.gitattributes` or to an automation-control path fails the
+  writer's run at import. A new top-level entry needs
   its own allowed-path decision. `app/` is allowed, but an `api/openapi.yaml`
   change still fails the recipe's `api digest` step: its fix is a
   regenerated client, and `app generate` needs the network the writer's
