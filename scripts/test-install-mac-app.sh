@@ -55,6 +55,7 @@ case "${1:-}" in
         printf '%s\n' "${STUB_BUNDLE_ID:-${built_id:-ai.freeside.app.macos}}"
         ;;
     CFBundleDisplayName | CFBundleName | CFBundleIconName | FreesideEnvironment | \
+        FreesideBuildCommit | FreesideDaemonDigest | \
         'com\.apple\.application-identifier' | \
         'com\.apple\.developer\.team-identifier' | keychain-access-groups.* | \
         TeamIdentifier.0 | ApplicationIdentifierPrefix.0 | DeveloperCertificates.* | \
@@ -194,7 +195,8 @@ case "${1:-}" in
         ' "$target" >"$target.tmp" && mv "$target.tmp" "$target"
         exit 0
         ;;
-    CFBundleDisplayName | CFBundleName | FreesideEnvironment)
+    CFBundleDisplayName | CFBundleName | FreesideEnvironment | FreesideBuildCommit | \
+        FreesideDaemonDigest)
         # The synthetic Info.plist is key=value lines; -replace inserts or
         # overwrites, as real plutil does.
         [[ "$3" == -string ]] || exit 1
@@ -336,6 +338,39 @@ EOF
     exit 0
 fi
 exit 42
+STUB
+
+# The daemon build records its arguments and GOFLAGS, then "builds" by
+# copying the case's freesided fixture to the -o path. STUB_GO_FAILS makes it
+# fail as a compile error would.
+cat >"$STUB_BIN/go" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${STUB_CASE_DIR:?}/go-args"
+printf '%s\n' "${GOFLAGS-unset}" >"$STUB_CASE_DIR/go-goflags"
+printf 'go build\n' >>"$STUB_CASE_DIR/install-steps"
+if [[ -n "${STUB_GO_FAILS:-}" ]]; then
+    echo 'stub compile error' >&2
+    exit 1
+fi
+previous=''
+for argument in "$@"; do
+    if [[ "$previous" == -o ]]; then
+        cp "$STUB_CASE_DIR/freesided" "$argument"
+        exit 0
+    fi
+    previous=$argument
+done
+exit 1
+STUB
+
+# The checkout's commit and status, fixed per case.
+cat >"$STUB_BIN/git" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+*" rev-parse HEAD ") printf '%s\n' "${STUB_GIT_HEAD:-1111111111111111111111111111111111111111}" ;;
+*" status --porcelain ") printf '%s' "${STUB_GIT_STATUS:-}" ;;
+*) exit 1 ;;
+esac
 STUB
 
 # No case runs the installed client, so pgrep finds nothing. The stand-in
@@ -582,6 +617,9 @@ begin_case() {
     unset STUB_PROFILE_CERTIFICATE_1
     unset STUB_SIGNER_CERTIFICATE
     unset STUB_CODESIGN_DROP_ENTITLEMENTS
+    unset STUB_GO_FAILS
+    unset STUB_GIT_HEAD
+    unset STUB_GIT_STATUS
     unset RUN_STATE_ROOT
     echo "case: $CASE"
 }
@@ -599,6 +637,20 @@ run_installer() {
 
 run_dev_installer() {
     run_installer_raw dev --daemon-path "$CASE_DIR/freesided"
+}
+
+# The ordinary prod install with no --daemon-path, so the installer builds
+# freesided itself.
+run_built_installer() {
+    run_installer_raw --prod
+}
+
+sha256_of() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{ print $1 }'
+    else
+        sha256sum "$1" | awk '{ print $1 }'
+    fi
 }
 
 run_installer_raw() {
@@ -1286,13 +1338,63 @@ assert_absent "$CASE_DIR/xcodebuild-called"
 assert_inode "$destination" "$entry_inode" \
     "foreign bundle destination changed"
 
-begin_case "daemon path is required before building" 26
+# With no --daemon-path, the installer builds freesided from its own
+# checkout with flags that make the bytes depend on the sources alone, and
+# records the commit and the unsigned binary's digest in the bundle (#3106).
+begin_case "without a daemon path the installer builds freesided reproducibly" 26
 destination=$CASE_DIR/Applications/Freeside.app
-run_installer_raw
+export STUB_BUILD_SUCCEEDS=true
+export STUB_GIT_HEAD=2222222222222222222222222222222222222222
+export GOFLAGS=-mod=mod
+run_built_installer
+unset GOFLAGS
+assert_rc 0
+checkout_root=$(cd "$(dirname "$INSTALLER")/../.." && pwd)
+if [[ "$(cat "$CASE_DIR/go-args" 2>/dev/null)" == "$(printf '%s\n' \
+    build -C "$checkout_root/daemon" -trimpath -buildvcs=false \
+    -o "$CASE_DIR/Build/freesided" ./cmd/freesided)" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "go arguments: $(cat "$CASE_DIR/go-args" 2>/dev/null)"
+fi
+if [[ "$(cat "$CASE_DIR/go-goflags" 2>/dev/null)" == "" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "GOFLAGS reached the daemon build: $(cat "$CASE_DIR/go-goflags" 2>/dev/null)"
+fi
+assert_file_contains "$destination/Contents/Info.plist" \
+    "FreesideBuildCommit=2222222222222222222222222222222222222222"
+assert_file_omits "$destination/Contents/Info.plist" "-dirty"
+assert_file_contains "$destination/Contents/Info.plist" \
+    "FreesideDaemonDigest=$(sha256_of "$CASE_DIR/freesided")"
+if cmp -s "$CASE_DIR/freesided" "$destination/Contents/Resources/freesided"; then
+    pass=$((pass + 1))
+else
+    report_failure "the bundled freesided is not the built one"
+fi
+assert_contains "building commit 2222222222222222222222222222222222222222"
+
+begin_case "uncommitted changes mark the recorded commit dirty" build-dirty
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_GIT_HEAD=3333333333333333333333333333333333333333
+export STUB_GIT_STATUS=' M daemon/main.go'
+run_built_installer
+assert_rc 0
+assert_file_contains "$destination/Contents/Info.plist" \
+    "FreesideBuildCommit=3333333333333333333333333333333333333333-dirty"
+
+begin_case "a failed daemon build stops before the app build" build-fails
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_GO_FAILS=true
+run_built_installer
 assert_rc 1
-assert_contains "--daemon-path is required"
-assert_absent "$destination"
+assert_contains "stub compile error"
+assert_contains "the freesided build failed"
 assert_absent "$CASE_DIR/xcodebuild-called"
+assert_inode "$destination" "$old_inode" "a failed daemon build replaced the installed app"
 
 begin_case "daemon path must be absolute" 27
 run_installer_raw --daemon-path ./freesided
@@ -1498,6 +1600,10 @@ assert_file_omits "$destination/Contents/Info.plist" "CFBundleIconName=AppIconDe
 assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_BUNDLE_ID=ai.freeside.app.macos"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "FREESIDE_MAC_APP_ICON_NAME=AppIcon"
 assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
+# A supplied daemon is not built, and its digest is recorded the same way.
+assert_absent "$CASE_DIR/go-args"
+assert_file_contains "$destination/Contents/Info.plist" \
+    "FreesideDaemonDigest=$(sha256_of "$CASE_DIR/freesided")"
 assert_exists "$CASE_DIR/codesign-sign-called"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "-allowProvisioningUpdates"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "CODE_SIGN_STYLE=Automatic"

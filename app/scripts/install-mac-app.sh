@@ -2,7 +2,7 @@
 # install-mac-app.sh — install and update FreesideMac as the operator's
 # real client (plan §10, issue #444).
 #
-# Usage: install-mac-app.sh [dev|prod] [--prod] --daemon-path <absolute-path>
+# Usage: install-mac-app.sh [dev|prod] [--prod] [--daemon-path <absolute-path>]
 #                           [--server-url <url>] [--launch]
 #
 # The target is an environment tier (plan "Environments: Prod, Dev, and
@@ -32,8 +32,13 @@
 # from UserDefaults), so the app reaches the operator's daemon when it
 # is launched from the Dock rather than with launch arguments.
 #
-# --daemon-path supplies the freesided binary copied into the app bundle
-# before the app receives its final code-signature seal.
+# The installer builds freesided from this checkout with
+# `go build -trimpath -buildvcs=false`, so the same sources give the same
+# bytes, and copies it into the app bundle before the app receives its final
+# code-signature seal. --daemon-path supplies a binary to use instead. The
+# bundle's Info.plist records the checkout's commit (FreesideBuildCommit,
+# with -dirty for uncommitted changes) and the sha256 of the unsigned daemon
+# (FreesideDaemonDigest).
 #
 # Signing identity, in resolution order:
 #   FREESIDE_MAC_SIGNING_IDENTITY  explicit Apple Development identity, by
@@ -53,10 +58,11 @@
 #                             ~/Library/Application Support/<app name>); the
 #                             daemon's state directory is <root>/daemon
 #
-# Requires: macOS, Xcode.
+# Requires: macOS, Xcode, and Go unless --daemon-path is given.
 set -euo pipefail
 
 app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(dirname "$app_dir")"
 
 target=""
 prod_confirmed=false
@@ -183,11 +189,14 @@ state_root="${FREESIDE_MAC_STATE_ROOT:-$HOME/Library/Application Support/$displa
     die "FREESIDE_MAC_STATE_ROOT must be absolute: $state_root"
 daemon_state_dir="$state_root/daemon"
 
-[[ "$daemon_path_given" == true ]] ||
-    die "--daemon-path is required so the bundled LaunchAgent can run freesided"
-[[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
-[[ -f "$daemon_path" && -x "$daemon_path" ]] ||
-    die "--daemon-path is not an executable file: $daemon_path"
+if [[ "$daemon_path_given" == true ]]; then
+    [[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
+    [[ -f "$daemon_path" && -x "$daemon_path" ]] ||
+        die "--daemon-path is not an executable file: $daemon_path"
+else
+    command -v go >/dev/null 2>&1 ||
+        die "go is required to build freesided; install Go or pass --daemon-path"
+fi
 
 # The daemon URL becomes a durable preference of the installed app, so a
 # malformed one would strand every later launch on the mock composition
@@ -670,6 +679,33 @@ identity_certificate "$identity" |
     die "could not encode the '$identity' signing certificate"
 [[ -s "$signing_certificate" ]] ||
     die "the '$identity' signing certificate is empty"
+
+build_commit=$(git -C "$repo_root" rev-parse HEAD) ||
+    die "could not read the commit of the checkout at $repo_root"
+checkout_status=$(git -C "$repo_root" status --porcelain) ||
+    die "could not read the status of the checkout at $repo_root"
+[[ -z "$checkout_status" ]] || build_commit+="-dirty"
+echo "install-mac-app: building commit $build_commit"
+
+# -trimpath and -buildvcs=false keep the checkout's path and VCS state out
+# of the binary, so the same sources give the same bytes from any checkout,
+# and an unchanged daemon can be recognized by its digest below. GOFLAGS is
+# cleared so an operator's setting cannot change the bytes either.
+if [[ "$daemon_path_given" == false ]]; then
+    daemon_path="$build_dir/freesided"
+    daemon_build_log="$build_dir/go-build.log"
+    echo "install-mac-app: building freesided (log: $daemon_build_log)"
+    if ! GOFLAGS='' go build -C "$repo_root/daemon" -trimpath -buildvcs=false \
+        -o "$daemon_path" ./cmd/freesided >"$daemon_build_log" 2>&1; then
+        tail -40 "$daemon_build_log" >&2
+        die "the freesided build failed; full log at $daemon_build_log"
+    fi
+fi
+# The digest of the unsigned binary: signing changes the bytes, so only this
+# one is comparable across installs.
+new_daemon_digest=$(shasum -a 256 "$daemon_path" | awk '{ print $1 }') ||
+    die "could not compute the sha256 of $daemon_path"
+
 build_log="$build_dir/xcodebuild.log"
 echo "install-mac-app: building Release (log: $build_log)"
 if ! xcodebuild \
@@ -708,10 +744,17 @@ plutil -replace CFBundleName -string "$bundle_name" "$built_info" ||
     die "could not set the app bundle name"
 plutil -replace FreesideEnvironment -string "$target" "$built_info" ||
     die "could not set the app environment"
+# The build identity, which the next install compares against.
+plutil -replace FreesideBuildCommit -string "$build_commit" "$built_info" ||
+    die "could not record the build commit"
+plutil -replace FreesideDaemonDigest -string "$new_daemon_digest" "$built_info" ||
+    die "could not record the daemon digest"
 require_plist_value "$built_info" CFBundleDisplayName "$display_name" "the app display name"
 require_plist_value "$built_info" CFBundleName "$bundle_name" "the app bundle name"
 require_plist_value "$built_info" CFBundleIconName "$app_icon_name" "the app icon name"
 require_plist_value "$built_info" FreesideEnvironment "$target" "the app environment"
+require_plist_value "$built_info" FreesideBuildCommit "$build_commit" "the build commit"
+require_plist_value "$built_info" FreesideDaemonDigest "$new_daemon_digest" "the daemon digest"
 # The app registers the plist its FreesideEnvironment names, so a dev bundle
 # ships its own file and label rather than a second ai.freeside.daemon.
 launch_agent_dir="$built_app/Contents/Library/LaunchAgents"
