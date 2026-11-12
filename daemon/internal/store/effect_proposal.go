@@ -911,11 +911,21 @@ func (tx *ReadTx) followUpFilingTarget(
 // separate-work verdict writes no disposition, so its entry is the whole
 // link. Every mismatch fails closed.
 //
+// The stored finding row, never the proposal, says which disposition record
+// a deferred source re-checks: an external finding's outcome is an
+// ExternalFindingDisposition (issue #1787), any other finding's is a review
+// disposition. An external finding the source's cycle does not admit is
+// refused by the entry check, because reading the adjudication re-proves that
+// its cycle admits every external finding it names, and reading the external
+// dispositions re-proves the same for each of their rows.
+//
 // Every row read here is append-only, so a proposal that passed once keeps
 // passing: this gate runs inside every attention-item reconstruction, and a
 // check on state that ordinary work moves would turn a fixed finding into an
-// unreadable inbox. Whether the source still backs the filing is the separate
-// question gateFollowUpFilingSourceCurrent answers.
+// unreadable inbox. External admission keeps that true: it reads the trust
+// profile the cycle's sealed authority names, not the active one. Whether the
+// source still backs the filing is the separate question
+// gateFollowUpFilingSourceCurrent answers.
 func (tx *ReadTx) gateFollowUpFilingSource(
 	ctx context.Context,
 	declaration domain.WorkUnitDeclaration,
@@ -947,15 +957,32 @@ func (tx *ReadTx) gateFollowUpFilingSource(
 	if source.Kind != domain.FollowUpSourceDeferredDisposition {
 		return nil
 	}
-	dispositions, err := tx.ListFindingDispositions(ctx, declaration.RunID)
+	external, err := tx.followUpSourceIsExternal(ctx, source.FindingID)
 	if err != nil {
 		return err
 	}
-	recorded := slices.ContainsFunc(dispositions, func(disposition domain.ReviewDispositionRecord) bool {
-		return disposition.FindingID == source.FindingID &&
-			disposition.Disposition == domain.ReviewDispositionDeferred &&
-			disposition.AdjudicationDigest == source.AdjudicationDigest
-	})
+	var recorded bool
+	if external {
+		dispositions, err := tx.ListExternalFindingDispositions(ctx, declaration.RunID)
+		if err != nil {
+			return err
+		}
+		recorded = slices.ContainsFunc(dispositions, func(disposition domain.ExternalFindingDisposition) bool {
+			return disposition.FindingID == source.FindingID &&
+				disposition.Disposition == domain.ReviewDispositionDeferred &&
+				disposition.Adjudication() == source.AdjudicationDigest
+		})
+	} else {
+		dispositions, err := tx.ListFindingDispositions(ctx, declaration.RunID)
+		if err != nil {
+			return err
+		}
+		recorded = slices.ContainsFunc(dispositions, func(disposition domain.ReviewDispositionRecord) bool {
+			return disposition.FindingID == source.FindingID &&
+				disposition.Disposition == domain.ReviewDispositionDeferred &&
+				disposition.AdjudicationDigest == source.AdjudicationDigest
+		})
+	}
 	if !recorded {
 		return fmt.Errorf("follow-up filing source finding %q has no deferred disposition under %q: %w",
 			source.FindingID, source.AdjudicationDigest, domain.ErrFollowUpFilingSourceMismatch)
@@ -969,6 +996,10 @@ func (tx *ReadTx) gateFollowUpFilingSource(
 // row pins which revision carried a separate-work verdict, so its artifact
 // must still be its round's head: a later revision is the amended
 // adjudication, and a verdict it replaced backs nothing.
+//
+// An external finding's deferred source is current while that deferred row
+// is the finding's latest external disposition. External dispositions have
+// no drift reversals, so the latest row is the effective one.
 //
 // It runs where a filing gains authority, at admission and at approval, and
 // never on a read: the state it checks moves with ordinary review work. It
@@ -993,6 +1024,13 @@ func (tx *ReadTx) gateFollowUpFilingSourceCurrent(
 		}
 		return nil
 	}
+	external, err := tx.followUpSourceIsExternal(ctx, source.FindingID)
+	if err != nil {
+		return err
+	}
+	if external {
+		return tx.gateExternalFollowUpFilingSourceCurrent(ctx, declaration, source)
+	}
 	// Every recorded round counts: the effective disposition is the finding's
 	// latest, with drift reversals applied.
 	effective, err := tx.EffectiveFindingDispositions(ctx, declaration.RunID, math.MaxInt)
@@ -1009,6 +1047,48 @@ func (tx *ReadTx) gateFollowUpFilingSourceCurrent(
 			source.FindingID, source.AdjudicationDigest, domain.ErrFollowUpFilingSourceStale)
 	}
 	return nil
+}
+
+// gateExternalFollowUpFilingSourceCurrent is gateFollowUpFilingSourceCurrent
+// for a deferred source on an external finding: the finding's external
+// disposition with the highest round must be deferred under the source's
+// adjudication.
+func (tx *ReadTx) gateExternalFollowUpFilingSourceCurrent(
+	ctx context.Context,
+	declaration domain.WorkUnitDeclaration,
+	source domain.FollowUpFilingSource,
+) error {
+	dispositions, err := tx.ListExternalFindingDispositions(ctx, declaration.RunID)
+	if err != nil {
+		return err
+	}
+	var latest *domain.ExternalFindingDisposition
+	for index, disposition := range dispositions {
+		if disposition.FindingID == source.FindingID && (latest == nil || disposition.Round > latest.Round) {
+			latest = &dispositions[index]
+		}
+	}
+	if latest == nil || latest.Disposition != domain.ReviewDispositionDeferred ||
+		latest.Adjudication() != source.AdjudicationDigest {
+		return fmt.Errorf("follow-up filing source external finding %q is not deferred under %q: %w",
+			source.FindingID, source.AdjudicationDigest, domain.ErrFollowUpFilingSourceStale)
+	}
+	return nil
+}
+
+// followUpSourceIsExternal reads, from the stored finding row, whether a
+// source names a finding from outside Freeside. A source naming no stored
+// finding is a mismatch.
+func (tx *ReadTx) followUpSourceIsExternal(ctx context.Context, id domain.FindingID) (bool, error) {
+	finding, err := tx.GetFinding(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return false, fmt.Errorf("follow-up filing source finding %q: %w",
+			id, domain.ErrFollowUpFilingSourceMismatch)
+	}
+	if err != nil {
+		return false, err
+	}
+	return finding.External != nil, nil
 }
 
 // followUpSourceRoute maps a source kind to the adjudication route that
