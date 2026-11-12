@@ -16,7 +16,16 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-var _ stage.UsageExtractor = claudeProvider{}
+var (
+	_ stage.UsageExtractor         = claudeProvider{}
+	_ stage.QuotaRefusalClassifier = claudeProvider{}
+)
+
+// ClassifyQuotaRefusal reads a failed writer's transcript for the provider's
+// refusal of one quota window. Anything else, or any doubt, returns nil.
+func (claudeProvider) ClassifyQuotaRefusal(transcript []byte) *domain.QuotaRefusal {
+	return exec.ClassifyClaudeQuotaRefusal(transcript, ward.RejectDuplicateJSONKeys)
+}
 
 // ExtractUsage reads numbers-only telemetry from the last Claude terminal
 // result envelope. Missing or malformed telemetry returns nil.

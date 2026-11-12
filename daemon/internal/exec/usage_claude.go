@@ -210,6 +210,65 @@ func ExtractClaudeUsageCapture(
 	return &capture
 }
 
+// claudeRejectedStatus is the rate_limit_event status the pinned CLI reports
+// for a window the provider refused, as the Claude collector reads it.
+const claudeRejectedStatus = "rejected"
+
+// ClassifyClaudeQuotaRefusal reads a failed writer turn's transcript for the
+// provider's quota refusal: the one window whose last rate_limit_event is
+// rejected, with that event's reset. The transcript is agent output and the
+// refusal only feeds scheduling. Any doubt gives nil, never a guess: an
+// unreadable line, a malformed event, no rejected window, more than one, or
+// a refusal Validate refuses. A rejected event with no reset is still a
+// refusal, with a nil reset. Unlike ExtractClaudeUsageCapture it requires no
+// result record, because a refused turn need not finish.
+func ClassifyClaudeQuotaRefusal(
+	transcript []byte, rejectDuplicateKeys func([]byte) error,
+) *domain.QuotaRefusal {
+	events := map[string]ClaudeRateLimitEvent{}
+	for line := range bytes.SplitSeq(transcript, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		if rejectDuplicateKeys(line) != nil {
+			return nil
+		}
+		var record struct {
+			Type string `json:"type"`
+		}
+		if err := strictjson.DecodeAllowingUnknownFields(
+			line, &record, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
+		); err != nil {
+			return nil
+		}
+		if record.Type != "rate_limit_event" {
+			continue
+		}
+		event, ok := decodeClaudeRateLimitEvent(line)
+		if !ok {
+			return nil
+		}
+		// The last event is the window's latest status, so a later allowed
+		// event clears an earlier rejection.
+		events[event.Window] = event
+	}
+	var refusal *domain.QuotaRefusal
+	for _, event := range events {
+		if event.Status != claudeRejectedStatus {
+			continue
+		}
+		if refusal != nil {
+			return nil
+		}
+		refusal = &domain.QuotaRefusal{Window: event.Window, ResetsAt: event.ResetsAt}
+	}
+	if refusal == nil || refusal.Validate() != nil {
+		return nil
+	}
+	return refusal
+}
+
 func decodeClaudeRateLimitEvent(line []byte) (ClaudeRateLimitEvent, bool) {
 	var record struct {
 		Info *struct {
