@@ -1,0 +1,32 @@
+{
+  "head_sha": "35e9a5b7a998142344291224ffdc87ee8cc320c5",
+  "base_sha": "c942c1a3ef48b00231dc1941d5c3d529010ac14f",
+  "history_base_sha": "c942c1a3ef48b00231dc1941d5c3d529010ac14f",
+  "recipe_path": ".freeside/verify.json",
+  "recipe_digest": "sha256:78eee19e2548a3bd25b28c8eaef00fea2cfe2c1bf7f2384688b23af36624a8d4",
+  "outcome": "passed",
+  "steps": [
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "room": "project_image",
+      "exit_code": 0,
+      "output_truncated": false
+    },
+    {
+      "argv": [
+        "bash",
+        "history-probe.sh"
+      ],
+      "room": "project_image",
+      "history": true,
+      "exit_code": 0,
+      "output_truncated": false
+    }
+  ],
+  "findings": [],
+  "transcript_truncated": false
+}

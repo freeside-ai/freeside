@@ -68,8 +68,12 @@ type Step struct {
 	// existed has none, still parses, and keeps its artifact digest;
 	// ParseReport reads its steps as project_image, the only room
 	// there was.
-	Room     ExecutionClass `json:"room,omitempty"`
-	ExitCode int            `json:"exit_code"`
+	Room ExecutionClass `json:"room,omitempty"`
+	// History records that the command asked for and got the
+	// candidate's git history. Omitted otherwise, so a report from a
+	// recipe that asks for none keeps its bytes.
+	History  bool `json:"history,omitempty"`
+	ExitCode int  `json:"exit_code"`
 	// OutputTruncated reports that this step's output was cut at a
 	// byte cap, so the transcript is honest about being partial.
 	OutputTruncated bool `json:"output_truncated"`
@@ -86,12 +90,18 @@ type Report struct {
 	// whose tree the recipe ran against. It is omitted when the head's
 	// own tree was verified, so a report written before the field
 	// existed still parses and keeps its artifact digest.
-	EvaluatedSHA string        `json:"evaluated_sha,omitempty"`
-	RecipePath   string        `json:"recipe_path"`
-	RecipeDigest domain.Digest `json:"recipe_digest"`
-	Outcome      Outcome       `json:"outcome"`
-	Steps        []Step        `json:"steps"`
-	Findings     []Finding     `json:"findings"`
+	EvaluatedSHA string `json:"evaluated_sha,omitempty"`
+	// HistoryBaseSHA is the base a history command's range starts at:
+	// the merge base of HeadSHA and BaseSHA. Set when any recipe command
+	// asks for history, whether or not that command ran; omitted
+	// otherwise, so a report from a recipe that asks for none keeps its
+	// bytes.
+	HistoryBaseSHA string        `json:"history_base_sha,omitempty"`
+	RecipePath     string        `json:"recipe_path"`
+	RecipeDigest   domain.Digest `json:"recipe_digest"`
+	Outcome        Outcome       `json:"outcome"`
+	Steps          []Step        `json:"steps"`
+	Findings       []Finding     `json:"findings"`
 	// TranscriptTruncated reports that the transcript artifact was cut
 	// at the transcript cap; the per-step flags cover only the room's
 	// per-command cap, so without this a capped transcript would read
@@ -120,6 +130,9 @@ func ParseReport(raw []byte) (Report, error) {
 	for i, step := range rep.Steps {
 		if len(step.Argv) == 0 || step.Argv[0] == "" {
 			return Report{}, fmt.Errorf("verification report has an empty command")
+		}
+		if step.History && rep.HistoryBaseSHA == "" {
+			return Report{}, fmt.Errorf("verification report step %d had history but the report names no history base", i)
 		}
 		if step.Room != "" && !step.Room.valid() {
 			return Report{}, fmt.Errorf("verification report step %d names unknown room %q", i, step.Room)

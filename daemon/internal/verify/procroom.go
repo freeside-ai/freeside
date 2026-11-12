@@ -65,11 +65,22 @@ type Invocation struct {
 	Env  []string
 }
 
+var _ EnvRoom = (*ProcRoom)(nil)
+
 // Run executes one recipe command in workdir. A non-zero exit or a
 // signal death (including a timeout kill) is a StepResult, not an
 // error: a failing candidate is a verification outcome. An error means
 // the room itself could not execute the command.
 func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (StepResult, error) {
+	return r.RunEnv(ctx, workdir, argv, nil)
+}
+
+// RunEnv is Run with extra KEY=VALUE entries appended after the room's
+// fixed PATH, HOME, and LC_ALL, which no entry may replace.
+func (r *ProcRoom) RunEnv(ctx context.Context, workdir string, argv, extra []string) (StepResult, error) {
+	if err := CheckRoomEnv(extra, "PATH", "HOME", "LC_ALL"); err != nil {
+		return StepResult{}, err
+	}
 	if r.Home == "" {
 		return StepResult{}, fmt.Errorf("proc room home is unset: %w", ErrInvalidOptions)
 	}
@@ -88,6 +99,7 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 		"HOME=" + r.Home,
 		"LC_ALL=C",
 	}
+	env = append(env, extra...)
 	waitDelay := r.WaitDelay
 	if waitDelay == 0 {
 		waitDelay = DefaultRoomWaitDelay

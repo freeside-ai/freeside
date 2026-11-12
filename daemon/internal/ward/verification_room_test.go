@@ -402,3 +402,92 @@ func TestProjectImageRoomIsNetworklessForARebuiltImage(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectImageRoomPassesExtraEnvToTheRecipeCommandOnly pins RunEnv:
+// each extra entry reaches the recipe command's container as its own
+// --env pair after the room's HOME and LC_ALL, and the preparation
+// command gets none.
+func TestProjectImageRoomPassesExtraEnvToTheRecipeCommandOnly(t *testing.T) {
+	t.Parallel()
+	runtime := newFakeRuntime(t)
+	var calls [][]string
+	room := newProjectImageRoom(
+		"container", verificationProjectImage(t, []string{"prepare", "--offline"}),
+		runtime, verificationRunner(t, runtime, []verify.StepResult{{}, {}}, &calls),
+		nil,
+		verify.DefaultMaxRoomOutputBytes,
+		DefaultLaunchSize(LaunchVerification),
+	)
+	extra := []string{"FREESIDE_VERIFY_BASE_SHA=" + strings.Repeat("e", 40), "GIT_CONFIG_VALUE_0=*"}
+	result, err := room.RunEnv(t.Context(), t.TempDir(), []string{"verify"}, extra)
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("RunEnv = %#v, %v", result, err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("run calls = %d, want 2", len(calls))
+	}
+	envPairs := func(call []string) []string {
+		var pairs []string
+		for index := 0; index+1 < len(call) && call[index] != "--"; index++ {
+			if call[index] == "--env" {
+				pairs = append(pairs, call[index+1])
+			}
+		}
+		return pairs
+	}
+	if got, want := envPairs(calls[0]), []string{"HOME=/tmp/freeside-home", "LC_ALL=C"}; !slices.Equal(got, want) {
+		t.Errorf("preparation env = %q, want %q", got, want)
+	}
+	if got, want := envPairs(calls[1]), append([]string{"HOME=/tmp/freeside-home", "LC_ALL=C"}, extra...); !slices.Equal(got, want) {
+		t.Errorf("recipe env = %q, want %q", got, want)
+	}
+}
+
+// TestProjectImageRoomRefusesUnsafeExtraEnv pins that an entry the room
+// can't pass safely, or one that would replace the room's own HOME or
+// LC_ALL, refuses the command before any container starts.
+func TestProjectImageRoomRefusesUnsafeExtraEnv(t *testing.T) {
+	t.Parallel()
+	for _, entry := range []string{
+		"HOME=/root", "LC_ALL=en_US.UTF-8", "NOEQUALS", "=value", "lower=x",
+		"1LEADING_DIGIT=x", "KEY=line\nbreak", "KEY=carriage\rreturn", "KEY=nul\x00byte",
+		"--network=host",
+	} {
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			runtime := newFakeRuntime(t)
+			var calls [][]string
+			room := newProjectImageRoom(
+				"container", verificationProjectImage(t, []string{"prepare", "--offline"}),
+				runtime, verificationRunner(t, runtime, []verify.StepResult{{}, {}}, &calls),
+				nil,
+				verify.DefaultMaxRoomOutputBytes,
+				DefaultLaunchSize(LaunchVerification),
+			)
+			if _, err := room.RunEnv(t.Context(), t.TempDir(), []string{"verify"}, []string{entry}); err == nil {
+				t.Fatalf("RunEnv accepted %q", entry)
+			}
+			if len(calls) != 0 {
+				t.Fatalf("a container started for refused entry %q: %q", entry, calls)
+			}
+		})
+	}
+	t.Run("duplicate key", func(t *testing.T) {
+		t.Parallel()
+		runtime := newFakeRuntime(t)
+		var calls [][]string
+		room := newProjectImageRoom(
+			"container", verificationProjectImage(t, []string{"prepare", "--offline"}),
+			runtime, verificationRunner(t, runtime, []verify.StepResult{{}, {}}, &calls),
+			nil,
+			verify.DefaultMaxRoomOutputBytes,
+			DefaultLaunchSize(LaunchVerification),
+		)
+		if _, err := room.RunEnv(t.Context(), t.TempDir(), []string{"verify"}, []string{"KEY=a", "KEY=b"}); err == nil {
+			t.Fatal("RunEnv accepted a key given twice")
+		}
+		if len(calls) != 0 {
+			t.Fatalf("a container started: %q", calls)
+		}
+	})
+}

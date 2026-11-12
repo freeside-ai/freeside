@@ -21,12 +21,13 @@ func TestParseRecipeGolden(t *testing.T) {
 		t.Fatalf("ParseRecipe: %v", err)
 	}
 	type command struct {
-		Argv []string       `json:"argv"`
-		Room ExecutionClass `json:"room"`
+		Argv    []string       `json:"argv"`
+		Room    ExecutionClass `json:"room"`
+		History bool           `json:"history"`
 	}
 	commands := make([]command, 0, len(r.Commands))
 	for _, c := range r.Commands {
-		commands = append(commands, command{c.Argv, c.Class})
+		commands = append(commands, command{c.Argv, c.Class, c.History})
 	}
 	doc := struct {
 		Commands []command   `json:"commands"`
@@ -97,6 +98,15 @@ func TestParseRecipeRejects(t *testing.T) {
 		{"object duplicate room", `{"commands": [{"argv": ["true"], "room": "project_image", "room": "macos_host"}], "capture": "none"}`},
 		{"object shell command string", `{"commands": [{"argv": ["sh", "-c", "true"], "room": "macos_host"}], "capture": "none"}`},
 		{"object dotdot token", `{"commands": [{"argv": ["../escape.sh"], "room": "macos_host"}], "capture": "none"}`},
+		// History is a boolean asked for on a project_image command only:
+		// the macOS slot helper can't pass the range's SHAs.
+		{"history on macos_host", `{"commands": [{"argv": ["true"], "room": "macos_host", "history": true}], "capture": "none"}`},
+		{"history null", `{"commands": [{"argv": ["true"], "room": "project_image", "history": null}], "capture": "none"}`},
+		{"history string", `{"commands": [{"argv": ["true"], "room": "project_image", "history": "true"}], "capture": "none"}`},
+		{"history number", `{"commands": [{"argv": ["true"], "room": "project_image", "history": 1}], "capture": "none"}`},
+		{"history object", `{"commands": [{"argv": ["true"], "room": "project_image", "history": {}}], "capture": "none"}`},
+		{"history duplicate", `{"commands": [{"argv": ["true"], "room": "project_image", "history": false, "history": true}], "capture": "none"}`},
+		{"history case-folded duplicate", `{"commands": [{"argv": ["true"], "room": "project_image", "history": false, "History": true}], "capture": "none"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,6 +172,39 @@ func TestParseRecipeExecutionClasses(t *testing.T) {
 	// any other: CommandPaths covers every class.
 	if got := r.CommandPaths(); !reflect.DeepEqual(got, []string{"scripts/check.sh"}) {
 		t.Errorf("CommandPaths = %#v", got)
+	}
+}
+
+// TestParseRecipeHistory pins the history field: only the object form can
+// ask, a false or absent value asks for nothing, macos_host may say false,
+// and the image proof's command list leaves a history command out while
+// CommandsIn keeps it.
+func TestParseRecipeHistory(t *testing.T) {
+	t.Parallel()
+	raw := `{"commands": [` +
+		`["go", "test", "./..."], ` +
+		`{"argv": ["bash", "scripts/check-commit-messages.sh"], "room": "project_image", "history": true}, ` +
+		`{"argv": ["go", "vet", "./..."], "room": "project_image", "history": false}, ` +
+		`{"argv": ["bash", "scripts/check.sh", "app", "test"], "room": "macos_host", "history": false}` +
+		`], "capture": "none"}`
+	r, err := ParseRecipe([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseRecipe: %v", err)
+	}
+	want := []Command{
+		{Argv: []string{"go", "test", "./..."}, Class: ClassProjectImage},
+		{Argv: []string{"bash", "scripts/check-commit-messages.sh"}, Class: ClassProjectImage, History: true},
+		{Argv: []string{"go", "vet", "./..."}, Class: ClassProjectImage},
+		{Argv: []string{"bash", "scripts/check.sh", "app", "test"}, Class: ClassMacOSHost},
+	}
+	if !reflect.DeepEqual(r.Commands, want) {
+		t.Fatalf("Commands = %#v, want %#v", r.Commands, want)
+	}
+	if got := r.ProofCommands(); !reflect.DeepEqual(got, [][]string{want[0].Argv, want[2].Argv}) {
+		t.Errorf("ProofCommands = %#v, want the project_image commands without history", got)
+	}
+	if got := r.CommandsIn(ClassProjectImage); !reflect.DeepEqual(got, [][]string{want[0].Argv, want[1].Argv, want[2].Argv}) {
+		t.Errorf("CommandsIn(project_image) = %#v, want every project_image command", got)
 	}
 }
 

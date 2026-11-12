@@ -87,9 +87,18 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	// Every class the recipe names needs a room before anything is
 	// materialized or run: a command never falls back to another class's
 	// room.
+	wantsHistory := false
 	for _, cmd := range recipe.Commands {
-		if _, ok := opts.Rooms[cmd.Class]; !ok {
+		room, ok := opts.Rooms[cmd.Class]
+		if !ok {
 			return Result{}, fmt.Errorf("recipe names execution class %q with no room: %w", cmd.Class, ErrRoomUnavailable)
+		}
+		if !cmd.History {
+			continue
+		}
+		wantsHistory = true
+		if _, ok := room.(EnvRoom); !ok {
+			return Result{}, fmt.Errorf("recipe command %q asks for history, which the %q room can't give: %w", cmd.Argv[0], cmd.Class, ErrRoomUnavailable)
 		}
 	}
 	recipeDigest := RecipeDigest(trusted)
@@ -112,7 +121,15 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if findings == nil {
 		findings = []Finding{}
 	}
-	steps, transcript, outcome, err := runRecipe(ctx, g, opts, recipe, scratch)
+	// The history is written once, before any command runs, so a range
+	// the verifier can't give exactly fails closed with nothing run.
+	var hist *history
+	if wantsHistory {
+		if hist, err = buildHistory(ctx, g, scratch, treeSHA, opts.BaseSHA, opts.HeadSHA); err != nil {
+			return Result{}, err
+		}
+	}
+	steps, transcript, outcome, err := runRecipe(ctx, g, opts, recipe, hist, scratch)
 	if err != nil {
 		return Result{}, err
 	}
@@ -120,6 +137,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 		HeadSHA:             opts.HeadSHA,
 		BaseSHA:             opts.BaseSHA,
 		EvaluatedSHA:        opts.EvaluatedSHA,
+		HistoryBaseSHA:      hist.base(),
 		RecipePath:          opts.RecipePath,
 		RecipeDigest:        recipeDigest,
 		Outcome:             outcome,
@@ -207,7 +225,14 @@ func (g *gitRunner) isTreeSymlink(ctx context.Context, commitSHA, path string) (
 // checkout per command makes each command provably run against the head
 // (the clean-room model, §6); recipe commands are therefore independent
 // checks and cannot pass workspace state between one another.
-func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, scratch string) ([]Step, *procbound.TailBuffer, Outcome, error) {
+//
+// A command that asks for history gets hist's .git copied in after its
+// workspace passes the exact-tree check, and runs through its room's
+// RunEnv with hist's variables; nothing runs between the check and the
+// copy. Every other command runs exactly as before. Verify built hist
+// when any command asks and checked each such command's room is an
+// EnvRoom.
+func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, hist *history, scratch string) ([]Step, *procbound.TailBuffer, Outcome, error) {
 	steps := make([]Step, 0, len(recipe.Commands))
 	transcript := procbound.NewTailBuffer(opts.Policy.MaxTranscriptBytes)
 	outcome := OutcomePassed
@@ -217,11 +242,26 @@ func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, s
 			return nil, nil, "", err
 		}
 		// Verify checked every class against opts.Rooms before this ran.
-		res, err := runStep(ctx, opts.Rooms[cmd.Class], opts.Policy.CommandTimeout, workspace, cmd.Argv)
+		room := opts.Rooms[cmd.Class]
+		run := func(ctx context.Context) (StepResult, error) { return room.Run(ctx, workspace, cmd.Argv) }
+		if cmd.History {
+			if err := hist.install(workspace); err != nil {
+				return nil, nil, "", err
+			}
+			// Verify refused a history command whose room isn't an EnvRoom.
+			envRoom := room.(EnvRoom)
+			run = func(ctx context.Context) (StepResult, error) {
+				return envRoom.RunEnv(ctx, workspace, cmd.Argv, hist.env)
+			}
+		}
+		res, err := runStep(ctx, opts.Policy.CommandTimeout, run)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("recipe command %q: %w", cmd.Argv[0], err)
 		}
-		steps = append(steps, Step{Argv: cmd.Argv, Room: cmd.Class, ExitCode: res.ExitCode, OutputTruncated: res.Truncated})
+		steps = append(steps, Step{
+			Argv: cmd.Argv, Room: cmd.Class, History: cmd.History,
+			ExitCode: res.ExitCode, OutputTruncated: res.Truncated,
+		})
 		writeTranscriptStep(transcript, cmd.Argv, res)
 		// Remove the used workspace before the next materialization so
 		// the scratch does not hold N full checkouts at once.
@@ -236,14 +276,14 @@ func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, s
 
 // runStep runs one command in its class's room under the per-command
 // timeout.
-func runStep(ctx context.Context, room Room, timeout time.Duration, workspace string, argv []string) (StepResult, error) {
+func runStep(ctx context.Context, timeout time.Duration, run func(context.Context) (StepResult, error)) (StepResult, error) {
 	stepCtx := ctx
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		stepCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	return room.Run(stepCtx, workspace, argv)
+	return run(stepCtx)
 }
 
 // writeTranscriptStep appends one step's record to the transcript.

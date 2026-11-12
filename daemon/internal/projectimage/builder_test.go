@@ -692,6 +692,35 @@ func TestBuildProvesOnlyProjectImageCommands(t *testing.T) {
 	}
 }
 
+// TestBuildProofSkipsHistoryCommands pins that the offline proof leaves
+// out a project_image command that asks for history: the proof has no
+// candidate, so it has no base and head to give the command.
+func TestBuildProofSkipsHistoryCommands(t *testing.T) {
+	t.Parallel()
+	backend := newFakeBackend()
+	backend.negativeErr = nil
+	request := validRequest()
+	request.Recipe = []byte(`{"commands":[["npm","run","lint"],` +
+		`{"argv":["bash","scripts/check-commit-messages.sh"],"room":"project_image","history":true},` +
+		`["npm","test"]],"capture":"none"}`)
+	if _, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	var recipeRuns [][]string
+	for _, run := range backend.runs {
+		if slices.Contains(run.Argv, "scripts/check-commit-messages.sh") {
+			t.Fatalf("history command reached the build backend: %+v", run)
+		}
+		if len(run.Argv) > 0 && run.Argv[0] == "npm" && !slices.Equal(run.Argv, []string{"npm", "ci", "--ignore-scripts"}) {
+			recipeRuns = append(recipeRuns, run.Argv)
+		}
+	}
+	want := [][]string{{"npm", "run", "lint"}, {"npm", "test"}, {"npm", "run", "lint"}, {"npm", "test"}}
+	if !slices.EqualFunc(recipeRuns, want, slices.Equal) {
+		t.Fatalf("recipe runs = %q, want the proof commands in the positive and masked passes %q", recipeRuns, want)
+	}
+}
+
 func TestBuildContextWithRestrictiveUmask(t *testing.T) {
 	if os.Getenv("FREESIDE_TEST_BUILD_CONTEXT_UMASK") == "1" {
 		// The child runs only this test; the test it delegates to calls
