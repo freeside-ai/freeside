@@ -1893,6 +1893,40 @@ The check covers whether this build can read this data, not whether it then
 behaves correctly, and it does not cover daemons started with a driver, the
 fake lane, or a scenario.
 
+### Drain For An Update
+
+`freesided drain -db <database>` asks the running daemon to finish what it
+is running and start nothing new, so an update can replace it without
+cutting work short (#3104): drain, poll until the daemon reads ready, then
+swap the build. `freesided drain -db <database> -status`
+changes nothing, and `-cancel` lifts the drain by hand. Each form prints the
+daemon's restart readiness as one JSON object on stdout, the shape
+`GET /restart-readiness` serves: `ready`, the drain in force, and the
+blockers still running by kind.
+
+- **A drain holds every new launch, in every operating mode:** writer
+  attempts, attention discussions, routed and shadow review admissions,
+  verification jobs, project-image builds, and model-discovery and
+  credential-integrity probes. A held run shows an `update_drain` hold, and
+  unattended operation reports an `update_drain` stop. Submissions are
+  still accepted and wait.
+- **Work already admitted runs to its end.** An attempt recorded before the
+  drain still starts, and a review that holds its slot is still collected:
+  publication passes keep running while one does, since only a pass frees
+  that slot.
+- **Ready needs the drain and nothing running.** The store's kinds and the
+  daemon's in-process work (verification jobs, image builds, probes, and
+  publication passes) all count; with no drain in force the read is never
+  ready.
+- **The new build lifts it.** At start, after the stored-state steps and
+  before any loop can launch, a daemon whose executable digest differs from
+  the build that requested the drain records the lift and clears the
+  `update_drain` holds. A restart of the same build stays drained and logs a
+  warning, so a crash in the middle of an update never resumes launches on
+  the old build. An operator stop is a separate gate and survives the lift.
+- **It needs a running daemon.** On a database no daemon holds it refuses
+  without opening the store: there is nothing to drain.
+
 ### Repair A Quarantined Stage Intent
 
 At each start, restart recovery gives every stage intent in

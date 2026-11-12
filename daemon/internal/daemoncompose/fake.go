@@ -19,12 +19,15 @@ const (
 	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
 )
 
-// ComposeFakeWorkflow builds the fake-driver engine over driver.
+// ComposeFakeWorkflow builds the fake-driver engine over driver. running is
+// the daemon's count of in-process work.
 func ComposeFakeWorkflow(
 	st *store.Store, attention *signet.Service, driver exec.StageDriver,
-	lock *daemonlock.Lock, bound ward.LaunchBound, logger *slog.Logger,
+	lock *daemonlock.Lock, bound ward.LaunchBound, running *engine.RunningWork, logger *slog.Logger,
 ) (*engine.Engine, error) {
-	walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock), engine.WithMachineCapacity(bound)}
+	walkingSkeletonOptions := []engine.Option{
+		engine.WithDaemonLock(lock), engine.WithMachineCapacity(bound), engine.WithRunningWork(running),
+	}
 	if logger != nil {
 		walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(logger))
 	}

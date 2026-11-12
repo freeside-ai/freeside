@@ -96,8 +96,9 @@ func runDoctorCommand(
 	// Only a running daemon can observe a credential store. With no daemon
 	// the report carries the marks earlier passes recorded.
 	var integrityProbe daemoncompose.CredentialIntegrityProbe
+	var running *engine.RunningWork
 	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
-		integrityProbe = daemon.credentialIntegrityProbe
+		integrityProbe, running = daemon.credentialIntegrityProbe, daemon.running
 		if err := daemon.requireApproved(ctx, approvedRecipes); err != nil {
 			return err
 		}
@@ -135,6 +136,13 @@ func runDoctorCommand(
 	if _, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); !borrowed {
 		defer func() { err = errors.Join(err, st.Close()) }()
 	}
+	// While an update drain is in force the report carries recorded marks
+	// only, so the command starts no observer container (issue #3104).
+	integrityProbe, endProbe, err := daemoncompose.ProbeUnlessDraining(ctx, st, running, integrityProbe, nil)
+	if err != nil {
+		return err
+	}
+	defer endProbe()
 	attention := signet.NewService(st, signet.WithBlobStore(blobs))
 	report, err := (operations.Doctor{
 		Store: st, Attention: attention, BackupHealthSource: backupHealth,

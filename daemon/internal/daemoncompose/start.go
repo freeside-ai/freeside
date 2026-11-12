@@ -56,6 +56,10 @@ type StartSeams struct {
 	// wall clock (run defaults it); tests can advance startup across
 	// pairing-code expiry.
 	Now func() time.Time
+	// Build is the build the update drain log records for this daemon.
+	// Production leaves it empty for the digest of the running executable;
+	// tests set one to stand for an old or a new build.
+	Build domain.Digest
 }
 
 // StartOptions is what a start reads: main's configuration after run has
@@ -133,6 +137,11 @@ type ControlRouteInputs struct {
 	// ReleaseVerificationMemory re-proves and releases a task's held
 	// verification reservations through the engine; nil when no engine runs.
 	ReleaseVerificationMemory func(context.Context, domain.TaskID, bool) (engine.VerificationMemoryRelease, error)
+	// UpdateDrain requests and cancels this build's update drain.
+	UpdateDrain engine.UpdateDrain
+	// Running is the daemon's count of in-process work; the operator's
+	// doctor counts its probe there.
+	Running *engine.RunningWork
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -292,12 +301,22 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		late                  = &StartupBindings{}
 		claudeStartup         = cfg.claudeStartup()
 	)
+	build := cfg.Build
+	if build == "" {
+		build, err = ExecutableBuild()
+		if err != nil {
+			return nil, err
+		}
+	}
+	// One count of the in-process work a restart would cut short, shared by
+	// every part that starts such work and by the readiness read.
+	running := engine.NewRunningWork()
 	usageRefreshAge, usage, claudeUsageCaptures := newUsageCollection(st, cfg)
 	attention := newAttentionService(st, blobs, cfg, pairingKey, hostName, connectionMode, topicKey,
-		cfg.ManualInitiator, usage, usageRefreshAge, &doctorAvailable, late)
+		cfg.ManualInitiator, usage, usageRefreshAge, &doctorAvailable, late, running)
 	if cfg.FakeDriverEnabled {
 		workflow, err = ComposeFakeWorkflow(
-			st, attention, cfg.WrapFakeDriver(driver), lock, bound, cfg.Logger)
+			st, attention, cfg.WrapFakeDriver(driver), lock, bound, running, cfg.Logger)
 		if err != nil {
 			return nil, err
 		}
@@ -312,14 +331,14 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	} else if cfg.Claude != nil {
 		var claude *ClaudeWorkflow
 		claude, err = ComposeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, claudeStartup, cfg.ManualProjects,
-			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late)
+			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late, running)
 		if err != nil {
 			return nil, err
 		}
 		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
 	} else if cfg.Scenario != nil {
 		var parts ScenarioParts
-		parts, err = newScenarioParts(st, attention, blobs, lock, bound, cfg)
+		parts, err = newScenarioParts(st, attention, blobs, lock, bound, running, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}
@@ -348,10 +367,10 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	}
 	// The startup pass reports recorded marks only, so starting the daemon
 	// starts no observer container. Scheduled passes run the live probe.
-	if err := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, nil)(parent); err != nil {
+	if err := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, running, nil)(parent); err != nil {
 		return nil, fmt.Errorf("initial doctor pass: %w", err)
 	}
-	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, integrityProbe)
+	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, running, integrityProbe)
 	if workflow != nil {
 		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
 			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
@@ -362,6 +381,13 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		logger = slog.New(slog.DiscardHandler)
 	}
 	if err := ConvergeStoredState(parent, st, workflow != nil, cfg.Now, logger); err != nil {
+		return nil, err
+	}
+	// The last stored step before anything that launches starts: model
+	// discovery, the engine loops, publications, and image upkeep all start
+	// below (issue #3104).
+	updateDrain := engine.UpdateDrain{Store: st, Build: build, Now: cfg.Now}
+	if err := liftUpdateDrainAtStart(parent, updateDrain, logger); err != nil {
 		return nil, err
 	}
 	if loopbackTwin != nil {
@@ -392,6 +418,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	routes := ControlRouteInputs{
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
+		UpdateDrain: updateDrain, Running: running,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -432,7 +459,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		}
 	}
 
-	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, localBackups, logger)
+	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, localBackups, running, logger)
 	defer func() {
 		if !success {
 			if stop != nil {
@@ -551,7 +578,7 @@ func newAttentionService(
 	connectionMode domain.ConnectionMode, topicKey []byte,
 	manualInitiator func(domain.ProjectID) (engine.ManualInitiator, bool),
 	usage *usagecollect.Coordinator, usageRefreshAge time.Duration, doctorAvailable *atomic.Bool,
-	late *StartupBindings,
+	late *StartupBindings, running *engine.RunningWork,
 ) *signet.Service {
 	attention := signet.NewService(st,
 		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
@@ -572,6 +599,7 @@ func newAttentionService(
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.Now),
+		signet.WithRunningWork(running.Counts),
 		signet.WithLogger(cfg.Logger),
 		signet.WithDoctorSchedule(DoctorScheduleID, doctorAvailable.Load),
 		signet.WithBlobStore(blobs),
@@ -668,7 +696,7 @@ func newAttentionService(
 // is the Claude composition's own constant.
 func newScenarioParts(
 	st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, bound ward.LaunchBound, cfg StartOptions,
+	lock *daemonlock.Lock, bound ward.LaunchBound, running *engine.RunningWork, cfg StartOptions,
 ) (ScenarioParts, error) {
 	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {
@@ -676,7 +704,7 @@ func newScenarioParts(
 	}
 	return ScenarioParts{
 		Store: st, Attention: attention, Blobs: blobs, Lock: lock, Bound: bound,
-		DBPath: cfg.DBPath, Logger: cfg.Logger, Scenario: cfg.Scenario,
+		DBPath: cfg.DBPath, Logger: cfg.Logger, Scenario: cfg.Scenario, Running: running,
 		AdmissionFloor:                   AdmissionFloor(domain.ModeUnattended),
 		ImplementationDeliveryValidation: ProductionImplementationDeliveryValidator(materializer),
 		SpecificationDeliveryValidation:  ProductionSpecificationDeliveryValidator(materializer),
@@ -690,22 +718,28 @@ func newScenarioParts(
 // newDoctorPass returns a doctor pass, which does nothing outside Claude
 // mode. The startup pass takes a nil probe, so it reports recorded
 // credential-integrity marks only and starting the daemon starts no
-// observer container; scheduled passes take the live probe.
+// observer container; scheduled passes take the live probe, except while an
+// update drain is in force, when they report recorded marks too.
 func newDoctorPass(
 	cfg StartOptions, st *store.Store, attention *signet.Service, claudeWiring *ClaudeComposition,
-	doctorConvergenceLock *sync.Mutex, probe CredentialIntegrityProbe,
+	doctorConvergenceLock *sync.Mutex, running *engine.RunningWork, probe CredentialIntegrityProbe,
 ) func(context.Context) error {
 	return func(runCtx context.Context) error {
 		if cfg.Claude == nil {
 			return nil
 		}
+		passProbe, endProbe, err := ProbeUnlessDraining(runCtx, st, running, probe, cfg.Logger)
+		if err != nil {
+			return err
+		}
 		// The probe runs before the lock is taken. It lasts as long as
 		// its observer containers do, and the unattended engine waits on
 		// this lock before every dispatch.
-		replay := probe.runOnce(runCtx)
+		replay := passProbe.runOnce(runCtx)
+		endProbe()
 		doctorConvergenceLock.Lock()
 		defer doctorConvergenceLock.Unlock()
-		_, err := (operations.Doctor{
+		_, err = (operations.Doctor{
 			Store: st, Attention: attention,
 			ProjectID:                 domain.ProjectID("project-system"),
 			Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
@@ -728,7 +762,7 @@ func newDoctorPass(
 func (d *Daemon) startServing(
 	parent, ctx context.Context, cfg StartOptions, st *store.Store, attention *signet.Service,
 	workflow *engine.Engine, claudeWiring *ClaudeComposition, localBackups *store.LocalBackupProducer,
-	logger *slog.Logger,
+	running *engine.RunningWork, logger *slog.Logger,
 ) {
 	// Usage collection starts before the control socket serves and the
 	// scheduler runs, either of which can trigger it. It only observes and
@@ -744,6 +778,7 @@ func (d *Daemon) startServing(
 	if claudeWiring != nil {
 		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.ContainerBin,
 			cfg.ClaudeModelDiscoverer, cfg.CodexModelDiscoverer, logger)
+		refresh.running = running
 		d.Go(func() {
 			refresh.run(ctx)
 		})

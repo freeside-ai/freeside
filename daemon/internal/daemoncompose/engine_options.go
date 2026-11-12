@@ -23,7 +23,7 @@ import (
 // none of them. Required fields always become their option, nil or not, so
 // the engine's own checks still fail startup on a missing part. Optional
 // fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink,
-// HostVerification) become their option only when non-nil, because each of
+// HostVerification, Running) become their option only when non-nil, because each of
 // those engine options rejects nil; a nil optional field means the part is
 // not installed.
 type ProductionEngine struct {
@@ -51,6 +51,9 @@ type ProductionEngine struct {
 	// HostVerification, when set, is the macOS verification executor the
 	// engine admits macos_host recipe commands onto.
 	HostVerification *macverify.Backend
+	// Running is the daemon's count of in-process work, which the restart
+	// readiness read reports.
+	Running *engine.RunningWork
 }
 
 // Options returns the engine Options in the order the Claude workflow has
@@ -92,6 +95,9 @@ func (p ProductionEngine) Options() []engine.Option {
 				}
 				return room, nil
 			}))
+	}
+	if p.Running != nil {
+		options = append(options, engine.WithRunningWork(p.Running))
 	}
 	return options
 }
