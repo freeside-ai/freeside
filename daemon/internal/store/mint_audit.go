@@ -34,6 +34,7 @@ type MintAudit struct {
 	RequestedPullRequests   string
 	RequestedMetadata       string
 	RequestedIssues         string
+	RequestedWorkflows      string
 	GrantedActions          string
 	GrantedAdministration   string
 	GrantedContents         string
@@ -41,6 +42,7 @@ type MintAudit struct {
 	GrantedPullRequests     string
 	GrantedMetadata         string
 	GrantedIssues           string
+	GrantedWorkflows        string
 	ExpiresAt               time.Time
 }
 
@@ -53,8 +55,9 @@ INSERT INTO publish_mint_audits (
     requested_actions, requested_administration, requested_environments,
     granted_actions, granted_administration, granted_environments,
     requested_issues, granted_issues,
+    requested_workflows, granted_workflows,
     expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	listMintAuditsSQL = `
 SELECT id, minted_at, registration_id, installation_id, repository_id, repo,
     requested_contents, requested_pull_requests, requested_metadata,
@@ -62,6 +65,7 @@ SELECT id, minted_at, registration_id, installation_id, repository_id, repo,
     requested_actions, requested_administration, requested_environments,
     granted_actions, granted_administration, granted_environments,
     requested_issues, granted_issues,
+    requested_workflows, granted_workflows,
     expires_at
 FROM publish_mint_audits ORDER BY id`
 )
@@ -102,6 +106,7 @@ func (tx *InternalTx) RecordMintAudit(ctx context.Context, rec MintAudit) (MintA
 		rec.RequestedActions, rec.RequestedAdministration, rec.RequestedEnvironments,
 		rec.GrantedActions, rec.GrantedAdministration, rec.GrantedEnvironments,
 		rec.RequestedIssues, rec.GrantedIssues,
+		rec.RequestedWorkflows, rec.GrantedWorkflows,
 		formatTime(rec.ExpiresAt))
 	if err != nil {
 		return MintAudit{}, fmt.Errorf("record mint audit %q: %w", rec.Repo, err)
@@ -134,6 +139,7 @@ func (tx *ReadTx) ListMintAudits(ctx context.Context) ([]MintAudit, error) {
 			&rec.RequestedActions, &rec.RequestedAdministration, &rec.RequestedEnvironments,
 			&rec.GrantedActions, &rec.GrantedAdministration, &rec.GrantedEnvironments,
 			&rec.RequestedIssues, &rec.GrantedIssues,
+			&rec.RequestedWorkflows, &rec.GrantedWorkflows,
 			&expiresAt); err != nil {
 			return nil, fmt.Errorf("list mint audits: %w", err)
 		}

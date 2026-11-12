@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // TokenSource supplies a usable installation token for an owner/name
@@ -52,6 +54,11 @@ type tokenCacheKey struct {
 	registrationID int64
 	installationID int64
 	repositoryID   int64
+	// stance is the current profile's automation-change stance, which picks
+	// the publication token's permission set, so a token minted under block
+	// is never reused once the profile turns advisory, or the reverse.
+	// Sources that mint one fixed set leave it empty.
+	stance domain.AutomationChangePolicy
 }
 
 // AuthorityInspectionTokenSource mints one repository-scoped, read-only token
@@ -202,7 +209,7 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	binding, parsed, repositoryID, err := s.minter.resolveTrusted(ctx, repo)
+	binding, parsed, repositoryID, stance, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
 	}
@@ -210,14 +217,13 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 		registrationID: binding.RegistrationID,
 		installationID: binding.InstallationID,
 		repositoryID:   repositoryID,
+		stance:         stance,
 	}
 	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
 		return *tok, nil
 	}
-	tok, err := s.minter.mintResolved(
-		ctx, binding, parsed, repositoryID,
-		PublishPermissions, publishPermissionScopes,
-	)
+	permissions, scopes := publicationPermissions(stance)
+	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID, permissions, scopes)
 	if err != nil {
 		return InstallationToken{}, err
 	}
@@ -261,7 +267,7 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	binding, parsed, repositoryID, err := s.minter.resolveTrusted(ctx, repo)
+	binding, parsed, repositoryID, _, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
 	}
@@ -319,7 +325,7 @@ func (s *IssueReadTokenSource) Token(ctx context.Context, repo string) (Installa
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	binding, parsed, repositoryID, err := s.minter.resolveTrusted(ctx, repo)
+	binding, parsed, repositoryID, _, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
 	}

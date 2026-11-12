@@ -15,7 +15,8 @@
     "environments": "read",
     "pull_requests": "write",
     "metadata": "read",
-    "issues": "write"
+    "issues": "write",
+    "workflows": "write"
   },
   "name": "freeside-publish",
   "html_url": "https://github.com/apps/freeside-publish",

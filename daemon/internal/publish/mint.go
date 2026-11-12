@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // Permissions is the GitHub App repository-permission set a mint requests and
@@ -24,6 +26,7 @@ type Permissions struct {
 	Issues         string `json:"issues,omitempty"`
 	PullRequests   string `json:"pull_requests,omitempty"`
 	Metadata       string `json:"metadata,omitempty"`
+	Workflows      string `json:"workflows,omitempty"`
 }
 
 // PublishPermissions is the minimum combined publish-and-live-audit set:
@@ -39,6 +42,39 @@ var PublishPermissions = Permissions{
 	Environments:   "read",
 	PullRequests:   "write",
 	Metadata:       "read",
+}
+
+// PublishWorkflowPermissions is PublishPermissions plus workflows:write, the
+// publication set under a trust profile whose candidate_automation_changes is
+// advisory (plan §5.5): GitHub refuses a push that changes a workflow file
+// without it. A block profile never requests it (publicationPermissions).
+var PublishWorkflowPermissions = func() Permissions {
+	permissions := PublishPermissions
+	permissions.Workflows = "write"
+	return permissions
+}()
+
+var publishWorkflowPermissionScopes = func() map[string]string {
+	scopes := maps.Clone(publishPermissionScopes)
+	scopes["workflows"] = PublishWorkflowPermissions.Workflows
+	return scopes
+}()
+
+// publicationPermissions picks the publication mint's permission set from
+// the stance of the current, re-validated trust profile resolveTrusted read:
+// workflows:write only under the advisory opt-in, so a block profile's token
+// cannot push a workflow edit even if one reached publication. The stance is
+// never taken from the candidate. The switch omits default so a new stance
+// must choose its set; the trailing return keeps the narrower set for the
+// invalid zero value.
+func publicationPermissions(stance domain.AutomationChangePolicy) (Permissions, map[string]string) {
+	switch stance {
+	case domain.AutomationChangesAdvisory:
+		return PublishWorkflowPermissions, publishWorkflowPermissionScopes
+	case domain.AutomationChangesBlocked:
+		return PublishPermissions, publishPermissionScopes
+	}
+	return PublishPermissions, publishPermissionScopes
 }
 
 // FollowUpFilingPermissions grants only issue filing on one repository.
@@ -77,15 +113,16 @@ var issueInspectionPermissionScopes = map[string]string{
 }
 
 // RegistrationPermissions declares all capabilities the App may need; each
-// token source narrows its mint to the effect it performs.
+// token source narrows its mint to the effect it performs. workflows:write
+// serves only publication under an advisory profile (PublishWorkflowPermissions).
 var RegistrationPermissions = func() Permissions {
-	permissions := PublishPermissions
+	permissions := PublishWorkflowPermissions
 	permissions.Issues = "write"
 	return permissions
 }()
 
 var registrationPermissionScopes = func() map[string]string {
-	scopes := maps.Clone(publishPermissionScopes)
+	scopes := maps.Clone(publishWorkflowPermissionScopes)
 	scopes["issues"] = RegistrationPermissions.Issues
 	return scopes
 }()
@@ -222,50 +259,54 @@ type mintResponse struct {
 
 // MintInstallationToken resolves repo's owner to a known registration and
 // installation, re-gates repo against the existing trusted-repository source,
-// mints a token with the minimum publish permission set, and records the mint
-// before returning it. No caller-supplied installation ID can bypass either
-// gate.
+// mints a token with the minimum publish permission set for the current
+// profile's stance (publicationPermissions), and records the mint before
+// returning it. No caller-supplied installation ID can bypass either gate.
 func (m *Minter) MintInstallationToken(ctx context.Context, repo string) (InstallationToken, error) {
-	binding, parsed, repositoryID, err := m.resolveTrusted(ctx, repo)
+	binding, parsed, repositoryID, stance, err := m.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	return m.mintResolved(
-		ctx, binding, parsed, repositoryID,
-		PublishPermissions, publishPermissionScopes,
-	)
+	permissions, scopes := publicationPermissions(stance)
+	return m.mintResolved(ctx, binding, parsed, repositoryID, permissions, scopes)
 }
 
-func (m *Minter) resolveTrusted(ctx context.Context, repo string) (InstallationBinding, repoRef, int64, error) {
+// resolveTrusted resolves repo to its trusted installation binding and
+// returns the current, re-validated trust profile's repository ID and
+// automation-change stance, which the publication mint uses to pick its
+// permission set.
+func (m *Minter) resolveTrusted(
+	ctx context.Context, repo string,
+) (InstallationBinding, repoRef, int64, domain.AutomationChangePolicy, error) {
 	parsed, err := parseRepo(repo)
 	if err != nil {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: %w", err)
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf("mint: %w", err)
 	}
 	if m == nil || m.keystore == nil || m.resolver == nil || m.trust == nil ||
 		m.client == nil || m.recorder == nil || m.now == nil {
-		return InstallationBinding{}, repoRef{}, 0, errors.New("mint: nil or invalid dependency")
+		return InstallationBinding{}, repoRef{}, 0, "", errors.New("mint: nil or invalid dependency")
 	}
 	current, err := m.trust.CurrentTrust(ctx, repo)
 	if err != nil {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: read current trust: %w", err)
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf("mint: read current trust: %w", err)
 	}
 	if current.Profile == nil {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: no current trust profile for %s: %w",
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf("mint: no current trust profile for %s: %w",
 			repo, ErrTrustProfileDrift)
 	}
 	if err := current.Profile.Validate(); err != nil {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: current trust profile for %s: %w", repo, err)
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf("mint: current trust profile for %s: %w", repo, err)
 	}
 	if current.Profile.Repo != repo {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: current trust profile names a different repository: %w",
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf("mint: current trust profile names a different repository: %w",
 			ErrTrustProfileDrift)
 	}
 	binding, err := m.resolver.Resolve(ctx, parsed.owner)
 	if err != nil {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: %w", err)
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf("mint: %w", err)
 	}
 	if !m.resolver.allowsRepository(binding.RegistrationID, binding.InstallationID, current.Profile.RepositoryID) {
-		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf(
+		return InstallationBinding{}, repoRef{}, 0, "", fmt.Errorf(
 			"mint: registration %d installation %d repository %d: %w",
 			binding.RegistrationID,
 			binding.InstallationID,
@@ -273,7 +314,7 @@ func (m *Minter) resolveTrusted(ctx context.Context, repo string) (InstallationB
 			ErrInstallationGrantUntrusted,
 		)
 	}
-	return binding, parsed, current.Profile.RepositoryID, nil
+	return binding, parsed, current.Profile.RepositoryID, current.Profile.CandidateAutomationChanges, nil
 }
 
 func (m *Minter) mintResolved(
