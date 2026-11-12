@@ -71,6 +71,7 @@ func (f *activeResourceCacheForge) serveHTTP(w http.ResponseWriter, r *http.Requ
 		body = map[string]any{"number": 443, "state": "open"}
 	case "/repos/owner/repo/pulls/450/reviews",
 		"/repos/owner/repo/pulls/450/comments",
+		"/repos/owner/repo/issues/450/comments",
 		"/repos/owner/repo/issues/450/reactions":
 		body = []any{}
 	default:

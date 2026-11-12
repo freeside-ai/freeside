@@ -129,8 +129,8 @@ type fakeGitHub struct {
 	// with rel="next" Link headers (default: one page).
 	labelIssuesPageSize int
 	// reviewActivityPageSize, when non-zero, paginates a pull request's
-	// reviews and inline review comments with rel="next" Link headers
-	// (default: one page).
+	// reviews, inline review comments, and conversation comments with
+	// rel="next" Link headers (default: one page).
 	reviewActivityPageSize int
 
 	// Native review activity per PR number, each list ETag'd by its revision
@@ -142,6 +142,13 @@ type fakeGitHub struct {
 	reviewCommentRevs map[int]int
 	reactions         map[int][]fakeReaction
 	reactionRevs      map[int]int
+	// conversation is the pull request's main-conversation comments (the
+	// issues comments surface), ETag'd by conversationRevs.
+	conversation     map[int][]fakeConversationComment
+	conversationRevs map[int]int
+	// conversationRefusal, when set for a PR number, answers its
+	// conversation read with that status before any ETag check.
+	conversationRefusal map[int]fakeRefusal
 	// reactionsRefusal, when set for a PR number, answers its reactions read
 	// with that status and headers before any ETag check (#2717).
 	reactionsRefusal map[int]fakeRefusal
@@ -181,8 +188,10 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 		reviews:               map[int][]fakeReview{}, reviewRevs: map[int]int{},
 		reviewComments: map[int][]fakeReviewComment{}, reviewCommentRevs: map[int]int{},
 		reactions: map[int][]fakeReaction{}, reactionRevs: map[int]int{},
-		reactionsRefusal: map[int]fakeRefusal{},
-		repositoryID:     testRepoID,
+		conversation: map[int][]fakeConversationComment{}, conversationRevs: map[int]int{},
+		conversationRefusal: map[int]fakeRefusal{},
+		reactionsRefusal:    map[int]fakeRefusal{},
+		repositoryID:        testRepoID,
 	}
 }
 
@@ -251,6 +260,18 @@ func fakeUserJSON(accountID int64, login string) map[string]any {
 		user["id"] = accountID
 	}
 	return user
+}
+
+// fakeConversationComment is one main-conversation comment. IssueURL, when
+// set, overrides the issue the comment names, to serve one that belongs to
+// another resource.
+type fakeConversationComment struct {
+	ID        int64
+	AccountID int64
+	Login     string
+	Body      string
+	CreatedAt string
+	IssueURL  string
 }
 
 type fakeReaction struct {
@@ -491,6 +512,35 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 				row["original_line"] = *c.OriginalLine
 			}
 			out = append(out, row)
+		}
+		_ = json.NewEncoder(w).Encode(fakeReviewPage(w, r, out, g.reviewActivityPageSize))
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/issues/") && strings.HasSuffix(path, "/comments"):
+		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/issues/"), "/comments"))
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if refusal, ok := g.conversationRefusal[number]; ok {
+			w.WriteHeader(refusal.Status)
+			return
+		}
+		etag := fmt.Sprintf(`"conversation-%d-%d"`, number, g.conversationRevs[number])
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		out := []map[string]any{}
+		for _, c := range g.conversation[number] {
+			issueURL := fmt.Sprintf("http://%s%s/issues/%d", r.Host, testRepoPath, number)
+			if c.IssueURL != "" {
+				issueURL = c.IssueURL
+			}
+			out = append(out, map[string]any{
+				"id": c.ID, "issue_url": issueURL, "user": fakeUserJSON(c.AccountID, c.Login),
+				"body": c.Body, "created_at": c.CreatedAt,
+			})
 		}
 		_ = json.NewEncoder(w).Encode(fakeReviewPage(w, r, out, g.reviewActivityPageSize))
 

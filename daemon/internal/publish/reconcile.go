@@ -58,7 +58,7 @@ type issueCacheEntry struct {
 	obs  IssueObservation
 }
 
-// reviewActivityCacheEntry caches the three list sub-resources of one PR's
+// reviewActivityCacheEntry caches the four list sub-resources of one PR's
 // review activity independently: each carries its own validator, so an
 // unchanged sub-resource answers 304 and its cached items are reused while a
 // changed sibling re-reads. An empty per-part etag makes that part's next poll
@@ -68,9 +68,11 @@ type issueCacheEntry struct {
 type reviewActivityCacheEntry struct {
 	reviewsETag      string
 	commentsETag     string
+	conversationETag string
 	reactionsETag    string
 	reviews          []PullReview
 	comments         []PullReviewComment
+	conversation     []PullConversationComment
 	reactions        []PullDescriptionReaction
 	reactionsRefused bool
 }
@@ -155,16 +157,18 @@ type IssueObservation struct {
 }
 
 // PullReviewObservation is the reconciled native review activity of one pull
-// request (plan §5.16, §7): its submitted reviews, inline review comments, and
-// description reactions, as observed. It is raw transport, not durable
-// evidence — the reconciler filters by reviewer login, normalizes, and bounds
-// it before recording. NotModified reports that the whole activity is
-// unchanged: the reviews and review comments answered 304, and the reactions
-// either answered 304 or were refused on this pass and the one before it.
+// request (plan §5.16, §7): its submitted reviews, inline review comments,
+// conversation comments, and description reactions, as observed. It is raw
+// transport, not durable evidence — the reconciler filters by reviewer login,
+// normalizes, and bounds it before recording. NotModified reports that the
+// whole activity is unchanged: the reviews and both comment lists answered
+// 304, and the reactions either answered 304 or were refused on this pass and
+// the one before it.
 type PullReviewObservation struct {
-	Reviews   []PullReview
-	Comments  []PullReviewComment
-	Reactions []PullDescriptionReaction
+	Reviews              []PullReview
+	Comments             []PullReviewComment
+	ConversationComments []PullConversationComment
+	Reactions            []PullDescriptionReaction
 	// ReactionsUnavailable is true when GitHub refused the reactions read with
 	// a 403 that isn't a rate limit (#2717). Reactions is then nil and means
 	// unknown, not "no reactions". The reviews and comments are still observed:
@@ -384,13 +388,14 @@ func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int
 }
 
 // ReconcilePullReviewActivity observes a pull request's native review activity
-// (plan §5.16, §7): its submitted reviews, inline review comments, and
-// description reactions, each conditionally when a prior observation holds a
-// validator. The three sub-resources are cached independently, so an unchanged
-// one rides its 304 while a changed sibling re-reads; the observation reports
-// NotModified only when all three are unchanged. A reactions read GitHub
-// refuses with a non-rate-limited 403 doesn't fail the observation: the
-// reviews and comments are returned with ReactionsUnavailable set, and the
+// (plan §5.16, §7): its submitted reviews, inline review comments,
+// conversation comments, and description reactions, each conditionally when a
+// prior observation holds a validator. The four sub-resources are cached
+// independently, so an unchanged one rides its 304 while a changed sibling
+// re-reads; the observation reports NotModified only when all four are
+// unchanged. A reactions read GitHub refuses with a non-rate-limited 403
+// doesn't fail the observation: the reviews and both comment lists are
+// returned with ReactionsUnavailable set, and the
 // next pass reads the reactions unconditionally, so a fixed permission shows
 // up at once. Any other reactions error still fails the whole observation.
 // Read-only: this never touches publication or readiness state.
@@ -417,6 +422,12 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 	if err != nil {
 		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
 	}
+	// A conversation comment can start a round as a review can (#3127), so a
+	// refused read fails the observation; only the reactions tolerate one.
+	conversationRead, err := r.forge.getPullConversationComments(ctx, ref, number, entry.conversationETag)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
 	reactionsRead, err := r.forge.getIssueReactions(ctx, ref, number, entry.reactionsETag)
 	reactionsRefused := false
 	if err != nil {
@@ -434,6 +445,10 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 	if err != nil {
 		return PullReviewObservation{}, fmt.Errorf("reconcile review comments: %w", err)
 	}
+	conversation, conversationETag, err := resolveListPart(conversationRead, entry.conversationETag, entry.conversation)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile conversation comments: %w", err)
+	}
 	// A refused read leaves the reactions unknown, with no validator, so the
 	// next read is unconditional. The reactions count as unchanged only when
 	// the previous pass was refused too: a refusal after a successful read
@@ -450,15 +465,17 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 	}
 
 	obs := PullReviewObservation{
-		Reviews: reviews, Comments: comments, Reactions: reactions,
+		Reviews: reviews, Comments: comments, ConversationComments: conversation, Reactions: reactions,
 		ReactionsUnavailable: reactionsRefused,
-		NotModified:          reviewsRead.NotModified && commentsRead.NotModified && reactionsUnchanged,
+		NotModified: reviewsRead.NotModified && commentsRead.NotModified &&
+			conversationRead.NotModified && reactionsUnchanged,
 	}
 	r.mu.Lock()
 	if epoch == r.cacheEpoch {
 		r.reviewActivity[key] = reviewActivityCacheEntry{
-			reviewsETag: reviewsETag, commentsETag: commentsETag, reactionsETag: reactionsETag,
-			reviews: reviews, comments: comments, reactions: reactions,
+			reviewsETag: reviewsETag, commentsETag: commentsETag,
+			conversationETag: conversationETag, reactionsETag: reactionsETag,
+			reviews: reviews, comments: comments, conversation: conversation, reactions: reactions,
 			reactionsRefused: reactionsRefused,
 		}
 	}
