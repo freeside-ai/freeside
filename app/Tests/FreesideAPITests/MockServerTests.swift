@@ -182,16 +182,23 @@ import Testing
         let first = try await client.getHealth().ok.body.json
         #expect(first.status == .ok)
         #expect(first.version == "mock")
-        // By default the mock serves this client's own contract digest, so a
-        // client built from the same spec sees a match; the mutator can serve
-        // a foreign one to exercise the skew diagnosis.
+        // By default the mock serves this client's own digest, level, and
+        // floor, so a client built from the same spec can sync; the mutator
+        // serves others, or omits them as a daemon built before #3109 does.
         #expect(first.contract_digest == APIContract.digest)
+        #expect(first.compatibility_level == APIContract.compatibilityLevel)
+        #expect(first.compatibility_floor == APIContract.compatibilityFloor)
 
-        let foreign = "sha256:" + String(repeating: "b", count: 64)
-        await server.setHealthContractDigest(foreign)
+        await server.setHealthCompatibility(level: 9, floor: 4)
         let skewed = try await client.getHealth().ok.body.json
-        #expect(skewed.contract_digest == foreign)
-        await server.setHealthContractDigest(APIContract.digest)
+        #expect(skewed.compatibility_level == 9)
+        #expect(skewed.compatibility_floor == 4)
+        await server.setHealthCompatibility(level: nil, floor: nil)
+        let older = try await client.getHealth().ok.body.json
+        #expect(older.compatibility_level == nil)
+        #expect(older.compatibility_floor == nil)
+        await server.setHealthCompatibility(
+            level: APIContract.compatibilityLevel, floor: APIContract.compatibilityFloor)
 
         let restartedAt = Date(timeIntervalSince1970: 1_725_184_860)
         await server.restart(version: "mock-2", startedAt: restartedAt)

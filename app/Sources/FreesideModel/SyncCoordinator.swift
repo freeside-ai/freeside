@@ -113,7 +113,7 @@ public final class SyncCoordinator {
     public private(set) var answeredTaskTimelineIDs: Set<String> = []
     public private(set) var lastUpdatedAt: Date?
     /// The named features the daemon's `/health` listed at its last answered
-    /// read (#1266). A surface whose feature is missing offers no control and
+    /// compatible read, which opens every refresh round (#1266, #3109). A surface whose feature is missing offers no control and
     /// sends no command, rather than failing on a command the daemon refuses.
     /// A daemon that omits the list serves none of the named features. A read
     /// that fails keeps the last answered set, and the set is empty until the
@@ -121,6 +121,10 @@ public final class SyncCoordinator {
     /// what catches a daemon restarted on another build, a change that moves
     /// neither the sync epoch nor the revision.
     public internal(set) var daemonFeatures: Set<Components.Schemas.DaemonFeature> = []
+    /// This app's compatibility level, the one each round judges the daemon's
+    /// answer against (#3109). Always the compiled-in level outside tests; a
+    /// test raises it to stand for a newer app.
+    var appCompatibilityLevel = APIContract.compatibilityLevel
 
     private let cache: CacheStore
     /// The bytes of the attachments `pendingTaskSubmissions` and the
@@ -407,22 +411,18 @@ public final class SyncCoordinator {
                     await bootstrap()
                 }
             case .undocumented(let statusCode, _):
-                let diagnosed = await failureFreshness(status: statusCode)
+                let diagnosed = failureFreshness(status: statusCode)
                 guard generation == syncGeneration else { return }
-                store.freshness = diagnosed
+                publish(diagnosed)
             }
         } catch {
             guard generation == syncGeneration else { return }
-            let diagnosed: InboxStore.Freshness
-            if error is ConversationContractValidation.InvalidConversation {
-                // A decoded-but-invalid conversation is a reachable,
-                // failing read: probe for a contract skew like any other.
-                diagnosed = await diagnoseSyncFailure()
-            } else {
-                diagnosed = await diagnosedReadFreshness(error)
-            }
+            // A decoded-but-invalid conversation is a reachable, failing read.
+            let diagnosed: InboxStore.Freshness =
+                error is ConversationContractValidation.InvalidConversation
+                ? .syncFailing : freshnessForReadError(error)
             guard generation == syncGeneration else { return }
-            store.freshness = diagnosed
+            publish(diagnosed)
         }
     }
 
@@ -496,7 +496,7 @@ public final class SyncCoordinator {
                         // revision; only bootstrap replaces the catalog.
                         await bootstrap()
                     } else {
-                        store.freshness = .fresh
+                        publish(.fresh)
                         lastUpdatedAt = .now
                         settleTaskStops()
                         settleRoutingPolicyChange()
@@ -508,19 +508,19 @@ public final class SyncCoordinator {
             case .badRequest:
                 // Only a malformed `after` earns a 400, and this read sends
                 // none, so it is a failed read like any other status.
-                let diagnosed = await failureFreshness(status: 400)
+                let diagnosed = failureFreshness(status: 400)
                 guard generation == syncGeneration else { return }
-                store.freshness = diagnosed
+                publish(diagnosed)
             case .undocumented(let statusCode, _):
-                let diagnosed = await failureFreshness(status: statusCode)
+                let diagnosed = failureFreshness(status: statusCode)
                 guard generation == syncGeneration else { return }
-                store.freshness = diagnosed
+                publish(diagnosed)
             }
         } catch {
             guard generation == syncGeneration else { return }
-            let diagnosed = await diagnosedReadFreshness(error)
+            let diagnosed = freshnessForReadError(error)
             guard generation == syncGeneration else { return }
-            store.freshness = diagnosed
+            publish(diagnosed)
         }
     }
 
@@ -651,10 +651,24 @@ public final class SyncCoordinator {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             guard let self else { return false }
-            // The feature read runs beside the round's reads rather than
-            // ahead of them, so it adds no round trip.
-            let client = store.client
-            let healthRead = Task { await Self.readHealth(client) }
+            // The health read runs ahead of the round's reads, not beside
+            // them: its compatibility verdict decides whether this round may
+            // read or resend anything at all (#3109). That costs one round
+            // trip per round.
+            if let health = await Self.readHealth(store.client) {
+                if let incompatibility = DaemonIncompatibility.verdict(for: health, appLevel: appCompatibilityLevel) {
+                    store.freshness = .incompatible(incompatibility)
+                    return false
+                }
+                if case .incompatible = store.freshness { store.freshness = .unvalidated }
+                daemonFeatures = Set(health.features ?? [])
+            } else if case .incompatible = store.freshness {
+                // An unanswered health read keeps the last verdict: a daemon
+                // that refused this app is read again only once it answers
+                // compatibly. Any other state runs the round, whose reads
+                // diagnose the outage as before.
+                return false
+            }
             await heartbeat()
             let observedBeforeRuns = cursors?.highestObservedServerRevision
             await refreshRuns()
@@ -670,9 +684,6 @@ public final class SyncCoordinator {
                 // failed opening heartbeat: a partial read leaves a failing
                 // state in place (#1947), so `.unvalidated` alone would skip it.
                 await heartbeat()
-            }
-            if let health = await healthRead.value {
-                daemonFeatures = Set(health.features ?? [])
             }
             return store.freshness == .fresh
         }
@@ -784,22 +795,22 @@ public final class SyncCoordinator {
                 }
                 persist()
             case .undocumented(let statusCode, _):
-                let diagnosed = await failureFreshness(status: statusCode)
+                let diagnosed = failureFreshness(status: statusCode)
                 guard requestGeneration == runListGeneration,
                     requestCacheGeneration == cacheGeneration
                 else { return }
-                store.freshness = diagnosed
+                publish(diagnosed)
             }
         } catch {
             guard requestGeneration == runListGeneration,
                 requestCacheGeneration == cacheGeneration
             else { return }
             if error is CancellationError || Task.isCancelled { return }
-            let diagnosed = await diagnosedReadFreshness(error)
+            let diagnosed = freshnessForReadError(error)
             guard requestGeneration == runListGeneration,
                 requestCacheGeneration == cacheGeneration
             else { return }
-            store.freshness = diagnosed
+            publish(diagnosed)
         }
     }
 
@@ -946,11 +957,7 @@ public final class SyncCoordinator {
             case .ok(let timeline):
                 guard binds(timeline) else {
                     fail()
-                    let diagnosed = await diagnoseSyncFailure()
-                    guard self[keyPath: generations][id] == requestGeneration,
-                        requestCacheGeneration == cacheGeneration
-                    else { return }
-                    store.freshness = diagnosed
+                    publish(.syncFailing)
                     return
                 }
                 adopt(timeline)
@@ -962,11 +969,11 @@ public final class SyncCoordinator {
                 fail()
             case .undocumented(let statusCode):
                 fail()
-                let diagnosed = await failureFreshness(status: statusCode)
+                let diagnosed = failureFreshness(status: statusCode)
                 guard self[keyPath: generations][id] == requestGeneration,
                     requestCacheGeneration == cacheGeneration
                 else { return }
-                store.freshness = diagnosed
+                publish(diagnosed)
             }
         } catch {
             guard self[keyPath: generations][id] == requestGeneration else { return }
@@ -979,11 +986,11 @@ public final class SyncCoordinator {
                 return
             }
             fail()
-            let diagnosed = await diagnosedReadFreshness(error)
+            let diagnosed = freshnessForReadError(error)
             guard self[keyPath: generations][id] == requestGeneration,
                 requestCacheGeneration == cacheGeneration
             else { return }
-            store.freshness = diagnosed
+            publish(diagnosed)
         }
     }
 
@@ -1043,7 +1050,7 @@ public final class SyncCoordinator {
             highestObservedServerRevision: max(
                 cursors?.highestObservedServerRevision ?? 0, snapshot.revision)
         )
-        store.freshness = .fresh
+        publish(.fresh)
         lastUpdatedAt = .now
         settleTaskStops()
         settleRoutingPolicyChange()
@@ -1056,44 +1063,16 @@ public final class SyncCoordinator {
 
     /// Maps an answered non-401 status to its freshness state. The daemon
     /// responded, so this is never `.unreachable`: 401 is the credential
-    /// state, any other status is a reachable daemon whose reads are
-    /// failing, refined by a health probe into `.contractMismatch` on a
-    /// contract-digest skew. Returns the state; the caller re-checks its
-    /// round generation before writing it, so the awaited probe cannot let
-    /// a superseded round overwrite a newer one.
-    private func failureFreshness(status: Int) async -> InboxStore.Freshness {
-        status == 401 ? .unauthenticated : await diagnoseSyncFailure()
+    /// state, and any other status is a reachable daemon whose reads are
+    /// failing. A contract digest difference is no diagnosis of its own
+    /// (#3109): the round's health read already decided compatibility.
+    private func failureFreshness(status: Int) -> InboxStore.Freshness {
+        status == 401 ? .unauthenticated : .syncFailing
     }
 
-    /// The diagnosed freshness for a thrown read error: `.unreachable`
-    /// stays (no response arrived), while a reachable-but-failing read
-    /// (`.syncFailing`) is refined by a health probe into
-    /// `.contractMismatch` on a contract-digest skew. Caller re-guards the
-    /// write as above.
-    private func diagnosedReadFreshness(_ error: any Error) async -> InboxStore.Freshness {
-        freshnessForReadError(error) == .syncFailing ? await diagnoseSyncFailure() : .unreachable
-    }
-
-    /// Probes `/health` to tell a contract skew from a generic sync
-    /// failure. When a sync read has already failed as reachable-but-
-    /// failing, a `/health` answer whose `contract_digest` differs from
-    /// this client's compiled-in `APIContract.digest` means the two were
-    /// built from different specs, so the client must not expect to sync;
-    /// report `.contractMismatch`. A matching digest, a transport error,
-    /// or an undecodable health body (including a pre-#1265 daemon with no
-    /// digest field) stays `.syncFailing`.
-    ///
-    /// The probe races a short timeout, as the daemon-menu health checker
-    /// does: a daemon that stops between the failed read and this request,
-    /// or a network that starts black-holing traffic, would otherwise leave
-    /// this await pending until the transport timeout, stalling the shared
-    /// refresh task so later refreshes only join it. Timeout falls back to
-    /// `.syncFailing`, the same as any other unreachable-probe outcome.
-    private func diagnoseSyncFailure() async -> InboxStore.Freshness {
-        guard let body = await Self.readHealth(store.client), body.contract_digest != APIContract.digest else {
-            return .syncFailing
-        }
-        return .contractMismatch(daemonContract: body.contract_digest)
+    /// `InboxStore.publish(_:)`, which keeps a compatibility verdict.
+    private func publish(_ freshness: InboxStore.Freshness) {
+        store.publish(freshness)
     }
 
     /// Reads `/health`, or nil when it doesn't answer 200 with a body this

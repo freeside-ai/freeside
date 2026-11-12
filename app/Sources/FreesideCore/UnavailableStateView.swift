@@ -10,12 +10,15 @@ enum EmptyStateGlyph {
     case tasks
     /// A device whose pairing was revoked.
     case revoked
+    /// An app and daemon too far apart to talk (#3109).
+    case incompatible
 
     var symbolName: String {
         switch self {
         case .inbox: "archivebox"
         case .tasks: "checklist.checked"
         case .revoked: "lock.slash"
+        case .incompatible: "arrow.down.app"
         }
     }
 }

@@ -12,7 +12,8 @@ import Testing
             .fresh,
             .unreachable,
             .syncFailing,
-            .contractMismatch(daemonContract: "sha256:" + String(repeating: "a", count: 64)),
+            .incompatible(.appBelowFloor(floor: 1, daemonVersion: "1.0.0")),
+            .incompatible(.daemonBelowLevel(level: 0, daemonVersion: "1.0.0")),
             .unauthenticated,
         ]
         for state in states {

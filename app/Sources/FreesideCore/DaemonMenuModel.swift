@@ -6,23 +6,32 @@
     public struct DaemonHealth: Equatable, Sendable {
         public let version: String
         public let startedAt: Date
-        /// The daemon's reported API contract digest (GET /health). Compared
-        /// with this client's compiled-in `APIContract.digest` to flag a
-        /// client/daemon contract skew in the menu.
-        public let contractDigest: String
+        /// The daemon's reported compatibility level and floor (GET /health,
+        /// #3109). A daemon that omits either reports 0 for it.
+        public let compatibilityLevel: Int
+        public let compatibilityFloor: Int
 
-        /// `contractDigest` defaults to this client's own digest, so a
-        /// fixture or preview reads as a same-build daemon; the live health
-        /// checker always passes the daemon's reported value.
-        public init(version: String, startedAt: Date, contractDigest: String = APIContract.digest) {
+        /// The level and floor default to this client's own, so a fixture or
+        /// preview reads as a same-build daemon; the live health checker
+        /// always passes the daemon's reported values.
+        public init(
+            version: String, startedAt: Date,
+            compatibilityLevel: Int = APIContract.compatibilityLevel,
+            compatibilityFloor: Int = APIContract.compatibilityFloor
+        ) {
             self.version = version
             self.startedAt = startedAt
-            self.contractDigest = contractDigest
+            self.compatibilityLevel = compatibilityLevel
+            self.compatibilityFloor = compatibilityFloor
         }
 
-        /// Whether the daemon was built from the same API spec as this
-        /// client. A mismatch means one of the two must be updated.
-        public var contractMatchesClient: Bool { contractDigest == APIContract.digest }
+        /// Why this app and the daemon can't talk, or nil when they can: the
+        /// same verdict the sync round reaches from the same fields. A
+        /// different contract digest alone is never one.
+        public var incompatibility: DaemonIncompatibility? {
+            DaemonIncompatibility.verdict(
+                daemonLevel: compatibilityLevel, daemonFloor: compatibilityFloor, daemonVersion: version)
+        }
     }
 
     public protocol DaemonHealthChecking: Sendable {
@@ -51,7 +60,8 @@
                     let body = try await makeClient(serverURL).getHealth().ok.body.json
                     return DaemonHealth(
                         version: body.version, startedAt: body.started_at,
-                        contractDigest: body.contract_digest)
+                        compatibilityLevel: body.compatibility_level ?? 0,
+                        compatibilityFloor: body.compatibility_floor ?? 0)
                 }
                 group.addTask {
                     try await Task.sleep(for: timeout)

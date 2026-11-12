@@ -131,6 +131,10 @@ public actor MockServer {
     private var epochGeneration = 1
     private var healthVersion = "mock"
     private var healthStartedAt = Date(timeIntervalSince1970: 1_725_184_800)
+    /// The level and floor `/health` reports, each omitted when nil as a
+    /// daemon built before #3109 omits them.
+    private var healthCompatibilityLevel: Int? = APIContract.compatibilityLevel
+    private var healthCompatibilityFloor: Int? = APIContract.compatibilityFloor
     private var healthContractDigest = APIContract.digest
     private var healthAvailable = true
     /// The features `/health` lists, or nil to omit the field as a daemon
@@ -490,8 +494,17 @@ public actor MockServer {
         await withCheckedContinuation { revisionWaiterArrivals.append((count, $0)) }
     }
 
-    /// Serves a contract digest other than this client's, so a test can
-    /// exercise the client/daemon contract-skew diagnosis.
+    /// Serves a compatibility level and floor other than this client's, or
+    /// omits either when nil, so a test can exercise the app's refusal of an
+    /// incompatible daemon (#3109). The mock, like the daemon, still serves
+    /// every request; only the app decides.
+    public func setHealthCompatibility(level: Int?, floor: Int?) {
+        healthCompatibilityLevel = level
+        healthCompatibilityFloor = floor
+    }
+
+    /// Serves a contract digest other than this client's, so a test can show
+    /// a digest difference alone never stops an app (#3109).
     public func setHealthContractDigest(_ digest: String) {
         healthContractDigest = digest
     }
@@ -1080,8 +1093,9 @@ public actor MockServer {
     func healthStatus() throws -> Components.Schemas.HealthStatus {
         guard healthAvailable else { throw HealthUnavailableError() }
         return .init(
-            status: .ok, contract_digest: healthContractDigest, features: healthFeatures,
-            version: healthVersion, started_at: healthStartedAt)
+            status: .ok, contract_digest: healthContractDigest,
+            compatibility_level: healthCompatibilityLevel, compatibility_floor: healthCompatibilityFloor,
+            features: healthFeatures, version: healthVersion, started_at: healthStartedAt)
     }
 
     /// One canonical snapshot of every synchronized resource from a

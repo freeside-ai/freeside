@@ -27,7 +27,7 @@ is configured.
 
 `FreesideServerURL` is read from `UserDefaults`, so an installed app that is launched from the Dock (where nothing forwards launch arguments) takes it from its persisted preferences instead; `install-mac-app.sh --server-url` writes that preference. A launch argument still wins, because the argument domain outranks the persistent one.
 
-Build the daemon you point it at from the same commit as the client. The API schema moves with `api/openapi.yaml`, so a client from one commit and a daemon binary from another can connect, authenticate, and still fail every sync — visible only as the freshness banner, with no error naming the mismatch. `scripts/run-convergence.sh` avoids this by rebuilding the harness from source on every run; a hand-rolled daemon launch does not, and a rebase is enough to desynchronise the two.
+The daemon you point it at need not come from the same commit as the client. They can talk while the daemon's compatibility floor is at or below the app's level and the daemon's level is at or above it ([api/README.md](../api/README.md#compatibility-level)); otherwise the app replaces its inbox with one screen naming which side to update. A same-commit build is still the simplest: `scripts/run-convergence.sh` rebuilds the harness from source on every run, while a hand-rolled daemon launch does not.
 
 Launch arguments also pin the presentation per launch (`LaunchInputs`), so screenshot and testing workflows drive the app without UI automation. These are launch arguments rather than environment variables because `open --args` forwards only arguments, and `xcrun simctl launch` forwards them too:
 
@@ -113,7 +113,7 @@ Signing needs an `Apple Development` identity, which Xcode mints from the free p
 
 **Pairing.** `--server-url` cannot be written to an iOS app's preferences from the host, so it is passed after `devicectl`'s `--` application-argument separator as `-FreesideServerURL` on the first launch; that is why it requires `--launch` or `--launch-only`. If a first personal-team launch is rejected before the certificate trust step, trust the certificate, then retry only the launch, without another build, as `./scripts/install-ios-app.sh --device '<name>' --server-url '<url>' --launch-only`. The launch enters live mode and shows the pairing screen: run the pairing command on the daemon host and enter the code it displays. The app persists the deployment URL on-device when pairing succeeds, so later launches from the home screen (which forward no arguments) reach the same daemon with no `--server-url`. Routine updates are therefore just `./scripts/install-ios-app.sh --device '<name>'`. Because the app reads `-FreesideServerURL` only at process start, a `--server-url` launch terminates any running instance before launching, so the new URL takes effect; switching an already-paired phone to a new daemon is therefore one `./scripts/install-ios-app.sh --device '<name>' --server-url '<url>' --launch-only` run.
 
-**Sync-contract churn.** When a sync-contract change lands (the app's generated API client changes shape), the installed build is stale against the daemon and must be reinstalled; the weekly re-sign cadence makes that reinstall routine rather than a special step.
+**Sync-contract churn.** An additive API change needs no reinstall. When a breaking one raises the daemon's floor above the installed app's level, the app shows the update screen and must be reinstalled; the weekly re-sign cadence makes that reinstall routine rather than a special step.
 
 ## New Task Prompt History
 

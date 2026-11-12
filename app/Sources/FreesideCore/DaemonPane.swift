@@ -101,7 +101,8 @@ struct DaemonPane: View {
         /// The menu-bar panel's Daemon section on one bordered box: the host
         /// over the version and start time or what the state means, and the
         /// state chip and the one lifecycle control trailing. Under it, a
-        /// failed action and a contract mismatch, as the panel draws them.
+        /// failed action and an app or daemon that needs an update, as the
+        /// panel draws them.
         private func macHostRow(_ mac: MacDaemon) -> some View {
             VStack(alignment: .leading, spacing: 12) {
                 // At the accessibility sizes the state and control drop under
@@ -148,10 +149,12 @@ struct DaemonPane: View {
                     Notice(tone: .wax, keyword: "Failed", sentence: actionError)
                         .accessibilityElement(children: .combine)
                 }
-                if case .running(let health, _) = mac.state, !health.contractMatchesClient {
-                    let mismatch = ContractMismatchSentence(daemonContract: health.contractDigest)
-                    Notice(tone: .accent, keyword: "Mismatch", sentence: mismatch.plain, drawn: mismatch.text)
-                        .accessibilityElement(children: .combine)
+                if case .running(let health, _) = mac.state, let incompatibility = health.incompatibility {
+                    Notice(
+                        tone: .accent, keyword: "Update needed",
+                        sentence: CompatibilityWords(incompatibility: incompatibility, platform: .mac).notice
+                    )
+                    .accessibilityElement(children: .combine)
                 }
             }
         }
@@ -211,14 +214,15 @@ struct DaemonPane: View {
     }
 
     /// The freshness banner's word: ink while connected, faint while the
-    /// first check runs, the accent for a contract mismatch, and wax for a
+    /// first check runs, the accent for an app or daemon that needs an
+    /// update, and wax for a
     /// sync that isn't reaching the daemon.
     private func freshnessChip(_ freshness: InboxStore.Freshness) -> StateChip {
         let label = SettingsSummary.daemon(freshness)
         return switch freshness {
         case .fresh: StateChip(label: label, cut: .ink)
         case .unvalidated: StateChip(label: label, cut: .faint)
-        case .contractMismatch: StateChip(label: label, cut: .attention)
+        case .incompatible: StateChip(label: label, cut: .attention)
         case .unreachable, .syncFailing, .unauthenticated: StateChip(label: label, color: .waxText)
         }
     }

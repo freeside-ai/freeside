@@ -25,7 +25,8 @@
 
         @Test func everyFailingStateIsFailingEvenWhenRecent() {
             let failing: [InboxStore.Freshness] = [
-                .unreachable, .syncFailing, .contractMismatch(daemonContract: "abc"), .unauthenticated,
+                .unreachable, .syncFailing, .incompatible(.appBelowFloor(floor: 1, daemonVersion: "other")),
+                .unauthenticated,
             ]
             for freshness in failing {
                 #expect(SyncStatusDot.status(freshness: freshness, lastUpdatedAt: recent, at: now) == .failing)

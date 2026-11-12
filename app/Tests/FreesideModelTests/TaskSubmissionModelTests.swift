@@ -326,7 +326,7 @@ import Testing
     private static let failingFreshness: [InboxStore.Freshness] = [
         .unreachable,
         .syncFailing,
-        .contractMismatch(daemonContract: "sha256:" + String(repeating: "0", count: 64)),
+        .incompatible(.appBelowFloor(floor: 1, daemonVersion: "other")),
         .unauthenticated,
     ]
 }

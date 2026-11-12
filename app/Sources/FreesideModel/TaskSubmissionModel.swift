@@ -73,8 +73,8 @@ public final class TaskSubmissionModel {
             return "New tasks need the daemon, which is unreachable."
         case .syncFailing:
             return "New tasks need a working sync with the daemon."
-        case .contractMismatch:
-            return "New tasks need a daemon on a matching version."
+        case .incompatible:
+            return "New tasks need an app and daemon that can talk to each other."
         case .unauthenticated:
             return "New tasks need this device to be paired again."
         }
@@ -219,7 +219,7 @@ public final class TaskSubmissionModel {
                     // Authentication can fail before an accepted command's
                     // replay is reached. Keep its saved identity unresolved;
                     // this response proves nothing about the earlier outcome.
-                    coordinator.store.freshness = .unauthenticated
+                    coordinator.store.publish(.unauthenticated)
                     state = .lost
                 case 400..<500:
                     state = .rejected("the daemon rejected the submission (status \(statusCode))")
@@ -263,7 +263,7 @@ public final class TaskSubmissionModel {
             case .undocumented(let statusCode, _):
                 switch statusCode {
                 case 401, 403:
-                    coordinator.store.freshness = .unauthenticated
+                    coordinator.store.publish(.unauthenticated)
                     state = .lost
                 case 400..<500:
                     coordinator.finishTaskSubmission(command.command_id)

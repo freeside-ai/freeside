@@ -483,7 +483,8 @@ import Testing
         coordinator.store.freshness = .unvalidated
         #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).cancellationMayBeOutdated)
         let failing: [InboxStore.Freshness] = [
-            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+            .unreachable, .syncFailing, .incompatible(.appBelowFloor(floor: 1, daemonVersion: "other")),
+            .unauthenticated,
         ]
         for freshness in failing {
             coordinator.store.freshness = freshness
@@ -515,9 +516,10 @@ import Testing
         await server.setBeforeRespond { await order.record($0) }
         await coordinator.taskStop.confirm(prepared)
         // A sync round whose first read follows the confirm, then one send.
+        // The round opens with its compatibility read (#3109).
         let operations = await order.operations
         let send = try #require(operations.firstIndex(of: "submitCommand"))
-        #expect(operations.first == "getSyncRevision")
+        #expect(Array(operations.prefix(2)) == ["getHealth", "getSyncRevision"])
         #expect(operations.filter { $0 == "submitCommand" }.count == 1)
         #expect(operations[..<send].contains("getSyncBootstrap"))
         #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
@@ -660,7 +662,8 @@ import Testing
         #expect(coordinator.taskStop.unavailableReason == nil)
         #expect(coordinator.taskStop.prepare(taskID: taskID) != nil)
         let failing: [InboxStore.Freshness] = [
-            .unreachable, .syncFailing, .contractMismatch(daemonContract: "other"), .unauthenticated,
+            .unreachable, .syncFailing, .incompatible(.appBelowFloor(floor: 1, daemonVersion: "other")),
+            .unauthenticated,
         ]
         for freshness in failing {
             coordinator.store.freshness = freshness

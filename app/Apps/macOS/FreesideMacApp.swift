@@ -440,9 +440,9 @@ private enum DaemonMenuDemo {
         case "unreachable":
             status = .enabled
             health = .unreachable
-        case "mismatch":
+        case "incompatible":
             status = .enabled
-            health = .contractMismatch
+            health = .appBelowFloor
         default:
             status = .notRegistered
             health = .unreachable
@@ -474,7 +474,7 @@ private final class DemoDaemonService: DaemonServiceControlling {
 private struct DemoHealthChecker: DaemonHealthChecking {
     enum Result: Sendable {
         case running
-        case contractMismatch
+        case appBelowFloor
         case unreachable
     }
 
@@ -485,12 +485,13 @@ private struct DemoHealthChecker: DaemonHealthChecking {
         switch result {
         case .running:
             return DaemonHealth(version: "1.0.0", startedAt: startedAt)
-        case .contractMismatch:
-            // A daemon built from a different spec, for the menu's
-            // contract-mismatch demo/screenshot state (#1265).
+        case .appBelowFloor:
+            // A daemon whose floor is far above any app's level, for the
+            // menu's update-needed demo state (#3109). This target reads no
+            // FreesideAPI constant, so the level is a literal.
             return DaemonHealth(
                 version: "1.0.0", startedAt: startedAt,
-                contractDigest: "sha256:" + String(repeating: "a", count: 64))
+                compatibilityLevel: 1_000, compatibilityFloor: 1_000)
         case .unreachable:
             throw URLError(.cannotConnectToHost)
         }

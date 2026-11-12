@@ -261,7 +261,8 @@ package final class RoutingPolicyModel {
             return coordinator.cursors == nil ? "Refresh before changing the routing policy." : nil
         case .unauthenticated: return "Pair this device again before changing the routing policy."
         case .unreachable: return "Offline. Connect to the daemon before changing the routing policy."
-        case .syncFailing, .contractMismatch: return "The routing policy isn't current. Refresh before changing it."
+        case .syncFailing: return "The routing policy isn't current. Refresh before changing it."
+        case .incompatible: return "Update the app or the daemon before changing the routing policy."
         }
     }
 
@@ -414,7 +415,7 @@ package final class RoutingPolicyModel {
                     failure = RoutingPolicyFailure(
                         message: "The daemon rejected the change (status \(status)). Nothing was changed.")
                     await coordinator.refreshAfterCommit()
-                case 401, 403: coordinator.store.freshness = .unauthenticated
+                case 401, 403: coordinator.store.publish(.unauthenticated)
                 default: break
                 }
             }

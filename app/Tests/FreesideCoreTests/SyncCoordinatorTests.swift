@@ -16,6 +16,12 @@ private func makeCoordinator(
     SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache)
 }
 
+/// The operation IDs a mock server answered, in arrival order.
+private actor OperationRecorder {
+    private(set) var recorded: [String] = []
+    func append(_ operation: String) { recorded.append(operation) }
+}
+
 /// A newer daemon: renames one attention type in the bootstrap body to a
 /// value this client's contract doesn't declare.
 private struct NewerAttentionTypeTransport: ClientTransport {
@@ -882,7 +888,6 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         // not a sync round (#1947). It advances the observed cursor but
         // leaves the failure on screen; the cursor gap makes the next good
         // round bootstrap back to fresh.
-        let foreign = "sha256:" + String(repeating: "a", count: 64)
         let server = MockServer()
         let coordinator = makeCoordinator(server: server)
         await coordinator.bootstrap()
@@ -903,7 +908,6 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
             #expect(partial.highestObservedServerRevision > partial.lastFullSnapshotRevision)
 
             await server.setBeforeRespond(nil)
-            await server.setHealthContractDigest(APIContract.digest)
             await coordinator.heartbeat()
             #expect(coordinator.store.freshness == .fresh)
             let recovered = try #require(coordinator.cursors)
@@ -913,39 +917,156 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         try await check(.unreachable, failingSyncReadsWith: MockOutage())
         try await check(.syncFailing, failingSyncReadsWith: MockServer.ForcedStatus(500))
         try await check(.unauthenticated, failingSyncReadsWith: MockServer.ForcedStatus(401))
-        await server.setHealthContractDigest(foreign)
-        try await check(.contractMismatch(daemonContract: foreign), failingSyncReadsWith: MockServer.ForcedStatus(500))
     }
 
-    @Test func aFailingReadAgainstAMismatchedContractSurfacesContractMismatch() async throws {
-        // A reachable-but-failing sync read against a daemon whose /health
-        // reports a contract digest different from this client's is
-        // diagnosed as a contract skew, not a generic sync failure. The same
-        // failure with a matching digest stays .syncFailing, and a transport
-        // outage (no /health answer at all) stays .unreachable.
-        let foreign = "sha256:" + String(repeating: "a", count: 64)
+    @Test func aDaemonWhoseFloorIsAboveThisAppStopsEveryReadButHealth() async throws {
+        // #3109: a daemon whose floor is above this app's level refuses
+        // nothing itself; the app reads only /health, publishes the verdict,
+        // and sends nothing else until a round finds the two compatible.
+        let level = APIContract.compatibilityLevel
         let server = MockServer()
         let coordinator = makeCoordinator(server: server)
-        await coordinator.bootstrap()
+        await coordinator.refresh()
         #expect(coordinator.store.freshness == .fresh)
 
-        await server.setHealthContractDigest(foreign)
-        await server.setBeforeRespond { op in
-            if op == "getSyncBootstrap" { throw MockServer.ForcedStatus(500) }
+        // A decision whose response was lost waits, unresolved, for its
+        // resend; the refusal must leave it queued and send nothing for it.
+        await server.setAfterRespond { op in
+            if op == "submitCommand" { throw MockOutage() }
         }
-        await coordinator.bootstrap()
-        #expect(coordinator.store.freshness == .contractMismatch(daemonContract: foreign))
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        await server.setAfterRespond(nil)
+        let pending = try #require(coordinator.store.pendingCommandsByItemID["item-spec_approval"])
+        #expect(pending.state == .unresolved)
+        await coordinator.refresh()
+        let rows = coordinator.store.rows
 
-        // The identical failure, now with a matching digest, is not a skew.
-        await server.setHealthContractDigest(APIContract.digest)
+        let operations = OperationRecorder()
+        await server.setBeforeRespond { op in await operations.append(op) }
+        await server.setHealthCompatibility(level: level + 2, floor: level + 1)
+        let endedFresh = await coordinator.refreshAfterCommit()
+        #expect(!endedFresh)
+        let refusal = InboxStore.Freshness.incompatible(.appBelowFloor(floor: level + 1, daemonVersion: "mock"))
+        #expect(coordinator.store.freshness == refusal)
+        await coordinator.refresh()
+        #expect(await operations.recorded == ["getHealth", "getHealth"])
+        // The cache stays on disk for when sync resumes; only the screen
+        // stops showing it. The unresolved command stays queued.
+        #expect(coordinator.store.rows == rows)
+        #expect(coordinator.store.pendingCommandsByItemID["item-spec_approval"] == pending)
+
+        // A daemon that no longer answers keeps the refusal and still
+        // reads nothing else.
+        await server.setBeforeRespond { op in
+            await operations.append(op)
+            throw MockOutage()
+        }
+        await coordinator.refresh()
+        #expect(coordinator.store.freshness == refusal)
+        #expect(await operations.recorded == ["getHealth", "getHealth", "getHealth"])
+
+        // Once the daemon serves this app's level again, the next round
+        // syncs with no relaunch.
+        await server.setBeforeRespond(nil)
+        await server.setHealthCompatibility(level: level + 2, floor: level)
+        #expect(await coordinator.refreshAfterCommit())
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func aFailingReadNoLongerStandsInForAnIncompatibility() async throws {
+        // A sync read that fails while /health reports a compatible daemon
+        // stays a sync failure, and a refusal published by one round is not
+        // replaced by a later failing read from outside a round: only a
+        // round's health read sets or clears it.
+        let level = APIContract.compatibilityLevel
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.refresh()
+
+        await server.setBeforeRespond { op in
+            if op == "getSyncBootstrap" || op == "getSyncRevision" { throw MockServer.ForcedStatus(500) }
+        }
         await coordinator.bootstrap()
         #expect(coordinator.store.freshness == .syncFailing)
 
-        // A transport outage silences /health too, so it stays .unreachable
-        // rather than being misreported as a skew.
-        await server.setBeforeRespond { _ in throw MockOutage() }
-        await coordinator.heartbeat()
-        #expect(coordinator.store.freshness == .unreachable)
+        await server.setBeforeRespond(nil)
+        await server.setHealthCompatibility(level: level + 1, floor: level + 1)
+        await coordinator.refresh()
+        let refusal = InboxStore.Freshness.incompatible(.appBelowFloor(floor: level + 1, daemonVersion: "mock"))
+        #expect(coordinator.store.freshness == refusal)
+
+        await server.setBeforeRespond { _ in throw MockServer.ForcedStatus(500) }
+        await coordinator.refreshRuns()
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == refusal)
+
+        // A revoked answer landing behind the refusal, from a read or from a
+        // model's command, doesn't reopen the inbox either.
+        await server.setBeforeRespond { _ in throw MockServer.ForcedStatus(401) }
+        await coordinator.bootstrap()
+        coordinator.store.publish(.unauthenticated)
+        #expect(coordinator.store.freshness == refusal)
+    }
+
+    @Test func aDaemonBelowThisAppsLevelNeedsAnUpdateAndResumesWhenUpdated() async throws {
+        // #3109: an app's minimum daemon level is its own level. A daemon
+        // below it gets the daemon-needs-an-update refusal and no other
+        // read; once it reports a compatible level, the next round syncs
+        // with no relaunch.
+        let level = APIContract.compatibilityLevel
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        coordinator.appCompatibilityLevel = level + 1
+
+        let operations = OperationRecorder()
+        await server.setBeforeRespond { op in await operations.append(op) }
+        await coordinator.refresh()
+        #expect(
+            coordinator.store.freshness
+                == .incompatible(.daemonBelowLevel(level: level, daemonVersion: "mock")))
+        #expect(await operations.recorded == ["getHealth"])
+
+        await server.setBeforeRespond(nil)
+        await server.setHealthCompatibility(level: level + 1, floor: level)
+        #expect(await coordinator.refreshAfterCommit())
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func aCompatibleDaemonSyncsWhateverItsDigest() async throws {
+        // #3109: a digest difference alone is never a refusal. A daemon on
+        // another spec at this app's level, with features this app knows
+        // left off, syncs with those features off; so does a newer daemon
+        // whose floor still admits this app.
+        let level = APIContract.compatibilityLevel
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await server.setHealthContractDigest("sha256:" + String(repeating: "a", count: 64))
+        await server.setHealthFeatures([.parked_task_move])
+        await coordinator.refresh()
+        #expect(coordinator.store.freshness == .fresh)
+        #expect(coordinator.daemonFeatures == [.parked_task_move])
+
+        await server.setHealthCompatibility(level: level + 3, floor: level)
+        await coordinator.refresh()
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func aDaemonThatOmitsItsLevelReadsAsLevelZero() async throws {
+        // A daemon built before #3109 reports neither field; each reads as
+        // 0, so it serves a level-0 app and is too old for a level-1 one.
+        let server = MockServer()
+        await server.setHealthCompatibility(level: nil, floor: nil)
+        let current = makeCoordinator(server: server)
+        current.appCompatibilityLevel = 0
+        await current.refresh()
+        #expect(current.store.freshness == .fresh)
+
+        let newer = makeCoordinator(server: server)
+        newer.appCompatibilityLevel = 1
+        await newer.refresh()
+        #expect(newer.store.freshness == .incompatible(.daemonBelowLevel(level: 0, daemonVersion: "mock")))
     }
 
     @Test func answered200WithUndecodableBodySurfacesSyncFailing() async throws {
