@@ -7,10 +7,16 @@
 # check greps for the retired word stem (case-insensitive) in the surfaces
 # the rename covers and fails when it reappears. In a git checkout it reads
 # tracked files only, so untracked scratch files never fail it. In a tree
-# without git (a verification room, which holds a commit's exact tree and
-# no .git, or a `git archive` export) it reads every regular file, which is
-# the same set. Both modes search with git grep, so they print the same
-# lines and apply the same binary rule. The scope:
+# without git (a verification room or a `git archive` export, which hold a
+# commit's tree and no .git) it reads every regular file except those an
+# in-tree .gitignore ignores, so output a preparation step adds to the room,
+# such as the Swift checkouts `freeside-project-prepare` resolves under
+# app/.build/, is skipped as git mode skips it. A per-user ignore file is
+# never read, so it cannot hide a file. One difference from git mode
+# remains: a tracked file that a committed .gitignore also matches is read
+# in git mode and skipped without git. The required check runs in git mode,
+# so it still reads such a file. Both modes search with git grep, so they
+# print the same lines and apply the same binary rule. The scope:
 #
 #   daemon/**/*.go   non-test Go code, except one legacy_vocabulary.go per
 #                    package, which is the only place pre-rename literals
@@ -93,12 +99,17 @@ list_files() {
 }
 
 # search exits 0 on a hit and 1 on none, as git grep does; any other
-# status is a failure that must not pass as a clean file.
+# status is a failure that must not pass as a clean file. Without git,
+# --exclude-standard makes git grep honor the tree's .gitignore files, so an
+# ignored file returns 1 even when named; core.excludesFile=/dev/null keeps
+# the per-user ignore file, which git reads by default even when
+# GIT_CONFIG_GLOBAL is /dev/null, from hiding a file.
 search() {
   if [ "$in_git" -eq 1 ]; then
     git -C "$root" grep -I -i -n -e "$stem" -- "$1"
   else
-    (cd "$root" && git grep --no-index -I -i -n -e "$stem" -- "$1")
+    (cd "$root" && git -c core.excludesFile=/dev/null grep --no-index \
+      --exclude-standard -I -i -n -e "$stem" -- "$1")
   fi
 }
 

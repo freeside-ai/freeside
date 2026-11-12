@@ -256,6 +256,56 @@ assert_not_contains "0064_specification_vocabulary.sql"
 assert_not_contains "legacy_vocabulary.go"
 assert_not_contains "stage_test.go"
 
+# add_ignored <tree> writes a hit where preparation puts the Swift checkouts,
+# into the exported tree only, as freeside-project-prepare does in a room.
+add_ignored() {
+  mkdir -p "$1/app/.build/checkouts/dep"
+  printf '%s\n' "the $word of rights" > "$1/app/.build/checkouts/dep/LICENSE.txt"
+}
+
+begin_case "an exported tree skips preparation output its .gitignore ignores"
+repo=$(new_repo export-ignored)
+add_file "$repo" app/.gitignore ".build/"
+commit_all "$repo"
+exported=$(export_tree "$repo" export-ignored-tree)
+add_ignored "$exported"
+run_check "$exported"
+assert_rc 0
+assert_contains "no retired vocabulary in scope"
+
+begin_case "an exported tree with ignored output still fails on every surface"
+repo=$(new_repo export-ignored-surfaces)
+add_file "$repo" app/.gitignore ".build/"
+surface_paths=(daemon/internal/engine/stage.go api/x.yaml app/Sources/x.swift prompts/x.md scripts/x.sh)
+for path in "${surface_paths[@]}"; do
+  add_file "$repo" "$path" "# $word"
+done
+commit_all "$repo"
+exported=$(export_tree "$repo" export-ignored-surfaces-tree)
+add_ignored "$exported"
+run_check "$exported"
+assert_rc 1
+for path in "${surface_paths[@]}"; do
+  assert_contains "$path:1:"
+done
+assert_not_contains "app/.build/"
+assert_contains "retired vocabulary in 5 file(s) in scope"
+
+begin_case "a per-user ignore file hides nothing in an exported tree"
+repo=$(new_repo export-user-ignore)
+add_file "$repo" scripts/x.sh "# $word"
+commit_all "$repo"
+exported=$(export_tree "$repo" export-user-ignore-tree)
+xdg=$TMP/xdg
+mkdir -p "$xdg/git"
+printf '*.sh\n' > "$xdg/git/ignore"
+set +e
+OUT=$(XDG_CONFIG_HOME=$xdg bash "$CHECK" "$exported" 2>&1)
+RC=$?
+set -e
+assert_rc 1
+assert_contains "scripts/x.sh:1:"
+
 begin_case "a failed directory listing cannot be hidden by a later successful one"
 repo=$(new_repo list-fails)
 add_file "$repo" scripts/example.sh "# clean"
