@@ -603,7 +603,10 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/engine/commit_message.go` (derives and screens the fallback
   commit message published to GitHub, and the recipes replay accepts),
   `internal/engine/follow_up_filing.go` (frames untrusted finding text into
-  the follow-up issue a person approves for filing), and
+  the follow-up issue a person approves for filing),
+  `internal/engine/follow_up_duplicate_search.go` (decides from untrusted
+  issue text and a model answer whether a finding is filed, and which open
+  issue a duplicate verdict names), and
   `internal/engine/verification_report.go` (reads the verifier's bytes),
   `internal/engine/publication_core.go` (the git publish transport, the
   publication lock, and candidate identity),
@@ -644,6 +647,10 @@ directory named before it in the same bullet. All under `daemon/`:
   (binds a sealed handoff tip to the audit that observed it, re-checked
   before a remediation starts at that tip),
   `internal/store/shadow_review_configuration.go`,
+  `internal/domain/duplicate_search.go` and
+  `internal/store/duplicate_search.go` (the duplicate-search record whose
+  handle rule decides which issue a verdict names, and the filing gate
+  reads before admitting or approving a filing),
   `internal/domain/decision_surface.go`,
   `internal/domain/closure_approval.go`,
   `internal/domain/agent_decision.go`, `internal/domain/authorization.go`,

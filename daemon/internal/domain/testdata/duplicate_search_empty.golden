@@ -1,0 +1,19 @@
+{
+  "encoding_version": 1,
+  "run_id": "run-1",
+  "adjudication_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "finding_id": "finding-1",
+  "kind": "deferred_disposition",
+  "repository": {
+    "repo": "acme/widgets",
+    "repository_id": 42
+  },
+  "candidate_limit": 100,
+  "truncated": false,
+  "candidates": [],
+  "duplicate_of": "",
+  "confidence": "",
+  "reason": "",
+  "created_at": "2026-11-12T10:00:00Z",
+  "digest": "sha256:23708e264baa76c0457de0a1fa32812bb499e774c58d85b5bbaafb6fc8f8b80f"
+}

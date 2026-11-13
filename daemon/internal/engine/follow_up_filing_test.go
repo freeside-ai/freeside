@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // newFollowUpFilingFixture is the adjudication fixture with one located
@@ -29,6 +31,9 @@ func newFollowUpFilingFixture(
 	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
 		modelRouteEntry(t, f.finding.ID, route, domain.ConfidenceHigh))
 	f.workflow.artifacts = f.blobs
+	// The filing target has no open issues, so every search answers "new"
+	// without a site call.
+	stubOpenIssues(t, f, http.StatusOK)
 	return f
 }
 
@@ -469,6 +474,11 @@ func TestFollowUpFilingReplayKeepsAnInstanceComposedDifferently(t *testing.T) {
 			},
 		}, f.binding.resolvedPolicy)
 		if err != nil {
+			return err
+		}
+		if err := storetest.PutNewDuplicateSearch(f.ctx, tx, f.task.RunID, proposal.FilingProposal.Source,
+			domain.FollowUpFilingRepository{Repo: target.Repo, RepositoryID: target.RepositoryID},
+			f.workflow.now()); err != nil {
 			return err
 		}
 		_, _, err = tx.AllocateProposalInstance(f.ctx, domain.ProposalAdmissionKey{

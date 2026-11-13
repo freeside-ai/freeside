@@ -385,6 +385,7 @@ func ComposeClaudeWorkflow(
 		HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
 		RebuildProjectImage:    rebuild,
 		ImageUpkeepPending:     imageUpkeep.PendingResolution,
+		OpenIssues:             claudeWiring.openIssues,
 		NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 			return ward.NewProjectImageRoom(claudeWiring.ContainerBin, image, size, cfg.Logger)
 		},

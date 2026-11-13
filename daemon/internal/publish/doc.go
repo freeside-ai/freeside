@@ -5,8 +5,9 @@
 // App's identity from them to choose a registration. Other packages
 // receive read-scoped tokens through TokenSource and send them only to
 // GitHub: the project-image clone and identity requests
-// (WorkflowAuditPermissions), research issue reads in specify
-// (IssueReadPermissions), and the prelaunch issue read
+// (WorkflowAuditPermissions), research issue reads in specify and the
+// duplicate search's open-issue listing (IssueReadPermissions,
+// OpenIssueLister), and the prelaunch issue read
 // (IssueInspectionPermissions). cmd/freesided composes the Minter and
 // chooses each consumer's source. No GitHub write credential ever
 // enters any workspace (§5.4).

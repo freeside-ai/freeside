@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // filingFixture seeds one follow_up_filing proposal instance with the rows its
@@ -129,6 +130,10 @@ func newFilingFixture(t *testing.T) filingFixture {
 			Disposition: domain.ReviewDispositionDeferred, Reason: "tracked as a follow-up",
 			AdjudicationDigest: adjudication.Digest, CreatedAt: now,
 		}); err != nil {
+			return err
+		}
+		if err := storetest.PutNewDuplicateSearch(ctx, tx, policy.RunID, proposal.FilingProposal.Source,
+			domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID}, now); err != nil {
 			return err
 		}
 		instance, _, err = tx.AllocateProposalInstance(ctx,

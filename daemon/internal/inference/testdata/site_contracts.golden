@@ -52,5 +52,11 @@
     "output_contract": "specifier_triage_output_v1",
     "has_instruction": true,
     "contract_digest": "sha256:9a0078eeac4717fda3663a76d380af2402478194daf96fb5411dd2340372254f"
+  },
+  {
+    "site_id": "duplicate_search",
+    "output_contract": "duplicate_search_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:2ee42daf65cc944a9d22a2cb17d8a55de7a14075196472270c08bdda792bb4b6"
   }
 ]

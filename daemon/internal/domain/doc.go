@@ -130,6 +130,7 @@
 //   - follow_up_filing.go, follow_up_filing_ledger.go
 //     follow-up issue filing: its policy and bounds, and the create-attempt
 //     ledger
+//   - duplicate_search.go the duplicate search a follow-up filing must cite
 //   - project.go      the project authority binding one repository
 //   - project_image.go, admitted_image.go
 //     project image toolchains and the admitted-image pointer (§5.7)

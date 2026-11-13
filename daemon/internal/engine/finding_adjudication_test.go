@@ -272,7 +272,7 @@ func newFindingAdjudicationFixtureWithOptions(
 		Roles:     fake.Roles{Provider: "fake", Model: "test", Driver: driver},
 		Sites: []inference.Site{
 			inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
-			inference.DriftAuditorSite(budget),
+			inference.DriftAuditorSite(budget), inference.DuplicateSearchSite(budget),
 		},
 		Advisory: advisoryStore, Now: func() time.Time { return now },
 	})

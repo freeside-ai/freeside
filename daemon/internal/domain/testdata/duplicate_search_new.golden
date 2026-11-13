@@ -1,0 +1,30 @@
+{
+  "encoding_version": 1,
+  "run_id": "run-1",
+  "adjudication_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "finding_id": "finding-1",
+  "kind": "deferred_disposition",
+  "repository": {
+    "repo": "acme/widgets",
+    "repository_id": 42
+  },
+  "candidate_limit": 100,
+  "truncated": true,
+  "candidates": [
+    {
+      "handle": "candidate-1",
+      "number": 17,
+      "title": "Retry the config read on start"
+    },
+    {
+      "handle": "candidate-2",
+      "number": 9,
+      "title": "Document the cache bound"
+    }
+  ],
+  "duplicate_of": "",
+  "confidence": "high",
+  "reason": "Issue candidate-1 tracks the same retry.",
+  "created_at": "2026-11-12T10:00:00Z",
+  "digest": "sha256:2acc8040ca5a0838cacda46c2008f0c250271e7579be64bce6edb7175471c16f"
+}

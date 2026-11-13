@@ -57,7 +57,7 @@ func (r RoleName) Sites() []string {
 	case RoleFindingClassifier:
 		return []string{"finding_classifier"}
 	case RoleFindingAdjudicator:
-		return []string{"finding_adjudicator"}
+		return []string{"finding_adjudicator", "duplicate_search"}
 	case RoleAttentionDiscussion:
 		return []string{"attention_discussion"}
 	case RoleDriftAuditor:

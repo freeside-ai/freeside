@@ -177,6 +177,11 @@ func approveFollowUpFiling(t testing.TB, st *store.Store, filing FollowUpFiling)
 		}); err != nil {
 			return err
 		}
+		if err := PutNewDuplicateSearch(ctx, tx, runID, proposal.FilingProposal.Source,
+			domain.FollowUpFilingRepository{Repo: target.Repo, RepositoryID: target.RepositoryID},
+			filingSeedAt.Add(3*time.Minute)); err != nil {
+			return err
+		}
 		var err error
 		instance, _, err = tx.AllocateProposalInstance(ctx,
 			domain.ProposalAdmissionKey{

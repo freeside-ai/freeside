@@ -69,7 +69,7 @@ func judgmentCallAuditFor(adapter domain.Digest) *domain.InterimCallLaunchAudit 
 func JudgmentSites(budget inference.Budget) []inference.Site {
 	return []inference.Site{
 		inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
-		inference.DriftAuditorSite(budget),
+		inference.DuplicateSearchSite(budget), inference.DriftAuditorSite(budget),
 		inference.DiagnosticSite(budget), inference.DiscussionSite(budget),
 		inference.TaskNamerSite(budget),
 		inference.PublicationAuthorExplainSite(budget),

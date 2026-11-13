@@ -1,13 +1,35 @@
 package integration_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+type issueReadTestTokens struct{}
+
+func (issueReadTestTokens) Token(context.Context, string) (publish.InstallationToken, error) {
+	return publish.InstallationToken{Token: publish.Secret("issue-read-token")}, nil
+}
+
+// stubNoOpenIssues gives the next engine a lister whose repository has no
+// open issues, so each follow-up filing's duplicate search records "new"
+// without a site call and the filing is proposed.
+func (p *productionPublicationHarness) stubNoOpenIssues(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("[]"))
+	}))
+	t.Cleanup(srv.Close)
+	p.openIssues = publish.NewOpenIssueLister(issueReadTestTokens{}, srv.Client(), srv.URL)
+}
 
 // openFollowUpFilings returns the open follow_up_filing cards and the filings
 // their batches hold. A filing proposal needs the run's work-unit
@@ -84,6 +106,7 @@ func assertExternalFiling(
 func TestExternalReviewDeferralProposesOneFollowUpFiling(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarnessWithBoundIssue(t, "", 79)
+	p.stubNoOpenIssues(t)
 	driver := p.configureAdjudicator(t)
 	_, findings := p.startAdjudicatedExternalReview(t, "rename this too")
 
@@ -121,6 +144,7 @@ func TestExternalReviewDeferralProposesOneFollowUpFiling(t *testing.T) {
 func TestExternalReviewSeparateWorkProposesOneFollowUpFiling(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarnessWithBoundIssue(t, "", 79)
+	p.stubNoOpenIssues(t)
 	driver := p.configureAdjudicator(t)
 	_, findings := p.startAdjudicatedExternalReview(t, "this leaks the handle")
 
