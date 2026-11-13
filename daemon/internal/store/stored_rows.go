@@ -157,6 +157,9 @@ var storedRowKinds = []storedRowKind{
 	{"routing policy", []string{"routing_policies"}, inRead(func(ctx context.Context, tx *ReadTx) error {
 		return discard(tx.RoutingPolicyRevisions(ctx))
 	})},
+	{"workflow policy", []string{"workflow_policy_revisions"}, inRead(func(ctx context.Context, tx *ReadTx) error {
+		return discard(tx.WorkflowPolicyLayers(ctx))
+	})},
 	{"unattended operation transition", []string{"unattended_operation_transitions"}, inRead(func(ctx context.Context, tx *ReadTx) error {
 		return discard2(tx.LatestUnattendedOperationTransition(ctx))
 	})},

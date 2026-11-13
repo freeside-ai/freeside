@@ -3,7 +3,7 @@
     import SwiftUI
 
     /// The Mac's Settings window (`⌘,`, the App's `Settings` scene): a source
-    /// list of the seven panes with the daemon's host and version at its foot,
+    /// list of the eight panes with the daemon's host and version at its foot,
     /// and the selected pane beside it, as the 4 Nov 2026 handoff draws it
     /// (`docs/design/handoff-2026-11-04-settings-usage-new-task/`, canvas
     /// band 1). The selection is `NavigationModel.settingsPane`, so the
@@ -86,6 +86,7 @@
         let openTask: (String) -> Void
         @State private var devices: DevicesModel
         @State private var routing: RoutingPolicyModel
+        @State private var workflow: WorkflowPolicyModel
         @State private var usage: AccountUsageModel
 
         init(
@@ -106,6 +107,7 @@
                     coordinator: coordinator,
                     signOut: { try session.rePair(endingPairingOf: coordinator) }))
             _routing = State(initialValue: RoutingPolicyModel(coordinator: coordinator))
+            _workflow = State(initialValue: WorkflowPolicyModel(coordinator: coordinator))
             _usage = State(initialValue: AccountUsageModel(coordinator: coordinator))
         }
 
@@ -124,7 +126,7 @@
                 SettingsWindowContent(
                     navigation: navigation,
                     sync: SettingsSync(
-                        devices: devices, routing: routing, usage: usage,
+                        devices: devices, routing: routing, workflow: workflow, usage: usage,
                         freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt,
                         revision: coordinator.cursors?.highestObservedServerRevision,
                         projects: coordinator.unifiedList.knownProjects,

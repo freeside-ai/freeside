@@ -623,10 +623,11 @@ public struct FreesideRootView: View {
                             if case .needsPairing = session.phase { navigation.closeSettings() }
                         }),
                     routing: RoutingPolicyModel(coordinator: coordinator),
+                    workflow: WorkflowPolicyModel(coordinator: coordinator),
                     usage: AccountUsageModel(coordinator: coordinator))
             }
             return SettingsSync(
-                devices: models.devices, routing: models.routing, usage: models.usage,
+                devices: models.devices, routing: models.routing, workflow: models.workflow, usage: models.usage,
                 freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt,
                 revision: coordinator.cursors?.highestObservedServerRevision,
                 projects: coordinator.unifiedList.knownProjects,
@@ -877,6 +878,7 @@ struct RevokedPane: View {
         struct Models {
             let devices: DevicesModel
             let routing: RoutingPolicyModel
+            let workflow: WorkflowPolicyModel
             let usage: AccountUsageModel
         }
 

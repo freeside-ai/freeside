@@ -42,6 +42,10 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// kept like a pending Stop so its retry survives a relaunch.
     public var pendingRoutingPolicyChange: PendingRoutingPolicyChange?
     public var routingDaemonID: String?
+    /// The unresolved workflow policy change, and the daemon it was sent
+    /// to, kept the same way. Additive: a cache without it loads none.
+    public var pendingWorkflowPolicyChange: PendingWorkflowPolicyChange?
+    public var workflowDaemonID: String?
     /// The unresolved usage command, and the daemon it was sent to, kept
     /// the same way. Additive: a cache without it loads none.
     public var pendingUsageCommand: PendingUsageCommand?
@@ -72,6 +76,9 @@ public struct CachedState: Codable, Equatable, Sendable {
     public var agentCatalog: Components.Schemas.AgentCatalog?
     /// The routing policy as of `cursors`; nil when none was ever set.
     public var routingPolicy: Components.Schemas.RoutingPolicySnapshot?
+    /// The workflow policy layers as of `cursors`; nil in a cache written
+    /// before the Workflow pane, which the next bootstrap fills.
+    public var workflowPolicy: Components.Schemas.WorkflowPolicySnapshot?
     /// Every usage pool's record as of `cursors`.
     public var usagePools: [Components.Schemas.UsagePoolSnapshot]
     public var runTimelines: [Components.Schemas.RunTimeline]
@@ -105,6 +112,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = nil,
         agentCatalog: Components.Schemas.AgentCatalog? = nil,
         routingPolicy: Components.Schemas.RoutingPolicySnapshot? = nil,
+        workflowPolicy: Components.Schemas.WorkflowPolicySnapshot? = nil,
         usagePools: [Components.Schemas.UsagePoolSnapshot] = [],
         runTimelines: [Components.Schemas.RunTimeline] = [],
         tasks: [Components.Schemas.TaskSnapshot] = [],
@@ -116,6 +124,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         stopDaemonID: String? = nil,
         pendingRoutingPolicyChange: PendingRoutingPolicyChange? = nil,
         routingDaemonID: String? = nil,
+        pendingWorkflowPolicyChange: PendingWorkflowPolicyChange? = nil,
+        workflowDaemonID: String? = nil,
         pendingUsageCommand: PendingUsageCommand? = nil,
         usageDaemonID: String? = nil,
         pendingParkedTaskMove: PendingParkedTaskMove? = nil,
@@ -135,6 +145,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.unattendedOperation = unattendedOperation
         self.agentCatalog = agentCatalog
         self.routingPolicy = routingPolicy
+        self.workflowPolicy = workflowPolicy
         self.usagePools = usagePools
         self.runTimelines = runTimelines
         self.tasks = tasks
@@ -146,6 +157,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.stopDaemonID = stopDaemonID
         self.pendingRoutingPolicyChange = pendingRoutingPolicyChange
         self.routingDaemonID = routingDaemonID
+        self.pendingWorkflowPolicyChange = pendingWorkflowPolicyChange
+        self.workflowDaemonID = workflowDaemonID
         self.pendingUsageCommand = pendingUsageCommand
         self.usageDaemonID = usageDaemonID
         self.pendingParkedTaskMove = pendingParkedTaskMove
@@ -191,6 +204,7 @@ public struct CachedState: Codable, Equatable, Sendable {
             Components.Schemas.UnattendedOperationSnapshot.self, .unattendedOperation)
         agentCatalog = try snapshot(Components.Schemas.AgentCatalog.self, .agentCatalog)
         routingPolicy = try snapshot(Components.Schemas.RoutingPolicySnapshot.self, .routingPolicy)
+        workflowPolicy = try snapshot(Components.Schemas.WorkflowPolicySnapshot.self, .workflowPolicy)
         usagePools = try snapshots([Components.Schemas.UsagePoolSnapshot].self, .usagePools)
         runTimelines = try snapshots([Components.Schemas.RunTimeline].self, .runTimelines)
         tasks = try snapshots([Components.Schemas.TaskSnapshot].self, .tasks)
@@ -207,6 +221,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         pendingRoutingPolicyChange = try? container.decodeIfPresent(
             PendingRoutingPolicyChange.self, forKey: .pendingRoutingPolicyChange)
         routingDaemonID = try? container.decodeIfPresent(String.self, forKey: .routingDaemonID)
+        pendingWorkflowPolicyChange = try? container.decodeIfPresent(
+            PendingWorkflowPolicyChange.self, forKey: .pendingWorkflowPolicyChange)
+        workflowDaemonID = try? container.decodeIfPresent(String.self, forKey: .workflowDaemonID)
         pendingUsageCommand = try? container.decodeIfPresent(
             PendingUsageCommand.self, forKey: .pendingUsageCommand)
         usageDaemonID = try? container.decodeIfPresent(String.self, forKey: .usageDaemonID)
@@ -341,6 +358,8 @@ public struct DiskCacheStore: CacheStore {
                 stopDaemonID: file.state.stopDaemonID,
                 pendingRoutingPolicyChange: file.state.pendingRoutingPolicyChange,
                 routingDaemonID: file.state.routingDaemonID,
+                pendingWorkflowPolicyChange: file.state.pendingWorkflowPolicyChange,
+                workflowDaemonID: file.state.workflowDaemonID,
                 pendingUsageCommand: file.state.pendingUsageCommand,
                 usageDaemonID: file.state.usageDaemonID,
                 pendingParkedTaskMove: file.state.pendingParkedTaskMove,

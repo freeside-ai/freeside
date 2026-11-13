@@ -12,7 +12,7 @@ var ErrCommandReceiptArms = errors.New("command receipt must set exactly one arm
 
 // CommandReceipt is the recorded result of one accepted operator command
 // (refresh_usage, reassign_collector, change_task_line, set_routing_policy,
-// move_parked_task): exactly one arm is set. The accepting transaction records it with the
+// move_parked_task, set_workflow_policy): exactly one arm is set. The accepting transaction records it with the
 // command's effect, and a replay of the command_id returns it unchanged.
 type CommandReceipt struct {
 	UsageRefresh          *UsageRefreshReceipt
@@ -20,6 +20,7 @@ type CommandReceipt struct {
 	TaskLineChange        *TaskLineChangeReceipt
 	RoutingPolicyChange   *RoutingPolicyChangeReceipt
 	ParkedTaskMove        *ParkedTaskMoveReceipt
+	WorkflowPolicyChange  *WorkflowPolicyChangeReceipt
 }
 
 // Kind names the set arm; it is empty unless exactly one arm is set.
@@ -40,6 +41,9 @@ func (r CommandReceipt) Kind() CommandKind {
 	if r.ParkedTaskMove != nil {
 		kinds = append(kinds, CommandKindMoveParkedTask)
 	}
+	if r.WorkflowPolicyChange != nil {
+		kinds = append(kinds, CommandKindSetWorkflowPolicy)
+	}
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -59,6 +63,8 @@ func (r CommandReceipt) CommandID() string {
 		return r.RoutingPolicyChange.CommandID
 	case CommandKindMoveParkedTask:
 		return r.ParkedTaskMove.CommandID
+	case CommandKindSetWorkflowPolicy:
+		return r.WorkflowPolicyChange.CommandID
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
 	}
 	return ""
@@ -78,6 +84,8 @@ func (r CommandReceipt) Validate() error {
 		return r.RoutingPolicyChange.Validate()
 	case CommandKindMoveParkedTask:
 		return r.ParkedTaskMove.Validate()
+	case CommandKindSetWorkflowPolicy:
+		return r.WorkflowPolicyChange.Validate()
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
 	}
 	return ErrCommandReceiptArms

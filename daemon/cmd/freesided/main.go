@@ -726,7 +726,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 			return nil, err
 		}
 	}
-	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath)
+	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath, cfg.Logger)
 	if err != nil {
 		return nil, err
 	}

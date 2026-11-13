@@ -459,6 +459,7 @@ const (
 	CommandKindChangeTaskLine    CommandKind = "change_task_line"
 	CommandKindSetRoutingPolicy  CommandKind = "set_routing_policy"
 	CommandKindMoveParkedTask    CommandKind = "move_parked_task"
+	CommandKindSetWorkflowPolicy CommandKind = "set_workflow_policy"
 )
 
 // AllCommandKinds lists every valid CommandKind; it is the single registration
@@ -472,13 +473,14 @@ var AllCommandKinds = []CommandKind{
 	CommandKindChangeTaskLine,
 	CommandKindSetRoutingPolicy,
 	CommandKindMoveParkedTask,
+	CommandKindSetWorkflowPolicy,
 }
 
 func (k CommandKind) valid() bool {
 	switch k {
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask, CommandKindRefreshUsage,
 		CommandKindReassignCollector, CommandKindChangeTaskLine, CommandKindSetRoutingPolicy,
-		CommandKindMoveParkedTask:
+		CommandKindMoveParkedTask, CommandKindSetWorkflowPolicy:
 		return true
 	default:
 		return false
@@ -1563,21 +1565,27 @@ func (s ConversationStatus) valid() bool {
 	}
 }
 
-// ProvenanceSource records whether a resolved-policy key came from a preset
-// default or an explicit override (plan §3.2, §5.12 per-key provenance).
+// ProvenanceSource records where a resolved-policy key came from: a preset
+// default, an explicit override, or a Workflow settings layer, general or
+// project (plan §3.2, §5.12 per-key provenance).
 type ProvenanceSource string
 
 const (
 	ProvenancePreset   ProvenanceSource = "preset"
 	ProvenanceOverride ProvenanceSource = "override"
+	// ProvenanceGeneral and ProvenanceProject mark a workflow policy key set
+	// at that layer of the store (WorkflowPolicyLayers); the digest is the
+	// setting revision's.
+	ProvenanceGeneral ProvenanceSource = "general"
+	ProvenanceProject ProvenanceSource = "project"
 )
 
 // AllProvenanceSources lists every valid ProvenanceSource.
-var AllProvenanceSources = []ProvenanceSource{ProvenancePreset, ProvenanceOverride}
+var AllProvenanceSources = []ProvenanceSource{ProvenancePreset, ProvenanceOverride, ProvenanceGeneral, ProvenanceProject}
 
 func (s ProvenanceSource) valid() bool {
 	switch s {
-	case ProvenancePreset, ProvenanceOverride:
+	case ProvenancePreset, ProvenanceOverride, ProvenanceGeneral, ProvenanceProject:
 		return true
 	default:
 		return false

@@ -49,6 +49,14 @@ public final class SyncCoordinator {
     /// in the sheet's model, so a sheet reopened mid-send sees both.
     package internal(set) var routingPolicySending = false
     package internal(set) var routingPolicyFailure: RoutingPolicyFailure?
+    /// The workflow policy change sent and not yet settled by sync, kept as
+    /// the routing change is: one at a time, because each change names the
+    /// revision it replaces.
+    public private(set) var pendingWorkflowPolicyChange: PendingWorkflowPolicyChange?
+    /// The last change sync confirmed this session, for the view's notice.
+    public private(set) var confirmedWorkflowPolicyChange: Components.Schemas.WorkflowPolicyChangeRecord?
+    package internal(set) var workflowPolicySending = false
+    package internal(set) var workflowPolicyFailure: WorkflowPolicyFailure?
     /// The usage command (a refresh or a collector reassignment) sent and not
     /// yet settled by sync; one at a time, so a reopened sheet finds it.
     public private(set) var pendingUsageCommand: PendingUsageCommand?
@@ -95,6 +103,11 @@ public final class SyncCoordinator {
     /// The current routing policy; nil when none was ever set. Every change
     /// advances the revision, so the revision check alone refreshes it.
     public private(set) var routingPolicy: Components.Schemas.RoutingPolicySnapshot?
+    /// The workflow policy layers for the general section and each served
+    /// project; nil until a bootstrap from a daemon that projects them.
+    /// Every change advances the server revision, so the revision check
+    /// alone refreshes it.
+    public private(set) var workflowPolicy: Components.Schemas.WorkflowPolicySnapshot?
     /// Every usage pool's record from the last adopted bootstrap, in the
     /// order the daemon lists them. Every record write is a client-visible
     /// transaction, so the revision check alone brings a new reading.
@@ -266,6 +279,12 @@ public final class SyncCoordinator {
             {
                 pendingRoutingPolicyChange = entry
             }
+            if cached.workflowDaemonID == submissionDaemonID,
+                let entry = cached.pendingWorkflowPolicyChange,
+                entry.isValid(deviceID: device.deviceID)
+            {
+                pendingWorkflowPolicyChange = entry
+            }
             if cached.usageDaemonID == submissionDaemonID, let entry = cached.pendingUsageCommand,
                 entry.isValid(deviceID: device.deviceID)
             {
@@ -302,6 +321,7 @@ public final class SyncCoordinator {
                 unattendedOperation = cached.unattendedOperation
                 agentCatalog = cached.agentCatalog
                 routingPolicy = cached.routingPolicy
+                workflowPolicy = cached.workflowPolicy
                 usagePools = cached.usagePools
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
                     timelines[timeline.run_id] = timeline
@@ -500,6 +520,7 @@ public final class SyncCoordinator {
                         lastUpdatedAt = .now
                         settleTaskStops()
                         settleRoutingPolicyChange()
+                        settleWorkflowPolicyChange()
                         settleUsageCommand()
                         settleParkedTaskMove()
                         settleTaskLineChange()
@@ -1021,6 +1042,7 @@ public final class SyncCoordinator {
         unattendedOperation = snapshot.unattended_operation
         agentCatalog = snapshot.agent_catalog
         routingPolicy = snapshot.routing_policy?.value1
+        workflowPolicy = snapshot.workflow_policy
         usagePools = snapshot.usage_pools
         tasks = snapshot.tasks
         // Timelines are not in the bootstrap payload, so a same-epoch
@@ -1054,6 +1076,7 @@ public final class SyncCoordinator {
         lastUpdatedAt = .now
         settleTaskStops()
         settleRoutingPolicyChange()
+        settleWorkflowPolicyChange()
         settleUsageCommand()
         settleParkedTaskMove()
         settleTaskLineChange()
@@ -1119,6 +1142,7 @@ public final class SyncCoordinator {
         unattendedOperation = nil
         agentCatalog = nil
         routingPolicy = nil
+        workflowPolicy = nil
         usagePools = []
         timelinesByRunID = [:]
         timelineLoadStates = [:]
@@ -1147,7 +1171,8 @@ public final class SyncCoordinator {
         // a registered contract survives a relaunch with no cursors.
         guard
             cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !pendingTaskStops.isEmpty
-                || pendingRoutingPolicyChange != nil || pendingUsageCommand != nil
+                || pendingRoutingPolicyChange != nil || pendingWorkflowPolicyChange != nil
+                || pendingUsageCommand != nil
                 || pendingParkedTaskMove != nil || pendingTaskLineChange != nil
                 || !comprehensionQueue.isEmpty
                 || fingerprint != nil
@@ -1168,6 +1193,7 @@ public final class SyncCoordinator {
                     unattendedOperation: cursors == nil ? nil : unattendedOperation,
                     agentCatalog: cursors == nil ? nil : agentCatalog,
                     routingPolicy: cursors == nil ? nil : routingPolicy,
+                    workflowPolicy: cursors == nil ? nil : workflowPolicy,
                     usagePools: cursors == nil ? [] : usagePools,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
@@ -1181,6 +1207,8 @@ public final class SyncCoordinator {
                     stopDaemonID: submissionDaemonID,
                     pendingRoutingPolicyChange: pendingRoutingPolicyChange,
                     routingDaemonID: submissionDaemonID,
+                    pendingWorkflowPolicyChange: pendingWorkflowPolicyChange,
+                    workflowDaemonID: submissionDaemonID,
                     pendingUsageCommand: pendingUsageCommand,
                     usageDaemonID: submissionDaemonID,
                     pendingParkedTaskMove: pendingParkedTaskMove,
@@ -1335,6 +1363,45 @@ public final class SyncCoordinator {
         if let current = routingPolicy?.policy.revision, current >= record.policy.revision {
             finishRoutingPolicyChange()
             if pendingRoutingPolicyChange == nil { confirmedRoutingPolicyChange = record }
+        }
+    }
+
+    /// Persist the exact command before sending it; a failed write rolls
+    /// back. Holds one change at a time, as the routing change does.
+    func retainWorkflowPolicyChange(_ entry: PendingWorkflowPolicyChange) -> Bool {
+        guard entry.isValid(deviceID: store.device.deviceID),
+            pendingWorkflowPolicyChange == nil || pendingWorkflowPolicyChange?.command == entry.command
+        else { return false }
+        let previous = pendingWorkflowPolicyChange
+        pendingWorkflowPolicyChange = entry
+        guard persist() else {
+            pendingWorkflowPolicyChange = previous
+            return false
+        }
+        return true
+    }
+
+    func finishWorkflowPolicyChange() {
+        let previous = pendingWorkflowPolicyChange
+        pendingWorkflowPolicyChange = nil
+        if !persist() { pendingWorkflowPolicyChange = previous }
+    }
+
+    func clearConfirmedWorkflowPolicyChange() { confirmedWorkflowPolicyChange = nil }
+
+    /// Settles as the routing change does: once fresh sync holds the
+    /// change's revision or a later one, or at once in a new epoch, where
+    /// the revision it expected means nothing.
+    func settleWorkflowPolicyChange() {
+        guard store.freshness == .fresh, let cursors, let entry = pendingWorkflowPolicyChange else { return }
+        if cursors.syncEpoch != entry.syncEpoch {
+            finishWorkflowPolicyChange()
+            return
+        }
+        guard case .set_workflow_policy(let record) = entry.receipt?.record else { return }
+        if let current = workflowPolicy?.revision, current >= record.revision {
+            finishWorkflowPolicyChange()
+            if pendingWorkflowPolicyChange == nil { confirmedWorkflowPolicyChange = record }
         }
     }
 

@@ -195,6 +195,10 @@ public actor MockServer {
     /// The current routing policy revision; the daemon stamps it with the
     /// serving revision because the policy row stores none of its own.
     private var routingPolicy: Components.Schemas.RoutingPolicy?
+    /// The workflow policy layers, and the projects the daemon serves, which
+    /// the projection lists and a project-scope change must name.
+    private var workflowPolicy: WorkflowPolicyLayers
+    private let workflowProjects: [String]
     /// The agent catalog: the enrollments a line's selection is checked
     /// against, and the committed tree's half. A catalog with a null
     /// lineup_revision models a daemon that holds no tree (the fake driver),
@@ -255,6 +259,8 @@ public actor MockServer {
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
         usagePools: [Components.Schemas.UsagePoolSnapshot] = UsageFixtures.defaultUsagePools(),
         routingPolicy: Components.Schemas.RoutingPolicy? = UsageFixtures.defaultRoutingPolicy(),
+        workflowPolicy: WorkflowPolicyLayers = WorkflowPolicyFixtures.defaultLayers(),
+        workflowProjects: [String] = [WorkflowPolicyFixtures.projectID],
         agentCatalog: Components.Schemas.AgentCatalog = UsageFixtures.defaultAgentCatalog(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
@@ -299,6 +305,8 @@ public actor MockServer {
             usagePoolsByID[snapshot.pool.id] = snapshot
         }
         self.routingPolicy = routingPolicy
+        self.workflowPolicy = workflowPolicy
+        self.workflowProjects = workflowProjects
         self.agentCatalog = agentCatalog
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
@@ -930,7 +938,7 @@ public actor MockServer {
             else { return nil }
             return resultsByCommandID[command.command_id]
         case .stop_task, .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy,
-            .move_parked_task:
+            .move_parked_task, .set_workflow_policy:
             // Active-device authority is required even for Stop and operator
             // command replay; the daemon gates the device before its replay read.
             return nil
@@ -953,6 +961,7 @@ public actor MockServer {
         case staleTask(Components.Schemas.StaleTaskRejection)
         case taskLineRejected(Components.Schemas.TaskLineChangeRejection)
         case routingPolicyRejected(Components.Schemas.RoutingPolicyRejection)
+        case workflowPolicyRejected(Components.Schemas.WorkflowPolicyRejection)
         /// The command's feature is withheld: the daemon's build predates it.
         case unservedKind
     }
@@ -1116,6 +1125,7 @@ public actor MockServer {
             unattended_operation: unattendedOperationSnapshot(),
             usage_pools: listUsagePools(),
             routing_policy: routingPolicySnapshot().map { .init(value1: $0) },
+            workflow_policy: workflowPolicy.snapshot(projects: workflowProjects, asOfRevision: revision),
             agent_catalog: agentCatalog
         )
         return bootstrapTransform?(snapshot) ?? snapshot
@@ -1774,7 +1784,7 @@ public actor MockServer {
         switch payload {
         case .move_parked_task: .parked_task_move
         case .stop_task, .submit_task, .decision, .refresh_usage, .reassign_collector, .change_task_line,
-            .set_routing_policy:
+            .set_routing_policy, .set_workflow_policy:
             nil
         }
     }
@@ -1807,6 +1817,8 @@ public actor MockServer {
             return try submitChangeTaskLineCommand(command, payload)
         case .set_routing_policy(let payload):
             return try submitSetRoutingPolicyCommand(command, payload)
+        case .set_workflow_policy(let payload):
+            return try submitSetWorkflowPolicyCommand(command, payload)
         case .move_parked_task(let payload):
             return try submitMoveParkedTaskCommand(command, payload)
         }
@@ -2821,6 +2833,44 @@ public actor MockServer {
                 .init(
                     kind: .set_routing_policy, command_id: command.command_id, device_id: command.device_id,
                     expected_revision: payload.expected_revision, recorded: recorded, policy: policy)))
+    }
+
+    /// Sets or clears one workflow policy layer (engine.SetWorkflowPolicyTx)
+    /// when the client's expected_revision names the current one; the value
+    /// the layer already holds records no new revision. The shape was checked
+    /// in validateStructure.
+    private func submitSetWorkflowPolicyCommand(
+        _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.SetWorkflowPolicyPayload
+    ) throws -> SubmitOutcome {
+        if let replay = try replayOperatorCommand(command) { return replay }
+        if let project = payload.project_id, !workflowProjects.contains(project) {
+            throw OperatorCommandRejectedError(
+                commandID: command.command_id, reason: "workflow policy project is not one the daemon serves")
+        }
+        guard (payload.expected_revision ?? 0) == workflowPolicy.revision else {
+            return .workflowPolicyRejected(
+                .init(
+                    message: "the workflow policy changed",
+                    current_workflow_policy: workflowPolicy.snapshot(projects: workflowProjects, asOfRevision: revision)
+                ))
+        }
+        let layer = WorkflowPolicyLayers.Layer(projectID: payload.project_id, key: payload.key)
+        let recorded = workflowPolicy.entries[layer]?.value != payload.value
+        revision += 1
+        if recorded {
+            workflowPolicy.revision += 1
+            workflowPolicy.entries[layer] = payload.value.map {
+                .init(value: $0, setBy: "device:\(command.device_id)", setAt: currentTime)
+            }
+        }
+        return recordOperatorResult(
+            command,
+            .set_workflow_policy(
+                .init(
+                    kind: .set_workflow_policy, command_id: command.command_id, device_id: command.device_id,
+                    scope: payload.scope, project_id: payload.project_id, key: payload.key, value: payload.value,
+                    expected_revision: payload.expected_revision, recorded: recorded,
+                    revision: workflowPolicy.revision)))
     }
 
     /// Creates new work for each distinct command ID and replays the original

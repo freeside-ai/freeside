@@ -484,6 +484,16 @@ var (
 		"routing policy enrollment's catalog does not serve the role's lineup model and effort")
 	ErrRoutingPolicyRoleUnbound = errors.New(
 		"routing policy orders a role the lineup leaves unbound")
+	ErrInvalidWorkflowPolicyKey = errors.New(
+		"workflow policy key is not one the Workflow pane exposes")
+	ErrInvalidWorkflowPolicyScope = errors.New(
+		"workflow policy scope is not general or project")
+	ErrInvalidWorkflowPolicyValue = errors.New(
+		"workflow policy value is not one the key takes")
+	ErrWorkflowPolicyProjectMismatch = errors.New(
+		"workflow policy names a project exactly when its scope is project")
+	ErrWorkflowPolicyProjectUnserved = errors.New(
+		"workflow policy project is not one the daemon serves")
 	// ErrTaskLinesNotCanonical marks a submission record whose lines are
 	// present but empty or out of role order.
 	ErrTaskLinesNotCanonical       = errors.New("recorded task lines are empty or out of role order")

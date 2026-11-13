@@ -13,6 +13,55 @@
   },
   "usage_pools": [],
   "routing_policy": null,
+  "workflow_policy": {
+    "as_of_revision": 1,
+    "revision": 0,
+    "general": [
+      {
+        "key": "gates.follow_up_filing",
+        "value": "false",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "gates.issue_comment",
+        "value": "false",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "gates.source_issue_closure",
+        "value": "false",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "follow_up_filing.max_per_day",
+        "value": "10",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "follow_up_filing.max_per_run",
+        "value": "5",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "follow_up_filing.max_depth",
+        "value": "2",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      }
+    ],
+    "projects": []
+  },
   "agent_catalog": {
     "lineup_revision": null,
     "enrollments": [

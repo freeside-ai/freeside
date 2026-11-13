@@ -1,0 +1,11 @@
+{
+  "command_id": "cmd-workflow",
+  "device_id": "device-1",
+  "scope": "project",
+  "project_id": "proj-1",
+  "key": "gates.source_issue_closure",
+  "value": "true",
+  "expected_revision": 3,
+  "recorded": true,
+  "revision": 4
+}

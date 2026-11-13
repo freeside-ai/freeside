@@ -2088,6 +2088,20 @@ on within `max_iterations`. A refused URL, an oversized or non-UTF-8
 response, and a storage error still fail the specification. The source-issue
 read that names a label-intake task still fails on a miss.
 
+Six keys belong to the app's Workflow settings pane, not this file:
+`gates.follow_up_filing`, `gates.issue_comment`,
+`gates.source_issue_closure`, `follow_up_filing.max_per_day`,
+`follow_up_filing.max_per_run`, and `follow_up_filing.max_depth`. A paired
+client sets each one generally or for one configured project
+(`set_workflow_policy`), and every client and label-intake task resolves it
+when the task is created: the project's value, else the general value, else
+the default (`false` for a gate; 10, 5, and 2 for the caps). The run's
+resolved policy records the winning layer as the key's provenance (`project`,
+`general`, or `preset` for the default), and a run already created keeps its
+policy. A file that still sets one of these keys loads without it, and the
+daemon logs a warning naming the project and key at startup.
+`freesided submit -policy` still reads them from its own file.
+
 Changing the file requires a daemon restart and affects only new submissions.
 An explicit manual Retry of a recorded command returns its original result,
 even if configuration changed or was removed. A new command always creates
@@ -2098,10 +2112,10 @@ submission to the deputy, use the [production walkthrough](../docs/production-wa
 
 The resolved-policy key `gates.source_issue_closure` decides how a published
 pull request references a source issue it can close: a daemon-bound issue
-subject, or a bare issue URL in the target repository. Set it wherever a
-project's policy keys are supplied, such as its `policy_keys` here or the
-array that `freesided submit -policy` reads. Each run stores its resolved
-policy, so a changed value affects only later runs.
+subject, or a bare issue URL in the target repository. For client and
+label-intake tasks, set it in the app's Workflow settings pane; for
+`freesided submit`, set it in the array that `-policy` reads. Each run stores
+its resolved policy, so a changed value affects only later runs.
 
 | Value | What a closable source gets |
 | --- | --- |

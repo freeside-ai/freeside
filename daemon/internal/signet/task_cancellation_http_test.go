@@ -104,7 +104,7 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
 					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
 					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog,
-					signet.WithParkedTaskMover(fakeParkedTaskMover))
+					signet.WithParkedTaskMover(fakeParkedTaskMover), signet.WithWorkflowPolicySetter(engineWorkflowPolicySetter))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {
 					case domain.CommandKindDecision:
@@ -123,6 +123,9 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 						return policyCommand("shared", nil, codexPrimary)
 					case domain.CommandKindMoveParkedTask:
 						return moveCommand("shared", id, "move-claude/claude_code")
+					case domain.CommandKindSetWorkflowPolicy:
+						return workflowCommand("shared", domain.WorkflowPolicyScopeGeneral, nil,
+							domain.WorkflowGateIssueComment, new("true"), nil)
 					}
 					t.Fatal("unknown kind")
 					return signet.ClientCommand{}

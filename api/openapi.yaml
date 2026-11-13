@@ -25,7 +25,7 @@ info:
   # - Raise the floor with the level, unless the daemon deliberately keeps
   #   serving the old shape; an app below the floor refuses to sync.
   # Keep each on its own line in exactly this form; the scripts read them.
-  x-compatibility-level: 0
+  x-compatibility-level: 1
   x-compatibility-floor: 0
   description: |
     **Provisional.** This schema is provisional until exercised by real
@@ -670,8 +670,8 @@ paths:
         receipt replay. Acceptance is pending, never proof of termination or
         WIP release.
         The operator commands refresh_usage, reassign_collector,
-        change_task_line, set_routing_policy, and move_parked_task carry
-        neither envelope field
+        change_task_line, set_routing_policy, move_parked_task, and
+        set_workflow_policy carry neither envelope field
         and are rejected as malformed if they do. Each records a receipt in
         the transaction that applies it, and a replay returns that receipt and
         its revision. A request for the line or the role orders already held
@@ -681,7 +681,11 @@ paths:
         does not carry (set_routing_policy) are 400. A role whose attempt is
         running (change_task_line) is 409 with the current task snapshot, and
         a set_routing_policy whose expected_revision is not the current policy
-        revision is 409 with the current policy. A move_parked_task for a
+        revision is 409 with the current policy. A set_workflow_policy with
+        an unknown key or scope, a value its key does not take, or a project
+        the daemon does not serve is 400; one whose expected_revision is not
+        the current workflow policy revision is 409 with the current workflow
+        policy. A move_parked_task for a
         task with no attempt parked on an exhausted quota window, or naming
         an agent the park no longer offers, is 400 and records nothing, as is
         a retry_with_alternate_agent decision whose agent no longer
@@ -722,8 +726,10 @@ paths:
             canonical state. Carries the replacement item snapshot so the
             client can re-render without a refetch (sync test 2). A Stop
             carries the current task instead, a line change refused for a
-            running role carries the current task, and a stale routing policy
-            change carries the current policy. No side effect was applied.
+            running role carries the current task, a stale routing policy
+            change carries the current policy, and a stale workflow policy
+            change carries the current workflow policy. No side effect was
+            applied.
           content:
             application/json:
               schema:
@@ -1216,6 +1222,7 @@ components:
         - unattended_operation
         - usage_pools
         - routing_policy
+        - workflow_policy
         - agent_catalog
       properties:
         sync_epoch:
@@ -1265,6 +1272,8 @@ components:
           description: The current routing policy revision; null until one is set.
           allOf:
             - $ref: "#/components/schemas/RoutingPolicySnapshot"
+        workflow_policy:
+          $ref: "#/components/schemas/WorkflowPolicySnapshot"
         agent_catalog:
           $ref: "#/components/schemas/AgentCatalog"
 
@@ -1665,6 +1674,106 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         policy:
           $ref: "#/components/schemas/RoutingPolicy"
+
+    WorkflowPolicySnapshot:
+      type: object
+      description: >
+        The Workflow settings: each key the pane exposes, with its effective
+        value and the layer it came from, for the general section and for
+        every project the daemon serves. A task resolves these keys when it
+        is created, the project's value over the general value over the
+        default, and a run keeps the policy it was created with. revision is
+        the newest workflow policy revision, 0 when none was ever set; every
+        change advances it, and a set_workflow_policy names the revision it
+        was prepared against.
+      required: [as_of_revision, revision, general, projects]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        revision:
+          type: integer
+          minimum: 0
+        general:
+          type: array
+          description: >
+            The general section, one setting per key in pane order: the
+            general value, else the default.
+          items:
+            $ref: "#/components/schemas/WorkflowPolicySetting"
+        projects:
+          type: array
+          description: Each served project's effective settings, in project id order.
+          items:
+            $ref: "#/components/schemas/WorkflowPolicyProject"
+
+    WorkflowPolicyProject:
+      type: object
+      description: One served project's effective settings, one per key in pane order.
+      required: [project_id, settings]
+      properties:
+        project_id:
+          type: string
+          minLength: 1
+        settings:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowPolicySetting"
+
+    WorkflowPolicySetting:
+      type: object
+      description: >
+        One key's effective value and the layer it came from. set_by and
+        set_at name the revision that set the winning layer, and are null
+        for the default.
+      required: [key, value, origin, set_by, set_at]
+      properties:
+        key:
+          $ref: "#/components/schemas/WorkflowPolicyKey"
+        value:
+          type: string
+          minLength: 1
+        origin:
+          $ref: "#/components/schemas/WorkflowPolicyOrigin"
+        set_by:
+          type: string
+          minLength: 1
+          nullable: true
+        set_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    WorkflowPolicyKey:
+      type: string
+      description: >
+        A key the Workflow pane exposes (mirrors domain.WorkflowPolicyKey). A
+        gate (gates.*) takes "true", which asks a person before the effect,
+        or "false", the default, which lets the effect run under policy. A
+        cap (follow_up_filing.*) takes a positive decimal integer with no
+        sign or leading zero; the defaults are 10 per day, 5 per run, and a
+        depth of 2.
+      enum:
+        - gates.follow_up_filing
+        - gates.issue_comment
+        - gates.source_issue_closure
+        - follow_up_filing.max_per_day
+        - follow_up_filing.max_per_run
+        - follow_up_filing.max_depth
+        - unknown
+
+    WorkflowPolicyScope:
+      type: string
+      description: >
+        The layer a workflow setting is set at: general, which every project
+        inherits, or project, which overrides it for one project.
+      enum: [general, project, unknown]
+
+    WorkflowPolicyOrigin:
+      type: string
+      description: >
+        The layer an effective workflow setting came from: the project's
+        value, the general value, or the built-in default.
+      enum: [project, general, default, unknown]
 
     RoutingPolicySource:
       type: string
@@ -4662,7 +4771,7 @@ components:
         from source text and binds to no entity, so it carries neither
         envelope field and is rejected as malformed if it does, as are the
         operator commands refresh_usage, reassign_collector, change_task_line,
-        set_routing_policy, and move_parked_task. New command
+        set_routing_policy, move_parked_task, and set_workflow_policy. New command
         types are typed as the signet/saddle pair exercises the surface, via
         kind:contract changes. The daemon rejects an unknown field anywhere
         in a request, including inside the schemas that responses also use
@@ -4693,7 +4802,8 @@ components:
           description: >
             Required for decision and stop_task; absent for submit_task and the
             operator commands (refresh_usage, reassign_collector,
-            change_task_line, set_routing_policy, move_parked_task).
+            change_task_line, set_routing_policy, move_parked_task,
+            set_workflow_policy).
             For a decision command this is the entity_version of the target
             entity the command was prepared against; a mismatch rejects the
             command with the replacement state. For Stop this is the observed
@@ -4723,6 +4833,7 @@ components:
             - $ref: "#/components/schemas/ChangeTaskLinePayload"
             - $ref: "#/components/schemas/SetRoutingPolicyPayload"
             - $ref: "#/components/schemas/MoveParkedTaskPayload"
+            - $ref: "#/components/schemas/SetWorkflowPolicyPayload"
           discriminator:
             propertyName: kind
             mapping:
@@ -4734,6 +4845,7 @@ components:
               change_task_line: "#/components/schemas/ChangeTaskLinePayload"
               set_routing_policy: "#/components/schemas/SetRoutingPolicyPayload"
               move_parked_task: "#/components/schemas/MoveParkedTaskPayload"
+              set_workflow_policy: "#/components/schemas/SetWorkflowPolicyPayload"
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -4870,6 +4982,42 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/TaskLineSelection"
+
+    SetWorkflowPolicyPayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Set or clear one layer of one workflow setting. scope general sets
+        the value every project inherits; scope project, with project_id
+        naming a project the daemon serves, overrides it for that project.
+        project_id is null exactly for scope general. A null value clears
+        the layer, so the key falls back to the general value or the
+        default. A request for the value the layer already holds records
+        nothing. expected_revision is the workflow policy revision the
+        client saw, null when it saw none; any other current revision
+        refuses the change. The new revision's set_by is device:<device_id>.
+        Only tasks created after the change resolve it.
+      required: [kind, scope, project_id, key, value, expected_revision]
+      properties:
+        kind:
+          type: string
+          enum: [set_workflow_policy]
+        scope:
+          $ref: "#/components/schemas/WorkflowPolicyScope"
+        project_id:
+          type: string
+          minLength: 1
+          nullable: true
+        key:
+          $ref: "#/components/schemas/WorkflowPolicyKey"
+        value:
+          type: string
+          minLength: 1
+          nullable: true
+        expected_revision:
+          type: integer
+          minimum: 1
+          nullable: true
 
     SetRoutingPolicyPayload:
       type: object
@@ -5044,6 +5192,46 @@ components:
         policy:
           $ref: "#/components/schemas/RoutingPolicy"
 
+    WorkflowPolicyChangeRecord:
+      type: object
+      description: >
+        The receipt of a workflow setting change: the request as accepted,
+        whether it recorded a new revision, and the workflow policy revision
+        current after it. recorded false means the layer already held the
+        value, and revision is then the one the request expected.
+      required: [kind, command_id, device_id, scope, project_id, key, value, expected_revision, recorded, revision]
+      properties:
+        kind:
+          type: string
+          enum: [set_workflow_policy]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        scope:
+          $ref: "#/components/schemas/WorkflowPolicyScope"
+        project_id:
+          type: string
+          minLength: 1
+          nullable: true
+        key:
+          $ref: "#/components/schemas/WorkflowPolicyKey"
+        value:
+          type: string
+          minLength: 1
+          nullable: true
+        expected_revision:
+          type: integer
+          minimum: 1
+          nullable: true
+        recorded:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 0
+
     ParkedTaskMoveRecord:
       type: object
       description: >
@@ -5175,11 +5363,15 @@ components:
         fields, so an arm whose required fields are a subset of another's
         matches that other's bodies too: TaskLineChangeRejection precedes
         StaleTaskRejection for that reason, and a new arm goes before any
-        arm whose required fields its own include.
+        arm whose required fields its own include. A required field that is
+        nullable counts as absent here, because a generated client decodes a
+        missing one as null: RoutingPolicyRejection matches on message alone,
+        so WorkflowPolicyRejection precedes it.
       oneOf:
         - $ref: "#/components/schemas/StaleVersionRejection"
         - $ref: "#/components/schemas/TaskLineChangeRejection"
         - $ref: "#/components/schemas/StaleTaskRejection"
+        - $ref: "#/components/schemas/WorkflowPolicyRejection"
         - $ref: "#/components/schemas/RoutingPolicyRejection"
 
     TaskLineChangeRejection:
@@ -5214,6 +5406,19 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/RoutingPolicy"
+
+    WorkflowPolicyRejection:
+      description: >
+        A workflow setting change refused because expected_revision is not
+        the current workflow policy revision, with the current workflow
+        policy.
+      type: object
+      required: [message, current_workflow_policy]
+      properties:
+        message:
+          type: string
+        current_workflow_policy:
+          $ref: "#/components/schemas/WorkflowPolicySnapshot"
 
     StaleTaskRejection:
       description: Current task projection and epoch for an obsolete prepared Stop.
@@ -5723,6 +5928,7 @@ components:
             - $ref: "#/components/schemas/TaskLineChangeRecord"
             - $ref: "#/components/schemas/RoutingPolicyChangeRecord"
             - $ref: "#/components/schemas/ParkedTaskMoveRecord"
+            - $ref: "#/components/schemas/WorkflowPolicyChangeRecord"
           discriminator:
             propertyName: kind
             mapping:
@@ -5734,6 +5940,7 @@ components:
               change_task_line: "#/components/schemas/TaskLineChangeRecord"
               set_routing_policy: "#/components/schemas/RoutingPolicyChangeRecord"
               move_parked_task: "#/components/schemas/ParkedTaskMoveRecord"
+              set_workflow_policy: "#/components/schemas/WorkflowPolicyChangeRecord"
         revision:
           type: integer
           format: int64

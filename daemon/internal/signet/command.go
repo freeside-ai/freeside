@@ -44,6 +44,7 @@ type ClientCommand struct {
 	ChangeTaskLine    ChangeTaskLinePayload
 	SetRoutingPolicy  SetRoutingPolicyPayload
 	MoveParkedTask    MoveParkedTaskPayload
+	SetWorkflowPolicy SetWorkflowPolicyPayload
 }
 
 // SubmitTaskPayload mirrors the API contract's SubmitTaskPayload: the project
@@ -352,7 +353,8 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 
 // kindedReceiptRecord flattens a receipt's arm beside its kind, producing the
 // wire UsageRefreshRecord, CollectorReassignmentRecord, TaskLineChangeRecord,
-// RoutingPolicyChangeRecord, or ParkedTaskMoveRecord.
+// RoutingPolicyChangeRecord, ParkedTaskMoveRecord, or
+// WorkflowPolicyChangeRecord.
 func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 	kind := receipt.Kind()
 	switch kind {
@@ -386,6 +388,11 @@ func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 			*domain.RoutingPolicyChangeReceipt
 			Policy RoutingPolicyWire `json:"policy"`
 		}{kind, receipt.RoutingPolicyChange, renderRoutingPolicy(receipt.RoutingPolicyChange.Policy)}, nil
+	case domain.CommandKindSetWorkflowPolicy:
+		return struct {
+			Kind domain.CommandKind `json:"kind"`
+			*domain.WorkflowPolicyChangeReceipt
+		}{kind, receipt.WorkflowPolicyChange}, nil
 	case domain.CommandKindMoveParkedTask:
 		// The wire carries a choice and its record's selection. A receipt
 		// stored before #2808 holds neither; no command renders one, since a

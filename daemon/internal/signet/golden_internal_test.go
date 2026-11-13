@@ -223,9 +223,10 @@ func TestSignetWireGoldens(t *testing.T) {
 				Schedules: []ScheduleSnapshot{
 					scheduleSnapshot(schedule, store.Snapshot{AsOfRevision: 22, EntityVersion: 1}),
 				},
-				UsagePools:    usagePoolsFixture(t, createdAt),
-				RoutingPolicy: routingPolicyFixture(t, createdAt),
-				AgentCatalog:  bootstrapCatalogFixture(t, agentCatalogFixture(t), createdAt),
+				UsagePools:     usagePoolsFixture(t, createdAt),
+				RoutingPolicy:  routingPolicyFixture(t, createdAt),
+				WorkflowPolicy: workflowPolicyFixture(t, createdAt),
+				AgentCatalog:   bootstrapCatalogFixture(t, agentCatalogFixture(t), createdAt),
 				UnattendedOperation: UnattendedOperationSnapshot{
 					Admission: domain.UnattendedAdmissionStopped,
 					Stops: []UnattendedStop{
@@ -354,6 +355,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			UnattendedOperation: UnattendedOperationSnapshot{Admission: domain.UnattendedAdmissionOpen, Stops: []UnattendedStop{}},
 			UsagePools:          []UsagePoolSnapshot{},
 			AgentCatalog:        bootstrapCatalogFixture(t, nil, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
+			WorkflowPolicy:      renderWorkflowPolicy(domain.WorkflowPolicyLayers{}, nil, 1),
 		},
 	})
 	for _, tc := range cases {
@@ -612,6 +614,29 @@ func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 
 // routingPolicyFixture is a client-set policy revision ordering two roles'
 // enrollments, which the wire carries as ids.
+// workflowPolicyFixture shows each origin: a general value, a project value
+// over it, and the defaults.
+func workflowPolicyFixture(t *testing.T, at time.Time) WorkflowPolicySnapshot {
+	t.Helper()
+	project := domain.ProjectID("project-569")
+	var revisions []domain.WorkflowPolicyRevision
+	for i, in := range []domain.WorkflowPolicyInput{
+		{Scope: domain.WorkflowPolicyScopeGeneral, Key: domain.WorkflowGateSourceIssueClosure, Value: new("true"), SetBy: "device:device-569"},
+		{Scope: domain.WorkflowPolicyScopeProject, ProjectID: &project, Key: domain.WorkflowFollowUpMaxPerDay, Value: new("3"), SetBy: "device:device-569"},
+	} {
+		revision, err := domain.NewWorkflowPolicyRevision(in, i+1, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revisions = append(revisions, revision)
+	}
+	layers, err := domain.NewWorkflowPolicyLayers(revisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return renderWorkflowPolicy(layers, []domain.ProjectID{project}, 24)
+}
+
 func routingPolicyFixture(t *testing.T, at time.Time) *RoutingPolicySnapshot {
 	t.Helper()
 	policy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{

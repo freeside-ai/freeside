@@ -343,7 +343,8 @@ struct AccountUsageView: View {
         switch pending.command.payload {
         case .refresh_usage(let payload): "the refresh of \(payload.pool)"
         case .reassign_collector(let payload): "making \(payload.enrollment_id) the collector for \(payload.pool)"
-        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy, .move_parked_task:
+        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy, .move_parked_task,
+            .set_workflow_policy:
             "the usage command"
         }
     }

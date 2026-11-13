@@ -101,6 +101,17 @@ public enum CommandResultTrust {
                 && record.policy.drain_first_account == payload.drain_first_account
                 && record.policy.revision == (record.recorded ? expected + 1 : expected)
                 && (!record.recorded || record.policy.source == .client_routing_set)
+        case .set_workflow_policy(let payload):
+            // The record echoes the change, and its revision is the one after
+            // expected_revision when recorded, expected_revision itself when
+            // the layer already held the value.
+            guard case .set_workflow_policy(let record) = result.record else { return false }
+            let expected = payload.expected_revision ?? 0
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.scope == payload.scope && record.project_id == payload.project_id
+                && record.key == payload.key && record.value == payload.value
+                && record.expected_revision == payload.expected_revision
+                && record.revision == (record.recorded ? expected + 1 : expected)
         }
     }
 

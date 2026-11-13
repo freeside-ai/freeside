@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -646,6 +648,19 @@ func newAttentionService(
 				}, now)
 			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 		}),
+		// A workflow policy change records one layer in the command's
+		// transaction; the projects it may name, and the bootstrap lists, are
+		// the ones the manual submission file configures.
+		signet.WithWorkflowPolicySetter(func(
+			ctx context.Context, tx *store.WriteTx, change signet.WorkflowPolicyChange, now time.Time,
+		) (signet.WorkflowPolicyOutcome, error) {
+			result, err := engine.SetWorkflowPolicyTx(ctx, tx, engine.SetWorkflowPolicyRequest{
+				Scope: change.Scope, ProjectID: change.ProjectID, Key: change.Key, Value: change.Value,
+				SetBy: change.SetBy,
+			}, now)
+			return signet.WorkflowPolicyOutcome{Recorded: result.Recorded, Revision: result.Revision}, err
+		}),
+		signet.WithWorkflowPolicyProjects(slices.Sorted(maps.Keys(cfg.ManualProjects))),
 		// An alternate-agent choice re-derives its rule against the admitted
 		// lineup and the daemon's admission settings, which exist only after
 		// the Claude or scenario composition; without one both commands

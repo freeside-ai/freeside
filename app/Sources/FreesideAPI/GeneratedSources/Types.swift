@@ -259,8 +259,8 @@ public protocol APIProtocol: Sendable {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, set_routing_policy, and move_parked_task carry
-    /// neither envelope field
+    /// change_task_line, set_routing_policy, move_parked_task, and
+    /// set_workflow_policy carry neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -270,7 +270,11 @@ public protocol APIProtocol: Sendable {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A move_parked_task for a
+    /// revision is 409 with the current policy. A set_workflow_policy with
+    /// an unknown key or scope, a value its key does not take, or a project
+    /// the daemon does not serve is 400; one whose expected_revision is not
+    /// the current workflow policy revision is 409 with the current workflow
+    /// policy. A move_parked_task for a
     /// task with no attempt parked on an exhausted quota window, or naming
     /// an agent the park no longer offers, is 400 and records nothing, as is
     /// a retry_with_alternate_agent decision whose agent no longer
@@ -783,8 +787,8 @@ extension APIProtocol {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, set_routing_policy, and move_parked_task carry
-    /// neither envelope field
+    /// change_task_line, set_routing_policy, move_parked_task, and
+    /// set_workflow_policy carry neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -794,7 +798,11 @@ extension APIProtocol {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A move_parked_task for a
+    /// revision is 409 with the current policy. A set_workflow_policy with
+    /// an unknown key or scope, a value its key does not take, or a project
+    /// the daemon does not serve is 400; one whose expected_revision is not
+    /// the current workflow policy revision is 409 with the current workflow
+    /// policy. A move_parked_task for a
     /// task with no attempt parked on an exhausted quota window, or naming
     /// an agent the park no longer offers, is 400 and records nothing, as is
     /// a retry_with_alternate_agent decision whose agent no longer
@@ -1116,6 +1124,8 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/routing_policy`.
             public var routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload?
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/workflow_policy`.
+            public var workflow_policy: Components.Schemas.WorkflowPolicySnapshot
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog`.
             public var agent_catalog: Components.Schemas.AgentCatalog
             /// Creates a new `BootstrapSnapshot`.
@@ -1132,6 +1142,7 @@ public enum Components {
             ///   - unattended_operation:
             ///   - usage_pools: Every usage pool's usage record, in pool id order.
             ///   - routing_policy: The current routing policy revision; null until one is set.
+            ///   - workflow_policy:
             ///   - agent_catalog:
             public init(
                 sync_epoch: Swift.String,
@@ -1145,6 +1156,7 @@ public enum Components {
                 unattended_operation: Components.Schemas.UnattendedOperationSnapshot,
                 usage_pools: [Components.Schemas.UsagePoolSnapshot],
                 routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload? = nil,
+                workflow_policy: Components.Schemas.WorkflowPolicySnapshot,
                 agent_catalog: Components.Schemas.AgentCatalog
             ) {
                 self.sync_epoch = sync_epoch
@@ -1158,6 +1170,7 @@ public enum Components {
                 self.unattended_operation = unattended_operation
                 self.usage_pools = usage_pools
                 self.routing_policy = routing_policy
+                self.workflow_policy = workflow_policy
                 self.agent_catalog = agent_catalog
             }
             public enum CodingKeys: String, CodingKey {
@@ -1172,6 +1185,7 @@ public enum Components {
                 case unattended_operation
                 case usage_pools
                 case routing_policy
+                case workflow_policy
                 case agent_catalog
             }
         }
@@ -1764,6 +1778,150 @@ public enum Components {
                 case entity_version
                 case policy
             }
+        }
+        /// The Workflow settings: each key the pane exposes, with its effective value and the layer it came from, for the general section and for every project the daemon serves. A task resolves these keys when it is created, the project's value over the general value over the default, and a run keeps the policy it was created with. revision is the newest workflow policy revision, 0 when none was ever set; every change advances it, and a set_workflow_policy names the revision it was prepared against.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicySnapshot`.
+        public struct WorkflowPolicySnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySnapshot/as_of_revision`.
+            public var as_of_revision: Components.Schemas.AsOfRevision
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySnapshot/revision`.
+            public var revision: Swift.Int
+            /// The general section, one setting per key in pane order: the general value, else the default.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySnapshot/general`.
+            public var general: [Components.Schemas.WorkflowPolicySetting]
+            /// Each served project's effective settings, in project id order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySnapshot/projects`.
+            public var projects: [Components.Schemas.WorkflowPolicyProject]
+            /// Creates a new `WorkflowPolicySnapshot`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - revision:
+            ///   - general: The general section, one setting per key in pane order: the general value, else the default.
+            ///   - projects: Each served project's effective settings, in project id order.
+            public init(
+                as_of_revision: Components.Schemas.AsOfRevision,
+                revision: Swift.Int,
+                general: [Components.Schemas.WorkflowPolicySetting],
+                projects: [Components.Schemas.WorkflowPolicyProject]
+            ) {
+                self.as_of_revision = as_of_revision
+                self.revision = revision
+                self.general = general
+                self.projects = projects
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case revision
+                case general
+                case projects
+            }
+        }
+        /// One served project's effective settings, one per key in pane order.
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicyProject`.
+        public struct WorkflowPolicyProject: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyProject/project_id`.
+            public var project_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyProject/settings`.
+            public var settings: [Components.Schemas.WorkflowPolicySetting]
+            /// Creates a new `WorkflowPolicyProject`.
+            ///
+            /// - Parameters:
+            ///   - project_id:
+            ///   - settings:
+            public init(
+                project_id: Swift.String,
+                settings: [Components.Schemas.WorkflowPolicySetting]
+            ) {
+                self.project_id = project_id
+                self.settings = settings
+            }
+            public enum CodingKeys: String, CodingKey {
+                case project_id
+                case settings
+            }
+        }
+        /// One key's effective value and the layer it came from. set_by and set_at name the revision that set the winning layer, and are null for the default.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicySetting`.
+        public struct WorkflowPolicySetting: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySetting/key`.
+            public var key: Components.Schemas.WorkflowPolicyKey
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySetting/value`.
+            public var value: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySetting/origin`.
+            public var origin: Components.Schemas.WorkflowPolicyOrigin
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySetting/set_by`.
+            public var set_by: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicySetting/set_at`.
+            public var set_at: Foundation.Date?
+            /// Creates a new `WorkflowPolicySetting`.
+            ///
+            /// - Parameters:
+            ///   - key:
+            ///   - value:
+            ///   - origin:
+            ///   - set_by:
+            ///   - set_at:
+            public init(
+                key: Components.Schemas.WorkflowPolicyKey,
+                value: Swift.String,
+                origin: Components.Schemas.WorkflowPolicyOrigin,
+                set_by: Swift.String? = nil,
+                set_at: Foundation.Date? = nil
+            ) {
+                self.key = key
+                self.value = value
+                self.origin = origin
+                self.set_by = set_by
+                self.set_at = set_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case key
+                case value
+                case origin
+                case set_by
+                case set_at
+            }
+        }
+        /// A key the Workflow pane exposes (mirrors domain.WorkflowPolicyKey). A gate (gates.*) takes "true", which asks a person before the effect, or "false", the default, which lets the effect run under policy. A cap (follow_up_filing.*) takes a positive decimal integer with no sign or leading zero; the defaults are 10 per day, 5 per run, and a depth of 2.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicyKey`.
+        @frozen public enum WorkflowPolicyKey: String, Codable, Hashable, Sendable, CaseIterable {
+            case gates_period_follow_up_filing = "gates.follow_up_filing"
+            case gates_period_issue_comment = "gates.issue_comment"
+            case gates_period_source_issue_closure = "gates.source_issue_closure"
+            case follow_up_filing_period_max_per_day = "follow_up_filing.max_per_day"
+            case follow_up_filing_period_max_per_run = "follow_up_filing.max_per_run"
+            case follow_up_filing_period_max_depth = "follow_up_filing.max_depth"
+            case unknown = "unknown"
+        }
+        /// The layer a workflow setting is set at: general, which every project inherits, or project, which overrides it for one project.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicyScope`.
+        @frozen public enum WorkflowPolicyScope: String, Codable, Hashable, Sendable, CaseIterable {
+            case general = "general"
+            case project = "project"
+            case unknown = "unknown"
+        }
+        /// The layer an effective workflow setting came from: the project's value, the general value, or the built-in default.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicyOrigin`.
+        @frozen public enum WorkflowPolicyOrigin: String, Codable, Hashable, Sendable, CaseIterable {
+            case project = "project"
+            case general = "general"
+            case _default = "default"
+            case unknown = "unknown"
         }
         /// The path that set a routing policy revision (mirrors domain.RoutingPolicySource): cli_routing_set is `freesided routing set` on the daemon host, client_routing_set a paired client's set_routing_policy command.
         ///
@@ -7375,7 +7533,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, and move_parked_task. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes. The daemon rejects an unknown field anywhere in a request, including inside the schemas that responses also use (AlternateAgentChoice, AlternativeChoice, TaskLineSelection, TaskProposalScope), which leave additionalProperties open only so that a client tolerates fields a newer daemon adds to responses.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, and set_workflow_policy. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes. The daemon rejects an unknown field anywhere in a request, including inside the schemas that responses also use (AlternateAgentChoice, AlternativeChoice, TaskLineSelection, TaskProposalScope), which leave additionalProperties open only so that a client tolerates fields a newer daemon adds to responses.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
@@ -7389,7 +7547,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
@@ -7434,6 +7592,8 @@ public enum Components {
                 case refresh_usage(Components.Schemas.RefreshUsagePayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SetRoutingPolicyPayload`.
                 case set_routing_policy(Components.Schemas.SetRoutingPolicyPayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SetWorkflowPolicyPayload`.
+                case set_workflow_policy(Components.Schemas.SetWorkflowPolicyPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/StopTaskPayload`.
                 case stop_task(Components.Schemas.StopTaskPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SubmitTaskPayload`.
@@ -7460,6 +7620,8 @@ public enum Components {
                         self = .refresh_usage(try .init(from: decoder))
                     case "set_routing_policy":
                         self = .set_routing_policy(try .init(from: decoder))
+                    case "set_workflow_policy":
+                        self = .set_workflow_policy(try .init(from: decoder))
                     case "stop_task":
                         self = .stop_task(try .init(from: decoder))
                     case "submit_task":
@@ -7486,6 +7648,8 @@ public enum Components {
                         try value.encode(to: encoder)
                     case let .set_routing_policy(value):
                         try value.encode(to: encoder)
+                    case let .set_workflow_policy(value):
+                        try value.encode(to: encoder)
                     case let .stop_task(value):
                         try value.encode(to: encoder)
                     case let .submit_task(value):
@@ -7500,7 +7664,7 @@ public enum Components {
             /// - Parameters:
             ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///   - expected_bindings: Required for decision; forbidden for every other kind. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
@@ -7873,6 +8037,95 @@ public enum Components {
                     "task_id",
                     "role",
                     "selection"
+                ])
+            }
+        }
+        /// Set or clear one layer of one workflow setting. scope general sets the value every project inherits; scope project, with project_id naming a project the daemon serves, overrides it for that project. project_id is null exactly for scope general. A null value clears the layer, so the key falls back to the general value or the default. A request for the value the layer already holds records nothing. expected_revision is the workflow policy revision the client saw, null when it saw none; any other current revision refuses the change. The new revision's set_by is device:<device_id>. Only tasks created after the change resolve it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload`.
+        public struct SetWorkflowPolicyPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case set_workflow_policy = "set_workflow_policy"
+            }
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/kind`.
+            public var kind: Components.Schemas.SetWorkflowPolicyPayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/scope`.
+            public var scope: Components.Schemas.WorkflowPolicyScope
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/project_id`.
+            public var project_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/key`.
+            public var key: Components.Schemas.WorkflowPolicyKey
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/value`.
+            public var value: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/SetWorkflowPolicyPayload/expected_revision`.
+            public var expected_revision: Swift.Int?
+            /// Creates a new `SetWorkflowPolicyPayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - scope:
+            ///   - project_id:
+            ///   - key:
+            ///   - value:
+            ///   - expected_revision:
+            public init(
+                kind: Components.Schemas.SetWorkflowPolicyPayload.kindPayload,
+                scope: Components.Schemas.WorkflowPolicyScope,
+                project_id: Swift.String? = nil,
+                key: Components.Schemas.WorkflowPolicyKey,
+                value: Swift.String? = nil,
+                expected_revision: Swift.Int? = nil
+            ) {
+                self.kind = kind
+                self.scope = scope
+                self.project_id = project_id
+                self.key = key
+                self.value = value
+                self.expected_revision = expected_revision
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case scope
+                case project_id
+                case key
+                case value
+                case expected_revision
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.SetWorkflowPolicyPayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.scope = try container.decode(
+                    Components.Schemas.WorkflowPolicyScope.self,
+                    forKey: .scope
+                )
+                self.project_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .project_id
+                )
+                self.key = try container.decode(
+                    Components.Schemas.WorkflowPolicyKey.self,
+                    forKey: .key
+                )
+                self.value = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .value
+                )
+                self.expected_revision = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .expected_revision
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "scope",
+                    "project_id",
+                    "key",
+                    "value",
+                    "expected_revision"
                 ])
             }
         }
@@ -8261,6 +8514,84 @@ public enum Components {
                 case policy
             }
         }
+        /// The receipt of a workflow setting change: the request as accepted, whether it recorded a new revision, and the workflow policy revision current after it. recorded false means the layer already held the value, and revision is then the one the request expected.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord`.
+        public struct WorkflowPolicyChangeRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case set_workflow_policy = "set_workflow_policy"
+            }
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/kind`.
+            public var kind: Components.Schemas.WorkflowPolicyChangeRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/scope`.
+            public var scope: Components.Schemas.WorkflowPolicyScope
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/project_id`.
+            public var project_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/key`.
+            public var key: Components.Schemas.WorkflowPolicyKey
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/value`.
+            public var value: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/expected_revision`.
+            public var expected_revision: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/recorded`.
+            public var recorded: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyChangeRecord/revision`.
+            public var revision: Swift.Int
+            /// Creates a new `WorkflowPolicyChangeRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - scope:
+            ///   - project_id:
+            ///   - key:
+            ///   - value:
+            ///   - expected_revision:
+            ///   - recorded:
+            ///   - revision:
+            public init(
+                kind: Components.Schemas.WorkflowPolicyChangeRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                scope: Components.Schemas.WorkflowPolicyScope,
+                project_id: Swift.String? = nil,
+                key: Components.Schemas.WorkflowPolicyKey,
+                value: Swift.String? = nil,
+                expected_revision: Swift.Int? = nil,
+                recorded: Swift.Bool,
+                revision: Swift.Int
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.scope = scope
+                self.project_id = project_id
+                self.key = key
+                self.value = value
+                self.expected_revision = expected_revision
+                self.recorded = recorded
+                self.revision = revision
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case scope
+                case project_id
+                case key
+                case value
+                case expected_revision
+                case recorded
+                case revision
+            }
+        }
         /// The receipt of a parked task's move: the request, the record of the operator's choice, and the task lines the move set, each citing the record.
         ///
         ///
@@ -8481,7 +8812,7 @@ public enum Components {
                 case effort
             }
         }
-        /// A command conflict with the replacement state it was refused against. The arms carry no discriminator, so a client tries them in the order listed and takes the first that decodes. Responses tolerate added fields, so an arm whose required fields are a subset of another's matches that other's bodies too: TaskLineChangeRejection precedes StaleTaskRejection for that reason, and a new arm goes before any arm whose required fields its own include.
+        /// A command conflict with the replacement state it was refused against. The arms carry no discriminator, so a client tries them in the order listed and takes the first that decodes. Responses tolerate added fields, so an arm whose required fields are a subset of another's matches that other's bodies too: TaskLineChangeRejection precedes StaleTaskRejection for that reason, and a new arm goes before any arm whose required fields its own include. A required field that is nullable counts as absent here, because a generated client decodes a missing one as null: RoutingPolicyRejection matches on message alone, so WorkflowPolicyRejection precedes it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/CommandRejection`.
@@ -8493,6 +8824,8 @@ public enum Components {
             /// - Remark: Generated from `#/components/schemas/CommandRejection/case3`.
             case StaleTaskRejection(Components.Schemas.StaleTaskRejection)
             /// - Remark: Generated from `#/components/schemas/CommandRejection/case4`.
+            case WorkflowPolicyRejection(Components.Schemas.WorkflowPolicyRejection)
+            /// - Remark: Generated from `#/components/schemas/CommandRejection/case5`.
             case RoutingPolicyRejection(Components.Schemas.RoutingPolicyRejection)
             public init(from decoder: any Swift.Decoder) throws {
                 var errors: [any Swift.Error] = []
@@ -8510,6 +8843,12 @@ public enum Components {
                 }
                 do {
                     self = .StaleTaskRejection(try .init(from: decoder))
+                    return
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self = .WorkflowPolicyRejection(try .init(from: decoder))
                     return
                 } catch {
                     errors.append(error)
@@ -8533,6 +8872,8 @@ public enum Components {
                 case let .TaskLineChangeRejection(value):
                     try value.encode(to: encoder)
                 case let .StaleTaskRejection(value):
+                    try value.encode(to: encoder)
+                case let .WorkflowPolicyRejection(value):
                     try value.encode(to: encoder)
                 case let .RoutingPolicyRejection(value):
                     try value.encode(to: encoder)
@@ -8623,6 +8964,32 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case message
                 case current_policy
+            }
+        }
+        /// A workflow setting change refused because expected_revision is not the current workflow policy revision, with the current workflow policy.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkflowPolicyRejection`.
+        public struct WorkflowPolicyRejection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyRejection/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkflowPolicyRejection/current_workflow_policy`.
+            public var current_workflow_policy: Components.Schemas.WorkflowPolicySnapshot
+            /// Creates a new `WorkflowPolicyRejection`.
+            ///
+            /// - Parameters:
+            ///   - message:
+            ///   - current_workflow_policy:
+            public init(
+                message: Swift.String,
+                current_workflow_policy: Components.Schemas.WorkflowPolicySnapshot
+            ) {
+                self.message = message
+                self.current_workflow_policy = current_workflow_policy
+            }
+            public enum CodingKeys: String, CodingKey {
+                case message
+                case current_workflow_policy
             }
         }
         /// Current task projection and epoch for an obsolete prepared Stop.
@@ -9517,6 +9884,8 @@ public enum Components {
                 case refresh_usage(Components.Schemas.UsageRefreshRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/RoutingPolicyChangeRecord`.
                 case set_routing_policy(Components.Schemas.RoutingPolicyChangeRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/WorkflowPolicyChangeRecord`.
+                case set_workflow_policy(Components.Schemas.WorkflowPolicyChangeRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/StopTaskRecord`.
                 case stop_task(Components.Schemas.StopTaskRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/TaskSubmissionRecord`.
@@ -9543,6 +9912,8 @@ public enum Components {
                         self = .refresh_usage(try .init(from: decoder))
                     case "set_routing_policy":
                         self = .set_routing_policy(try .init(from: decoder))
+                    case "set_workflow_policy":
+                        self = .set_workflow_policy(try .init(from: decoder))
                     case "stop_task":
                         self = .stop_task(try .init(from: decoder))
                     case "submit_task":
@@ -9568,6 +9939,8 @@ public enum Components {
                     case let .refresh_usage(value):
                         try value.encode(to: encoder)
                     case let .set_routing_policy(value):
+                        try value.encode(to: encoder)
+                    case let .set_workflow_policy(value):
                         try value.encode(to: encoder)
                     case let .stop_task(value):
                         try value.encode(to: encoder)
@@ -19484,8 +19857,8 @@ public enum Operations {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, set_routing_policy, and move_parked_task carry
-    /// neither envelope field
+    /// change_task_line, set_routing_policy, move_parked_task, and
+    /// set_workflow_policy carry neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -19495,7 +19868,11 @@ public enum Operations {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A move_parked_task for a
+    /// revision is 409 with the current policy. A set_workflow_policy with
+    /// an unknown key or scope, a value its key does not take, or a project
+    /// the daemon does not serve is 400; one whose expected_revision is not
+    /// the current workflow policy revision is 409 with the current workflow
+    /// policy. A move_parked_task for a
     /// task with no attempt parked on an exhausted quota window, or naming
     /// an agent the park no longer offers, is 400 and records nothing, as is
     /// a retry_with_alternate_agent decision whose agent no longer
@@ -19673,7 +20050,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Optimistic-concurrency rejection: the command's expected_entity_version or expected_bindings no longer match canonical state. Carries the replacement item snapshot so the client can re-render without a refetch (sync test 2). A Stop carries the current task instead, a line change refused for a running role carries the current task, and a stale routing policy change carries the current policy. No side effect was applied.
+            /// Optimistic-concurrency rejection: the command's expected_entity_version or expected_bindings no longer match canonical state. Carries the replacement item snapshot so the client can re-render without a refetch (sync test 2). A Stop carries the current task instead, a line change refused for a running role carries the current task, a stale routing policy change carries the current policy, and a stale workflow policy change carries the current workflow policy. No side effect was applied.
             ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/409`.

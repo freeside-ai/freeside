@@ -1,0 +1,9 @@
+{
+  "revision": 2,
+  "scope": "project",
+  "project_id": "proj-1",
+  "key": "gates.source_issue_closure",
+  "value": null,
+  "set_by": "device:device-1",
+  "set_at": "2026-01-02T03:04:05Z"
+}

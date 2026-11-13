@@ -75,6 +75,12 @@ type Service struct {
 	usageOperator       UsageOperator
 	taskLineChanger     TaskLineChanger
 	routingPolicySetter RoutingPolicySetter
+	// workflowPolicySetter applies set_workflow_policy, and
+	// workflowPolicyProjects are the projects the daemon serves, which the
+	// command checks and the bootstrap projection lists
+	// (workflow_policy.go).
+	workflowPolicySetter   WorkflowPolicySetter
+	workflowPolicyProjects []domain.ProjectID
 	// parkedTaskMover and alternateAgentRetrier apply an alternate-agent
 	// choice (alternate_agent_retry.go, operator_commands.go). Nil fails the
 	// command closed, after replay.
@@ -347,6 +353,8 @@ func (s *Service) submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		return s.setRoutingPolicy(ctx, in)
 	case domain.CommandKindMoveParkedTask:
 		return s.moveParkedTask(ctx, in)
+	case domain.CommandKindSetWorkflowPolicy:
+		return s.setWorkflowPolicy(ctx, in)
 	case domain.CommandKindDecision, "":
 		// The empty zero value is the intentional legacy decision default, so
 		// existing decision callers stay unchanged (ClientCommand.Kind).
