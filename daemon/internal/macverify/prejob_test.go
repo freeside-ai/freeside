@@ -37,7 +37,7 @@ func TestRunPreJobProbeRunsTheSandboxModeFirst(t *testing.T) {
 	}
 	_, prepares, runs := fake.snapshot()
 	probe, req := prepares[0], runs[0]
-	if probe.workdir != fake.probeDir || probe.swiftCache != "" || string(probe.profile) != testProfile {
+	if probe.workdir != fake.probeDir || probe.caches != (jobCaches{}) || string(probe.profile) != testProfile {
 		t.Fatalf("probe prepare = %+v, want the probe workspace under the configured profile with no cache", probe)
 	}
 	argv := req.Argv

@@ -45,11 +45,10 @@ type fakeLauncher struct {
 	prepareHook func(ctx context.Context) error
 	// prepareErr fails every prepare, probe jobs included.
 	prepareErr error
-	// reportSwiftCache overrides the Swift cache key a recipe job's prepare
-	// reports.
-	reportSwiftCache *string
-	reapErr          error
-	cleanupErr       error
+	// reportCaches overrides the cache keys a recipe job's prepare reports.
+	reportCaches *jobCaches
+	reapErr      error
+	cleanupErr   error
 	// recipeCleanupErr fails only a recipe job's cleanup.
 	recipeCleanupErr error
 	// command plays a recipe command; reaped closes on the first reap after
@@ -65,8 +64,9 @@ type fakeLauncher struct {
 }
 
 type prepareCall struct {
-	slot, jobID, workdir, swiftCache string
-	profile                          []byte
+	slot, jobID, workdir string
+	caches               jobCaches
+	profile              []byte
 }
 
 func newFakeLauncher() *fakeLauncher {
@@ -141,11 +141,11 @@ func (f *fakeLauncher) slotUID() int {
 	return testSlotUID()
 }
 
-func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, swiftCache string) (preparedJob, error) {
+func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, caches jobCaches) (preparedJob, error) {
 	f.record("prepare " + slot)
 	f.mu.Lock()
 	f.prepares = append(f.prepares, prepareCall{
-		slot: slot, jobID: jobID, workdir: workdir, swiftCache: swiftCache, profile: slices.Clone(profile),
+		slot: slot, jobID: jobID, workdir: workdir, caches: caches, profile: slices.Clone(profile),
 	})
 	f.profiles[jobID] = slices.Clone(profile)
 	f.mu.Unlock()
@@ -179,17 +179,17 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 			return preparedJob{}, err
 		}
 	}
-	reported := swiftCache
-	if recipe && f.reportSwiftCache != nil {
-		reported = *f.reportSwiftCache
+	reported := caches
+	if recipe && f.reportCaches != nil {
+		reported = *f.reportCaches
 	}
 	return preparedJob{
-		Root:       f.root,
-		UID:        f.slotUID(),
-		Home:       filepath.Join(f.root, "homes", slot),
-		Tmp:        "/private/var/folders/ab/" + slot + "/T",
-		Cache:      "/private/var/folders/ab/" + slot + "/C",
-		SwiftCache: reported,
+		Root:   f.root,
+		UID:    f.slotUID(),
+		Home:   filepath.Join(f.root, "homes", slot),
+		Tmp:    "/private/var/folders/ab/" + slot + "/T",
+		Cache:  "/private/var/folders/ab/" + slot + "/C",
+		Caches: reported,
 	}, nil
 }
 

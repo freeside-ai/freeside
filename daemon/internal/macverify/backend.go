@@ -115,6 +115,10 @@ type conformanceConfiguration struct {
 	Slots             []string `json:"slots"`
 	XcodeBuild        string   `json:"xcode_build"`
 	Swift             string   `json:"swift"`
+	// Go names the Go toolchain pin slots run. The daemon's identity already
+	// covers it, since the pin is compiled in; naming it makes the record
+	// say which Go a pass proved.
+	Go string `json:"go"`
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -168,7 +172,7 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		return ""
 	}
 	body, err := json.Marshal(conformanceConfiguration{
-		Version:           "freeside.macverify.conformance-configuration/v2",
+		Version:           "freeside.macverify.conformance-configuration/v3",
 		Daemon:            b.daemonIdentity,
 		ExecutorRoot:      b.cfg.ExecutorRoot,
 		SandboxProfile:    contentaddr.Sum(b.cfg.SandboxProfile),
@@ -176,6 +180,7 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		Slots:             b.cfg.Slots,
 		XcodeBuild:        b.cfg.Toolchain.XcodeBuild,
 		Swift:             b.cfg.Toolchain.Swift,
+		Go:                "go" + goToolchainVersion,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal macverify conformance configuration: %v", err))

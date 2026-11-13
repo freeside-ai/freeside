@@ -152,10 +152,10 @@ func (s InstallSpec) homePath(slot string) string {
 }
 
 // rootEntries are the names install creates directly under the root, in
-// removal order. The Swift cache goes first: the operator can make it fail to
+// removal order. The caches go first: the operator can make them fail to
 // delete (an immutable file), and the helper in bin is what lets a rerun
 // removal recognize the root as install's.
-var rootEntries = []string{swiftCacheDirName, "bin", "jobs", "homes", "template", "pf"}
+var rootEntries = []string{swiftCacheDirName, goCacheDirName, "bin", "jobs", "homes", "template", "pf"}
 
 func (s InstallSpec) treeDirs() []string {
 	return []string{
@@ -238,7 +238,8 @@ func (in installer) pieces() []piece {
 		ps = append(ps, in.dirPiece(dir))
 	}
 	ps = append(ps,
-		in.swiftCachePiece(),
+		in.operatorCachePiece("Swift cache", swiftCacheDirName),
+		in.operatorCachePiece("Go cache", goCacheDirName),
 		in.filePiece("helper", helperPath(s.Root), helperScript, 0o755, nil),
 		in.filePiece("slot list", s.slotsConfPath(), renderSlotsConf(s.Slots()), 0o644, nil),
 		in.groupPiece(),
@@ -465,18 +466,19 @@ func isTempEntry(entry string, allowed []string) bool {
 	return false
 }
 
-// swiftCachePiece holds <root>/swift-cache to what populate fills as the
-// operator and slot-run seeds from: a directory the operator owns at 0755.
-// It is the one tree directory root does not own. A root-owned one, as an
-// interrupted Mkdir leaves, is install's to repair; one another user owns is
-// foreign, so install never hands that user's entries to the operator.
-func (in installer) swiftCachePiece() piece {
+// operatorCachePiece holds a cache directory under the root (swift-cache or
+// go-cache) to what populate fills as the operator and slot-run reads from:
+// a directory the operator owns at 0755. The caches are the tree directories
+// root does not own. A root-owned one, as an interrupted Mkdir leaves, is
+// install's to repair; one another user owns is foreign, so install never
+// hands that user's entries to the operator.
+func (in installer) operatorCachePiece(name, dirName string) piece {
 	s := in.spec
-	dir := s.path(swiftCacheDirName)
+	dir := s.path(dirName)
 	var exists bool
 	var uid int
 	return piece{
-		name: "Swift cache " + dir,
+		name: name + " " + dir,
 		inspect: func() (State, string, error) {
 			operator, ok, err := in.host.User(s.Operator)
 			if err != nil {

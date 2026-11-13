@@ -25,10 +25,9 @@ var errHelperAbandoned = errors.New("slot-run is still running")
 type launcher interface {
 	// prepare refuses a slot that owns a live process, resets its home,
 	// temporary, and cache directories, and copies workdir into a fresh job
-	// directory, installing profile as the job's sandbox profile. A
-	// non-empty swiftCache names the Swift dependency cache entry whose seed
-	// it copies into the job directory and the home.
-	prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, swiftCache string) (preparedJob, error)
+	// directory, installing profile as the job's sandbox profile. caches
+	// names the dependency cache entries the job uses.
+	prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, caches jobCaches) (preparedJob, error)
 	// run starts the command as the slot and returns a channel that receives
 	// exactly one outcome once it is done.
 	run(req runRequest, output io.Writer) (<-chan runOutcome, error)
@@ -40,15 +39,23 @@ type launcher interface {
 	ownsProcess(uid int) (bool, error)
 }
 
-// preparedJob is what slot-run reports for a prepared slot. SwiftCache is
-// the Swift dependency cache key it seeded, or "" for none.
+// jobCaches names a job's dependency cache entries by key, "" for none:
+// Swift is the entry whose seed prepare copies into the job directory and
+// the home, and Go the entry whose module cache the command reads in place.
+type jobCaches struct {
+	Swift string
+	Go    string
+}
+
+// preparedJob is what slot-run reports for a prepared slot. Caches are the
+// entries it checked and set the job up from.
 type preparedJob struct {
-	Root       string
-	UID        int
-	Home       string
-	Tmp        string
-	Cache      string
-	SwiftCache string
+	Root   string
+	UID    int
+	Home   string
+	Tmp    string
+	Cache  string
+	Caches jobCaches
 }
 
 // runRequest is one command launch as a slot. Env and Params are the exact
@@ -115,10 +122,13 @@ func (l sudoLauncher) invoke(ctx context.Context, stdin []byte, op string, args 
 	}
 }
 
-func (l sudoLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, swiftCache string) (preparedJob, error) {
+func (l sudoLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, caches jobCaches) (preparedJob, error) {
 	args := []string{slot, jobID, workdir}
-	if swiftCache != "" {
-		args = append(args, swiftCache)
+	if caches.Swift != "" {
+		args = append(args, "swift="+caches.Swift)
+	}
+	if caches.Go != "" {
+		args = append(args, "go="+caches.Go)
 	}
 	out, err := l.invoke(ctx, profile, "prepare", args...)
 	if err != nil {
@@ -190,10 +200,10 @@ func (l sudoLauncher) cleanup(ctx context.Context, slot, jobID string) error {
 func (sudoLauncher) ownsProcess(uid int) (bool, error) { return uidOwnsProcess(uid) }
 
 // parsePrepared reads prepare's report: exactly root, uid, home, tmp, cache,
-// and swift_cache, with every path clean and absolute and swift_cache either
-// none or a cache key.
+// swift_cache, and go_cache, with every path clean and absolute and each
+// cache either none or a cache key.
 func parsePrepared(out []byte) (preparedJob, error) {
-	fields, err := parseReport(out, "root", "uid", "home", "tmp", "cache", "swift_cache")
+	fields, err := parseReport(out, "root", "uid", "home", "tmp", "cache", "swift_cache", "go_cache")
 	if err != nil {
 		return preparedJob{}, err
 	}
@@ -207,16 +217,19 @@ func parsePrepared(out []byte) (preparedJob, error) {
 			return preparedJob{}, fmt.Errorf("slot-run reported %s %q, not a clean absolute path", key, path)
 		}
 	}
-	swiftCache := fields["swift_cache"]
-	switch {
-	case swiftCache == "none":
-		swiftCache = ""
-	case !swiftCacheKeyPattern.MatchString(swiftCache):
-		return preparedJob{}, fmt.Errorf("slot-run reported swift_cache %q, not none or a cache key", swiftCache)
+	var caches [2]string
+	for i, key := range []string{"swift_cache", "go_cache"} {
+		switch value := fields[key]; {
+		case value == "none":
+		case swiftCacheKeyPattern.MatchString(value):
+			caches[i] = value
+		default:
+			return preparedJob{}, fmt.Errorf("slot-run reported %s %q, not none or a cache key", key, value)
+		}
 	}
 	return preparedJob{
 		Root: fields["root"], UID: uid, Home: fields["home"], Tmp: fields["tmp"], Cache: fields["cache"],
-		SwiftCache: swiftCache,
+		Caches: jobCaches{Swift: caches[0], Go: caches[1]},
 	}, nil
 }
 

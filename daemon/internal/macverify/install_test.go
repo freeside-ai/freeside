@@ -96,9 +96,11 @@ func TestInstallFresh(t *testing.T) {
 	if home := h.files["/Library/Freeside/macverify/homes/fvslot1"].info; home.UID != 461 || home.Mode != 0o700 {
 		t.Errorf("home = %+v", home)
 	}
-	if cache := h.files["/Library/Freeside/macverify/swift-cache"].info; cache.Kind != FileDir || cache.UID != 501 ||
-		cache.Mode != 0o755 {
-		t.Errorf("Swift cache = %+v, want the operator's directory at 0755", cache)
+	for _, dir := range []string{"swift-cache", "go-cache"} {
+		if cache := h.files["/Library/Freeside/macverify/"+dir].info; cache.Kind != FileDir || cache.UID != 501 ||
+			cache.Mode != 0o755 {
+			t.Errorf("%s = %+v, want the operator's directory at 0755", dir, cache)
+		}
 	}
 	if !h.pf || !h.services["ai.freeside.macverify.pf"] {
 		t.Errorf("pf enabled %v, job loaded %v", h.pf, h.services)
@@ -327,6 +329,10 @@ func TestInstallRefusesWithoutChanging(t *testing.T) {
 			seedRoot(h)
 			h.files["/Library/Freeside/macverify/swift-cache"] = fakeFile{info: FileInfo{Kind: FileRegular, UID: 501, Mode: 0o644}}
 		},
+		"Go cache is not a directory": func(h *fakeHost) {
+			seedRoot(h)
+			h.files["/Library/Freeside/macverify/go-cache"] = fakeFile{info: FileInfo{Kind: FileOther, UID: 501, Mode: 0o755}}
+		},
 		"slot is an administrator": func(h *fakeHost) {
 			h.groups["admin"] = Group{Name: "admin", GID: 80, Members: []string{"benja", "fvslot1"}}
 			h.groups["fvslots"] = Group{Name: "fvslots", GID: 460}
@@ -362,46 +368,59 @@ func seedRoot(h *fakeHost) {
 // Install repairs the Swift cache to the operator's at 0755: a root-owned one
 // is what an install interrupted between creating it and handing it over
 // leaves, and slot-run refuses to seed from a group-writable one.
-func TestInstallRepairsSwiftCache(t *testing.T) {
+// operatorCaches are the cache directories install hands to the operator.
+var operatorCaches = []string{swiftCacheDirName, goCacheDirName}
+
+func TestInstallRepairsOperatorCaches(t *testing.T) {
 	t.Parallel()
-	for name, info := range map[string]FileInfo{
-		"root-owned":            {Kind: FileDir, Mode: 0o700},
-		"group-writable":        {Kind: FileDir, UID: 501, Mode: 0o775},
-		"closed to other users": {Kind: FileDir, UID: 501, Mode: 0o700},
-	} {
-		h, spec := installed(t)
-		cache := spec.path("swift-cache")
-		h.files[cache] = fakeFile{info: info}
-		if _, err := Install(spec, h); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if !slices.Equal(h.changes, []string{"chown/chmod " + cache}) {
-			t.Errorf("%s: changes = %q, want the Swift cache repaired only", name, h.changes)
-		}
-		if got := h.files[cache].info; got.UID != 501 || got.Mode != 0o755 {
-			t.Errorf("%s: Swift cache = %+v", name, got)
+	for _, dir := range operatorCaches {
+		for name, info := range map[string]FileInfo{
+			"root-owned":            {Kind: FileDir, Mode: 0o700},
+			"group-writable":        {Kind: FileDir, UID: 501, Mode: 0o775},
+			"closed to other users": {Kind: FileDir, UID: 501, Mode: 0o700},
+		} {
+			h, spec := installed(t)
+			cache := spec.path(dir)
+			h.files[cache] = fakeFile{info: info}
+			if _, err := Install(spec, h); err != nil {
+				t.Fatalf("%s %s: %v", dir, name, err)
+			}
+			if !slices.Equal(h.changes, []string{"chown/chmod " + cache}) {
+				t.Errorf("%s %s: changes = %q, want the cache repaired only", dir, name, h.changes)
+			}
+			if got := h.files[cache].info; got.UID != 501 || got.Mode != 0o755 {
+				t.Errorf("%s %s: cache = %+v", dir, name, got)
+			}
 		}
 	}
 }
 
 // Install leaves what populate wrote in the operator's cache alone.
-func TestInstallKeepsSwiftCacheEntries(t *testing.T) {
+func TestInstallKeepsOperatorCacheEntries(t *testing.T) {
 	t.Parallel()
 	h, spec := installed(t)
-	entry := spec.path("swift-cache", strings.Repeat("a", 64))
-	h.files[entry] = fakeFile{info: FileInfo{Kind: FileDir, UID: 501, Mode: 0o755}}
+	entries := []string{
+		spec.path(swiftCacheDirName, strings.Repeat("a", 64)),
+		spec.path(goCacheDirName, strings.Repeat("a", 64)),
+		spec.path(goCacheDirName, "go"+goToolchainVersion),
+	}
+	for _, entry := range entries {
+		h.files[entry] = fakeFile{info: FileInfo{Kind: FileDir, UID: 501, Mode: 0o755}}
+	}
 	if _, err := Install(spec, h); err != nil {
 		t.Fatal(err)
 	}
 	if len(h.changes) != 0 {
 		t.Fatalf("rerun changed %q", h.changes)
 	}
-	if _, ok := h.files[entry]; !ok {
-		t.Error("install deleted a Swift cache entry")
+	for _, entry := range entries {
+		if _, ok := h.files[entry]; !ok {
+			t.Errorf("install deleted %s", entry)
+		}
 	}
 }
 
-func TestInspectSwiftCacheNeedsAKnownOperator(t *testing.T) {
+func TestInspectOperatorCachesNeedAKnownOperator(t *testing.T) {
 	t.Parallel()
 	h, spec := installed(t)
 	delete(h.users, spec.Operator)
@@ -409,12 +428,14 @@ func TestInspectSwiftCacheNeedsAKnownOperator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := slices.IndexFunc(findings, func(f Finding) bool { return f.Piece == "Swift cache "+spec.path("swift-cache") })
-	if i < 0 {
-		t.Fatal("no Swift cache finding")
-	}
-	if f := findings[i]; f.State != StateMisconfigured {
-		t.Errorf("Swift cache with no operator account: %s %s, want misconfigured", f.State, f.Detail)
+	for _, piece := range []string{"Swift cache " + spec.path(swiftCacheDirName), "Go cache " + spec.path(goCacheDirName)} {
+		i := slices.IndexFunc(findings, func(f Finding) bool { return f.Piece == piece })
+		if i < 0 {
+			t.Fatalf("no %s finding", piece)
+		}
+		if f := findings[i]; f.State != StateMisconfigured {
+			t.Errorf("%s with no operator account: %s %s, want misconfigured", piece, f.State, f.Detail)
+		}
 	}
 }
 
@@ -436,7 +457,7 @@ func TestInspectNamesEachMissingPiece(t *testing.T) {
 		"directory /Library/Freeside/macverify", "directory /Library/Freeside/macverify/bin",
 		"directory /Library/Freeside/macverify/jobs", "directory /Library/Freeside/macverify/homes",
 		"directory /Library/Freeside/macverify/template", "directory /Library/Freeside/macverify/template/home",
-		"directory /Library/Freeside/macverify/pf", "Swift cache /Library/Freeside/macverify/swift-cache",
+		"directory /Library/Freeside/macverify/pf", "Swift cache /Library/Freeside/macverify/swift-cache", "Go cache /Library/Freeside/macverify/go-cache",
 		"helper /Library/Freeside/macverify/bin/slot-run", "slot list /Library/Freeside/macverify/bin/slots.conf",
 		"group fvslots", "account fvslot1", "account fvslot2", "home fvslot1", "home fvslot2",
 		"sudoers file /etc/sudoers.d/freeside-slot-run", "anchor file /Library/Freeside/macverify/pf/anchor.conf",
@@ -476,10 +497,12 @@ func TestRemoveDeletesTheInstall(t *testing.T) {
 	t.Parallel()
 	h, spec := installed(t)
 	h.live[461] = true
-	// Populated entries go with the cache: populate can fill them again.
-	entry := spec.path("swift-cache", strings.Repeat("a", 64))
-	h.files[entry] = fakeFile{info: FileInfo{Kind: FileDir, UID: 501, Mode: 0o755}}
-	h.files[entry+"/record.json"] = fakeFile{info: FileInfo{Kind: FileRegular, UID: 501, Mode: 0o644}}
+	// Populated entries go with the caches: populate can fill them again.
+	for _, dir := range operatorCaches {
+		entry := spec.path(dir, strings.Repeat("a", 64))
+		h.files[entry] = fakeFile{info: FileInfo{Kind: FileDir, UID: 501, Mode: 0o755}}
+		h.files[entry+"/record.json"] = fakeFile{info: FileInfo{Kind: FileRegular, UID: 501, Mode: 0o644}}
+	}
 	report, err := Remove(spec, h)
 	if err != nil {
 		t.Fatal(err)
@@ -502,11 +525,13 @@ func TestRemoveDeletesTheInstall(t *testing.T) {
 	if !strings.HasPrefix(h.changes[0], "remove "+spec.sudoersPath()) {
 		t.Errorf("first change %q, want the sudoers file removed", h.changes[0])
 	}
-	// The Swift cache goes before the helper, so a cache that will not delete
+	// The caches go before the helper, so a cache that will not delete
 	// leaves a root a rerun removal still recognizes.
-	if cache, helper := slices.Index(h.changes, "remove "+spec.path("swift-cache")),
-		slices.Index(h.changes, "remove "+spec.path("bin")); cache < 0 || cache > helper {
-		t.Errorf("changes %q, want the Swift cache removed before bin", h.changes)
+	for _, dir := range operatorCaches {
+		if cache, helper := slices.Index(h.changes, "remove "+spec.path(dir)),
+			slices.Index(h.changes, "remove "+spec.path("bin")); cache < 0 || cache > helper {
+			t.Errorf("changes %q, want %s removed before bin", h.changes, dir)
+		}
 	}
 }
 

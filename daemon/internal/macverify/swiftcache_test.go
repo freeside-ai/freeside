@@ -152,8 +152,8 @@ func TestRunServesACompleteSwiftCacheEntry(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	prepares, _ := fake.recipeJobs()
-	if prepares[0].swiftCache != key.Key {
-		t.Fatalf("prepare seeded %q, want %s", prepares[0].swiftCache, key.Key)
+	if prepares[0].caches.Swift != key.Key {
+		t.Fatalf("prepare seeded %q, want %s", prepares[0].caches.Swift, key.Key)
 	}
 }
 
@@ -164,8 +164,8 @@ func TestRunWithoutPackageResolvedSeedsNoCache(t *testing.T) {
 	if _, err := room.Run(t.Context(), t.TempDir(), []string{"true"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if prepares, _ := fake.recipeJobs(); prepares[0].swiftCache != "" {
-		t.Fatalf("prepare seeded %q for a workspace with no Package.resolved", prepares[0].swiftCache)
+	if prepares, _ := fake.recipeJobs(); prepares[0].caches.Swift != "" {
+		t.Fatalf("prepare seeded %q for a workspace with no Package.resolved", prepares[0].caches.Swift)
 	}
 }
 
@@ -235,8 +235,8 @@ func TestRunMaskedSwiftCacheSeedsNothing(t *testing.T) {
 	if _, err := room.Run(t.Context(), swiftWorkspace(t), []string{"swift", "test"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if prepares, _ := fake.recipeJobs(); prepares[0].swiftCache != "" {
-		t.Fatalf("masked room seeded %q", prepares[0].swiftCache)
+	if prepares, _ := fake.recipeJobs(); prepares[0].caches.Swift != "" {
+		t.Fatalf("masked room seeded %q", prepares[0].caches.Swift)
 	}
 }
 
@@ -244,7 +244,7 @@ func TestRunRefusesAPrepareThatSeededAnotherSwiftCache(t *testing.T) {
 	t.Parallel()
 	fake := newFakeLauncher()
 	other := strings.Repeat("0", 64)
-	fake.reportSwiftCache = &other
+	fake.reportCaches = &jobCaches{Swift: other}
 	room := newTestRoom(t, fake)
 	workdir := swiftWorkspace(t)
 	writeEntry(t, room.root, mustKey(t, workdir).Key)
