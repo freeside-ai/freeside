@@ -68,6 +68,7 @@ func budgetedSites() []inference.Site {
 		inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
 		inference.DriftAuditorSite(budget), inference.DiscussionSite(budget),
 		inference.TriagerSite(budget), inference.DuplicateSearchSite(budget),
+		inference.FollowUpFilingAuthorSite(budget),
 	}
 }
 
