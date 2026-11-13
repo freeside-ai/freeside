@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 123
+revision: 124
 status: active
 updated: 2026-11-13
 ---
@@ -6553,7 +6553,13 @@ fact: the agent supplies a location and a caption, never code text, and the
 daemon reads the lines from the imported commit, or from its base for
 removed code. An excerpt the daemon cannot read renders as unresolved, never
 as agent-supplied code. A guide is optional: a missing one never blocks a
-ready item. A malformed one is invalid evidence and fails the import closed.
+ready item. A guide over a size bound is trimmed to the bound, never refused
+(revision 124): the daemon keeps what fits, cuts the rest, and records each
+cut on the item, so the card says the guide was trimmed. A guide too large
+to read at all is left out, and the item says so. Credential screening
+reads the guide as written, so it covers what a trim cuts, and reads a guide
+left out as it reads any other evidence. A malformed guide is still invalid
+evidence and fails the import closed.
 
 In Phase 1 the summarizer is the stage agent whose work the card concerns,
 labeled with its `producer_invocation_id`. On every item type (revision 82),
@@ -7689,25 +7695,33 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 123 ("A Follow-Up Filing May Carry an Authored Kind Label"):
+Revision 124 ("An Over-Long Review Guide Is Trimmed, Not Refused"):
 
-1. **A follow-up filing may carry one `kind:*` label the authoring site
-   chose from a fixed enum** (Section
-   [5.17](#517-follow-up-issue-filing)). The finding adjudicator's
-   follow-up authoring site drafts the work-unit form's fields and names a
-   kind, feature, fix, or chore; a fixed table in code maps it to its label,
-   and the gate re-derives the whole label set from policy and the stored
-   kind on admission and on every read. A value outside the enum is refused,
-   and a filing with no authored kind carries no kind label. This narrows
-   that section's "labels ... never from proposal text". `kind:contract` is
-   outside the enum, because a contract unit invokes contract review and
-   the planner assigns it. Rejected: leaving every authored filing
-   unlabeled, which leaves the planner to classify each one by hand; and
-   letting the model name any label, which lets proposal text choose
-   policy.
+1. **A review guide over a size bound is trimmed to the bound and recorded
+   on the ready item, never refused** (Section
+   [9](#9-comprehension), Summary Provenance). The daemon keeps the first
+   stops, excerpts, questions, and lines up to their bounds and cuts an
+   over-long string to fit; the ready item records each cut so the card
+   says the guide was trimmed. A guide file too large to read is left out,
+   and the item records that. Credential screening still reads the guide
+   as written, so it covers what a trim cuts, and reads a guide left out as
+   it reads any other evidence. Every other fault, a malformed shape, an
+   unreadable range, an over-long path, or a bad declaration, still fails
+   the import closed, and the failure now names invalid evidence as its
+   cause instead of unknown. This narrows revision
+   112's "a malformed one is invalid evidence": exceeding a size bound no
+   longer counts as malformed. It follows the #2753 exit run, whose
+   finished change was discarded because one excerpt ran 116 lines against
+   an 80-line bound. Rejected: keeping the fail-closed rule, which spends a
+   whole run on a cosmetic overrun of an optional card section; trimming
+   without a record, which would show the operator a guide that differs
+   from what the agent wrote without saying so; and dropping the whole
+   guide on any overrun, which discards a guide that is useful once
+   trimmed.
 
-(Owner decision of 2026-11-12 on #3132, recorded in #3148's contract;
-[decision note](../devlog/2026-11-13-1119-follow-up-filing-author.md).)
+(Owner decision of 2026-11-13 on #3180;
+[decision note](../devlog/2026-11-13-0957-review-guide-caps-trim.md).)
+
 ## 14. Risks
 
 | Risk | Current response |

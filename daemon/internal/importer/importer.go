@@ -28,6 +28,11 @@ type Result struct {
 	// CommitPlanNotice is a daemon-derived reason for consuming but not using
 	// the plan channel, or for the plan_preferred unified fallback.
 	CommitPlanNotice *domain.CommitPlanNoticeReason `json:"commit_plan_notice,omitempty"`
+	// ReviewGuideNotice records how the importer trimmed the review guide to
+	// its caps, or that it left out a guide too large to read; nil when the
+	// guide arrived whole or there was none. Omitted when nil, so the digest
+	// of a result without one is the digest it had before the field existed.
+	ReviewGuideNotice *domain.ReviewGuideNotice `json:"review_guide_notice,omitempty"`
 }
 
 // Import validates the handoff under handoffDir and imports it onto the
@@ -70,7 +75,7 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	// whole import closed, the same posture as the repo channel's integrity
 	// violations. Built before commit construction so no clean commit is
 	// produced for a handoff with hostile evidence.
-	claims, evidenceFindings, err := buildClaims(em, evidenceBlobs, opts)
+	claims, evidenceFindings, guideNotice, err := buildClaims(em, evidenceBlobs, opts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -129,9 +134,10 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	}
 	sortFindings(findings)
 	result := Result{
-		Changes:  make([]Change, 0, len(changes)),
-		Findings: findings,
-		Claims:   claims,
+		Changes:           make([]Change, 0, len(changes)),
+		Findings:          findings,
+		Claims:            claims,
+		ReviewGuideNotice: guideNotice,
 	}
 	if planPresent && opts.Policy.CommitPlan == domain.CommitPlanSingleCommit {
 		setPlanNotice(&result, domain.CommitPlanNoticePresentButNotHonored)

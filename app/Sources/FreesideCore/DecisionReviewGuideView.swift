@@ -10,6 +10,9 @@ import SwiftUI
 /// never reformatted.
 struct DecisionReviewGuideView: View {
     let guide: Components.Schemas.ReviewGuide
+    /// The daemon's record of what it cut to fit the guide to its caps,
+    /// drawn as daemon fact before the stops. Empty when nothing was cut.
+    let trims: [Components.Schemas.ReviewGuideTrim]
     /// The invocation that wrote the guide, from its claim's provenance.
     /// Nil when the item carries no claim with the guide's digest.
     let producerInvocationID: String?
@@ -40,6 +43,18 @@ struct DecisionReviewGuideView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            if !trims.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    KeywordLabel(text: "Trimmed to Fit")
+                    ForEach(Array(trims.enumerated()), id: \.offset) { _, trim in
+                        Text(verbatim: AttentionDisplay.reviewGuideTrim(trim))
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .accessibilityElement(children: .combine)
             }
             ForEach(Array(guide.stops.enumerated()), id: \.offset) { index, stop in
                 stopView(stop, number: index + 1)
@@ -189,5 +204,26 @@ struct DecisionReviewGuideView: View {
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The Review Guide module of a ready card whose guide the daemon left out
+/// (`review_guide_notice.omission`): a daemon fact, so it carries no
+/// unverified register, and it says why the card shows no guide.
+struct DecisionReviewGuideOmissionView: View {
+    let omission: Components.Schemas.ReviewGuideOmission
+
+    private typealias CardScale = DecisionCardComposition.Scale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CardScale.controlGap) {
+            KeywordLabel(text: "Review Guide")
+            Text(verbatim: AttentionDisplay.label(omission))
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

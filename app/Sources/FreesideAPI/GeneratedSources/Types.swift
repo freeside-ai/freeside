@@ -6554,7 +6554,7 @@ public enum Components {
             case blocked = "blocked"
             case unknown = "unknown"
         }
-        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure.
+        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure. invalid_evidence: import refused what the run wrote to its evidence channel (a malformed entry, or bytes that are not the declared media type), so no other agent escapes it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/FailureCause`.
@@ -6567,6 +6567,7 @@ public enum Components {
             case invalid_configuration = "invalid_configuration"
             case contract_contradiction = "contract_contradiction"
             case memory_limit = "memory_limit"
+            case invalid_evidence = "invalid_evidence"
             case unknown = "unknown"
         }
         /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. Every writer names its cause, so the daemon never sends unknown; a client decodes a cause it doesn't know as unknown.
@@ -13642,6 +13643,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide`.
             public var review_guide: Components.Schemas.AttentionItem.review_guidePayload?
+            /// Why the ready item's guide is shorter than its invocation wrote it, or missing although the invocation wrote one. Null on every other type, on a ready item whose guide was within its caps, and on one with no guide written.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide_notice`.
+            public struct review_guide_noticePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide_notice/value1`.
+                public var value1: Components.Schemas.ReviewGuideNotice
+                /// Creates a new `review_guide_noticePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewGuideNotice) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Why the ready item's guide is shorter than its invocation wrote it, or missing although the invocation wrote one. Null on every other type, on a ready item whose guide was within its caps, and on one with no guide written.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/review_guide_notice`.
+            public var review_guide_notice: Components.Schemas.AttentionItem.review_guide_noticePayload?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/item_version`.
             public var item_version: Swift.Int
             /// - Remark: Generated from `#/components/schemas/AttentionItem/interruption_class`.
@@ -13789,6 +13816,7 @@ public enum Components {
             ///   - agent_question: Typed question facts, present on every agent_question item and null on every other type.
             ///   - review_diminishing: Why the review loop stopped, on a review_diminishing_returns item; null on every other type. Also null on such an item stored before the facts existed and on one a review escalation raised, so a client must render the item without them.
             ///   - review_guide: The producing invocation's reading order for the pull request, on a ready_for_final_review item whose invocation wrote one; null on every other type and on a ready item without a guide, so a client must render the item without it.
+            ///   - review_guide_notice: Why the ready item's guide is shorter than its invocation wrote it, or missing although the invocation wrote one. Null on every other type, on a ready item whose guide was within its caps, and on one with no guide written.
             ///   - item_version:
             ///   - interruption_class:
             ///   - conversation_id:
@@ -13841,6 +13869,7 @@ public enum Components {
                 agent_question: Components.Schemas.AttentionItem.agent_questionPayload? = nil,
                 review_diminishing: Components.Schemas.AttentionItem.review_diminishingPayload? = nil,
                 review_guide: Components.Schemas.AttentionItem.review_guidePayload? = nil,
+                review_guide_notice: Components.Schemas.AttentionItem.review_guide_noticePayload? = nil,
                 item_version: Swift.Int,
                 interruption_class: Components.Schemas.InterruptionClass,
                 conversation_id: Swift.String? = nil,
@@ -13893,6 +13922,7 @@ public enum Components {
                 self.agent_question = agent_question
                 self.review_diminishing = review_diminishing
                 self.review_guide = review_guide
+                self.review_guide_notice = review_guide_notice
                 self.item_version = item_version
                 self.interruption_class = interruption_class
                 self.conversation_id = conversation_id
@@ -13946,6 +13976,7 @@ public enum Components {
                 case agent_question
                 case review_diminishing
                 case review_guide
+                case review_guide_notice
                 case item_version
                 case interruption_class
                 case conversation_id
@@ -16026,6 +16057,7 @@ public enum Components {
         }
         /// A reading order for a ready_for_final_review item's pull request (plan §7; mirrors domain.ReviewGuide). The stops, captions, questions, and notes are the agent's labeled claim; each excerpt's text is a daemon fact read from the imported commit or its bound base. head_sha equals the item's pr_head_sha. claim_digest names exactly one agent_claims entry, the one the guide was parsed from: label freeside.review-guide, media_type application/json, null inline text, and head_bound provenance whose source_head_sha equals head_sha and whose sensitivity_class is not high_sensitivity, since the guide's prose rides inline on the item as inline claim text does.
         /// The agent writes the guide to .freeside-evidence/review-guide.json as this object without head_sha and claim_digest, and each excerpt without text and unresolved_reason. The handoff supplies head_sha, import supplies claim_digest, and excerpt resolution supplies text or unresolved_reason. The file carries no version field (the reserved label and path identify the format), and import rejects unknown fields. String caps count Unicode code points.
+        /// A guide over a size cap still reaches the item: import keeps the first stops, excerpts, and questions up to their count caps, the first 80 lines of an over-long range, and cuts an over-long title, summary, caption, question, or notes to its cap, ending in "…". The item's review_guide_notice records each trim. A file over the 64 KiB read bound is left out, and the notice says so. Every other fault, including a malformed range or an over-long path, still fails the run.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReviewGuide`.
@@ -16215,6 +16247,124 @@ public enum Components {
             case range_out_of_file = "range_out_of_file"
             case binary = "binary"
             case too_large = "too_large"
+            case unknown = "unknown"
+        }
+        /// Why a ready item's guide is shorter than its invocation wrote it, or missing (mirrors domain.ReviewGuideNotice). The daemon derives it at import; nothing an agent or client writes sets it. Exactly one of omission and trims is set: omission when the guide was left out and the item's review_guide is null, a non-empty trims beside the guide the trims shortened. trims is [] beside an omission.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewGuideNotice`.
+        public struct ReviewGuideNotice: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideNotice/omission`.
+            public struct omissionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ReviewGuideNotice/omission/value1`.
+                public var value1: Components.Schemas.ReviewGuideOmission
+                /// Creates a new `omissionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ReviewGuideOmission) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideNotice/omission`.
+            public var omission: Components.Schemas.ReviewGuideNotice.omissionPayload?
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideNotice/trims`.
+            public var trims: [Components.Schemas.ReviewGuideTrim]
+            /// Creates a new `ReviewGuideNotice`.
+            ///
+            /// - Parameters:
+            ///   - omission:
+            ///   - trims:
+            public init(
+                omission: Components.Schemas.ReviewGuideNotice.omissionPayload? = nil,
+                trims: [Components.Schemas.ReviewGuideTrim]
+            ) {
+                self.omission = omission
+                self.trims = trims
+            }
+            public enum CodingKeys: String, CodingKey {
+                case omission
+                case trims
+            }
+        }
+        /// One size cap import trimmed the guide to (mirrors domain.ReviewGuideTrim), in the guide's reading order. stop, excerpt, and question are 0-based indexes into the stored guide, set exactly where the cap applied: stop for stop_excerpts, title, and summary; stop and excerpt for excerpt_lines and caption; question for question; none for stops, questions, and notes. found is what the agent wrote (a count, a span in lines, or a length in code points) and limit what was kept; found is greater than limit. A trim inside a stop or question that a count cap dropped is not recorded.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim`.
+        public struct ReviewGuideTrim: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim/cap`.
+            public var cap: Components.Schemas.ReviewGuideCap
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim/stop`.
+            public var stop: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim/excerpt`.
+            public var excerpt: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim/question`.
+            public var question: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim/limit`.
+            public var limit: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/ReviewGuideTrim/found`.
+            public var found: Swift.Int
+            /// Creates a new `ReviewGuideTrim`.
+            ///
+            /// - Parameters:
+            ///   - cap:
+            ///   - stop:
+            ///   - excerpt:
+            ///   - question:
+            ///   - limit:
+            ///   - found:
+            public init(
+                cap: Components.Schemas.ReviewGuideCap,
+                stop: Swift.Int? = nil,
+                excerpt: Swift.Int? = nil,
+                question: Swift.Int? = nil,
+                limit: Swift.Int,
+                found: Swift.Int
+            ) {
+                self.cap = cap
+                self.stop = stop
+                self.excerpt = excerpt
+                self.question = question
+                self.limit = limit
+                self.found = found
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cap
+                case stop
+                case excerpt
+                case question
+                case limit
+                case found
+            }
+        }
+        /// A review guide size cap (mirrors domain.ReviewGuideCap): stops (12 stops), stop_excerpts (4 excerpts in a stop), questions (8 questions), excerpt_lines (80 lines in a range), and the code-point caps title (120), summary (2000), caption (300), question (500), and notes (2000).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewGuideCap`.
+        @frozen public enum ReviewGuideCap: String, Codable, Hashable, Sendable, CaseIterable {
+            case stops = "stops"
+            case stop_excerpts = "stop_excerpts"
+            case questions = "questions"
+            case excerpt_lines = "excerpt_lines"
+            case title = "title"
+            case summary = "summary"
+            case caption = "caption"
+            case question = "question"
+            case notes = "notes"
+            case unknown = "unknown"
+        }
+        /// Why a ready item carries no guide although its invocation wrote one (mirrors domain.ReviewGuideOmission): file_too_large (the file was over the 64 KiB read bound, so import could not decode it).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReviewGuideOmission`.
+        @frozen public enum ReviewGuideOmission: String, Codable, Hashable, Sendable, CaseIterable {
+            case file_too_large = "file_too_large"
             case unknown = "unknown"
         }
         /// Every coordinate of one immutable persisted review contradiction, including its exact body digest. A recover_review command authorizes only this row; a later contradiction requires another decision.

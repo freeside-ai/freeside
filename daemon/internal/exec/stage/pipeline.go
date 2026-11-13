@@ -132,8 +132,11 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	}
 	var cause domain.FailureCause
 	var refusal handoffSpecRefusal
-	if status == exec.StatusFailed && errors.As(err, &refusal) {
-		cause = domain.FailureCauseInvalidConfiguration
+	if status == exec.StatusFailed {
+		cause = importRefusalCause(err)
+		if errors.As(err, &refusal) {
+			cause = domain.FailureCauseInvalidConfiguration
+		}
 	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
@@ -153,6 +156,19 @@ type handoffSpecRefusal struct{ err error }
 func (r handoffSpecRefusal) Error() string { return r.err.Error() }
 
 func (r handoffSpecRefusal) Unwrap() error { return r.err }
+
+// importRefusalCause classifies an import refusal for the failed outcome it
+// ends in: a refused evidence channel (importer.ErrEvidenceInvalid or
+// ErrEvidenceMediaMismatch) is invalid_evidence. Every other error returns
+// the empty cause, which the outcome records as unknown. The importer is
+// the daemon's own judgment of the export, so the cause is trusted; the
+// summary keeps naming the entry and the rule.
+func importRefusalCause(err error) domain.FailureCause {
+	if errors.Is(err, importer.ErrEvidenceInvalid) || errors.Is(err, importer.ErrEvidenceMediaMismatch) {
+		return domain.FailureCauseInvalidEvidence
+	}
+	return ""
+}
 
 // commit writes the terminal result and reports a write that failed. The
 // failure is retained for Inspect/Collect either way; recording it is the
@@ -929,7 +945,9 @@ func (d *Driver) persistReleasedMaterial(
 		return nil, executionReplay{}, err
 	}
 	if normalized != nil {
-		for index, entry := range out.evidence.Entries {
+		// artifacts follows returnedEvidence, not the manifest, so the
+		// rewrite indexes that list.
+		for index, entry := range returnedEvidence(out.evidence.Entries) {
 			if entry.Label != normalized.label {
 				continue
 			}
@@ -1131,8 +1149,9 @@ func validateReleasedExportRecord(
 		return nil, fmt.Errorf("recovered evidence disagrees with export record: %w",
 			domain.ErrParentKeyMismatch)
 	}
-	artifacts := make([]domain.Digest, 0, len(out.evidence.Entries))
-	for _, entry := range out.evidence.Entries {
+	returned := returnedEvidence(out.evidence.Entries)
+	artifacts := make([]domain.Digest, 0, len(returned))
+	for _, entry := range returned {
 		artifacts = append(artifacts, domain.Digest(entry.Digest))
 	}
 	return artifacts, nil
@@ -1220,6 +1239,16 @@ func readDigestedFile(path string, digest domain.Digest) ([]byte, error) {
 	return body, nil
 }
 
+// returnedEvidence lists, in manifest order, the evidence entries whose
+// digests a stage result names as artifacts: every entry but a review
+// guide the import left out (importer.ReviewGuideOmitted), whose blob is
+// stored for the replay but which no reply or client may name. The live
+// result, its scope-conflict rewrite, and the recovered result all index
+// this one list, so they agree slot for slot.
+func returnedEvidence(entries []export.EvidenceEntry) []export.EvidenceEntry {
+	return slices.DeleteFunc(slices.Clone(entries), importer.ReviewGuideOmitted)
+}
+
 type evidenceNormalization struct {
 	label  string
 	digest domain.Digest
@@ -1267,21 +1296,30 @@ func (d *Driver) persistEvidence(
 				normalized.label, normalizedClaims)
 		}
 	}
-	digests := make([]domain.Digest, 0, len(out.evidence.Entries))
+	// Every blob is stored, since a replay re-imports every entry; only
+	// the returned entries name an artifact.
+	durable := func(entry export.EvidenceEntry) domain.Digest {
+		if normalized != nil && entry.Label == normalized.label {
+			return normalized.digest
+		}
+		return domain.Digest(entry.Digest)
+	}
 	for _, entry := range out.evidence.Entries {
-		digest := domain.Digest(entry.Digest)
-		body, err := readEvidenceBlob(out.dir, digest)
+		body, err := readEvidenceBlob(out.dir, domain.Digest(entry.Digest))
 		if err != nil {
 			return nil, err
 		}
 		if normalized != nil && entry.Label == normalized.label {
-			digest = normalized.digest
 			body = normalized.body
 		}
-		if err := d.artifacts.PutBlob(ctx, digest, body); err != nil {
+		if err := d.artifacts.PutBlob(ctx, durable(entry), body); err != nil {
 			return nil, fmt.Errorf("persist evidence %s: %w", entry.Label, err)
 		}
-		digests = append(digests, digest)
+	}
+	returned := returnedEvidence(out.evidence.Entries)
+	digests := make([]domain.Digest, 0, len(returned))
+	for _, entry := range returned {
+		digests = append(digests, durable(entry))
 	}
 	if err := d.artifacts.RecordClaims(ctx, in.InvocationID, claims); err != nil {
 		return nil, fmt.Errorf("record agent claims: %w", err)
@@ -1960,9 +1998,12 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 		// would leave the same intent to fail every later pass. Record the
 		// stage failure when the durable phase proves that is safe. A running
 		// handoff refuses this transition until ward proves export or loss.
+		// A definitive import refusal from a surviving export reaches here
+		// (recoverExported returns it), so it keeps its cause.
 		if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: exec.StatusFailed,
 			Summary: truncateFailureSummary("recovery failed: " + err.Error()),
+			Cause:   importRefusalCause(err),
 		}); commitErr != nil {
 			return fmt.Errorf("%w: commit recovery failure: %w",
 				ErrRecoveryRetryable, commitErr)
@@ -2217,10 +2258,14 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 				}
 				return nil
 			}
+			var cause domain.FailureCause
+			if status == exec.StatusFailed {
+				cause = importRefusalCause(err)
+			}
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
 				Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
-				ClaudeUsage: result.ClaudeUsage,
+				ClaudeUsage: result.ClaudeUsage, Cause: cause,
 			}); commitErr != nil {
 				return fmt.Errorf("%w: commit recovery result: %w",
 					ErrRecoveryRetryable, commitErr)

@@ -29,6 +29,7 @@ func TestQualifyAlternateFollowsTheFailureClass(t *testing.T) {
 		{"revocation, no valid generation", domain.FailureCauseCredentialRevoked, failed, otherPool, domain.AlternateAgentValidGeneration, false},
 		{"capacity, other route", domain.FailureCauseServiceCapacity, failed, otherRoute, domain.AlternateAgentDifferentRoute, true},
 		{"capacity, same route", domain.FailureCauseServiceCapacity, failed, otherPool, domain.AlternateAgentDifferentRoute, false},
+		{"invalid evidence", domain.FailureCauseInvalidEvidence, failed, validGeneration, "", false},
 		{"unknown cause", domain.FailureCauseUnknown, failed, validGeneration, "", false},
 	}
 	for _, tc := range cases {

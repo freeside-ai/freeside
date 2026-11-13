@@ -103,6 +103,12 @@ func TestDecideFailureDisposition(t *testing.T) {
 			with(otherPool, otherRoute), domain.FailureDispositionAttention,
 		},
 		{
+			// The fault is in what the run wrote, not the agent's
+			// service, so no alternate escapes it.
+			"invalid evidence with alternates", domain.FailureCauseInvalidEvidence,
+			with(otherPool, otherRoute), domain.FailureDispositionAttention,
+		},
+		{
 			"unknown", domain.FailureCauseUnknown,
 			with(otherPool, otherRoute), domain.FailureDispositionAttention,
 		},

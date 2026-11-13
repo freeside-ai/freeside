@@ -57,7 +57,9 @@
 //   - evidence.go the evidence channel: optional manifest intake, magic/
 //     type validation, and routing into labeled agent claims
 //   - review_guide.go the reserved review-guide entry: its strict decoder,
-//     shared with the engine, and the claim's binding to the built commit
+//     shared with the engine, the trims that fit it to its caps, the
+//     omission of a file over its read bound, and the claim's binding to
+//     the built commit
 //   - commit_plan.go the opaque plan intake, tolerant decoded-string secret
 //     pass, strict V1 validation, exact-cover resolution, and tree-order checks
 //   - message.go the built-in versioned publishing-message screening rules

@@ -58,15 +58,21 @@ func readyReviewGuideItem(t *testing.T) domain.AttentionItem {
 		},
 		Questions: []string{},
 	}
+	stop, excerpt := 0, 0
+	item.ReviewGuideNotice = &domain.ReviewGuideNotice{Trims: []domain.ReviewGuideTrim{{
+		Cap: domain.ReviewGuideCapExcerptLines, Stop: &stop, Excerpt: &excerpt,
+		Limit: domain.MaxReviewExcerptLines, Found: 116,
+	}}}
 	if err := item.Validate(); err != nil {
 		t.Fatalf("fixture item: %v", err)
 	}
 	return item
 }
 
-// TestReadyItemReviewGuideRoundTripsAndLegacyRowsDecode: a guide survives
-// put, get, and list unchanged, and a row stored before the field existed,
-// with no review_guide key in its body, decodes to a nil guide.
+// TestReadyItemReviewGuideRoundTripsAndLegacyRowsDecode: a guide and its
+// notice survive put, get, and list unchanged, and a row stored before the
+// fields existed, with no review_guide or review_guide_notice key in its
+// body, decodes to a nil guide and notice.
 func TestReadyItemReviewGuideRoundTripsAndLegacyRowsDecode(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -101,6 +107,9 @@ func TestReadyItemReviewGuideRoundTripsAndLegacyRowsDecode(t *testing.T) {
 		if decoded.ReviewGuide == nil || !reflect.DeepEqual(*decoded.ReviewGuide, *item.ReviewGuide) {
 			t.Fatalf("review guide = %+v, want %+v", decoded.ReviewGuide, item.ReviewGuide)
 		}
+		if decoded.ReviewGuideNotice == nil || !reflect.DeepEqual(*decoded.ReviewGuideNotice, *item.ReviewGuideNotice) {
+			t.Fatalf("review guide notice = %+v, want %+v", decoded.ReviewGuideNotice, item.ReviewGuideNotice)
+		}
 	}
 	pretty, err := json.MarshalIndent(got, "", "  ")
 	if err != nil {
@@ -109,14 +118,14 @@ func TestReadyItemReviewGuideRoundTripsAndLegacyRowsDecode(t *testing.T) {
 	golden.Assert(t, "attention_item_card_review_guide", append(pretty, '\n'))
 
 	if _, err := st.db.ExecContext(ctx,
-		`UPDATE attention_items SET body = json_remove(body, '$.review_guide') WHERE id = ?`, item.ID,
+		`UPDATE attention_items SET body = json_remove(body, '$.review_guide', '$.review_guide_notice') WHERE id = ?`, item.ID,
 	); err != nil {
 		t.Fatal(err)
 	}
 	got, listed = read(t)
 	for _, decoded := range []domain.AttentionItem{got, listed} {
-		if decoded.ReviewGuide != nil {
-			t.Fatalf("legacy row review guide = %+v, want nil", decoded.ReviewGuide)
+		if decoded.ReviewGuide != nil || decoded.ReviewGuideNotice != nil {
+			t.Fatalf("legacy row review guide = %+v, notice %+v, want nil", decoded.ReviewGuide, decoded.ReviewGuideNotice)
 		}
 	}
 }

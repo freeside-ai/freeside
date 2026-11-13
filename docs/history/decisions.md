@@ -3956,3 +3956,23 @@ Nothing in this revision is built yet: #3155 builds it.
 
 (Owner decision of 2026-11-12 on #3121;
 [decision note](../../devlog/2026-11-12-1107-macos-job-loopback-ports.md).)
+
+## Revision 123 ("A Follow-Up Filing May Carry an Authored Kind Label"):
+
+1. **A follow-up filing may carry one `kind:*` label the authoring site
+   chose from a fixed enum** (Section
+   [5.17](../plan.md#517-follow-up-issue-filing)). The finding adjudicator's
+   follow-up authoring site drafts the work-unit form's fields and names a
+   kind, feature, fix, or chore; a fixed table in code maps it to its label,
+   and the gate re-derives the whole label set from policy and the stored
+   kind on admission and on every read. A value outside the enum is refused,
+   and a filing with no authored kind carries no kind label. This narrows
+   that section's "labels ... never from proposal text". `kind:contract` is
+   outside the enum, because a contract unit invokes contract review and
+   the planner assigns it. Rejected: leaving every authored filing
+   unlabeled, which leaves the planner to classify each one by hand; and
+   letting the model name any label, which lets proposal text choose
+   policy.
+
+(Owner decision of 2026-11-12 on #3132, recorded in #3148's contract;
+[decision note](../../devlog/2026-11-13-1119-follow-up-filing-author.md).)

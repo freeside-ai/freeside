@@ -4165,6 +4165,9 @@ components:
         What went wrong in a failed invocation, in a vocabulary every
         invocation lane shares. It says nothing about what to do next.
         unknown is a real member: nothing positively classified the failure.
+        invalid_evidence: import refused what the run wrote to its evidence
+        channel (a malformed entry, or bytes that are not the declared
+        media type), so no other agent escapes it.
       enum:
         - quota
         - credential_expired
@@ -4174,6 +4177,7 @@ components:
         - invalid_configuration
         - contract_contradiction
         - memory_limit
+        - invalid_evidence
         - unknown
 
     InterpretationFailureCause:
@@ -7672,6 +7676,7 @@ components:
         - agent_question
         - review_diminishing
         - review_guide
+        - review_guide_notice
         - item_version
         - interruption_class
         - conversation_id
@@ -7965,6 +7970,15 @@ components:
             a ready_for_final_review item whose invocation wrote one; null on
             every other type and on a ready item without a guide, so a client
             must render the item without it.
+        review_guide_notice:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewGuideNotice"
+          description: >
+            Why the ready item's guide is shorter than its invocation wrote
+            it, or missing although the invocation wrote one. Null on every
+            other type, on a ready item whose guide was within its caps, and
+            on one with no guide written.
         item_version:
           type: integer
           minimum: 1
@@ -8186,6 +8200,7 @@ components:
         agent_question: null
         review_diminishing: null
         review_guide: null
+        review_guide_notice: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -9617,6 +9632,15 @@ components:
         or unresolved_reason. The file carries no version field (the
         reserved label and path identify the format), and import rejects
         unknown fields. String caps count Unicode code points.
+
+        A guide over a size cap still reaches the item: import keeps the
+        first stops, excerpts, and questions up to their count caps, the
+        first 80 lines of an over-long range, and cuts an over-long title,
+        summary, caption, question, or notes to its cap, ending in "…".
+        The item's review_guide_notice records each trim. A file over the
+        64 KiB read bound is left out, and the notice says so. Every other
+        fault, including a malformed range or an over-long path, still
+        fails the run.
       required: [head_sha, claim_digest, stops, questions, notes]
       properties:
         head_sha:
@@ -9742,6 +9766,92 @@ components:
         - range_out_of_file
         - binary
         - too_large
+        - unknown
+
+    ReviewGuideNotice:
+      type: object
+      description: >
+        Why a ready item's guide is shorter than its invocation wrote it,
+        or missing (mirrors domain.ReviewGuideNotice). The daemon derives it
+        at import; nothing an agent or client writes sets it. Exactly one of
+        omission and trims is set: omission when the guide was left out and
+        the item's review_guide is null, a non-empty trims beside the guide
+        the trims shortened. trims is [] beside an omission.
+      required: [omission, trims]
+      properties:
+        omission:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewGuideOmission"
+        trims:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewGuideTrim"
+
+    ReviewGuideTrim:
+      type: object
+      description: >
+        One size cap import trimmed the guide to (mirrors
+        domain.ReviewGuideTrim), in the guide's reading order. stop,
+        excerpt, and question are 0-based indexes into the stored guide,
+        set exactly where the cap applied: stop for stop_excerpts, title,
+        and summary; stop and excerpt for excerpt_lines and caption;
+        question for question; none for stops, questions, and notes. found
+        is what the agent wrote (a count, a span in lines, or a length in
+        code points) and limit what was kept; found is greater than limit.
+        A trim inside a stop or question that a count cap dropped is not
+        recorded.
+      required: [cap, stop, excerpt, question, limit, found]
+      properties:
+        cap:
+          $ref: "#/components/schemas/ReviewGuideCap"
+        stop:
+          type: integer
+          minimum: 0
+          nullable: true
+        excerpt:
+          type: integer
+          minimum: 0
+          nullable: true
+        question:
+          type: integer
+          minimum: 0
+          nullable: true
+        limit:
+          type: integer
+          minimum: 1
+        found:
+          type: integer
+          minimum: 2
+
+    ReviewGuideCap:
+      type: string
+      description: >
+        A review guide size cap (mirrors domain.ReviewGuideCap): stops (12
+        stops), stop_excerpts (4 excerpts in a stop), questions (8
+        questions), excerpt_lines (80 lines in a range), and the code-point
+        caps title (120), summary (2000), caption (300), question (500),
+        and notes (2000).
+      enum:
+        - stops
+        - stop_excerpts
+        - questions
+        - excerpt_lines
+        - title
+        - summary
+        - caption
+        - question
+        - notes
+        - unknown
+
+    ReviewGuideOmission:
+      type: string
+      description: >
+        Why a ready item carries no guide although its invocation wrote one
+        (mirrors domain.ReviewGuideOmission): file_too_large (the file was
+        over the 64 KiB read bound, so import could not decode it).
+      enum:
+        - file_too_large
         - unknown
 
     ReviewRecoveryBinding:

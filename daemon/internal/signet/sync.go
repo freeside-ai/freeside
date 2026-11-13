@@ -2600,6 +2600,11 @@ func normalizeAttentionItem(item domain.AttentionItem) domain.AttentionItem {
 		}
 		item.ReviewGuide = &guide
 	}
+	if item.ReviewGuideNotice != nil {
+		notice := *item.ReviewGuideNotice
+		notice.Trims = nonNilSlice(slices.Clone(notice.Trims))
+		item.ReviewGuideNotice = &notice
+	}
 	return item
 }
 

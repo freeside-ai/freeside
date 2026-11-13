@@ -87,6 +87,8 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"ReviewAttention":            enumStrings(domain.AllReviewAttentions),
 		"ReviewExcerptSide":          enumStrings(domain.AllReviewExcerptSides),
 		"ReviewExcerptUnresolved":    enumStrings(domain.AllReviewExcerptUnresolved),
+		"ReviewGuideCap":             enumStrings(domain.AllReviewGuideCaps),
+		"ReviewGuideOmission":        enumStrings(domain.AllReviewGuideOmissions),
 		"EvidenceMediaType":          enumStrings(domain.AllEvidenceMediaTypes),
 		"EvidenceSource":             enumStrings(domain.AllEvidenceSources),
 		"EvidenceAvailability":       enumStrings(domain.AllEvidenceAvailabilities),

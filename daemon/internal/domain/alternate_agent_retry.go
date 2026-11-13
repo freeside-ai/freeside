@@ -58,7 +58,7 @@ func QualifyAlternate(cause FailureCause, facts FailureFacts, alt FailureAlterna
 	case FailureCauseServiceCapacity:
 		return AlternateAgentDifferentRoute, facts.Route != "" && alt.Route != "" && alt.Route != facts.Route
 	case FailureCauseProviderUnavailable, FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
-		FailureCauseMemoryLimit, FailureCauseUnknown:
+		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseUnknown:
 	}
 	return "", false
 }

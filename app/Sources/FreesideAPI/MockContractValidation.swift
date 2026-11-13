@@ -695,6 +695,11 @@ enum MockContractValidation {
         {
             return breach
         }
+        if let notice = item.review_guide_notice?.value1,
+            let breach = reviewGuideNoticeBreach(notice, on: item)
+        {
+            return breach
+        }
         if let failure = item.execution_failure?.value1 {
             if item._type != .execution_failure {
                 return "execution_failure facts on a different item type"
@@ -1253,6 +1258,64 @@ enum MockContractValidation {
                 }
                 if let text = excerpt.text, text.utf8.count > 8192 {
                     return "review_guide excerpt text exceeds 8 KiB"
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Mirrors domain.AttentionItem.validateReviewGuideNotice and
+    /// ReviewGuideNotice.Validate: the notice rides only a ready item, holds
+    /// exactly one of an omission (beside no guide) and non-empty trims
+    /// (beside the guide they shortened), and each trim carries the indexes
+    /// its cap applies at, naming entries the guide has, over a positive
+    /// limit.
+    private static func reviewGuideNoticeBreach(
+        _ notice: Components.Schemas.ReviewGuideNotice,
+        on item: Components.Schemas.AttentionItem
+    ) -> String? {
+        if item._type != .ready_for_final_review {
+            return "review_guide_notice on a different item type"
+        }
+        let omitted = notice.omission != nil
+        if omitted == !notice.trims.isEmpty {
+            return "review_guide_notice must carry exactly one of omission and trims"
+        }
+        if notice.omission?.value1 == .unknown {
+            return "review_guide_notice with an unknown omission"
+        }
+        if omitted == (item.review_guide != nil) {
+            return omitted
+                ? "review_guide_notice omission beside a review_guide"
+                : "review_guide_notice trims beside no review_guide"
+        }
+        guard let guide = item.review_guide?.value1 else { return nil }
+        for trim in notice.trims {
+            let wants: (stop: Bool, excerpt: Bool, question: Bool)
+            switch trim.cap {
+            case .stops, .questions, .notes: wants = (false, false, false)
+            case .stop_excerpts, .title, .summary: wants = (true, false, false)
+            case .excerpt_lines, .caption: wants = (true, true, false)
+            case .question: wants = (false, false, true)
+            case .unknown: return "review_guide_notice trim with an unknown cap"
+            }
+            if (trim.stop != nil) != wants.stop || (trim.excerpt != nil) != wants.excerpt
+                || (trim.question != nil) != wants.question
+            {
+                return "review_guide_notice trim indexes do not match its cap"
+            }
+            if trim.limit < 1 || trim.found <= trim.limit {
+                return "review_guide_notice trim must find more than a positive limit"
+            }
+            if let question = trim.question, !guide.questions.indices.contains(question) {
+                return "review_guide_notice trim names a question the guide lacks"
+            }
+            if let stop = trim.stop {
+                guard guide.stops.indices.contains(stop) else {
+                    return "review_guide_notice trim names a stop the guide lacks"
+                }
+                if let excerpt = trim.excerpt, !guide.stops[stop].excerpts.indices.contains(excerpt) {
+                    return "review_guide_notice trim names an excerpt the stop lacks"
                 }
             }
         }

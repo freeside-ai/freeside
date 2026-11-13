@@ -801,6 +801,16 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 			domain.ErrParentKeyMismatch,
 		)
 	}
+	// The import's notice rides in the authorized import result; the guide
+	// beside it must be the one it describes: none for an omission, and the
+	// trimmed guide for trims.
+	if notice := checkpoint.Imported.ReviewGuideNotice; notice != nil &&
+		(notice.Validate() != nil || (notice.Omission != nil) == (checkpoint.ReviewGuide != nil)) {
+		return productionVerificationCheckpoint{}, false, fmt.Errorf(
+			"production verification checkpoint review guide notice disagrees with its guide: %w",
+			domain.ErrParentKeyMismatch,
+		)
+	}
 	for _, artifact := range checkpoint.Artifacts {
 		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			// A transient blob fault stays retryable; only a digest mismatch or

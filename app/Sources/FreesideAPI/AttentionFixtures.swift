@@ -403,6 +403,35 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The guide fixture as the daemon stores it after trimming the agent's
+    /// guide to its caps: 13 stops cut to 12 and the first stop's first
+    /// excerpt cut from 116 lines to 80. Mirrors the daemon's
+    /// attention_item_ready_review_guide_trimmed golden notice.
+    public static func readyWithTrimmedReviewGuide() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = readyWithReviewGuide()
+        snapshot.item.id = "item-ready-review-guide-trimmed"
+        snapshot.item.review_guide_notice = .init(
+            value1: .init(
+                omission: nil,
+                trims: [
+                    .init(cap: .stops, limit: 12, found: 13),
+                    .init(cap: .excerpt_lines, stop: 0, excerpt: 0, limit: 80, found: 116),
+                ]))
+        return snapshot
+    }
+
+    /// A ready item whose agent wrote a guide over the 64 KiB read bound:
+    /// the daemon left it out, so the item carries no guide and no guide
+    /// claim, only the notice. Mirrors the daemon's
+    /// attention_item_ready_review_guide_omitted golden.
+    public static func readyWithOmittedReviewGuide() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready-review-guide-omitted"
+        snapshot.item.review_guide_notice = .init(
+            value1: .init(omission: .init(value1: .file_too_large), trims: []))
+        return snapshot
+    }
+
     public static func scopeConflictQuestion() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .agent_question)
         snapshot.item.id = "item-scope-conflict"
@@ -1074,6 +1103,21 @@ public enum AttentionFixtures {
                 enrollment: UsageFixtures.readingSecondEnrollmentID, pool: "claude-team-pool", harness: .claude_code,
                 model: "claude-opus-5-5", qualification: .different_pool)
         ]
+        return snapshot
+    }
+
+    /// The implementation failure as an import refusal of what the run wrote
+    /// to its evidence channel (#3180): the cause names invalid evidence,
+    /// and the card offers no other agent or capabilities, since neither
+    /// escapes a fault in the run's own output.
+    public static func invalidEvidenceFailure() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .execution_failure)
+        snapshot.item.id = "item-execution_failure-invalid_evidence"
+        snapshot.item.execution_failure?.value1.cause = .invalid_evidence
+        snapshot.item.reason =
+            "evidence entry freeside.review-guide: evidence manifest failed validation: review guide stop 1: excerpt 0: line range 0-12 starts before line 1"
+        snapshot.item.execution_failure?.value1.offered_manifests = nil
+        snapshot.item.requested_decision = [.retry, .discuss, .stop]
         return snapshot
     }
 
