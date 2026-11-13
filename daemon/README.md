@@ -5768,9 +5768,13 @@ per task, whether its specification runs on the specifier's lineup agent
 only when the specifier's lineup line has an escalated counterpart, the task
 has no triage record and no specifier line (an operator's line, even a
 cleared one, skips it), and no run of the task has admitted its specifier.
-It sends the project's repository name and the task's source as the task
-namer reads it: the issue's title, body, and label names, or the submitted
-text. Its default criteria are code-owned (`internal/inference/triager_prompt.md`).
+It sends the project's repository name and the task's source: the issue's
+title, body, and label names for an issue-subject task, or for a submitted
+task whose text is exactly one canonical issue URL in the managed
+repository (fetched by the project's repository ID, never the submitted
+URL); otherwise the submitted text. The task namer still reads such a
+submission as its text. Its default criteria are code-owned
+(`internal/inference/triager_prompt.md`).
 The task's timeline shows every outcome. A failed call, an unreadable
 source, a refused answer, a spent budget, and a lineup with no triager line
 each escalate, so an unavailable triager costs quota on the larger model,
