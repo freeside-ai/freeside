@@ -282,8 +282,9 @@ printf 'called\n' >"${STUB_CASE_DIR:?}/xcodebuild-called"
 printf '%s\n' "$@" >"$STUB_CASE_DIR/xcodebuild-args"
 if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
     built_app="$STUB_CASE_DIR/Build/Build/Products/Release/FreesideMac.app"
-    mkdir -p "$built_app/Contents"
+    mkdir -p "$built_app/Contents/MacOS"
     printf 'new client\n' >"$built_app/Contents/marker"
+    cp "$STUB_APP_EXECUTABLE" "$built_app/Contents/MacOS/FreesideMac"
     mkdir -p "$built_app/Contents/Library/LaunchAgents"
     cp "$STUB_AGENT_TEMPLATE" \
         "$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
@@ -612,11 +613,43 @@ PLIST
 # drain command does, and running answers -status with the next line of
 # $STUB_CASE_DIR/drain-statuses, repeating the last. STUB_TERM_ON_CANCEL makes
 # the first cancel act as one a second interrupt killed: it signals the
-# installer and fails.
+# installer and fails. snapshot writes a fixed checkpoint, or fails with
+# STUB_SNAPSHOT_FAILS. undo-update records its arguments, refuses as a held
+# daemon lock for its first STUB_UNDO_LOCKED calls, then exits with
+# STUB_UNDO_RC and, on 0, deletes the checkpoint as freesided does.
 STUB_DAEMON=$TMP/freesided-stub
 cat >"$STUB_DAEMON" <<'STUB'
 #!/usr/bin/env bash
 case "${1:-}" in
+snapshot)
+    printf 'snapshot\n' >>"$STUB_CASE_DIR/install-steps"
+    [[ -z "${STUB_SNAPSHOT_FAILS:-}" ]] || exit 1
+    (
+        umask 077
+        printf 'checkpoint\n' >"${!#}"
+    )
+    exit 0
+    ;;
+undo-update)
+    printf '%s\n' "$*" >>"$STUB_CASE_DIR/undo-calls"
+    printf 'undo-update\n' >>"$STUB_CASE_DIR/install-steps"
+    calls=$(wc -l <"$STUB_CASE_DIR/undo-calls")
+    if ((calls <= ${STUB_UNDO_LOCKED:-0})); then
+        echo "freesided undo-update: undo-update: stop the daemon first (lock is held)" >&2
+        exit 1
+    fi
+    rc=${STUB_UNDO_RC:-0}
+    if [[ "$rc" -eq 0 ]]; then
+        while [[ $# -gt 0 ]]; do
+            [[ "$1" != -checkpoint ]] || rm -f "$2"
+            shift
+        done
+        echo "restored the database"
+    else
+        echo "freesided undo-update: refused" >&2
+    fi
+    exit "$rc"
+    ;;
 check-database)
     printf '%s\n' "$@" >"$STUB_CASE_DIR/check-database-args"
     printf 'check-database\n' >>"$STUB_CASE_DIR/install-steps"
@@ -671,6 +704,24 @@ exit 0
 STUB
 chmod +x "$STUB_DAEMON"
 
+# The app executable every stub bundle carries, for the installer's
+# `FreesideMac daemon start|stop`. It records which app ran it (the bundle's
+# marker says old or new client) and fails a start with STUB_APP_START_RC.
+STUB_APP_EXECUTABLE=$TMP/FreesideMac-stub
+export STUB_APP_EXECUTABLE
+cat >"$STUB_APP_EXECUTABLE" <<'STUB'
+#!/usr/bin/env bash
+app=old
+grep -Fq 'new client' "$(dirname "$0")/../marker" && app=new
+printf '%s app %s %s\n' "$app" "$1" "$2" >>"$STUB_CASE_DIR/install-steps"
+if [[ "$2" == start && -n "${STUB_APP_START_RC:-}" ]]; then
+    echo "action=start registration=enabled health=unreachable error=timeout"
+    exit "$STUB_APP_START_RC"
+fi
+echo "action=$2 registration=enabled health=reachable"
+STUB
+chmod +x "$STUB_APP_EXECUTABLE"
+
 pass=0
 fail=0
 skip=0
@@ -721,6 +772,11 @@ begin_case() {
     unset STUB_TERM_ON_CANCEL
     unset STUB_APP_RUNNING
     unset STUB_CHECK_DATABASE_RC
+    unset STUB_SNAPSHOT_FAILS
+    unset STUB_UNDO_LOCKED
+    unset STUB_UNDO_RC
+    unset STUB_APP_START_RC
+    unset FREESIDE_MAC_REOPEN_TIMEOUT
     unset RUN_STATE_ROOT
     echo "case: $CASE"
 }
@@ -865,8 +921,9 @@ inode() {
 
 make_recovery_app() {
     local path=$1
-    mkdir -p "$path/Contents"
+    mkdir -p "$path/Contents/MacOS"
     printf 'old client\n' >"$path/Contents/marker"
+    cp "$STUB_APP_EXECUTABLE" "$path/Contents/MacOS/FreesideMac"
     printf 'fixture\n' >"$path/Contents/Info.plist"
 }
 
@@ -1785,6 +1842,7 @@ export STUB_BUILD_SUCCEEDS=true
 run_installer
 assert_rc 0
 assert_contains "skipped the database check: the prod tier has no database yet"
+assert_contains "no update checkpoint: a first install has no previous app to restore"
 assert_absent "$CASE_DIR/check-database-args"
 
 # Forget what one install run recorded, so a case can install twice and
@@ -1794,7 +1852,7 @@ reset_case_records() {
     rm -f "$CASE_DIR/install-steps" "$CASE_DIR/defaults-calls" \
         "$CASE_DIR/go-args" "$CASE_DIR/go-goflags" "$CASE_DIR/xcodebuild-called" \
         "$CASE_DIR/codesign-verify-count" "$CASE_DIR/drain-calls" \
-        "$CASE_DIR/drain-status-count"
+        "$CASE_DIR/drain-status-count" "$CASE_DIR/undo-calls"
 }
 
 # Install once with the case's daemon, then mark the installed helper as a
@@ -1828,6 +1886,7 @@ install_first_generation
 run_built_installer
 assert_rc 0
 assert_contains "freesided is unchanged; leaving the daemon and its registration as they are"
+assert_contains "no update checkpoint: the daemon is unchanged and keeps running"
 assert_marker_not_deleted
 assert_absent "$CASE_DIR/drain-calls"
 if cmp -s "$CASE_DIR/installed-freesided" "$destination/Contents/Resources/freesided"; then
@@ -1887,6 +1946,8 @@ not_ready() {
         "$blockers"
 }
 READY='{"ready":true,"drain":{"since":"2026-11-12T00:00:00Z","forced":false},"blockers":[],"as_of":"2026-11-12T00:00:01Z"}'
+# The new build's answer once it has started and lifted the drain.
+LIFTED='{"ready":true,"drain":null,"blockers":[],"as_of":"2026-11-12T00:01:00Z"}'
 
 drain_statuses() {
     printf '%s\n' "$@" >"$CASE_DIR/drain-statuses"
@@ -1928,12 +1989,12 @@ export STUB_DRAIN=running
 export STUB_MARKER_SET=true
 export STUB_GIT_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 drain_statuses "$(not_ready 2 execution_launch)" "$(not_ready 2 execution_launch)" \
-    "$(not_ready 1 execution_launch 1 probe)" "$READY"
+    "$(not_ready 1 execution_launch 1 probe)" "$READY" "$READY" "$LIFTED"
 run_built_installer
 assert_rc 0
 assert_steps 'go build' 'drain request' 'drain status' 'drain status' 'drain status' \
-    'drain status' 'defaults read' 'defaults delete' pgrep 'defaults delete' \
-    "open $destination"
+    'drain status' 'defaults read' 'defaults delete' pgrep snapshot 'defaults delete' \
+    "open $destination" 'drain status' 'drain status'
 assert_first_drain_call "drain -db $prod_db"
 before_request=${OUT%%requested a drain*}
 if [[ "$before_request" != "$OUT" &&
@@ -1951,6 +2012,10 @@ fi
 assert_contains "waiting for the daemon to drain: 1 execution_launch, 1 probe"
 assert_contains "the daemon is drained and ready to restart"
 assert_contains "opening the new app, which restarts the drained daemon on the new build"
+assert_contains "checkpointed the prod database"
+assert_contains "the new freesided started and lifted the drain; removed the checkpoint and the previous app"
+assert_absent "$(dirname "$prod_db")/update-checkpoint"
+assert_absent "$destination.install-superseded"
 assert_file_omits "$CASE_DIR/drain-calls" "-cancel"
 assert_file_omits "$CASE_DIR/defaults-calls" " write "
 if cmp -s "$CASE_DIR/freesided" "$destination/Contents/Resources/freesided"; then
@@ -1969,6 +2034,7 @@ run_built_installer
 assert_rc 0
 assert_contains "installed commit: unknown, installed before the commit was recorded"
 assert_contains "no prod daemon is running, so there is nothing to drain"
+assert_contains "no update checkpoint: no prod daemon is running, so no drain marks the update"
 assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete'
 assert_contains "installed $destination"
 
@@ -2011,13 +2077,13 @@ prod_db="$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
 make_recovery_app "$destination"
 export STUB_BUILD_SUCCEEDS=true
 export STUB_DRAIN=running
-drain_statuses "$(not_ready 1 execution_launch)" "$READY"
+drain_statuses "$(not_ready 1 execution_launch)" "$READY" "$LIFTED"
 run_built_installer --force
 assert_rc 0
 assert_contains "requested a forced drain"
 assert_first_drain_call "drain -db $prod_db -force"
 assert_steps 'go build' 'drain force' 'drain status' 'drain status' 'defaults read' \
-    'defaults delete' pgrep 'defaults delete' "open $destination"
+    'defaults delete' pgrep snapshot 'defaults delete' "open $destination" 'drain status'
 
 begin_case "--force does nothing for an unchanged daemon" drain-force-unchanged
 destination=$CASE_DIR/Applications/Freeside.app
@@ -2041,13 +2107,13 @@ destination=$CASE_DIR/Applications/Freeside.app
 export STUB_BUILD_SUCCEEDS=true
 install_first_generation
 export STUB_DRAIN=running
-drain_statuses "$READY"
+drain_statuses "$READY" "$LIFTED"
 run_built_installer
 assert_rc 0
 assert_contains "freesided changed; the daemon restarts on the new build"
 assert_contains "the daemon is drained and ready to restart"
 assert_steps 'go build' 'defaults read' 'drain request' 'drain status' 'defaults read' \
-    'defaults delete' pgrep 'defaults delete' "open $destination"
+    'defaults delete' pgrep snapshot 'defaults delete' "open $destination" 'drain status'
 
 # Each way out between the drain request and a verified new bundle cancels
 # the drain and puts back a marker it deleted, so the old install keeps
@@ -2123,7 +2189,10 @@ run_built_installer
 assert_rc 1
 assert_contains "restored the previous install"
 assert_steps 'go build' 'drain request' 'drain status' 'defaults read' 'defaults delete' \
-    pgrep 'defaults delete' 'drain cancel' 'defaults write'
+    pgrep snapshot 'defaults delete' 'drain cancel' 'defaults write'
+# The rolled-back swap never opened the new app, so the database was never
+# at risk and the checkpoint goes with the rollback.
+assert_absent "$CASE_DIR/home/Library/Application Support/Freeside/daemon/update-checkpoint"
 # The undo runs before the restore, so a failed restore cannot skip it.
 after_cancel=${OUT#*canceled the drain}
 if [[ "$after_cancel" != "$OUT" && "$after_cancel" == *"restored the previous install"* ]]; then
@@ -2132,6 +2201,209 @@ else
     report_failure "the rollback must cancel the drain before it restores the bundle"
 fi
 assert_inode "$destination" "$old_inode" "a rolled-back swap did not restore the installed app"
+
+# The update undo (#3108). A changed daemon that drained is checkpointed
+# before the swap, and the installer waits a bound for the new build to
+# lift the drain. Each case starts from an installed old app and a running
+# daemon that drains at once.
+begin_update_case() {
+    begin_case "$1" "$2"
+    destination=$CASE_DIR/Applications/Freeside.app
+    state_dir="$CASE_DIR/home/Library/Application Support/Freeside/daemon"
+    prod_db=$state_dir/freeside.db
+    checkpoint_dir=$state_dir/update-checkpoint
+    make_recovery_app "$destination"
+    export STUB_BUILD_SUCCEEDS=true
+    export STUB_DRAIN=running
+    export FREESIDE_MAC_REOPEN_TIMEOUT=10
+}
+
+assert_app_is() {
+    if [[ "$(cat "$destination/Contents/marker" 2>/dev/null)" == "$1 client" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "the app at $destination is not the $1 client"
+    fi
+}
+
+assert_mode() {
+    local mode
+    # GNU stat first: its -f reads the file system and succeeds with other
+    # output, while BSD stat rejects -c and falls through.
+    mode=$(stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null)
+    if [[ "$mode" == "$2" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "$1 has mode ${mode:-unknown}, want $2"
+    fi
+}
+
+checkpoint_sha=$(printf 'checkpoint\n' | if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256
+else
+    sha256sum
+fi | awk '{ print $1 }')
+
+# The old daemon stays drained and no new build ever lifts the drain: after
+# the bound (10 seconds, three polls), the installer stops the daemon
+# through the new app, puts the checkpoint back (retrying once while the
+# lock is still held), puts the old app back, starts its daemon, and lifts
+# the drain, then exits nonzero naming why.
+begin_update_case "a new daemon that never lifts the drain is undone" undo-timeout
+export STUB_UNDO_LOCKED=1
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_steps 'go build' 'drain request' 'drain status' 'defaults read' 'defaults delete' \
+    pgrep snapshot 'defaults delete' "open $destination" 'drain status' 'drain status' \
+    'drain status' pgrep 'new app daemon stop' undo-update undo-update \
+    'old app daemon start' 'drain cancel'
+assert_contains "undid the update: the new freesided did not start and lift the drain within 10 seconds"
+assert_contains "changes
+  made after then were discarded"
+assert_file_contains "$CASE_DIR/undo-calls" \
+    "undo-update -db $prod_db -checkpoint $checkpoint_dir/freeside.db -sha256 $checkpoint_sha"
+assert_app_is old
+assert_absent "$destination.install-superseded"
+assert_absent "$destination.install-rejected"
+assert_absent "$checkpoint_dir"
+
+# The new build lifted the drain and then failed: its database may hold
+# work it launched, so nothing is restored and the new daemon starts again.
+begin_update_case "a new daemon that lifted the drain and then failed is started again" undo-lifted
+export STUB_UNDO_RC=3
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "the new build had already lifted the update drain"
+assert_contains "The new daemon was started again"
+if [[ "$(tail -3 "$CASE_DIR/install-steps")" == "$(printf '%s\n' 'new app daemon stop' undo-update 'new app daemon start')" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "install steps end: $(tail -3 "$CASE_DIR/install-steps"), want the stop, the refused undo, and the new start"
+fi
+assert_app_is new
+assert_absent "$destination.install-superseded"
+assert_absent "$checkpoint_dir"
+
+# Any other refusal keeps everything a re-run needs: the owner-only
+# checkpoint, the new freesided, and the previous app.
+begin_update_case "a refused undo keeps the checkpoint and the previous app" undo-refused
+export STUB_UNDO_RC=1
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "the database could not be put back (freesided
+  undo-update exited 1)"
+assert_app_is new
+assert_exists "$destination.install-superseded"
+assert_exists "$checkpoint_dir/swapped"
+assert_exists "$checkpoint_dir/freesided"
+assert_file_contains "$checkpoint_dir/update.env" "CHECKPOINT_SHA256=$checkpoint_sha"
+assert_mode "$checkpoint_dir" 700
+assert_mode "$checkpoint_dir/freeside.db" 600
+
+# An interrupt during the watch leaves the update pending. The re-run
+# resolves it before building anything: the new daemon never reopened, so
+# it undoes the update and stops rather than install the same build again.
+begin_update_case "an interrupted watch is undone by the next run" undo-resume
+export STUB_TERM_ON_SLEEP=true
+drain_statuses "$READY"
+run_built_installer
+assert_rc 130
+assert_contains "re-run the installer to finish checking this update"
+assert_exists "$checkpoint_dir/swapped"
+assert_exists "$destination.install-superseded"
+unset STUB_TERM_ON_SLEEP
+reset_case_records
+run_built_installer
+assert_rc 1
+assert_steps 'drain status' pgrep 'new app daemon stop' undo-update 'old app daemon start' \
+    'drain cancel'
+assert_contains "undid the update: a previous install stopped before the new freesided reopened"
+assert_app_is old
+assert_absent "$checkpoint_dir"
+
+# A run stopped after the database swap never repeats it: the checkpoint is
+# gone, so the re-run skips the stop and the undo and finishes the rest.
+begin_update_case "a re-run after the database was restored never restores it again" \
+    undo-resume-restored
+export STUB_APP_START_RC=4
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "The database and the previous app are back, but its daemon
+  did not start"
+assert_app_is old
+assert_absent "$checkpoint_dir/freeside.db"
+unset STUB_APP_START_RC
+reset_case_records
+run_built_installer
+assert_rc 1
+assert_steps pgrep 'old app daemon start' 'drain cancel'
+assert_contains "undid the update: a previous install stopped before the new freesided reopened"
+assert_absent "$checkpoint_dir"
+
+# A set-aside database means an undo started, so a daemon answering with no
+# drain may run on an empty database it created mid-swap: the re-run
+# finishes the undo instead of keeping that daemon and deleting the
+# checkpoint.
+begin_update_case "a re-run with a set-aside database never reads it as reopened" \
+    undo-resume-set-aside
+export STUB_TERM_ON_SLEEP=true
+drain_statuses "$READY"
+run_built_installer
+assert_rc 130
+unset STUB_TERM_ON_SLEEP
+reset_case_records
+printf 'real data\n' >"$prod_db.update-failed"
+drain_statuses "$LIFTED"
+rm -f "$CASE_DIR/drain-status-count"
+run_built_installer
+assert_rc 1
+assert_steps pgrep 'new app daemon stop' undo-update 'old app daemon start' 'drain cancel'
+assert_contains "undid the update: a previous install stopped before the new freesided reopened"
+assert_app_is old
+
+# A re-run whose new daemon did reopen keeps it, and installs as usual.
+begin_update_case "a re-run whose new daemon reopened cleans up and installs" undo-resume-reopened
+export STUB_TERM_ON_SLEEP=true
+drain_statuses "$READY"
+run_built_installer
+assert_rc 130
+unset STUB_TERM_ON_SLEEP
+reset_case_records
+drain_statuses "$LIFTED" "$READY" "$LIFTED"
+rm -f "$CASE_DIR/drain-status-count"
+run_built_installer
+assert_rc 0
+assert_contains "the previous update's new freesided reopened; removed its checkpoint and the previous app"
+assert_contains "the new freesided started and lifted the drain"
+assert_absent "$checkpoint_dir"
+assert_absent "$destination.install-superseded"
+
+# A checkpoint left before the swap never put the database at risk.
+begin_update_case "a checkpoint left before its swap is removed" undo-stale-checkpoint
+unset STUB_DRAIN
+mkdir -p "$checkpoint_dir"
+printf 'checkpoint\n' >"$checkpoint_dir/freeside.db"
+run_built_installer
+assert_rc 0
+assert_contains "removed an update checkpoint a run left before its swap"
+assert_absent "$checkpoint_dir"
+
+# A failed checkpoint stops the install before the swap, with the drain
+# canceled and nothing left behind.
+begin_update_case "a failed checkpoint stops the install unchanged" undo-snapshot-fails
+export STUB_SNAPSHOT_FAILS=true
+old_inode=$(inode "$destination")
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "could not checkpoint the prod database, so nothing was replaced"
+assert_contains "canceled the drain; the installed daemon keeps serving"
+assert_inode "$destination" "$old_inode" "a failed checkpoint replaced the installed app"
+assert_absent "$checkpoint_dir"
 
 # A state path bearing a JSON metacharacter must bind byte-for-byte. Here the
 # state root carries a literal backslash before `t`; a raw interpolation into the `-json`

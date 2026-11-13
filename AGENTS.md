@@ -712,7 +712,11 @@ directory named before it in the same bullet. All under `daemon/`:
   The pre-update database check joins them: `internal/store/database_copy.go`
   (copies the live database, credentials and all, without reading its
   schema) and `cmd/freesided/check_database.go` (makes, guards, and removes
-  that copy, and decides what of its failures may print).
+  that copy, and decides what of its failures may print). The undo of a
+  failed update joins them: `internal/store/update_undo.go` (the drain-log
+  gate that refuses once the new build lifted the drain, and the file swap
+  that replaces the live database) and `cmd/freesided/undo_update.go`
+  (takes the daemon lock and maps the gate's refusals to exit codes).
 - **Migrations that rewrite data:** `internal/store/migrate.go`,
   `internal/store/migration_*.go`, and any `migrations/*.sql` file that
   updates, moves, or drops existing rows or rebuilds a table. A migration
