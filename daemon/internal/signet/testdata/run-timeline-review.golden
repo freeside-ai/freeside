@@ -50,5 +50,10 @@
     ]
   },
   "billable_cost_so_far": null,
-  "admissions": []
+  "admissions": [],
+  "outcomes": {
+    "posts": [],
+    "findings": [],
+    "complete": true
+  }
 }

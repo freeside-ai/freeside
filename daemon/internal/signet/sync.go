@@ -253,7 +253,8 @@ type WorkUnitCompletionFacts struct {
 }
 
 // RunTimeline is the typed daemon-observation projection read under one
-// server revision. It deliberately carries no free agent-authored text.
+// server revision. Its only free agent-authored text is the bounded finding
+// messages and reasons in Outcomes.
 type RunTimeline struct {
 	AsOfRevision      int64                          `json:"as_of_revision"`
 	AsOf              time.Time                      `json:"as_of"`
@@ -267,6 +268,8 @@ type RunTimeline struct {
 	// Admissions is what ran each admitted invocation of the run, as its
 	// execution or review admission recorded it, in admission order (#979).
 	Admissions []domain.InvocationAdmissionFacts `json:"admissions"`
+	// Outcomes is what the run produced besides its pull request (#3149).
+	Outcomes RunOutcomes `json:"outcomes"`
 }
 
 // ConversationSnapshot is a whole Conversation with its store-stamped sync
@@ -1126,6 +1129,7 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 // gate. The server revision is the upper bound for every returned fact.
 func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimeline, error) {
 	var out RunTimeline
+	var faults []error
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
 		if err != nil {
@@ -1161,12 +1165,23 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		// An outcome that cannot be read is listed as such and never fails
+		// the timeline.
+		var outcomes RunOutcomes
+		outcomes, faults, err = ReadRunOutcomes(ctx, tx, id)
+		if err != nil {
+			return err
+		}
 		observation.Hold = renderHold(observation.Hold)
-		out = runTimeline(observation, state.Revision, time.Now().UTC(), facts)
+		out = runTimeline(observation, state.Revision, time.Now().UTC(), facts, outcomes)
 		return nil
 	})
 	if err != nil {
 		return RunTimeline{}, fmt.Errorf("get run %q timeline: %w", id, err)
+	}
+	// Logged after the read transaction closes, never inside it.
+	for _, fault := range faults {
+		s.logger.Warn("run outcome list incomplete", "run_id", id, "error", fault)
 	}
 	return out, nil
 }
@@ -1386,6 +1401,7 @@ func runSnapshot(
 
 func runTimeline(
 	observation domain.RunObservation, asOfRevision int64, asOf time.Time, facts runProjectionFacts,
+	outcomes RunOutcomes,
 ) RunTimeline {
 	return RunTimeline{
 		AsOfRevision:      asOfRevision,
@@ -1398,6 +1414,7 @@ func runTimeline(
 		Review:            facts.review,
 		BillableCostSoFar: facts.cost,
 		Admissions:        nonNilSlice(facts.admissions),
+		Outcomes:          outcomes,
 	}
 }
 

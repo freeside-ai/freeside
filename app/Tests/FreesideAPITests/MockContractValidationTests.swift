@@ -177,6 +177,39 @@ import Testing
         #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "completion milestone has no fact")
     }
 
+    @Test func runOutcomesMatchDaemonValidation() throws {
+        for timeline in RunFixtures.defaultTimelines() {
+            #expect(MockContractValidation.runOutcomesBreach(timeline.outcomes) == nil)
+        }
+        #expect(MockContractValidation.runOutcomesBreach(nil) == "missing outcome list")
+        let source = RunFixtures.readyOutcomes
+        #expect(Set(source.posts.map(\.state)) == [.completed, .capped])
+        var invalid = source
+        invalid.posts[0].issue_number = nil
+        #expect(
+            MockContractValidation.runOutcomesBreach(invalid) == "outcome post issue disagrees with its state")
+        invalid = source
+        invalid.posts[1].comment_id = nil
+        #expect(
+            MockContractValidation.runOutcomesBreach(invalid) == "outcome post comment disagrees with its state")
+        invalid = source
+        invalid.posts[2].notice = nil
+        #expect(MockContractValidation.runOutcomesBreach(invalid) == "capped outcome post has no notice")
+        invalid = source
+        invalid.posts[2].refusal_reason = nil
+        #expect(
+            MockContractValidation.runOutcomesBreach(invalid) == "outcome post refusal disagrees with its state")
+        invalid = source
+        invalid.posts.append(.init(effect_kind: .issue_comment, finding_id: "finding-x", state: .unreadable))
+        #expect(MockContractValidation.runOutcomesBreach(invalid) == "unreadable outcome post carries details")
+        invalid = source
+        invalid.findings[0].disposition = .unknown
+        #expect(MockContractValidation.runOutcomesBreach(invalid) == "outcome finding was not set aside")
+        invalid = source
+        invalid.findings[0].reason = String(repeating: "a", count: 4097)
+        #expect(MockContractValidation.runOutcomesBreach(invalid) == "outcome finding text over its bound")
+    }
+
     @Test func taskCreationInstantMatchesDaemonValidation() throws {
         var invalid = try #require(TaskFixtures.defaultTasks().first)
         invalid.task.created_at = daemonZeroInstant

@@ -530,7 +530,8 @@ import Testing
             ],
             completion: nil,
             billable_cost_so_far: nil,
-            admissions: [])
+            admissions: [],
+            outcomes: RunFixtures.noOutcomes)
         let legacyTimeline = Components.Schemas.RunTimeline(
             as_of_revision: 12,
             as_of: submittedAt,
@@ -539,7 +540,8 @@ import Testing
             invocations: [],
             completion: nil,
             billable_cost_so_far: nil,
-            admissions: [])
+            admissions: [],
+            outcomes: RunFixtures.noOutcomes)
         let server = MockServer(
             runs: [observed, legacy],
             timelines: [observedTimeline, legacyTimeline])

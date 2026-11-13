@@ -194,7 +194,8 @@ enum TaskStageFixtures {
                     .init(
                         as_of_revision: 12, as_of: RunFixtures.screenshotInstant, run_id: run.run_id,
                         milestones: run.milestones.reversed(), invocations: [],
-                        review: .init(value1: .init(rounds: $0)), admissions: [])
+                        review: .init(value1: .init(rounds: $0)), admissions: [],
+                        outcomes: RunFixtures.noOutcomes)
                 }
             }
         }

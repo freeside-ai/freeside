@@ -3567,6 +3567,11 @@ components:
         A computed, typed daemon-observation timeline for one run. Review facts
         are separate from retained reviewer output, which has its own
         authenticated route. Stage labels come from the Run aggregate.
+        outcomes is what the run posted or tried to post and the findings it
+        set aside; every daemon that has the list serves it, empty or not.
+        It is optional so an app still reads the timeline from a daemon
+        built before the list existed, where an absent list is unknown, not
+        empty.
       required:
         [as_of_revision, as_of, run_id, milestones, hold, invocations,
          completion, review, billable_cost_so_far, admissions]
@@ -3618,6 +3623,8 @@ components:
             invocation_id. Only the run timeline carries it.
           items:
             $ref: "#/components/schemas/InvocationAdmissionFacts"
+        outcomes:
+          $ref: "#/components/schemas/RunOutcomes"
       example:
         as_of_revision: 42
         as_of: "2026-01-02T03:14:06Z"
@@ -3652,6 +3659,169 @@ components:
           invocations: 1
           complete: true
         admissions: []
+        outcomes:
+          posts:
+            - effect_kind: follow_up_filing
+              finding_id: "finding-1"
+              state: completed
+              repository:
+                repo: "freeside-ai/freeside"
+                repository_id: 4242
+              issue_number: 3201
+              comment_id: null
+              refusal_reason: null
+              notice: null
+            - effect_kind: issue_comment
+              finding_id: "finding-2"
+              state: capped
+              repository:
+                repo: "freeside-ai/freeside"
+                repository_id: 4242
+              issue_number: 3188
+              comment_id: null
+              refusal_reason: precondition_failed
+              notice:
+                code: "issue_comment_capped"
+                reason: "Issue comment for proposal instance pi-2 was not posted: its run already has 2 filings and comments, the follow_up_filing.max_per_run cap of 2."
+          findings:
+            - finding_id: "finding-3"
+              disposition: declined
+              round: 2
+              external: false
+              message: "The retry loop has no upper bound."
+              reason: "The caller already bounds retries."
+          complete: true
+
+    RunOutcomes:
+      type: object
+      description: >
+        What a run produced besides its pull request: each follow-up issue it
+        filed or proposed, each issue comment it posted or proposed, and each
+        finding whose latest disposition set it aside. Read from the
+        proposal, intent, and disposition records and the notices the filer
+        and comment dispatcher raised; it decides nothing. Only the run
+        timeline carries it. complete is false when part of the list could
+        not be read; the parts that could are still listed, and an
+        unreadable post is listed as unreadable.
+      required: [posts, findings, complete]
+      properties:
+        posts:
+          type: array
+          description: One entry per follow-up filing or issue comment proposal of the run.
+          items:
+            $ref: "#/components/schemas/RunOutcomePost"
+        findings:
+          type: array
+          description: >
+            One entry per finding whose latest disposition is declined or
+            deferred: the run's own review findings as they stand after its
+            latest round, then its external findings.
+          items:
+            $ref: "#/components/schemas/RunOutcomeFinding"
+        complete:
+          type: boolean
+
+    RunOutcomePostState:
+      type: string
+      description: >
+        Where one follow-up filing or issue comment stands. pending: nothing
+        final yet (the card is open, or the proposal is approved, on its card
+        or by policy, and the post isn't finished). card_declined: a person
+        declined the card. withdrawn: the post will never be sent (no
+        approval and no open card, or nothing sent when the run's workflow
+        closed). completed:
+        the issue or comment exists and is in the ledger. refused: the post
+        ended refused. capped: a refusal its notice says a cap caused.
+        ambiguous: the create may have reached GitHub and no issue or comment
+        is recorded. unreadable: the daemon could not read the proposal,
+        because its stored rows fail the daemon's checks or the read failed.
+      enum: [pending, card_declined, withdrawn, completed, refused, capped, ambiguous, unreadable, unknown]
+
+    RunOutcomePost:
+      type: object
+      description: >
+        One follow-up filing or issue comment proposal of the run.
+        effect_kind is follow_up_filing or issue_comment. finding_id and
+        repository are null only when state is unreadable. issue_number is
+        the filed issue once a filing completes, and the issue a comment
+        targets in any readable state; comment_id is set once a comment
+        completes. refusal_reason is the ledger's reason for a refused or
+        capped post. notice is the notice that explains a refused, capped,
+        or ambiguous outcome, when one was raised.
+      required: [effect_kind, finding_id, state, repository, issue_number, comment_id, refusal_reason, notice]
+      properties:
+        effect_kind:
+          $ref: "#/components/schemas/EffectKind"
+        finding_id:
+          type: string
+          minLength: 1
+          nullable: true
+        state:
+          $ref: "#/components/schemas/RunOutcomePostState"
+        repository:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ProjectRepository"
+        issue_number:
+          type: integer
+          minimum: 1
+          nullable: true
+        comment_id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        refusal_reason:
+          type: string
+          nullable: true
+          description: Why the intent ended refused. Matches domain.AllFollowUpFilingRefusalReasons.
+          enum: [definite_rejection, retry_bound_spent, precondition_failed, null, unknown]
+        notice:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunOutcomeNotice"
+
+    RunOutcomeNotice:
+      type: object
+      description: >
+        The code and text of the advisory notice the filer or comment
+        dispatcher raised for a post's terminal outcome.
+      required: [code, reason]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+
+    RunOutcomeFinding:
+      type: object
+      description: >
+        One finding whose latest disposition is declined or deferred. round
+        is the round that disposition was recorded in, or the round that
+        found a fix reversed. message is the finding's message and reason
+        the disposition's reason: agent or reviewer text, each cut to 4096
+        bytes with a " (truncated)" note.
+      required: [finding_id, disposition, round, external, message, reason]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        disposition:
+          type: string
+          enum: [declined, deferred, unknown]
+        round:
+          type: integer
+          minimum: 1
+        external:
+          type: boolean
+          description: True for a finding from an external review on the pull request.
+        message:
+          type: string
+          maxLength: 4096
+        reason:
+          type: string
+          maxLength: 4096
 
     RunReviewFacts:
       type: "object"
