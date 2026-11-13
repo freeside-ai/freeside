@@ -175,3 +175,46 @@ func TestIssueCommentRejectsMixedKindArms(t *testing.T) {
 		}
 	}
 }
+
+// TestEffectGateOn: an absent gate is off, a bool reads as itself, and a
+// value that does not parse turns the gate on.
+func TestEffectGateOn(t *testing.T) {
+	t.Parallel()
+	provenance := domain.KeyProvenance{
+		Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+	}
+	for _, tc := range []struct {
+		name  string
+		value *string
+		want  bool
+	}{
+		{"absent", nil, false},
+		{"true", ptr("true"), true},
+		{"false", ptr("false"), false},
+		{"malformed", ptr("sometimes"), true},
+		{"empty", ptr(""), true},
+		{"loose false spelling", ptr("0"), true},
+		{"capitalized false", ptr("False"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			keys := []domain.PolicyKey{{Key: "paths", Value: "daemon/", Provenance: provenance}}
+			if tc.value != nil {
+				keys = append(keys, domain.PolicyKey{
+					Key: string(domain.WorkflowGateIssueComment), Value: *tc.value, Provenance: provenance,
+				})
+			}
+			policy, err := domain.NewResolvedPolicy("gate-run", keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := domain.EffectGateOn(policy, domain.WorkflowGateIssueComment); got != tc.want {
+				t.Fatalf("EffectGateOn(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+			// Another gate's key never answers for this one.
+			if domain.EffectGateOn(policy, domain.WorkflowGateFollowUpFiling) {
+				t.Fatal("the follow-up filing gate read the issue comment gate's key")
+			}
+		})
+	}
+}

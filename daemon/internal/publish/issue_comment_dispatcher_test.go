@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -195,6 +197,32 @@ const commentBody = "A review finding matches this issue.\n\nFinding: the sync c
 // propose's.
 func (h *filingHarness) proposeComment(run filingRun, finding, issue int, decision domain.Action) domain.ProposalInstance {
 	h.t.Helper()
+	return h.admitComment(run, finding, issue, func(ctx context.Context, tx *store.WriteTx, instance domain.ProposalInstance, created time.Time) error {
+		item, err := signet.OpenIssueCommentItem(ctx, tx, h.blobs, instance.ID, created)
+		if err != nil {
+			return err
+		}
+		return decideCard(ctx, tx, instance, item, decision, created)
+	})
+}
+
+// proposePolicyComment admits the comment as proposeComment does and records
+// its policy approval in place of a card, as the engine does when the run's
+// gates.issue_comment is off.
+func (h *filingHarness) proposePolicyComment(run filingRun, finding, issue int) domain.ProposalInstance {
+	h.t.Helper()
+	return h.admitComment(run, finding, issue, func(ctx context.Context, tx *store.WriteTx, instance domain.ProposalInstance, created time.Time) error {
+		return tx.RecordPolicyIssueCommentApproval(ctx, instance.ID, created)
+	})
+}
+
+// admitComment records the duplicate search and admits the comment proposal,
+// then runs decide on the new instance in the same write.
+func (h *filingHarness) admitComment(
+	run filingRun, finding, issue int,
+	decide func(context.Context, *store.WriteTx, domain.ProposalInstance, time.Time) error,
+) domain.ProposalInstance {
+	h.t.Helper()
 	ctx := context.Background()
 	created := filingAt.Add(time.Hour + time.Duration(finding)*time.Minute)
 	repository := domain.FollowUpFilingRepository{Repo: run.target.Repo, RepositoryID: run.target.RepositoryID}
@@ -238,11 +266,7 @@ func (h *filingHarness) proposeComment(run filingRun, finding, issue int, decisi
 		if err != nil {
 			return err
 		}
-		item, err := signet.OpenIssueCommentItem(ctx, tx, h.blobs, instance.ID, created)
-		if err != nil {
-			return err
-		}
-		return decideCard(ctx, tx, instance, item, decision, created)
+		return decide(ctx, tx, instance, created)
 	}); err != nil {
 		h.t.Fatalf("propose comment %s/%d: %v", run.id, finding, err)
 	}
@@ -618,4 +642,168 @@ func TestIssueCommentPerRunCapCountsFilings(t *testing.T) {
 			t.Fatalf("create requests = %d, want none", h.creates())
 		}
 	})
+}
+
+// assertPostedNotice fails unless the policy-approved comment's posted notice
+// is one open advisory item naming the issue and the posted comment's URL.
+func (h *filingHarness) assertPostedNotice(id domain.ProposalInstanceID, issue int, commentID int64) {
+	h.t.Helper()
+	item := h.commentNotice(id, issueCommentPostedNoticeCode)
+	url := fmt.Sprintf("https://github.com/%s/issues/%d#issuecomment-%d", filingRepo, issue, commentID)
+	if item == nil || item.Type != domain.AttentionSystemHealth || item.Status != domain.StatusOpen ||
+		item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory ||
+		item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != issueCommentPostedNoticeCode ||
+		!strings.Contains(item.Reason, fmt.Sprintf("%s#%d", filingRepo, issue)) ||
+		!strings.Contains(item.Reason, url) || !strings.Contains(item.Reason, string(id)) {
+		h.t.Fatalf("comment %q posted notice = %+v, want one naming %s", id, item, url)
+	}
+}
+
+const issueCommentPostedNoticeCode = "issue_comment_posted"
+
+// TestIssueCommentDispatcherPostsAPolicyApprovedCommentOnce: a comment the
+// policy approved, with no card, posts once across passes and a restart and
+// raises one notice naming the issue and the comment; a card-approved
+// comment raises none.
+func TestIssueCommentDispatcherPostsAPolicyApprovedCommentOnce(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	h.trustComments()
+	run := h.seedRun("run-a", nil, nil)
+	byPolicy := h.proposePolicyComment(run, 0, 41)
+	byCard := h.proposeComment(run, 1, 42, domain.ActionApprove)
+
+	h.mustCommentPass()
+	if h.issueComments.posts != 2 {
+		t.Fatalf("comment posts = %d, want 2", h.issueComments.posts)
+	}
+	on := h.issueCommentsOn(41)
+	if len(on) != 1 || on[0].Body != commentBody {
+		t.Fatalf("comments on issue 41 = %+v, want the policy-approved body once", on)
+	}
+	h.assertPosted(byPolicy.ID, 41, on[0].ID)
+	h.assertPostedNotice(byPolicy.ID, 41, on[0].ID)
+	if item := h.commentNotice(byCard.ID, issueCommentPostedNoticeCode); item != nil {
+		t.Fatalf("card-approved comment raised a posted notice: %+v", item)
+	}
+
+	h.mustCommentPass()
+	h.restart()
+	h.advance(pastSettle)
+	h.mustCommentPass()
+	if h.issueComments.posts != 2 {
+		t.Fatalf("after more passes and a restart: posts = %d, want 2", h.issueComments.posts)
+	}
+	h.assertPostedNotice(byPolicy.ID, 41, on[0].ID)
+}
+
+// TestIssueCommentDispatcherAdoptsAPolicyApprovedPost: a policy-approved post
+// whose response was lost is adopted from the settled listing as a
+// card-approved one is, and the adoption raises the posted notice.
+func TestIssueCommentDispatcherAdoptsAPolicyApprovedPost(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	h.trustComments()
+	run := h.seedRun("run-a", nil, nil)
+	comment := h.proposePolicyComment(run, 0, 41)
+	h.issueComments.responses = []fakeCreateResponse{{Status: http.StatusCreated, Drop: true}}
+
+	_ = h.commentPass()
+	if item := h.commentNotice(comment.ID, issueCommentPostedNoticeCode); item != nil {
+		t.Fatalf("posted notice before the post was proven: %+v", item)
+	}
+	h.restart()
+	h.advance(pastSettle)
+	h.mustCommentPass()
+	on := h.issueCommentsOn(41)
+	if len(on) != 1 || h.issueComments.posts != 1 {
+		t.Fatalf("comments = %+v, posts = %d, want the one committed post", on, h.issueComments.posts)
+	}
+	h.assertPosted(comment.ID, 41, on[0].ID)
+	h.assertPostedNotice(comment.ID, 41, on[0].ID)
+}
+
+// TestIssueCommentDispatcherCapsAPolicyApprovedComment: the per-run cap
+// refuses a policy-approved comment with the capped notice, posts nothing,
+// and raises no posted notice.
+func TestIssueCommentDispatcherCapsAPolicyApprovedComment(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	h.trustComments()
+	run := h.seedRun("run-a", map[string]string{"follow_up_filing.max_per_run": "1"}, nil)
+	first := h.proposeComment(run, 0, 41, domain.ActionApprove)
+	second := h.proposePolicyComment(run, 1, 42)
+
+	h.mustCommentPass()
+	if h.issueComments.posts != 1 {
+		t.Fatalf("comment posts = %d, want 1", h.issueComments.posts)
+	}
+	h.assertPosted(first.ID, 41, h.issueCommentsOn(41)[0].ID)
+	h.assertCommentTerminal(second.ID, domain.FollowUpFilingRefused,
+		domain.FollowUpFilingRefusalPreconditionFailed, "issue_comment_capped")
+	if item := h.commentNotice(second.ID, issueCommentPostedNoticeCode); item != nil {
+		t.Fatalf("capped comment raised a posted notice: %+v", item)
+	}
+}
+
+// TestIssueCommentDispatcherNotesAPolicyApprovedPostAfterClosure: a
+// policy-approved post whose response was lost is adopted after its run's
+// workflow closed, and the adoption still raises the posted notice, because
+// the comment is public whatever the workflow's state.
+func TestIssueCommentDispatcherNotesAPolicyApprovedPostAfterClosure(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	h.trustComments()
+	run := h.seedRun("run-a", nil, nil)
+	comment := h.proposePolicyComment(run, 0, 41)
+	h.issueComments.responses = []fakeCreateResponse{{Status: http.StatusCreated, Drop: true}}
+
+	_ = h.commentPass()
+	publish.CloseWorkflowForTest(t, h.store, run.id, h.now)
+	h.restart()
+	h.advance(pastSettle)
+	h.mustCommentPass()
+	on := h.issueCommentsOn(41)
+	if len(on) != 1 || h.issueComments.posts != 1 {
+		t.Fatalf("comments = %+v, posts = %d, want the one committed post", on, h.issueComments.posts)
+	}
+	h.assertPosted(comment.ID, 41, on[0].ID)
+	h.assertPostedNotice(comment.ID, 41, on[0].ID)
+}
+
+// TestIssueCommentDispatcherPostsPastAnUnreadablePolicyApproval: a
+// policy-approved comment whose run no longer reads fails the pass with its
+// instance named and posts nothing, and a card-approved comment in the same
+// pass still posts.
+func TestIssueCommentDispatcherPostsPastAnUnreadablePolicyApproval(t *testing.T) {
+	t.Parallel()
+	h := newFilingHarness(t)
+	h.trustComments()
+	broken := h.proposePolicyComment(h.seedRun("run-a", nil, nil), 0, 41)
+	approved := h.proposeComment(h.seedRun("run-b", nil, nil), 1, 42, domain.ActionApprove)
+	if err := h.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(),
+		`UPDATE resolved_policies SET body = 'not json' WHERE run_id = 'run-a'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h.open()
+
+	err = h.commentPass()
+	if err == nil || !strings.Contains(err.Error(), string(broken.ID)) {
+		t.Fatalf("pass error = %v, want one naming %q", err, broken.ID)
+	}
+	if h.issueComments.posts != 1 || len(h.issueCommentsOn(41)) != 0 {
+		t.Fatalf("posts = %d, comments on 41 = %+v, want only the card-approved post",
+			h.issueComments.posts, h.issueCommentsOn(41))
+	}
+	h.assertPosted(approved.ID, 42, h.issueCommentsOn(42)[0].ID)
 }

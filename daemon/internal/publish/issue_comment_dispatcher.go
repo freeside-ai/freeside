@@ -29,6 +29,12 @@ import (
 // the trust profile's accepted set is rechecked at the default-branch tip
 // immediately before every post. And a comment creates no issue, so only the
 // per-run cap applies, counted with the run's filings.
+//
+// A comment is approved by a person on its card, or by the policy actor when
+// gates.issue_comment is off for its run (issue #3150); the store's approval
+// read accepts exactly one of the two. A policy-approved comment has no card,
+// so its notices go where the card would have been, and its post raises one
+// notice naming the comment, since no person saw it before it went out.
 
 // Health diagnostic codes for the dispatcher's system_health items.
 const (
@@ -37,12 +43,13 @@ const (
 	issueCommentCappedCode     = "issue_comment_capped"
 	issueCommentStalledCode    = "issue_comment_stalled"
 	issueCommentUnreadableCode = "issue_comment_unreadable"
+	issueCommentPostedCode     = "issue_comment_posted"
 )
 
 const issueCommentItemPrefix = "issue-comment/"
 
-// IssueCommentDispatcher posts the issue comments a human approved, exactly
-// once each, and recovers a post a crash interrupted.
+// IssueCommentDispatcher posts the approved issue comments, exactly once
+// each, and recovers a post a crash interrupted.
 type IssueCommentDispatcher struct {
 	store    *store.Store
 	forge    *forge
@@ -184,12 +191,13 @@ type unreadableComment struct {
 	err error
 }
 
-// discover lists the comments whose proposal card a human approved. It is a
-// pre-filter only: the store re-derives the approval when the intent opens
-// and on every view, so a card that was not an approved comment posts
-// nothing. As the filer's discover does, it walks the accepted approve
-// commands and reads each item's record, so one tampered instance cannot
-// stop every other comment.
+// discover lists the comments whose proposal card a human approved and the
+// comments the policy actor approved. It is a pre-filter only: the store
+// re-derives the approval when the intent opens and on every view, so a card
+// that was not an approved comment posts nothing. As the filer's discover
+// does, it walks the accepted approve commands and reads each item's record,
+// and it reads each policy approval's subject on its own, so one tampered
+// instance cannot stop every other comment.
 func (d *IssueCommentDispatcher) discover(ctx context.Context) ([]approvedComment, []unreadableComment, error) {
 	var comments []approvedComment
 	var unreadable []unreadableComment
@@ -236,6 +244,25 @@ func (d *IssueCommentDispatcher) discover(ctx context.Context) ([]approvedCommen
 			}
 			ref.instanceID = instance.ID
 			comments = append(comments, approvedComment{filingRef: ref, createdAt: instance.CreatedAt})
+		}
+		policyApproved, err := tx.ListPolicyApprovedIssueComments(ctx)
+		if err != nil {
+			return err
+		}
+		for _, approved := range policyApproved {
+			// The subject is the one its card would have had
+			// (signet.OpenIssueCommentItem).
+			ref := filingRef{
+				instanceID: approved.InstanceID, projectID: approved.ProjectID,
+				subject: domain.Subject{
+					Type: domain.SubjectProposalBatch, ID: domain.SubjectID(approved.ProposalBatchID),
+				},
+			}
+			if approved.Err != nil {
+				unreadable = append(unreadable, unreadableComment{ref, approved.Err})
+				continue
+			}
+			comments = append(comments, approvedComment{filingRef: ref, createdAt: approved.CreatedAt})
 		}
 		return nil
 	})
@@ -593,7 +620,7 @@ func (d *IssueCommentDispatcher) dispatch(ctx context.Context, comment approvedC
 	}
 	switch class {
 	case domain.FollowUpFilingResponseSuccess:
-		return d.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return d.recordPosted(ctx, comment, view, result.Comment.ID, func(tx *store.InternalTx) error {
 			_, err := tx.LedgerIssueCommentSuccess(ctx, comment.instanceID, result.Comment.ID, d.now())
 			return err
 		})
@@ -714,7 +741,7 @@ func (d *IssueCommentDispatcher) settle(ctx context.Context, comment approvedCom
 		return d.recordAmbiguous(ctx, comment, view, fmt.Sprintf(
 			"%d comments could be the one this proposal posted", len(candidates)))
 	}
-	err = d.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err = d.recordPosted(ctx, comment, view, candidates[0], func(tx *store.InternalTx) error {
 		_, err := tx.AdoptIssueCommentCandidate(ctx, comment.instanceID, candidates[0], d.now())
 		return err
 	})
@@ -757,6 +784,30 @@ func (d *IssueCommentDispatcher) candidates(
 	return ids, err
 }
 
+// recordPosted runs the ledger write that records a posted comment. For a
+// policy-approved comment it raises the posted notice in the same
+// transaction, so the notice exists exactly when the post is recorded and a
+// crash cannot leave one without the other. The notice is raised even when
+// the run's workflow closed while the post was in flight, because the
+// comment is public either way.
+func (d *IssueCommentDispatcher) recordPosted(
+	ctx context.Context, comment approvedComment, view commentView, commentID int64,
+	ledger func(tx *store.InternalTx) error,
+) error {
+	if !view.approved.ByPolicy {
+		return d.store.WriteInternal(ctx, ledger)
+	}
+	return d.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := ledger(&tx.InternalTx); err != nil {
+			return err
+		}
+		return d.notices.observe(ctx, tx, comment.filingRef, issueCommentPostedCode, fmt.Sprintf(
+			"Freeside posted a comment on %s#%d without asking, because gates.issue_comment is off for its run: https://github.com/%s/issues/%d#issuecomment-%d (proposal instance %s).",
+			view.approved.Repo, view.approved.IssueNumber,
+			view.approved.Repo, view.approved.IssueNumber, commentID, comment.instanceID))
+	})
+}
+
 // refuse records a terminal refusal and its item in one transaction, so a
 // refused comment never exists without the notice that explains it.
 // response, when set, is the rejection the dispatched attempt just observed.
@@ -796,11 +847,17 @@ func (d *IssueCommentDispatcher) recordAmbiguous(ctx context.Context, comment ap
 // longer pass the store's gates, and returns the read error. Nothing more is
 // sent for such a comment: every ledger write re-runs the same gates.
 func (d *IssueCommentDispatcher) reportUnreadable(ctx context.Context, ref filingRef, cause error) error {
+	failed := fmt.Errorf("%w: %q: %w", errIssueCommentUnreadable, ref.instanceID, cause)
+	if ref.projectID == "" {
+		// A policy-approved comment whose subject does not resolve has no
+		// project to raise a notice in; the pass error carries it to the log.
+		return failed
+	}
 	d.notices.hold(ref.instanceID, issueCommentUnreadableCode)
 	err := d.store.Write(ctx, func(tx *store.WriteTx) error {
 		return d.notices.put(ctx, tx, ref, issueCommentUnreadableCode, fmt.Sprintf(
 			"Issue comment for proposal instance %s is stopped: its stored proposal, approval, or ledger rows no longer pass validation, so nothing more is sent to GitHub for it. If a comment request had already been sent, its outcome is not recorded and the comment may exist; check the issue before posting it by hand. If it had begun posting, later comments on the same issue wait until its rows are repaired.",
 			ref.instanceID))
 	})
-	return errors.Join(fmt.Errorf("%w: %q: %w", errIssueCommentUnreadable, ref.instanceID, cause), err)
+	return errors.Join(failed, err)
 }

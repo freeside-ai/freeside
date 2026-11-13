@@ -159,3 +159,20 @@ func GateIssueComment(proposal EffectProposal, repository FollowUpFilingReposito
 	}
 	return nil
 }
+
+// EffectGateOn reads a gates.<effect> switch from a run's resolved policy and
+// reports whether a person must approve the effect. Absent means off, the
+// key's default. Only the exact value "false", the one off value a Workflow
+// layer accepts, turns it off; any other value turns the gate on (plan §3.2),
+// so a configuration typo, or a looser spelling such as "0", never removes a
+// person from the path. The engine reads it to choose between a card and a
+// policy approval, and the store reads it again where a policy approval is
+// written and read.
+func EffectGateOn(policy ResolvedPolicy, key WorkflowPolicyKey) bool {
+	for _, k := range policy.Keys {
+		if k.Key == string(key) {
+			return k.Value != "false"
+		}
+	}
+	return false
+}

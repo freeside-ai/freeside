@@ -220,3 +220,82 @@ func TestIssueCommentTextFallsBackOnAScreenRefusal(t *testing.T) {
 		}
 	}
 }
+
+var commentGateOff = map[string]string{string(domain.WorkflowGateIssueComment): "false"}
+
+// With gates.issue_comment off and the profile accepting the issue_comment
+// set, a matching finding's comment gets a policy approval and no card, and
+// a replay writes nothing more.
+func TestDuplicateSearchMatchWithTheGateOffApprovesByPolicy(t *testing.T) {
+	t.Parallel()
+	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteParkSeparateWork, commentGateOff)
+	seedFollowUpFilingSubject(t, f, true)
+	seedIssueCommentTrust(t, f, true)
+	stubOpenIssues(t, f, http.StatusOK, twoOpenIssues...)
+	scriptDuplicateSearch(f, fake.DuplicateSearchMatch)
+	reconcileFollowUpFiling(t, f, productionReviewPending)
+	acceptFindingAdjudicationItem(t, f, productionReviewItemID(f.task.RunID, 1))
+	artifact := readFollowUpFilingState(t, f, 1).artifact
+	routes := map[domain.FindingID]domain.AdjudicationRoute{f.finding.ID: domain.RouteParkSeparateWork}
+	var revisions [2]int64
+	for pass := range revisions {
+		if err := f.workflow.proposeSeparateWorkFilings(f.ctx, f.task, artifact, routes); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		server, err := f.store.ServerState(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revisions[pass] = server.Revision
+	}
+	state := readFollowUpFilingState(t, f, 1)
+	if revisions[0] != revisions[1] {
+		t.Fatalf("revisions = %v, want no write after the policy approval", revisions)
+	}
+	if len(state.instances) != 1 || len(state.cards) != 0 || len(state.notices) != 0 {
+		t.Fatalf("instances, cards, notices = %d, %d, %d, want 1, 0, 0",
+			len(state.instances), len(state.cards), len(state.notices))
+	}
+	var approved store.ApprovedIssueComment
+	if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+		var err error
+		approved, err = tx.ApprovedIssueComment(f.ctx, state.instances[0].ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !approved.ByPolicy || approved.IssueNumber != 41 || approved.RepositoryID != 123 {
+		t.Fatalf("approved = %+v, want a policy approval on issue 41", approved)
+	}
+}
+
+// A gate value that does not parse keeps the card, as a gate that is on does.
+func TestDuplicateSearchMatchUnderAMalformedGateTakesTheCard(t *testing.T) {
+	t.Parallel()
+	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer,
+		map[string]string{string(domain.WorkflowGateIssueComment): "sometimes"})
+	seedFollowUpFilingSubject(t, f, true)
+	seedIssueCommentTrust(t, f, true)
+	stubOpenIssues(t, f, http.StatusOK, twoOpenIssues...)
+	scriptDuplicateSearch(f, fake.DuplicateSearchMatch)
+	reconcileFollowUpFiling(t, f, productionReviewPassed)
+	assertOneCommentCard(t, f, readFollowUpFilingState(t, f, 1))
+}
+
+// With the gate off, a profile that does not accept the issue_comment set
+// still refuses the comment: the acceptance binds both paths, so there is no
+// card to fall back to.
+func TestDuplicateSearchMatchWithTheGateOffUnderAnUnacceptedProfileRaisesTheNotice(t *testing.T) {
+	t.Parallel()
+	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer, commentGateOff)
+	seedFollowUpFilingSubject(t, f, true)
+	seedIssueCommentTrust(t, f, false)
+	stubOpenIssues(t, f, http.StatusOK, twoOpenIssues...)
+	scriptDuplicateSearch(f, fake.DuplicateSearchMatch)
+	reconcileFollowUpFiling(t, f, productionReviewPassed)
+	state := readFollowUpFilingState(t, f, 1)
+	if len(state.instances) != 0 || len(state.cards) != 0 {
+		t.Fatalf("instances, cards = %d, %d, want 0, 0", len(state.instances), len(state.cards))
+	}
+	assertIssueCommentRefusedNotice(t, f, state)
+}

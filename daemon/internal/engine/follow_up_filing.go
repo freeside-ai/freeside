@@ -20,7 +20,10 @@ import (
 // Follow-up filing proposals (plan §5.17, §7). A finding adjudication that
 // concludes "this is separate work" produces a follow_up_filing proposal and
 // its effect_proposal card, and nothing more: no decision, no approval, and no
-// forge write. A person decides the card.
+// forge write. A person decides the card. That holds with gates.follow_up_filing
+// off too: plan §5.17 lets a filing go without a card only once the trust
+// profile accepts the repository's audited issues workflow set, and nothing
+// builds that set yet, so the run gets one notice saying why (issue #3150).
 //
 // Two conclusions produce one. A deferred disposition does, in the
 // transaction that writes its row. An accepted park_separate_work route does,
@@ -499,7 +502,7 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 		return err
 	}
 	plan.pending = fresh
-	if err := w.allocateFollowUpFilings(ctx, tx, artifact, kind, plan, drafts); err != nil {
+	if err := w.allocateFollowUpFilings(ctx, tx, projectID, artifact, kind, plan, drafts); err != nil {
 		return err
 	}
 	return w.proposeIssueComments(ctx, tx, projectID, artifact, plan, duplicates)
@@ -563,10 +566,12 @@ func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 // allocateFollowUpFilings allocates the planned instances and opens a card
 // for each one this pass inserted, so a decided card is never reopened. An
 // entry with a draft takes the authored text and kind; any other takes the
-// composed text and no kind.
+// composed text and no kind. When the run's gate is off, a pass that inserts
+// a filing also raises the run's one notice that it still takes its card.
 func (w *productionPublicationWorkflow) allocateFollowUpFilings(
 	ctx context.Context,
 	tx *store.WriteTx,
+	projectID domain.ProjectID,
 	artifact domain.FindingAdjudication,
 	kind domain.FollowUpSourceKind,
 	plan followUpFilingPlan,
@@ -574,6 +579,7 @@ func (w *productionPublicationWorkflow) allocateFollowUpFilings(
 ) error {
 	batchID := followUpFilingBatchID(artifact.Digest)
 	now := w.attentionCreatedAt()
+	gated := domain.EffectGateOn(plan.policy, domain.WorkflowGateFollowUpFiling)
 	for _, candidate := range plan.pending {
 		finding, err := tx.GetFinding(ctx, candidate.entry.FindingID)
 		if err != nil {
@@ -616,8 +622,31 @@ func (w *productionPublicationWorkflow) allocateFollowUpFilings(
 		if _, err := signet.OpenFollowUpFilingItem(ctx, tx, w.artifacts, instance.ID, now); err != nil {
 			return err
 		}
+		if !gated {
+			if err := w.recordFollowUpFilingAutonomyRefused(ctx, tx, projectID, artifact.RunID, plan.target.Repo); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// followUpFilingAutonomyRefusedItemID identifies the one notice a run raises when
+// its gate is off and its filings still take their cards.
+func followUpFilingAutonomyRefusedItemID(runID domain.RunID) domain.ItemID {
+	return domain.ItemID("follow-up-filing-autonomy-refused-" + string(runID))
+}
+
+// recordFollowUpFilingAutonomyRefused raises the run's one notice that its
+// follow-up filings take their cards although gates.follow_up_filing is off,
+// and names the precondition that is missing.
+func (w *productionPublicationWorkflow) recordFollowUpFilingAutonomyRefused(
+	ctx context.Context, tx *store.WriteTx, projectID domain.ProjectID, runID domain.RunID, repo string,
+) error {
+	return w.recordRunProposalNotice(ctx, tx, projectID, runID,
+		followUpFilingAutonomyRefusedItemID(runID), "follow_up_filing_autonomy_refused", fmt.Sprintf(
+			"Follow-up issues for run %s still wait for your approval, although gates.follow_up_filing is off. Filing without a card needs the trust profile for %s to accept the repository's audited issues workflows, which an issue Freeside opens would start, and Freeside does not audit that set yet. Each filing has its card.",
+			runID, repo))
 }
 
 // followUpFilingRefusalClass names a refusal no retry can clear: the run has

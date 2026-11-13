@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -20,13 +21,20 @@ import (
 
 // newFollowUpFilingFixture is the adjudication fixture with one located
 // finding the fake adjudicator sends down route, under the given extra policy.
+// The filing and comment gates are on unless policy sets them, so a card is
+// the default path the tests see, as it was before a gate could be off.
 func newFollowUpFilingFixture(
 	t *testing.T, severity domain.FindingSeverity, route domain.AdjudicationRoute, policy map[string]string,
 ) *findingAdjudicationFixture {
 	t.Helper()
+	gated := map[string]string{
+		string(domain.WorkflowGateFollowUpFiling): "true",
+		string(domain.WorkflowGateIssueComment):   "true",
+	}
+	maps.Copy(gated, policy)
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixtureWithOptions(t, severity, location, "low", "high",
-		findingAdjudicationFixtureOptions{note: "producer=fake/test; fixture", policy: policy})
+		findingAdjudicationFixtureOptions{note: "producer=fake/test; fixture", policy: gated})
 	f.writePath(t, f.headRoot)
 	f.workflow.findingAdjudicator = newDeterministicFindingAdjudicator(
 		modelRouteEntry(t, f.finding.ID, route, domain.ConfidenceHigh))
@@ -579,5 +587,45 @@ func TestFollowUpFilingTextScreensEachField(t *testing.T) {
 				t.Fatalf("composed text does not pass its own screen: %v", err)
 			}
 		})
+	}
+}
+
+// With gates.follow_up_filing off, a filing still takes its card, because no
+// trust profile accepts an issues workflow set yet, and the run gets one
+// notice naming that. A replayed pass writes nothing more.
+func TestFollowUpFilingWithTheGateOffKeepsItsCardAndSaysWhy(t *testing.T) {
+	t.Parallel()
+	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteParkSeparateWork,
+		map[string]string{string(domain.WorkflowGateFollowUpFiling): "false"})
+	seedFollowUpFilingSubject(t, f, true)
+	reconcileFollowUpFiling(t, f, productionReviewPending)
+	acceptFindingAdjudicationItem(t, f, productionReviewItemID(f.task.RunID, 1))
+	artifact := readFollowUpFilingState(t, f, 1).artifact
+	routes := map[domain.FindingID]domain.AdjudicationRoute{f.finding.ID: domain.RouteParkSeparateWork}
+	var revisions [2]int64
+	for pass := range revisions {
+		if err := f.workflow.proposeSeparateWorkFilings(f.ctx, f.task, artifact, routes); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		server, err := f.store.ServerState(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revisions[pass] = server.Revision
+	}
+	if revisions[0] != revisions[1] {
+		t.Fatalf("revisions = %v, want no write on the replayed pass", revisions)
+	}
+	state := readFollowUpFilingState(t, f, 1)
+	if len(state.instances) != 1 || len(state.cards) != 1 || len(state.notices) != 1 {
+		t.Fatalf("instances, cards, notices = %d, %d, %d, want 1, 1, 1",
+			len(state.instances), len(state.cards), len(state.notices))
+	}
+	notice := state.notices[0]
+	if notice.ID != followUpFilingAutonomyRefusedItemID(f.task.RunID) || notice.HealthDiagnostic == nil ||
+		notice.HealthDiagnostic.Code != "follow_up_filing_autonomy_refused" ||
+		notice.Posture == nil || *notice.Posture != domain.HealthPostureAdvisory ||
+		!strings.Contains(notice.Reason, "owner/repo") || !strings.Contains(notice.Reason, "issues workflows") {
+		t.Fatalf("notice = %#v, want the run's follow_up_filing_autonomy_refused advisory", notice)
 	}
 }

@@ -4731,8 +4731,7 @@ dispatches without a card when `gates.issue_comment` resolves off (Section
 that acceptance the comment is a definite refusal, never a card, and the
 refusal is recorded beside the finding's deferred disposition. A comment on
 the issue the task is bound to is not this kind and takes no
-`gates.issue_comment` key. Not yet built: #3150 dispatches it without a
-card, and #1435 builds the `issue_comment` audit.
+`gates.issue_comment` key.
 
 ### 5.14 Client Synchronization and Conversations
 
@@ -5364,9 +5363,9 @@ restores `auto_start` eligibility only for the non-Freeside-origin issues it
 admits that pass the intake proof check. Freeside-origin issues stay
 propose-only whatever the profile state.
 
-Not yet built: #3150 dispatches filings and comments without a card, #3145
-builds the Workflow settings pane that turns the gates on, and no unit yet
-builds the `issues` audit, so until one does every filing takes the card.
+Not yet built: no unit builds the `issues` audit, so until one does every
+filing takes the card, with the notice naming the missing acceptance when its
+gate is off.
 
 ### 5.18 The World Model: Post-Merge Recompute and Frontier Projection
 

@@ -29,10 +29,10 @@ import (
 // intent names. A posted-comment row must decode to its key columns and be
 // backed by a ledgered intent whose attempts account for the comment. A row
 // that fails any of that is an error, never an absent answer. Every row the
-// re-gate reads is write-once (the proposal instance, its decision, the
-// deciding command, the item binding, the duplicate search record) or
-// immutable where it matters (a project's repository identity, a run's
-// pinned policy).
+// re-gate reads is write-once (the proposal instance, its decision or policy
+// approval, the deciding command, the item binding, the duplicate search
+// record) or immutable where it matters (a project's repository identity, a
+// run's pinned policy).
 
 const (
 	selectCommentIntentsSQL = `
@@ -59,11 +59,12 @@ FROM posted_issue_comments`
 // that already has an intent returns that intent unchanged, whatever state it
 // has reached.
 //
-// The instance must be an issue comment with a recorded approve decision
-// (ErrIssueCommentNotApproved otherwise). The repository and issue come from
-// the proposal's re-gated target, never from the caller. An issue holds one
-// outstanding intent at a time: while another instance's intent there has no
-// terminal outcome, opening is refused with ErrIssueCommentIssueBusy.
+// The instance must be an issue comment with a recorded approve decision or
+// policy approval (ErrIssueCommentNotApproved otherwise). The repository and
+// issue come from the proposal's re-gated target, never from the caller. An
+// issue holds one outstanding intent at a time: while another instance's
+// intent there has no terminal outcome, opening is refused with
+// ErrIssueCommentIssueBusy.
 func (tx *InternalTx) OpenIssueCommentIntent(
 	ctx context.Context, instanceID domain.ProposalInstanceID, openedAt time.Time,
 ) (domain.IssueCommentIntent, error) {
@@ -714,7 +715,8 @@ func scanPostedIssueComment(row scanner) (domain.PostedIssueComment, error) {
 
 // ApprovedIssueComment is what an approved issue comment instance authorizes,
 // re-derived from current rows: the repository and issue it posts on, the
-// body, and the subject it originates from.
+// body, and the subject it originates from. ByPolicy says the policy actor
+// approved it (gates.issue_comment off) rather than a person on its card.
 type ApprovedIssueComment struct {
 	RepositoryID int64
 	Repo         string
@@ -723,6 +725,7 @@ type ApprovedIssueComment struct {
 	Handle       domain.OpaqueSubjectHandle
 	ProjectID    domain.ProjectID
 	RunID        domain.RunID
+	ByPolicy     bool
 }
 
 // ApprovedIssueComment re-derives what an approved issue comment instance
@@ -738,10 +741,13 @@ func (tx *ReadTx) ApprovedIssueComment(
 // comment instance authorizes. GetProposalInstance re-runs the registry gate
 // and the comment gate (gateIssueComment), which re-reads the duplicate
 // search record and re-derives the issue from it and the repository from the
-// project row; the approval is re-tied to its authoring command and the
-// rendered digest that command decided, as RecordProposalDecision checked on
-// write. ErrIssueCommentNotApproved covers an instance of another effect
-// kind, an undecided one, and a declined one.
+// project row. The approval comes from exactly one recorder: a human approve,
+// re-tied to its authoring command and the rendered digest that command
+// decided, as RecordProposalDecision checked on write; or a policy approval,
+// re-checked against the instance and the run's resolved policy
+// (issueCommentPolicyApproval). Both recorded is corruption and fails closed.
+// ErrIssueCommentNotApproved covers an instance of another effect kind, an
+// undecided one, and a declined one.
 func (tx *ReadTx) approvedIssueComment(
 	ctx context.Context, instanceID domain.ProposalInstanceID,
 ) (ApprovedIssueComment, error) {
@@ -756,7 +762,7 @@ func (tx *ReadTx) approvedIssueComment(
 	if instance.Proposal.Kind != domain.EffectIssueComment || comment == nil {
 		return fail(fmt.Errorf("%w: instance is a %q proposal", domain.ErrIssueCommentNotApproved, instance.Proposal.Kind))
 	}
-	declaration, _, err := tx.ResolveProposalSubject(ctx, comment.SubjectHandle)
+	declaration, policy, err := tx.ResolveProposalSubject(ctx, comment.SubjectHandle)
 	if err != nil {
 		return fail(err)
 	}
@@ -764,31 +770,24 @@ func (tx *ReadTx) approvedIssueComment(
 	if err != nil {
 		return fail(err)
 	}
-	var commandID, action string
-	var selectedDigest sql.NullString
-	err = tx.tx.QueryRowContext(ctx, `SELECT command_id, action, selected_digest
-		FROM effect_proposal_decisions WHERE instance_id = ?`,
-		instanceID).Scan(&commandID, &action, &selectedDigest)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fail(fmt.Errorf("%w: no decision is recorded", domain.ErrIssueCommentNotApproved))
-	}
+	decisions, err := tx.countProposalDecisions(ctx, instanceID)
 	if err != nil {
 		return fail(err)
 	}
-	if domain.Action(action) != domain.ActionApprove {
-		return fail(fmt.Errorf("%w: the recorded decision is %q", domain.ErrIssueCommentNotApproved, action))
-	}
-	command, err := tx.GetCommand(ctx, commandID)
+	policies, err := tx.countIssueCommentPolicyApprovals(ctx, instanceID)
 	if err != nil {
 		return fail(err)
 	}
-	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
+	switch {
+	case decisions > 0 && policies > 0:
+		return fail(fmt.Errorf("%w: both a decision and a policy approval are recorded", errRowInconsistent))
+	case policies > 0:
+		err = tx.issueCommentPolicyApproval(ctx, instance, policy)
+	default:
+		err = tx.humanIssueCommentApproval(ctx, instanceID)
+	}
 	if err != nil {
 		return fail(err)
-	}
-	if command.Action != domain.ActionApprove || boundInstance != instanceID ||
-		!selectedDigest.Valid || domain.Digest(selectedDigest.String) != boundDigest {
-		return fail(fmt.Errorf("%w: approval does not bind its command and digest", errRowInconsistent))
 	}
 	// gateIssueComment, run inside GetProposalInstance, proved the comment's
 	// repository id is the project's and its issue is the search record's
@@ -796,8 +795,41 @@ func (tx *ReadTx) approvedIssueComment(
 	return ApprovedIssueComment{
 		RepositoryID: project.RepositoryID, Repo: project.Repo, IssueNumber: comment.IssueNumber,
 		Body: comment.Body, Handle: comment.SubjectHandle,
-		ProjectID: declaration.ProjectID, RunID: declaration.RunID,
+		ProjectID: declaration.ProjectID, RunID: declaration.RunID, ByPolicy: policies > 0,
 	}, nil
+}
+
+// humanIssueCommentApproval re-ties a comment's recorded decision to its
+// authoring command and the rendered digest that command decided. An
+// undecided or declined comment is ErrIssueCommentNotApproved.
+func (tx *ReadTx) humanIssueCommentApproval(ctx context.Context, instanceID domain.ProposalInstanceID) error {
+	var commandID, action string
+	var selectedDigest sql.NullString
+	err := tx.tx.QueryRowContext(ctx, `SELECT command_id, action, selected_digest
+		FROM effect_proposal_decisions WHERE instance_id = ?`,
+		instanceID).Scan(&commandID, &action, &selectedDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: no decision is recorded", domain.ErrIssueCommentNotApproved)
+	}
+	if err != nil {
+		return err
+	}
+	if domain.Action(action) != domain.ActionApprove {
+		return fmt.Errorf("%w: the recorded decision is %q", domain.ErrIssueCommentNotApproved, action)
+	}
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return err
+	}
+	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	if command.Action != domain.ActionApprove || boundInstance != instanceID ||
+		!selectedDigest.Valid || domain.Digest(selectedDigest.String) != boundDigest {
+		return fmt.Errorf("%w: approval does not bind its command and digest", errRowInconsistent)
+	}
+	return nil
 }
 
 // commentBackingError keeps a missing or unapproved backing row from reading

@@ -12,11 +12,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// Issue comment proposals (plan §7, issue #3147). A follow-up entry whose
-// duplicate search named an open issue gets an issue_comment proposal on that
-// issue in place of a filing, and its effect_proposal card, and nothing more:
-// no decision, no approval, and no forge write. A person decides the card,
-// and the issue comment dispatcher posts only after an approve.
+// Issue comment proposals (plan §5.17, §7, issues #3147 and #3150). A
+// follow-up entry whose duplicate search named an open issue gets an
+// issue_comment proposal on that issue in place of a filing, and no forge
+// write. Who approves it follows gates.issue_comment in the run's resolved
+// policy: with the gate on, or a value that does not parse, it gets its
+// effect_proposal card and a person decides it; with the gate off, the policy
+// actor approves it here and it gets no card. Either way the issue comment
+// dispatcher posts only an approved comment.
 //
 // The comment frames untrusted finding text, and model text from the search,
 // into a post on the repository, so this file is Tier A. What it re-checks:
@@ -117,11 +120,12 @@ func issueCommentsAccepted(ctx context.Context, tx *store.ReadTx, target domain.
 }
 
 // proposeIssueComments writes, in the caller's transaction, one comment
-// proposal and its open card for each duplicate entry, under the filing
-// batch and the entry's admission key: an entry gets a filing or a comment,
-// never both. When the repository's trust profile does not accept its
-// issue_comment workflows, it proposes nothing and raises the run's one
-// notice instead.
+// proposal for each duplicate entry, under the filing batch and the entry's
+// admission key: an entry gets a filing or a comment, never both. Each new
+// proposal gets its open card when the run's gate is on and its policy
+// approval when the gate is off. When the repository's trust profile does not
+// accept its issue_comment workflows, it proposes nothing and raises the
+// run's one notice instead: that acceptance binds both paths (plan §5.5).
 func (w *productionPublicationWorkflow) proposeIssueComments(
 	ctx context.Context,
 	tx *store.WriteTx,
@@ -146,6 +150,7 @@ func (w *productionPublicationWorkflow) proposeIssueComments(
 	batchID := followUpFilingBatchID(artifact.Digest)
 	now := w.attentionCreatedAt()
 	repository := domain.FollowUpFilingRepository{Repo: plan.target.Repo, RepositoryID: plan.target.RepositoryID}
+	gated := domain.EffectGateOn(plan.policy, domain.WorkflowGateIssueComment)
 	for _, duplicate := range duplicates {
 		finding, err := tx.GetFinding(ctx, duplicate.entry.FindingID)
 		if err != nil {
@@ -170,6 +175,12 @@ func (w *productionPublicationWorkflow) proposeIssueComments(
 			return err
 		}
 		if !inserted {
+			continue
+		}
+		if !gated {
+			if err := tx.RecordPolicyIssueCommentApproval(ctx, instance.ID, now); err != nil {
+				return err
+			}
 			continue
 		}
 		if _, err := signet.OpenIssueCommentItem(ctx, tx, w.artifacts, instance.ID, now); err != nil {

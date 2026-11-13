@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -83,11 +84,23 @@ func seedFilingIn(
 	t *testing.T, ctx context.Context, st *store.Store, projectID domain.ProjectID, repo string, repositoryID int64,
 ) filingFixture {
 	t.Helper()
+	return seedFilingWith(t, ctx, st, projectID, repo, repositoryID, nil)
+}
+
+// seedFilingWith is seedFilingIn with extra keys in the run's resolved
+// policy, such as a gate.
+func seedFilingWith(
+	t *testing.T, ctx context.Context, st *store.Store, projectID domain.ProjectID, repo string, repositoryID int64,
+	extra map[string]string,
+) filingFixture {
+	t.Helper()
 	runID := domain.RunID(string(projectID) + "-run")
-	policy := filingPolicy(t, runID, map[string]string{
+	keys := map[string]string{
 		domain.PolicyFollowUpFilingLabels:    "lane:spine, deferral",
 		domain.PolicyFollowUpFilingMilestone: "1B",
-	})
+	}
+	maps.Copy(keys, extra)
+	policy := filingPolicy(t, runID, keys)
 	project := domain.Project{ID: projectID, Repo: repo, RepositoryID: repositoryID}
 	target, err := domain.DeriveFollowUpFilingTarget(project, policy)
 	if err != nil {
