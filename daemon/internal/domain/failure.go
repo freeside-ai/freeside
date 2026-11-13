@@ -32,7 +32,13 @@ const (
 	FailureCauseInvalidConfiguration  FailureCause = "invalid_configuration"
 	FailureCauseContractContradiction FailureCause = "contract_contradiction"
 	FailureCauseMemoryLimit           FailureCause = "memory_limit"
-	FailureCauseUnknown               FailureCause = "unknown"
+	// FailureCauseInvalidEvidence: the import refused the writer's evidence
+	// channel (importer.ErrEvidenceInvalid or ErrEvidenceMediaMismatch), such
+	// as a malformed review guide or content that does not match its declared
+	// media type. The fault is in what the run wrote, not in the agent's
+	// service, so no alternate escapes it and it needs the operator.
+	FailureCauseInvalidEvidence FailureCause = "invalid_evidence"
+	FailureCauseUnknown         FailureCause = "unknown"
 )
 
 // AllFailureCauses lists every valid FailureCause; it is the single
@@ -46,6 +52,7 @@ var AllFailureCauses = []FailureCause{
 	FailureCauseInvalidConfiguration,
 	FailureCauseContractContradiction,
 	FailureCauseMemoryLimit,
+	FailureCauseInvalidEvidence,
 	FailureCauseUnknown,
 }
 
@@ -54,7 +61,7 @@ func (c FailureCause) valid() bool {
 	case FailureCauseQuota, FailureCauseCredentialExpired, FailureCauseCredentialRevoked,
 		FailureCauseServiceCapacity, FailureCauseProviderUnavailable,
 		FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
-		FailureCauseMemoryLimit, FailureCauseUnknown:
+		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseUnknown:
 		return true
 	default:
 		return false
@@ -164,7 +171,7 @@ func DecideFailureDisposition(cause FailureCause, facts FailureFacts) FailureDis
 		return FailureDispositionWait
 	case FailureCauseProviderUnavailable:
 		return FailureDispositionRetrySameAgent
-	case FailureCauseInvalidConfiguration, FailureCauseUnknown:
+	case FailureCauseInvalidConfiguration, FailureCauseInvalidEvidence, FailureCauseUnknown:
 		return FailureDispositionAttention
 	case FailureCauseContractContradiction:
 		return FailureDispositionFailLoud

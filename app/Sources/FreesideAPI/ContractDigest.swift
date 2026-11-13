@@ -5,7 +5,7 @@ public enum APIContract {
     /// "sha256:" plus the lowercase hex SHA-256 of the spec's exact bytes.
     /// It names the contract for diagnosis; compatibility comes from the
     /// level and floor below, never from a digest difference.
-    public static let digest = "sha256:93d57ec89e84aa63253672fa6897396efb50efa83b36eeffdce938bfe123db50"
+    public static let digest = "sha256:466d6cdb717be7b7c5384104ccb3d7211b0bc060f77c7f6ec193d8bea930d0ba"
 
     /// The spec's x-compatibility-level: the count of changes that broke
     /// apps built before them. A daemon whose reported floor is above it

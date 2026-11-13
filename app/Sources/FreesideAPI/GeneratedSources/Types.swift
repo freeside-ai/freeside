@@ -6554,7 +6554,7 @@ public enum Components {
             case blocked = "blocked"
             case unknown = "unknown"
         }
-        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure.
+        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure. invalid_evidence: import refused what the run wrote to its evidence channel (a malformed entry, or bytes that are not the declared media type), so no other agent escapes it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/FailureCause`.
@@ -6567,6 +6567,7 @@ public enum Components {
             case invalid_configuration = "invalid_configuration"
             case contract_contradiction = "contract_contradiction"
             case memory_limit = "memory_limit"
+            case invalid_evidence = "invalid_evidence"
             case unknown = "unknown"
         }
         /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. Every writer names its cause, so the daemon never sends unknown; a client decodes a cause it doesn't know as unknown.

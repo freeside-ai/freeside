@@ -1077,6 +1077,21 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The implementation failure as an import refusal of what the run wrote
+    /// to its evidence channel (#3180): the cause names invalid evidence,
+    /// and the card offers no other agent or capabilities, since neither
+    /// escapes a fault in the run's own output.
+    public static func invalidEvidenceFailure() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .execution_failure)
+        snapshot.item.id = "item-execution_failure-invalid_evidence"
+        snapshot.item.execution_failure?.value1.cause = .invalid_evidence
+        snapshot.item.reason =
+            "evidence entry freeside.review-guide: evidence manifest failed validation: review guide stop 1: excerpt 0: line range 0-12 starts before line 1"
+        snapshot.item.execution_failure?.value1.offered_manifests = nil
+        snapshot.item.requested_decision = [.retry, .discuss, .stop]
+        return snapshot
+    }
+
     /// The default inbox with the invalid-configuration failure replaced by
     /// the quota failure, offering `UsageFixtures.alternateAgentOffers()`,
     /// for `-FreesideAlternates` (#1722). The item keeps its id, so

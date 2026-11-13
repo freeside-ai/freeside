@@ -215,6 +215,13 @@ import Testing
         }
     }
 
+    @Test func invalidEvidenceFailureFixtureIsValid() {
+        let item = AttentionFixtures.invalidEvidenceFailure().item
+        #expect(item.execution_failure?.value1.cause == .invalid_evidence)
+        #expect(MockContractValidation.itemValidityBreach(item) == nil)
+        #expect(MockContractValidation.itemPolicyBreach(item) == nil)
+    }
+
     @Test func reviewGuideFixtureIsValidOnlyOnItsReadyItem() {
         let ready = AttentionFixtures.readyWithReviewGuide().item
         #expect(MockContractValidation.itemValidityBreach(ready) == nil)

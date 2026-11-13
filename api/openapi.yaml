@@ -4165,6 +4165,9 @@ components:
         What went wrong in a failed invocation, in a vocabulary every
         invocation lane shares. It says nothing about what to do next.
         unknown is a real member: nothing positively classified the failure.
+        invalid_evidence: import refused what the run wrote to its evidence
+        channel (a malformed entry, or bytes that are not the declared
+        media type), so no other agent escapes it.
       enum:
         - quota
         - credential_expired
@@ -4174,6 +4177,7 @@ components:
         - invalid_configuration
         - contract_contradiction
         - memory_limit
+        - invalid_evidence
         - unknown
 
     InterpretationFailureCause:

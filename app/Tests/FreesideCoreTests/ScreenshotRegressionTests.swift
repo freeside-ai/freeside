@@ -1770,6 +1770,15 @@
                                     quotaDetail.screenshotCard(
                                         quota, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
                     }
+                    // An import refusal of the run's evidence (#3180): the
+                    // cause names invalid evidence rather than unknown.
+                    surfaces.append(
+                        Surface(
+                            name: "decision-execution_failure-invalid_evidence",
+                            width: canvasWidth,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    AttentionFixtures.invalidEvidenceFailure().item, at: dynamicTypeSize))))
                 }
 
                 if snapshot.item._type == .effect_proposal {

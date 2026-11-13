@@ -132,8 +132,11 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	}
 	var cause domain.FailureCause
 	var refusal handoffSpecRefusal
-	if status == exec.StatusFailed && errors.As(err, &refusal) {
-		cause = domain.FailureCauseInvalidConfiguration
+	if status == exec.StatusFailed {
+		cause = importRefusalCause(err)
+		if errors.As(err, &refusal) {
+			cause = domain.FailureCauseInvalidConfiguration
+		}
 	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
@@ -153,6 +156,19 @@ type handoffSpecRefusal struct{ err error }
 func (r handoffSpecRefusal) Error() string { return r.err.Error() }
 
 func (r handoffSpecRefusal) Unwrap() error { return r.err }
+
+// importRefusalCause classifies an import refusal for the failed outcome it
+// ends in: a refused evidence channel (importer.ErrEvidenceInvalid or
+// ErrEvidenceMediaMismatch) is invalid_evidence. Every other error returns
+// the empty cause, which the outcome records as unknown. The importer is
+// the daemon's own judgment of the export, so the cause is trusted; the
+// summary keeps naming the entry and the rule.
+func importRefusalCause(err error) domain.FailureCause {
+	if errors.Is(err, importer.ErrEvidenceInvalid) || errors.Is(err, importer.ErrEvidenceMediaMismatch) {
+		return domain.FailureCauseInvalidEvidence
+	}
+	return ""
+}
 
 // commit writes the terminal result and reports a write that failed. The
 // failure is retained for Inspect/Collect either way; recording it is the
@@ -1960,9 +1976,12 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 		// would leave the same intent to fail every later pass. Record the
 		// stage failure when the durable phase proves that is safe. A running
 		// handoff refuses this transition until ward proves export or loss.
+		// A definitive import refusal from a surviving export reaches here
+		// (recoverExported returns it), so it keeps its cause.
 		if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: exec.StatusFailed,
 			Summary: truncateFailureSummary("recovery failed: " + err.Error()),
+			Cause:   importRefusalCause(err),
 		}); commitErr != nil {
 			return fmt.Errorf("%w: commit recovery failure: %w",
 				ErrRecoveryRetryable, commitErr)
@@ -2217,10 +2236,14 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 				}
 				return nil
 			}
+			var cause domain.FailureCause
+			if status == exec.StatusFailed {
+				cause = importRefusalCause(err)
+			}
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
 				Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
-				ClaudeUsage: result.ClaudeUsage,
+				ClaudeUsage: result.ClaudeUsage, Cause: cause,
 			}); commitErr != nil {
 				return fmt.Errorf("%w: commit recovery result: %w",
 					ErrRecoveryRetryable, commitErr)
