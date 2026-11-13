@@ -223,54 +223,65 @@ func (e *Engine) readTaskSource(
 		}
 		source.Text = string(body)
 	case domain.SpecificationSourceIssueSubject:
-		var resolved domain.ResolvedPolicy
-		var scope specify.ManagedRepository
-		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			if resolved, err = tx.GetResolvedPolicy(ctx, run.ID); err != nil {
-				return err
-			}
-			scope, err = researchScope(ctx, tx, run.ProjectID)
+		return e.readIssueSource(ctx, run, *task.Source.IssueSubject, invocation, purpose)
+	}
+	return source, nil
+}
+
+// readIssueSource fetches the issue's title, body, and label names through
+// the specification's research fetcher under invocation and purpose, inside
+// the run's research allowlist and byte bound. It fetches the repository-ID
+// endpoint built from issue, so the request names the repository by its
+// numeric identity, never by a URL a submitter wrote.
+func (e *Engine) readIssueSource(
+	ctx context.Context, run domain.Run, issue domain.IssueSubjectRef, invocation domain.InvocationID, purpose string,
+) (taskSource, error) {
+	var resolved domain.ResolvedPolicy
+	var scope specify.ManagedRepository
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if resolved, err = tx.GetResolvedPolicy(ctx, run.ID); err != nil {
 			return err
-		}); err != nil {
-			return taskSource{}, err
 		}
-		settings, err := specify.ParsePolicy(resolved)
-		if err != nil {
-			return taskSource{}, err
-		}
-		issue := task.Source.IssueSubject
-		source.Repository, source.IssueNumber = issue.Repo, strconv.Itoa(issue.IssueNumber)
-		artifact, err := e.specification.fetcher.Fetch(ctx, invocation, 1,
-			specify.FetchRequest{
-				URL:     fmt.Sprintf("https://api.github.com/repositories/%d/issues/%d", issue.RepositoryID, issue.IssueNumber),
-				Purpose: purpose,
-			}, scope, settings.ResearchAllowlist, settings.ResearchMaxBytes)
-		if err != nil {
-			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
-		}
-		body, err := readBoundedArtifactBlob(e.specification.blobs, artifact.Artifact.Digest, exec.ProductionMaxInputBytes)
-		if err != nil {
-			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
-		}
-		evidence, err := specify.DecodeResearchEvidence(body)
-		if err != nil {
-			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
-		}
-		var content struct {
-			Title  string `json:"title"`
-			Body   string `json:"body"`
-			Labels []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
-		}
-		if err := json.Unmarshal([]byte(evidence.Body), &content); err != nil {
-			return taskSource{}, fmt.Errorf("%w: decode issue research: %w", errTaskSourceUnavailable, err)
-		}
-		source.IssueTitle, source.IssueBody = content.Title, content.Body
-		for _, label := range content.Labels {
-			source.IssueLabels = append(source.IssueLabels, label.Name)
-		}
+		scope, err = researchScope(ctx, tx, run.ProjectID)
+		return err
+	}); err != nil {
+		return taskSource{}, err
+	}
+	settings, err := specify.ParsePolicy(resolved)
+	if err != nil {
+		return taskSource{}, err
+	}
+	source := taskSource{Repository: issue.Repo, IssueNumber: strconv.Itoa(issue.IssueNumber)}
+	artifact, err := e.specification.fetcher.Fetch(ctx, invocation, 1,
+		specify.FetchRequest{
+			URL:     fmt.Sprintf("https://api.github.com/repositories/%d/issues/%d", issue.RepositoryID, issue.IssueNumber),
+			Purpose: purpose,
+		}, scope, settings.ResearchAllowlist, settings.ResearchMaxBytes)
+	if err != nil {
+		return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+	}
+	body, err := readBoundedArtifactBlob(e.specification.blobs, artifact.Artifact.Digest, exec.ProductionMaxInputBytes)
+	if err != nil {
+		return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+	}
+	evidence, err := specify.DecodeResearchEvidence(body)
+	if err != nil {
+		return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+	}
+	var content struct {
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal([]byte(evidence.Body), &content); err != nil {
+		return taskSource{}, fmt.Errorf("%w: decode issue research: %w", errTaskSourceUnavailable, err)
+	}
+	source.IssueTitle, source.IssueBody = content.Title, content.Body
+	for _, label := range content.Labels {
+		source.IssueLabels = append(source.IssueLabels, label.Name)
 	}
 	return source, nil
 }
