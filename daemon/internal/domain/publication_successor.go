@@ -378,6 +378,16 @@ func (s PublicationSuccessor) AnswersExternalFindings() bool {
 	return origin == PublicationSuccessorExternalReview || origin == PublicationSuccessorHandBack
 }
 
+// HandBackComment reports whether finding is the conversation comment this
+// hand_back authority consumed. The comment asks for rework of the pull
+// request as a whole, so it carries no location, and it is the one finding a
+// fix may answer without one: a person may route it to a fix and the engine
+// grants it `allowed` (HandBackCommentCompatibility), while the import still
+// holds the fix to the run's declared paths (issue #3160).
+func (s PublicationSuccessor) HandBackComment(finding Finding) bool {
+	return s.HandsBack() && finding.ID == s.ExternalFindingID && finding.Location == nil
+}
+
 // InPlaceHandoffID names the handoff check a hand_back cycle runs on its
 // adopted head before it re-earns readiness. It is not the cycle's
 // publication ID: a fix the cycle starts publishes under that ID and hands

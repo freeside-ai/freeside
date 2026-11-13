@@ -282,6 +282,9 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		if err != nil {
 			return productionReviewPending, err
 		}
+		if task.Successor.HandBackComment(finding) {
+			compatibility = domain.HandBackCommentCompatibility(declaredPaths)
+		}
 		residue = append(residue, findingAdjudicationInput{
 			Finding: finding, Surface: surfacePath, Compatibility: compatibility,
 		})
@@ -799,11 +802,21 @@ func (w *productionPublicationWorkflow) findingAdjudicationRevisionInputs(
 	for _, priorEntry := range prior.Entries {
 		var finding domain.Finding
 		var classification *domain.Classification
+		handBackComment := false
 		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
 			finding, err = tx.GetFinding(ctx, priorEntry.FindingID)
 			if err != nil {
 				return err
+			}
+			// A revision keeps the compatibility the first adjudication gave
+			// the hand-back comment, read from the round's authority.
+			if !slices.Contains(record.FindingIDs, finding.ID) {
+				authority, found, err := tx.ExternalReviewAuthorityForRound(ctx, record)
+				if err != nil {
+					return err
+				}
+				handBackComment = found && authority.HandBackComment(finding)
 			}
 			got, err := tx.GetClassification(ctx, priorEntry.FindingID, record.Round)
 			if errors.Is(err, store.ErrNotFound) {
@@ -827,6 +840,9 @@ func (w *productionPublicationWorkflow) findingAdjudicationRevisionInputs(
 			finding, declaredPaths, baseRoot, candidateRoot)
 		if err != nil {
 			return nil, err
+		}
+		if handBackComment {
+			compatibility = domain.HandBackCommentCompatibility(declaredPaths)
 		}
 		residue = append(residue, findingAdjudicationInput{
 			Finding: finding, Classification: classification, Surface: surfacePath,

@@ -35,8 +35,9 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 			external = append(external, id)
 		}
 	}
+	var authority domain.PublicationSuccessor
 	if len(external) > 0 {
-		if err := tx.requireAdmittedExternalEntries(ctx, record, external); err != nil {
+		if authority, err = tx.requireAdmittedExternalEntries(ctx, record, external); err != nil {
 			return err
 		}
 	}
@@ -66,7 +67,9 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 			identity = &domain.DisputedFindingExternal{ReviewerLogin: finding.External.ReviewerLogin, ThreadID: finding.External.ThreadID}
 		}
 		if row.Message != finding.Message || !reflect.DeepEqual(row.Location, finding.Location) || row.Severity != finding.Severity ||
-			!reflect.DeepEqual(row.External, identity) || !slices.Equal(row.OfferedRoutes, domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy))) {
+			!reflect.DeepEqual(row.External, identity) ||
+			!slices.Equal(row.OfferedRoutes, domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy),
+				slices.Contains(external, row.FindingID) && authority.HandBackComment(finding))) {
 			return domain.ErrParentKeyMismatch
 		}
 		// The adjudication block is re-derived, never trusted. A row with no

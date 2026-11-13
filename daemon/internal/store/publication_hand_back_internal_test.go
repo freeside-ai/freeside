@@ -28,6 +28,8 @@ type handBackOptions struct {
 	leaveOpen bool
 	// pull edits the recorded pull fact before it is appended.
 	pull func(*domain.PullMergeFact)
+	// paths is the run's declared paths; "" declares none.
+	paths string
 }
 
 func conversationFinding(t *testing.T, runID domain.RunID, head string, comment int, raw string) domain.Finding {
@@ -77,7 +79,7 @@ func handBackAuthority(
 
 func seedHandBack(t *testing.T, opts handBackOptions) handBackFixture {
 	t.Helper()
-	f := handBackFixture{externalReviewFixture: seedExternalReview(t, externalReviewOptions{leaveOpen: opts.leaveOpen})}
+	f := handBackFixture{externalReviewFixture: seedExternalReview(t, externalReviewOptions{leaveOpen: opts.leaveOpen, paths: opts.paths})}
 	pull := f.openPullFact(handBackHead, 10)
 	if opts.pull != nil {
 		opts.pull(&pull)

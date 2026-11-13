@@ -5919,7 +5919,11 @@ deterministic route. A finding whose location is missing, non-path, or
 unresolvable in both trees yields no presumptive surface, and never a vacuously
 contained `allowed`. When its goal relationship is `required`, it falls to
 `unknown` or attention. A non-`required` finding routes by its own row, and that
-row consumes no surface.
+row consumes no surface. One finding is the exception: the comment a hand-back
+cycle answers names no path, because it asks for rework of the pull request as
+a whole, so its surface is the task's declared paths. The engine grants it
+`allowed`, and offers a person a fix for it, only while the task declares a
+path; the import boundary still holds the fix to those paths.
 
 For each finding, the artifact records two normalized axes, a recommended route,
 rationale and evidence, cited repository rules, assumptions, viable
@@ -6004,7 +6008,8 @@ Remediation is presumptively `allowed` when its proposed surface stays within
 the task's declared paths carried by this run's work-unit declaration. And
 `allowed` is representable only as an
 engine-derived value. The deterministic declared-path containment check is its
-sole producer. So model output cannot mint permission, and the adjudicator
+producer, and the hand-back comment's whole-scope surface, also engine-derived,
+is the only other. So model output cannot mint permission, and the adjudicator
 structurally cannot infer permission to exit the declared surface.
 
 Rule interpretation is required only where remediation would exit that surface

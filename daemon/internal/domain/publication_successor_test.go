@@ -3,6 +3,7 @@ package domain_test
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -610,5 +611,38 @@ func TestPublicationSuccessorAdmitsSuccessorReentry(t *testing.T) {
 		if refuses.AdmitsSuccessorReentry() {
 			t.Errorf("%s cycle admits a successor re-entry", refuses.EffectiveOrigin())
 		}
+	}
+}
+
+// TestHandBackCommentOffersAFixToTheWholeScope pins the one widening of the
+// location rule (issue #3160): only the locationless comment a hand_back
+// authority consumed is offered a fix and granted `allowed` without a
+// location, and only while the run declares a path. An external_review
+// cycle's comment, another finding, and a located finding keep the ordinary
+// rule.
+func TestHandBackCommentOffersAFixToTheWholeScope(t *testing.T) {
+	authority := handBackSuccessor()
+	comment := domain.Finding{ID: authority.ExternalFindingID}
+	declared := []string{"daemon/**"}
+	offersFix := func(finding domain.Finding, paths []string, handBackComment bool) bool {
+		return slices.Contains(domain.ReviewDisputeRoutes(finding, paths, handBackComment), domain.RouteRemediate)
+	}
+
+	if !authority.HandBackComment(comment) || !offersFix(comment, declared, true) ||
+		domain.HandBackCommentCompatibility(declared) != domain.CompatibilityAllowed {
+		t.Fatal("the hand-back comment is not offered a fix")
+	}
+	if offersFix(comment, nil, true) || domain.HandBackCommentCompatibility(nil) != domain.CompatibilityUnknown {
+		t.Fatal("a fix offered with no declared path")
+	}
+	if externalReviewSuccessor().HandBackComment(comment) {
+		t.Fatal("an external_review comment widened")
+	}
+	if authority.HandBackComment(domain.Finding{ID: "external-other"}) {
+		t.Fatal("another finding widened")
+	}
+	located := domain.Finding{ID: authority.ExternalFindingID, Location: &domain.FindingLocation{Path: "app/a.go"}}
+	if authority.HandBackComment(located) || offersFix(located, declared, true) {
+		t.Fatal("an out-of-scope location widened")
 	}
 }

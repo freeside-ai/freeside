@@ -79,6 +79,18 @@ planned base would have left most hand-backs with a person.
   `head_changed` re-entry while the label is on. The next pass reads the
   conversation comment on the new head and seals the hand-back.
 
+- **The comment may be routed to a fix with no location.** On 2026-11-13
+  the owner chose to let a person and the adjudicator route the hand-back
+  comment to a fix, in this unit. The comment asks for rework of the pull
+  request as a whole and names no path, so under the ordinary rule it could
+  only be declined or deferred, and a lander's rework request could never be
+  fixed by Freeside. Its surface is the run's declared paths: the engine
+  grants it `allowed` and the dispute card offers a fix only while the run
+  declares a path, and the import still refuses a fix that leaves them. The
+  rule covers only the comment the hand_back authority consumed; an
+  external_review comment and every other finding keep the location rule.
+  Rejected keeping the location rule, which made the cycle unable to act on
+  the one request it exists to answer.
 
 ## Refute-First Pass
 

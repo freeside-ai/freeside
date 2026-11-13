@@ -28,6 +28,8 @@ type externalReviewOptions struct {
 	leaveOpen bool
 	// priorRound is the round of the review the cycle follows; zero means 1.
 	priorRound int
+	// paths is the run's declared paths; "" declares none.
+	paths string
 }
 
 func externalFindingWithText(t *testing.T, runID domain.RunID, head, raw string) domain.Finding {
@@ -78,7 +80,7 @@ func externalReviewAuthority(
 func seedExternalReview(t *testing.T, opts externalReviewOptions) externalReviewFixture {
 	t.Helper()
 	f := externalReviewFixture{reentryFixture: reentryFixture{
-		readyBindingFixture: seedReadyItemBinding(t, "feat/meaningful-task", reentryBase1, reentryHead1),
+		readyBindingFixture: seedReadyItemBindingDeclaring(t, "feat/meaningful-task", reentryBase1, reentryHead1, opts.paths),
 	}}
 	prior := putReentryReview(t, f.st, f.run.ID, max(opts.priorRound, 1), reentryBase1, reentryHead1)
 	repo, id := f.binding.Repo, f.binding.RepositoryID

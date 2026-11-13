@@ -3,6 +3,7 @@ package integration_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -208,5 +209,102 @@ func TestHandBackCycleContinuesARebaseThatEndedQuietly(t *testing.T) {
 	if got := p.externalDispositions(t); len(got) != 1 || got[0].FindingID != comment.ID ||
 		got[0].Disposition != domain.ReviewDispositionDeclined {
 		t.Fatalf("dispositions = %#v, want the comment declined", got)
+	}
+}
+
+// TestHandBackCycleRemediatesTheComment: the adjudicator judges the lander's
+// comment required, and the engine grants the comment `allowed` over the
+// run's declared paths though it names no location, so the cycle's first
+// round starts a remediation of the adopted head. The remediated head is
+// pushed over the lander's, the comment is recorded fixed, and the run is
+// ready again on the remediated head.
+func TestHandBackCycleRemediatesTheComment(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	driver := p.configureAdjudicator(t)
+	first := p.publishReady(t)
+	maintainer := externalMaintainer()
+	p.listExternalReviewers(t, maintainer)
+	head := p.pushToPullRequest(t, "REWORK.md", "the lander's rework\n")
+
+	comment, started := p.handBack(t, first, 1, maintainer, head, p.baseSHA, "the rework drops the handle check")
+	if !started {
+		t.Fatal("a hand-back comment started no cycle")
+	}
+	p.scriptCleanReview(2, p.baseSHA, head)
+	scriptAdjudication(t, driver, remediateVerdict(comment.ID))
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("cycle result = %#v, %v", result, err)
+	}
+	remediated, input := p.remediateExternalCycle(t, 2, "production change\nrestored the handle check\n")
+	assertExternalFindingsRemediated(t, input, []domain.Finding{comment})
+	p.assertHandBackRemediated(t, comment, remediated.HeadSHA)
+}
+
+// TestHandBackCommentOffersAPersonAFix: when the adjudicator disputes the
+// lander's comment, the card offers a fix for it though it names no
+// location, and a person's fix route remediates the adopted head.
+func TestHandBackCommentOffersAPersonAFix(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	driver := p.configureAdjudicator(t)
+	first := p.publishReady(t)
+	maintainer := externalMaintainer()
+	p.listExternalReviewers(t, maintainer)
+	head := p.pushToPullRequest(t, "REWORK.md", "the lander's rework\n")
+
+	comment, started := p.handBack(t, first, 1, maintainer, head, p.baseSHA, "the rework drops the handle check")
+	if !started {
+		t.Fatal("a hand-back comment started no cycle")
+	}
+	p.scriptCleanReview(2, p.baseSHA, head)
+	scriptAdjudication(t, driver, disputeVerdict(comment.ID))
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	end := p.externalReviewEnd(t)
+	if len(end.reviewItems) != 1 || end.reviewItems[0].ReviewDispute == nil ||
+		len(end.reviewItems[0].ReviewDispute.Findings) != 1 {
+		t.Fatalf("waiting cycle = %#v", end)
+	}
+	item := end.reviewItems[0]
+	row := item.ReviewDispute.Findings[0]
+	if row.FindingID != comment.ID || row.Location != nil || !slices.Contains(row.OfferedRoutes, domain.RouteRemediate) {
+		t.Fatalf("dispute row = %#v, want a fix offered for the comment", row)
+	}
+	if _, err := p.attention.Submit(p.ctx, p.externalDisputeCommand(t, item, externalChoice(comment.ID, domain.RouteRemediate))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	remediated, input := p.remediateExternalCycle(t, 2, "production change\nrestored the handle check\n")
+	assertExternalFindingsRemediated(t, input, []domain.Finding{comment})
+	p.assertHandBackRemediated(t, comment, remediated.HeadSHA)
+}
+
+// assertHandBackRemediated checks a hand-back cycle that fixed its comment:
+// the remediated head is on the pull request and ready, and the comment is
+// recorded fixed in the cycle's first round.
+func (p *productionPublicationHarness) assertHandBackRemediated(t *testing.T, comment domain.Finding, remediated string) {
+	t.Helper()
+	pr := p.forge.PullRequests()[0]
+	p.forge.Mu.Lock()
+	pushed := p.forge.Refs[pr.HeadRef]
+	p.forge.Mu.Unlock()
+	if pushed != remediated {
+		t.Fatalf("pull request head = %s, want the remediated head %s", pushed, remediated)
+	}
+	if ready := p.currentReadyItem(t); ready.Status != domain.StatusOpen || ready.PRHeadSHA != remediated {
+		t.Fatalf("ready item = %#v", ready)
+	}
+	dispositions := p.externalDispositions(t)
+	if len(dispositions) != 1 || dispositions[0].FindingID != comment.ID || dispositions[0].Round != 2 ||
+		dispositions[0].Disposition != domain.ReviewDispositionFixed {
+		t.Fatalf("external dispositions = %#v, want the comment fixed", dispositions)
+	}
+	if end := p.externalReviewEnd(t); !end.readyItem || end.pending != 0 || len(end.reviewItems) != 0 ||
+		!end.successor.HandsBack() {
+		t.Fatalf("cycle end = %#v", end)
 	}
 }

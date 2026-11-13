@@ -2550,9 +2550,10 @@ func (c WorkUnitCompatibility) valid() bool {
 // ProposedCompatibility is the model-emittable subset of WorkUnitCompatibility:
 // every member except `allowed`. A model-residue adjudication entry carries this
 // type, so `allowed` is unreachable through the model-entry constructor rather
-// than merely rejected after the fact — the deterministic declared-path
-// containment check (EngineCompatibility) is the sole producer of `allowed`
-// (plan §7). The zero value is invalid by design.
+// than merely rejected after the fact — `allowed` comes only from the engine:
+// the deterministic declared-path containment check (EngineCompatibility),
+// and for a hand-back comment, HandBackCommentCompatibility (plan §7). The
+// zero value is invalid by design.
 type ProposedCompatibility string
 
 const (

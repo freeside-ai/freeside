@@ -840,6 +840,13 @@ var readyAnchorSpecDigest = domain.Digest("sha256:" + strings.Repeat("5", 64))
 
 func seedReadyItemBinding(t *testing.T, branch, baseSHA, headSHA string) readyBindingFixture {
 	t.Helper()
+	return seedReadyItemBindingDeclaring(t, branch, baseSHA, headSHA, "")
+}
+
+// seedReadyItemBindingDeclaring is seedReadyItemBinding for a run whose
+// policy declares paths, a comma-separated list; "" declares none.
+func seedReadyItemBindingDeclaring(t *testing.T, branch, baseSHA, headSHA, paths string) readyBindingFixture {
+	t.Helper()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -848,12 +855,16 @@ func seedReadyItemBinding(t *testing.T, branch, baseSHA, headSHA string) readyBi
 	invocationID := domain.InvocationID("inv-ready-anchor")
 	stageID := domain.StageID("stage-ready-anchor")
 	attemptID := domain.AttemptID("attempt-ready-anchor")
-	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+	keys := []domain.PolicyKey{{
 		Key: "driver", Value: "claude", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenanceOverride,
 			Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
-	}})
+	}}
+	if paths != "" {
+		keys = append(keys, domain.PolicyKey{Key: "paths", Value: paths, Provenance: keys[0].Provenance})
+	}
+	policy, err := domain.NewResolvedPolicy(runID, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
