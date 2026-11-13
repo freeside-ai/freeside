@@ -124,6 +124,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // leaves: no workflows columns on the mint audit.
 func rewindPublishAuditWorkflows(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindDuplicateSearches(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE publish_mint_audits DROP COLUMN requested_workflows`,
 		`ALTER TABLE publish_mint_audits DROP COLUMN granted_workflows`,

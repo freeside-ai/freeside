@@ -644,6 +644,10 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.GetDriftAuditForRound(ctx, domain.RunID(k.s[0]), int(k.n[0])))
 		})},
+	{"duplicate search", []string{"duplicate_searches"}, eachKey(`SELECT adjudication_digest, finding_id FROM duplicate_searches`, "ss",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.GetDuplicateSearch(ctx, domain.Digest(k.s[0]), domain.FindingID(k.s[1])))
+		})},
 	{"finding", []string{"findings"}, eachKey(`SELECT id FROM findings`, "s",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.GetFinding(ctx, domain.FindingID(k.s[0])))

@@ -141,6 +141,22 @@ func seedFilingIn(
 		if err := tx.PutFindingAdjudication(ctx, adjudication); err != nil {
 			return err
 		}
+		// Both filing sources were searched and found no open issue, so the
+		// filing gate admits them; the gate's own tests remove or replace these.
+		repository := domain.FollowUpFilingRepository{Repo: repo, RepositoryID: repositoryID}
+		for _, source := range []struct {
+			id   domain.FindingID
+			kind domain.FollowUpSourceKind
+		}{
+			{findings[0].ID, domain.FollowUpSourceDeferredDisposition},
+			{findings[1].ID, domain.FollowUpSourceSeparateWorkVerdict},
+		} {
+			if err := storetest.PutNewDuplicateSearch(ctx, tx, runID, domain.FollowUpFilingSource{
+				FindingID: source.id, AdjudicationDigest: adjudication.Digest, Kind: source.kind,
+			}, repository, filingAt.Add(2*time.Minute)); err != nil {
+				return err
+			}
+		}
 		return tx.PutFindingDisposition(ctx, domain.ReviewDispositionRecord{
 			FindingID: findings[0].ID, RunID: runID, Round: 1,
 			Disposition: domain.ReviewDispositionDeferred, Reason: "tracked as a follow-up",
@@ -551,7 +567,15 @@ func TestFollowUpFilingSeparateWorkSourceMustBeCurrentRevision(t *testing.T) {
 		); err != nil {
 			return err
 		}
-		return tx.PutFindingAdjudication(ctx, successor)
+		if err := tx.PutFindingAdjudication(ctx, successor); err != nil {
+			return err
+		}
+		// The amended revision is searched again under its own digest.
+		source := fx.parkedSource()
+		source.AdjudicationDigest = successor.Digest
+		return storetest.PutNewDuplicateSearch(ctx, tx, fx.runID, source,
+			domain.FollowUpFilingRepository{Repo: fx.target.Repo, RepositoryID: fx.target.RepositoryID},
+			filingAt.Add(2*time.Hour))
 	}); err != nil {
 		t.Fatalf("append the successor revision: %v", err)
 	}
