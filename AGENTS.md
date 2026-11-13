@@ -612,7 +612,10 @@ directory named before it in the same bullet. All under `daemon/`:
   milestone from policy and the stored kind),
   `internal/engine/follow_up_duplicate_search.go` (decides from untrusted
   issue text and a model answer whether a finding is filed, and which open
-  issue a duplicate verdict names), and
+  issue a duplicate verdict names),
+  `internal/engine/issue_comment_proposal.go` (frames untrusted finding text
+  and a model's reason into the issue comment a person approves, and checks
+  the trust profile accepts the workflows the comment starts), and
   `internal/engine/verification_report.go` (reads the verifier's bytes),
   `internal/engine/publication_core.go` (the git publish transport, the
   publication lock, and candidate identity),
@@ -657,6 +660,10 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/store/duplicate_search.go` (the duplicate-search record whose
   handle rule decides which issue a verdict names, and the filing gate
   reads before admitting or approving a filing),
+  `internal/domain/issue_comment.go`, `internal/domain/issue_comment_ledger.go`,
+  and `internal/store/issue_comment_ledger.go` (the comment's target gate
+  against its search record, and the post ledger the dispatcher re-gates
+  against its approved instance on read),
   `internal/domain/decision_surface.go`,
   `internal/domain/closure_approval.go`,
   `internal/domain/agent_decision.go`, `internal/domain/authorization.go`,

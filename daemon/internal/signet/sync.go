@@ -96,6 +96,20 @@ type EffectProposalFactsSnapshot struct {
 	SourceIssueClosure  *SourceIssueClosureFacts     `json:"source_issue_closure"`
 	FollowUpFiling      *FollowUpFilingFacts         `json:"follow_up_filing"`
 	ImagePolicyAdoption *ImagePolicyAdoptionFacts    `json:"image_policy_adoption"`
+	IssueComment        *IssueCommentFacts           `json:"issue_comment"`
+}
+
+// IssueCommentFacts carries the bounded comment facts: the repository and the
+// open issue the comment would post on, the screened body it would post, and
+// the finding and duplicate search record it answers. The repository is the
+// card's project's current record, as followUpFilingFacts explains; the issue
+// is the one the store gate re-derived from the search record. It holds no
+// opaque handle or policy identity.
+type IssueCommentFacts struct {
+	Repository  domain.FollowUpFilingRepository `json:"repository"`
+	IssueNumber int                             `json:"issue_number"`
+	Body        domain.ScreenedIssueText        `json:"body"`
+	Source      domain.IssueCommentSource       `json:"source"`
 }
 
 // ImagePolicyAdoptionFacts carries an adoption card's parameters: the
@@ -799,6 +813,16 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 			}
 			out.ImagePolicyAdoption, err = imagePolicyAdoptionFacts(project, proposal, superseded, merge)
 			return err
+		case domain.EffectIssueComment:
+			// ProposalForItem re-ran the comment gate, which re-derived the
+			// issue from the search record and tied the repository to this
+			// project.
+			project, err := tx.GetProject(ctx, item.ProjectID)
+			if err != nil {
+				return err
+			}
+			out.IssueComment, err = issueCommentFacts(project, proposal, superseded, merge)
+			return err
 		case domain.EffectTaskProposal:
 		}
 		return ErrInvalidSyncSnapshot
@@ -893,6 +917,24 @@ func followUpFilingFacts(
 		Labels:     slices.Clone(filing.Labels),
 		Milestone:  filing.Milestone, Title: filing.Title, Body: filing.Body,
 		Source: filing.Source,
+	}, nil
+}
+
+// issueCommentFacts rebuilds the comment arm. A comment binds no merge and
+// admits no revision, so a row carrying either is inconsistent and the read
+// fails closed, as followUpFilingFacts does.
+func issueCommentFacts(
+	project domain.Project, proposal domain.EffectProposal,
+	superseded *domain.EffectProposal, merge *domain.ProspectiveMerge,
+) (*IssueCommentFacts, error) {
+	comment := proposal.CommentProposal
+	if comment == nil || merge != nil || superseded != nil ||
+		comment.Repository.RepositoryID != project.RepositoryID {
+		return nil, ErrInvalidSyncSnapshot
+	}
+	return &IssueCommentFacts{
+		Repository:  domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID},
+		IssueNumber: comment.IssueNumber, Body: comment.Body, Source: comment.Source,
 	}, nil
 }
 

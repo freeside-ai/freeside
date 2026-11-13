@@ -1891,7 +1891,7 @@ public enum Components {
                 case set_at
             }
         }
-        /// A key the Workflow pane exposes (mirrors domain.WorkflowPolicyKey). A gate (gates.*) takes "true", which asks a person before the effect, or "false", the default, which lets the effect run under policy. A cap (follow_up_filing.*) takes a positive decimal integer with no sign or leading zero; the defaults are 10 per day, 5 per run, and a depth of 2.
+        /// A key the Workflow pane exposes (mirrors domain.WorkflowPolicyKey). A gate (gates.*) takes "true", which asks a person before the effect, or "false", the default, which lets the effect run under policy. A cap (follow_up_filing.*) takes a positive decimal integer with no sign or leading zero; the defaults are 10 per day, 5 per run, and a depth of 2. The per-run cap counts issue comments with filings.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/WorkflowPolicyKey`.
@@ -2437,7 +2437,7 @@ public enum Components {
                 case scope
             }
         }
-        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure, follow_up_filing, or image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
+        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure, follow_up_filing, image_policy_adoption, or issue_comment) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot`.
@@ -2452,7 +2452,7 @@ public enum Components {
             public var proposal_digest: Components.Schemas.Digest
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/effect_kind`.
             public var effect_kind: Components.Schemas.EffectKind
-            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
+            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing or issue_comment effect, which admits no revision.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes`.
@@ -2473,7 +2473,7 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
+            /// The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing or issue_comment effect, which admits no revision.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/supersedes`.
@@ -2556,6 +2556,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
             public var image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload?
+            /// The comment facts for an issue_comment effect; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/issue_comment`.
+            public struct issue_commentPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/issue_comment/value1`.
+                public var value1: Components.Schemas.IssueCommentFacts
+                /// Creates a new `issue_commentPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.IssueCommentFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The comment facts for an issue_comment effect; null for any other effect kind.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/issue_comment`.
+            public var issue_comment: Components.Schemas.EffectProposalFactsSnapshot.issue_commentPayload?
             /// Creates a new `EffectProposalFactsSnapshot`.
             ///
             /// - Parameters:
@@ -2564,10 +2590,11 @@ public enum Components {
             ///   - item_version:
             ///   - proposal_digest:
             ///   - effect_kind:
-            ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
+            ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing or issue_comment effect, which admits no revision.
             ///   - source_issue_closure: The closure facts for a source_issue_closure effect; null for any other effect kind.
             ///   - follow_up_filing: The filing facts for a follow_up_filing effect; null for any other effect kind.
             ///   - image_policy_adoption: The adoption facts for an image_policy_adoption effect; null for any other effect kind.
+            ///   - issue_comment: The comment facts for an issue_comment effect; null for any other effect kind.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 entity_version: Components.Schemas.EntityVersion,
@@ -2577,7 +2604,8 @@ public enum Components {
                 supersedes: Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload? = nil,
                 source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload? = nil,
                 follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload? = nil,
-                image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload? = nil
+                image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload? = nil,
+                issue_comment: Components.Schemas.EffectProposalFactsSnapshot.issue_commentPayload? = nil
             ) {
                 self.as_of_revision = as_of_revision
                 self.entity_version = entity_version
@@ -2588,6 +2616,7 @@ public enum Components {
                 self.source_issue_closure = source_issue_closure
                 self.follow_up_filing = follow_up_filing
                 self.image_policy_adoption = image_policy_adoption
+                self.issue_comment = issue_comment
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -2599,6 +2628,7 @@ public enum Components {
                 case source_issue_closure
                 case follow_up_filing
                 case image_policy_adoption
+                case issue_comment
             }
         }
         /// The policy change an adoption card proposes to answer one policy-class project-image upkeep refusal (plan §5.7, Project-image upkeep): the refusal record it answers and the recipe digest to approve, the registry authorities to add, or both, and the repository the adoption widens, served from the card's project's current record. Approving the card records the adoption in the daemon's own image policy, for the card's repository only. Mirrors domain.ImagePolicyAdoptionParameters plus the repository.
@@ -2846,6 +2876,76 @@ public enum Components {
                 case title
                 case body
                 case source
+            }
+        }
+        /// Bounded issue-comment facts (plan §7): the project's repository, the open issue the finding's duplicate search named, the screened body the comment would post, and the finding and search the comment answers. No subject handle or policy identity; the comment posts only after an approve, and only while the repository's issue_comment workflows are the set its trust profile accepted.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/IssueCommentFacts`.
+        public struct IssueCommentFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/IssueCommentFacts/repository`.
+            public var repository: Components.Schemas.ProjectRepository
+            /// - Remark: Generated from `#/components/schemas/IssueCommentFacts/issue_number`.
+            public var issue_number: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/IssueCommentFacts/body`.
+            public var body: Components.Schemas.ScreenedIssueText
+            /// - Remark: Generated from `#/components/schemas/IssueCommentFacts/source`.
+            public var source: Components.Schemas.IssueCommentSource
+            /// Creates a new `IssueCommentFacts`.
+            ///
+            /// - Parameters:
+            ///   - repository:
+            ///   - issue_number:
+            ///   - body:
+            ///   - source:
+            public init(
+                repository: Components.Schemas.ProjectRepository,
+                issue_number: Swift.Int,
+                body: Components.Schemas.ScreenedIssueText,
+                source: Components.Schemas.IssueCommentSource
+            ) {
+                self.repository = repository
+                self.issue_number = issue_number
+                self.body = body
+                self.source = source
+            }
+            public enum CodingKeys: String, CodingKey {
+                case repository
+                case issue_number
+                case body
+                case source
+            }
+        }
+        /// What an issue comment came from: the finding, the finding-adjudication artifact that routed it, and the duplicate search record that named the target issue. Served as recorded; if a later round fixes or re-routes the finding, the daemon refuses approval.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/IssueCommentSource`.
+        public struct IssueCommentSource: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/IssueCommentSource/finding_id`.
+            public var finding_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/IssueCommentSource/adjudication_digest`.
+            public var adjudication_digest: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/IssueCommentSource/search_digest`.
+            public var search_digest: Components.Schemas.Digest
+            /// Creates a new `IssueCommentSource`.
+            ///
+            /// - Parameters:
+            ///   - finding_id:
+            ///   - adjudication_digest:
+            ///   - search_digest:
+            public init(
+                finding_id: Swift.String,
+                adjudication_digest: Components.Schemas.Digest,
+                search_digest: Components.Schemas.Digest
+            ) {
+                self.finding_id = finding_id
+                self.adjudication_digest = adjudication_digest
+                self.search_digest = search_digest
+            }
+            public enum CodingKeys: String, CodingKey {
+                case finding_id
+                case adjudication_digest
+                case search_digest
             }
         }
         /// A project's repository, such as the one a follow-up issue is filed in or an image-policy adoption widens. repository_id is the forge identity; repo is the project's current name for it, so a rename after the proposal was made shows the new name.
@@ -3660,7 +3760,7 @@ public enum Components {
         @frozen public enum TaskProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
             case implement_subject = "implement_subject"
         }
-        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17); image_policy_adoption proposes adopting the recipe digest or registry authorities a project-image upkeep refusal names (plan §5.7). Matches domain.AllEffectKinds.
+        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17); image_policy_adoption proposes adopting the recipe digest or registry authorities a project-image upkeep refusal names (plan §5.7); issue_comment proposes commenting on the open issue a finding's duplicate search named (plan §7). Matches domain.AllEffectKinds.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectKind`.
@@ -3669,6 +3769,7 @@ public enum Components {
             case source_issue_closure = "source_issue_closure"
             case follow_up_filing = "follow_up_filing"
             case image_policy_adoption = "image_policy_adoption"
+            case issue_comment = "issue_comment"
             case unknown = "unknown"
         }
         /// The versioned ruleset an issue text field was screened under. Matches domain.AllIssueTextRulesets.

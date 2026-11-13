@@ -231,7 +231,9 @@ func (t fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	recorder := httptest.NewRecorder()
-	if next := t.h.gh.filing.nextPath; next != "" && req.URL.Path == strings.SplitN(next, "?", 2)[0] &&
+	if t.h.serveIssueComments(recorder, req) {
+		// The issue comment endpoints, which only the comment dispatcher calls.
+	} else if next := t.h.gh.filing.nextPath; next != "" && req.URL.Path == strings.SplitN(next, "?", 2)[0] &&
 		(!strings.Contains(next, "?") || strings.TrimPrefix(next, req.URL.Path+"?") == req.URL.RawQuery) {
 		// The foreign collection is empty: checking rows after following the
 		// link would miss the incomplete-listing boundary violation.
@@ -303,6 +305,15 @@ type filingHarness struct {
 	// bot is the App the repository is registered to now.
 	bot   publish.AppBotIdentity
 	filer *publish.FollowUpFiler
+	// comments is the issue comment dispatcher over the same store and forge,
+	// and issueComments the fake's issue comment state.
+	comments      *publish.IssueCommentDispatcher
+	issueComments fakeIssueComments
+	// audit is what the dispatcher's workflow auditor answers; audits counts
+	// its calls and auditedRefs records the ref each read.
+	audit       domain.WorkflowAudit
+	audits      int
+	auditedRefs []string
 	// step, when set, sees every point at which the filer reaches outside the
 	// store: each token request and each side of each forge request.
 	step func(name string)
@@ -351,6 +362,12 @@ func (h *filingHarness) open() {
 		harnessBotIdentity{h}, func() time.Time { return h.now })
 	if err != nil {
 		h.t.Fatalf("NewFollowUpFiler: %v", err)
+	}
+	h.comments, err = publish.NewIssueCommentDispatcher(
+		s, steppedTokens{h}, &http.Client{Transport: fakeTransport{h}}, "http://github.test",
+		harnessBotIdentity{h}, harnessAuditor{h}, func() time.Time { return h.now })
+	if err != nil {
+		h.t.Fatalf("NewIssueCommentDispatcher: %v", err)
 	}
 }
 
@@ -583,38 +600,50 @@ func (h *filingHarness) propose(run filingRun, finding int, decision domain.Acti
 			return err
 		}
 		item, err := signet.OpenFollowUpFilingItem(ctx, tx, h.blobs, instance.ID, created)
-		if err != nil || decision == "" {
-			return err
-		}
-		command, err := domain.NewCommand(domain.CommandInput{
-			CommandID: "command-" + string(instance.ID), DeviceID: "device-1",
-			ItemID: item.ID, ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests, Action: decision,
-		})
 		if err != nil {
 			return err
 		}
-		if err := tx.PutCommand(ctx, command); err != nil {
-			return err
-		}
-		status, selected := domain.StatusDismissed, (*domain.Digest)(nil)
-		if decision == domain.ActionApprove {
-			status, selected = domain.StatusResolved, &instance.Proposal.Digest
-		}
-		decidedAt := created.Add(time.Hour)
-		if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, decision, selected, decidedAt); err != nil {
-			return err
-		}
-		item.ItemVersion++
-		item.Status = status
-		item, err = item.WithDecidedAt(decidedAt)
-		if err != nil {
-			return err
-		}
-		return tx.PutAttentionItem(ctx, domaintest.MustConclude(item))
+		return decideCard(ctx, tx, instance, item, decision, created)
 	}); err != nil {
 		h.t.Fatalf("propose filing %s/%d: %v", run.id, finding, err)
 	}
 	return instance
+}
+
+// decideCard records decision on a proposal's open card and concludes the
+// card the way the attention service does. A decision of "" leaves it open.
+func decideCard(
+	ctx context.Context, tx *store.WriteTx, instance domain.ProposalInstance, item domain.AttentionItem,
+	decision domain.Action, created time.Time,
+) error {
+	if decision == "" {
+		return nil
+	}
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "command-" + string(instance.ID), DeviceID: "device-1",
+		ItemID: item.ID, ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests, Action: decision,
+	})
+	if err != nil {
+		return err
+	}
+	if err := tx.PutCommand(ctx, command); err != nil {
+		return err
+	}
+	status, selected := domain.StatusDismissed, (*domain.Digest)(nil)
+	if decision == domain.ActionApprove {
+		status, selected = domain.StatusResolved, &instance.Proposal.Digest
+	}
+	decidedAt := created.Add(time.Hour)
+	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, decision, selected, decidedAt); err != nil {
+		return err
+	}
+	item.ItemVersion++
+	item.Status = status
+	item, err = item.WithDecidedAt(decidedAt)
+	if err != nil {
+		return err
+	}
+	return tx.PutAttentionItem(ctx, domaintest.MustConclude(item))
 }
 
 func (h *filingHarness) approve(run filingRun, finding int) domain.ProposalInstance {

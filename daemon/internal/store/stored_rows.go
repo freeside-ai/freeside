@@ -796,6 +796,7 @@ var storedRowKinds = []storedRowKind{
 			return discard(tx.ClosureApprovalForInstance(ctx, domain.ProposalInstanceID(k.s[0])))
 		})},
 	{"follow-up filing", []string{"follow_up_filing_intents", "follow_up_filing_attempts", "follow_up_filed_issues"}, walkFollowUpFiling},
+	{"issue comment", []string{"issue_comment_intents", "issue_comment_attempts", "posted_issue_comments"}, walkIssueComments},
 }
 
 // walkFollowUpFiling reads each intent, which reconstructs its attempts, and
@@ -814,4 +815,21 @@ func walkFollowUpFiling(ctx context.Context, s *Store) error {
 			return discard(tx.FiledFollowUpIssue(ctx, k.n[0], int(k.n[1])))
 		})
 	return filed(ctx, s)
+}
+
+// walkIssueComments reads each intent, which reconstructs its attempts, and
+// then each posted comment by its own key, as walkFollowUpFiling does.
+func walkIssueComments(ctx context.Context, s *Store) error {
+	intents := eachKey(`SELECT instance_id FROM issue_comment_intents`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.GetIssueCommentIntent(ctx, domain.ProposalInstanceID(k.s[0])))
+		})
+	if err := intents(ctx, s); err != nil {
+		return err
+	}
+	posted := eachKey(`SELECT repository_id, comment_id FROM posted_issue_comments`, "nn",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.PostedIssueComment(ctx, k.n[0], k.n[1]))
+		})
+	return posted(ctx, s)
 }

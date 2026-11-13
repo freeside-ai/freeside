@@ -98,7 +98,9 @@ func readDuplicateSearch(
 }
 
 // A search that names an open issue records it and proposes no filing; the
-// disposition still commits, and a replay neither lists nor asks again.
+// disposition still commits, and a replay neither lists nor asks again. With
+// no trust profile accepting the repository's issue_comment workflows, no
+// comment is proposed either, and the run's notice says why.
 func TestDuplicateSearchMatchRecordsTheIssueAndProposesNoFiling(t *testing.T) {
 	t.Parallel()
 	f := newFollowUpFilingFixture(t, domain.FindingSeverityP2, domain.RouteDefer, nil)
@@ -109,10 +111,11 @@ func TestDuplicateSearchMatchRecordsTheIssueAndProposesNoFiling(t *testing.T) {
 	replayFollowUpFiling(t, f, readFollowUpFilingState(t, f, 1).artifact)
 
 	state := readFollowUpFilingState(t, f, 1)
-	if len(state.dispositions) != 1 || len(state.instances) != 0 || len(state.cards) != 0 || len(state.notices) != 0 {
-		t.Fatalf("dispositions, instances, cards, notices = %d, %d, %d, %d, want 1, 0, 0, 0",
+	if len(state.dispositions) != 1 || len(state.instances) != 0 || len(state.cards) != 0 || len(state.notices) != 1 {
+		t.Fatalf("dispositions, instances, cards, notices = %d, %d, %d, %d, want 1, 0, 0, 1",
 			len(state.dispositions), len(state.instances), len(state.cards), len(state.notices))
 	}
+	assertIssueCommentRefusedNotice(t, f, state)
 	search, err := readDuplicateSearch(t, f, state.artifact)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +257,7 @@ func TestSeparateWorkDuplicateReplayWritesNothing(t *testing.T) {
 		revisions[pass] = server.Revision
 	}
 	state := readFollowUpFilingState(t, f, 1)
-	if revisions[1] != revisions[2] || len(state.instances) != 0 || len(state.notices) != 0 {
+	if revisions[1] != revisions[2] || len(state.instances) != 0 || len(state.notices) != 1 {
 		t.Fatalf("revisions = %v, instances, notices = %d, %d", revisions, len(state.instances), len(state.notices))
 	}
 	search, err := readDuplicateSearch(t, f, artifact)

@@ -1522,6 +1522,69 @@ import Testing
         #expect(AttentionDisplay.proposedIssueText(armless) == nil)
     }
 
+    private func commentFacts() throws -> Components.Schemas.EffectProposalFactsSnapshot {
+        try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.issueCommentEffectProposal()))
+    }
+
+    @Test func issueCommentRowsNameTheIssueItPostsOnAndItsSource() throws {
+        #expect(
+            AttentionDisplay.effectProposalRows(try commentFacts()) == [
+                .init("Effect", "Issue comment"),
+                .init("Repository", "owner/repo", monospaced: true),
+                .init("Issue", "#412", monospaced: true),
+                .init("Source", "Finding finding-3 · Duplicate search match"),
+                .init("Text Screening", "Body: passed under github-issue/1"),
+            ])
+    }
+
+    @Test func issueCommentBodyIsNeverAFactRowAndDrawsWithNoTitle() throws {
+        let facts = try commentFacts()
+        let comment = try #require(facts.issue_comment?.value1)
+
+        // The body quotes the agent's finding and the search's reason, so no
+        // daemon-fact row carries it; the card draws it as the proposed
+        // comment in its own unverified section.
+        for row in AttentionDisplay.effectProposalRows(facts) {
+            #expect(!row.value.contains(comment.body.text))
+        }
+        for row in AttentionDisplay.issueCommentDetailRows(facts) {
+            #expect(!row.value.contains(comment.body.text))
+        }
+        #expect(AttentionDisplay.proposedIssueText(facts) == .init(title: nil, body: comment.body.text))
+    }
+
+    @Test func issueCommentDetailRowsCarryTheRepositoryIDAndFullDigests() throws {
+        #expect(
+            AttentionDisplay.issueCommentDetailRows(try commentFacts()) == [
+                .init(label: "Repository ID", value: "84958515"),
+                .init(label: "Finding", value: "finding-3"),
+                .init(
+                    label: "Adjudication Digest",
+                    value: "sha256:" + String(repeating: "c", count: 64)),
+                .init(
+                    label: "Search Digest",
+                    value: "sha256:" + String(repeating: "f", count: 64)),
+            ])
+    }
+
+    @Test func commentTextAndDetailRowsFollowTheEffectKindNotTheArm() throws {
+        // A filing that carries a stray comment arm draws the filing only.
+        var filing = try filingFacts()
+        filing.issue_comment = try commentFacts().issue_comment
+        #expect(AttentionDisplay.issueCommentDetailRows(filing).isEmpty)
+        #expect(AttentionDisplay.proposedIssueText(filing)?.title != nil)
+        #expect(value(AttentionDisplay.effectProposalRows(filing), "Effect") == "Follow-up issue filing")
+
+        // A comment kind with no comment arm draws nothing.
+        var armless = try commentFacts()
+        armless.issue_comment = nil
+        #expect(AttentionDisplay.effectProposalRows(armless).isEmpty)
+        #expect(AttentionDisplay.proposedIssueText(armless) == nil)
+        #expect(AttentionDisplay.issueCommentDetailRows(armless).isEmpty)
+    }
+
     @Test func screenedIssueTextExplanationSaysWhatScreeningDoesNotEstablish() {
         #expect(
             AttentionDisplay.screenedIssueTextExplanation

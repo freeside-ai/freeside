@@ -20,6 +20,7 @@ import Testing
             AttentionFixtures.recommendedEffectProposal().item,
             AttentionFixtures.followUpFilingEffectProposal().item,
             AttentionFixtures.imagePolicyAdoptionEffectProposal().item,
+            AttentionFixtures.issueCommentEffectProposal().item,
             heldPublication,
         ]
 

@@ -32,5 +32,6 @@
       "kind": "deferred_disposition"
     }
   },
-  "image_policy_adoption": null
+  "image_policy_adoption": null,
+  "issue_comment": null
 }

@@ -344,6 +344,37 @@ func (f *forge) getRepositoryID(ctx context.Context, repo repoRef) (int64, error
 	return decoded.ID, nil
 }
 
+// repoDefaultBranchResponse decodes a repository's numeric identity and its
+// default branch.
+type repoDefaultBranchResponse struct {
+	ID            int64  `json:"id"`
+	DefaultBranch string `json:"default_branch"`
+}
+
+// getRepositoryDefaultBranch reads a repository's numeric identity and its
+// default branch in one request. The issue comment dispatcher binds the
+// target by the identity and audits the issue_comment workflows at the
+// branch, because GitHub runs those workflows from the default branch.
+func (f *forge) getRepositoryDefaultBranch(ctx context.Context, repo repoRef) (int64, string, error) {
+	path := "/repos/" + repo.path()
+	resp, err := f.do(ctx, http.MethodGet, repo, path, "", nil)
+	if err != nil {
+		return 0, "", fmt.Errorf("get repository default branch: %w", err)
+	}
+	defer drainAndClose(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return 0, "", fmt.Errorf("get repository default branch: %w", &APIError{Status: resp.StatusCode, RequestPath: path})
+	}
+	var decoded repoDefaultBranchResponse
+	if err := decodeResponse(resp.Body, &decoded); err != nil {
+		return 0, "", fmt.Errorf("get repository default branch: decode response: %w", err)
+	}
+	if decoded.ID <= 0 || strings.TrimSpace(decoded.DefaultBranch) == "" {
+		return 0, "", errors.New("get repository default branch: response carries no repository id or default branch")
+	}
+	return decoded.ID, decoded.DefaultBranch, nil
+}
+
 // repoVisibilityResponse decodes a repository's visibility. GitHub returns the
 // modern "visibility" (public|private|internal) and the legacy "private" bool;
 // the caller maps them to a sensitivity class. Private is a pointer so an absent

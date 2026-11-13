@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,15 +83,7 @@ type FollowUpFiler struct {
 	listingFailures map[domain.ProposalInstanceID]int
 	// failingSince is when each filing's current run of failed passes began.
 	failingSince map[domain.ProposalInstanceID]time.Time
-	// holding is the transient notices whose condition the current pass saw
-	// still holding; the pass resolves every other open one.
-	holding map[filingNotice]bool
-}
-
-// filingNotice names one notice kind on one filing.
-type filingNotice struct {
-	instanceID domain.ProposalInstanceID
-	code       string
+	notices      *proposalNotices
 }
 
 // transientFilingNoticeCodes are the notices that describe a condition a
@@ -117,7 +108,8 @@ func NewFollowUpFiler(
 		identity: identity, now: now, wake: make(chan struct{}, 1),
 		listingFailures: map[domain.ProposalInstanceID]int{},
 		failingSince:    map[domain.ProposalInstanceID]time.Time{},
-		holding:         map[filingNotice]bool{},
+		notices: newProposalNotices(followUpFilingItemPrefix, transientFilingNoticeCodes,
+			"Resolved when the condition holding the follow-up filing cleared.", now),
 	}, nil
 }
 
@@ -166,7 +158,7 @@ func (f *FollowUpFiler) Pass(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("follow-up filing: %w", err)
 	}
-	clear(f.holding)
+	f.notices.startPass()
 	var errs []error
 	for _, ref := range unreadable {
 		errs = append(errs, f.reportUnreadable(ctx, ref.filingRef, ref.err))
@@ -188,7 +180,7 @@ func (f *FollowUpFiler) Pass(ctx context.Context) error {
 	// Every filing was visited, so holding is complete for this pass unless
 	// the context ended inside the last one.
 	if ctx.Err() == nil {
-		errs = append(errs, f.resolveClearedNotices(ctx))
+		errs = append(errs, f.notices.resolveCleared(ctx, f.store))
 	}
 	return errors.Join(errs...)
 }
@@ -201,7 +193,7 @@ var errFollowUpFilingUnreadable = errors.New("follow-up filing does not read")
 // followUpFilingStallNoticeAfter. The run of failures is held in memory, so a
 // restart starts it again.
 func (f *FollowUpFiler) noteStall(ctx context.Context, ref filingRef) error {
-	f.holding[filingNotice{ref.instanceID, followUpFilingStalledCode}] = true
+	f.notices.hold(ref.instanceID, followUpFilingStalledCode)
 	since, failing := f.failingSince[ref.instanceID]
 	if !failing {
 		f.failingSince[ref.instanceID] = f.now()
@@ -211,19 +203,10 @@ func (f *FollowUpFiler) noteStall(ctx context.Context, ref filingRef) error {
 		return nil
 	}
 	return f.store.Write(ctx, func(tx *store.WriteTx) error {
-		return f.putHealthItem(ctx, tx, ref, followUpFilingStalledCode, fmt.Sprintf(
+		return f.notices.put(ctx, tx, ref, followUpFilingStalledCode, fmt.Sprintf(
 			"Follow-up issue filing for proposal instance %s has failed on every attempt for %d minutes and is not finished. It is retried automatically, and later filings in the same repository wait behind it. The daemon log carries the error.",
 			ref.instanceID, int(followUpFilingStallNoticeAfter.Minutes())))
 	})
-}
-
-// filingRef is what a health item needs about one filing: where the
-// operator saw the proposal. It comes from the effect_proposal item, which
-// reads even when the proposal instance behind it no longer does.
-type filingRef struct {
-	instanceID domain.ProposalInstanceID
-	projectID  domain.ProjectID
-	subject    domain.Subject
 }
 
 type approvedFiling struct {
@@ -393,7 +376,7 @@ func (f *FollowUpFiler) driveWorkflow(ctx context.Context, filing approvedFiling
 		intent, opened, err := f.open(ctx, filing, view, all)
 		if err != nil {
 			// An uncertain cap or intent result cannot clear an existing notice.
-			f.holding[filingNotice{filing.instanceID, followUpFilingWaitingCode}] = true
+			f.notices.hold(filing.instanceID, followUpFilingWaitingCode)
 			return err
 		}
 		if !opened {
@@ -497,9 +480,9 @@ func (f *FollowUpFiler) open(
 			return domain.FollowUpFilingIntent{}, false, err
 		}
 		if recent >= view.caps.MaxPerDay {
-			f.holding[filingNotice{filing.instanceID, followUpFilingWaitingCode}] = true
+			f.notices.hold(filing.instanceID, followUpFilingWaitingCode)
 			return domain.FollowUpFilingIntent{}, false, f.store.Write(ctx, func(tx *store.WriteTx) error {
-				return f.putHealthItem(ctx, tx, filing.filingRef, followUpFilingWaitingCode, fmt.Sprintf(
+				return f.notices.put(ctx, tx, filing.filingRef, followUpFilingWaitingCode, fmt.Sprintf(
 					"Follow-up issue filing for proposal instance %s in %s is waiting: %d filings there in the last 24 hours reach the %s cap of %d. It files when the window frees.",
 					filing.instanceID, view.project.Repo, recent, policyFollowUpFilingMaxPerDay, view.caps.MaxPerDay))
 			})
@@ -529,6 +512,22 @@ func lastCreateSentAt(intent domain.FollowUpFilingIntent) time.Time {
 		return intent.OpenedAt
 	}
 	return intent.Attempts[len(intent.Attempts)-1].DispatchStartedAt
+}
+
+// runCapReason returns why the run's other filings and comments that may
+// have reached GitHub leave no room under the per-run cap, or "" when one
+// more fits. The filer and the comment dispatcher both call it, and each
+// calls it again in the write that starts its attempt, so two posts started
+// together cannot both pass on the same count.
+func runCapReason(
+	ctx context.Context, tx *store.ReadTx, handle domain.OpaqueSubjectHandle, exclude domain.ProposalInstanceID, maxPerRun int,
+) (string, error) {
+	perRun, err := tx.RunPostsMayHaveCreated(ctx, handle, exclude)
+	if err != nil || perRun < maxPerRun {
+		return "", err
+	}
+	return fmt.Sprintf("its run already has %d filings and comments, the %s cap of %d",
+		perRun, policyFollowUpFilingMaxPerRun, maxPerRun), nil
 }
 
 // countFilings counts the other discovered filings in scope whose intent may
@@ -760,15 +759,20 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 			"the new issue would sit deeper in Freeside-filed ancestry than the %s cap of %d",
 			policyFollowUpFilingMaxDepth, view.caps.MaxDepth))
 	}
-	perRun, err := f.countFilings(ctx, filing, all,
-		func(other approvedFiling) bool { return other.handle == filing.handle },
-		func(domain.FollowUpFilingIntent) bool { return true })
-	if err != nil {
+	// The per-run cap counts the run's issue comments with its filings
+	// (issue #3147), so it reads every intent under the run's subject, not
+	// only the filings this pass discovered. This read skips the forge work
+	// below for a run already at the cap; the attempt's write decides.
+	var capped string
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		capped, err = runCapReason(ctx, tx, filing.handle, filing.instanceID, view.caps.MaxPerRun)
+		return err
+	}); err != nil {
 		return err
 	}
-	if perRun >= view.caps.MaxPerRun {
-		return refusePrecondition(followUpFilingCappedCode, fmt.Sprintf(
-			"its run already has %d filings, the %s cap of %d", perRun, policyFollowUpFilingMaxPerRun, view.caps.MaxPerRun))
+	if capped != "" {
+		return refusePrecondition(followUpFilingCappedCode, capped)
 	}
 	target, err := f.resolveTarget(ctx, view, true)
 	var precondition *filingPreconditionError
@@ -819,10 +823,19 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 	}
 	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		var err error
+		// Counted again under the writer lock: the comment dispatcher
+		// starts attempts against the same cap from its own goroutine.
+		if capped, err = runCapReason(ctx, &tx.ReadTx, filing.handle, filing.instanceID,
+			view.caps.MaxPerRun); err != nil || capped != "" {
+			return err
+		}
 		intent, err = tx.StartFollowUpFilingAttempt(ctx, filing.instanceID, f.now())
 		return err
 	}); err != nil {
 		return err
+	}
+	if capped != "" {
+		return refusePrecondition(followUpFilingCappedCode, capped)
 	}
 	result, sendErr := f.forge.sendCreateIssue(request, target.repo)
 	class := classifyFollowUpFilingCreate(result, sendErr)
@@ -974,7 +987,7 @@ func (f *FollowUpFiler) refuse(
 		if _, err := tx.RefuseFollowUpFiling(ctx, filing.instanceID, reason, f.now()); err != nil {
 			return err
 		}
-		return f.putHealthItem(ctx, tx, filing.filingRef, code, fmt.Sprintf(
+		return f.notices.put(ctx, tx, filing.filingRef, code, fmt.Sprintf(
 			"Follow-up issue for proposal instance %s was not filed: %s. No issue was created, and this proposal will not be retried.",
 			filing.instanceID, why))
 	})
@@ -987,7 +1000,7 @@ func (f *FollowUpFiler) recordAmbiguous(ctx context.Context, filing approvedFili
 		if _, err := tx.RecordFollowUpFilingAmbiguous(ctx, filing.instanceID, f.now()); err != nil {
 			return err
 		}
-		return f.putHealthItem(ctx, tx, filing.filingRef, followUpFilingAmbiguousCode, fmt.Sprintf(
+		return f.notices.put(ctx, tx, filing.filingRef, followUpFilingAmbiguousCode, fmt.Sprintf(
 			"Follow-up issue filing for proposal instance %s in repository %s (ID %d) is ambiguous: %s. The create request may have committed, so no issue is recorded for this proposal and it will not be retried. Later filings in this repository record an issue only from a confirmed create response.",
 			filing.instanceID, view.project.Repo, view.intent.RepositoryID, why))
 	})
@@ -999,130 +1012,11 @@ func (f *FollowUpFiler) recordAmbiguous(ctx context.Context, filing approvedFili
 // notice does not say whether a create was sent before, because the intent
 // that would say so is behind the same gates and does not read.
 func (f *FollowUpFiler) reportUnreadable(ctx context.Context, ref filingRef, cause error) error {
-	f.holding[filingNotice{ref.instanceID, followUpFilingUnreadableCode}] = true
+	f.notices.hold(ref.instanceID, followUpFilingUnreadableCode)
 	err := f.store.Write(ctx, func(tx *store.WriteTx) error {
-		return f.putHealthItem(ctx, tx, ref, followUpFilingUnreadableCode, fmt.Sprintf(
+		return f.notices.put(ctx, tx, ref, followUpFilingUnreadableCode, fmt.Sprintf(
 			"Follow-up issue filing for proposal instance %s is stopped: its stored proposal, approval, or ledger rows no longer pass validation, so nothing more is sent to GitHub for it. If a create request had already been sent, its outcome is not recorded and the issue may exist; check the repository before filing it by hand. If it had begun filing, later filings in the same repository wait until its rows are repaired.",
 			ref.instanceID))
 	})
 	return errors.Join(fmt.Errorf("%w: %q: %w", errFollowUpFilingUnreadable, ref.instanceID, cause), err)
-}
-
-// putHealthItem opens one advisory, acknowledge-only system_health item on
-// the proposal's own subject. Its ID is fixed by the filing and the code, so
-// raising a notice that already exists writes nothing. A transient notice
-// that was resolved is final, so the condition's return opens the next
-// numbered one.
-func (f *FollowUpFiler) putHealthItem(
-	ctx context.Context, tx *store.WriteTx, ref filingRef, code, reason string,
-) error {
-	if err := tx.RequireProposalWorkflowOpen(ctx, ref.instanceID); errors.Is(err, store.ErrTaskWorkflowClosed) {
-		return nil
-	}
-	first := followUpFilingItemPrefix + string(ref.instanceID) + "/" + code
-	id := domain.ItemID(first)
-	for occurrence := 2; ; occurrence++ {
-		existing, err := tx.GetAttentionItem(ctx, id)
-		if errors.Is(err, store.ErrNotFound) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if existing.Status == domain.StatusOpen || !slices.Contains(transientFilingNoticeCodes, code) {
-			return nil
-		}
-		id = domain.ItemID(first + "/" + strconv.Itoa(occurrence))
-	}
-	names, err := tx.DisplayNamesFor(ctx, ref.projectID, ref.subject)
-	if err != nil {
-		return err
-	}
-	createdAt := f.now().UTC()
-	advisory := domain.HealthPostureAdvisory
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: id, ProjectID: ref.projectID, Subject: ref.subject,
-		Type: domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
-		Reason:            reason,
-		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
-		// Advisory: publication and review continue; only this filing is affected.
-		HealthDiagnostic: &domain.HealthDiagnostic{Code: code, Impairs: domain.ImpairedCapabilityNone},
-		ItemVersion:      1, InterruptionClass: domain.InterruptionExceptional,
-		CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: &advisory,
-	}, nil)
-	if err != nil {
-		return err
-	}
-	return tx.PutAttentionItem(ctx, item)
-}
-
-// resolveClearedNotices resolves every open transient notice whose condition
-// this pass did not see: the filing opened its intent, stopped failing, reads
-// again, or finished. It is the only resolver because each condition ends in
-// several places. The read comes first so the ordinary pass, with no notice
-// to resolve, opens no write transaction.
-func (f *FollowUpFiler) resolveClearedNotices(ctx context.Context) error {
-	var cleared []domain.AttentionItem
-	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		cleared, err = f.clearedNotices(ctx, tx)
-		return err
-	}); err != nil || len(cleared) == 0 {
-		return err
-	}
-	return f.store.Write(ctx, func(tx *store.WriteTx) error {
-		// Recomputed inside the write, so each resolve advances the item's
-		// current version, not the one the read saw.
-		cleared, err := f.clearedNotices(ctx, &tx.ReadTx)
-		if err != nil {
-			return err
-		}
-		for _, item := range cleared {
-			item.ItemVersion++
-			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, f.now().UTC(),
-				"Resolved when the condition holding the follow-up filing cleared.", nil)
-			if err != nil {
-				return err
-			}
-			if err := tx.PutAttentionItem(ctx, item); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func (f *FollowUpFiler) clearedNotices(ctx context.Context, tx *store.ReadTx) ([]domain.AttentionItem, error) {
-	items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
-	if err != nil {
-		return nil, err
-	}
-	var cleared []domain.AttentionItem
-	for _, item := range items {
-		if err := tx.RequireItemWorkflowOpen(ctx, item); errors.Is(err, store.ErrTaskWorkflowClosed) {
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-		if notice, ok := transientFilingNotice(item); ok && !f.holding[notice] {
-			cleared = append(cleared, item)
-		}
-	}
-	return cleared, nil
-}
-
-// transientFilingNotice reads the filing and code out of a transient notice
-// this filer raised; ok is false for any other item.
-func transientFilingNotice(item domain.AttentionItem) (filingNotice, bool) {
-	rest, ok := strings.CutPrefix(string(item.ID), followUpFilingItemPrefix)
-	if !ok {
-		return filingNotice{}, false
-	}
-	for _, code := range transientFilingNoticeCodes {
-		// The code is followed by nothing or by an occurrence number.
-		if at := strings.LastIndex(rest, "/"+code); at >= 0 {
-			return filingNotice{domain.ProposalInstanceID(rest[:at]), code}, true
-		}
-	}
-	return filingNotice{}, false
 }

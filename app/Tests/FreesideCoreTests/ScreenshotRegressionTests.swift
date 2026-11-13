@@ -3591,6 +3591,38 @@
                                 at: dynamicTypeSize,
                                 effectProposalFacts: adoptionEffectFacts))))
             }
+            // The issue comment card is not in the default inbox either. Its
+            // facts carry the issue the duplicate search matched, so these pin
+            // its rows and the proposed comment in its unverified section, at
+            // Mac and iPhone width in both schemes.
+            let commentEffect = AttentionFixtures.issueCommentEffectProposal()
+            let commentEffectStore = InboxStore(client: client)
+            commentEffectStore.replaceAll(with: [commentEffect])
+            let commentEffectDetail = DecisionDetailView(
+                store: commentEffectStore,
+                itemID: commentEffect.item.id,
+                graphics: .init(),
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            let commentEffectFacts = AttentionFixtures.effectProposalFacts(for: commentEffect)
+            for (suffix, width, scheme) in [
+                ("", canvasWidth, ColorScheme.light),
+                ("-phone", CGFloat(390), ColorScheme.light),
+                ("-dark", canvasWidth, ColorScheme.dark),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-effect_proposal-comment\(suffix)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            commentEffectDetail.screenshotCard(
+                                commentEffect.item,
+                                at: dynamicTypeSize,
+                                effectProposalFacts: commentEffectFacts))))
+            }
             surfaces.append(
                 Surface(
                     name: "task-proposal-snooze-sheet",

@@ -1117,16 +1117,21 @@ struct DecisionDetailView: View {
                     }
                 }
             }
-            // A filing's title and body are the agent's words. They stay in
-            // this module, ahead of the actions, so the operator reads all
-            // that would be filed before deciding, and each draws in its own
-            // unverified section so neither shares one with a daemon fact.
+            // A filing's title and body, and a comment's body, are the
+            // agent's words. They stay in this module, ahead of the actions,
+            // so the operator reads all that would be posted before deciding,
+            // and each draws in its own unverified section so none shares one
+            // with a daemon fact.
             if let effectProposalFacts,
                 let proposed = AttentionDisplay.proposedIssueText(effectProposalFacts)
             {
-                proposedIssueTextSection("Proposed title", text: proposed.title, unverified: register)
-                proposedIssueTextSection(
-                    "Proposed body", text: proposed.body, unverified: register.withoutInfo)
+                if let title = proposed.title {
+                    proposedIssueTextSection("Proposed title", text: title, unverified: register)
+                    proposedIssueTextSection(
+                        "Proposed body", text: proposed.body, unverified: register.withoutInfo)
+                } else {
+                    proposedIssueTextSection("Proposed comment", text: proposed.body, unverified: register)
+                }
             }
         case .agentQuestion:
             agentQuestionLead(item, register: register)
@@ -1230,8 +1235,8 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// One field of the issue a follow-up filing would create, in full and
-    /// as plain text: the operator approves the exact text that would be
+    /// One field of the issue a follow-up filing would create, or the comment
+    /// an issue comment would post, in full and as plain text: the operator approves the exact text that would be
     /// sent, so nothing is truncated and Markdown is not interpreted.
     private func proposedIssueTextSection(
         _ title: String,
@@ -2883,6 +2888,7 @@ struct DecisionDetailView: View {
         if let effectProposalFacts {
             rows.append(contentsOf: AttentionDisplay.followUpFilingDetailRows(effectProposalFacts))
             rows.append(contentsOf: AttentionDisplay.imagePolicyAdoptionDetailRows(effectProposalFacts))
+            rows.append(contentsOf: AttentionDisplay.issueCommentDetailRows(effectProposalFacts))
         }
         return rows
     }

@@ -17,5 +17,6 @@
     "registry_authorities": [
       "registry.example.com"
     ]
-  }
+  },
+  "issue_comment": null
 }

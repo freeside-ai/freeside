@@ -1332,8 +1332,8 @@ import Testing
     /// One way served filing facts can disagree with the item or with
     /// themselves. Each must fail the match gate on its own.
     enum FilingFactsMismatch: String, CaseIterable {
-        case closureKind, runProposalKind, missingFilingArm, closureArmPresent, supersedesPresent
-        case rejectedTitle, rejectedBody
+        case closureKind, runProposalKind, missingFilingArm, closureArmPresent, commentArmPresent
+        case supersedesPresent, rejectedTitle, rejectedBody
         case staleRevision, staleEntityVersion, staleItemVersion, wrongProposalDigest
 
         func apply(
@@ -1351,6 +1351,8 @@ import Testing
                 mutated.source_issue_closure =
                     AttentionFixtures.effectProposalFacts(
                         for: AttentionFixtures.fixture(type: .effect_proposal))?.source_issue_closure
+            case .commentArmPresent:
+                mutated.issue_comment = DecisionModelTests.servedCommentArm()
             case .supersedesPresent:
                 mutated.supersedes = .init(
                     value1: .init(proposal_digest: "sha256:prior-effect", source_issue_closure: nil))
@@ -1384,6 +1386,138 @@ import Testing
         #expect(mismatch.apply(to: served) != served)
         await server.setEffectProposalFactsTransform { mismatch.apply(to: $0) }
         let model = await filingModel(server: server)
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    private func commentModel(server: MockServer) async -> DecisionModel {
+        let store = await makeStore(server: server)
+        return DecisionModel(
+            store: store, itemID: AttentionFixtures.issueCommentEffectProposal().item.id)
+    }
+
+    private static func commentServer() -> MockServer {
+        MockServer(items: [AttentionFixtures.issueCommentEffectProposal()])
+    }
+
+    /// The comment arm the mock serves, for the mismatch cases that add it
+    /// to another kind's facts.
+    nonisolated static func servedCommentArm()
+        -> Components.Schemas.EffectProposalFactsSnapshot.issue_commentPayload?
+    {
+        AttentionFixtures.effectProposalFacts(
+            for: AttentionFixtures.issueCommentEffectProposal())?.issue_comment
+    }
+
+    @Test func issueCommentFactsValidateAndEnableTheOfferedActions() async throws {
+        let model = await commentModel(server: Self.commentServer())
+
+        await model.validate()
+
+        let facts = try #require(model.effectProposalFacts)
+        #expect(facts.effect_kind == .issue_comment)
+        #expect(facts.issue_comment != nil)
+        #expect(model.actionsEnabled)
+        // A comment admits no revision, so the item never offers one.
+        #expect(model.offeredActions == [.approve, .decline, .snooze])
+    }
+
+    @Test func issueCommentApproveSubmitsAndResolvesTheItem() async {
+        let model = await commentModel(server: Self.commentServer())
+        await model.validate()
+
+        await model.submit(.approve)
+
+        #expect(model.appliedRecord?.action == .approve)
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
+    @Test func issueCommentDeclineSubmitsAndDismissesTheItem() async {
+        let model = await commentModel(server: Self.commentServer())
+        await model.validate()
+
+        await model.submit(.decline)
+
+        #expect(model.appliedRecord?.action == .decline)
+        #expect(model.snapshot?.item.status == .dismissed)
+    }
+
+    /// One way served comment facts can disagree with the item or with
+    /// themselves. Each must fail the match gate on its own.
+    enum CommentFactsMismatch: String, CaseIterable {
+        case filingKind, runProposalKind, missingCommentArm, closureArmPresent, filingArmPresent
+        case adoptionArmPresent, supersedesPresent, rejectedBody, staleItemVersion, wrongProposalDigest
+
+        func apply(
+            to facts: Components.Schemas.EffectProposalFactsSnapshot
+        ) -> Components.Schemas.EffectProposalFactsSnapshot {
+            var mutated = facts
+            switch self {
+            case .filingKind:
+                mutated.effect_kind = .follow_up_filing
+            case .runProposalKind:
+                mutated.effect_kind = .run_proposal
+            case .missingCommentArm:
+                mutated.issue_comment = nil
+            case .closureArmPresent:
+                mutated.source_issue_closure =
+                    AttentionFixtures.effectProposalFacts(
+                        for: AttentionFixtures.fixture(type: .effect_proposal))?.source_issue_closure
+            case .filingArmPresent:
+                mutated.follow_up_filing =
+                    AttentionFixtures.effectProposalFacts(
+                        for: AttentionFixtures.followUpFilingEffectProposal())?.follow_up_filing
+            case .adoptionArmPresent:
+                mutated.image_policy_adoption =
+                    AttentionFixtures.effectProposalFacts(
+                        for: AttentionFixtures.imagePolicyAdoptionEffectProposal())?.image_policy_adoption
+            case .supersedesPresent:
+                mutated.supersedes = .init(
+                    value1: .init(proposal_digest: "sha256:prior-effect", source_issue_closure: nil))
+            case .rejectedBody:
+                mutated.issue_comment?.value1.body.verdict = .rejected
+            case .staleItemVersion:
+                mutated.item_version += 1
+            case .wrongProposalDigest:
+                mutated.proposal_digest = "sha256:another-proposal"
+            }
+            return mutated
+        }
+    }
+
+    @Test(arguments: CommentFactsMismatch.allCases)
+    func mismatchedIssueCommentFactsAreDroppedAndActionsStayDisabled(
+        mismatch: CommentFactsMismatch
+    ) async throws {
+        let server = Self.commentServer()
+        // The mutation must change the served facts, or the case would pass
+        // by proving nothing.
+        let served = try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.issueCommentEffectProposal()))
+        #expect(mismatch.apply(to: served) != served)
+        await server.setEffectProposalFactsTransform { mismatch.apply(to: $0) }
+        let model = await commentModel(server: server)
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func closureFactsCarryingACommentArmAreDropped() async throws {
+        let server = MockServer()
+        let comment = try #require(Self.servedCommentArm())
+        await server.setEffectProposalFactsTransform { facts in
+            var mutated = facts
+            mutated.issue_comment = comment
+            return mutated
+        }
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
 
         await model.validate()
 
@@ -1439,7 +1573,7 @@ import Testing
     /// own.
     enum AdoptionFactsMismatch: String, CaseIterable {
         case filingKind, runProposalKind, missingAdoptionArm, closureArmPresent, filingArmPresent
-        case supersedesPresent, adoptsNothing, staleItemVersion, wrongProposalDigest
+        case commentArmPresent, supersedesPresent, adoptsNothing, staleItemVersion, wrongProposalDigest
 
         func apply(
             to facts: Components.Schemas.EffectProposalFactsSnapshot
@@ -1460,6 +1594,8 @@ import Testing
                 mutated.follow_up_filing =
                     AttentionFixtures.effectProposalFacts(
                         for: AttentionFixtures.followUpFilingEffectProposal())?.follow_up_filing
+            case .commentArmPresent:
+                mutated.issue_comment = DecisionModelTests.servedCommentArm()
             case .supersedesPresent:
                 mutated.supersedes = .init(
                     value1: .init(proposal_digest: "sha256:prior-effect", source_issue_closure: nil))

@@ -595,9 +595,10 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodGet && path == testRepoPath:
 		// GET /repos/{owner}/{repo}: label intake's §5.18 rebinding check reads
-		// only the canonical numeric id.
+		// only the canonical numeric id; the issue comment dispatcher also
+		// reads the default branch.
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":%d}`, g.repositoryID)
+		_, _ = fmt.Fprintf(w, `{"id":%d,"default_branch":"main"}`, g.repositoryID)
 
 	case r.Method == http.MethodPost && path == testRepoPath+"/issues":
 		g.filing.create(g.t, w, r)

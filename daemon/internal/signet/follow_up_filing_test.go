@@ -30,6 +30,21 @@ type filingFixture struct {
 
 func newFilingFixture(t *testing.T) filingFixture {
 	t.Helper()
+	return newFindingProposalFixture(t, domain.EffectFollowUpFiling)
+}
+
+// newCommentFixture is newFilingFixture with an issue_comment proposal in
+// place of the filing: the finding's duplicate search answers issue 41, and
+// the comment card is open.
+func newCommentFixture(t *testing.T) filingFixture {
+	t.Helper()
+	return newFindingProposalFixture(t, domain.EffectIssueComment)
+}
+
+const commentFixtureIssue = 41
+
+func newFindingProposalFixture(t *testing.T, kind domain.EffectKind) filingFixture {
+	t.Helper()
 	ctx := context.Background()
 	base := newRunFixture(t)
 	now := *base.now
@@ -80,16 +95,47 @@ func newFilingFixture(t *testing.T) filingFixture {
 			Text: text, Ruleset: domain.IssueTextRulesetGitHubIssue1, Verdict: domain.ScreeningVerdictPassed,
 		}
 	}
-	proposal, err := domain.NewEffectProposal(domain.EffectFollowUpFiling, domain.FollowUpFilingInput{
-		SubjectHandle: domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID)),
-		Target:        target,
-		Source: domain.FollowUpFilingSource{
-			FindingID: finding.ID, AdjudicationDigest: adjudication.Digest,
-			Kind: domain.FollowUpSourceDeferredDisposition,
-		},
-		Title: passed("Bound the retry budget in the sync client"),
-		Body:  passed("The sync client retries without a budget.\n\nDeferred from review round 1."),
-	}, policy)
+	repository := domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID}
+	source := domain.FollowUpFilingSource{
+		FindingID: finding.ID, AdjudicationDigest: adjudication.Digest,
+		Kind: domain.FollowUpSourceDeferredDisposition,
+	}
+	handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))
+	var proposal domain.EffectProposal
+	var search *domain.DuplicateSearch
+	switch kind {
+	case domain.EffectFollowUpFiling:
+		proposal, err = domain.NewEffectProposal(domain.EffectFollowUpFiling, domain.FollowUpFilingInput{
+			SubjectHandle: handle,
+			Target:        target,
+			Source:        source,
+			Title:         passed("Bound the retry budget in the sync client"),
+			Body:          passed("The sync client retries without a budget.\n\nDeferred from review round 1."),
+		}, policy)
+	case domain.EffectIssueComment:
+		var duplicate domain.DuplicateSearch
+		duplicate, err = domain.NewDuplicateSearch(domain.DuplicateSearchInput{
+			RunID: policy.RunID, AdjudicationDigest: adjudication.Digest, FindingID: finding.ID,
+			Kind: source.Kind, Repository: repository, CandidateLimit: domain.MaxDuplicateSearchCandidates,
+			Candidates: []domain.DuplicateSearchCandidate{
+				{Handle: domain.DuplicateSearchHandle(1), Number: commentFixtureIssue, Title: "Bound the sync client's retries"},
+			},
+			DuplicateOf: domain.DuplicateSearchHandle(1), Confidence: domain.ConfidenceHigh,
+			Reason: "candidate-1 already tracks the retry budget.", CreatedAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		search = &duplicate
+		proposal, err = domain.NewEffectProposal(domain.EffectIssueComment, domain.IssueCommentInput{
+			SubjectHandle: handle,
+			Repository:    repository,
+			Search:        duplicate,
+			Body:          passed("A review finding matches this issue.\n\nFinding: retry budget is unbounded"),
+		}, policy)
+	default:
+		t.Fatalf("fixture kind %q", kind)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,8 +178,12 @@ func newFilingFixture(t *testing.T) filingFixture {
 		}); err != nil {
 			return err
 		}
-		if err := storetest.PutNewDuplicateSearch(ctx, tx, policy.RunID, proposal.FilingProposal.Source,
-			domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID}, now); err != nil {
+		if search != nil {
+			err = tx.PutDuplicateSearch(ctx, *search)
+		} else {
+			err = storetest.PutNewDuplicateSearch(ctx, tx, policy.RunID, source, repository, now)
+		}
+		if err != nil {
 			return err
 		}
 		instance, _, err = tx.AllocateProposalInstance(ctx,
@@ -142,7 +192,11 @@ func newFilingFixture(t *testing.T) filingFixture {
 		if err != nil {
 			return err
 		}
-		item, err = signet.OpenFollowUpFilingItem(ctx, tx, base.blobs, instance.ID, now)
+		if kind == domain.EffectIssueComment {
+			item, err = signet.OpenIssueCommentItem(ctx, tx, base.blobs, instance.ID, now)
+		} else {
+			item, err = signet.OpenFollowUpFilingItem(ctx, tx, base.blobs, instance.ID, now)
+		}
 		return err
 	}); err != nil {
 		t.Fatal(err)

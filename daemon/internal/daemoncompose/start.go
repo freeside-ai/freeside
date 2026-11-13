@@ -32,7 +32,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// Approval wakes the filer immediately; this tick bounds recovery delay.
+// Approval wakes the filer and the comment dispatcher immediately; this tick
+// bounds recovery delay.
 const defaultFollowUpFilingInterval = time.Minute
 
 // StartSeams are the test seams a start reads. Production leaves each one
@@ -854,6 +855,16 @@ func (d *Daemon) startClaudeLoops(
 		err := claudeWiring.FollowUpFiler.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
 			if cfg.Logger != nil {
 				cfg.Logger.Error("follow-up filing pass failed", "error", err)
+			}
+		})
+		d.ComponentExited(parent, ctx, daemonshell.ComponentFollowUpFiling, err)
+	})
+	// The comment dispatcher posts on the duplicate branch of follow-up
+	// filing, so it exits under the filing's supervision kind.
+	d.Go(func() {
+		err := claudeWiring.IssueCommentDispatcher.Run(ctx, defaultFollowUpFilingInterval, func(err error) {
+			if cfg.Logger != nil {
+				cfg.Logger.Error("issue comment pass failed", "error", err)
 			}
 		})
 		d.ComponentExited(parent, ctx, daemonshell.ComponentFollowUpFiling, err)

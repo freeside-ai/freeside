@@ -163,7 +163,10 @@ type EffectProposal struct {
 	// AdoptionProposal carries image_policy_adoption parameters, omitempty
 	// so the earlier kinds keep their encodings and digests.
 	AdoptionProposal *ImagePolicyAdoptionParameters `json:"image_policy_adoption,omitempty"`
-	Digest           Digest                         `json:"digest"`
+	// CommentProposal carries issue_comment parameters, omitempty so the
+	// earlier kinds keep their encodings and digests.
+	CommentProposal *IssueCommentParameters `json:"issue_comment,omitempty"`
+	Digest          Digest                  `json:"digest"`
 }
 
 // ProposalInstance is one admitted occurrence. Its admission key, not the
@@ -248,6 +251,7 @@ type canonicalEffectProposal struct {
 	ClosureProposal      *SourceIssueClosureParameters  `json:"source_issue_closure,omitempty"`
 	FilingProposal       *FollowUpFilingParameters      `json:"follow_up_filing,omitempty"`
 	AdoptionProposal     *ImagePolicyAdoptionParameters `json:"image_policy_adoption,omitempty"`
+	CommentProposal      *IssueCommentParameters        `json:"issue_comment,omitempty"`
 }
 
 // NewEffectProposal dispatches construction through the kind's fixed Go type.
@@ -300,6 +304,20 @@ func NewEffectProposal(
 			EncodingVersion: EffectProposalEncodingVersion,
 			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
 			ResolvedPolicyDigest: policy.Digest, FilingProposal: &params,
+		}
+	case EffectIssueComment:
+		input, ok := parameters.(IssueCommentInput)
+		if !ok {
+			return EffectProposal{}, fmt.Errorf("effect kind %q requires IssueCommentInput: %w", kind, ErrEffectProposalInconsistent)
+		}
+		params, err := input.parameters()
+		if err != nil {
+			return EffectProposal{}, err
+		}
+		proposal = EffectProposal{
+			EncodingVersion: EffectProposalEncodingVersion,
+			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
+			ResolvedPolicyDigest: policy.Digest, CommentProposal: &params,
 		}
 	case EffectImagePolicyAdoption:
 		// The card binds no resolved policy, so it has its own constructor
@@ -364,31 +382,43 @@ func (p EffectProposal) Validate() error {
 	}
 	switch p.Kind {
 	case EffectTaskProposal:
-		if p.TaskProposal == nil || p.ClosureProposal != nil || p.FilingProposal != nil || p.AdoptionProposal != nil {
+		if p.TaskProposal == nil || p.ClosureProposal != nil || p.FilingProposal != nil || p.AdoptionProposal != nil ||
+			p.CommentProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.TaskProposal.Validate(); err != nil {
 			return err
 		}
 	case EffectSourceIssueClosure:
-		if p.ClosureProposal == nil || p.TaskProposal != nil || p.FilingProposal != nil || p.AdoptionProposal != nil {
+		if p.ClosureProposal == nil || p.TaskProposal != nil || p.FilingProposal != nil || p.AdoptionProposal != nil ||
+			p.CommentProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.ClosureProposal.Validate(); err != nil {
 			return err
 		}
 	case EffectFollowUpFiling:
-		if p.FilingProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.AdoptionProposal != nil {
+		if p.FilingProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.AdoptionProposal != nil ||
+			p.CommentProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.FilingProposal.Validate(); err != nil {
 			return err
 		}
 	case EffectImagePolicyAdoption:
-		if p.AdoptionProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.FilingProposal != nil {
+		if p.AdoptionProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.FilingProposal != nil ||
+			p.CommentProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.AdoptionProposal.Validate(); err != nil {
+			return err
+		}
+	case EffectIssueComment:
+		if p.CommentProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.FilingProposal != nil ||
+			p.AdoptionProposal != nil {
+			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
+		}
+		if err := p.CommentProposal.Validate(); err != nil {
 			return err
 		}
 	}
@@ -411,7 +441,7 @@ func (p EffectProposal) canonical() canonicalEffectProposal {
 		ResolvedPolicyRunID:  p.ResolvedPolicyRunID,
 		ResolvedPolicyDigest: p.ResolvedPolicyDigest, TaskProposal: p.TaskProposal,
 		ClosureProposal: p.ClosureProposal, FilingProposal: p.FilingProposal,
-		AdoptionProposal: p.AdoptionProposal,
+		AdoptionProposal: p.AdoptionProposal, CommentProposal: p.CommentProposal,
 	}
 }
 
@@ -507,6 +537,18 @@ func gateEffectProposal(
 			return ErrEffectProposalInconsistent
 		}
 		if err := proposal.FilingProposal.Validate(); err != nil {
+			return err
+		}
+		return nil
+	case EffectIssueComment:
+		// The policy and structural gate runs here. The target and source
+		// re-gate is GateIssueComment, which the store calls with the
+		// duplicate search record it re-reads, and the store screens the
+		// body again.
+		if proposal.CommentProposal == nil {
+			return ErrEffectProposalInconsistent
+		}
+		if err := proposal.CommentProposal.Validate(); err != nil {
 			return err
 		}
 		return nil

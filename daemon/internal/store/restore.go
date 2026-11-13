@@ -28,6 +28,9 @@ const (
 	followUpFilingIntentsDeleteTrigger  = "follow_up_filing_intents_append_only_delete"
 	followUpFilingAttemptsDeleteTrigger = "follow_up_filing_attempts_append_only_delete"
 	followUpFiledIssuesDeleteTrigger    = "follow_up_filed_issues_append_only_delete"
+	issueCommentIntentsDeleteTrigger    = "issue_comment_intents_append_only_delete"
+	issueCommentAttemptsDeleteTrigger   = "issue_comment_attempts_append_only_delete"
+	postedIssueCommentsDeleteTrigger    = "posted_issue_comments_append_only_delete"
 )
 
 const canonicalOutboxPublicationInsertTriggerSQL = `CREATE TRIGGER outbox_publication_intent_requires_current_insert
@@ -79,6 +82,24 @@ BEGIN
     SELECT RAISE(ABORT, 'filed follow-up issues are append-only');
 END`
 
+const canonicalIssueCommentIntentsDeleteTriggerSQL = `CREATE TRIGGER issue_comment_intents_append_only_delete
+BEFORE DELETE ON issue_comment_intents
+BEGIN
+    SELECT RAISE(ABORT, 'issue comment intents are append-only');
+END`
+
+const canonicalIssueCommentAttemptsDeleteTriggerSQL = `CREATE TRIGGER issue_comment_attempts_append_only_delete
+BEFORE DELETE ON issue_comment_attempts
+BEGIN
+    SELECT RAISE(ABORT, 'issue comment attempts are append-only');
+END`
+
+const canonicalPostedIssueCommentsDeleteTriggerSQL = `CREATE TRIGGER posted_issue_comments_append_only_delete
+BEFORE DELETE ON posted_issue_comments
+BEGIN
+    SELECT RAISE(ABORT, 'posted issue comments are append-only');
+END`
+
 // deleteGuard names an append-only BEFORE DELETE trigger a restore must lift
 // around its wholesale delete+reinsert and canonically reinstate before commit.
 type deleteGuard struct {
@@ -100,6 +121,9 @@ var appendOnlyDeleteGuards = []deleteGuard{
 	{followUpFilingIntentsDeleteTrigger, canonicalFollowUpFilingIntentsDeleteTriggerSQL},
 	{followUpFilingAttemptsDeleteTrigger, canonicalFollowUpFilingAttemptsDeleteTriggerSQL},
 	{followUpFiledIssuesDeleteTrigger, canonicalFollowUpFiledIssuesDeleteTriggerSQL},
+	{issueCommentIntentsDeleteTrigger, canonicalIssueCommentIntentsDeleteTriggerSQL},
+	{issueCommentAttemptsDeleteTrigger, canonicalIssueCommentAttemptsDeleteTriggerSQL},
+	{postedIssueCommentsDeleteTrigger, canonicalPostedIssueCommentsDeleteTriggerSQL},
 }
 
 // restoreLateCopyTables lists every table whose BEFORE INSERT trigger

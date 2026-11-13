@@ -670,6 +670,7 @@ public final class DecisionModel {
             // show one head and approve another.
             return facts.follow_up_filing == nil
                 && facts.image_policy_adoption == nil
+                && facts.issue_comment == nil
                 && facts.source_issue_closure?.value1.merge.candidate_head_sha
                     == snapshot.item.pr_head_sha
         case .follow_up_filing:
@@ -682,6 +683,7 @@ public final class DecisionModel {
             guard let filing = facts.follow_up_filing?.value1 else { return false }
             return facts.source_issue_closure == nil
                 && facts.image_policy_adoption == nil
+                && facts.issue_comment == nil
                 && facts.supersedes == nil
                 && filing.title.verdict == .passed
                 && filing.body.verdict == .passed
@@ -696,8 +698,18 @@ public final class DecisionModel {
             guard let adoption = facts.image_policy_adoption?.value1 else { return false }
             return facts.source_issue_closure == nil
                 && facts.follow_up_filing == nil
+                && facts.issue_comment == nil
                 && facts.supersedes == nil
                 && (adoption.recipe_digest != nil || !adoption.registry_authorities.isEmpty)
+        case .issue_comment:
+            // A comment binds no merge and admits no revision, like a filing.
+            // The daemon serves one only with its body screened as passed.
+            guard let comment = facts.issue_comment?.value1 else { return false }
+            return facts.source_issue_closure == nil
+                && facts.follow_up_filing == nil
+                && facts.image_policy_adoption == nil
+                && facts.supersedes == nil
+                && comment.body.verdict == .passed
         case .unknown:
             // A kind this build doesn't know binds nothing it can show, so the
             // card never approves it.

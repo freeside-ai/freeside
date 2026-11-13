@@ -160,13 +160,15 @@ import Testing
     }
 
     /// The rows an effect proposal's fetched facts add (the closure's bound
-    /// merge, a follow-up filing, an image policy adoption) are values a
-    /// reader copies, so they join Identifiers and never Recorded Context.
+    /// merge, a follow-up filing, an image policy adoption, an issue
+    /// comment) are values a reader copies, so they join Identifiers and
+    /// never Recorded Context.
     @Test func effectProposalFactRowsAreIdentifiers() throws {
         let snapshots = [
             AttentionFixtures.recommendedEffectProposal(),
             AttentionFixtures.followUpFilingEffectProposal(),
             AttentionFixtures.imagePolicyAdoptionEffectProposal(),
+            AttentionFixtures.issueCommentEffectProposal(),
         ]
         for snapshot in snapshots {
             let item = snapshot.item

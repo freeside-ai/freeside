@@ -216,27 +216,37 @@ func duplicateSearchFindingText(finding domain.Finding, entry domain.FindingAdju
 	return string(body), nil
 }
 
-// searchedNewFollowUpFilings keeps the pending entries whose duplicate search
-// answered "new". An entry with no record waits for a search, and one whose
-// search named an open issue gets no filing.
-func searchedNewFollowUpFilings(
+// duplicateFollowUpEntry is a pending entry whose duplicate search named an
+// open issue, with the record that named it.
+type duplicateFollowUpEntry struct {
+	followUpFilingEntry
+	search domain.DuplicateSearch
+}
+
+// splitSearchedFollowUps sorts the pending entries by their duplicate
+// search's answer: an entry whose search answered "new" gets a filing, and
+// one whose search named an open issue gets a comment on that issue (plan §7).
+// An entry with no record gets neither: it waits for a search, or the run's
+// duplicate_search_unavailable notice already covers it.
+func splitSearchedFollowUps(
 	ctx context.Context,
 	tx *store.ReadTx,
 	artifact domain.FindingAdjudication,
 	pending []followUpFilingEntry,
-) ([]followUpFilingEntry, error) {
-	var kept []followUpFilingEntry
+) (fresh []followUpFilingEntry, duplicates []duplicateFollowUpEntry, err error) {
 	for _, candidate := range pending {
 		search, err := tx.GetDuplicateSearch(ctx, artifact.Digest, candidate.entry.FindingID)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if search.IsNew() {
-			kept = append(kept, candidate)
+			fresh = append(fresh, candidate)
+		} else {
+			duplicates = append(duplicates, duplicateFollowUpEntry{candidate, search})
 		}
 	}
-	return kept, nil
+	return fresh, duplicates, nil
 }
