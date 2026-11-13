@@ -31,6 +31,20 @@ const (
 	MaxFollowUpFilingLabelBytes = 50
 	// MaxFollowUpFilingMilestoneBytes bounds the milestone title.
 	MaxFollowUpFilingMilestoneBytes = 255
+
+	// The authored fields of a follow-up filing's body (plan §5.17), each
+	// bounded on its own. The authoring site refuses an answer with a field
+	// over its bound, and the engine renders each under its heading. Origin
+	// bounds the composed record of the finding the body closes with. With
+	// the fixed headings, the Dependencies line, and the title kept apart,
+	// they sum below MaxFollowUpFilingBodyBytes, so a rendered body never
+	// exceeds it.
+	MaxFollowUpFilingObjectiveBytes         = 2 << 10
+	MaxFollowUpFilingNonGoalsBytes          = 1 << 10
+	MaxFollowUpFilingAffectedContractsBytes = 1 << 10
+	MaxFollowUpFilingAcceptanceBytes        = 2 << 10
+	MaxFollowUpFilingScopeBytes             = 1 << 10
+	MaxFollowUpFilingOriginBytes            = 6 << 10
 )
 
 // FollowUpFilingRepository names the repository a follow-up issue is filed
@@ -132,6 +146,11 @@ type FollowUpFilingParameters struct {
 	Title  ScreenedIssueText    `json:"title"`
 	Body   ScreenedIssueText    `json:"body"`
 	Source FollowUpFilingSource `json:"source"`
+	// Kind is the work kind the authoring site chose, or empty when the text
+	// was composed without it. It is the one input to Labels that is not
+	// policy: Labels holds its fixed label, and the gate re-derives that.
+	// Omitted when empty, so a filing without one keeps its encoding.
+	Kind FollowUpFilingKind `json:"kind,omitempty"`
 }
 
 // Validate reports whether the parameters are structurally sound. It is the
@@ -160,6 +179,9 @@ func (p FollowUpFilingParameters) Validate() error {
 	}
 	if err := p.Body.validate("body", MaxFollowUpFilingBodyBytes, false); err != nil {
 		return err
+	}
+	if p.Kind != "" && !p.Kind.valid() {
+		return fmt.Errorf("follow-up filing kind %q: %w", p.Kind, ErrEffectProposalInconsistent)
 	}
 	return p.Source.Validate()
 }
@@ -279,6 +301,25 @@ type FollowUpFilingInput struct {
 	// Title and Body are the agent text with the records of their screening.
 	Title ScreenedIssueText
 	Body  ScreenedIssueText
+	// Kind is the authoring site's work kind, or empty for none. It adds its
+	// fixed label to the target's labels and nothing else.
+	Kind FollowUpFilingKind
+}
+
+// followUpFilingLabels is the one derivation of a filing's label set: the
+// policy labels and, when a kind is named, its fixed label, sorted and
+// duplicate-free. The producer and the gate both call it, so a stored label
+// set is only ever what policy and the enum's table yield.
+func followUpFilingLabels(target FollowUpFilingTarget, kind FollowUpFilingKind) []string {
+	// A fresh non-nil slice: the canonical encoding of no labels is [], and
+	// the copy detaches the result from the target's backing array.
+	labels := append([]string{}, target.Labels...)
+	if label := kind.Label(); label != "" {
+		labels = append(labels, label)
+		slices.Sort(labels)
+		labels = slices.Compact(labels)
+	}
+	return labels
 }
 
 // parameters derives the stored parameters from the trusted input. It rejects
@@ -291,10 +332,8 @@ func (in FollowUpFilingInput) parameters() (FollowUpFilingParameters, error) {
 	params := FollowUpFilingParameters{
 		SubjectHandle: in.SubjectHandle,
 		Repository:    FollowUpFilingRepository{Repo: in.Target.Repo, RepositoryID: in.Target.RepositoryID},
-		// A fresh non-nil slice: the canonical encoding of no labels is [], and
-		// the copy detaches the proposal from the caller's backing array.
-		Labels: append([]string{}, in.Target.Labels...),
-		Title:  in.Title, Body: in.Body, Source: in.Source,
+		Labels:        followUpFilingLabels(in.Target, in.Kind),
+		Title:         in.Title, Body: in.Body, Source: in.Source, Kind: in.Kind,
 	}
 	if in.Target.Milestone != "" {
 		milestone := in.Target.Milestone
@@ -308,10 +347,13 @@ func (in FollowUpFilingInput) parameters() (FollowUpFilingParameters, error) {
 
 // GateFollowUpFiling re-gates a filing proposal against the daemon's current
 // filing-target determination and rejects any stored repository, label set,
-// or milestone that differs. The repository compares by id alone: the id is
-// the identity, and a proposal made before a rename keeps the old name
-// (#1537). The source link and the text screen are re-checked by the store,
-// which holds the rows and the screen this package cannot reach.
+// or milestone that differs. The label set must be exactly the policy labels
+// plus the stored kind's fixed label (followUpFilingLabels), and Validate
+// refuses a kind outside the enum, so no stored label can name anything
+// policy or the enum's table did not. The repository compares by id alone:
+// the id is the identity, and a proposal made before a rename keeps the old
+// name (#1537). The source link and the text screen are re-checked by the
+// store, which holds the rows and the screen this package cannot reach.
 func GateFollowUpFiling(proposal EffectProposal, target FollowUpFilingTarget) error {
 	if proposal.Kind != EffectFollowUpFiling || proposal.FilingProposal == nil {
 		return ErrEffectProposalInconsistent
@@ -326,7 +368,7 @@ func GateFollowUpFiling(proposal EffectProposal, target FollowUpFilingTarget) er
 	if filing.Repository.RepositoryID != target.RepositoryID {
 		return fmt.Errorf("follow-up filing repository: %w", ErrFollowUpFilingTargetMismatch)
 	}
-	if !slices.Equal(filing.Labels, target.Labels) {
+	if !slices.Equal(filing.Labels, followUpFilingLabels(target, filing.Kind)) {
 		return fmt.Errorf("follow-up filing labels: %w", ErrFollowUpFilingTargetMismatch)
 	}
 	milestone := ""

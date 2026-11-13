@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 122
+revision: 123
 status: active
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # Freeside
@@ -5290,7 +5290,11 @@ cannot authenticate a historical event (drift-create-revert is assumed
 reachable).
 
 Repository, filing identity, labels, and milestone derive from trusted policy
-and task lineage, never from proposal text. Every agent-controlled textual field
+and task lineage, never from proposal text. The one exception is a single
+`kind:*` label: the authoring site may name a work kind from a fixed enum
+(feature, fix, or chore), a fixed table in code maps it to its label, a value
+outside the enum is refused, and a filing with no authored kind carries no
+kind label. Every agent-controlled textual field
 is screened under a versioned ruleset on the Section [5.5](#55-the-ci-trust-boundary)
 commit-message-screening pattern. The effect identity is the proposal-instance
 ID (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). Idempotent check-before-create and crash-after-create
@@ -7685,37 +7689,25 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 122 ("A macOS Verification Job May Use Its Own Ports on the Host"):
+Revision 123 ("A Follow-Up Filing May Carry an Authored Kind Label"):
 
-1. **A macOS verification job may bind and connect at its slot's reserved
-   ports on the host's own addresses, and nowhere else** (Sections
-   [5.4](#54-credential-modes-egress-profiles-and-concurrency),
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), and
-   [14](#14-risks)). The sandbox can't tell loopback from the host's other
-   addresses, so the allowance covers them all, over TCP or UDP. A slot's
-   reserved ports are a small fixed set, disjoint from every other slot's,
-   outside the ephemeral range, and never a port the daemon listens on. The
-   probe still refutes every other port, the system resolver, and off-host
-   reach, and checks before each job that nothing else listens on the
-   reserved ports. The sandbox profile alone enforces the reservation; the
-   packet filter stays the second layer for off-host traffic only, because
-   whether it sees loopback depends on rules other software loads. The plan
-   names two new residuals: a host process that binds a reserved port
-   during a job is reachable from it, and a job's listener also accepts
-   connections on the host's other addresses, with off-host ones resting on
-   the packet filter alone, unprobed. This lets the convergence pass run
-   in Freeside's verification and narrows revision 96's "denies every
-   network operation". Rejected: leaving the convergence pass outside
-   Freeside's verification, so a pull request Freeside verified could
-   still fail `required`; allowing all of loopback, which reaches the
-   daemon's API and every host service; and a packet-filter loopback rule
-   as a second layer, which the conformance pass cannot prove on a host
-   whose packet filter skips loopback.
+1. **A follow-up filing may carry one `kind:*` label the authoring site
+   chose from a fixed enum** (Section
+   [5.17](#517-follow-up-issue-filing)). The finding adjudicator's
+   follow-up authoring site drafts the work-unit form's fields and names a
+   kind, feature, fix, or chore; a fixed table in code maps it to its label,
+   and the gate re-derives the whole label set from policy and the stored
+   kind on admission and on every read. A value outside the enum is refused,
+   and a filing with no authored kind carries no kind label. This narrows
+   that section's "labels ... never from proposal text". `kind:contract` is
+   outside the enum, because a contract unit invokes contract review and
+   the planner assigns it. Rejected: leaving every authored filing
+   unlabeled, which leaves the planner to classify each one by hand; and
+   letting the model name any label, which lets proposal text choose
+   policy.
 
-Nothing in this revision is built yet: #3155 builds it.
-
-(Owner decision of 2026-11-12 on #3121;
-[decision note](../devlog/2026-11-12-1107-macos-job-loopback-ports.md).)
+(Owner decision of 2026-11-12 on #3132, recorded in #3148's contract;
+[decision note](../devlog/2026-11-13-1119-follow-up-filing-author.md).)
 ## 14. Risks
 
 | Risk | Current response |

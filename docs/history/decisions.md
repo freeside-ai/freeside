@@ -3924,3 +3924,35 @@ settings pane and the layers, #3146 the duplicate search, #3147 the
 
 (Owner decisions of 2026-11-12 on #3132;
 [decision note](../../devlog/2026-11-12-1011-default-autonomous-effects.md).)
+
+## Revision 122 ("A macOS Verification Job May Use Its Own Ports on the Host"):
+
+1. **A macOS verification job may bind and connect at its slot's reserved
+   ports on the host's own addresses, and nowhere else** (Sections
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency),
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), and
+   [14](../plan.md#14-risks)). The sandbox can't tell loopback from the host's other
+   addresses, so the allowance covers them all, over TCP or UDP. A slot's
+   reserved ports are a small fixed set, disjoint from every other slot's,
+   outside the ephemeral range, and never a port the daemon listens on. The
+   probe still refutes every other port, the system resolver, and off-host
+   reach, and checks before each job that nothing else listens on the
+   reserved ports. The sandbox profile alone enforces the reservation; the
+   packet filter stays the second layer for off-host traffic only, because
+   whether it sees loopback depends on rules other software loads. The plan
+   names two new residuals: a host process that binds a reserved port
+   during a job is reachable from it, and a job's listener also accepts
+   connections on the host's other addresses, with off-host ones resting on
+   the packet filter alone, unprobed. This lets the convergence pass run
+   in Freeside's verification and narrows revision 96's "denies every
+   network operation". Rejected: leaving the convergence pass outside
+   Freeside's verification, so a pull request Freeside verified could
+   still fail `required`; allowing all of loopback, which reaches the
+   daemon's API and every host service; and a packet-filter loopback rule
+   as a second layer, which the conformance pass cannot prove on a host
+   whose packet filter skips loopback.
+
+Nothing in this revision is built yet: #3155 builds it.
+
+(Owner decision of 2026-11-12 on #3121;
+[decision note](../../devlog/2026-11-12-1107-macos-job-loopback-ports.md).)

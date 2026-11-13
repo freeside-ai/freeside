@@ -58,5 +58,11 @@
     "output_contract": "duplicate_search_output_v1",
     "has_instruction": true,
     "contract_digest": "sha256:2ee42daf65cc944a9d22a2cb17d8a55de7a14075196472270c08bdda792bb4b6"
+  },
+  {
+    "site_id": "follow_up_filing_author",
+    "output_contract": "follow_up_filing_author_output_v1",
+    "has_instruction": true,
+    "contract_digest": "sha256:a7b3f211cfa05dfd90ae9685588cafce1aa41a8443c6583d812760668920b5f8"
   }
 ]

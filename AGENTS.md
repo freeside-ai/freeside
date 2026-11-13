@@ -602,8 +602,14 @@ directory named before it in the same bullet. All under `daemon/`:
   (screens agent prose before it reaches GitHub),
   `internal/engine/commit_message.go` (derives and screens the fallback
   commit message published to GitHub, and the recipes replay accepts),
-  `internal/engine/follow_up_filing.go` (frames untrusted finding text into
-  the follow-up issue a person approves for filing),
+  `internal/engine/follow_up_filing.go` (frames untrusted finding text and
+  authored drafts into the follow-up issue a person approves for filing),
+  `internal/engine/follow_up_filing_author.go` (asks a model to draft that
+  issue and the work kind that picks its one non-policy label),
+  `internal/inference/follow_up_filing_author.go` (the draft's schema, which
+  refuses a kind outside the enum), `internal/domain/follow_up_filing.go`
+  (`GateFollowUpFiling`, which re-derives a filing's repository, labels, and
+  milestone from policy and the stored kind),
   `internal/engine/follow_up_duplicate_search.go` (decides from untrusted
   issue text and a model answer whether a finding is filed, and which open
   issue a duplicate verdict names), and

@@ -177,6 +177,50 @@ func (k FollowUpSourceKind) valid() bool {
 	}
 }
 
+// FollowUpFilingKind is the work kind an authored follow-up filing names
+// (plan §5.17): the one label a filing carries that its policy does not
+// name. The authoring site returns it from this closed set and Label maps it
+// to a label by a fixed table, so no label text ever comes from a model.
+// kind:contract is deliberately absent: a contract classification is the
+// planner's call against the code. The zero value means no kind and is not a
+// member.
+type FollowUpFilingKind string
+
+const (
+	FollowUpFilingKindFeature FollowUpFilingKind = "feature"
+	FollowUpFilingKindFix     FollowUpFilingKind = "fix"
+	FollowUpFilingKindChore   FollowUpFilingKind = "chore"
+)
+
+// AllFollowUpFilingKinds is the single registration point for the kind.
+var AllFollowUpFilingKinds = []FollowUpFilingKind{
+	FollowUpFilingKindFeature, FollowUpFilingKindFix, FollowUpFilingKindChore,
+}
+
+func (k FollowUpFilingKind) valid() bool {
+	switch k {
+	case FollowUpFilingKindFeature, FollowUpFilingKindFix, FollowUpFilingKindChore:
+		return true
+	default:
+		return false
+	}
+}
+
+// Label is the kind's fixed issue label. The switch dispatches behaviour and
+// so omits default; the trailing return gives the zero value, and any other
+// non-member, no label.
+func (k FollowUpFilingKind) Label() string {
+	switch k {
+	case FollowUpFilingKindFeature:
+		return "kind:feature"
+	case FollowUpFilingKindFix:
+		return "kind:fix"
+	case FollowUpFilingKindChore:
+		return "kind:chore"
+	}
+	return ""
+}
+
 // FollowUpFilingOutcome is the one terminal outcome of a follow-up filing
 // creation intent (plan §5.17): the issue is in the ledger, the filing was
 // refused, or what the create did cannot be settled. Every outcome releases

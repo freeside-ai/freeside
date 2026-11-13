@@ -65,19 +65,20 @@ func (w *productionPublicationWorkflow) awaitPendingFindingDecisions(
 	for _, id := range waiting {
 		delete(settled, id)
 	}
-	if err := w.searchFollowUpDuplicates(ctx, task.ProjectID, artifact, settled,
-		domain.FollowUpSourceDeferredDisposition); err != nil {
+	drafts, err := w.prepareFollowUpFilings(ctx, task.ProjectID, artifact, settled,
+		domain.FollowUpSourceDeferredDisposition)
+	if err != nil {
 		return productionReviewPending, err
 	}
 	// Commit outcomes before the item. A retry uses the same batch and skips
 	// existing outcomes; the human successor must not rewrite their provenance.
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return w.persistUnresolvedFindingRoutes(ctx, tx, task.ProjectID, artifact, settled, artifact.CreatedAt)
+		return w.persistUnresolvedFindingRoutes(ctx, tx, task.ProjectID, artifact, settled, artifact.CreatedAt, drafts)
 	}); err != nil {
 		return productionReviewPending, err
 	}
 	reason := fmt.Sprintf("Adjudication requires a second decision. Choose a route for each listed finding (%d). Other findings already have routes; recorded declines and deferrals won't change. Remediation waits until you answer every listed finding.", len(waiting))
-	reason, err := w.withExternalReviewFindings(ctx, task, reason)
+	reason, err = w.withExternalReviewFindings(ctx, task, reason)
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -92,6 +93,7 @@ func (w *productionPublicationWorkflow) awaitPendingFindingDecisions(
 func (w *productionPublicationWorkflow) persistUnresolvedFindingRoutes(
 	ctx context.Context, tx *store.WriteTx, projectID domain.ProjectID,
 	artifact domain.FindingAdjudication, routes map[domain.FindingID]domain.AdjudicationRoute, at time.Time,
+	drafts followUpFilingDrafts,
 ) error {
 	unresolved := maps.Clone(routes)
 	for id := range unresolved {
@@ -113,5 +115,6 @@ func (w *productionPublicationWorkflow) persistUnresolvedFindingRoutes(
 	if err := persistFindingRouteDispositions(ctx, tx, artifact, unresolved, at); err != nil {
 		return err
 	}
-	return w.proposeFollowUpFilings(ctx, tx, projectID, artifact, unresolved, domain.FollowUpSourceDeferredDisposition)
+	return w.proposeFollowUpFilings(ctx, tx, projectID, artifact, unresolved,
+		domain.FollowUpSourceDeferredDisposition, drafts)
 }

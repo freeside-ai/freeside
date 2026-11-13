@@ -99,6 +99,8 @@
 //   - follow_up_filing.go follow-up issue filings from an adjudication
 //   - follow_up_duplicate_search.go the open-issue duplicate search a filing
 //     waits on
+//   - follow_up_filing_author.go the model draft a filing renders in the
+//     work-unit form's shape
 //   - external_finding_quote.go, external_review_cycle.go, external_review_reentry.go
 //     admitted external findings as model input, and the re-entry cycle they
 //     start

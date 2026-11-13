@@ -1,0 +1,37 @@
+Title: Bound the sync client's retries
+Label: kind:fix
+
+### Objective
+
+The sync client retries a failed push without limit. Bound the retries so a dead remote stops the push instead of looping.
+
+### Non-goals
+
+Changing the push protocol or its backoff curve.
+
+### Affected interfaces/contracts
+
+none
+
+### Acceptance
+
+- A push against a dead remote stops after the retry bound.
+- A push that succeeds on a retry still completes.
+
+### Scope / declared paths
+
+daemon/internal/sync/
+
+### Dependencies
+
+none
+
+### Origin
+
+A reviewer outside Freeside, "maintainer", left this finding on the work unit's pull request. The quoted text is the reviewer's words, cut to at most 4096 bytes; Freeside did not write it.
+
+Reviewer's words: `"Please bound the retries here, they loop \"forever\"."`
+
+Location: daemon/internal/sync/push.go:40-52
+
+Adjudication rationale: adjacent to the goal: the unit changes the push path, not its retries
