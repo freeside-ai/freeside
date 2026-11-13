@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -196,7 +197,7 @@ func (e *Engine) callTriager(ctx context.Context, run domain.Run, lineup domain.
 	var source taskSource
 	if e.specification != nil {
 		var err error
-		source, err = e.readTaskSource(ctx, run, task, domain.InvocationID("task-triager-"+string(task.ID)),
+		source, err = e.readTriageSource(ctx, run, task, domain.InvocationID("task-triager-"+string(task.ID)),
 			"Choose the specifier's tier from the issue's requested outcome")
 		if errors.Is(err, errTaskSourceUnavailable) {
 			e.logger.Warn("specifier triage source unavailable", "task_id", task.ID, "error", err)
@@ -224,4 +225,40 @@ func (e *Engine) callTriager(ctx context.Context, run domain.Run, lineup domain.
 		TaskID: run.TaskID, Outcome: domain.TriageOutcomeAnswered, Tier: &answer.Tier, Reason: &answer.Reason,
 		Escalated: domain.TriageEscalates(domain.TriageOutcomeAnswered, &answer.Tier),
 	}, nil
+}
+
+// readTriageSource reads the task's source as readTaskSource does, except
+// that a submitted task whose text is exactly one canonical issue URL in the
+// project's managed repository reads as that issue: its title, body, and
+// label names, with no source text, as an issue-subject task reads. Without
+// this, triage sees only the URL, which it treats as a thin source and
+// escalates (#3177). The issue is fetched by the project's repository ID,
+// never by the submitted URL, and the owner/name comparison ignores case as
+// the research fetcher's scope check does. Any other text, a URL for another
+// repository, or a project with no registered repository reads as submitted.
+func (e *Engine) readTriageSource(
+	ctx context.Context, run domain.Run, task domain.Task, invocation domain.InvocationID, purpose string,
+) (taskSource, error) {
+	source, err := e.readTaskSource(ctx, run, task, invocation, purpose)
+	if err != nil || task.Source == nil || task.Source.Kind != domain.SpecificationSourceWorkItemArtifact {
+		return source, err
+	}
+	ownerRepo, number, ok := parseSourceIssueURL(TaskSourceIssue([]byte(source.Text)))
+	if !ok {
+		return source, nil
+	}
+	var scope specify.ManagedRepository
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		scope, err = researchScope(ctx, tx, run.ProjectID)
+		return err
+	}); err != nil {
+		return taskSource{}, err
+	}
+	if scope.RepositoryID <= 0 || !strings.EqualFold(ownerRepo, scope.Repo) {
+		return source, nil
+	}
+	return e.readIssueSource(ctx, run, domain.IssueSubjectRef{
+		Repo: scope.Repo, RepositoryID: scope.RepositoryID, IssueNumber: number,
+	}, invocation, purpose)
 }
