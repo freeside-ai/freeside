@@ -16,7 +16,7 @@ func allSites() []inference.Site {
 		inference.PublicationAuthorExplainSite(budget), inference.PublicationAuthorProposeSite(budget),
 		inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
 		inference.DriftAuditorSite(budget), inference.DiscussionSite(budget),
-		inference.TriagerSite(budget),
+		inference.TriagerSite(budget), inference.DuplicateSearchSite(budget),
 	}
 }
 

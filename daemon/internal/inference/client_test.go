@@ -57,6 +57,7 @@ func auditedTestSites(calls int64) []inference.Site {
 		inference.PublicationAuthorExplainSite(testBudget(calls)),
 		inference.PublicationAuthorProposeSite(testBudget(calls)),
 		inference.TriagerSite(testBudget(calls)),
+		inference.DuplicateSearchSite(testBudget(calls)),
 	}
 	for i := range sites {
 		sites[i].AuditEvery = 1

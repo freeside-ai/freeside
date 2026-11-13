@@ -276,7 +276,9 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 
 		// The publication author with no prompt file is off: both sites fail
 		// safe as inference being down, and nothing is raised.
-		authorSites := []inference.Site{sites[6], sites[7]}
+		authorSites := slices.DeleteFunc(slices.Clone(sites), func(site inference.Site) bool {
+			return site.ID != inference.PublicationAuthorExplainSiteID && site.ID != inference.PublicationAuthorProposeSiteID
+		})
 		off := newClient(adopted, daemoncompose.JudgmentRuntime{Driver: driver}, health)
 		for _, site := range authorSites {
 			if result := call(off, site); !result.Fallback || result.Reason != inference.FallbackRoleOff {

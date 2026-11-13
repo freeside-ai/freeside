@@ -52,6 +52,12 @@ func TestRoleShapeAndPlace(t *testing.T) {
 		[]string{"publication_author_explain", "publication_author_propose"}) {
 		t.Fatalf("publication author sites = %v", got)
 	}
+	// The duplicate search is the adjudicator's second site: plan §5.13 keeps
+	// the role list closed, so it joins the role that already judges findings.
+	if got := domain.RoleFindingAdjudicator.Sites(); !slices.Equal(got,
+		[]string{"finding_adjudicator", "duplicate_search"}) {
+		t.Fatalf("finding adjudicator sites = %v", got)
+	}
 	if got := domain.RoleDriftAuditor.Sites(); !slices.Equal(got, []string{"drift_auditor"}) {
 		t.Fatalf("drift auditor sites = %v", got)
 	}

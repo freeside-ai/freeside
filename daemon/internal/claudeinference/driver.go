@@ -394,6 +394,8 @@ func siteFor(id string) (inference.Site, bool) {
 		return inference.ClassifierSite(inference.Budget{}), true
 	case inference.AdjudicatorSiteID:
 		return inference.AdjudicatorSite(inference.Budget{}), true
+	case inference.DuplicateSearchSiteID:
+		return inference.DuplicateSearchSite(inference.Budget{}), true
 	case inference.DriftAuditorSiteID:
 		return inference.DriftAuditorSite(inference.Budget{}), true
 	case inference.PublicationAuthorExplainSiteID:
