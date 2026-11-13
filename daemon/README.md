@@ -4184,7 +4184,7 @@ these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
-  twelve commands. Eight run in the project image. The first two are the
+  thirteen commands. Eight run in the project image. The first two are the
   history commands, `bash scripts/verify-range-check.sh
   scripts/check-commit-messages.sh` and the same wrapper over
   `scripts/check-migration-history.sh`, each with `"history": true` (A
@@ -4195,13 +4195,16 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   operator approves the new recipe digest before it runs. Then come the
   four `daemon`, `docs`, `api`, and `scripts` commands sized above, then
   `bash scripts/check.sh app generate` and
-  `bash scripts/check.sh app linux`. Four run on the macOS verification
+  `bash scripts/check.sh app linux`. Five run on the macOS verification
   executor (`macos_host`): `app format`, `app test`,
-  `app build-mac`, and `app build-ios`. The last three run as
-  `env APP_MACVERIFY=1 bash scripts/check.sh app <step>`. The switch adds
-  the executor flags documented under Install the macOS Verification
-  Executor, because the recipe can't name the job's `../source-packages`
-  itself: `verify.ParseRecipe` refuses a `..` path segment. `app generate`
+  `app build-mac`, `app build-ios`, and `convergence run`. The last four
+  run as `env APP_MACVERIFY=1 bash scripts/check.sh <component> <step>`.
+  The switch adds the executor flags documented under Install the macOS
+  Verification Executor, because the recipe can't name the job's
+  `../source-packages` itself: `verify.ParseRecipe` refuses a `..` path
+  segment. For `convergence run` it adds `--disable-sandbox` to the swift
+  commands, and the harness listens on the slot's reserved ports, which the
+  room passes in `FREESIDE_VERIFY_PORTS` (Reserved ports). `app generate`
   builds the generator offline from the image's baked mirrors. In a tree
   without `.git` it compares the generated outputs with a snapshot it takes
   before regenerating, so it fails a schema change whose committed client is
@@ -4210,10 +4213,13 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   has neither `go.mod` nor `Package.swift`, and the one image bakes both.
 - **Prerequisites:** the executor installed and proved on the daemon host
   (Install the macOS Verification Executor, Prove the Executor), and a Swift
-  cache entry for the onboarded commit (`freesided swift-cache populate`).
+  cache entry and a Go cache entry for the onboarded commit
+  (`freesided swift-cache populate` and `freesided go-cache populate`;
+  `convergence run` builds the daemon's harness offline from the Go
+  entry).
   A deputy run names the executor in its `macos_verification` setting (Run
   Real Work With The Deputy); without it the `macos_host` commands fail.
-- **Executor measurements:** all four `macos_host` commands pass as slots
+- **Executor measurements:** all five `macos_host` commands pass as slots
   with networking denied. Measured on 2026-11-12 on the reference host
   (macOS 27.2 build 26B123, Xcode 27.2 build 27B52) at `main`
   `0b38be48c`. Each command ran in its own slot job, through
@@ -4230,6 +4236,7 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   | `app test` | passes; flaky under load (#2323) | 1506 MiB | 906 s |
   | `app build-mac` | passes | 706 MiB | 250 s |
   | `app build-ios` | passes | 691 MiB | 246 s |
+  | `convergence run` | passes | 1850 MiB | 132 s |
 
   The host was busy with other work: load average 105 to 132 at the start
   of each command in the first run, on 10 CPUs, so its walls run long. In
@@ -4238,7 +4245,11 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   starved main actor; it peaked at 1693 MiB and took 1079 s. Its row is a
   rerun at the same commit, load average 66 at the start. The two builds
   resolve packages offline under `-skipPackageUpdates`, and `build-ios`
-  needs no window-server session.
+  needs no window-server session. The `convergence run` row was measured
+  the same way later that day at this change's branch commit `84ee53db7`,
+  load average 26 at the start: the harness listened on the slot's
+  reserved ports 47000 and 47001, built offline from the Go entry, and the
+  23 `FreesideConvergenceTests` passed.
 - **Protected paths:** none. Pass no `-protected-path` flag, so Freeside's
   profile widens no class, and an agent's edit to the hooks, the recipe,
   the check scripts, `prompts/`, `policy/`, `docs/plan.md`, or a `.github/`

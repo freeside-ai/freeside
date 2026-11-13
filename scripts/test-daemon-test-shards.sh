@@ -460,8 +460,17 @@ class Coverage(unittest.TestCase):
         # a build flag added there needs the same flag in the writer's
         # build and a swift-build-v1 prefix bump, or a hit would run a
         # bundle built without it.
+        # A verification slot adds --disable-sandbox under APP_MACVERIFY,
+        # which no workflow sets, so CI's arguments stay the pinned flag.
         runner = (root / 'scripts/run-convergence.sh').read_text()
-        self.assertIn('swift_args=(--only-use-versions-from-resolved-file)\n', runner)
+        self.assertIn('swift_args=(--only-use-versions-from-resolved-file '
+                      '${sandbox_args[@]+"${sandbox_args[@]}"})\n', runner)
+        self.assertEqual(re.findall(r'^ *sandbox_args=\((.*)\)$', runner, re.M),
+                         ['', '--disable-sandbox'])
+        self.assertIn('if [[ -n "${APP_MACVERIFY:-}" ]]; then\n'
+                      '  sandbox_args=(--disable-sandbox)\nfi\n', runner)
+        for workflow in sorted((root / '.github/workflows').glob('*.y*ml')):
+            self.assertNotIn('APP_MACVERIFY', workflow.read_text(), workflow.name)
         self.assertEqual(re.findall(r'^ *swift_args\+=\((.*)\)$', runner, re.M),
                          ['--filter FreesideConvergenceTests', '--skip-build'])
         # The SwiftPM mirror: generate writes it on push, convergence and
