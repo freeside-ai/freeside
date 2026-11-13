@@ -5361,10 +5361,8 @@ admits that pass the intake proof check. Freeside-origin issues stay
 propose-only whatever the profile state.
 
 Not yet built: #3150 dispatches filings and comments without a card, #3145
-builds the Workflow settings pane that turns the gates on, #3146 builds the
-duplicate search (Section [7](#7-review-policy), Finding Adjudication), and
-no unit yet builds the `issues` audit, so until one does every filing takes
-the card.
+builds the Workflow settings pane that turns the gates on, and no unit yet
+builds the `issues` audit, so until one does every filing takes the card.
 
 ### 5.18 The World Model: Post-Merge Recompute and Frontier Projection
 
@@ -5986,7 +5984,8 @@ not the finding adjudicator, whose contract is ceiling-bounded annotation.
 candidate yields an `issue_comment` proposal on that issue (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)),
 not a filing. The site never names a target: an answer outside the listed
-handles is invalid. Not yet built: #3146.
+handles is invalid. Not yet built: #3147 proposes the comment; until it
+does, a chosen candidate yields no proposal.
 
 Permission has a presumptive baseline, not an affirmative-citation requirement.
 Remediation is presumptively `allowed` when its proposed surface stays within
