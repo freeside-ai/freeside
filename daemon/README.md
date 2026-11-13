@@ -5047,6 +5047,9 @@ world-writable unless noted, and so is every ancestor of the root:
   pf/anchor.conf           the slots' packet-filter anchor, mode 0644
   swift-cache/             the offline Swift dependency cache (the operator, 0755)
   swift-cache/<key>/       one entry per dependency key (the operator, 0755)
+  go-cache/                the Go toolchain and module cache (the operator, 0755)
+  go-cache/go<version>/    the pinned Go toolchain (the operator, 0755)
+  go-cache/<key>/          one entry per Go module key (the operator, 0755)
 ```
 
 **Profile.** `macverify.DefaultSandboxProfile()` denies all network access,
@@ -5068,7 +5071,8 @@ run sometimes leaves one there that no one can remove, and Foundation names
 each at random, so a later job can reach it only by its name (#3009).
 Nothing bounds what collects there, so a job can use up disk space. The
 command's environment is exactly
-`HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`. A
+`HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`, plus
+the Go variables under Go Toolchain and Modules for a workspace with Go. A
 SwiftPM recipe command must pass `--disable-sandbox`: SwiftPM sandboxes its
 manifest build with `sandbox-exec`, which cannot nest inside the room's.
 
@@ -5094,7 +5098,7 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   `<root>/homes/<slot>`.
 - **The executor root** (`/Library/Freeside/macverify`) in the layout above,
   plus `pf/`, each slot's home (the slot's, `0700`), and an empty
-  `swift-cache/` (the operator's, `0755`). It creates a missing
+  `swift-cache/` and `go-cache/` (the operator's, `0755`). It creates a missing
   `/Library/Freeside` but never changes an existing ancestor.
 - **The helper and slot list:** `bin/slot-run` from the daemon's embedded copy
   and `bin/slots.conf`. Rerun install after upgrading the daemon: it rewrites a
@@ -5126,9 +5130,9 @@ id is held by something it did not create, when the operator is root or
 unknown, when an ancestor of the root is not root-owned or is group- or
 world-writable, or when the root or a directory in it is owned by another
 user or holds anything install does not write (so `-root /usr/local` is
-refused, not adopted). The Swift cache is the operator's instead: install
-refuses one another user owns and hands a root-owned one to the operator,
-and never reads what is in it. An existing account counts as a slot only when its primary
+refused, not adopted). The Swift and Go caches are the operator's instead:
+install refuses one another user owns and hands a root-owned one to the
+operator, and never reads what is in it. An existing account counts as a slot only when its primary
 group id is the slot group's and its home is `<root>/homes/<slot>`; install
 then repairs its other attributes but never renumbers it. The group counts as
 install's only when every member, and every account with it as primary group,
@@ -5211,6 +5215,54 @@ cannot nest inside the room's profile. `-skipMacroValidation` and
 `-skipPackagePluginValidation` stand in for the trust prompt a fresh slot home
 has never answered. Decision record: `devlog/2026-11-09-0909-macos-swift-cache.md`.
 
+**Go toolchain and modules.** A job whose workspace holds any `go.mod` or
+`go.sum` runs Go from a toolchain the daemon pins, Go 1.27.4, by version and
+by the SHA-256 of each darwin archive on go.dev. It takes its modules from an
+offline cache entry keyed by a SHA-256 over every `go.mod` and `go.sum`
+outside `.git`, `.build`, and `testdata` directories. The room refuses the
+job before any slot is leased, with `ErrGoCacheMissing` naming the key and
+the files, unless `<root>/go-cache/go1.27.4/bin/go` and a complete
+`<root>/go-cache/<key>/` are in place. The command then runs with the
+toolchain first on its `PATH` and Go held to it and to the entry, offline:
+
+```text
+PATH=<root>/go-cache/go1.27.4/bin:/usr/bin:/bin:/usr/sbin:/sbin
+GOFLAGS=-mod=readonly  GOMODCACHE=<root>/go-cache/<key>/modcache
+GOPROXY=off  GOTOOLCHAIN=local  GOWORK=off
+```
+
+`GOCACHE` stays at its default under the slot's home, which the helper resets
+every job. Fill an entry as the operator, on the host, with network, from a
+checkout of the commit to verify, and again whenever a `go.mod` or `go.sum`
+changes:
+
+```sh
+freesided go-cache populate --executor-root /Library/Freeside/macverify --source <checkout>
+```
+
+Populate refuses a `go.mod` whose `go` or `toolchain` line asks for a Go newer
+than the pin, since `GOTOOLCHAIN=local` would refuse it in every job; raising
+the daemon's own `go` line means raising the pin with it. When the toolchain
+is absent it downloads the pinned archive, refuses it unless its SHA-256
+matches, extracts it beside the cache, and renames it into place, so the
+toolchain is whole or absent; a toolchain directory without its `go` binary
+is refused for the operator to remove. It then runs `go mod download` for
+each module through the Go module proxy and checksum database, proves the
+entry offline with `go list -deps -test ./...` for each module under
+`GOPROXY=off` with every proxy pointed at a closed port, and writes
+`record.json` last, naming the Go version that proved it. A failed populate
+leaves no entry, and a record from another Go version is refused. An entry
+holds `record.json` and `modcache/`, the job's `GOMODCACHE`.
+
+The slot reads the toolchain and the module cache in place: populate leaves
+every file `0644` or `0755` and every directory `0755`, owned by the
+operator, so a slot cannot write them, and Go reads a complete module cache
+without writing to it. The helper's `prepare` refuses a Go key unless
+`go-cache/`, the entry, `modcache/`, the toolchain, and its `bin/` are real
+directories the operator owns that are not group- or world-writable, and
+`record.json` and `bin/go` are regular files. The toolchain's version is part
+of the configuration digest.
+
 **Run the live suites.** The room suite runs probes through the production
 room as real slots of an installed executor, with the packet-filter rules
 install loads: the full conformance pass over every slot, the pre-job probe
@@ -5239,6 +5291,18 @@ FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_SWIFT_LIVE_TEST=1 \
   -run LiveRoomServesSwift -v -timeout 90m
 ```
 
+The Go live suite populates the Go cache for the tree at `HEAD`, or at
+`FREESIDE_MACVERIFY_GO_COMMIT`, installing the toolchain if it is absent,
+builds the daemon as a slot with networking denied, and shows the job can
+write neither the module cache nor the toolchain:
+
+```sh
+FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_GO_LIVE_TEST=1 \
+  FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify FREESIDE_MACVERIFY_SLOTS=fvslot1,fvslot2 \
+  bash scripts/check.sh daemon test -- ./internal/macverify/... \
+  -run 'LiveRoomBuildsGo|LiveHelperRefusesAnUnsafeGo' -v -timeout 30m
+```
+
 The install suite builds `freesided`, installs two slots under names disjoint
 from the default install (`fvtest1` and `fvtest2`, ids from 470, root
 `/Library/Freeside/macverify-livetest`), checks the accounts, files, and
@@ -5260,8 +5324,8 @@ Removal deletes the sudoers drop-in first, so the daemon starts no job while
 it runs, then the LaunchDaemon, each slot account listed in
 `<root>/bin/slots.conf` that the adoption rule marks as a slot (after killing
 its processes), the loaded anchor rules, the group once nothing names it, the
-entries install writes under the root (the Swift cache with every entry in
-it), and the root and `/Library/Freeside`
+entries install writes under the root (the Swift and Go caches with every
+entry in them), and the root and `/Library/Freeside`
 if that leaves each empty. It deletes the sudoers drop-in and LaunchDaemon
 only when their content is exactly what install writes, the group only when
 it found a root-owned `slots.conf` or helper, and the root's entries only when
@@ -5275,7 +5339,7 @@ cache directories under `/private/var/folders` stay too.
 
 The backend declares `supports_credential_free_host_verification` only after
 a passing conformance pass is durably recorded for its configuration digest
-(the daemon binary, profile, anchor rules, slots, root, and toolchain pin).
+(the daemon binary, profile, anchor rules, slots, root, and toolchain pins).
 `macverify.NewSuite` builds the pass and `Suite.Full` runs it; give it
 `WithConformanceRecorder`, since a pass with no recorder never declares.
 Decision record: `devlog/2026-11-09-1830-macos-conformance-probe.md`.

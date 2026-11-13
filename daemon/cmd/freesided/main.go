@@ -227,6 +227,9 @@ func main() {
 		case "swift-cache":
 			runSwiftCacheMain(os.Args[2:])
 			return
+		case "go-cache":
+			runGoCacheMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
