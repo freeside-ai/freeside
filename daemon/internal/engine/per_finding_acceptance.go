@@ -65,6 +65,10 @@ func (w *productionPublicationWorkflow) awaitPendingFindingDecisions(
 	for _, id := range waiting {
 		delete(settled, id)
 	}
+	if err := w.searchFollowUpDuplicates(ctx, task.ProjectID, artifact, settled,
+		domain.FollowUpSourceDeferredDisposition); err != nil {
+		return productionReviewPending, err
+	}
 	// Commit outcomes before the item. A retry uses the same batch and skips
 	// existing outcomes; the human successor must not rewrite their provenance.
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {

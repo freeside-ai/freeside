@@ -323,6 +323,10 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 		}
 		return productionTaskOutcome{}, domain.ErrParentKeyMismatch
 	}
+	if err := w.searchFollowUpDuplicates(ctx, source.ProjectID, artifact, routes,
+		domain.FollowUpSourceDeferredDisposition); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := intent.persist(ctx, tx, artifact.CreatedAt); err != nil {
 			return err

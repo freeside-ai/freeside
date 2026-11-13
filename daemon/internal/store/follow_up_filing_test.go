@@ -754,3 +754,56 @@ func TestBindProposalItemFollowsEffectKind(t *testing.T) {
 		t.Fatalf("bind a filing without a merge: %v", err)
 	}
 }
+
+// TestFollowUpFilingGateRequiresNewDuplicateSearch: a filing is admitted and
+// approved only under a duplicate search that answered "new". With the
+// record gone, or with one naming an open issue, both admission and approval
+// refuse, while the card already admitted stays readable.
+func TestFollowUpFilingGateRequiresNewDuplicateSearch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, path, store.Options{})
+	fx := seedFiling(t, ctx, st, "project-1")
+	source := fx.deferredSource()
+	proposal := fx.proposal(t, fx.input(source))
+	approve, approveCommand := openFilingCard(t, ctx, st, fx, proposal, "event-approve", domain.ActionApprove)
+
+	st = tamperStore(t, path, st, `DELETE FROM duplicate_searches WHERE adjudication_digest = ? AND finding_id = ?`,
+		string(source.AdjudicationDigest), string(source.FindingID))
+	if _, err := allocateFiling(ctx, st, proposal, "event-unsearched"); !errors.Is(err, domain.ErrFollowUpFilingUnsearched) {
+		t.Fatalf("admission without a search = %v, want ErrFollowUpFilingUnsearched", err)
+	}
+	if err := decideFiling(ctx, st, approve, approveCommand); !errors.Is(err, domain.ErrFollowUpFilingUnsearched) {
+		t.Fatalf("approval without a search = %v, want ErrFollowUpFilingUnsearched", err)
+	}
+
+	if err := putDuplicateSearch(ctx, st, duplicateRecord(t, fx, source.FindingID, source.Kind)); err != nil {
+		t.Fatalf("put the duplicate answer: %v", err)
+	}
+	if _, err := allocateFiling(ctx, st, proposal, "event-duplicate"); !errors.Is(err, domain.ErrFollowUpFilingUnsearched) {
+		t.Fatalf("admission under a duplicate answer = %v, want ErrFollowUpFilingUnsearched", err)
+	}
+	if err := decideFiling(ctx, st, approve, approveCommand); !errors.Is(err, domain.ErrFollowUpFilingUnsearched) {
+		t.Fatalf("approval under a duplicate answer = %v, want ErrFollowUpFilingUnsearched", err)
+	}
+	if _, err := getFiling(ctx, st, approve.ID); err != nil {
+		t.Fatalf("read of the admitted filing: %v", err)
+	}
+}
+
+// TestFollowUpFilingGateRefusesForgedDuplicateTarget: the gate reads the
+// record through its handle rule, so a stored answer naming no candidate it
+// showed refuses admission rather than reading as "new" or as a duplicate.
+func TestFollowUpFilingGateRefusesForgedDuplicateTarget(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, path, store.Options{})
+	fx := seedFiling(t, ctx, st, "project-1")
+	source := fx.deferredSource()
+	st = forgeDuplicateTarget(t, ctx, path, st, source)
+	if _, err := allocateFiling(ctx, st, fx.proposal(t, fx.input(source)), "event-forged"); !errors.Is(err, domain.ErrDuplicateSearchInconsistent) {
+		t.Fatalf("admission over a forged target = %v, want ErrDuplicateSearchInconsistent", err)
+	}
+}

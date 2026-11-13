@@ -260,6 +260,9 @@ type productionPublicationHarness struct {
 	// engineOptions are added to every engine the harness builds after its
 	// own, such as the host verification executor.
 	engineOptions []engine.Option
+	// openIssues, when set, is the lister the next engine's follow-up
+	// filings search for duplicates through.
+	openIssues *publish.OpenIssueLister
 }
 
 // productionBaseManifests are the npm manifests the production harness
@@ -1002,6 +1005,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			AfterTerminal:        seams.afterTerminal,
 			AfterTaskLockRelease: seams.afterLockRelease,
 			TransitionHook:       seams.transitionHook,
+			OpenIssues:           p.openIssues,
 		}))
 	}
 	if p.machineCapacity != nil {

@@ -1935,6 +1935,12 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 	}
 
+	// Deferred findings are searched for duplicates before the write that
+	// proposes their filings: the search calls GitHub and a model.
+	if err := w.searchFollowUpDuplicates(ctx, task.ProjectID, artifact, routes,
+		domain.FollowUpSourceDeferredDisposition); err != nil {
+		return productionReviewPending, err
+	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionFindingAdjudication, DurableTransitionBefore); err != nil {
 		return productionReviewPending, err

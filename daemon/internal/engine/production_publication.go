@@ -157,7 +157,11 @@ type ProductionPublicationConfig struct {
 	// image serves holds while it reports a resolution and stops as before
 	// when it reports none. Nil reports none.
 	ImageUpkeepPending func(context.Context) (*domain.ImageUpkeepHold, error)
-	ReviewSource       exec.ReviewSource
+	// OpenIssues lists the filing target's open issues for the duplicate
+	// search a follow-up filing waits on (plan §7 Finding Adjudication). Nil
+	// leaves every filing unproposed, with the run's refusal notice.
+	OpenIssues   *publish.OpenIssueLister
+	ReviewSource exec.ReviewSource
 	// ReviewAdmission admits a routed or shadow review invocation before its
 	// source is asked (plan §5.4). The workflow stores the snapshot it returns
 	// once and puts that stored snapshot on every request for the invocation.
@@ -323,6 +327,7 @@ type productionPublicationWorkflow struct {
 	findingAdjudicator              findingAdjudicator
 	signet                          *signet.Service
 	inference                       *inference.Client
+	openIssues                      *publish.OpenIssueLister
 	reviewRecovery                  func(context.Context) error
 	reviewRecoveryPending           bool
 	reviewConfigurationDigest       domain.Digest
@@ -465,6 +470,7 @@ func newProductionPublicationWorkflow(
 		proveVerificationContainersAbsent: cfg.ProveVerificationContainersAbsent,
 		rebuild:                           cfg.RebuildProjectImage,
 		imageUpkeepPending:                cfg.ImageUpkeepPending,
+		openIssues:                        cfg.OpenIssues,
 		remediationPromptPackage:          cfg.RemediationPromptPackageDigest,
 		shadowReviewSource:                cfg.ShadowReviewSource,
 		reviewRecovery:                    cfg.ReviewRecovery, reviewRecoveryPending: true,

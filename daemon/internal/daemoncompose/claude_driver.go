@@ -723,6 +723,10 @@ type ClaudeComposition struct {
 	// issueReadTokens authenticates research fetches of the managed
 	// repository's issues; nil when no App transport is composed.
 	issueReadTokens publish.TokenSource
+	// openIssues lists open issues for the follow-up duplicate search on the
+	// same read-only issue grant, never on the publication token; nil when
+	// no App transport is composed.
+	openIssues *publish.OpenIssueLister
 }
 
 // seedAdmittedImagePointer makes the configured agent image the pointer's
@@ -1211,6 +1215,8 @@ func composeClaudeDriver(
 		FollowUpFiler:    followUpFiler,
 		ReviewReplier:    reviewReplier,
 		issueReadTokens:  issueReadTokens,
+		openIssues: publish.NewOpenIssueLister(
+			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
 		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (repositoryID int64, err error) {
 			// Stable coverage keeps the fetch's installation token from
 			// failing under a concurrent janitor pass.

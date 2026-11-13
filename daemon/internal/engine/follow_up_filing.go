@@ -242,12 +242,14 @@ func followUpFilingEntries(
 }
 
 // followUpFilingPlan is what one pass still has to propose: the selected
-// entries with no instance yet, and the subject and target they file under.
+// entries with no instance yet, the subject and target they file under, and
+// the issue the run is bound to (zero when it has none).
 type followUpFilingPlan struct {
-	pending []followUpFilingEntry
-	handle  domain.OpaqueSubjectHandle
-	policy  domain.ResolvedPolicy
-	target  domain.FollowUpFilingTarget
+	pending    []followUpFilingEntry
+	handle     domain.OpaqueSubjectHandle
+	policy     domain.ResolvedPolicy
+	target     domain.FollowUpFilingTarget
+	boundIssue int
 }
 
 // planFollowUpFilings reads what is left to propose. An entry whose instance
@@ -301,15 +303,19 @@ func planFollowUpFilings(
 		return followUpFilingPlan{}, err
 	}
 	plan.policy = policy
+	if declaration.BoundIssue != nil {
+		plan.boundIssue = *declaration.BoundIssue
+	}
 	plan.target, err = domain.DeriveFollowUpFilingTarget(project, policy)
 	return plan, err
 }
 
 // proposeFollowUpFilings writes, in the caller's transaction, one filing
-// proposal and its open card for each entry the source kind selects. A
-// deferred source needs its disposition row written first in the same
-// transaction: admission checks that the finding is effectively deferred
-// under this artifact.
+// proposal and its open card for each entry the source kind selects whose
+// duplicate search answered "new"; the caller runs searchFollowUpDuplicates
+// first, outside the transaction. A deferred source needs its disposition row
+// written first in the same transaction: admission checks that the finding
+// is effectively deferred under this artifact.
 //
 // It never fails the caller for a refusal that would repeat on every retry.
 // A propagated error stops the publication lane, so a run that can carry no
@@ -333,6 +339,9 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 	if err != nil {
 		return err
 	}
+	if plan.pending, err = searchedNewFollowUpFilings(ctx, &tx.ReadTx, artifact, plan.pending); err != nil {
+		return err
+	}
 	return w.allocateFollowUpFilings(ctx, tx, artifact, kind, plan)
 }
 
@@ -344,7 +353,8 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 //
 // The parked run re-enters on each reconcile, and every committed write
 // advances the revision clients sync against, so a pass with nothing left to
-// write stays a read.
+// write stays a read: an entry whose search named an open issue, or that has
+// no search because the search raised the run's notice, has nothing to write.
 func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -355,6 +365,9 @@ func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 	entries := followUpFilingEntries(artifact, routes, kind)
 	if len(entries) == 0 {
 		return nil
+	}
+	if err := w.searchFollowUpDuplicates(ctx, task.ProjectID, artifact, routes, kind); err != nil {
+		return err
 	}
 	settled := false
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -368,7 +381,11 @@ func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 			}
 			return err
 		}
-		settled = len(plan.pending) == 0
+		if err != nil {
+			return err
+		}
+		searched, err := searchedNewFollowUpFilings(ctx, tx, artifact, plan.pending)
+		settled = len(searched) == 0
 		return err
 	}); err != nil || settled {
 		return err

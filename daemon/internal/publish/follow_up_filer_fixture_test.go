@@ -567,7 +567,12 @@ func (h *filingHarness) propose(run filingRun, finding int, decision domain.Acti
 	created := filingAt.Add(time.Hour + time.Duration(finding)*time.Minute)
 	var instance domain.ProposalInstance
 	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
-		var err error
+		// The finding was searched and no open issue tracks it.
+		err := storetest.PutNewDuplicateSearch(ctx, tx, run.id, proposal.FilingProposal.Source,
+			domain.FollowUpFilingRepository{Repo: run.target.Repo, RepositoryID: run.target.RepositoryID}, created)
+		if err != nil {
+			return err
+		}
 		instance, _, err = tx.AllocateProposalInstance(ctx,
 			domain.ProposalAdmissionKey{
 				Source:          domain.ProposalSourceUpstreamEvent,

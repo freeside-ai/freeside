@@ -1001,10 +1001,49 @@ func (tx *ReadTx) gateFollowUpFilingSource(
 // is the finding's latest external disposition. External dispositions have
 // no drift reversals, so the latest row is the effective one.
 //
+// The source must also have been searched for a duplicate, and the search
+// must have answered "new" (gateFollowUpFilingSearched).
+//
 // It runs where a filing gains authority, at admission and at approval, and
 // never on a read: the state it checks moves with ordinary review work. It
 // assumes gateFollowUpFilingSource already passed for the same source.
 func (tx *ReadTx) gateFollowUpFilingSourceCurrent(
+	ctx context.Context,
+	declaration domain.WorkUnitDeclaration,
+	source domain.FollowUpFilingSource,
+) error {
+	if err := tx.gateFollowUpFilingSourceBacked(ctx, declaration, source); err != nil {
+		return err
+	}
+	return tx.gateFollowUpFilingSearched(ctx, source)
+}
+
+// gateFollowUpFilingSearched refuses a filing whose finding has no duplicate
+// search under the source's adjudication, or whose search named an open issue
+// that already tracks it (plan §7 Finding Adjudication). The daemon never
+// files without having searched, and a duplicate is answered with a comment
+// on that issue, never a new one. The record is re-read, which re-runs its
+// handle rule and binding, so a stored answer outside its own candidates
+// refuses here too.
+func (tx *ReadTx) gateFollowUpFilingSearched(ctx context.Context, source domain.FollowUpFilingSource) error {
+	search, err := tx.GetDuplicateSearch(ctx, source.AdjudicationDigest, source.FindingID)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("follow-up filing source finding %q has no duplicate search under %q: %w",
+			source.FindingID, source.AdjudicationDigest, domain.ErrFollowUpFilingUnsearched)
+	}
+	if err != nil {
+		return err
+	}
+	if !search.IsNew() {
+		return fmt.Errorf("follow-up filing source finding %q duplicates an open issue: %w",
+			source.FindingID, domain.ErrFollowUpFilingUnsearched)
+	}
+	return nil
+}
+
+// gateFollowUpFilingSourceBacked is the backing half of
+// gateFollowUpFilingSourceCurrent: the source still concludes the finding.
+func (tx *ReadTx) gateFollowUpFilingSourceBacked(
 	ctx context.Context,
 	declaration domain.WorkUnitDeclaration,
 	source domain.FollowUpFilingSource,

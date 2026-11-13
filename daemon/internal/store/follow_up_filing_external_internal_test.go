@@ -112,7 +112,21 @@ func (f externalFilingFixture) allocate(
 	proposal := f.proposal(t, source)
 	var instance domain.ProposalInstance
 	err := f.st.Write(ctx, func(tx *WriteTx) error {
-		var err error
+		// The source was searched and found no open issue, so only the
+		// source's own backing decides admission. A source its adjudication
+		// does not route has no search to bind; admission refuses it alone.
+		search, err := domain.NewDuplicateSearch(domain.DuplicateSearchInput{
+			RunID: f.run.ID, AdjudicationDigest: source.AdjudicationDigest, FindingID: source.FindingID,
+			Kind: source.Kind, CandidateLimit: domain.MaxDuplicateSearchCandidates,
+			Repository: domain.FollowUpFilingRepository{Repo: f.target.Repo, RepositoryID: f.target.RepositoryID},
+			CreatedAt:  reentryAt.Add(3 * time.Hour),
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutDuplicateSearch(ctx, search); err != nil && !errors.Is(err, domain.ErrParentKeyMismatch) {
+			return err
+		}
 		instance, _, err = tx.AllocateProposalInstance(ctx,
 			domain.ProposalAdmissionKey{Source: domain.ProposalSourceUpstreamEvent, UpstreamEventID: event},
 			"batch-external-filing", proposal, reentryAt.Add(3*time.Hour))
@@ -156,7 +170,9 @@ func (f externalFilingFixture) read(id domain.ProposalInstanceID) error {
 func (f externalFilingFixture) current(source domain.FollowUpFilingSource) error {
 	ctx := context.Background()
 	return f.st.Read(ctx, func(tx *ReadTx) error {
-		return tx.gateFollowUpFilingSourceCurrent(ctx, f.declaration, source)
+		// The backing half alone: whether the source was searched is the
+		// duplicate-search gate's question, tested on its own.
+		return tx.gateFollowUpFilingSourceBacked(ctx, f.declaration, source)
 	})
 }
 
