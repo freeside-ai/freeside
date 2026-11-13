@@ -175,14 +175,14 @@ func TestRunRefusesAMissingOrIncompleteSwiftCacheEntry(t *testing.T) {
 		"missing": func(*testing.T, string, string) {},
 		"no record": func(t *testing.T, root, key string) {
 			writeEntry(t, root, key)
-			if err := os.Remove(filepath.Join(swiftCacheEntry(root, key), swiftCacheRecordName)); err != nil {
+			if err := os.Remove(filepath.Join(swiftCacheEntry(root, key), cacheRecordName)); err != nil {
 				t.Fatal(err)
 			}
 		},
 		"record for another key": func(t *testing.T, root, key string) {
 			writeEntry(t, root, key)
 			other := swiftCacheRecord{Format: swiftCacheRecordFormat, Key: strings.Repeat("0", 64)}
-			if err := os.Remove(filepath.Join(swiftCacheEntry(root, key), swiftCacheRecordName)); err != nil {
+			if err := os.Remove(filepath.Join(swiftCacheEntry(root, key), cacheRecordName)); err != nil {
 				t.Fatal(err)
 			}
 			if err := writeRecord(swiftCacheEntry(root, key), other); err != nil {
