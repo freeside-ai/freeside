@@ -31,6 +31,17 @@ const (
 	preparationDigestVersion = "freeside.project-image-preparation/v5"
 )
 
+// nodeToolchainLauncher is installed at node, npm, and npx and dispatches on
+// the name it was run as. It extracts the verified Node archive once per
+// process tree into a private directory, and every descendant reuses that
+// tree through FREESIDE_PROJECT_NODE_ROOT. It owns the npm configuration of a
+// project room: the room passes only HOME and LC_ALL, and the image may set no
+// ENV, so without these exports a later npm would use an empty cache under
+// HOME and the public registry. NPM_CONFIG_GLOBALCONFIG names the baked npmrc
+// (the baked cache, prefer-offline), and NPM_CONFIG_USERCONFIG=/dev/null keeps
+// a file under HOME from overriding it. A writer's npm ci then reinstalls from
+// the baked cache with no network instead of deleting node_modules and failing
+// at the registry (#3179).
 const nodeToolchainLauncher = `#!/usr/bin/busybox sh
 set -eu
 owned_toolchain=false
@@ -56,6 +67,7 @@ else
 	/usr/bin/busybox xz -dc /opt/freeside/project-toolchain/node.tar.xz |
 		/usr/bin/busybox tar -xf - -C "$toolchain" --strip-components=1
 fi
+export NPM_CONFIG_GLOBALCONFIG=/usr/local/etc/npmrc NPM_CONFIG_USERCONFIG=/dev/null
 case "${0##*/}" in
 node)
 	set -- "$toolchain/bin/node" "$@"
@@ -270,13 +282,18 @@ COPY prepare %s
 # Cache warming executes no repository or dependency lifecycle scripts. The
 # fresh verification workspace hydrates the same way: the image-owned
 # preparation helper runs npm ci --ignore-scripts under --network none using
-# only these cached tarballs.
+# only these cached tarballs. npm writes the cache owner-only, so the cache is
+# opened for reading: the unprivileged writer's own npm ci reads it through
+# the launcher's npm configuration, and without read access npm fails with
+# EACCES after it has already removed node_modules. It stays root-owned and
+# unwritable to the writer.
 RUN set -eux; \
 	cd /opt/freeside/project-seed; \
 	NPM_CONFIG_GLOBALCONFIG=/usr/local/etc/npmrc \
 	NPM_CONFIG_USERCONFIG=/dev/null \
 		npm ci --ignore-scripts; \
-	rm -rf node_modules /tmp/freeside-project-node.*
+	rm -rf node_modules /tmp/freeside-project-node.*; \
+	chmod -R a+rX %s
 
 LABEL org.opencontainers.image.title="freeside-project-image" \
 	ai.freeside.base.digest="${BASE_DIGEST}" \
@@ -288,6 +305,6 @@ LABEL org.opencontainers.image.title="freeside-project-image" \
 	ai.freeside.project.recipe-digest="${PROJECT_RECIPE_DIGEST}"
 `, request.Repository, request.CommitSHA,
 		nodeToolchainBaseImage, nodeToolchainVersion, nodeToolchainArchiveSHA256,
-		NPMCachePath, NPMCachePath, ward.ProjectRecipePath, PreparationPath) +
+		NPMCachePath, NPMCachePath, ward.ProjectRecipePath, PreparationPath, NPMCachePath) +
 		"# Bound recipe digest: " + string(recipeDigest) + "\n"
 }

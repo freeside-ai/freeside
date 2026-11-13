@@ -3653,6 +3653,17 @@ tree and set:
 | `GOMODCACHE` | `/opt/freeside/go-mod-cache` |
 | `GOCACHE` | The caller's, else `$HOME/.cache/go-build`, else `/tmp/.cache/go-build`. |
 
+An npm image's `node`, `npm`, and `npx` launcher likewise sets
+`NPM_CONFIG_GLOBALCONFIG=/usr/local/etc/npmrc` (the baked cache, with
+`prefer-offline`) and `NPM_CONFIG_USERCONFIG=/dev/null` for every process,
+not only the preparation helper. So a writer's own `npm ci` in a project
+room reinstalls from the baked cache with no registry, instead of deleting
+`node_modules` and failing at the public registry (#3179). The image opens
+the cache for reading, since npm writes it owner-only and the writer runs
+as UID 1001; it stays root-owned and unwritable to the writer. The cache holds
+only the baked manifests' packages: after a change to `package.json` or
+`package-lock.json`, an install still needs the registry and fails.
+
 `GOFLAGS` is left to the recipe. The build refuses, and admission and the
 rebuild gate report, the Go inputs no image serves:
 
