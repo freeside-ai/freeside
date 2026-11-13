@@ -54,6 +54,23 @@
 # otherwise re-run the installer or lift the drain with
 # `freesided drain -cancel -db <tier database>`.
 #
+# A changed daemon that drained is also checkpointed before the swap
+# (issue #3108): a `freesided snapshot` of the tier's database, the new
+# daemon, and their digests go into <state dir>/update-checkpoint, an
+# owner-only directory, and the replaced app is kept beside the new one.
+# After opening the new app the installer waits up to
+# FREESIDE_MAC_REOPEN_TIMEOUT seconds (default 300) for the new daemon to
+# lift the drain. If it does, the checkpoint and the replaced app are
+# deleted. If it does not, the installer stops the daemon, runs
+# `freesided undo-update` to put the checkpointed database back, restores
+# the replaced app, starts it, cancels the drain, and exits nonzero naming
+# the step that failed. undo-update refuses once the new build lifted the
+# drain, so a build that reopened is never downgraded; the installer then
+# starts the new daemon again and says so. A run killed after the swap
+# leaves the checkpoint, and the next run finishes the check or the undo
+# before anything else. No checkpoint is taken for a first install, an
+# unchanged daemon, or a tier with no running daemon.
+#
 # Signing identity, in resolution order:
 #   FREESIDE_MAC_SIGNING_IDENTITY  explicit Apple Development identity, by
 #                                  name or SHA-1 hash
@@ -71,6 +88,8 @@
 #   FREESIDE_MAC_STATE_ROOT   absolute tier state root (default:
 #                             ~/Library/Application Support/<app name>); the
 #                             daemon's state directory is <root>/daemon
+#   FREESIDE_MAC_REOPEN_TIMEOUT  seconds to wait for the new daemon to lift
+#                             the drain before undoing the update (default 300)
 #
 # Requires: macOS, Xcode, jq, and Go unless --daemon-path is given.
 set -euo pipefail
@@ -423,6 +442,278 @@ restore_interrupted_install() {
     echo "install-mac-app: restored an install interrupted before replacement" >&2
 }
 
+# An update that restarts a running daemon is provisional until the new build
+# reopens (issue #3108). Before the swap the installer checkpoints the
+# database; after it, it waits for the new daemon to lift the update drain,
+# and undoes the update when that does not happen in time. Once the drain is
+# lifted the new build may have launched work and published, so nothing is
+# ever undone after that (freesided undo-update refuses).
+#
+#   $checkpoint_dir/freeside.db  the checkpoint, mode 0600. undo-update
+#                                deletes it once it is back in place, so its
+#                                absence means the database was restored.
+#   $checkpoint_dir/freesided    the new build's freesided, which has
+#                                undo-update; the old build's does not.
+#   $checkpoint_dir/update.env   the checkpoint's sha256 and time, and the
+#                                new build's daemon digest.
+#   $checkpoint_dir/swapped      written just before the old app moves aside.
+#                                Without it the new build never ran, so the
+#                                database was never at risk.
+#
+# The directory holds credentials and stays only while an update is
+# unresolved: a re-run resolves it before building anything.
+db_path="$daemon_state_dir/freeside.db"
+checkpoint_dir="$daemon_state_dir/update-checkpoint"
+reopen_timeout=${FREESIDE_MAC_REOPEN_TIMEOUT:-300}
+[[ "$reopen_timeout" =~ ^[1-9][0-9]*$ ]] ||
+    die "FREESIDE_MAC_REOPEN_TIMEOUT must be a positive number of seconds: $reopen_timeout"
+checkpoint_taken=false
+
+checkpoint_value() {
+    sed -n "s/^$1=//p" "$checkpoint_dir/update.env" 2>/dev/null || true
+}
+
+# The swapped marker goes first, so a delete cut short leaves a directory
+# the next run discards as one left before its swap, never one it resumes
+# with the checkpoint already gone.
+discard_checkpoint() {
+    rm -f "$checkpoint_dir/swapped"
+    rm -rf "$checkpoint_dir"
+}
+
+# Checkpoint the database just before the swap, as late as it can: the
+# drained old daemon still accepts submissions, decisions, and pairings until
+# the new app restarts it, and an undo discards them. The old daemon writes
+# the copy over its control socket (freesided snapshot). A failure dies
+# through the drain's EXIT trap, which cancels the drain.
+take_update_checkpoint() {
+    local sha
+    [[ ! -e "$db_path.update-failed" && ! -L "$db_path.update-failed" ]] ||
+        die "an earlier undo left $db_path.update-failed. It holds credentials;
+  inspect it and remove it before updating."
+    rm -rf "$checkpoint_dir"
+    mkdir -m 700 "$checkpoint_dir" || die "could not create $checkpoint_dir"
+    if ! "$bundled_daemon" snapshot -db "$db_path" "$checkpoint_dir/freeside.db" >/dev/null ||
+        ! chmod 600 "$checkpoint_dir/freeside.db" ||
+        ! sha=$(shasum -a 256 "$checkpoint_dir/freeside.db" | awk '{ print $1 }') ||
+        ! cp "$bundled_daemon" "$checkpoint_dir/freesided" ||
+        ! printf 'CHECKPOINT_SHA256=%s\nNEW_DAEMON_DIGEST=%s\nCHECKPOINT_TAKEN_AT=%s\n' \
+            "$sha" "$new_daemon_digest" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$checkpoint_dir/update.env"; then
+        rm -rf "$checkpoint_dir"
+        die "could not checkpoint the $target database, so nothing was replaced"
+    fi
+    checkpoint_taken=true
+    echo "install-mac-app: checkpointed the $target database in $checkpoint_dir"
+}
+
+# A running instance holds the bundle open and would keep serving stale
+# code after the swap. The client's disk cache is written atomically
+# (CacheStore), so terminating it cannot tear durable state. The pattern
+# matches only the installed executable, so an Xcode-run build of the
+# same app is left alone; the path is escaped because pgrep matches an
+# expression, not a literal. It ends at a space or the end of the command
+# line rather than anchoring at the end, because pgrep -f matches the
+# whole command line and the documented launch arguments would otherwise
+# hide a running client.
+running_pattern="^$(printf '%s' "$destination" |
+    sed 's/[][\\.^$*+?(){}|]/\\&/g')/Contents/MacOS/FreesideMac( |\$)"
+quit_running_app() {
+    pgrep -f "$running_pattern" >/dev/null 2>&1 || return 0
+    echo "install-mac-app: quitting the running installed app"
+    pkill -f "$running_pattern" || true
+    for _ in $(seq 20); do
+        pgrep -f "$running_pattern" >/dev/null 2>&1 || break
+        sleep 0.5
+    done
+    if pgrep -f "$running_pattern" >/dev/null 2>&1; then
+        die "the installed app is still running; quit it and re-run"
+    fi
+}
+
+# The installed app's lifecycle command (`FreesideMac daemon start|stop`)
+# registers or unregisters the tier's LaunchAgent and waits for the daemon's
+# health to match. It prints one key=value line.
+app_daemon() {
+    "$destination/Contents/MacOS/FreesideMac" daemon "$1" --timeout 60
+}
+
+# Whether a daemon answers on the tier's database with no update drain in
+# force: the new build has started and lifted the drain. A failed call (no
+# daemon yet, or one that keeps crashing) is not an answer.
+new_daemon_reopened() {
+    local readiness
+    readiness=$("$checkpoint_dir/freesided" drain -db "$db_path" -status 2>/dev/null) || return 1
+    [[ "$(jq -r 'if type == "object" and has("drain") then .drain == null else false end' \
+        <<<"$readiness" 2>/dev/null)" == true ]]
+}
+
+# Polls every 5 seconds until the bound. It counts polls rather than reading
+# the clock, so slow status calls stretch the wait instead of skipping polls.
+wait_for_reopen() {
+    local polls=$(((reopen_timeout + 4) / 5)) poll
+    for ((poll = 0; poll <= polls; poll++)); do
+        new_daemon_reopened && return 0
+        ((poll == polls)) || sleep 5
+    done
+    return 1
+}
+
+# Every step from the swap to a resolved update can be repeated from what is
+# on disk, so an interrupt leaves it to the next run.
+pending_update_interrupted() {
+    trap - INT TERM
+    echo "install-mac-app: interrupted; re-run the installer to finish checking this update" >&2
+    exit 130
+}
+
+# Put the checkpoint back with the new build's undo-update, which refuses
+# while the daemon still holds the database lock (retried while `daemon stop`
+# lets go) and once the drain was lifted (exit 3).
+restore_checkpoint() {
+    local reason=$1 sha=$2 rc=0 error_file="$checkpoint_dir/undo-update.stderr"
+    for attempt in $(seq 12); do
+        rc=0
+        "$checkpoint_dir/freesided" undo-update -db "$db_path" \
+            -checkpoint "$checkpoint_dir/freeside.db" -sha256 "$sha" 2>"$error_file" || rc=$?
+        if [[ "$rc" -ne 1 || "$attempt" -eq 12 ]] ||
+            ! grep -Fq "stop the daemon first" "$error_file"; then
+            break
+        fi
+        sleep 5
+    done
+    case "$rc" in
+    0) ;;
+    3)
+        cat "$error_file" >&2
+        echo "install-mac-app: the new freesided lifted the drain, so its database stays; starting it again" >&2
+        app_daemon start ||
+            echo "install-mac-app: the new daemon did not start; start it from the Freeside menu" >&2
+        rm -rf "$superseded"
+        discard_checkpoint
+        die "$reason, but the new build had already lifted the update drain, so
+  nothing was restored: the new build may have launched work, and the old
+  database would discard it. The new daemon was started again; install a fix."
+        ;;
+    *)
+        cat "$error_file" >&2
+        die "$reason, and the database could not be put back (freesided
+  undo-update exited $rc). The daemon was asked to stop. Re-run the installer to retry
+  the undo, or start the new daemon with
+  \"$destination/Contents/MacOS/FreesideMac\" daemon start. The checkpoint
+  stays at $checkpoint_dir."
+        ;;
+    esac
+}
+
+# Put the previous app back. The failed app moves to the rejected path and
+# is deleted only when it is the build this update installed.
+restore_superseded_app() {
+    local reason=$1 new_digest=$2 digest
+    if [[ ! -e "$superseded" && ! -L "$superseded" ]]; then
+        # An earlier run already put it back.
+        digest=$(plutil -extract FreesideDaemonDigest raw -o - "$destination/Contents/Info.plist" 2>/dev/null || true)
+        [[ -d "$destination" && "$digest" != "$new_digest" ]] ||
+            die "$reason. The database was put back, but the previous app is not at
+  $superseded; install the previous build, then lift the drain with
+  \"$checkpoint_dir/freesided\" drain -cancel -db \"$db_path\"."
+        return 0
+    fi
+    recovery_app_is_valid "$superseded" ||
+        die "$reason. The database was put back, but the previous app at
+  $superseded is $recovery_validation_error; it was left in place."
+    if [[ -e "$destination" || -L "$destination" ]]; then
+        [[ ! -e "$rejected" && ! -L "$rejected" ]] ||
+            die "$reason. The database was put back, but $rejected is occupied,
+  so the failed app could not move aside; inspect it, then re-run the installer."
+        rename_exclusively "$destination" "$rejected" ||
+            die "$reason. The database was put back, but the failed app could not
+  move aside; re-run the installer."
+        digest=$(plutil -extract FreesideDaemonDigest raw -o - "$rejected/Contents/Info.plist" 2>/dev/null || true)
+        if [[ "$digest" == "$new_digest" ]]; then
+            rm -rf "$rejected"
+        else
+            echo "install-mac-app: left an app that is not the failed build at $rejected" >&2
+        fi
+    fi
+    rename_exclusively "$superseded" "$destination" ||
+        die "$reason. The database was put back, but the previous app could not
+  return from $superseded; re-run the installer."
+    recovery_app_is_valid "$destination" ||
+        die "$reason. The app put back at $destination is $recovery_validation_error."
+    echo "install-mac-app: put the previous app back at $destination"
+}
+
+# A drained daemon lifts only a drain another build requested, so the old
+# daemon starts drained on the restored database and needs the cancel.
+cancel_restored_drain() {
+    for _ in $(seq 12); do
+        "$checkpoint_dir/freesided" drain -db "$db_path" -cancel >/dev/null 2>&1 && return 0
+        sleep 5
+    done
+    return 1
+}
+
+# Undo an update whose new daemon never lifted the drain: stop it, put the
+# checkpoint back as the database, put the previous app back, start its
+# daemon, and lift the drain. Each step is skipped when an earlier run
+# finished it. It always exits nonzero, naming why the update was undone.
+undo_failed_update() {
+    local reason=$1 sha new_digest taken_at
+    sha=$(checkpoint_value CHECKPOINT_SHA256)
+    new_digest=$(checkpoint_value NEW_DAEMON_DIGEST)
+    taken_at=$(checkpoint_value CHECKPOINT_TAKEN_AT)
+    [[ -n "$sha" && -n "$new_digest" && -x "$checkpoint_dir/freesided" ]] ||
+        die "$reason, but the update checkpoint at $checkpoint_dir is incomplete,
+  so nothing was undone. Inspect it before retrying."
+    trap pending_update_interrupted INT TERM
+    echo "install-mac-app: $reason; undoing the update" >&2
+    quit_running_app
+    if [[ -e "$checkpoint_dir/freeside.db" ]]; then
+        app_daemon stop ||
+            echo "install-mac-app: the app did not confirm the daemon stopped; trying the undo anyway" >&2
+        restore_checkpoint "$reason" "$sha"
+    fi
+    restore_superseded_app "$reason" "$new_digest"
+    app_daemon start ||
+        die "$reason. The database and the previous app are back, but its daemon
+  did not start. Start it from the Freeside menu, then re-run the installer to
+  lift the drain. If it cannot open the database because a newer build
+  migrated it since, remove $checkpoint_dir and install a build that can."
+    cancel_restored_drain ||
+        die "$reason. The database and the previous app are back and its daemon
+  runs, but its update drain could not be lifted. Re-run the installer, or run
+  \"$checkpoint_dir/freesided\" drain -cancel -db \"$db_path\"."
+    discard_checkpoint
+    trap - INT TERM
+    die "undid the update: $reason. The previous app and daemon serve again,
+  with the database as checkpointed at ${taken_at:-an unrecorded time}; changes
+  made after then were discarded."
+}
+
+# Resolve an update a killed run left unchecked before building anything,
+# so a re-run never installs over a build that has not reopened.
+resolve_pending_update() {
+    [[ -e "$checkpoint_dir" || -L "$checkpoint_dir" ]] || return 0
+    if [[ ! -e "$checkpoint_dir/swapped" ]]; then
+        rm -rf "$checkpoint_dir"
+        echo "install-mac-app: removed an update checkpoint a run left before its swap"
+        return 0
+    fi
+    # Only before the database is restored: afterwards the old daemon runs
+    # with its drain canceled, which would read as a reopened new build. A
+    # set-aside database means an undo started, and a daemon answering then
+    # may run on a database it created at the empty path, so the undo
+    # finishes or refuses instead.
+    if [[ -e "$checkpoint_dir/freeside.db" && ! -e "$db_path.update-failed" ]] &&
+        new_daemon_reopened; then
+        rm -rf "$superseded"
+        discard_checkpoint
+        echo "install-mac-app: the previous update's new freesided reopened; removed its checkpoint and the previous app"
+        return 0
+    fi
+    undo_failed_update "a previous install stopped before the new freesided reopened"
+}
+
 # After every argument check and before anything touches the install or state
 # paths: a caller with no terminal must say --prod to replace the operator's
 # real client.
@@ -432,6 +723,7 @@ if [[ "$target" == prod && "$prod_confirmed" == false && ! -t 0 ]]; then
 fi
 
 restore_interrupted_install
+resolve_pending_update
 
 resolve_identity() {
     if [[ -n "${FREESIDE_MAC_SIGNING_IDENTITY:-}" ]]; then
@@ -799,7 +1091,6 @@ chmod 755 "$bundled_daemon"
 # double quote in the pathname binds literally instead of being decoded or
 # injecting arguments; see json_string for why a raw interpolation does not
 # fail closed on those bytes.
-db_path="$daemon_state_dir/freeside.db"
 stderr_path="$daemon_state_dir/freesided.log"
 plutil -replace ProgramArguments -json \
     "[\"freesided\",\"-environment\",\"$target\",\"-db\",\"$(json_string "$db_path")\",\"-state-dir\",\"$(json_string "$daemon_state_dir")\",\"-listen\",\"$(json_string "$listen_addr")\"]" \
@@ -939,6 +1230,13 @@ drain_daemon() {
 # only once the cancel has returned: a second interrupt kills the cancel, and
 # bash 5 re-enters the signal handler, which must then try again.
 undo_update() {
+    # The new app never opened, so the database was never at risk. First,
+    # so a failed restore never leaves a checkpoint that a re-run would
+    # resolve by deleting the previous app.
+    if [[ "$checkpoint_taken" == true ]]; then
+        checkpoint_taken=false
+        discard_checkpoint
+    fi
     if [[ "$drain_requested" == true ]]; then
         if drain_daemon -cancel; then
             drain_requested=false
@@ -1028,27 +1326,16 @@ else
     fi
 fi
 
-# A running instance holds the bundle open and would keep serving stale
-# code after the swap. The client's disk cache is written atomically
-# (CacheStore), so terminating it cannot tear durable state. The pattern
-# matches only the installed executable, so an Xcode-run build of the
-# same app is left alone; the path is escaped because pgrep matches an
-# expression, not a literal. It ends at a space or the end of the command
-# line rather than anchoring at the end, because pgrep -f matches the
-# whole command line and the documented launch arguments would otherwise
-# hide a running client.
-running_pattern="^$(printf '%s' "$destination" |
-    sed 's/[][\\.^$*+?(){}|]/\\&/g')/Contents/MacOS/FreesideMac( |\$)"
-if pgrep -f "$running_pattern" >/dev/null 2>&1; then
-    echo "install-mac-app: quitting the running installed app"
-    pkill -f "$running_pattern" || true
-    for _ in $(seq 20); do
-        pgrep -f "$running_pattern" >/dev/null 2>&1 || break
-        sleep 0.5
-    done
-    if pgrep -f "$running_pattern" >/dev/null 2>&1; then
-        die "the installed app is still running; quit it and re-run"
-    fi
+quit_running_app
+
+if [[ "$daemon_unchanged" == true ]]; then
+    echo "install-mac-app: no update checkpoint: the daemon is unchanged and keeps running"
+elif [[ ! -d "$destination" ]]; then
+    echo "install-mac-app: no update checkpoint: a first install has no previous app to restore"
+elif [[ "$drain_requested" == false ]]; then
+    echo "install-mac-app: no update checkpoint: no $target daemon is running, so no drain marks the update"
+else
+    take_update_checkpoint
 fi
 
 # Stage beside the destination and swap by rename, so a failed copy
@@ -1146,6 +1433,9 @@ if [[ "$daemon_unchanged" == false ]]; then
 fi
 
 if [[ -e "$destination" ]]; then
+    if [[ "$checkpoint_taken" == true ]]; then
+        : >"$checkpoint_dir/swapped"
+    fi
     mv "$destination" "$superseded"
     if [[ -e "$recovery_guard" || -L "$recovery_guard" ]] &&
         ! recovery_app_is_valid "$superseded"; then
@@ -1173,7 +1463,12 @@ new_requirement="$(designated_requirement "$destination")"
 installed_entitlements="$build_dir/FreesideMac.installed.entitlements"
 verify_provisioned_app "$destination" "$installed_entitlements"
 trap - EXIT INT TERM
-rm -rf "$superseded"
+# With a checkpoint, the previous app stays until the new daemon reopens.
+if [[ "$checkpoint_taken" == true ]]; then
+    trap pending_update_interrupted INT TERM
+else
+    rm -rf "$superseded"
+fi
 
 if [[ "$server_url_given" == true ]]; then
     defaults write "$bundle_id" FreesideServerURL -string "$server_url"
@@ -1196,4 +1491,19 @@ if [[ "$drain_requested" == true ]]; then
 fi
 if [[ "$launch_after_install" == true || "$drain_requested" == true ]]; then
     open "$destination" || die "could not open $destination"
+fi
+
+# The update stays provisional until the new daemon lifts the drain. A
+# daemon still migrating at the bound is undone too; re-run with a larger
+# FREESIDE_MAC_REOPEN_TIMEOUT if a slow migration is expected.
+if [[ "$checkpoint_taken" == true ]]; then
+    echo "install-mac-app: waiting up to ${reopen_timeout}s for the new freesided to start and lift the drain"
+    if wait_for_reopen; then
+        trap - INT TERM
+        rm -rf "$superseded"
+        discard_checkpoint
+        echo "install-mac-app: the new freesided started and lifted the drain; removed the checkpoint and the previous app"
+    else
+        undo_failed_update "the new freesided did not start and lift the drain within $reopen_timeout seconds"
+    fi
 fi
