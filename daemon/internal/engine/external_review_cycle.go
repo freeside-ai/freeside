@@ -15,11 +15,12 @@ import (
 // Each is a reviewer's own words, quoted and cut, in a stored and synced item.
 const externalReviewItemFindingLimit = 5
 
-// answersExternalReview reports whether the task is the cycle an external
-// reviewer's finding started.
+// answersExternalReview reports whether the task is a cycle that answers
+// admitted external findings: one an external reviewer's finding started, or
+// one a hand-back started (issue #3160), whose first round adjudicates the
+// findings on the head it adopted the same way.
 func (t productionPublicationTask) answersExternalReview() bool {
-	return t.reentersInPlace() &&
-		t.Successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview
+	return t.reentersInPlace() && t.Successor.AnswersExternalFindings()
 }
 
 // externalReviewFirstRound reports whether record is the round an external
@@ -39,8 +40,7 @@ func (t productionPublicationTask) externalReviewFirstRound(record domain.Review
 // producer gates (store, engine, signet) widen under this condition and no
 // other.
 func remediatesExternalFindings(successor domain.PublicationSuccessor, round int) bool {
-	return successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
-		successor.Reentry != nil && round == successor.ReviewRound
+	return successor.AnswersExternalFindings() && successor.Reentry != nil && round == successor.ReviewRound
 }
 
 // externalCycleFindings splits the external findings a cycle admits by whether
@@ -185,11 +185,14 @@ func loadExternalRoundCard(
 // round go to adjudication (issue #1767 decisions 1 and 4): the record is the
 // cycle's first round, and the cycle reviews the base its predecessor's
 // producer was admitted at, the only base a remediation could be admitted at.
+// A hand-back cycle reviews at the adopted head's merge base instead, and its
+// remediation is admitted there (handoffConflictAdmission), so it may
+// adjudicate at that base (issue #3160).
 func (t productionPublicationTask) externalReviewMayAdjudicate(
 	record domain.ReviewRecord, reentry *reentryCycle,
 ) bool {
 	return t.externalReviewFirstRound(record) && reentry != nil &&
-		reentry.admittedBaseSHA == t.Successor.Reentry.BaseSHA
+		(t.Successor.HandsBack() || reentry.admittedBaseSHA == t.Successor.Reentry.BaseSHA)
 }
 
 // adjudicatesExternalReview reports whether an external review cycle's round

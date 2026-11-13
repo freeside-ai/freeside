@@ -386,8 +386,7 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 		if err != nil {
 			return domain.FindingAdjudication{}, err
 		}
-		if successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
-			successor.Reentry != nil && intent.Round == successor.ReviewRound {
+		if successor.AnswersExternalFindings() && successor.Reentry != nil && intent.Round == successor.ReviewRound {
 			externalRound = true
 			if external, err = tx.ExternalReviewCycleFindings(ctx, runID, intent.SuccessorPublicationID); err != nil {
 				return domain.FindingAdjudication{}, err
