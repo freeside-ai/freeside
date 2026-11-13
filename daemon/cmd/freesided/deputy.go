@@ -424,9 +424,10 @@ func openDeputyTaskCoverage(ctx context.Context, paths deputyPaths, settings loa
 // recordDeputyIdentities records the writer and reviewer identities a fresh
 // root lacks, so auth adopt can enroll them. A recorded identity is checked,
 // never rewritten: settings that disagree with the store refuse the launch.
-// A Claude reviewer's identity is not recorded here: its setup-token volume
-// and account come from auth add, so the operator enrolls it before the
-// first run, and adoption reuses that enrollment (#397).
+// A Claude reviewer on its own identity is not recorded here: its
+// setup-token volume and account come from auth add, so the operator enrolls
+// it before the first run, and adoption reuses that enrollment (#397). A
+// Claude reviewer on the writer's identity is recorded as the writer (#3173).
 //
 // It also refuses a root whose store holds an enabled Claude identity with a
 // credential volume that the settings name as neither writer nor the

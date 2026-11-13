@@ -350,9 +350,6 @@ func (s *loadedDeputySettings) validate() error {
 			return fmt.Errorf("%s is required", value.name)
 		}
 	}
-	if s.AgentTree.AuthIdentity == s.AgentTree.ReviewAuthIdentity {
-		return errors.New("agent_tree.review_auth_identity must differ from agent_tree.auth_identity")
-	}
 	if err := validateDeputySecondWriter(s.deputySettings); err != nil {
 		return err
 	}
@@ -480,17 +477,30 @@ func (s deputySettings) reviewHarness() domain.HarnessClientKind {
 
 // validateDeputyReviewHarness pairs the reviewer's harness with the only
 // review.auth_mode the deputy can adopt for it: a Codex reviewer's
-// subscription store, or a Claude reviewer's setup token.
+// subscription store, or a Claude reviewer's setup token. It also holds the
+// reviewer's identity rule. A Codex identity can't be a Claude writer's, so
+// a Codex reviewer names its own. A Claude reviewer may share the writer's,
+// and auth adopt then writes its line on the writer's enrollment; the cost
+// owners must then match, which auth adopt also requires, so the mismatch is
+// refused here, naming the settings fields, before the start takes the lease.
 func validateDeputyReviewHarness(s deputySettings) error {
+	sharedIdentity := s.AgentTree.AuthIdentity == s.AgentTree.ReviewAuthIdentity
 	switch s.reviewHarness() {
 	case domain.HarnessClientCodexCLI:
 		if s.Review.AuthMode != ward.CodexAuthSubscription {
 			return errors.New("review.auth_mode must be subscription; api_key enrollment is not supported yet (#1677)")
 		}
+		if sharedIdentity {
+			return errors.New("agent_tree.review_auth_identity must differ from agent_tree.auth_identity")
+		}
 		return nil
 	case domain.HarnessClientClaudeCode:
 		if s.Review.AuthMode != ward.CodexAuthSetupToken {
 			return errors.New("review.auth_mode must be setup_token with agent_tree.review_harness claude_code")
+		}
+		if sharedIdentity && s.AgentTree.ReviewCostOwner != s.AgentTree.CostOwner {
+			return errors.New("agent_tree.review_auth_identity is agent_tree.auth_identity, " +
+				"so agent_tree.review_cost_owner must equal agent_tree.cost_owner")
 		}
 		return nil
 	}

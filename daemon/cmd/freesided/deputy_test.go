@@ -417,6 +417,129 @@ func TestDeputyStartAdoptsASecondWriterOverItsExistingVolume(t *testing.T) {
 	}
 }
 
+// TestDeputyStartRunsAClaudeReviewerOnTheWriterIdentity pins #3173: a
+// Claude reviewer on the writer's identity starts on a fresh root. The start
+// records the writer identity alone and refuses nothing as stray, auth adopt
+// writes the reviewer line on the writer's claude_code enrollment, and the
+// preflight resolves that line to the writer identity and passes
+// claude_review_credentials.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
+func TestDeputyStartRunsAClaudeReviewerOnTheWriterIdentity(t *testing.T) {
+	ctx := t.Context()
+	host, paths, leaseSettings := deputyLeaseFixture(t)
+	settings := deputyDaemonSettingsFixture(t)
+	settings.Listen, settings.SeedRoot = leaseSettings.Listen, leaseSettings.SeedRoot
+	settings.AgentTree.ReviewHarness = domain.HarnessClientClaudeCode
+	settings.AgentTree.ReviewAuthIdentity = settings.AgentTree.AuthIdentity
+	settings.Review.AuthMode = ward.CodexAuthSetupToken
+	settings.Review.Model = "claude-review-fixture-1"
+	review, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	review = filepath.Join(review, "review")
+	if err := os.Mkdir(review, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings.Review.InputRoot, settings.Review.AuthSnapshot = review, filepath.Join(review, "setup-token")
+	if err := os.WriteFile(settings.Review.AuthSnapshot, []byte("fixture-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.validate(); err != nil {
+		t.Fatalf("shared-identity settings: %v", err)
+	}
+	seedTemplateStore(t, paths.DB)
+	checkout := t.TempDir()
+	deputyTestGit(t, checkout, "init", "-q")
+	deputyTestGit(t, checkout, "commit", "-q", "--allow-empty", "-m", "empty")
+	settings.AgentTree.Checkout = checkout
+	settings.AgentTree.Commit = deputyTestGit(t, checkout, "rev-parse", "HEAD")
+	host.inspectImage = func(context.Context, string) error { return nil }
+	host.adopt = authAdoptDeps{
+		observeVolume: func(string, string) func(context.Context, string) (domain.Digest, error) {
+			return func(_ context.Context, volume string) (domain.Digest, error) {
+				return domain.Digest(contentaddr.Sum([]byte("tree of " + volume))), nil
+			}
+		},
+		now: func() time.Time { return time.Now().UTC() },
+	}
+
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		return recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The start before the tree is committed emits the patch and refuses.
+	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); ok ||
+		!strings.Contains(result.Remediation, "is not the tree auth adopt emitted") {
+		log, _ := os.ReadFile(paths.AdoptLog)
+		t.Fatalf("uncommitted tree: %+v, %t\n%s", result, ok, log)
+	}
+	deputyTestGit(t, checkout, "apply", paths.Patch)
+	deputyTestGit(t, checkout, "add", ".")
+	deputyTestGit(t, checkout, "commit", "-q", "-m", "agent tree")
+	settings.AgentTree.Commit = deputyTestGit(t, checkout, "rev-parse", "HEAD")
+	// The restart finds the enrolled writer and no stray Claude identity.
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		return recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+	}); err != nil {
+		t.Fatalf("the restart records nothing new: %v", err)
+	}
+	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); !ok {
+		t.Fatalf("committed tree: %+v", result)
+	}
+	listed := runAuthListForTest(t, paths.DB)
+	if len(listed.Identities) != 1 || listed.Identities[0].ID != "claude-1" ||
+		len(listed.Identities[0].Enrollments) != 1 {
+		t.Fatalf("auth list = %+v, want the writer identity alone with one enrollment", listed)
+	}
+	patch, err := os.ReadFile(paths.Patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	if roles := lineupRoles(tree); !slices.Contains(roles, "reviewer=claude-1/claude_code/claude-review-fixture-1/high") {
+		t.Fatalf("lineup = %v, want the reviewer on the writer's enrollment", roles)
+	}
+
+	revision, err := treeRevision(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents preflightAgentSelection
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		var err error
+		agents, err = resolvePreflightAgents(ctx, st, tree, revision, settings.Review.AuthMode, false, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatalf("resolve the agents: %v", err)
+	}
+	if agents.AuthIdentityID != "claude-1" || agents.ReviewAuthIdentityID != "claude-1" ||
+		agents.ReviewProvider.Vendor != domain.AgentVendorClaude {
+		t.Fatalf("agents = %+v, want the writer and a Claude reviewer on claude-1", agents)
+	}
+	lease, interrupted, err := acquireDeputyLease(ctx, host, paths, settings, io.Discard)
+	if err != nil || interrupted != nil {
+		t.Fatalf("acquire lease: %v, %+v", err, interrupted)
+	}
+	defer func() { _ = lease.Close() }()
+	cfg := deputyPreflightConfig(settings, paths, lease)
+	// composePreflight takes the database from the lease and the agents from
+	// the lineup it resolves.
+	cfg.DBPath, cfg.Agents = paths.DB, agents
+	inspection := (productionPreflightEnvironment{}).InspectDatabase(ctx, cfg, domain.Digest("sha256:"+strings.Repeat("8", 64)))
+	if inspection.OpenError != nil || inspection.ReviewCredentialError != nil {
+		t.Fatalf("database inspection: open %v, review credential %v", inspection.OpenError, inspection.ReviewCredentialError)
+	}
+	manifest := newCompositionManifest(cfg, "test", deputyTestNow())
+	useReviewCredentialCheck(&manifest, agents.ReviewProvider)
+	evaluateClaudeReviewCredentials(&manifest, cfg, inspection, false)
+	if status := checkStatus(manifest, claudeReviewCredentialCheck); status != compositionPassed {
+		t.Fatalf("%s = %q; checks %+v", claudeReviewCredentialCheck, status, manifest.Checks)
+	}
+}
+
 // The deputy passes the second writer's identity and volume to preflight,
 // so a deputy start runs second_claude_credentials; without one it passes
 // neither.
