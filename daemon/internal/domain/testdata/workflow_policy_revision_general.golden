@@ -1,0 +1,9 @@
+{
+  "revision": 1,
+  "scope": "general",
+  "project_id": null,
+  "key": "follow_up_filing.max_per_day",
+  "value": "12",
+  "set_by": "device:device-1",
+  "set_at": "2026-01-02T03:04:05Z"
+}

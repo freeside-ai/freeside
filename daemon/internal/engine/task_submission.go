@@ -18,6 +18,9 @@ import (
 // resolved policy keys a submitted task runs under and the commit author its
 // publication is attributed to. The daemon loads this operator-owned snapshot
 // separately from label intake; a paired client cannot choose these bindings.
+// PolicyKeys is the base the store's workflow policy layers overlay when a
+// task is created (ResolveWorkflowPolicyKeys): a key the Workflow pane exposes
+// never resolves from it.
 type ManualInitiator struct {
 	PolicyKeys   []domain.PolicyKey
 	CommitAuthor ProductionCommitAuthor
@@ -101,10 +104,19 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 		return signet.TaskSubmissionResult{}, err
 	}
 	publicationDigest := domain.Digest(contentaddr.Sum(publicationBytes))
+	// The workflow policy layers current in this transaction overlay the
+	// configured keys, so a task created after a settings change runs under
+	// it.
+	policyKeys, err := ResolveWorkflowPolicyKeys(ctx, &tx.ReadTx, in.ProjectID, init.PolicyKeys)
+	if err != nil {
+		return signet.TaskSubmissionResult{}, fmt.Errorf("resolve workflow policy: %w", err)
+	}
 	// The run-id derivation uses the keys-only policy digest so an exact
 	// resubmission converges; the resolved policy bound to the run carries its
-	// own digest.
-	policyKeysDigest, err := (domain.ResolvedPolicy{Keys: init.PolicyKeys}).ComputeDigest()
+	// own digest. The digest covers the layered keys, so the same submission
+	// under different settings derives a different run rather than colliding
+	// with the first run's stored policy.
+	policyKeysDigest, err := (domain.ResolvedPolicy{Keys: policyKeys}).ComputeDigest()
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
@@ -117,7 +129,7 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
-	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, init.PolicyKeys)
+	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, policyKeys)
 	if err != nil {
 		return signet.TaskSubmissionResult{}, fmt.Errorf("resolve submission policy: %w", err)
 	}

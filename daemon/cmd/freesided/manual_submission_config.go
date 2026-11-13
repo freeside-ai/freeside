@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -28,7 +29,7 @@ type manualSubmissionProject struct {
 // authority; production still authenticates the claimed author and admits the
 // policy before execution. A restart changes only future task creation.
 func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.ManualInitiator, bool), error) {
-	projects, err := readManualSubmissionProjects(path)
+	projects, err := readManualSubmissionProjects(path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +40,14 @@ func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.Man
 // path is no projects. Whether their sizes fit the memory budget waits for
 // the budget the start resolves once its store is open
 // (requireManualProjectsFit).
-func readManualSubmissionProjects(path string) (map[domain.ProjectID]engine.ManualInitiator, error) {
+//
+// A key the Workflow settings pane exposes resolves from the store's layers,
+// never from this file (engine.ResolveWorkflowPolicyKeys), so the loader drops
+// one the file sets and warns on logger, when there is one, naming the
+// project and key. A file written before the pane still loads.
+func readManualSubmissionProjects(
+	path string, logger *slog.Logger,
+) (map[domain.ProjectID]engine.ManualInitiator, error) {
 	projects := make(map[domain.ProjectID]engine.ManualInitiator)
 	if path != "" {
 		file, err := readSubmissionFile(path)
@@ -63,8 +71,20 @@ func readManualSubmissionProjects(path string) (map[domain.ProjectID]engine.Manu
 			if _, exists := projects[project.ProjectID]; exists {
 				return nil, fmt.Errorf("manual submission config repeats project_id %q", project.ProjectID)
 			}
+			keys := domain.WithoutWorkflowPolicyKeys(project.PolicyKeys)
+			if logger != nil {
+				for _, key := range project.PolicyKeys {
+					if domain.IsWorkflowPolicyKey(key.Key) {
+						// The value is logged so an operator can set it in the
+						// pane: dropping it falls back to the store layers,
+						// which may be looser than the file was.
+						logger.Warn("manual submission config sets a key the Workflow settings pane owns; ignoring it, set it in the Workflow pane instead",
+							"project", project.ProjectID, "key", key.Key, "value", key.Value)
+					}
+				}
+			}
 			// This temporary identity validates policy without persisting a run.
-			policy, err := domain.NewResolvedPolicy("manual-submission-config", project.PolicyKeys)
+			policy, err := domain.NewResolvedPolicy("manual-submission-config", keys)
 			if err != nil {
 				return nil, fmt.Errorf("manual submission config project %d policy: %w", index, err)
 			}

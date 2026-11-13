@@ -10,6 +10,7 @@ import (
 // leaves: no duplicate_searches table.
 func rewindDuplicateSearches(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindWorkflowPolicyRevisions(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE duplicate_searches`,
 		`DELETE FROM schema_migrations WHERE name = '0137_duplicate_searches.sql'`,

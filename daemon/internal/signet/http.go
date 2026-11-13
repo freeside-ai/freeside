@@ -496,7 +496,8 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		h.submitTaskCommand(w, r, request)
 		return
 	case domain.CommandKindRefreshUsage, domain.CommandKindReassignCollector,
-		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy, domain.CommandKindMoveParkedTask:
+		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy, domain.CommandKindMoveParkedTask,
+		domain.CommandKindSetWorkflowPolicy:
 		h.operatorCommand(w, r, request, kindProbe.Kind)
 		return
 	case domain.CommandKindDecision, "":
@@ -716,6 +717,11 @@ func (h httpHandler) operatorCommand(
 			Kind domain.CommandKind `json:"kind"`
 			*MoveParkedTaskPayload
 		}{MoveParkedTaskPayload: &in.MoveParkedTask}
+	case domain.CommandKindSetWorkflowPolicy:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*SetWorkflowPolicyPayload
+		}{SetWorkflowPolicyPayload: &in.SetWorkflowPolicy}
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
 		return
@@ -997,6 +1003,14 @@ func writeCommandError(w http.ResponseWriter, service *Service, err error) {
 		}{Message: policyChanged.Error(), RoutingPolicyRejectionError: policyChanged})
 		return
 	}
+	var workflowChanged *WorkflowPolicyRejectionError
+	if errors.As(err, &workflowChanged) {
+		writeJSON(w, http.StatusConflict, struct {
+			Message string `json:"message"`
+			*WorkflowPolicyRejectionError
+		}{Message: workflowChanged.Error(), WorkflowPolicyRejectionError: workflowChanged})
+		return
+	}
 	var staleTask *StaleTaskError
 	if errors.As(err, &staleTask) {
 		writeJSON(w, http.StatusConflict, struct {
@@ -1077,6 +1091,8 @@ func isCommandRequestError(err error) bool {
 		domain.ErrRoutingPolicyDrainFirstUnknown, domain.ErrRoutingPolicyEnrollmentUnknown,
 		domain.ErrRoutingPolicyEnrollmentDisabled, domain.ErrRoutingPolicyEnrollmentUnserved,
 		domain.ErrRoutingPolicyRoleUnbound,
+		// A workflow policy change names a project the daemon serves.
+		domain.ErrWorkflowPolicyProjectUnserved,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

@@ -63,6 +63,8 @@
 //   - device_notification_preference.go a device's notifications switch (§4)
 //   - policy.go       resolved policy with per-key provenance (§5.12)
 //   - routing_policy.go routing policy revisions and their source (§5.4)
+//   - workflow_policy.go the Workflow pane's gate and cap layers, their
+//     revisions, and the overlay a new task resolves (§3.2)
 //   - unattended.go   the unattended-operation state an operator moves
 //   - update_drain.go the update drain that holds new launches for a restart
 //   - restart_readiness.go what a restart waits on, by blocker kind

@@ -271,6 +271,15 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 			func(domain.TaskID) signet.ClientCommand { return policyCommand("cmd", nil, claudePrimary) },
 		},
 		{
+			domain.CommandKindSetWorkflowPolicy,
+			func(domain.TaskID) signet.ClientCommand {
+				return workflowCommand("cmd", domain.WorkflowPolicyScopeGeneral, nil, domain.WorkflowGateIssueComment, new("true"), nil)
+			},
+			func(domain.TaskID) signet.ClientCommand {
+				return workflowCommand("cmd", domain.WorkflowPolicyScopeGeneral, nil, domain.WorkflowGateIssueComment, new("false"), nil)
+			},
+		},
+		{
 			domain.CommandKindMoveParkedTask,
 			func(id domain.TaskID) signet.ClientCommand { return moveCommand("cmd", id, "move-claude/claude_code") },
 			func(id domain.TaskID) signet.ClientCommand { return moveCommand("cmd", id, "other-claude/claude_code") },
@@ -279,7 +288,8 @@ func TestOperatorCommandsAcceptAndReplay(t *testing.T) {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			svc, st, id := newOperatorService(t, signet.WithUsageOperator(&recordingUsageOperator{}),
 				signet.WithTaskLineChanger(engineTaskLineChanger), signet.WithRoutingPolicySetter(engineRoutingPolicySetter),
-				withOperatorCatalog, signet.WithParkedTaskMover(fakeParkedTaskMover))
+				withOperatorCatalog, signet.WithParkedTaskMover(fakeParkedTaskMover),
+				signet.WithWorkflowPolicySetter(engineWorkflowPolicySetter))
 			before := serverRevision(t, st)
 			result, err := svc.Submit(t.Context(), tc.command(id))
 			if err != nil {

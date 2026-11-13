@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -407,7 +408,7 @@ func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T
 	path := filepath.Join(t.TempDir(), "manual.json")
 	writeManualConfig(t, path, cfg)
 	bound := ward.LaunchBound{BudgetMiB: 8192, RuntimeVersion: "apple-container 1.1.0"}
-	projects, err := readManualSubmissionProjects(path)
+	projects, err := readManualSubmissionProjects(path, nil)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -417,5 +418,41 @@ func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T
 	err = daemoncompose.RequireManualProjectsFit(projects, bound)
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "16384 MiB declared plus 256 MiB") {
 		t.Fatalf("budgeted fit = %v, want a never-fits refusal naming the numbers", err)
+	}
+}
+
+// TestManualSubmissionConfigDropsWorkflowPaneKeys: a key the Workflow settings
+// pane owns resolves from the store's layers, so a file that still sets one
+// loads without it and the start warns, naming the project, key, and value.
+func TestManualSubmissionConfigDropsWorkflowPaneKeys(t *testing.T) {
+	t.Parallel()
+	cfg := manualConfigFixture(t)
+	keys := slices.Clone(cfg.Projects[0].PolicyKeys)
+	panes := []struct{ key, value string }{
+		{string(domain.WorkflowGateSourceIssueClosure), "true"},
+		{string(domain.WorkflowFollowUpMaxPerDay), "3"},
+	}
+	for _, pane := range panes {
+		set := keys[0]
+		set.Key, set.Value = pane.key, pane.value
+		keys = append(keys, set)
+	}
+	slices.SortFunc(keys, func(a, b domain.PolicyKey) int { return strings.Compare(a.Key, b.Key) })
+	cfg.Projects[0].PolicyKeys = keys
+	path := filepath.Join(t.TempDir(), "manual.json")
+	writeManualConfig(t, path, cfg)
+	var logs bytes.Buffer
+	projects, err := readManualSubmissionProjects(path, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	loaded := projects["project-client"].PolicyKeys
+	if want := domain.WithoutWorkflowPolicyKeys(keys); !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("loaded keys = %+v, want the file's keys without the pane's", loaded)
+	}
+	for _, pane := range panes {
+		if !strings.Contains(logs.String(), "project=project-client key="+pane.key+" value="+pane.value) {
+			t.Fatalf("logs = %q, want a warning naming project-client, %s, and %s", logs.String(), pane.key, pane.value)
+		}
 	}
 }

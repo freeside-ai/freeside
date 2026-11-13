@@ -204,6 +204,36 @@ revision. A `command_id` names one command of any kind.
   routing policy orders an agent on that pool for, unless an operator set
   its line (`daemon/README.md`, Retry Or Move A Task To Another Agent).
 
+## Workflow Policy Command Contract
+
+The bootstrap carries `workflow_policy`, never null: the six keys the app's
+Workflow settings pane exposes (the three `gates.*` keys and the three
+`follow_up_filing.*` caps), each with its effective value and `origin`, the
+layer it came from. `general` lists every key at the general value or the
+default, and `projects` lists the same keys for each project the daemon
+serves, at the project's value, else the general value, else the default.
+`set_by` and `set_at` name the revision that set the winning layer, null for
+the default. `revision` is the newest workflow policy revision, 0 before any
+change. A task resolves these keys when it is created, and its run keeps
+them; the daemon never reads them from the manual submission config file
+(`daemon/README.md`, Configure Client Task Submission).
+
+**`set_workflow_policy`** sets or clears one layer of one key. It carries
+no `expected_entity_version` or `expected_bindings`, and records an
+immutable receipt like the commands above. `scope` is `general` or
+`project`; `project_id` names a served project exactly for `project` and is
+null for `general`. `value` is `"true"` or `"false"` for a gate and a
+positive decimal integer with no sign or leading zero for a cap; null clears
+the layer. An unknown key or scope, a value the key does not take, a scope
+and `project_id` that disagree, and a project the daemon does not serve are
+400, never repeating the value or project. `expected_revision` is the
+revision the client saw, null when it saw none; any other current revision
+is 409 with `current_workflow_policy`, the projection as of the last
+committed revision. The record echoes the request and carries `recorded`,
+false when the layer already held the value, and `revision`, the workflow
+policy revision after the request. The new revision's `set_by` is
+`device:<device_id>`.
+
 ## Restart Readiness Contract
 
 `GET /restart-readiness` tells an update whether it can restart the daemon

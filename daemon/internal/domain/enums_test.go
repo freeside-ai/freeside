@@ -170,6 +170,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["ProvenanceSource"] = append(valids["ProvenanceSource"], v.valid)
 	}
 	invalids["ProvenanceSource"] = ProvenanceSource("").valid
+	for _, v := range AllWorkflowPolicyKeys {
+		valids["WorkflowPolicyKey"] = append(valids["WorkflowPolicyKey"], v.valid)
+	}
+	invalids["WorkflowPolicyKey"] = WorkflowPolicyKey("").valid
+	for _, v := range AllWorkflowPolicyScopes {
+		valids["WorkflowPolicyScope"] = append(valids["WorkflowPolicyScope"], v.valid)
+	}
+	invalids["WorkflowPolicyScope"] = WorkflowPolicyScope("").valid
+	for _, v := range AllWorkflowPolicyOrigins {
+		valids["WorkflowPolicyOrigin"] = append(valids["WorkflowPolicyOrigin"], v.valid)
+	}
+	invalids["WorkflowPolicyOrigin"] = WorkflowPolicyOrigin("").valid
 	for _, v := range AllPRExecutionModes {
 		valids["PRExecutionMode"] = append(valids["PRExecutionMode"], v.valid)
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 // The operator commands (refresh_usage, reassign_collector, change_task_line,
-// set_routing_policy, move_parked_task) bind to no entity version: each records a
+// set_routing_policy, move_parked_task, set_workflow_policy) bind to no entity version: each records a
 // domain.CommandReceipt in the transaction that applies it, and a replay of
 // its command_id returns that receipt. Their effects live in the engine and,
 // for usage, in the collection lifecycle, which import signet, so each reaches
@@ -72,7 +72,7 @@ var ErrInvalidOperatorCommandPayload = errors.New("operator command payload is i
 var ErrUsageOperationUnavailable = errors.New("usage operation is not available")
 
 // ErrOperatorSettingUnavailable answers change_task_line,
-// set_routing_policy, move_parked_task, and a retry_with_alternate_agent
+// set_routing_policy, move_parked_task, set_workflow_policy, and a retry_with_alternate_agent
 // decision on a service composed without their hook.
 var ErrOperatorSettingUnavailable = errors.New("operator setting is not available")
 
@@ -202,6 +202,7 @@ func (in ClientCommand) operatorArmOnly() bool {
 	for _, arm := range []any{
 		in.Payload, in.StopTask, in.SubmitTask,
 		in.RefreshUsage, in.ReassignCollector, in.ChangeTaskLine, in.SetRoutingPolicy, in.MoveParkedTask,
+		in.SetWorkflowPolicy,
 	} {
 		if !reflect.ValueOf(arm).IsZero() {
 			set++

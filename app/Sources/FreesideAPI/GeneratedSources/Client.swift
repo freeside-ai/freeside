@@ -1675,8 +1675,8 @@ public struct Client: APIProtocol {
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
     /// The operator commands refresh_usage, reassign_collector,
-    /// change_task_line, set_routing_policy, and move_parked_task carry
-    /// neither envelope field
+    /// change_task_line, set_routing_policy, move_parked_task, and
+    /// set_workflow_policy carry neither envelope field
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
@@ -1686,7 +1686,11 @@ public struct Client: APIProtocol {
     /// does not carry (set_routing_policy) are 400. A role whose attempt is
     /// running (change_task_line) is 409 with the current task snapshot, and
     /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A move_parked_task for a
+    /// revision is 409 with the current policy. A set_workflow_policy with
+    /// an unknown key or scope, a value its key does not take, or a project
+    /// the daemon does not serve is 400; one whose expected_revision is not
+    /// the current workflow policy revision is 409 with the current workflow
+    /// policy. A move_parked_task for a
     /// task with no attempt parked on an exhausted quota window, or naming
     /// an agent the park no longer offers, is 400 and records nothing, as is
     /// a retry_with_alternate_agent decision whose agent no longer

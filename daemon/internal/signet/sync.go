@@ -316,6 +316,9 @@ type BootstrapSnapshot struct {
 	UsagePools          []UsagePoolSnapshot         `json:"usage_pools"`
 	// RoutingPolicy is nil until a policy is first set.
 	RoutingPolicy *RoutingPolicySnapshot `json:"routing_policy"`
+	// WorkflowPolicy is never nil: with no revision every key projects its
+	// default.
+	WorkflowPolicy WorkflowPolicySnapshot `json:"workflow_policy"`
 	// AgentCatalog is never nil: its enrollments are read in the snapshot's
 	// transaction and its agents and lineup from the tree loaded at startup,
 	// empty when the daemon holds no committed tree.
@@ -384,6 +387,10 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return err
 		}
+		workflowPolicy, err := s.workflowPolicySnapshot(ctx, tx, state.Revision)
+		if err != nil {
+			return fmt.Errorf("workflow policy: %w", err)
+		}
 
 		out = BootstrapSnapshot{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
@@ -396,6 +403,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			UnattendedOperation: unattendedOperationSnapshot(gate, drain),
 			UsagePools:          usagePools,
 			RoutingPolicy:       routingPolicy,
+			WorkflowPolicy:      workflowPolicy,
 			AgentCatalog:        agentCatalog,
 		}
 		snoozedItems := make(map[domain.ItemID]bool)

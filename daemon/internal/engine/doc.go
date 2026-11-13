@@ -38,6 +38,8 @@
 //   - router.go, routing_policy.go, task_line_change.go
 //     agent routing, routing policy revisions, and an operator's task line
 //     change (§5.4)
+//   - workflow_policy.go the Workflow pane's setter and the layers a new
+//     task resolves (§3.2)
 //   - specifier_triage.go the triager's one call per task, before the
 //     specifier's first admission, and the line an escalation writes (§5.13)
 //   - machine_capacity.go launch bounds under the instance's memory budget

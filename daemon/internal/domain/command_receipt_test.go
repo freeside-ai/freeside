@@ -189,6 +189,14 @@ func validReceipts(t *testing.T) map[string]domain.CommandReceipt {
 			},
 			Recorded: true, Policy: receiptPolicy(t, 2),
 		}},
+		"workflow_policy_change_receipt": {WorkflowPolicyChange: &domain.WorkflowPolicyChangeReceipt{
+			WorkflowPolicyChangeRequest: domain.WorkflowPolicyChangeRequest{
+				CommandIdentity: receiptIdentity("cmd-workflow"), Scope: domain.WorkflowPolicyScopeProject,
+				ProjectID: new(domain.ProjectID("proj-1")), Key: domain.WorkflowGateSourceIssueClosure,
+				Value: new("true"), ExpectedRevision: new(3),
+			},
+			Recorded: true, Revision: 4,
+		}},
 	}
 }
 
@@ -212,6 +220,8 @@ func TestCommandReceiptGoldens(t *testing.T) {
 				arm = receipt.RoutingPolicyChange
 			case domain.CommandKindMoveParkedTask:
 				arm = receipt.ParkedTaskMove
+			case domain.CommandKindSetWorkflowPolicy:
+				arm = receipt.WorkflowPolicyChange
 			case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 				t.Fatalf("kind %q", receipt.Kind())
 			}
@@ -241,6 +251,11 @@ func TestCommandReceiptRefusals(t *testing.T) {
 		receipt := *validReceipts(t)["routing_policy_change_receipt"].RoutingPolicyChange
 		edit(&receipt)
 		return domain.CommandReceipt{RoutingPolicyChange: &receipt}
+	}
+	workflowChange := func(edit func(*domain.WorkflowPolicyChangeReceipt)) domain.CommandReceipt {
+		receipt := *validReceipts(t)["workflow_policy_change_receipt"].WorkflowPolicyChange
+		edit(&receipt)
+		return domain.CommandReceipt{WorkflowPolicyChange: &receipt}
 	}
 	refresh := validReceipts(t)["usage_refresh_receipt"]
 	for _, tc := range []struct {
@@ -303,6 +318,24 @@ func TestCommandReceiptRefusals(t *testing.T) {
 			r.Recorded = false
 		}), domain.ErrParentKeyMismatch},
 		{"non-positive expected revision", policyChange(func(r *domain.RoutingPolicyChangeReceipt) {
+			r.ExpectedRevision = new(0)
+		}), domain.ErrNonPositive},
+		{"workflow recorded revision skips one", workflowChange(func(r *domain.WorkflowPolicyChangeReceipt) {
+			r.Revision = 5
+		}), domain.ErrParentKeyMismatch},
+		{"workflow unrecorded revision moved", workflowChange(func(r *domain.WorkflowPolicyChangeReceipt) {
+			r.Recorded = false
+		}), domain.ErrParentKeyMismatch},
+		{"workflow unknown key", workflowChange(func(r *domain.WorkflowPolicyChangeReceipt) {
+			r.Key = "gates.spec_approval"
+		}), domain.ErrInvalidWorkflowPolicyKey},
+		{"workflow general scope with project", workflowChange(func(r *domain.WorkflowPolicyChangeReceipt) {
+			r.Scope = domain.WorkflowPolicyScopeGeneral
+		}), domain.ErrWorkflowPolicyProjectMismatch},
+		{"workflow bad gate value", workflowChange(func(r *domain.WorkflowPolicyChangeReceipt) {
+			r.Value = new("yes")
+		}), domain.ErrInvalidWorkflowPolicyValue},
+		{"workflow non-positive expected revision", workflowChange(func(r *domain.WorkflowPolicyChangeReceipt) {
 			r.ExpectedRevision = new(0)
 		}), domain.ErrNonPositive},
 	} {

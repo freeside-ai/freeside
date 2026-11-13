@@ -106,7 +106,14 @@ func TestSubmitTaskEgressPolicyBeforePersistence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			keysDigest, err := (domain.ResolvedPolicy{Keys: init.PolicyKeys}).ComputeDigest()
+			// With no workflow settings stored, submission adds each exposed
+			// key at its default.
+			layers, err := domain.NewWorkflowPolicyLayers(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := layers.Overlay("project-1", init.PolicyKeys)
+			keysDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +122,7 @@ func TestSubmitTaskEgressPolicyBeforePersistence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			policy, err := domain.NewResolvedPolicy(specID, init.PolicyKeys)
+			policy, err := domain.NewResolvedPolicy(specID, keys)
 			if err != nil {
 				t.Fatal(err)
 			}

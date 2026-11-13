@@ -8,6 +8,9 @@ extension Components.Schemas.CollectionAttemptStatus: UnknownTolerantEnum {}
 extension Components.Schemas.AvailabilityAnswer: UnknownTolerantEnum {}
 extension Components.Schemas.WindowStatus: UnknownTolerantEnum {}
 extension Components.Schemas.ExhaustedMarkSource: UnknownTolerantEnum {}
+extension Components.Schemas.WorkflowPolicyKey: UnknownTolerantEnum {}
+extension Components.Schemas.WorkflowPolicyScope: UnknownTolerantEnum {}
+extension Components.Schemas.WorkflowPolicyOrigin: UnknownTolerantEnum {}
 extension Components.Schemas.RoutingPolicySource: UnknownTolerantEnum {}
 extension Components.Schemas.TaskLineRole: UnknownTolerantEnum {}
 extension Components.Schemas.TaskAttachmentMediaType: UnknownTolerantEnum {}
@@ -116,6 +119,9 @@ public enum TolerantEnums {
         Components.Schemas.AvailabilityAnswer.self,
         Components.Schemas.WindowStatus.self,
         Components.Schemas.ExhaustedMarkSource.self,
+        Components.Schemas.WorkflowPolicyKey.self,
+        Components.Schemas.WorkflowPolicyScope.self,
+        Components.Schemas.WorkflowPolicyOrigin.self,
         Components.Schemas.RoutingPolicySource.self,
         Components.Schemas.TaskLineRole.self,
         Components.Schemas.TaskAttachmentMediaType.self,

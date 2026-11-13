@@ -1387,6 +1387,22 @@ enum MockContractValidation {
         }
     }
 
+    /// The daemon's workflow policy change check
+    /// (domain.WorkflowPolicyChangeRequest.Validate): a known scope with a
+    /// project id exactly for the project scope, a known key, and a value the
+    /// key takes, a gate "true" or "false" and a cap a canonical positive
+    /// decimal. Nil when the change is well formed; the reason never quotes
+    /// the value or project.
+    static func workflowPolicyChangeFault(_ payload: Components.Schemas.SetWorkflowPolicyPayload) -> String? {
+        guard payload.scope != .unknown else { return "unknown workflow policy scope" }
+        guard (payload.scope == .project) == (payload.project_id != nil), payload.project_id != "" else {
+            return "workflow policy scope and project_id disagree"
+        }
+        guard payload.key != .unknown else { return "unknown workflow policy key" }
+        guard let value = payload.value else { return nil }
+        return payload.key.accepts(value) ? nil : "invalid workflow policy value"
+    }
+
     static func validateStructure(_ command: Components.Schemas.ClientCommand) throws {
         func malformed(_ reason: String) -> MockServer.MalformedCommandError {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
@@ -1444,7 +1460,8 @@ enum MockContractValidation {
                 }
                 guard trimmed.unicodeScalars.count <= 60 else { throw malformed("name exceeds 60 characters") }
             }
-        case .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy, .move_parked_task:
+        case .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy, .move_parked_task,
+            .set_workflow_policy:
             // An operator command binds to no entity version (api/openapi.yaml).
             guard command.expected_entity_version == nil, command.expected_bindings == nil else {
                 throw malformed("operator command must not carry expected_entity_version or expected_bindings")
@@ -1469,6 +1486,9 @@ enum MockContractValidation {
                 guard !payload.task_id.isEmpty, validAlternateAgentChoice(payload.choice) else {
                     throw malformed("empty task or invalid choice")
                 }
+            case .set_workflow_policy(let payload):
+                guard (payload.expected_revision ?? 1) >= 1 else { throw malformed("non-positive expected_revision") }
+                if let reason = workflowPolicyChangeFault(payload) { throw malformed(reason) }
             case .decision, .stop_task, .submit_task:
                 break
             }

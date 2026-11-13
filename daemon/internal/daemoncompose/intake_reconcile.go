@@ -263,7 +263,11 @@ func (r *intakeReconciler) admit(
 	if err := requireForgeResearchHost(init.PolicyKeys); err != nil {
 		return domain.IntakeOccurrence{}, err
 	}
-	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, init.PolicyKeys)
+	policyKeys, err := r.intakePolicyKeys(ctx, init, specificationRunID)
+	if err != nil {
+		return domain.IntakeOccurrence{}, fmt.Errorf("resolve workflow policy: %w", err)
+	}
+	resolvedPolicy, err := domain.NewResolvedPolicy(specificationRunID, policyKeys)
 	if err != nil {
 		return domain.IntakeOccurrence{}, fmt.Errorf("resolve policy: %w", err)
 	}
@@ -409,6 +413,34 @@ func (r *intakeReconciler) admit(
 		return domain.IntakeOccurrence{}, fmt.Errorf("bind admission: %w", err)
 	}
 	return bound, nil
+}
+
+// intakePolicyKeys overlays the store's workflow policy layers on the
+// initiator's configured keys (engine.ResolveWorkflowPolicyKeys). A crash
+// after the run was reserved re-runs admission; the reserved run's stored
+// policy then supplies the workflow keys it was resolved with, so a settings
+// change in between converges on that immutable policy instead of conflicting
+// with it, as the stored attempt's publication does below.
+func (r *intakeReconciler) intakePolicyKeys(
+	ctx context.Context, init IntakeInitiator, specificationRunID domain.RunID,
+) ([]domain.PolicyKey, error) {
+	var keys []domain.PolicyKey
+	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		stored, err := tx.GetResolvedPolicy(ctx, specificationRunID)
+		if err == nil {
+			reserved := slices.DeleteFunc(slices.Clone(stored.Keys), func(k domain.PolicyKey) bool {
+				return !domain.IsWorkflowPolicyKey(k.Key)
+			})
+			keys = append(domain.WithoutWorkflowPolicyKeys(init.PolicyKeys), reserved...)
+			return nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		keys, err = engine.ResolveWorkflowPolicyKeys(ctx, tx, init.ProjectID, init.PolicyKeys)
+		return err
+	})
+	return keys, err
 }
 
 // decide applies the mode/WIP/start decision to an admitted occurrence. It is

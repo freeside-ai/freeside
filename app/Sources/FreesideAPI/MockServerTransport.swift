@@ -377,6 +377,8 @@ public struct MockServerTransport: ClientTransport {
                     return try Self.json(status: .conflict, body: rejection)
                 case .routingPolicyRejected(let rejection):
                     return try Self.json(status: .conflict, body: rejection)
+                case .workflowPolicyRejected(let rejection):
+                    return try Self.json(status: .conflict, body: rejection)
                 case .stale(let rejection):
                     return try Self.json(status: .conflict, body: rejection)
                 case .unservedKind:

@@ -510,6 +510,103 @@
       "drain_first_account": null
     }
   },
+  "workflow_policy": {
+    "as_of_revision": 24,
+    "revision": 2,
+    "general": [
+      {
+        "key": "gates.follow_up_filing",
+        "value": "false",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "gates.issue_comment",
+        "value": "false",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "gates.source_issue_closure",
+        "value": "true",
+        "origin": "general",
+        "set_by": "device:device-569",
+        "set_at": "2026-08-10T12:34:56Z"
+      },
+      {
+        "key": "follow_up_filing.max_per_day",
+        "value": "10",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "follow_up_filing.max_per_run",
+        "value": "5",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      },
+      {
+        "key": "follow_up_filing.max_depth",
+        "value": "2",
+        "origin": "default",
+        "set_by": null,
+        "set_at": null
+      }
+    ],
+    "projects": [
+      {
+        "project_id": "project-569",
+        "settings": [
+          {
+            "key": "gates.follow_up_filing",
+            "value": "false",
+            "origin": "default",
+            "set_by": null,
+            "set_at": null
+          },
+          {
+            "key": "gates.issue_comment",
+            "value": "false",
+            "origin": "default",
+            "set_by": null,
+            "set_at": null
+          },
+          {
+            "key": "gates.source_issue_closure",
+            "value": "true",
+            "origin": "general",
+            "set_by": "device:device-569",
+            "set_at": "2026-08-10T12:34:56Z"
+          },
+          {
+            "key": "follow_up_filing.max_per_day",
+            "value": "3",
+            "origin": "project",
+            "set_by": "device:device-569",
+            "set_at": "2026-08-10T12:34:56Z"
+          },
+          {
+            "key": "follow_up_filing.max_per_run",
+            "value": "5",
+            "origin": "default",
+            "set_by": null,
+            "set_at": null
+          },
+          {
+            "key": "follow_up_filing.max_depth",
+            "value": "2",
+            "origin": "default",
+            "set_by": null,
+            "set_at": null
+          }
+        ]
+      }
+    ]
+  },
   "agent_catalog": {
     "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "enrollments": [
