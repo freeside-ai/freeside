@@ -660,6 +660,7 @@ type ClaudeComposition struct {
 	publicationTransport            engine.PublicationTransport
 	publisher                       *publish.Publisher
 	FollowUpFiler                   *publish.FollowUpFiler
+	IssueCommentDispatcher          *publish.IssueCommentDispatcher
 	ReviewReplier                   *publish.ExternalReviewReplier
 	reviewSource                    exec.ReviewSource
 	shadowReviewSource              exec.ReviewSource
@@ -885,7 +886,7 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, publisher, commitAuthors, followUpFiler, janitor, reconciler, reviewReplier, issueReadTokens, err := claudeTransport(ctx, st, cfg, authority)
+	transport, publisher, commitAuthors, posters, janitor, reconciler, reviewReplier, issueReadTokens, err := claudeTransport(ctx, st, cfg, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -1210,11 +1211,12 @@ func composeClaudeDriver(
 	observeRefTip := refTipObserver(reconciler)
 	composition := &ClaudeComposition{
 		driver: driver, Backend: backend, authority: authority,
-		hostVerification: hostVerification,
-		selectionFailure: selectionFailure,
-		FollowUpFiler:    followUpFiler,
-		ReviewReplier:    reviewReplier,
-		issueReadTokens:  issueReadTokens,
+		hostVerification:       hostVerification,
+		selectionFailure:       selectionFailure,
+		FollowUpFiler:          posters.filer,
+		IssueCommentDispatcher: posters.comments,
+		ReviewReplier:          reviewReplier,
+		issueReadTokens:        issueReadTokens,
 		openIssues: publish.NewOpenIssueLister(
 			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
 		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (repositoryID int64, err error) {
@@ -1733,26 +1735,26 @@ func claudeTransport(
 	st *store.Store,
 	cfg ClaudeDriverConfig,
 	authority *publish.InstallationAuthorityStore,
-) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *publish.FollowUpFiler, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, publish.TokenSource, error) {
+) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, followUpPosters, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, publish.TokenSource, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, DefaultGitHubAPIBase, authority, authority, recorder, recorder, time.Now,
 		DefaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, DefaultGitHubAPIBase, recorder, trust, time.Now, janitor,
@@ -1762,49 +1764,49 @@ func claudeTransport(
 		tokens, keystore, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
-	}
-	followUpFiler, err := composeFollowUpFiler(st, minter, keystore, client, DefaultGitHubAPIBase)
-	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	reviewReplier, err := publish.NewExternalReviewReplier(st, tokens, client, DefaultGitHubAPIBase, commitAuthors, time.Now)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	transport, err := publish.NewTransport(
 		tokens,
 		publish.TransportOptions{RemoteBase: DefaultGitHubRemoteBase},
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	auditor, err := publish.NewGitHubWorkflowAuditor(
 		tokens, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+	}
+	posters, err := composeFollowUpFiler(st, minter, keystore, client, DefaultGitHubAPIBase, auditor)
+	if err != nil {
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	ledger, err := publish.NewStoreLedger(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	authorizations, err := publish.NewStoreAuthorizationSource(st)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	publisher := publish.NewPublisher(
 		tokens, client, DefaultGitHubAPIBase, auditor, ledger, trust, authorizations,
 	)
 	if err := transport.AuthorizePublisher(publisher); err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
 	}
 	if len(apps) == 0 {
-		return nil, nil, nil, nil, nil, nil, nil, nil, publish.ErrNoAppCredentials
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, publish.ErrNoAppCredentials
 	}
 	registrationIDs := make([]int64, 0, len(apps))
 	for _, app := range apps {
@@ -1812,35 +1814,67 @@ func claudeTransport(
 	}
 	session, err := startJanitorSession(ctx, janitor, registrationIDs)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
 	// Research reads the managed repository's issues on its own read-only
 	// grant, never on the publication token.
 	issueReadTokens := publish.NewIssueReadTokenSource(minter, time.Now)
-	return transport, publisher, commitAuthors, followUpFiler, session,
+	return transport, publisher, commitAuthors, posters, session,
 		publish.NewReconciler(tokens, client, DefaultGitHubAPIBase), reviewReplier, issueReadTokens, nil
 }
 
-// composeFollowUpFiler keeps both issue calls and bot identity reads on the
-// filing grant. Sharing the publication resolver would widen this path.
+// followUpPosters are the dispatchers that post what a human approved from a
+// finding: follow-up issues and comments on the open issue a finding
+// duplicates.
+type followUpPosters struct {
+	filer    *publish.FollowUpFiler
+	comments *publish.IssueCommentDispatcher
+}
+
+// composeFollowUpFiler keeps both dispatchers' issue calls and bot identity
+// reads on the filing grant. Sharing the publication resolver would widen this
+// path. auditor is the publisher's workflow auditor, which reads workflow
+// files for the comment dispatcher's issue_comment recheck on the publication
+// grant's contents read; the filing grant carries no contents permission.
 func composeFollowUpFiler(st *store.Store, minter *publish.Minter, keystore *publish.Keystore,
-	client *http.Client, baseURL string,
-) (*publish.FollowUpFiler, error) {
+	client *http.Client, baseURL string, auditor publish.WorkflowAuditor,
+) (followUpPosters, error) {
 	tokens := publish.NewFollowUpFilingTokenSource(minter, time.Now)
 	identity, err := publish.NewGitHubAppBotIdentityResolver(tokens, keystore, client, baseURL, time.Now)
 	if err != nil {
-		return nil, err
+		return followUpPosters{}, err
 	}
-	return publish.NewFollowUpFiler(st, tokens, client, baseURL, identity, time.Now)
+	filer, err := publish.NewFollowUpFiler(st, tokens, client, baseURL, identity, time.Now)
+	if err != nil {
+		return followUpPosters{}, err
+	}
+	comments, err := publish.NewIssueCommentDispatcher(st, tokens, client, baseURL, identity, auditor, time.Now)
+	if err != nil {
+		return followUpPosters{}, err
+	}
+	return followUpPosters{filer: filer, comments: comments}, nil
 }
 
-// FollowUpFilerBinding is read after composition, when a committed approve wakes
-// the filer. A fake-driver composition must return a genuinely nil interface.
+// FollowUpFilerBinding is read after composition, when a committed approve of
+// a filing or comment wakes both dispatchers. A fake-driver composition must
+// return a genuinely nil interface.
 func FollowUpFilerBinding(composition *ClaudeComposition) signet.FollowUpFiler {
-	if composition == nil || composition.FollowUpFiler == nil {
+	if composition == nil || composition.FollowUpFiler == nil || composition.IssueCommentDispatcher == nil {
 		return nil
 	}
-	return composition.FollowUpFiler
+	return followUpWake{composition.FollowUpFiler, composition.IssueCommentDispatcher}
+}
+
+// followUpWake wakes both dispatchers: an approve wakes the one whose card it
+// decided, and the other's pass finds nothing new to do.
+type followUpWake struct {
+	filer    *publish.FollowUpFiler
+	comments *publish.IssueCommentDispatcher
+}
+
+func (w followUpWake) Wake() {
+	w.filer.Wake()
+	w.comments.Wake()
 }
 
 const janitorStartupTimeout = 2 * time.Minute
