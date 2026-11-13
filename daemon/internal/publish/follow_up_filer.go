@@ -514,6 +514,22 @@ func lastCreateSentAt(intent domain.FollowUpFilingIntent) time.Time {
 	return intent.Attempts[len(intent.Attempts)-1].DispatchStartedAt
 }
 
+// runCapReason returns why the run's other filings and comments that may
+// have reached GitHub leave no room under the per-run cap, or "" when one
+// more fits. The filer and the comment dispatcher both call it, and each
+// calls it again in the write that starts its attempt, so two posts started
+// together cannot both pass on the same count.
+func runCapReason(
+	ctx context.Context, tx *store.ReadTx, handle domain.OpaqueSubjectHandle, exclude domain.ProposalInstanceID, maxPerRun int,
+) (string, error) {
+	perRun, err := tx.RunPostsMayHaveCreated(ctx, handle, exclude)
+	if err != nil || perRun < maxPerRun {
+		return "", err
+	}
+	return fmt.Sprintf("its run already has %d filings and comments, the %s cap of %d",
+		perRun, policyFollowUpFilingMaxPerRun, maxPerRun), nil
+}
+
 // countFilings counts the other discovered filings in scope whose intent may
 // have created an issue and that match. An intent in scope that does not read
 // fails the count: a cap that cannot be evaluated does not pass. Filings out
@@ -743,15 +759,20 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 			"the new issue would sit deeper in Freeside-filed ancestry than the %s cap of %d",
 			policyFollowUpFilingMaxDepth, view.caps.MaxDepth))
 	}
-	perRun, err := f.countFilings(ctx, filing, all,
-		func(other approvedFiling) bool { return other.handle == filing.handle },
-		func(domain.FollowUpFilingIntent) bool { return true })
-	if err != nil {
+	// The per-run cap counts the run's issue comments with its filings
+	// (issue #3147), so it reads every intent under the run's subject, not
+	// only the filings this pass discovered. This read skips the forge work
+	// below for a run already at the cap; the attempt's write decides.
+	var capped string
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		capped, err = runCapReason(ctx, tx, filing.handle, filing.instanceID, view.caps.MaxPerRun)
+		return err
+	}); err != nil {
 		return err
 	}
-	if perRun >= view.caps.MaxPerRun {
-		return refusePrecondition(followUpFilingCappedCode, fmt.Sprintf(
-			"its run already has %d filings, the %s cap of %d", perRun, policyFollowUpFilingMaxPerRun, view.caps.MaxPerRun))
+	if capped != "" {
+		return refusePrecondition(followUpFilingCappedCode, capped)
 	}
 	target, err := f.resolveTarget(ctx, view, true)
 	var precondition *filingPreconditionError
@@ -802,10 +823,19 @@ func (f *FollowUpFiler) dispatch(ctx context.Context, filing approvedFiling, vie
 	}
 	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		var err error
+		// Counted again under the writer lock: the comment dispatcher
+		// starts attempts against the same cap from its own goroutine.
+		if capped, err = runCapReason(ctx, &tx.ReadTx, filing.handle, filing.instanceID,
+			view.caps.MaxPerRun); err != nil || capped != "" {
+			return err
+		}
 		intent, err = tx.StartFollowUpFilingAttempt(ctx, filing.instanceID, f.now())
 		return err
 	}); err != nil {
 		return err
+	}
+	if capped != "" {
+		return refusePrecondition(followUpFilingCappedCode, capped)
 	}
 	result, sendErr := f.forge.sendCreateIssue(request, target.repo)
 	class := classifyFollowUpFilingCreate(result, sendErr)

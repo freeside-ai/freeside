@@ -98,16 +98,23 @@ const (
 	// type and constructor live in effect_proposal.go and its gate in
 	// image_policy_adoption.go.
 	EffectImagePolicyAdoption EffectKind = "image_policy_adoption"
+	// EffectIssueComment is the fifth registry member: an effect that
+	// proposes one comment on an issue the task is not bound to, the open
+	// issue a finding's duplicate search named (plan §5.13). Its parameter
+	// type and gate live in issue_comment.go.
+	EffectIssueComment EffectKind = "issue_comment"
 )
 
 // AllEffectKinds is the single registration point for effect kinds.
 var AllEffectKinds = []EffectKind{
 	EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling, EffectImagePolicyAdoption,
+	EffectIssueComment,
 }
 
 func (k EffectKind) valid() bool {
 	switch k {
-	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling, EffectImagePolicyAdoption:
+	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling, EffectImagePolicyAdoption,
+		EffectIssueComment:
 		return true
 	default:
 		return false
@@ -121,7 +128,7 @@ func (k EffectKind) valid() bool {
 // trailing return covers the invalid zero value.
 func (k EffectKind) BindsResolvedPolicy() bool {
 	switch k {
-	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling:
+	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling, EffectIssueComment:
 		return true
 	case EffectImagePolicyAdoption:
 		return false

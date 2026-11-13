@@ -15,10 +15,11 @@ import (
 // OpenEffectProposalItem opens (or returns) the effect_proposal attention item
 // for one stored closure proposal instance and the prospective merge its pull
 // request has now. It and OpenEffectProposalNotice are the only paths that
-// create a closure's effect_proposal item, and OpenFollowUpFilingItem the only
-// one that creates a filing's: generic intake refuses the type
-// (ValidateItemIntake), so the trusted context here (a re-gated closure
-// instance and a validated merge) is the item's sole authority.
+// create a closure's effect_proposal item, OpenFollowUpFilingItem the only one
+// that creates a filing's, and OpenIssueCommentItem the only one that creates
+// a comment's: generic intake refuses the type (ValidateItemIntake), so the
+// trusted context here (a re-gated closure instance and a validated merge) is
+// the item's sole authority.
 //
 // The call is idempotent for the same instance and merge: a repeat returns the
 // existing open item and writes nothing. A different merge (a new candidate
@@ -213,10 +214,13 @@ func (s *Service) newEffectProposalItem(
 	return item, nil
 }
 
-// followUpFilingItemReason is fixed daemon text. The finding and adjudicator
-// text a filing carries appears only in its proposal's screened title and
-// body, never in the item's reason.
-const followUpFilingItemReason = "Decide whether to file the follow-up issue"
+// followUpFilingItemReason and issueCommentItemReason are fixed daemon text.
+// The finding and adjudicator text a filing or comment carries appears only in
+// its proposal's screened text, never in the item's reason.
+const (
+	followUpFilingItemReason = "Decide whether to file the follow-up issue"
+	issueCommentItemReason   = "Decide whether to comment on the matching issue"
+)
 
 // OpenFollowUpFilingItem opens (or returns) the effect_proposal attention item
 // for one stored follow_up_filing instance. It runs inside the caller's
@@ -237,14 +241,57 @@ func OpenFollowUpFilingItem(
 	instanceID domain.ProposalInstanceID,
 	now time.Time,
 ) (domain.AttentionItem, error) {
-	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	item, err := openUnmergedProposalItem(ctx, tx, blobs, instanceID, domain.EffectFollowUpFiling,
+		followUpFilingItemReason, now)
 	if err != nil {
 		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
 	}
-	filing := instance.Proposal.FilingProposal
-	if instance.Proposal.Kind != domain.EffectFollowUpFiling || filing == nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: not a filing proposal: %w",
-			instanceID, domain.ErrEffectProposalInconsistent)
+	return item, nil
+}
+
+// OpenIssueCommentItem opens (or returns) the effect_proposal attention item
+// for one stored issue_comment instance, exactly as OpenFollowUpFilingItem
+// does for a filing: a comment binds no prospective merge and admits no
+// revision, and its item offers approve, decline, and snooze.
+func OpenIssueCommentItem(
+	ctx context.Context,
+	tx *store.WriteTx,
+	blobs EvidenceBlobWriter,
+	instanceID domain.ProposalInstanceID,
+	now time.Time,
+) (domain.AttentionItem, error) {
+	item, err := openUnmergedProposalItem(ctx, tx, blobs, instanceID, domain.EffectIssueComment,
+		issueCommentItemReason, now)
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("open issue comment item %q: %w", instanceID, err)
+	}
+	return item, nil
+}
+
+// openUnmergedProposalItem opens the card for a kind that binds no
+// prospective merge: its ID is the instance's plus "/effect", and a repeat
+// call returns the item it finds and writes nothing.
+func openUnmergedProposalItem(
+	ctx context.Context,
+	tx *store.WriteTx,
+	blobs EvidenceBlobWriter,
+	instanceID domain.ProposalInstanceID,
+	kind domain.EffectKind,
+	reason string,
+	now time.Time,
+) (domain.AttentionItem, error) {
+	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	var handle domain.OpaqueSubjectHandle
+	switch {
+	case kind == domain.EffectFollowUpFiling && instance.Proposal.Kind == kind && instance.Proposal.FilingProposal != nil:
+		handle = instance.Proposal.FilingProposal.SubjectHandle
+	case kind == domain.EffectIssueComment && instance.Proposal.Kind == kind && instance.Proposal.CommentProposal != nil:
+		handle = instance.Proposal.CommentProposal.SubjectHandle
+	default:
+		return domain.AttentionItem{}, fmt.Errorf("not a %s proposal: %w", kind, domain.ErrEffectProposalInconsistent)
 	}
 	itemID := domain.ItemID(string(instance.ID) + "/effect")
 	existing, err := tx.GetAttentionItem(ctx, itemID)
@@ -252,22 +299,22 @@ func OpenFollowUpFilingItem(
 		return existing, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+		return domain.AttentionItem{}, err
 	}
-	declaration, _, err := tx.ResolveProposalSubject(ctx, filing.SubjectHandle)
+	declaration, _, err := tx.ResolveProposalSubject(ctx, handle)
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+		return domain.AttentionItem{}, err
 	}
 	subject := domain.Subject{
 		Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID),
 	}
 	names, err := tx.DisplayNamesFor(ctx, declaration.ProjectID, subject)
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+		return domain.AttentionItem{}, err
 	}
 	artifact, err := PutProposalEvidence(ctx, tx, blobs, instance)
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q artifact: %w", instanceID, err)
+		return domain.AttentionItem{}, fmt.Errorf("artifact: %w", err)
 	}
 	createdAt := now.UTC()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -276,7 +323,7 @@ func OpenFollowUpFilingItem(
 		Subject:           subject,
 		Type:              domain.AttentionEffectProposal,
 		Priority:          domain.PriorityNormal,
-		Reason:            followUpFilingItemReason,
+		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDecline, domain.ActionSnooze},
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		ItemVersion:       1,
@@ -286,13 +333,13 @@ func OpenFollowUpFilingItem(
 		CreatedAt:         &createdAt,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q: %w", instanceID, err)
+		return domain.AttentionItem{}, err
 	}
 	if err := tx.PutAttentionItem(ctx, item); err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q item: %w", instanceID, err)
+		return domain.AttentionItem{}, fmt.Errorf("item: %w", err)
 	}
 	if err := tx.BindProposalItem(ctx, item.ID, instance.ID, instance.Proposal.Digest, nil); err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("open follow-up filing item %q bind: %w", instanceID, err)
+		return domain.AttentionItem{}, fmt.Errorf("bind: %w", err)
 	}
 	return item, nil
 }

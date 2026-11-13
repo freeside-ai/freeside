@@ -133,6 +133,9 @@
 //     follow-up issue filing: its policy and bounds, and the create-attempt
 //     ledger
 //   - duplicate_search.go the duplicate search a follow-up filing must cite
+//   - issue_comment.go, issue_comment_ledger.go
+//     the issue comment a duplicate search's match proposes, and its
+//     create-attempt ledger
 //   - project.go      the project authority binding one repository
 //   - project_image.go, admitted_image.go
 //     project image toolchains and the admitted-image pointer (§5.7)

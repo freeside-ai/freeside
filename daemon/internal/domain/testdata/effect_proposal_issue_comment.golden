@@ -1,0 +1,26 @@
+{
+  "encoding_version": 1,
+  "kind": "issue_comment",
+  "resolved_policy_run_id": "run-policy",
+  "resolved_policy_digest": "sha256:57afc93cbc6ec4a3dc987a7803b24f65f954d481569bdd5af0dc74e4fd251d11",
+  "run_proposal": null,
+  "issue_comment": {
+    "subject_handle": "subject-opaque-1",
+    "repository": {
+      "repo": "acme/widgets",
+      "repository_id": 42
+    },
+    "issue_number": 17,
+    "body": {
+      "text": "A review finding matches this issue.\n\nFinding: the config read is not retried.",
+      "ruleset": "github-issue/1",
+      "verdict": "passed"
+    },
+    "source": {
+      "finding_id": "finding-1",
+      "adjudication_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "search_digest": "sha256:8e371eb34d0180c4c9d2e7dd0622fd48b47d0d2b355a6ef7dd5e03ed91ee09cb"
+    }
+  },
+  "digest": "sha256:c6eff770469b718f6af6e839cc1d7a50d65f7b0f74471f23464e12a222678622"
+}

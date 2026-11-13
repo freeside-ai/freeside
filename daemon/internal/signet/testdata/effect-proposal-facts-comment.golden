@@ -1,0 +1,28 @@
+{
+  "as_of_revision": 27,
+  "entity_version": 5,
+  "item_version": 1,
+  "proposal_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "effect_kind": "issue_comment",
+  "supersedes": null,
+  "source_issue_closure": null,
+  "follow_up_filing": null,
+  "image_policy_adoption": null,
+  "issue_comment": {
+    "repository": {
+      "repo": "owner/repo",
+      "repository_id": 123
+    },
+    "issue_number": 41,
+    "body": {
+      "text": "A review finding matches this issue.\n\nThe sync client retries without a budget.",
+      "ruleset": "github-issue/1",
+      "verdict": "passed"
+    },
+    "source": {
+      "finding_id": "finding-1",
+      "adjudication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "search_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  }
+}

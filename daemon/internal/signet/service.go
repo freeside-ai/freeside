@@ -89,8 +89,8 @@ type Service struct {
 	// usageRefreshAge bounds how long a usage reading counts as fresh in the
 	// projection (WithUsageRefreshAge); zero means only its reset does.
 	usageRefreshAge time.Duration
-	// followUpFiler is the filer an approved follow-up filing wakes
-	// (WithFollowUpFiler). Nil means no filer is bound.
+	// followUpFiler is the dispatcher an approved follow-up filing or issue
+	// comment wakes (WithFollowUpFiler). Nil means none is bound.
 	followUpFiler func() FollowUpFiler
 	// imageUpkeepWake asks image upkeep for a pass after an approved
 	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
@@ -103,20 +103,21 @@ type Service struct {
 	closeOnce sync.Once
 }
 
-// FollowUpFiler is the dispatcher that files approved follow-up issues. It is
-// injected because its package imports signet's store-side peers, and signet
-// needs only its wake.
+// FollowUpFiler is the dispatcher that files approved follow-up issues and
+// posts approved issue comments. It is injected because its package imports
+// signet's store-side peers, and signet needs only its wake.
 type FollowUpFiler interface {
 	// Wake asks for a filing pass now. It must not block.
 	Wake()
 }
 
 // WithFollowUpFiler supplies the filer a committed approval of a follow-up
-// filing wakes, so the issue is filed without waiting for the filer's next
-// sweep. The func is read at each approval so the composition can bind the
-// filer after the service is built. The wake is a latency hint only: with no
-// option, a nil func, or a nil filer, the approval is recorded all the same
-// and the filer's own sweep finds it.
+// filing or an issue comment wakes, so the issue is filed or the comment
+// posted without waiting for the next sweep. The func is read at each
+// approval so the composition can bind the filer after the service is
+// built. The wake is a latency hint only: with no option, a nil func, or a
+// nil filer, the approval is recorded all the same and the filer's own sweep
+// finds it.
 func WithFollowUpFiler(filer func() FollowUpFiler) Option {
 	return func(s *Service) { s.followUpFiler = filer }
 }
@@ -407,9 +408,9 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 
 	var result CommandResult
 	// approvedFiling and approvedAdoption are set only by a new command that
-	// approves a follow-up filing or an image-policy adoption card. A replay
-	// never sets them and a failed write returns before the wake, so only a
-	// committed approval wakes the filer or upkeep.
+	// approves a follow-up filing, issue comment, or image-policy adoption
+	// card. A replay never sets them and a failed write returns before the
+	// wake, so only a committed approval wakes the filer or upkeep.
 	approvedFiling, approvedAdoption := false, false
 	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
 		_, _, getErr := tx.GetCommandSnapshot(ctx, command.CommandID)
@@ -591,7 +592,8 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				if err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
-				approvedFiling = item.Type == domain.AttentionEffectProposal && kind == domain.EffectFollowUpFiling
+				approvedFiling = item.Type == domain.AttentionEffectProposal &&
+					(kind == domain.EffectFollowUpFiling || kind == domain.EffectIssueComment)
 				approvedAdoption = item.Type == domain.AttentionEffectProposal &&
 					kind == domain.EffectImagePolicyAdoption
 			case outcomeRevisesAndStartsProposal:

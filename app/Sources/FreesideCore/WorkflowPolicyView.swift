@@ -166,7 +166,7 @@ struct WorkflowPolicyView: View {
         case .gates_period_issue_comment: "Ask me before commenting on an issue"
         case .gates_period_source_issue_closure: "Ask me before closing the source issue"
         case .follow_up_filing_period_max_per_day: "Follow-up issues per day"
-        case .follow_up_filing_period_max_per_run: "Follow-up issues per task run"
+        case .follow_up_filing_period_max_per_run: "Follow-up issues and comments per task run"
         case .follow_up_filing_period_max_depth: "Follow-up depth"
         case .unknown: "Unknown setting"
         }

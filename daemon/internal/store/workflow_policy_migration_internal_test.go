@@ -11,6 +11,7 @@ import (
 // leaves: no workflow policy revisions.
 func rewindWorkflowPolicyRevisions(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindIssueCommentLedger(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE workflow_policy_revisions`,
 		`DELETE FROM schema_migrations WHERE name = '0138_workflow_policy_revisions.sql'`,

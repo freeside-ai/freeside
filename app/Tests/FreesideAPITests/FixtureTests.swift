@@ -354,6 +354,36 @@ import Testing
         #expect(filed.body.text.contains("- Add a per-delivery retry budget with a **hard** cap."))
     }
 
+    @Test func issueCommentIsAValidNamedFixtureOfferingApproveDeclineAndSnooze() throws {
+        let comment = AttentionFixtures.issueCommentEffectProposal()
+        #expect(comment.item._type == .effect_proposal)
+        #expect(comment.item.id == "item-effect_proposal-comment")
+        #expect(comment.item.status == .open)
+        // A comment admits no revision and binds no merge, and its subject is
+        // its proposal batch, as the daemon's card is.
+        #expect(comment.item.requested_decision == [.approve, .decline, .snooze])
+        #expect(comment.item.pr_head_sha.isEmpty)
+        guard case .proposal_batch = comment.item.subject else {
+            Issue.record("subject = \(comment.item.subject), want a proposal batch")
+            return
+        }
+        #expect(!AttentionFixtures.defaultInboxItemIDs().contains(comment.item.id))
+
+        let facts = try #require(AttentionFixtures.effectProposalFacts(for: comment))
+        #expect(facts.effect_kind == .issue_comment)
+        #expect(facts.source_issue_closure == nil)
+        #expect(facts.follow_up_filing == nil)
+        #expect(facts.image_policy_adoption == nil)
+        #expect(facts.supersedes == nil)
+        #expect(comment.item.artifact_digests == [facts.proposal_digest])
+        let posted = try #require(facts.issue_comment?.value1)
+        #expect(posted.issue_number > 0)
+        #expect(posted.body.verdict == .passed)
+        // The body opens with the daemon's fixed lead, as every composed
+        // comment does.
+        #expect(posted.body.text.hasPrefix("A review finding on a Freeside work unit matches this issue."))
+    }
+
     @Test func holdAfterPublicationCarriesItsPullRequestAndOffersOpeningIt() {
         let unpublished = AttentionFixtures.fixture(type: .publish_blocked).item
         #expect(unpublished.pr_reference == nil)

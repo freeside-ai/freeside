@@ -1751,7 +1751,7 @@ components:
         or "false", the default, which lets the effect run under policy. A
         cap (follow_up_filing.*) takes a positive decimal integer with no
         sign or leading zero; the defaults are 10 per day, 5 per run, and a
-        depth of 2.
+        depth of 2. The per-run cap counts issue comments with filings.
       enum:
         - gates.follow_up_filing
         - gates.issue_comment
@@ -2087,8 +2087,9 @@ components:
       description: >
         Store-authenticated, digest-bound effect-proposal facts matched to one
         exact attention-item snapshot before the client enables a decision.
-        Exactly one kind member (source_issue_closure, follow_up_filing, or
-        image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and
+        Exactly one kind member (source_issue_closure, follow_up_filing,
+        image_policy_adoption, or issue_comment) is non-null, the one
+        effect_kind names. The opaque subject handle and
         policy identities stay server-side, as they do for task_proposal.
       required:
         - as_of_revision
@@ -2100,6 +2101,7 @@ components:
         - source_issue_closure
         - follow_up_filing
         - image_policy_adoption
+        - issue_comment
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -2119,7 +2121,7 @@ components:
           description: >
             The exact authenticated prior facts for a revised card; null for the
             initially admitted proposal, and always null for a follow_up_filing
-            effect, which admits no revision.
+            or issue_comment effect, which admits no revision.
         source_issue_closure:
           nullable: true
           allOf:
@@ -2141,6 +2143,13 @@ components:
           description: >
             The adoption facts for an image_policy_adoption effect; null for
             any other effect kind.
+        issue_comment:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/IssueCommentFacts"
+          description: >
+            The comment facts for an issue_comment effect; null for any other
+            effect kind.
 
     ImagePolicyAdoptionFacts:
       type: object
@@ -2265,6 +2274,44 @@ components:
           $ref: "#/components/schemas/ScreenedIssueText"
         source:
           $ref: "#/components/schemas/FollowUpFilingSource"
+
+    IssueCommentFacts:
+      type: object
+      description: >
+        Bounded issue-comment facts (plan §7): the project's repository, the
+        open issue the finding's duplicate search named, the screened body the
+        comment would post, and the finding and search the comment answers. No
+        subject handle or policy identity; the comment posts only after an
+        approve, and only while the repository's issue_comment workflows are
+        the set its trust profile accepted.
+      required: [repository, issue_number, body, source]
+      properties:
+        repository:
+          $ref: "#/components/schemas/ProjectRepository"
+        issue_number:
+          type: integer
+          minimum: 1
+        body:
+          $ref: "#/components/schemas/ScreenedIssueText"
+        source:
+          $ref: "#/components/schemas/IssueCommentSource"
+
+    IssueCommentSource:
+      type: object
+      description: >
+        What an issue comment came from: the finding, the finding-adjudication
+        artifact that routed it, and the duplicate search record that named
+        the target issue. Served as recorded; if a later round fixes or
+        re-routes the finding, the daemon refuses approval.
+      required: [finding_id, adjudication_digest, search_digest]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        adjudication_digest:
+          $ref: "#/components/schemas/Digest"
+        search_digest:
+          $ref: "#/components/schemas/Digest"
 
     ProjectRepository:
       type: object
@@ -2715,9 +2762,10 @@ components:
         follow_up_filing proposes filing a follow-up issue for a deferred
         finding or a separate-work verdict (plan §5.17);
         image_policy_adoption proposes adopting the recipe digest or registry
-        authorities a project-image upkeep refusal names (plan §5.7). Matches
-        domain.AllEffectKinds.
-      enum: [run_proposal, source_issue_closure, follow_up_filing, image_policy_adoption, unknown]
+        authorities a project-image upkeep refusal names (plan §5.7);
+        issue_comment proposes commenting on the open issue a finding's
+        duplicate search named (plan §7). Matches domain.AllEffectKinds.
+      enum: [run_proposal, source_issue_closure, follow_up_filing, image_policy_adoption, issue_comment, unknown]
 
     IssueTextRuleset:
       type: string

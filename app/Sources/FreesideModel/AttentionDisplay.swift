@@ -556,8 +556,8 @@ package enum AttentionDisplay {
     /// The authenticated-proposal card facts for an effect proposal, as pure
     /// label/value pairs so a display test asserts the wording without a
     /// view. Every value is a daemon fact from the snapshot; agent-written
-    /// text (a filing's title and body) is never a row here and draws in
-    /// its own unverified sections (`proposedIssueText`). The rows follow
+    /// text (a filing's title and body, a comment's body) is never a row
+    /// here and draws in its own unverified sections (`proposedIssueText`). The rows follow
     /// `effect_kind`, never which arm happens to be present, and are empty
     /// when the kind's arm is missing or the kind has no effect card.
     static func effectProposalRows(
@@ -573,6 +573,9 @@ package enum AttentionDisplay {
         case .image_policy_adoption:
             guard let adoption = facts.image_policy_adoption?.value1 else { return [] }
             return imagePolicyAdoptionRows(adoption)
+        case .issue_comment:
+            guard let comment = facts.issue_comment?.value1 else { return [] }
+            return issueCommentRows(comment)
         case .run_proposal:
             return []
         case .unknown:
@@ -740,6 +743,24 @@ package enum AttentionDisplay {
         ]
     }
 
+    /// What the daemon derived or checked for a comment: the repository and
+    /// issue it would post on, which the duplicate search's record names,
+    /// which finding it answers, and what the body was screened under.
+    private static func issueCommentRows(
+        _ comment: Components.Schemas.IssueCommentFacts
+    ) -> [FactRow] {
+        [
+            .init(effectFactLabel, effectKindLabel(.issue_comment)),
+            .init("Repository", comment.repository.repo, monospaced: true),
+            .init("Issue", "#\(comment.issue_number)", monospaced: true),
+            .init("Source", "Finding \(comment.source.finding_id) · Duplicate search match"),
+            .init(
+                "Text Screening",
+                "Body: \(screeningVerdictLabel(comment.body.verdict)) under "
+                    + issueTextRulesetLabel(comment.body.ruleset)),
+        ]
+    }
+
     /// One phrase while the title and body share a ruleset and verdict;
     /// otherwise each field names its own, so a difference is never hidden
     /// behind the other field's result.
@@ -780,27 +801,35 @@ package enum AttentionDisplay {
         }
     }
 
-    /// The agent-written text a follow-up filing would publish, exactly as
-    /// it would be sent.
+    /// The agent-written text a follow-up filing or an issue comment would
+    /// publish, exactly as it would be sent. A comment has no title.
     package struct ProposedIssueText: Equatable {
-        package let title: String
+        package let title: String?
         package let body: String
     }
 
-    /// The filing's title and body, kept apart from `effectProposalRows`
-    /// so agent text never shares a row or a section with a daemon fact.
-    /// Nil for any other effect kind, even one that carries a stray filing
-    /// arm.
+    /// A filing's title and body, or a comment's body, kept apart from
+    /// `effectProposalRows` so agent text never shares a row or a section
+    /// with a daemon fact. The text follows `effect_kind`: nil for any other
+    /// kind, even one that carries a stray filing or comment arm.
     package static func proposedIssueText(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> ProposedIssueText? {
-        guard facts.effect_kind == .follow_up_filing,
-            let filing = facts.follow_up_filing?.value1
-        else { return nil }
-        return .init(title: filing.title.text, body: filing.body.text)
+        switch facts.effect_kind {
+        case .follow_up_filing:
+            guard let filing = facts.follow_up_filing?.value1 else { return nil }
+            return .init(title: filing.title.text, body: filing.body.text)
+        case .issue_comment:
+            guard let comment = facts.issue_comment?.value1 else { return nil }
+            return .init(title: nil, body: comment.body.text)
+        case .source_issue_closure, .image_policy_adoption, .run_proposal:
+            return nil
+        case .unknown:
+            return nil
+        }
     }
 
-    /// The sentence under a filing's title and body. The shared unverified
+    /// The sentence under a filing's title and body, or a comment's body. The shared unverified
     /// sentence says the daemon did not check the text; the daemon did
     /// screen this text (the "Text screening" row), so the sentence says
     /// what that screening does not establish.
@@ -842,6 +871,23 @@ package enum AttentionDisplay {
         ]
     }
 
+    /// The comment's audit coordinates for Identifiers, in full: the forge
+    /// identity, and the adjudication and duplicate-search digests that pin
+    /// the finding and the issue the comment targets.
+    package static func issueCommentDetailRows(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> [BindingRow] {
+        guard facts.effect_kind == .issue_comment,
+            let comment = facts.issue_comment?.value1
+        else { return [] }
+        return [
+            .init(label: "Repository ID", value: String(comment.repository.repository_id)),
+            .init(label: "Finding", value: comment.source.finding_id),
+            .init(label: "Adjudication Digest", value: comment.source.adjudication_digest),
+            .init(label: "Search Digest", value: comment.source.search_digest),
+        ]
+    }
+
     /// The effect kind, named neutrally: the "On merge" row carries whether
     /// approving closes the issue, so this row must not assert the closing
     /// action, or a resolve-false proposal (every daemon_fallback, and any
@@ -852,6 +898,7 @@ package enum AttentionDisplay {
         case .source_issue_closure: return "Source issue closure"
         case .follow_up_filing: return "Follow-up issue filing"
         case .image_policy_adoption: return "Image policy adoption"
+        case .issue_comment: return "Issue comment"
         case .unknown: return "Unrecognized effect"
         }
     }

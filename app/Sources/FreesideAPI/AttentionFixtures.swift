@@ -967,14 +967,44 @@ public enum AttentionFixtures {
 
     static let imagePolicyAdoptionItemID = "item-effect_proposal-adoption"
 
+    /// An effect-proposal fixture whose effect comments on the open issue a
+    /// deferred finding's duplicate search matched (plan §7). Like the
+    /// daemon's card, its subject is the card's proposal batch, it offers
+    /// approve, decline, and snooze, since a comment admits no revision, and
+    /// it names no pull request head. It stays out of `defaultInbox()`.
+    public static func issueCommentEffectProposal() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .effect_proposal)
+        snapshot.item.id = issueCommentItemID
+        snapshot.item.subject = .proposal_batch(
+            .init(subject_type: .proposal_batch, subject_id: "batch-follow-up-filing", run_id: nil))
+        snapshot.item.reason = "Decide whether to comment on the matching issue"
+        snapshot.item.requested_decision = [.approve, .decline, .snooze]
+        snapshot.item.pr_head_sha = ""
+        return snapshot
+    }
+
+    static let issueCommentItemID = "item-effect_proposal-comment"
+
+    /// The comment body the comment fixture proposes: the daemon's fixed
+    /// lead, the search's reason, and the finding's draft.
+    static let issueCommentBody = """
+        A review finding on a Freeside work unit matches this issue.
+
+        Why it matches: #412 already tracks bounding the delivery retry budget.
+
+        Review of the delivery scheduler found that a failed delivery is retried \
+        with no upper bound while the receiver keeps answering 503.
+        """
+
     /// The bounded effect facts a client reads for one effect-proposal
     /// item, built from the served snapshot's version tuple and evidence
     /// digest. The default `item-effect_proposal` carries a source-issue
     /// closure with `verified` provenance from `propose_site`; the named
     /// `item-effect_proposal-recommended` carries `recommended`; the named
     /// `item-effect_proposal-filing` carries a follow-up filing instead of
-    /// a closure, and the named `item-effect_proposal-adoption` an image
-    /// policy adoption. The opaque subject handle and policy identity stay
+    /// a closure, the named `item-effect_proposal-adoption` an image
+    /// policy adoption, and the named `item-effect_proposal-comment` an
+    /// issue comment. The opaque subject handle and policy identity stay
     /// server-side, as they do for task_proposal. Returns nil for any
     /// non-effect_proposal item.
     public static func effectProposalFacts(
@@ -999,6 +1029,29 @@ public enum AttentionFixtures {
                         refusal_record_id: "sha256:" + String(repeating: "e", count: 64),
                         recipe_digest: .init(value1: "sha256:" + String(repeating: "d", count: 64)),
                         registry_authorities: ["proxy.golang.org"])))
+        }
+        if snapshot.item.id == issueCommentItemID {
+            return .init(
+                as_of_revision: snapshot.as_of_revision,
+                entity_version: snapshot.entity_version,
+                item_version: snapshot.item.item_version,
+                proposal_digest: digest,
+                effect_kind: .issue_comment,
+                supersedes: nil,
+                source_issue_closure: nil,
+                follow_up_filing: nil,
+                image_policy_adoption: nil,
+                issue_comment: .init(
+                    value1: .init(
+                        repository: .init(repo: "owner/repo", repository_id: 84_958_515),
+                        issue_number: 412,
+                        body: .init(
+                            text: issueCommentBody,
+                            ruleset: .github_hyphen_issue_sol_1, verdict: .passed),
+                        source: .init(
+                            finding_id: "finding-3",
+                            adjudication_digest: "sha256:" + String(repeating: "c", count: 64),
+                            search_digest: "sha256:" + String(repeating: "f", count: 64)))))
         }
         if snapshot.item.id == followUpFilingItemID {
             return .init(

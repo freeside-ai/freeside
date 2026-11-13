@@ -84,6 +84,11 @@ func (tx *WriteTx) AllocateProposalInstance(
 			return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
 		}
 	}
+	if proposal.Kind == domain.EffectIssueComment {
+		if err := tx.gateIssueCommentSourceCurrent(ctx, *subject.declaration, proposal.CommentProposal.Source); err != nil {
+			return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
+		}
+	}
 	admissionKey, err := admission.String()
 	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance admission: %w", err)
@@ -253,6 +258,11 @@ func ProposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubject
 			return "", domain.ErrEffectProposalInconsistent
 		}
 		return proposal.FilingProposal.SubjectHandle, nil
+	case domain.EffectIssueComment:
+		if proposal.CommentProposal == nil {
+			return "", domain.ErrEffectProposalInconsistent
+		}
+		return proposal.CommentProposal.SubjectHandle, nil
 	case domain.EffectImagePolicyAdoption:
 		// An adoption card is about a project's image policy, not a work unit.
 		if proposal.AdoptionProposal == nil {
@@ -376,6 +386,11 @@ func gateEffectProposalItemMerge(
 	case domain.EffectFollowUpFiling:
 		if merge != nil {
 			return fmt.Errorf("follow-up filing carries a merge: %w", errRowInconsistent)
+		}
+		return nil
+	case domain.EffectIssueComment:
+		if merge != nil {
+			return fmt.Errorf("issue comment carries a merge: %w", errRowInconsistent)
 		}
 		return nil
 	case domain.EffectImagePolicyAdoption:
@@ -628,6 +643,9 @@ func (tx *ReadTx) expectedRevision(
 		// A filing has no parameter an operator may change, so no command
 		// authors a revision of one and a stored revision row is not authority.
 		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
+	case domain.EffectIssueComment:
+		// A comment has no parameter an operator may change either.
+		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
 	case domain.EffectImagePolicyAdoption:
 		// No revise command is defined for an adoption card.
 		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
@@ -836,6 +854,14 @@ func (tx *ReadTx) gateProposalSubject(
 			return proposalSubject{}, err
 		}
 		return workUnitSubject(declaration), nil
+	case domain.EffectIssueComment:
+		if err := domain.GateEffectProposal(proposal, policy); err != nil {
+			return proposalSubject{}, err
+		}
+		if err := tx.gateIssueComment(ctx, declaration, proposal); err != nil {
+			return proposalSubject{}, err
+		}
+		return workUnitSubject(declaration), nil
 	case domain.EffectImagePolicyAdoption:
 		// Gated above: the card's handle names a project, not a work unit.
 		return proposalSubject{}, domain.ErrEffectProposalInconsistent
@@ -884,22 +910,113 @@ func (tx *ReadTx) followUpFilingTarget(
 	declaration domain.WorkUnitDeclaration,
 	policy domain.ResolvedPolicy,
 ) (domain.FollowUpFilingTarget, error) {
+	project, err := tx.subjectProject(ctx, declaration)
+	if err != nil {
+		return domain.FollowUpFilingTarget{}, fmt.Errorf("follow-up filing target: %w", err)
+	}
+	return domain.DeriveFollowUpFilingTarget(project, policy)
+}
+
+// subjectProject reads the project a work unit's run belongs to, verifying
+// the run-to-project join so a tampered declaration cannot name another
+// project.
+func (tx *ReadTx) subjectProject(ctx context.Context, declaration domain.WorkUnitDeclaration) (domain.Project, error) {
 	project, err := tx.GetProject(ctx, declaration.ProjectID)
 	if errors.Is(err, ErrNotFound) {
-		return domain.FollowUpFilingTarget{}, fmt.Errorf("follow-up filing target: project %q: %w",
-			declaration.ProjectID, ErrProjectAuthorityMissing)
+		return domain.Project{}, fmt.Errorf("project %q: %w", declaration.ProjectID, ErrProjectAuthorityMissing)
 	}
 	if err != nil {
-		return domain.FollowUpFilingTarget{}, err
+		return domain.Project{}, err
 	}
 	run, err := tx.GetRun(ctx, declaration.RunID)
 	if err != nil {
-		return domain.FollowUpFilingTarget{}, err
+		return domain.Project{}, err
 	}
 	if run.ProjectID != project.ID {
-		return domain.FollowUpFilingTarget{}, errRowInconsistent
+		return domain.Project{}, errRowInconsistent
 	}
-	return domain.DeriveFollowUpFilingTarget(project, policy)
+	return project, nil
+}
+
+// gateIssueComment re-gates a comment proposal against current rows on every
+// admission and reconstruction: the repository is the subject's project's,
+// the source's duplicate search record is re-read by its key, must belong to
+// the subject's run, and must be the record the source's digest names and
+// answer a duplicate that is the proposal's issue (domain.GateIssueComment);
+// the finding must still have the adjudication link that search was made
+// for (gateFollowUpFilingSource); and the body passes its recorded ruleset
+// again. Every row read here is append-only, so a proposal that passed once
+// keeps passing on reads; whether the source still backs the comment is
+// gateIssueCommentSourceCurrent, run at admission and approval.
+func (tx *ReadTx) gateIssueComment(
+	ctx context.Context, declaration domain.WorkUnitDeclaration, proposal domain.EffectProposal,
+) error {
+	comment := proposal.CommentProposal
+	project, err := tx.subjectProject(ctx, declaration)
+	if err != nil {
+		return fmt.Errorf("issue comment target: %w", err)
+	}
+	search, err := tx.issueCommentSearch(ctx, declaration, comment.Source)
+	if err != nil {
+		return err
+	}
+	repository := domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID}
+	if err := domain.GateIssueComment(proposal, repository, search); err != nil {
+		return err
+	}
+	if err := tx.gateFollowUpFilingSource(ctx, declaration, issueCommentFilingSource(search)); err != nil {
+		return err
+	}
+	if err := publicationtext.ScreenIssueBody(
+		comment.Body.Ruleset, comment.Body.Text, domain.MaxFollowUpFilingBodyBytes,
+	); err != nil {
+		return fmt.Errorf("%w: %w", domain.ErrIssueCommentTextRejected, err)
+	}
+	return nil
+}
+
+// issueCommentSearch re-reads the duplicate search a comment's source names
+// and checks it belongs to the subject's run. A missing record refuses.
+func (tx *ReadTx) issueCommentSearch(
+	ctx context.Context, declaration domain.WorkUnitDeclaration, source domain.IssueCommentSource,
+) (domain.DuplicateSearch, error) {
+	search, err := tx.GetDuplicateSearch(ctx, source.AdjudicationDigest, source.FindingID)
+	if errors.Is(err, ErrNotFound) {
+		return domain.DuplicateSearch{}, fmt.Errorf("issue comment source finding %q has no duplicate search under %q: %w",
+			source.FindingID, source.AdjudicationDigest, errors.Join(err, domain.ErrIssueCommentSourceMismatch))
+	}
+	if err != nil {
+		return domain.DuplicateSearch{}, err
+	}
+	if search.RunID != declaration.RunID {
+		return domain.DuplicateSearch{}, fmt.Errorf("issue comment source search run %q: %w",
+			search.RunID, domain.ErrIssueCommentSourceMismatch)
+	}
+	return search, nil
+}
+
+// issueCommentFilingSource is the filing-shaped view of the finding a comment
+// answers: the duplicate search was made for a deferred or separate-work
+// finding, and the record carries which.
+func issueCommentFilingSource(search domain.DuplicateSearch) domain.FollowUpFilingSource {
+	return domain.FollowUpFilingSource{
+		FindingID: search.FindingID, AdjudicationDigest: search.AdjudicationDigest, Kind: search.Kind,
+	}
+}
+
+// gateIssueCommentSourceCurrent refuses a comment whose finding no longer
+// concludes the way its search was made for: a deferred disposition that is
+// no longer effective, or a separate-work verdict whose adjudication was
+// revised. It runs where a comment gains authority, at admission and at
+// approval, never on a read. It assumes gateIssueComment already passed.
+func (tx *ReadTx) gateIssueCommentSourceCurrent(
+	ctx context.Context, declaration domain.WorkUnitDeclaration, source domain.IssueCommentSource,
+) error {
+	search, err := tx.issueCommentSearch(ctx, declaration, source)
+	if err != nil {
+		return err
+	}
+	return tx.gateFollowUpFilingSourceBacked(ctx, declaration, issueCommentFilingSource(search))
 }
 
 // gateFollowUpFilingSource re-reads a filing proposal's source link from
@@ -1322,9 +1439,9 @@ func (tx *ReadTx) proposalInstanceKind(
 
 // gateDecisionActionKind rejects a decision action that does not belong to the
 // instance's effect kind. start and start_with_changes decide task proposals;
-// approve decides a closure, a follow-up filing, or an adoption card;
-// approve_with_changes decides a closure only, because neither a filing nor
-// an adoption card has a parameter an operator may change; decline
+// approve decides a closure, a follow-up filing, an adoption card, or an
+// issue comment; approve_with_changes decides a closure only, because none of
+// the others has a parameter an operator may change; decline
 // terminates any kind. This is a predicate over the proposal-decision
 // subset of the Action union, so it uses default rather than exhaustive
 // dispatch.
@@ -1337,7 +1454,7 @@ func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error 
 		return nil
 	case domain.ActionApprove:
 		if kind != domain.EffectSourceIssueClosure && kind != domain.EffectFollowUpFiling &&
-			kind != domain.EffectImagePolicyAdoption {
+			kind != domain.EffectImagePolicyAdoption && kind != domain.EffectIssueComment {
 			return domain.ErrTransitionCommandMismatch
 		}
 		return nil
@@ -1363,7 +1480,7 @@ func revisionActionForKind(kind domain.EffectKind) (domain.Action, error) {
 		return domain.ActionStartWithChanges, nil
 	case domain.EffectSourceIssueClosure:
 		return domain.ActionApproveWithChanges, nil
-	case domain.EffectFollowUpFiling:
+	case domain.EffectFollowUpFiling, domain.EffectIssueComment:
 		return "", domain.ErrTransitionCommandMismatch
 	case domain.EffectImagePolicyAdoption:
 		return "", domain.ErrTransitionCommandMismatch
@@ -1412,6 +1529,11 @@ func (tx *WriteTx) RecordProposalDecision(
 	}
 	if kind == domain.EffectFollowUpFiling && action == domain.ActionApprove {
 		if err := tx.gateFollowUpFilingApproval(ctx, instanceID); err != nil {
+			return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
+		}
+	}
+	if kind == domain.EffectIssueComment && action == domain.ActionApprove {
+		if err := tx.gateIssueCommentApproval(ctx, instanceID); err != nil {
 			return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
 		}
 	}
@@ -1505,6 +1627,25 @@ func (tx *ReadTx) gateFollowUpFilingApproval(ctx context.Context, instanceID dom
 		return err
 	}
 	return tx.gateFollowUpFilingSourceCurrent(ctx, declaration, filing.Source)
+}
+
+// gateIssueCommentApproval is gateFollowUpFilingApproval for a comment: an
+// approval is refused when the comment's source stopped backing it after the
+// card opened.
+func (tx *ReadTx) gateIssueCommentApproval(ctx context.Context, instanceID domain.ProposalInstanceID) error {
+	instance, err := tx.GetProposalInstance(ctx, instanceID)
+	if err != nil {
+		return err
+	}
+	comment := instance.Proposal.CommentProposal
+	if comment == nil {
+		return domain.ErrEffectProposalInconsistent
+	}
+	declaration, _, err := tx.ResolveProposalSubject(ctx, comment.SubjectHandle)
+	if err != nil {
+		return err
+	}
+	return tx.gateIssueCommentSourceCurrent(ctx, declaration, comment.Source)
 }
 
 // policyApprovableClosureOrigin says which closure origins may carry a policy

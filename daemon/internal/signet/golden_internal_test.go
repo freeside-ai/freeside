@@ -339,6 +339,12 @@ func TestSignetWireGoldens(t *testing.T) {
 			name:  "effect-proposal-facts-adoption",
 			value: imagePolicyAdoptionFactsFixture(),
 		},
+		{
+			// The comment arm; the other arms and supersedes render explicit
+			// null.
+			name:  "effect-proposal-facts-comment",
+			value: issueCommentFactsFixture(),
+		},
 	}
 	cases = append(cases, struct {
 		name  string
@@ -427,6 +433,29 @@ func followUpFilingFactsFixture() EffectProposalFactsSnapshot {
 				FindingID:          "finding-1",
 				AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 				Kind:               domain.FollowUpSourceDeferredDisposition,
+			},
+		},
+	}
+}
+
+// issueCommentFactsFixture builds a fixed, valid comment-arm facts
+// snapshot.
+func issueCommentFactsFixture() EffectProposalFactsSnapshot {
+	return EffectProposalFactsSnapshot{
+		AsOfRevision: 27, EntityVersion: 5, ItemVersion: 1,
+		ProposalDigest: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+		EffectKind:     domain.EffectIssueComment,
+		IssueComment: &IssueCommentFacts{
+			Repository:  domain.FollowUpFilingRepository{Repo: "owner/repo", RepositoryID: 123},
+			IssueNumber: 41,
+			Body: domain.ScreenedIssueText{
+				Text:    "A review finding matches this issue.\n\nThe sync client retries without a budget.",
+				Ruleset: domain.IssueTextRulesetGitHubIssue1, Verdict: domain.ScreeningVerdictPassed,
+			},
+			Source: domain.IssueCommentSource{
+				FindingID:          "finding-1",
+				AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+				SearchDigest:       domain.Digest("sha256:" + strings.Repeat("e", 64)),
 			},
 		},
 	}
