@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v15",
+  "version": "freeside-task-record-v16",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -489,6 +489,11 @@
       "closure": null,
       "specification_retries": [],
       "review_admissions": [],
+      "outcomes": {
+        "posts": [],
+        "findings": [],
+        "complete": true
+      },
       "errors": []
     },
     {
@@ -565,6 +570,11 @@
           }
         }
       ],
+      "outcomes": {
+        "posts": [],
+        "findings": [],
+        "complete": true
+      },
       "errors": []
     },
     {
@@ -627,6 +637,11 @@
       "closure": null,
       "specification_retries": [],
       "review_admissions": [],
+      "outcomes": {
+        "posts": [],
+        "findings": [],
+        "complete": true
+      },
       "errors": []
     }
   ],

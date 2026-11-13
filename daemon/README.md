@@ -1550,7 +1550,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v15`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v16`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1564,7 +1564,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | --- | --- |
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
-| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers), `specification_retries`: each operator retry of a failed specification invocation, with the `invocation_id` it added, the `retried_invocation_id`, and the `reason`, and `review_admissions`: each routed and shadow review admission, with its `invocation_id`, `role`, `lineage_group`, `admitted_at`, and `agent`. |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers), `specification_retries`: each operator retry of a failed specification invocation, with the `invocation_id` it added, the `retried_invocation_id`, and the `reason`, and `review_admissions`: each routed and shadow review admission, with its `invocation_id`, `role`, `lineage_group`, `admitted_at`, and `agent`, and `outcomes`: the outcome list the run timeline serves, the follow-up filings and issue comments the run posted or tried to post with where each stands, and the findings it declined or deferred; an entry the read could not reconstruct reports under `outcome_entries` and leaves `complete` false. |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure` with its outcome and failure `cause`, `interpretation_failure` with the `cause` of a failure found after the invocation exported, `publish_block`, `blocked_on`), the item's `conversation_id` (`null` when it has none), the `alternate_agents` a card offers to retry its failed role on (`enrollment`, `pool`, `harness`, `model`, `qualification`, and a pre-#2735 offer's `agent`; empty when it offers none), the commands applied (command id, action, device id), and the deliveries. |
 | `task_lines` | Every line version of the task, ordered by role then version: `id`, `role`, `version`, `predecessor_id`, `agent` (a v1 line's agent name), `selection` (a v2 line's `enrollment_id`, `model_id`, and `effort`), `source`, `set_by`, `set_at`, `provenance` (a router or alternate-agent-move line's routing reading), and `cleared`. |
 | `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
@@ -1689,7 +1689,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v15`.
+  `freeside-task-record-v16`.
 - **`agent` says which enrollment, model, and effort an admission ran on.**
   On an execution admission and a review admission alike it carries the
   binding's digests, `route_model_id`, `enrollment_id`,
