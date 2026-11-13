@@ -246,3 +246,127 @@ func TestProductionRemediatedReadyItemCarriesTheRemediationGuide(t *testing.T) {
 		t.Fatalf("guide digest names %d claims, want 1", named)
 	}
 }
+
+// trimmedReviewGuideContent is reviewGuideContent's first stop with its head
+// excerpt running 1-200, the over-long range the #2753 exit run's writer
+// wrote. The import trims it to its first 80 lines.
+const trimmedReviewGuideContent = `{
+  "stops": [
+    {"title": "The change", "summary": "Read the new line first.", "attention": "product",
+     "excerpts": [
+       {"path": "README.md", "side": "head", "start_line": 1, "end_line": 200, "caption": "New text"}
+     ]}
+  ],
+  "questions": [],
+  "notes": null
+}`
+
+// TestProductionReadyItemCarriesTheTrimmedReviewGuide: a guide whose only
+// fault is a size cap no longer costs the run. The ready item carries the
+// guide cut to the cap and the notice that says what was cut.
+func TestProductionReadyItemCarriesTheTrimmedReviewGuide(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.replay = withReviewGuide(t, p, p.replay, trimmedReviewGuideContent)
+	p.startAndRecordExport(t)
+	reconcileToReady(t, p)
+	p.assertReady(t)
+	ready := p.readyItem(t)
+	guide := ready.ReviewGuide
+	if guide == nil || len(guide.Stops) != 1 || len(guide.Stops[0].Excerpts) != 1 {
+		t.Fatalf("review guide = %#v", guide)
+	}
+	if excerpt := guide.Stops[0].Excerpts[0]; excerpt.StartLine != 1 || excerpt.EndLine != 80 {
+		t.Fatalf("trimmed excerpt = %d-%d, want 1-80", excerpt.StartLine, excerpt.EndLine)
+	}
+	notice := ready.ReviewGuideNotice
+	if notice == nil || notice.Omission != nil || len(notice.Trims) != 1 {
+		t.Fatalf("review guide notice = %#v, want one trim", notice)
+	}
+	trim := notice.Trims[0]
+	if trim.Cap != domain.ReviewGuideCapExcerptLines || trim.Stop == nil || *trim.Stop != 0 ||
+		trim.Excerpt == nil || *trim.Excerpt != 0 || trim.Question != nil || trim.Limit != 80 || trim.Found != 200 {
+		t.Fatalf("trim = %#v, want stop 0 excerpt 0 at 80 of 200 lines", trim)
+	}
+}
+
+// TestProductionReadyItemOmitsAnOversizeReviewGuide: a guide too large to
+// read is left out. The ready item says so, and no claim on it names the
+// dropped bytes, so they reach no card.
+func TestProductionReadyItemOmitsAnOversizeReviewGuide(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	oversize := reviewGuideContent[:len(reviewGuideContent)-1] + strings.Repeat(" ", 64<<10) + "}"
+	p.replay = withReviewGuide(t, p, p.replay, oversize)
+	p.startAndRecordExport(t)
+	reconcileToReady(t, p)
+	p.assertReady(t)
+	ready := p.readyItem(t)
+	if ready.ReviewGuide != nil {
+		t.Fatalf("review guide = %#v, want none", ready.ReviewGuide)
+	}
+	notice := ready.ReviewGuideNotice
+	if notice == nil || notice.Omission == nil || *notice.Omission != domain.ReviewGuideOmissionFileTooLarge ||
+		len(notice.Trims) != 0 {
+		t.Fatalf("review guide notice = %#v, want file_too_large", notice)
+	}
+	for _, entry := range p.replay.Evidence.Entries {
+		for _, claim := range ready.AgentClaims {
+			if claim.Label == export.ReviewGuideEvidenceLabel || claim.Digest == domain.Digest(entry.Digest) {
+				t.Fatalf("ready item claim %#v names the dropped guide", claim)
+			}
+		}
+	}
+}
+
+// TestProductionCheckpointReviewGuideNoticeTamperFailsClosed removes the
+// trimmed guide from a stored checkpoint whose import says it was trimmed.
+// The import result is unchanged, so its digest still matches; the notice
+// re-check is what refuses an item that would claim a trim of no guide.
+func TestProductionCheckpointReviewGuideNoticeTamperFailsClosed(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.replay = withReviewGuide(t, p, p.replay, trimmedReviewGuideContent)
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterVerification: func() error { return errors.New("stop after the checkpoint") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("verification seam did not interrupt reconciliation")
+	}
+	key := "production-verification/" + string(p.runID) + "/" + p.replay.HeadSHA
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	var payload []byte
+	if err := raw.QueryRowContext(p.ctx, `SELECT payload FROM inbox WHERE idempotency_key = ?`, key).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint map[string]any
+	if err := json.Unmarshal(payload, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	imported, ok := checkpoint["imported"].(map[string]any)
+	if !ok || imported["review_guide_notice"] == nil || checkpoint["review_guide"] == nil {
+		t.Fatalf("checkpoint = %#v, want a trimmed guide and its notice", checkpoint)
+	}
+	checkpoint["review_guide"] = nil
+	forged, err := json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(p.ctx, `UPDATE inbox SET payload = ? WHERE idempotency_key = ?`, forged, key); err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("tampered checkpoint reconcile error = %v, want parent-key mismatch", err)
+	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("tampered checkpoint created a ready item: %v", err)
+	}
+}

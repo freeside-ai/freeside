@@ -945,7 +945,9 @@ func (d *Driver) persistReleasedMaterial(
 		return nil, executionReplay{}, err
 	}
 	if normalized != nil {
-		for index, entry := range out.evidence.Entries {
+		// artifacts follows returnedEvidence, not the manifest, so the
+		// rewrite indexes that list.
+		for index, entry := range returnedEvidence(out.evidence.Entries) {
 			if entry.Label != normalized.label {
 				continue
 			}
@@ -1147,8 +1149,9 @@ func validateReleasedExportRecord(
 		return nil, fmt.Errorf("recovered evidence disagrees with export record: %w",
 			domain.ErrParentKeyMismatch)
 	}
-	artifacts := make([]domain.Digest, 0, len(out.evidence.Entries))
-	for _, entry := range out.evidence.Entries {
+	returned := returnedEvidence(out.evidence.Entries)
+	artifacts := make([]domain.Digest, 0, len(returned))
+	for _, entry := range returned {
 		artifacts = append(artifacts, domain.Digest(entry.Digest))
 	}
 	return artifacts, nil
@@ -1236,6 +1239,16 @@ func readDigestedFile(path string, digest domain.Digest) ([]byte, error) {
 	return body, nil
 }
 
+// returnedEvidence lists, in manifest order, the evidence entries whose
+// digests a stage result names as artifacts: every entry but a review
+// guide the import left out (importer.ReviewGuideOmitted), whose blob is
+// stored for the replay but which no reply or client may name. The live
+// result, its scope-conflict rewrite, and the recovered result all index
+// this one list, so they agree slot for slot.
+func returnedEvidence(entries []export.EvidenceEntry) []export.EvidenceEntry {
+	return slices.DeleteFunc(slices.Clone(entries), importer.ReviewGuideOmitted)
+}
+
 type evidenceNormalization struct {
 	label  string
 	digest domain.Digest
@@ -1283,21 +1296,30 @@ func (d *Driver) persistEvidence(
 				normalized.label, normalizedClaims)
 		}
 	}
-	digests := make([]domain.Digest, 0, len(out.evidence.Entries))
+	// Every blob is stored, since a replay re-imports every entry; only
+	// the returned entries name an artifact.
+	durable := func(entry export.EvidenceEntry) domain.Digest {
+		if normalized != nil && entry.Label == normalized.label {
+			return normalized.digest
+		}
+		return domain.Digest(entry.Digest)
+	}
 	for _, entry := range out.evidence.Entries {
-		digest := domain.Digest(entry.Digest)
-		body, err := readEvidenceBlob(out.dir, digest)
+		body, err := readEvidenceBlob(out.dir, domain.Digest(entry.Digest))
 		if err != nil {
 			return nil, err
 		}
 		if normalized != nil && entry.Label == normalized.label {
-			digest = normalized.digest
 			body = normalized.body
 		}
-		if err := d.artifacts.PutBlob(ctx, digest, body); err != nil {
+		if err := d.artifacts.PutBlob(ctx, durable(entry), body); err != nil {
 			return nil, fmt.Errorf("persist evidence %s: %w", entry.Label, err)
 		}
-		digests = append(digests, digest)
+	}
+	returned := returnedEvidence(out.evidence.Entries)
+	digests := make([]domain.Digest, 0, len(returned))
+	for _, entry := range returned {
+		digests = append(digests, durable(entry))
 	}
 	if err := d.artifacts.RecordClaims(ctx, in.InvocationID, claims); err != nil {
 		return nil, fmt.Errorf("record agent claims: %w", err)

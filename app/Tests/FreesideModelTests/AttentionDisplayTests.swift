@@ -1584,6 +1584,41 @@ import Testing
                 "The file is binary.", "The lines are too large to show.", "The lines can't be shown.",
             ])
         #expect(AttentionDisplay.label(.path_missing, side: .base) == "No such file at the base.")
+        #expect(
+            Components.Schemas.ReviewGuideOmission.allCases.map(AttentionDisplay.label) == [
+                "The agent wrote a guide over 64 KiB, so it isn't shown.",
+                "The agent wrote a guide that isn't shown.",
+            ])
+    }
+
+    /// Every cap reads at its place, numbered from 1 as the card numbers
+    /// stops, though the notice's indexes count from 0.
+    @Test func everyReviewGuideTrimReadsAtItsPlace() {
+        let trims: [(Components.Schemas.ReviewGuideTrim, String)] = [
+            (.init(cap: .stops, limit: 12, found: 13), "Kept the first 12 of 13 stops."),
+            (.init(cap: .questions, limit: 8, found: 9), "Kept the first 8 of 9 questions."),
+            (.init(cap: .stop_excerpts, stop: 1, limit: 4, found: 6), "Stop 2: kept the first 4 of 6 excerpts."),
+            (
+                .init(cap: .excerpt_lines, stop: 0, excerpt: 2, limit: 80, found: 116),
+                "Stop 1, excerpt 3: kept the first 80 of 116 lines."
+            ),
+            (.init(cap: .title, stop: 0, limit: 120, found: 140), "Stop 1: title cut to 120 of 140 characters."),
+            (
+                .init(cap: .summary, stop: 0, limit: 2000, found: 2400),
+                "Stop 1: summary cut to 2000 of 2400 characters."
+            ),
+            (
+                .init(cap: .caption, stop: 0, excerpt: 0, limit: 300, found: 320),
+                "Stop 1, excerpt 1: caption cut to 300 of 320 characters."
+            ),
+            (.init(cap: .question, question: 1, limit: 500, found: 600), "Question 2: cut to 500 of 600 characters."),
+            (.init(cap: .notes, limit: 2000, found: 2100), "Notes cut to 2000 of 2100 characters."),
+            (.init(cap: .unknown, limit: 1, found: 2), "Cut to fit a size limit."),
+        ]
+        #expect(Set(trims.map(\.0.cap)) == Set(Components.Schemas.ReviewGuideCap.allCases))
+        for (trim, text) in trims {
+            #expect(AttentionDisplay.reviewGuideTrim(trim) == text)
+        }
     }
 
     @Test func excerptRangeNamesTheFileAndItsLines() throws {

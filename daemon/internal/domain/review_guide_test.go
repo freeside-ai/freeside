@@ -333,3 +333,170 @@ func TestAttentionItemRejectsReviewGuideOutsideReadyItem(t *testing.T) {
 		t.Fatal("no non-ready type accepted the base input; the test checked nothing")
 	}
 }
+
+// trimmedReviewGuideNotice is a notice for the fixture guide: its stop count
+// trimmed from 13 and its first stop's first excerpt from 116 lines.
+func trimmedReviewGuideNotice() domain.ReviewGuideNotice {
+	return domain.ReviewGuideNotice{Trims: []domain.ReviewGuideTrim{
+		{Cap: domain.ReviewGuideCapStops, Limit: domain.MaxReviewGuideStops, Found: 13},
+		{
+			Cap: domain.ReviewGuideCapExcerptLines, Stop: ptr(0), Excerpt: ptr(0),
+			Limit: domain.MaxReviewExcerptLines, Found: 116,
+		},
+	}}
+}
+
+func TestReviewGuideNoticeValidate(t *testing.T) {
+	t.Parallel()
+	omitted := domain.ReviewGuideOmissionFileTooLarge
+	unknownOmission := domain.ReviewGuideOmission("lost")
+	for _, c := range domain.AllReviewGuideCaps {
+		trim := domain.ReviewGuideTrim{Cap: c, Limit: 1, Found: 2}
+		switch c {
+		case domain.ReviewGuideCapStops, domain.ReviewGuideCapQuestions, domain.ReviewGuideCapNotes:
+		case domain.ReviewGuideCapStopExcerpts, domain.ReviewGuideCapTitle, domain.ReviewGuideCapSummary:
+			trim.Stop = ptr(0)
+		case domain.ReviewGuideCapExcerptLines, domain.ReviewGuideCapCaption:
+			trim.Stop, trim.Excerpt = ptr(0), ptr(0)
+		case domain.ReviewGuideCapQuestion:
+			trim.Question = ptr(0)
+		}
+		if err := (domain.ReviewGuideNotice{Trims: []domain.ReviewGuideTrim{trim}}).Validate(); err != nil {
+			t.Errorf("cap %q at its place = %v", c, err)
+		}
+	}
+	if err := (domain.ReviewGuideNotice{Omission: &omitted}).Validate(); err != nil {
+		t.Errorf("omission = %v", err)
+	}
+	for name, notice := range map[string]domain.ReviewGuideNotice{
+		"empty":              {},
+		"empty trims":        {Trims: []domain.ReviewGuideTrim{}},
+		"omission and trims": {Omission: &omitted, Trims: trimmedReviewGuideNotice().Trims},
+		"unknown omission":   {Omission: &unknownOmission},
+		"unknown cap":        {Trims: []domain.ReviewGuideTrim{{Cap: "length", Limit: 1, Found: 2}}},
+		"count cap with a stop": {Trims: []domain.ReviewGuideTrim{
+			{Cap: domain.ReviewGuideCapStops, Stop: ptr(0), Limit: 12, Found: 13},
+		}},
+		"excerpt cap without an excerpt": {Trims: []domain.ReviewGuideTrim{
+			{Cap: domain.ReviewGuideCapExcerptLines, Stop: ptr(0), Limit: 80, Found: 90},
+		}},
+		"question cap without a question": {Trims: []domain.ReviewGuideTrim{
+			{Cap: domain.ReviewGuideCapQuestion, Limit: 500, Found: 501},
+		}},
+		"negative index": {Trims: []domain.ReviewGuideTrim{
+			{Cap: domain.ReviewGuideCapTitle, Stop: ptr(-1), Limit: 120, Found: 121},
+		}},
+		"found at the limit": {Trims: []domain.ReviewGuideTrim{
+			{Cap: domain.ReviewGuideCapStops, Limit: 12, Found: 12},
+		}},
+		"zero limit": {Trims: []domain.ReviewGuideTrim{
+			{Cap: domain.ReviewGuideCapStops, Limit: 0, Found: 1},
+		}},
+	} {
+		if err := notice.Validate(); !errors.Is(err, domain.ErrInvalidReviewGuide) {
+			t.Errorf("%s = %v, want ErrInvalidReviewGuide", name, err)
+		}
+	}
+}
+
+func TestAttentionItemAcceptsReviewGuideNoticeOnReadyItem(t *testing.T) {
+	t.Parallel()
+	in := readyReviewGuideInput()
+	notice := trimmedReviewGuideNotice()
+	in.ReviewGuideNotice = &notice
+	item, err := domain.NewAttentionItem(in, nil)
+	if err != nil {
+		t.Fatalf("ready item with trims = %v", err)
+	}
+	// The item owns its copy of the notice.
+	*in.ReviewGuideNotice.Trims[1].Stop = 1
+	if *item.ReviewGuideNotice.Trims[1].Stop != 0 {
+		t.Fatal("item aliases its input's trim index")
+	}
+
+	omitted := readyReviewGuideInput()
+	omitted.ReviewGuide = nil
+	omitted.AgentClaims = omitted.AgentClaims[:len(omitted.AgentClaims)-1]
+	reason := domain.ReviewGuideOmissionFileTooLarge
+	omitted.ReviewGuideNotice = &domain.ReviewGuideNotice{Omission: &reason, Trims: []domain.ReviewGuideTrim{}}
+	if _, err := domain.NewAttentionItem(omitted, nil); err != nil {
+		t.Fatalf("ready item with an omission = %v", err)
+	}
+}
+
+func TestAttentionItemRejectsUnboundReviewGuideNotice(t *testing.T) {
+	t.Parallel()
+	reason := domain.ReviewGuideOmissionFileTooLarge
+	for name, tc := range map[string]struct {
+		mutate func(*domain.AttentionItemInput)
+		want   error
+	}{
+		"omission beside a guide": {
+			func(in *domain.AttentionItemInput) {
+				in.ReviewGuideNotice = &domain.ReviewGuideNotice{Omission: &reason}
+			},
+			domain.ErrCardFactInconsistent,
+		},
+		"trims beside no guide": {
+			func(in *domain.AttentionItemInput) {
+				in.ReviewGuide = nil
+				in.AgentClaims = in.AgentClaims[:len(in.AgentClaims)-1]
+			},
+			domain.ErrCardFactInconsistent,
+		},
+		"stop the guide lacks": {
+			func(in *domain.AttentionItemInput) { *in.ReviewGuideNotice.Trims[1].Stop = 2 },
+			domain.ErrCardFactInconsistent,
+		},
+		"excerpt the stop lacks": {
+			func(in *domain.AttentionItemInput) { *in.ReviewGuideNotice.Trims[1].Excerpt = 1 },
+			domain.ErrCardFactInconsistent,
+		},
+		"question the guide lacks": {
+			func(in *domain.AttentionItemInput) {
+				in.ReviewGuideNotice.Trims = append(in.ReviewGuideNotice.Trims, domain.ReviewGuideTrim{
+					Cap: domain.ReviewGuideCapQuestion, Question: ptr(1), Limit: 500, Found: 501,
+				})
+			},
+			domain.ErrCardFactInconsistent,
+		},
+		"invalid shape": {
+			func(in *domain.AttentionItemInput) { in.ReviewGuideNotice.Trims[0].Found = 12 },
+			domain.ErrInvalidReviewGuide,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := readyReviewGuideInput()
+			notice := trimmedReviewGuideNotice()
+			in.ReviewGuideNotice = &notice
+			tc.mutate(&in)
+			if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, tc.want) {
+				t.Fatalf("NewAttentionItem() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAttentionItemRejectsReviewGuideNoticeOutsideReadyItem(t *testing.T) {
+	t.Parallel()
+	reason := domain.ReviewGuideOmissionFileTooLarge
+	checked := 0
+	for _, typ := range domain.AllAttentionTypes {
+		if typ == domain.AttentionReadyForFinalReview {
+			continue
+		}
+		in := validItemInput(typ)
+		if _, err := domain.NewAttentionItem(in, nil); err != nil {
+			continue
+		}
+		in.ReviewGuideNotice = &domain.ReviewGuideNotice{Omission: &reason}
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrCardFactOutsideItem) {
+			t.Errorf("type %q with a notice = %v, want ErrCardFactOutsideItem", typ, err)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no non-ready type accepted the base input; the test checked nothing")
+	}
+}

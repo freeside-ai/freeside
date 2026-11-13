@@ -191,24 +191,25 @@ func skipUntilJSONClose(dec *json.Decoder) error {
 // import closed, exactly as the repo channel's integrity violations do.
 func buildClaims(
 	em export.EvidenceManifest, blobs map[export.Digest]blobInfo, opts Options,
-) ([]domain.AgentClaim, []Finding, error) {
+) ([]domain.AgentClaim, []Finding, *domain.ReviewGuideNotice, error) {
 	pol := opts.Policy.withDefaults()
 	createdAt := opts.evidenceCreatedAt()
 	claims := make([]domain.AgentClaim, 0, len(em.Entries))
 	var findings []Finding
+	var guideNotice *domain.ReviewGuideNotice
 	for _, e := range em.Entries {
 		info, ok := blobs[e.Digest]
 		if !ok {
 			// verifyBlobs built the verified set from these same entries, so a
 			// miss is an internal invariant break, not hostile input.
-			return nil, nil, fmt.Errorf("evidence entry %q digest %s has no verified blob: %w", e.Label, e.Digest, ErrMissingBlob)
+			return nil, nil, nil, fmt.Errorf("evidence entry %q digest %s has no verified blob: %w", e.Label, e.Digest, ErrMissingBlob)
 		}
 		if err := validateEvidenceType(e, info.verifiedPath); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		prov, err := mapEvidenceProvenance(e.Provenance)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		// Carry the daemon-validated media type and size the importer already
 		// checked (§5.15 rule 3) instead of dropping them: an unrecognized
@@ -217,7 +218,7 @@ func buildClaims(
 		// recomputes it from the blob store per synced item).
 		mediaType, err := mapEvidenceMediaType(e.MediaType)
 		if err != nil {
-			return nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
+			return nil, nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
 		}
 		claim := domain.AgentClaim{
 			Label:      e.Label,
@@ -232,16 +233,24 @@ func buildClaims(
 		// The manifest's labels are unique, so an import carries at most one
 		// guide entry.
 		if e.Label == export.ReviewGuideEvidenceLabel {
-			guideFindings, err := reviewGuideClaim(e, info)
+			guide, err := reviewGuideClaim(e, info, pol.SecretMaxScanBytes)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
-			findings = append(findings, guideFindings...)
+			findings = append(findings, guide.findings...)
+			guideNotice = guide.notice
+			if guide.omitted {
+				// The blob is still persisted with the export, which a replay
+				// re-imports, but no claim names it, and the stage pipeline
+				// returns no artifact for an unclaimed guide, so no item,
+				// reply, or client names it.
+				continue
+			}
 		}
 		if e.MediaType == "text/markdown" && e.Size <= pol.SecretMaxScanBytes {
 			body, readErr := readScanBlob(info, e.Digest)
 			if readErr != nil {
-				return nil, nil, fmt.Errorf("read evidence entry %q text: %w", e.Label, readErr)
+				return nil, nil, nil, fmt.Errorf("read evidence entry %q text: %w", e.Label, readErr)
 			}
 			matches := scanText(e.Label, body)
 			findings = append(findings, matches...)
@@ -260,14 +269,14 @@ func buildClaims(
 		// Defense in depth: decode already guarantees agent provenance, but
 		// re-pinning it here fails a mapping bug closed rather than open.
 		if err := claim.Validate(); err != nil {
-			return nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
+			return nil, nil, nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
 		}
 		claims = append(claims, claim)
 	}
 	if err := checkReviewGuideDigestUnique(claims); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return claims, findings, nil
+	return claims, findings, guideNotice, nil
 }
 
 // agentArtifactID is stable for one complete immutable artifact row. Labels

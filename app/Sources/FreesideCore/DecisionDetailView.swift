@@ -1197,6 +1197,7 @@ struct DecisionDetailView: View {
             if let guide = item.review_guide?.value1 {
                 DecisionReviewGuideView(
                     guide: guide,
+                    trims: item.review_guide_notice?.value1.trims ?? [],
                     producerInvocationID: DecisionCardComposition.reviewGuideClaim(item)
                         .map(Self.producerInvocationID),
                     carriesInfo: register.carriesInfo,
@@ -1206,6 +1207,8 @@ struct DecisionDetailView: View {
                         ? { path, line in Task { await model.openPullRequest(at: path, line: line) } }
                         : nil,
                     actionsEnabled: model.actionsEnabled && model.isSubmittable(.open_pr))
+            } else if let omission = item.review_guide_notice?.value1.omission?.value1 {
+                DecisionReviewGuideOmissionView(omission: omission)
             }
         case .claims:
             // A claims module under the actions lists its claims in the

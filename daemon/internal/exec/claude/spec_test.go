@@ -1271,7 +1271,7 @@ func TestReviewGuidePromptContract(t *testing.T) {
 			export.ReviewGuideEvidencePath, "never paste it", "at most 80 lines", "`head` means the final workspace",
 			"1 to 12 stops", "at most 4 excerpts per stop", "at most 8 questions", "within 120 characters",
 			"within 2,000", "within 300", "within 500", "under 64 KiB", "A malformed guide fails the stage",
-			"do not commit it",
+			"Content over a size cap does not fail it", "shows the guide as trimmed", "do not commit it",
 		} {
 			if !bytes.Contains(body, []byte(required)) {
 				t.Errorf("%s omits %q", name, required)
@@ -1289,8 +1289,8 @@ func TestReviewGuidePromptContract(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s review guide example is unterminated", name)
 		}
-		if _, err := importer.DecodeReviewGuide(example); err != nil {
-			t.Errorf("%s review guide example does not decode: %v", name, err)
+		if _, trims, err := importer.DecodeReviewGuide(example); err != nil || len(trims) != 0 {
+			t.Errorf("%s review guide example does not decode within its caps: %v, %d trims", name, err, len(trims))
 		}
 	}
 }

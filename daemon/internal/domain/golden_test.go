@@ -259,6 +259,27 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The guide item again with the notice the importer records when it
+	// trims a guide to its caps, and the ready item whose guide was too
+	// large to read, so both notice shapes are pinned on an item.
+	trimmedNotice := trimmedReviewGuideNotice()
+	trimmedInput := guideInput
+	trimmedInput.ID = "item-review-guide-trimmed"
+	trimmedInput.ReviewGuideNotice = &trimmedNotice
+	trimmedGuideItem, err := domain.NewAttentionItem(trimmedInput, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileTooLarge := domain.ReviewGuideOmissionFileTooLarge
+	omittedInput := readyInput
+	omittedInput.ID = "item-review-guide-omitted"
+	omittedInput.ReviewGuideNotice = &domain.ReviewGuideNotice{
+		Omission: &fileTooLarge, Trims: []domain.ReviewGuideTrim{},
+	}
+	omittedGuideItem, err := domain.NewAttentionItem(omittedInput, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The decision-surface identity of the base item at creation (plan §4):
 	// the persisted record the store derives, kept off the item body until
 	// #917 projects {epoch, digest} onto the wire.
@@ -2541,6 +2562,8 @@ func TestGolden(t *testing.T) {
 		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
 		{"attention_item_ready_review_guide", guideItem},
+		{"attention_item_ready_review_guide_trimmed", trimmedGuideItem},
+		{"attention_item_ready_review_guide_omitted", omittedGuideItem},
 		{"review_guide", guide},
 		{"decision_surface", decisionSurface},
 		{"recommendation_source_record", recommendationSource},

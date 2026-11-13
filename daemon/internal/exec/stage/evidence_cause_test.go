@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -158,5 +159,44 @@ func TestImportRefusalCause(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestOmittedReviewGuideIsNoArtifact: a guide over the read bound imports
+// with no claim. Its blob is still stored for replay, but the stage returns
+// no artifact for it, so no reply attaches it. Both pipeline paths share
+// persistEvidence; this drives it through recovery of an exported handoff.
+func TestOmittedReviewGuideIsNoArtifact(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	guide := export.EvidenceSource{
+		Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json",
+		Path: export.ReviewGuideEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass: export.EvidenceSensitivitySensitive, ProducerInvocationID: string(testInvoke),
+	}
+	body := []byte(`{"stops":[{"title":"t","summary":"s","attention":"risk","excerpts":[]}],"questions":[],"notes":null` +
+		strings.Repeat(" ", 65<<10) + "}")
+	repo, baseSHA := emptyBaseRepo(t)
+	outDir, manifest, evidence := releasedEvidenceExport(t, guide, body, map[string]string{"candidate.txt": "changed\n"})
+	artifacts := newStubArtifacts()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.artifacts = artifacts
+	d.seeder = recoveryGitSeeder{repo: repo}
+	spec := testStartSpec()
+	spec.Base.BaseSHA = baseSHA
+	orphanWithSpec(t, d, phaseExported, &releasedExport{
+		Dir: outDir, Manifest: manifest, Evidence: evidence, EvidencePresent: true, ObservedBaseSHA: baseSHA,
+	}, spec)
+	reconcileClean(t, ctx, d)
+	result, err := d.Collect(ctx, testInvoke)
+	if err != nil || result.Status != exec.StatusCompleted {
+		t.Fatalf("result = %+v, %v; want completed", result, err)
+	}
+	digest := domain.Digest(evidence.Entries[0].Digest)
+	if slices.Contains(result.Artifacts, digest) {
+		t.Fatalf("artifacts %v return the omitted guide %s", result.Artifacts, digest)
+	}
+	if _, stored := artifacts.blobs[digest]; !stored {
+		t.Fatalf("omitted guide %s is not stored for replay", digest)
 	}
 }

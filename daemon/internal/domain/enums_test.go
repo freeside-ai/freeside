@@ -434,6 +434,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReviewExcerptUnresolved"] = append(valids["ReviewExcerptUnresolved"], v.valid)
 	}
 	invalids["ReviewExcerptUnresolved"] = ReviewExcerptUnresolved("").valid
+	for _, v := range AllReviewGuideCaps {
+		valids["ReviewGuideCap"] = append(valids["ReviewGuideCap"], v.valid)
+	}
+	invalids["ReviewGuideCap"] = ReviewGuideCap("").valid
+	for _, v := range AllReviewGuideOmissions {
+		valids["ReviewGuideOmission"] = append(valids["ReviewGuideOmission"], v.valid)
+	}
+	invalids["ReviewGuideOmission"] = ReviewGuideOmission("").valid
 	for _, v := range AllClaimMediaTypes {
 		valids["ClaimMediaType"] = append(valids["ClaimMediaType"], v.valid)
 	}

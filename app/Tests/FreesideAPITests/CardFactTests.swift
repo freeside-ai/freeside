@@ -222,6 +222,66 @@ import Testing
         #expect(MockContractValidation.itemPolicyBreach(item) == nil)
     }
 
+    /// The notice rides only a ready item, holds exactly one of an omission
+    /// beside no guide and trims beside the guide, and names only places
+    /// the guide has (domain AttentionItem.validateReviewGuideNotice).
+    @Test func reviewGuideNoticeFixturesAreValidOnlyBoundToTheirGuide() {
+        let trimmed = AttentionFixtures.readyWithTrimmedReviewGuide().item
+        let omitted = AttentionFixtures.readyWithOmittedReviewGuide().item
+        #expect(MockContractValidation.itemValidityBreach(trimmed) == nil)
+        #expect(MockContractValidation.itemValidityBreach(omitted) == nil)
+        #expect(omitted.review_guide == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .execution_failure).item
+        wrongType.review_guide_notice = omitted.review_guide_notice
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "review_guide_notice on a different item type")
+
+        func breach(
+            _ base: Components.Schemas.AttentionItem,
+            _ mutate: (inout Components.Schemas.AttentionItem) -> Void
+        ) -> String? {
+            var item = base
+            mutate(&item)
+            return MockContractValidation.itemValidityBreach(item)
+        }
+        #expect(
+            breach(trimmed) { $0.review_guide_notice?.value1.trims = [] }
+                == "review_guide_notice must carry exactly one of omission and trims")
+        #expect(
+            breach(trimmed) { $0.review_guide_notice?.value1.omission = .init(value1: .file_too_large) }
+                == "review_guide_notice must carry exactly one of omission and trims")
+        #expect(
+            breach(trimmed) {
+                $0.review_guide_notice = .init(value1: .init(omission: .init(value1: .file_too_large), trims: []))
+            } == "review_guide_notice omission beside a review_guide")
+        #expect(
+            breach(omitted) {
+                $0.review_guide_notice = AttentionFixtures.readyWithTrimmedReviewGuide().item.review_guide_notice
+            } == "review_guide_notice trims beside no review_guide")
+        #expect(
+            breach(omitted) { $0.review_guide_notice?.value1.omission = .init(value1: .unknown) }
+                == "review_guide_notice with an unknown omission")
+        #expect(
+            breach(trimmed) { $0.review_guide_notice?.value1.trims[1].excerpt = nil }
+                == "review_guide_notice trim indexes do not match its cap")
+        #expect(
+            breach(trimmed) { $0.review_guide_notice?.value1.trims[0].found = 12 }
+                == "review_guide_notice trim must find more than a positive limit")
+        #expect(
+            breach(trimmed) { $0.review_guide_notice?.value1.trims[1].stop = 2 }
+                == "review_guide_notice trim names a stop the guide lacks")
+        #expect(
+            breach(trimmed) { $0.review_guide_notice?.value1.trims[1].excerpt = 1 }
+                == "review_guide_notice trim names an excerpt the stop lacks")
+        #expect(
+            breach(trimmed) {
+                $0.review_guide_notice?.value1.trims.append(
+                    .init(cap: .question, question: 1, limit: 500, found: 501))
+            } == "review_guide_notice trim names a question the guide lacks")
+    }
+
     @Test func reviewGuideFixtureIsValidOnlyOnItsReadyItem() {
         let ready = AttentionFixtures.readyWithReviewGuide().item
         #expect(MockContractValidation.itemValidityBreach(ready) == nil)

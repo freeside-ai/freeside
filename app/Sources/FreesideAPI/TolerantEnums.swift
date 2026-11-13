@@ -105,6 +105,8 @@ extension Components.Schemas.ReadinessInvalidationReason: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewAttention: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewExcerptSide: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewExcerptUnresolved: UnknownTolerantEnum {}
+extension Components.Schemas.ReviewGuideCap: UnknownTolerantEnum {}
+extension Components.Schemas.ReviewGuideOmission: UnknownTolerantEnum {}
 extension Components.Schemas.SensitivityClass: UnknownTolerantEnum {}
 extension Components.Schemas.Author: UnknownTolerantEnum {}
 extension Components.Schemas.ConversationStatus: UnknownTolerantEnum {}
@@ -216,6 +218,8 @@ public enum TolerantEnums {
         Components.Schemas.ReviewAttention.self,
         Components.Schemas.ReviewExcerptSide.self,
         Components.Schemas.ReviewExcerptUnresolved.self,
+        Components.Schemas.ReviewGuideCap.self,
+        Components.Schemas.ReviewGuideOmission.self,
         Components.Schemas.SensitivityClass.self,
         Components.Schemas.Author.self,
         Components.Schemas.ConversationStatus.self,

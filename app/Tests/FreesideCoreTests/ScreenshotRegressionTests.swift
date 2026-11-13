@@ -2146,6 +2146,28 @@
                                     detail.screenshotCard(
                                         guided, at: dynamicTypeSize, compactLayout: width != nil))))
                     }
+                    // A guide the daemon trimmed to its caps (#3180): the
+                    // trims draw as daemon fact ahead of the stops.
+                    let trimmed = AttentionFixtures.readyWithTrimmedReviewGuide().item
+                    for (suffix, width) in [("", CGFloat?.none), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-ready_for_final_review-guide_trimmed\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        trimmed, at: dynamicTypeSize, compactLayout: width != nil))))
+                    }
+                    // A guide over the read bound, left out (#3180): the
+                    // module says why the card has none.
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-guide_omitted",
+                            width: nil,
+                            view: AnyView(
+                                detail.screenshotCard(
+                                    AttentionFixtures.readyWithOmittedReviewGuide().item,
+                                    at: dynamicTypeSize))))
                 }
 
                 if snapshot.item._type == .publish_blocked {

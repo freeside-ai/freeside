@@ -1155,6 +1155,38 @@ package enum AttentionDisplay {
             : "\(excerpt.path), lines \(excerpt.start_line) to \(excerpt.end_line)"
     }
 
+    /// One trim the daemon made to fit the guide to a size cap, numbered
+    /// from 1 as the card numbers stops. The notice's indexes count from 0.
+    package static func reviewGuideTrim(_ trim: Components.Schemas.ReviewGuideTrim) -> String {
+        let stop = trim.stop.map { "Stop \($0 + 1)" }
+        let excerpt = trim.excerpt.map { "excerpt \($0 + 1)" }
+        let place = [stop, excerpt].compactMap { $0 }.joined(separator: ", ")
+        let kept = "\(trim.limit) of \(trim.found)"
+        switch trim.cap {
+        case .stops: return "Kept the first \(kept) stops."
+        case .questions: return "Kept the first \(kept) questions."
+        case .stop_excerpts: return "\(place): kept the first \(kept) excerpts."
+        case .excerpt_lines: return "\(place): kept the first \(kept) lines."
+        case .title: return "\(place): title cut to \(kept) characters."
+        case .summary: return "\(place): summary cut to \(kept) characters."
+        case .caption: return "\(place): caption cut to \(kept) characters."
+        case .question:
+            return "Question \((trim.question ?? 0) + 1): cut to \(kept) characters."
+        case .notes: return "Notes cut to \(kept) characters."
+        case .unknown: return "Cut to fit a size limit."
+        }
+    }
+
+    /// Why a ready card shows no guide although the agent wrote one.
+    package static func label(_ omission: Components.Schemas.ReviewGuideOmission) -> String {
+        switch omission {
+        case .file_too_large:
+            return "The agent wrote a guide over 64 KiB, so it isn't shown."
+        case .unknown:
+            return "The agent wrote a guide that isn't shown."
+        }
+    }
+
     /// A review stop as VoiceOver reads it, as one element: its place in the
     /// guide, its kind, its title, and the agent's summary.
     package static func reviewStopAccessibilityLabel(

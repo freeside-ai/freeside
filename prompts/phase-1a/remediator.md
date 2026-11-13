@@ -137,7 +137,7 @@ obligation explicit in the summary. Keeping scope does not waive review policy.
 ```
 
 - `attention` is one of `tradeoff`, `contract`, `product`, `risk`, or `accessibility`. Use 1 to 12 stops, at most 4 excerpts per stop, and at most 8 questions. Keep a title within 120 characters, a summary or `notes` within 2,000, a caption within 300, and a question within 500. Keep the file under 64 KiB. `notes` is a string or `null`; `excerpts` and `questions` may be empty lists.
-- Leave the file out rather than guess at its shape, even when the change warrants a guide. A malformed guide fails the stage; a missing one does not. Never put a credential in it.
+- Leave the file out rather than guess at its shape, even when the change warrants a guide. A malformed guide fails the stage; a missing one does not. Content over a size cap does not fail it: Freeside keeps what fits, cuts the rest, and shows the guide as trimmed, and it leaves out a file over 64 KiB, so write to the caps. Never put a credential in it.
 
 ## Public Pull Request Metadata
 

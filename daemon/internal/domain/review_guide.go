@@ -347,3 +347,232 @@ func cloneReviewGuide(in *ReviewGuide) *ReviewGuide {
 	}
 	return &out
 }
+
+// ReviewGuideCap names a review guide size cap. The importer trims an
+// agent-written guide that breaks one down to the cap rather than failing
+// the run, and records each trim in a ReviewGuideNotice. The zero value is
+// invalid.
+type ReviewGuideCap string
+
+const (
+	// ReviewGuideCapStops: more than MaxReviewGuideStops stops; the first
+	// ones are kept.
+	ReviewGuideCapStops ReviewGuideCap = "stops"
+	// ReviewGuideCapStopExcerpts: a stop with more than
+	// MaxReviewStopExcerpts excerpts; its first ones are kept.
+	ReviewGuideCapStopExcerpts ReviewGuideCap = "stop_excerpts"
+	// ReviewGuideCapQuestions: more than MaxReviewGuideQuestions questions;
+	// the first ones are kept.
+	ReviewGuideCapQuestions ReviewGuideCap = "questions"
+	// ReviewGuideCapExcerptLines: an excerpt range over
+	// MaxReviewExcerptLines lines; its first lines are kept.
+	ReviewGuideCapExcerptLines ReviewGuideCap = "excerpt_lines"
+	// The text caps: a string over its code-point cap is cut to fit, ending
+	// in an ellipsis.
+	ReviewGuideCapTitle    ReviewGuideCap = "title"
+	ReviewGuideCapSummary  ReviewGuideCap = "summary"
+	ReviewGuideCapCaption  ReviewGuideCap = "caption"
+	ReviewGuideCapQuestion ReviewGuideCap = "question"
+	ReviewGuideCapNotes    ReviewGuideCap = "notes"
+)
+
+// AllReviewGuideCaps is the single registration point for review guide caps.
+var AllReviewGuideCaps = []ReviewGuideCap{
+	ReviewGuideCapStops,
+	ReviewGuideCapStopExcerpts,
+	ReviewGuideCapQuestions,
+	ReviewGuideCapExcerptLines,
+	ReviewGuideCapTitle,
+	ReviewGuideCapSummary,
+	ReviewGuideCapCaption,
+	ReviewGuideCapQuestion,
+	ReviewGuideCapNotes,
+}
+
+func (c ReviewGuideCap) valid() bool {
+	switch c {
+	case ReviewGuideCapStops, ReviewGuideCapStopExcerpts, ReviewGuideCapQuestions,
+		ReviewGuideCapExcerptLines, ReviewGuideCapTitle, ReviewGuideCapSummary,
+		ReviewGuideCapCaption, ReviewGuideCapQuestion, ReviewGuideCapNotes:
+		return true
+	default:
+		return false
+	}
+}
+
+// reviewGuideTrimPlace says which indexes a trim of this cap carries: the
+// stop, excerpt, or question the cap applied to. A count cap over the whole
+// guide carries none.
+type reviewGuideTrimPlace struct{ stop, excerpt, question bool }
+
+func (c ReviewGuideCap) place() reviewGuideTrimPlace {
+	switch c {
+	case ReviewGuideCapStops, ReviewGuideCapQuestions, ReviewGuideCapNotes:
+		return reviewGuideTrimPlace{}
+	case ReviewGuideCapStopExcerpts, ReviewGuideCapTitle, ReviewGuideCapSummary:
+		return reviewGuideTrimPlace{stop: true}
+	case ReviewGuideCapExcerptLines, ReviewGuideCapCaption:
+		return reviewGuideTrimPlace{stop: true, excerpt: true}
+	case ReviewGuideCapQuestion:
+		return reviewGuideTrimPlace{question: true}
+	}
+	return reviewGuideTrimPlace{}
+}
+
+// ReviewGuideOmission says why a ready item carries no guide although its
+// invocation wrote one. The zero value is invalid.
+type ReviewGuideOmission string
+
+const (
+	// ReviewGuideOmissionFileTooLarge: the file was over the importer's read
+	// bound, so it could not be decoded at all.
+	ReviewGuideOmissionFileTooLarge ReviewGuideOmission = "file_too_large"
+)
+
+// AllReviewGuideOmissions is the single registration point for review guide
+// omission reasons.
+var AllReviewGuideOmissions = []ReviewGuideOmission{
+	ReviewGuideOmissionFileTooLarge,
+}
+
+func (o ReviewGuideOmission) valid() bool {
+	switch o {
+	case ReviewGuideOmissionFileTooLarge:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReviewGuideNotice records why a ready item's guide is shorter than its
+// agent wrote it, or missing (api/openapi.yaml ReviewGuideNotice). Exactly
+// one of Omission and Trims is set: Omission when the guide was left out,
+// a non-empty Trims when it was cut to its caps. The importer derives it;
+// it is never agent- or client-supplied. Trims is never nil on the wire, so
+// an omission has one encoding ([]); the sync projection normalizes it.
+type ReviewGuideNotice struct {
+	Omission *ReviewGuideOmission `json:"omission"`
+	Trims    []ReviewGuideTrim    `json:"trims"`
+}
+
+// ReviewGuideTrim is one cap the importer trimmed the guide to. Stop,
+// Excerpt, and Question are 0-based indexes into the stored guide, set
+// exactly when the cap applies at that place (ReviewGuideCap.place). Found
+// is what the agent wrote (a count, a span in lines, or a length in code
+// points) and Limit what was kept.
+type ReviewGuideTrim struct {
+	Cap      ReviewGuideCap `json:"cap"`
+	Stop     *int           `json:"stop"`
+	Excerpt  *int           `json:"excerpt"`
+	Question *int           `json:"question"`
+	Limit    int            `json:"limit"`
+	Found    int            `json:"found"`
+}
+
+// Validate reports whether the notice is well-formed on its own.
+// AttentionItem.Validate checks it against the item's guide.
+func (n ReviewGuideNotice) Validate() error {
+	switch {
+	case n.Omission != nil && len(n.Trims) > 0:
+		return fmt.Errorf("review guide notice has both an omission and trims: %w", ErrInvalidReviewGuide)
+	case n.Omission != nil:
+		if !n.Omission.valid() {
+			return fmt.Errorf("review guide omission %q: %w", *n.Omission, ErrInvalidReviewGuide)
+		}
+		return nil
+	case len(n.Trims) == 0:
+		return fmt.Errorf("review guide notice has neither an omission nor trims: %w", ErrInvalidReviewGuide)
+	}
+	for i, trim := range n.Trims {
+		if err := trim.Validate(); err != nil {
+			return fmt.Errorf("review guide trim %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// Validate reports whether the trim names a cap, the places it needs, and a
+// size over a positive limit.
+func (t ReviewGuideTrim) Validate() error {
+	if !t.Cap.valid() {
+		return fmt.Errorf("cap %q: %w", t.Cap, ErrInvalidReviewGuide)
+	}
+	place := t.Cap.place()
+	for _, index := range []struct {
+		name  string
+		value *int
+		want  bool
+	}{
+		{"stop", t.Stop, place.stop},
+		{"excerpt", t.Excerpt, place.excerpt},
+		{"question", t.Question, place.question},
+	} {
+		if (index.value != nil) != index.want {
+			return fmt.Errorf("cap %q %s index set %t, want %t: %w",
+				t.Cap, index.name, index.value != nil, index.want, ErrInvalidReviewGuide)
+		}
+		if index.value != nil && *index.value < 0 {
+			return fmt.Errorf("cap %q %s index %d: %w", t.Cap, index.name, *index.value, ErrInvalidReviewGuide)
+		}
+	}
+	if t.Limit < 1 || t.Found <= t.Limit {
+		return fmt.Errorf("cap %q found %d over limit %d, want found above a positive limit: %w",
+			t.Cap, t.Found, t.Limit, ErrInvalidReviewGuide)
+	}
+	return nil
+}
+
+// validateReviewGuideNotice binds a present notice to its item: only a
+// ready_for_final_review item carries one, an omission stands beside no
+// guide, and trims stand beside the guide they shortened, each naming a
+// place that guide has.
+func (i AttentionItem) validateReviewGuideNotice() error {
+	n := i.ReviewGuideNotice
+	if i.Type != AttentionReadyForFinalReview {
+		return fmt.Errorf("item %s type %q carries a review guide notice: %w",
+			i.ID, i.Type, ErrCardFactOutsideItem)
+	}
+	if err := n.Validate(); err != nil {
+		return fmt.Errorf("item %s review_guide_notice: %w", i.ID, err)
+	}
+	if (n.Omission != nil) == (i.ReviewGuide != nil) {
+		return fmt.Errorf("item %s review guide notice omission set %t beside guide set %t: %w",
+			i.ID, n.Omission != nil, i.ReviewGuide != nil, ErrCardFactInconsistent)
+	}
+	for j, trim := range n.Trims {
+		if !i.ReviewGuide.hasPlace(trim) {
+			return fmt.Errorf("item %s review guide trim %d names a place the guide lacks: %w",
+				i.ID, j, ErrCardFactInconsistent)
+		}
+	}
+	return nil
+}
+
+// hasPlace reports whether every index the trim carries names an entry of g.
+func (g *ReviewGuide) hasPlace(t ReviewGuideTrim) bool {
+	if t.Question != nil && *t.Question >= len(g.Questions) {
+		return false
+	}
+	if t.Stop == nil {
+		return true
+	}
+	if *t.Stop >= len(g.Stops) {
+		return false
+	}
+	return t.Excerpt == nil || *t.Excerpt < len(g.Stops[*t.Stop].Excerpts)
+}
+
+// cloneReviewGuideNotice deep-copies a notice so an item never aliases its
+// caller's slices or pointers.
+func cloneReviewGuideNotice(in *ReviewGuideNotice) *ReviewGuideNotice {
+	if in == nil {
+		return nil
+	}
+	out := ReviewGuideNotice{Omission: clonePtr(in.Omission), Trims: slices.Clone(in.Trims)}
+	for i := range out.Trims {
+		out.Trims[i].Stop = clonePtr(out.Trims[i].Stop)
+		out.Trims[i].Excerpt = clonePtr(out.Trims[i].Excerpt)
+		out.Trims[i].Question = clonePtr(out.Trims[i].Question)
+	}
+	return &out
+}

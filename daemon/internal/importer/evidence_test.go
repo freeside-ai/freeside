@@ -364,7 +364,7 @@ func TestBuildClaimsInlinesConformingMarkdown(t *testing.T) {
 			}
 			entry := evidenceEntry(export.SummaryEvidenceLabel, "text/markdown", tc.content)
 			entry.Provenance.SensitivityClass = tc.sensitivity
-			claims, findings, err := buildClaims(evidenceManifest(entry), map[export.Digest]blobInfo{
+			claims, findings, _, err := buildClaims(evidenceManifest(entry), map[export.Digest]blobInfo{
 				entry.Digest: {size: entry.Size, verifiedPath: p},
 			}, Options{Policy: Policy{SecretMaxScanBytes: tc.scanBytes}, Now: evidenceNowFixture})
 			if err != nil {
@@ -472,7 +472,7 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 	blobs := map[export.Digest]blobInfo{
 		entry.Digest: {size: entry.Size, verifiedPath: path},
 	}
-	first, findings, err := buildClaims(
+	first, findings, _, err := buildClaims(
 		evidenceManifest(entry), blobs, Options{Now: evidenceNowFixture},
 	)
 	if err != nil {
@@ -517,7 +517,7 @@ func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			changed := entry
 			tc.mutate(&changed.Provenance)
-			second, findings, err := buildClaims(evidenceManifest(changed), blobs, Options{Now: evidenceNowFixture})
+			second, findings, _, err := buildClaims(evidenceManifest(changed), blobs, Options{Now: evidenceNowFixture})
 			if err != nil {
 				t.Fatalf("build changed claim: %v", err)
 			}
@@ -862,12 +862,9 @@ func TestImportReviewGuideTamperFailsClosed(t *testing.T) {
 		"dot-dot path":          func(g map[string]any) { guideExcerpt(g)["path"] = "../a.txt" },
 		"absolute path":         func(g map[string]any) { guideExcerpt(g)["path"] = "/etc/passwd" },
 		"non-canonical path":    func(g map[string]any) { guideExcerpt(g)["path"] = "dir//a.txt" },
-		"span over 80 lines":    func(g map[string]any) { guideExcerpt(g)["end_line"] = 81 },
 		"end before start":      func(g map[string]any) { guideExcerpt(g)["start_line"] = 3; guideExcerpt(g)["end_line"] = 2 },
 		"zero start line":       func(g map[string]any) { guideExcerpt(g)["start_line"] = 0 },
 		"no stops":              func(g map[string]any) { g["stops"] = []any{} },
-		"thirteen stops":        func(g map[string]any) { g["stops"] = stops(13) },
-		"five excerpts":         func(g map[string]any) { guideStop(g, 0)["excerpts"] = excerpts(5) },
 		"unknown field":         func(g map[string]any) { g["version"] = "v1" },
 		"daemon text":           func(g map[string]any) { guideExcerpt(g)["text"] = "forged" },
 		"daemon head":           func(g map[string]any) { g["head_sha"] = evidenceSourceHead },
@@ -879,9 +876,36 @@ func TestImportReviewGuideTamperFailsClosed(t *testing.T) {
 		"missing notes":         func(g map[string]any) { delete(g, "notes") },
 		"missing excerpts":      func(g map[string]any) { delete(guideStop(g, 0), "excerpts") },
 		"empty caption":         func(g map[string]any) { guideExcerpt(g)["caption"] = "" },
-		"title over 120 chars":  func(g map[string]any) { guideStop(g, 0)["title"] = strings.Repeat("é", 121) },
-		"nine questions":        func(g map[string]any) { g["questions"] = []any{"1", "2", "3", "4", "5", "6", "7", "8", "9"} },
 		"fractional start line": func(g map[string]any) { guideExcerpt(g)["start_line"] = 1.5 },
+		"path over 1024 chars":  func(g map[string]any) { guideExcerpt(g)["path"] = strings.Repeat("a", 1025) },
+		// A size cap trims, but never past a shape fault: each of these is
+		// over a cap and malformed, the fault inside what a trim would cut.
+		"over-long malformed range": func(g map[string]any) {
+			guideExcerpt(g)["start_line"] = 0
+			guideExcerpt(g)["end_line"] = 200
+		},
+		"over-long range, invalid side": func(g map[string]any) {
+			guideExcerpt(g)["end_line"] = 200
+			guideExcerpt(g)["side"] = "left"
+		},
+		"dropped stop with invalid attention": func(g map[string]any) {
+			all := stops(13)
+			all[12].(map[string]any)["attention"] = "vibes"
+			g["stops"] = all
+		},
+		"dropped excerpt with dot-dot path": func(g map[string]any) {
+			all := excerpts(5)
+			all[4].(map[string]any)["path"] = "../a.txt"
+			guideStop(g, 0)["excerpts"] = all
+		},
+		"dropped question empty": func(g map[string]any) {
+			g["questions"] = []any{"1", "2", "3", "4", "5", "6", "7", "8", ""}
+		},
+		"dropped stop with unknown field": func(g map[string]any) {
+			all := stops(13)
+			all[12].(map[string]any)["version"] = "v1"
+			g["stops"] = all
+		},
 	}
 	type tamper struct {
 		content string
@@ -899,9 +923,11 @@ func TestImportReviewGuideTamperFailsClosed(t *testing.T) {
 		content: strings.Replace(valid, "The changed line.", "The \xff line.", 1),
 		entry:   reviewGuideEntry, want: ErrEvidenceMediaMismatch,
 	}
-	cases["over 64 KiB"] = tamper{
-		content: valid[:len(valid)-1] + strings.Repeat(" ", MaxReviewGuideBytes) + "}",
-		entry:   reviewGuideEntry, want: ErrEvidenceInvalid,
+	// An over-64-KiB guide is dropped rather than refused, but only after
+	// the declaration check and the media-type check on its bytes.
+	cases["over 64 KiB, not JSON"] = tamper{
+		content: valid[:len(valid)-1] + strings.Repeat(" ", MaxReviewGuideBytes) + "}{",
+		entry:   reviewGuideEntry, want: ErrEvidenceMediaMismatch,
 	}
 	for name, forge := range map[string]func(*export.EvidenceEntry){
 		"head-bound declaration": func(e *export.EvidenceEntry) {
@@ -913,14 +939,20 @@ func TestImportReviewGuideTamperFailsClosed(t *testing.T) {
 		},
 		"markdown declaration": func(e *export.EvidenceEntry) { e.MediaType = "text/markdown" },
 	} {
-		cases[name] = tamper{
-			content: valid,
-			entry: func(content string) export.EvidenceEntry {
-				e := reviewGuideEntry(content)
-				forge(&e)
-				return e
-			},
-			want: ErrEvidenceInvalid,
+		for size, content := range map[string]string{
+			"":             valid,
+			" over 64 KiB": valid[:len(valid)-1] + strings.Repeat(" ", MaxReviewGuideBytes) + "}",
+		} {
+			name := name + size
+			cases[name] = tamper{
+				content: content,
+				entry: func(content string) export.EvidenceEntry {
+					e := reviewGuideEntry(content)
+					forge(&e)
+					return e
+				},
+				want: ErrEvidenceInvalid,
+			}
 		}
 	}
 	for name, tc := range cases {

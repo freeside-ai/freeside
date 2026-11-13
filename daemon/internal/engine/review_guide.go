@@ -41,7 +41,9 @@ func resolveReviewGuide(
 	if err != nil {
 		return nil, fmt.Errorf("load review guide claim %s: %w", claim.Digest, err)
 	}
-	guide, err := importer.DecodeReviewGuide(body)
+	// The trims are the importer's to record: its Result carries them, and
+	// this decode of the same bytes derives the same trimmed guide.
+	guide, _, err := importer.DecodeReviewGuide(body)
 	if err != nil {
 		// The import accepted these bytes under the same decoder.
 		return nil, fmt.Errorf("decode stored review guide %s: %w: %w", claim.Digest, err, domain.ErrParentKeyMismatch)

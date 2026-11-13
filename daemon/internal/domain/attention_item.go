@@ -598,6 +598,12 @@ type AttentionItem struct {
 	// other type, on a ready item without a guide, and on items stored before
 	// the field existed.
 	ReviewGuide *ReviewGuide `json:"review_guide"`
+	// ReviewGuideNotice records, on a ready_for_final_review item, why its
+	// guide is shorter than the agent wrote it or missing: the importer
+	// trimmed it to its caps, or left out a file too large to read. It is
+	// nil when the guide arrived whole or none was written, on every other
+	// type, and on items stored before the field existed.
+	ReviewGuideNotice *ReviewGuideNotice `json:"review_guide_notice"`
 	// AlternateAgents are the agents the item offers to retry the failed role
 	// under (plan §4, alternate-agent retry): present exactly when the item
 	// offers retry_with_alternate_agent, and only on the execution_failure,
@@ -697,6 +703,7 @@ type AttentionItemInput struct {
 	AgentQuestion                    *AgentQuestionFacts
 	ReviewDiminishing                *ReviewDiminishingFacts
 	ReviewGuide                      *ReviewGuide
+	ReviewGuideNotice                *ReviewGuideNotice
 	AlternateAgents                  []AlternateAgentOffer
 	ItemVersion                      int
 	InterruptionClass                InterruptionClass
@@ -760,6 +767,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		AgentQuestion:                    cloneAgentQuestionFacts(in.AgentQuestion),
 		ReviewDiminishing:                cloneReviewDiminishingFacts(in.ReviewDiminishing),
 		ReviewGuide:                      cloneReviewGuide(in.ReviewGuide),
+		ReviewGuideNotice:                cloneReviewGuideNotice(in.ReviewGuideNotice),
 		AlternateAgents:                  slices.Clone(in.AlternateAgents),
 		ItemVersion:                      in.ItemVersion,
 		InterruptionClass:                in.InterruptionClass,
@@ -1057,6 +1065,11 @@ func (i AttentionItem) Validate() error {
 	}
 	if i.ReviewGuide != nil {
 		if err := i.validateReviewGuide(); err != nil {
+			return err
+		}
+	}
+	if i.ReviewGuideNotice != nil {
+		if err := i.validateReviewGuideNotice(); err != nil {
 			return err
 		}
 	}

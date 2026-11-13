@@ -146,6 +146,19 @@
     "questions": [],
     "notes": null
   },
+  "review_guide_notice": {
+    "omission": null,
+    "trims": [
+      {
+        "cap": "excerpt_lines",
+        "stop": 0,
+        "excerpt": 0,
+        "question": null,
+        "limit": 80,
+        "found": 116
+      }
+    ]
+  },
   "alternate_agents": null,
   "elapsed_deadlines": null,
   "item_version": 1,

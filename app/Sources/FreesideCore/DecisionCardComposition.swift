@@ -698,7 +698,9 @@ struct DecisionCardComposition: Equatable {
             return item._type == .ready_for_final_review
                 || !summaries(from: item.agent_claims).isEmpty
         case .reviewGuide:
-            return item.review_guide != nil
+            // A guide the daemon left out still draws the module, to say
+            // why the card has none.
+            return item.review_guide != nil || item.review_guide_notice?.value1.omission != nil
         case .claims:
             let drawn = claimsInCard(
                 from: Self.listedClaims(item), at: index,

@@ -3,6 +3,7 @@ package importer
 import (
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -12,6 +13,15 @@ import (
 // MaxReviewGuideBytes caps the agent-written review guide file. The domain
 // caps bound the decoded guide; this bounds the bytes read before decoding.
 const MaxReviewGuideBytes = 64 << 10
+
+// ReviewGuideOmitted reports whether the import leaves e out as a review
+// guide over MaxReviewGuideBytes. The stage pipeline still stores the
+// blob, which a replay re-imports, but returns no artifact for it, so no
+// reply attaches it and no client names it. The live and recovery paths
+// both derive their artifact lists through this one rule, so they agree.
+func ReviewGuideOmitted(e export.EvidenceEntry) bool {
+	return e.Label == export.ReviewGuideEvidenceLabel && e.Size > MaxReviewGuideBytes
+}
 
 // The agent-written review guide (api/openapi.yaml ReviewGuide): the domain
 // shape without the daemon-filled head_sha, claim_digest, and each excerpt's
@@ -43,14 +53,44 @@ type reviewGuideFileExcerpt struct {
 	Caption   string                   `json:"caption"`
 }
 
-// DecodeReviewGuide decodes and validates an agent-written review guide. It
-// returns the guide with HeadSHA, ClaimDigest, and every excerpt's Text and
-// UnresolvedReason empty: those are daemon facts the caller fills. The body
-// is untrusted; any violation (over MaxReviewGuideBytes, invalid UTF-8, an
-// unknown or missing key, or a domain cap or range breach) wraps
-// ErrEvidenceInvalid. The domain caps are checked by domain.ReviewGuide's own
-// Validate, so they live in one place.
-func DecodeReviewGuide(body []byte) (domain.ReviewGuide, error) {
+// DecodeReviewGuide decodes and validates an agent-written review guide and
+// trims it to the domain caps. It returns the trimmed guide with HeadSHA,
+// ClaimDigest, and every excerpt's Text and UnresolvedReason empty (daemon
+// facts the caller fills), and one trim per cap the agent broke, in reading
+// order. The body is untrusted. A shape fault (over MaxReviewGuideBytes,
+// invalid UTF-8, an unknown or missing key, an empty string, an invalid
+// attention or side, a non-canonical or over-long path, a malformed line
+// range, or no stops) wraps ErrEvidenceInvalid, including one inside a stop,
+// excerpt, or question a count cap drops, so trimming never admits a
+// malformed guide. Only size caps trim. The importer and the engine both
+// call it on the same bytes, so they derive the same guide.
+func DecodeReviewGuide(body []byte) (domain.ReviewGuide, []domain.ReviewGuideTrim, error) {
+	_, trimmed, trims, err := decodeReviewGuide(body)
+	return trimmed, trims, err
+}
+
+// decodeReviewGuide is DecodeReviewGuide that also returns the guide as the
+// agent wrote it, for the secret scan to read what a trim cuts.
+func decodeReviewGuide(body []byte) (written, trimmed domain.ReviewGuide, trims []domain.ReviewGuideTrim, err error) {
+	written, err = decodeWrittenReviewGuide(body)
+	if err != nil {
+		return domain.ReviewGuide{}, domain.ReviewGuide{}, nil, err
+	}
+	trimmed, trims, err = trimReviewGuide(written)
+	if err != nil {
+		return domain.ReviewGuide{}, domain.ReviewGuide{}, nil, fmt.Errorf("%w: %w", ErrEvidenceInvalid, err)
+	}
+	// The backstop: anything trimming left over a cap, and any fault the
+	// per-entry checks do not cover (no stops, empty notes), fails here.
+	if err := validateUnresolvedReviewGuide(trimmed); err != nil {
+		return domain.ReviewGuide{}, domain.ReviewGuide{}, nil, fmt.Errorf("%w: %w", ErrEvidenceInvalid, err)
+	}
+	return written, trimmed, trims, nil
+}
+
+// decodeWrittenReviewGuide strictly decodes the file into the domain shape,
+// untrimmed and unvalidated beyond its keys.
+func decodeWrittenReviewGuide(body []byte) (domain.ReviewGuide, error) {
 	var file reviewGuideFile
 	if err := strictjson.Decode(
 		body, &file, strictjson.RejectInvalidUTF8, strictjson.Limit(MaxReviewGuideBytes),
@@ -86,10 +126,143 @@ func DecodeReviewGuide(body []byte) (domain.ReviewGuide, error) {
 			Title: stop.Title, Summary: stop.Summary, Attention: stop.Attention, Excerpts: excerpts,
 		})
 	}
-	if err := validateUnresolvedReviewGuide(guide); err != nil {
-		return domain.ReviewGuide{}, fmt.Errorf("%w: %w", ErrEvidenceInvalid, err)
-	}
 	return guide, nil
+}
+
+// trimReviewGuide cuts a decoded guide down to the domain size caps, keeping
+// the agent's order: the first stops, excerpts, and questions up to their
+// count caps, the first lines of an over-long range, and the start of an
+// over-long string, ending in an ellipsis. Every stop, excerpt, and question
+// is shape-checked first, including those a count cap drops. A trim is
+// recorded only at a place the trimmed guide keeps; a dropped entry's own
+// breaches are covered by the count trim that dropped it. The input is not
+// modified.
+func trimReviewGuide(written domain.ReviewGuide) (domain.ReviewGuide, []domain.ReviewGuideTrim, error) {
+	var trims []domain.ReviewGuideTrim
+	record := func(trim domain.ReviewGuideTrim, kept bool) {
+		if kept {
+			trims = append(trims, trim)
+		}
+	}
+	guide := written
+	if n := len(written.Stops); n > domain.MaxReviewGuideStops {
+		record(domain.ReviewGuideTrim{
+			Cap: domain.ReviewGuideCapStops, Limit: domain.MaxReviewGuideStops, Found: n,
+		}, true)
+	}
+	guide.Stops = make([]domain.ReviewStop, 0, min(len(written.Stops), domain.MaxReviewGuideStops))
+	for i, stop := range written.Stops {
+		keptStop := i < domain.MaxReviewGuideStops
+		at := func(trim domain.ReviewGuideTrim) domain.ReviewGuideTrim {
+			index := i
+			trim.Stop = &index
+			return trim
+		}
+		var trim *domain.ReviewGuideTrim
+		if stop.Title, trim = trimReviewGuideText(
+			domain.ReviewGuideCapTitle, stop.Title, domain.MaxReviewStopTitleRunes); trim != nil {
+			record(at(*trim), keptStop)
+		}
+		if stop.Summary, trim = trimReviewGuideText(
+			domain.ReviewGuideCapSummary, stop.Summary, domain.MaxReviewStopSummaryRunes); trim != nil {
+			record(at(*trim), keptStop)
+		}
+		if n := len(stop.Excerpts); n > domain.MaxReviewStopExcerpts {
+			record(at(domain.ReviewGuideTrim{
+				Cap: domain.ReviewGuideCapStopExcerpts, Limit: domain.MaxReviewStopExcerpts, Found: n,
+			}), keptStop)
+		}
+		excerpts := make([]domain.ReviewExcerpt, 0, min(len(stop.Excerpts), domain.MaxReviewStopExcerpts))
+		for j, excerpt := range stop.Excerpts {
+			kept := keptStop && j < domain.MaxReviewStopExcerpts
+			atExcerpt := func(trim domain.ReviewGuideTrim) domain.ReviewGuideTrim {
+				trim = at(trim)
+				index := j
+				trim.Excerpt = &index
+				return trim
+			}
+			// Only a well-formed range is shortened: a malformed one is a shape
+			// fault that the check below must still see.
+			if span := excerpt.EndLine - excerpt.StartLine + 1; excerpt.StartLine >= 1 &&
+				excerpt.StartLine <= excerpt.EndLine && span > domain.MaxReviewExcerptLines {
+				excerpt.EndLine = excerpt.StartLine + domain.MaxReviewExcerptLines - 1
+				record(atExcerpt(domain.ReviewGuideTrim{
+					Cap: domain.ReviewGuideCapExcerptLines, Limit: domain.MaxReviewExcerptLines, Found: span,
+				}), kept)
+			}
+			if excerpt.Caption, trim = trimReviewGuideText(
+				domain.ReviewGuideCapCaption, excerpt.Caption, domain.MaxReviewExcerptCaptionRunes); trim != nil {
+				record(atExcerpt(*trim), kept)
+			}
+			if err := validateUnresolvedExcerpt(excerpt); err != nil {
+				return domain.ReviewGuide{}, nil, fmt.Errorf("review guide stop %d: excerpt %d: %w", i, j, err)
+			}
+			if j < domain.MaxReviewStopExcerpts {
+				excerpts = append(excerpts, excerpt)
+			}
+		}
+		stop.Excerpts = excerpts
+		// The excerpts were checked one by one above; this checks the stop's
+		// own title, summary, and attention.
+		check := stop
+		check.Excerpts = nil
+		if err := check.Validate(); err != nil {
+			return domain.ReviewGuide{}, nil, fmt.Errorf("review guide stop %d: %w", i, err)
+		}
+		if keptStop {
+			guide.Stops = append(guide.Stops, stop)
+		}
+	}
+	if n := len(written.Questions); n > domain.MaxReviewGuideQuestions {
+		record(domain.ReviewGuideTrim{
+			Cap: domain.ReviewGuideCapQuestions, Limit: domain.MaxReviewGuideQuestions, Found: n,
+		}, true)
+	}
+	guide.Questions = make([]string, 0, min(len(written.Questions), domain.MaxReviewGuideQuestions))
+	for i, question := range written.Questions {
+		if question == "" {
+			return domain.ReviewGuide{}, nil, fmt.Errorf("review guide question %d is empty: %w",
+				i, domain.ErrInvalidReviewGuide)
+		}
+		kept := i < domain.MaxReviewGuideQuestions
+		cut, trim := trimReviewGuideText(domain.ReviewGuideCapQuestion, question, domain.MaxReviewGuideQuestionRunes)
+		if trim != nil {
+			index := i
+			trim.Question = &index
+			record(*trim, kept)
+		}
+		if kept {
+			guide.Questions = append(guide.Questions, cut)
+		}
+	}
+	if written.Notes != nil {
+		notes, trim := trimReviewGuideText(domain.ReviewGuideCapNotes, *written.Notes, domain.MaxReviewGuideNotesRunes)
+		guide.Notes = &notes
+		if trim != nil {
+			record(*trim, true)
+		}
+	}
+	return guide, trims, nil
+}
+
+// trimReviewGuideText cuts value to limit code points, the last of them an
+// ellipsis, and returns the trim it made, or nil when value fits.
+func trimReviewGuideText(kind domain.ReviewGuideCap, value string, limit int) (string, *domain.ReviewGuideTrim) {
+	n := utf8.RuneCountInString(value)
+	if n <= limit {
+		return value, nil
+	}
+	runes := []rune(value)
+	return string(runes[:limit-1]) + "…", &domain.ReviewGuideTrim{Cap: kind, Limit: limit, Found: n}
+}
+
+// validateUnresolvedExcerpt runs domain validation on an excerpt whose
+// daemon-filled text holds a placeholder, as validateUnresolvedReviewGuide
+// does for the whole guide.
+func validateUnresolvedExcerpt(excerpt domain.ReviewExcerpt) error {
+	placeholder := ""
+	excerpt.Text, excerpt.UnresolvedReason = &placeholder, nil
+	return excerpt.Validate()
 }
 
 // validateUnresolvedReviewGuide runs domain validation on a copy whose
@@ -113,7 +286,8 @@ func validateUnresolvedReviewGuide(guide domain.ReviewGuide) error {
 
 // reviewGuideStrings lists the guide's decoded strings, for the secret scan.
 // The raw-body scan misses a credential spelled with JSON escapes; this is
-// what a reviewer would actually see.
+// what a reviewer would actually see. It is given the guide as written, so
+// it also covers what trimming cuts.
 func reviewGuideStrings(guide domain.ReviewGuide) []string {
 	out := append([]string(nil), guide.Questions...)
 	if guide.Notes != nil {
@@ -128,47 +302,77 @@ func reviewGuideStrings(guide domain.ReviewGuide) []string {
 	return out
 }
 
+// reviewGuideImport is what the reserved review guide entry contributes to an
+// import: the secret findings in its body, the notice a ready item carries
+// when the guide was trimmed or left out, and whether the entry becomes a
+// claim at all. A guide left out yields no claim, so no ready item names it.
+type reviewGuideImport struct {
+	findings []Finding
+	notice   *domain.ReviewGuideNotice
+	omitted  bool
+}
+
 // reviewGuideClaim validates a review guide evidence entry against the
-// launcher's declaration and decodes its body, returning the secret
-// findings. The launcher declares the source with a fixed media type,
-// head-independent binding (it writes the descriptor before any commit
-// exists), and a sensitivity the item may carry inline; an entry that
-// declares anything else was not written by the launcher, so it fails closed.
-func reviewGuideClaim(e export.EvidenceEntry, info blobInfo) ([]Finding, error) {
+// launcher's declaration and decodes its body. The launcher declares the
+// source with a fixed media type, head-independent binding (it writes the
+// descriptor before any commit exists), and a sensitivity the item may carry
+// inline; an entry that declares anything else was not written by the
+// launcher, so it fails closed. A body over MaxReviewGuideBytes cannot be
+// decoded within the read bound, so the guide is left out rather than
+// failing the run; its raw body is still scanned up to maxScan, as a
+// markdown entry's is. The secret scan reads the body and every decoded
+// string before trimming, so text a trim cuts is still scanned.
+func reviewGuideClaim(e export.EvidenceEntry, info blobInfo, maxScan int64) (reviewGuideImport, error) {
 	if e.MediaType != "application/json" ||
 		e.Provenance.HeadBinding != export.EvidenceHeadIndependent ||
 		e.Provenance.SourceHeadSHA != "" ||
 		e.Provenance.SensitivityClass == export.EvidenceSensitivityHigh {
-		return nil, fmt.Errorf("evidence entry %q declares media type %q, head binding %q, sensitivity %q; "+
+		return reviewGuideImport{}, fmt.Errorf("evidence entry %q declares media type %q, head binding %q, sensitivity %q; "+
 			"want the launcher's application/json, head_independent, not high_sensitivity: %w",
 			e.Label, e.MediaType, e.Provenance.HeadBinding, e.Provenance.SensitivityClass, ErrEvidenceInvalid)
 	}
-	if e.Size > MaxReviewGuideBytes {
-		return nil, fmt.Errorf("evidence entry %q is %d bytes, limit %d: %w",
-			e.Label, e.Size, MaxReviewGuideBytes, ErrEvidenceInvalid)
+	if ReviewGuideOmitted(e) {
+		omission := domain.ReviewGuideOmissionFileTooLarge
+		entry := reviewGuideImport{
+			notice:  &domain.ReviewGuideNotice{Omission: &omission, Trims: []domain.ReviewGuideTrim{}},
+			omitted: true,
+		}
+		if e.Size <= maxScan {
+			body, err := readScanBlob(info, e.Digest)
+			if err != nil {
+				return reviewGuideImport{}, fmt.Errorf("read evidence entry %q: %w", e.Label, err)
+			}
+			entry.findings = scanText(e.Label, body)
+		}
+		return entry, nil
 	}
 	body, err := readScanBlob(info, e.Digest)
 	if err != nil {
-		return nil, fmt.Errorf("read evidence entry %q: %w", e.Label, err)
+		return reviewGuideImport{}, fmt.Errorf("read evidence entry %q: %w", e.Label, err)
 	}
-	guide, err := DecodeReviewGuide(body)
+	written, _, trims, err := decodeReviewGuide(body)
 	if err != nil {
-		return nil, fmt.Errorf("evidence entry %q: %w", e.Label, err)
+		return reviewGuideImport{}, fmt.Errorf("evidence entry %q: %w", e.Label, err)
 	}
-	findings := scanText(e.Label, body)
-	if len(findings) > 0 {
-		return findings, nil
+	var entry reviewGuideImport
+	if len(trims) > 0 {
+		entry.notice = &domain.ReviewGuideNotice{Trims: trims}
+	}
+	if findings := scanText(e.Label, body); len(findings) > 0 {
+		entry.findings = findings
+		return entry, nil
 	}
 	// One located finding is enough to reject the import; the raw scan's
 	// line numbers are more useful, so this runs only when it found nothing.
-	for i, s := range reviewGuideStrings(guide) {
+	for i, s := range reviewGuideStrings(written) {
 		if matches := scanText(e.Label, []byte(s)); len(matches) > 0 {
 			match := matches[0]
 			match.Detail = fmt.Sprintf("decoded review-guide string %d", i+1)
-			return []Finding{match}, nil
+			entry.findings = []Finding{match}
+			return entry, nil
 		}
 	}
-	return nil, nil
+	return entry, nil
 }
 
 // checkReviewGuideDigestUnique refuses an import whose guide claim shares its

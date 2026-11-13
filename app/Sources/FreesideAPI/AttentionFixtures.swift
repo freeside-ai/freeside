@@ -403,6 +403,35 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The guide fixture as the daemon stores it after trimming the agent's
+    /// guide to its caps: 13 stops cut to 12 and the first stop's first
+    /// excerpt cut from 116 lines to 80. Mirrors the daemon's
+    /// attention_item_ready_review_guide_trimmed golden notice.
+    public static func readyWithTrimmedReviewGuide() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = readyWithReviewGuide()
+        snapshot.item.id = "item-ready-review-guide-trimmed"
+        snapshot.item.review_guide_notice = .init(
+            value1: .init(
+                omission: nil,
+                trims: [
+                    .init(cap: .stops, limit: 12, found: 13),
+                    .init(cap: .excerpt_lines, stop: 0, excerpt: 0, limit: 80, found: 116),
+                ]))
+        return snapshot
+    }
+
+    /// A ready item whose agent wrote a guide over the 64 KiB read bound:
+    /// the daemon left it out, so the item carries no guide and no guide
+    /// claim, only the notice. Mirrors the daemon's
+    /// attention_item_ready_review_guide_omitted golden.
+    public static func readyWithOmittedReviewGuide() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready-review-guide-omitted"
+        snapshot.item.review_guide_notice = .init(
+            value1: .init(omission: .init(value1: .file_too_large), trims: []))
+        return snapshot
+    }
+
     public static func scopeConflictQuestion() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = fixture(type: .agent_question)
         snapshot.item.id = "item-scope-conflict"
