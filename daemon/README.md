@@ -3481,7 +3481,10 @@ that has it. For a history command the verifier:
   the head. `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and
   `GIT_CONFIG_VALUE_0=*` let git read the repository whatever uid the room
   runs the command as. Recipe argv isn't shell-expanded, so a recipe
-  passes the SHAs through a committed wrapper script.
+  passes the SHAs through a committed wrapper script. Freeside's recipe
+  uses `scripts/verify-range-check.sh <check-script>`, which runs the
+  named script with the base and head SHAs as its two arguments and
+  exits 2 when either variable is missing or empty.
 - **Refuses what it can't give exactly**, before any command runs: a head
   and base with no merge base or more than one, a verified tree holding a
   `.git` path component or an alias of one, and a room that can't pass
@@ -3753,9 +3756,10 @@ env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet l
 `-p=2` halves the compile, vet, and test-package parallelism Go runs on 4
 CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
-slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
-then `bash scripts/check.sh docs`, then `env VACUUM=vacuum bash
-scripts/check.sh api`, then `check.sh scripts` with the same Go limits,
+slows under reclaim. Freeside's `.freeside/verify.json` first runs its two
+history commands (Onboard Freeside), which the offline proof skips, then
+this command, then `bash scripts/check.sh docs`, then `env VACUUM=vacuum
+bash scripts/check.sh api`, then `check.sh scripts` with the same Go limits,
 because `trackercollect` runs `go build`, `test`, and `vet`, then `bash
 scripts/check.sh app generate`, then `bash scripts/check.sh app linux`.
 Measured on 2026-11-10 with this recipe on
@@ -3765,6 +3769,8 @@ each prepared as the proof prepares it:
 
 | Step | Result | Unreclaimable peak | Wall |
 | --- | --- | --- | --- |
+| commit messages | passes | 4 MiB | under 1 s |
+| migration history | passes | 2 MiB | under 1 s |
 | build | passes | 844 MiB | 43 s |
 | test | passes | 1211 MiB | 267 s |
 | vet | passes | 1280 MiB | 83 s |
@@ -3793,6 +3799,18 @@ peak is over the 1536 MiB margin
 `devlog/2026-10-22-1241-proof-memory-bound.md` set, though under the
 room's 2048 MiB; at `d03b0b88` it measured 1323 MiB. That note has the
 decision and the rejected options.
+
+#3121 added the two history commands. The proof skips them, so they were
+measured by hand on 2026-11-12, in the mixed image #3122's run built,
+at load average near 29. Each ran three times in the room's shape (its
+size, no network, its environment, the preparation command first) over
+the workspace and `.git` the verifier writes for a one-commit candidate
+on `7a93761dd`; the table shows the highest peak, and every run finished
+in under 0.1 s. The room's volume shows `/workspace` as owned by
+whichever uid reads it, so git's ownership check never trips there. On a
+copy of that workspace owned by another uid, the image's git 2.47.3
+refused the repository as `dubious ownership` without the verifier's
+`safe.directory` override, and both checks passed with it.
 
 A Swift image for Freeside's `app` package, with the recipe
 `swift build --package-path app --only-use-versions-from-resolved-file
@@ -4151,9 +4169,17 @@ Freeside onboards itself for its whole repository (plan §11, revisions
 these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
-- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs ten
-  commands. Six run in the project image: the four `daemon`, `docs`, `api`,
-  and `scripts` commands sized above, then
+- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
+  twelve commands. Eight run in the project image. The first two are the
+  history commands, `bash scripts/verify-range-check.sh
+  scripts/check-commit-messages.sh` and the same wrapper over
+  `scripts/check-migration-history.sh`, each with `"history": true` (A
+  command can ask for the candidate's git history, above). They come
+  first so a candidate that `required` would refuse on either check
+  fails verification in seconds. They need a daemon at or after #3170,
+  which added the field; an older daemon refuses the whole recipe. The
+  operator approves the new recipe digest before it runs. Then come the
+  four `daemon`, `docs`, `api`, and `scripts` commands sized above, then
   `bash scripts/check.sh app generate` and
   `bash scripts/check.sh app linux`. Four run on the macOS verification
   executor (`macos_host`): `app format`, `app test`,
