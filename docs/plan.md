@@ -5689,6 +5689,15 @@ under the same check. That covers a feedback return, a remediation
 continuation, and a head someone else pushed. A target-branch advance alone
 starts nothing: no check or review reruns, and the run does not re-enter.
 
+A pull request the lander hands back is reworked on the current target tip.
+Freeside adopts its current head, even one it did not push, only while the
+pull request carries the configured hand-back label and an admitted account
+has commented on that head, and only to verify and review that head in full
+before any remediation or publication. The adopted head is then handed off on
+the current tip as any head is. Freeside removes the label when the pull
+request is ready again and leaves it when the cycle ends on a person; the
+owner's earlier approval does not carry over to the reworked head.
+
 **Between handoff and merge, nothing in Freeside checks the PR against the
 latest target branch.** Only the merge-time checks the target repository
 enforces, such as required checks on an up-to-date branch, cover that interval,
