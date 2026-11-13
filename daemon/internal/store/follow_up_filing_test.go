@@ -392,31 +392,131 @@ func TestFollowUpFilingReconstructionReGates(t *testing.T) {
 			}
 			forgedInput := fx.input(fx.deferredSource())
 			tc.mutate(fx, &forgedInput)
-			forged := instance
-			forged.Proposal = fx.proposal(t, forgedInput)
-			body, err := json.Marshal(forged)
+			reopened := replaceFilingRow(t, path, st, instance, fx.proposal(t, forgedInput))
+			if _, err := getFiling(ctx, reopened, instance.ID); !errors.Is(err, tc.want) {
+				t.Fatalf("reconstruction error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// replaceFilingRow closes st, overwrites the admitted instance's stored
+// proposal with proposal under its own content address, and reopens the
+// store, so only the read's re-gate stands between the row and a caller.
+func replaceFilingRow(
+	t *testing.T, path string, st *store.Store, instance domain.ProposalInstance, proposal domain.EffectProposal,
+) *store.Store {
+	t.Helper()
+	forged := instance
+	forged.Proposal = proposal
+	body, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := raw.Exec(`UPDATE effect_proposal_instances SET content_digest = ?, body = ?
+		WHERE instance_id = ?`, forged.Proposal.Digest, string(body), instance.ID)
+	if err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		t.Fatalf("tamper changed %d rows, %v", changed, err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return storetest.Open(t, path, store.Options{})
+}
+
+// forgeFilingKind rewrites a filing proposal's parameters past the
+// constructor, which always derives the labels from the kind, and gives it a
+// fresh content address, so the forgery is self-consistent and only the gate
+// can refuse it.
+func forgeFilingKind(
+	t *testing.T, proposal domain.EffectProposal, mutate func(*domain.FollowUpFilingParameters),
+) domain.EffectProposal {
+	t.Helper()
+	filing := *proposal.FilingProposal
+	filing.Labels = slices.Clone(filing.Labels)
+	mutate(&filing)
+	proposal.FilingProposal = &filing
+	digest, err := proposal.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal.Digest = digest
+	return proposal
+}
+
+// TestFollowUpFilingGateDerivesTheKindLabel shows the one label a filing may
+// carry beyond its policy comes from the stored kind through the enum's
+// fixed table, on admission and on every read: a kinded filing admits and
+// reads back, and a stored label set with an extra or missing kind label, or
+// a stored kind outside the enum, is refused at both.
+func TestFollowUpFilingGateDerivesTheKindLabel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	kinded := func(fx filingFixture) domain.FollowUpFilingInput {
+		input := fx.input(fx.deferredSource())
+		input.Kind = domain.FollowUpFilingKindFix
+		return input
+	}
+	t.Run("admits and reads back", func(t *testing.T) {
+		t.Parallel()
+		st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
+		fx := seedFiling(t, ctx, st, "project-filing")
+		instance, err := allocateFiling(ctx, st, fx.proposal(t, kinded(fx)), "event-kind")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := getFiling(ctx, st, instance.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filing := got.Proposal.FilingProposal; filing.Kind != domain.FollowUpFilingKindFix ||
+			!slices.Equal(filing.Labels, []string{"deferral", "kind:fix", "lane:spine"}) {
+			t.Fatalf("filing kind, labels = %q, %v", filing.Kind, filing.Labels)
+		}
+	})
+	cases := []struct {
+		name   string
+		mutate func(*domain.FollowUpFilingParameters)
+		want   error
+	}{
+		{"an extra kind label", func(p *domain.FollowUpFilingParameters) {
+			p.Labels = []string{"deferral", "kind:chore", "kind:fix", "lane:spine"}
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"the kind label missing", func(p *domain.FollowUpFilingParameters) {
+			p.Labels = []string{"deferral", "lane:spine"}
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"a kind label with no kind", func(p *domain.FollowUpFilingParameters) {
+			p.Kind = ""
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"a kind outside the enum", func(p *domain.FollowUpFilingParameters) {
+			p.Kind, p.Labels = "contract", []string{"deferral", "kind:contract", "lane:spine"}
+		}, domain.ErrEffectProposalInconsistent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "store.db")
+			st := storetest.Open(t, path, store.Options{})
+			fx := seedFiling(t, ctx, st, "project-filing")
+			forged := forgeFilingKind(t, fx.proposal(t, kinded(fx)), tc.mutate)
+			if _, err := allocateFiling(ctx, st, forged, "event-forged"); !errors.Is(err, tc.want) {
+				t.Fatalf("admission error = %v, want %v", err, tc.want)
+			}
+			instance, err := allocateFiling(ctx, st, fx.proposal(t, kinded(fx)), "event-kind")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := st.Close(); err != nil {
-				t.Fatal(err)
-			}
-			raw, err := sql.Open("sqlite", path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result, err := raw.Exec(`UPDATE effect_proposal_instances SET content_digest = ?, body = ?
-				WHERE instance_id = ?`, forged.Proposal.Digest, string(body), instance.ID)
-			if err != nil {
-				t.Fatalf("tamper: %v", err)
-			}
-			if changed, err := result.RowsAffected(); err != nil || changed != 1 {
-				t.Fatalf("tamper changed %d rows, %v", changed, err)
-			}
-			if err := raw.Close(); err != nil {
-				t.Fatal(err)
-			}
-			reopened := storetest.Open(t, path, store.Options{})
+			reopened := replaceFilingRow(t, path, st, instance, forged)
 			if _, err := getFiling(ctx, reopened, instance.ID); !errors.Is(err, tc.want) {
 				t.Fatalf("reconstruction error = %v, want %v", err, tc.want)
 			}

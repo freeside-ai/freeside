@@ -51,12 +51,16 @@ func TestFollowUpFilingGoldensAndRoundTrip(t *testing.T) {
 	// set renders [] and an absent milestone renders null.
 	separate := filingInput(domain.FollowUpSourceSeparateWorkVerdict)
 	separate.Target.Labels, separate.Target.Milestone = nil, ""
+	// The authored case pins the kind and its label beside the policy's.
+	kinded := filingInput(domain.FollowUpSourceDeferredDisposition)
+	kinded.Kind = domain.FollowUpFilingKindFix
 	cases := []struct {
 		name  string
 		input domain.FollowUpFilingInput
 	}{
 		{"effect_proposal_filing_deferred", filingInput(domain.FollowUpSourceDeferredDisposition)},
 		{"effect_proposal_filing_separate_work", separate},
+		{"effect_proposal_filing_kind", kinded},
 	}
 	seen := map[domain.Digest]bool{}
 	for _, tc := range cases {
@@ -159,6 +163,9 @@ func TestFollowUpFilingConstructorRejectsUnscreenedText(t *testing.T) {
 		{"target labels unsorted", func(in *domain.FollowUpFilingInput) {
 			in.Target.Labels = []string{"lane:spine", "deferral"}
 		}, domain.ErrFollowUpFilingTargetInconsistent},
+		{"kind outside the enum", func(in *domain.FollowUpFilingInput) {
+			in.Kind = "contract"
+		}, domain.ErrEffectProposalInconsistent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,6 +215,88 @@ func TestGateFollowUpFilingRejectsDifferingTarget(t *testing.T) {
 	}
 	if err := domain.GateFollowUpFiling(verifiedClosureProposal(t), filingTarget()); !errors.Is(err, domain.ErrEffectProposalInconsistent) {
 		t.Fatalf("closure proposal through the filing gate = %v", err)
+	}
+}
+
+// Each kind maps to one distinct kind:* label that is a valid label name;
+// kind:contract stays the planner's call and is no member.
+func TestFollowUpFilingKindLabels(t *testing.T) {
+	seen := map[string]bool{}
+	for _, kind := range domain.AllFollowUpFilingKinds {
+		label := kind.Label()
+		if label != "kind:"+string(kind) || seen[label] {
+			t.Fatalf("label for %q = %q", kind, label)
+		}
+		seen[label] = true
+		input := filingInput(domain.FollowUpSourceDeferredDisposition)
+		input.Kind = kind
+		filing := filingProposal(t, input).FilingProposal
+		want := []string{"deferral", label, "lane:spine"}
+		if filing.Kind != kind || strings.Join(filing.Labels, ",") != strings.Join(want, ",") {
+			t.Fatalf("filing kind, labels = %q, %v, want %q, %v", filing.Kind, filing.Labels, kind, want)
+		}
+	}
+	for _, outside := range []domain.FollowUpFilingKind{"", "contract", "Fix"} {
+		if label := outside.Label(); label != "" {
+			t.Fatalf("label for %q = %q, want none", outside, label)
+		}
+	}
+	// A policy that already names the kind's label yields one copy of it.
+	input := filingInput(domain.FollowUpSourceDeferredDisposition)
+	input.Target.Labels = []string{"deferral", "kind:fix"}
+	input.Kind = domain.FollowUpFilingKindFix
+	if labels := filingProposal(t, input).FilingProposal.Labels; strings.Join(labels, ",") != "deferral,kind:fix" {
+		t.Fatalf("labels = %v", labels)
+	}
+}
+
+// Tamper: the gate re-derives the label set from the target and the stored
+// kind, so a stored label the enum's table did not yield, a kind label with
+// no kind, a kind with its label dropped, or a kind outside the enum is
+// refused, and a filing with no kind gates on the policy labels alone.
+func TestGateFollowUpFilingDerivesTheKindLabel(t *testing.T) {
+	input := filingInput(domain.FollowUpSourceDeferredDisposition)
+	input.Kind = domain.FollowUpFilingKindFix
+	proposal := filingProposal(t, input)
+	if err := domain.GateFollowUpFiling(proposal, filingTarget()); err != nil {
+		t.Fatalf("gate on the deriving target: %v", err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*domain.FollowUpFilingParameters)
+		want   error
+	}{
+		{"another kind under the same labels", func(p *domain.FollowUpFilingParameters) {
+			p.Kind = domain.FollowUpFilingKindChore
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"kind dropped, its label kept", func(p *domain.FollowUpFilingParameters) {
+			p.Kind = ""
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"kind kept, its label dropped", func(p *domain.FollowUpFilingParameters) {
+			p.Labels = []string{"deferral", "lane:spine"}
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"a label beside the kind's", func(p *domain.FollowUpFilingParameters) {
+			p.Labels = []string{"deferral", "kind:fix", "lane:spine", "priority:critical"}
+		}, domain.ErrFollowUpFilingTargetMismatch},
+		{"kind:contract", func(p *domain.FollowUpFilingParameters) {
+			p.Kind, p.Labels = "contract", []string{"deferral", "kind:contract", "lane:spine"}
+		}, domain.ErrEffectProposalInconsistent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tampered := proposal
+			filing := *proposal.FilingProposal
+			filing.Labels = append([]string{}, filing.Labels...)
+			tc.mutate(&filing)
+			tampered.FilingProposal = &filing
+			if err := domain.GateFollowUpFiling(tampered, filingTarget()); !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	plain := filingProposal(t, filingInput(domain.FollowUpSourceDeferredDisposition))
+	if plain.FilingProposal.Kind != "" || domain.GateFollowUpFiling(plain, filingTarget()) != nil {
+		t.Fatalf("a filing with no kind = %#v", plain.FilingProposal)
 	}
 }
 
