@@ -1,0 +1,36 @@
+Title: Bound the sync client's retries
+Label: kind:fix
+
+### Objective
+
+Not drafted: the authored text for this section did not pass the issue-text screen. Read the finding under Origin below.
+
+### Non-goals
+
+Changing the push protocol or its backoff curve.
+
+### Affected interfaces/contracts
+
+none
+
+### Acceptance
+
+- A push against a dead remote stops after the retry bound.
+- A push that succeeds on a retry still completes.
+
+### Scope / declared paths
+
+daemon/internal/sync/
+
+### Dependencies
+
+starts-after #1234: set aside during the review of #1234; the planner confirms the relationship
+
+### Origin
+
+Retry budget is unbounded
+The client retries a failed push forever.
+
+Location: daemon/internal/sync/push.go:40-52
+
+Adjudication rationale: adjacent to the goal: the unit changes the push path, not its retries

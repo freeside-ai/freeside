@@ -323,8 +323,9 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 		}
 		return productionTaskOutcome{}, domain.ErrParentKeyMismatch
 	}
-	if err := w.searchFollowUpDuplicates(ctx, source.ProjectID, artifact, routes,
-		domain.FollowUpSourceDeferredDisposition); err != nil {
+	drafts, err := w.prepareFollowUpFilings(ctx, source.ProjectID, artifact, routes,
+		domain.FollowUpSourceDeferredDisposition)
+	if err != nil {
 		return productionTaskOutcome{}, err
 	}
 	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -337,7 +338,7 @@ func (w *productionPublicationWorkflow) startPublicationContinuation(ctx context
 		// An accepted separate-work route was proposed when its decision
 		// landed; only the deferred rows are new here.
 		return w.proposeFollowUpFilings(ctx, tx, source.ProjectID, artifact, routes,
-			domain.FollowUpSourceDeferredDisposition)
+			domain.FollowUpSourceDeferredDisposition, drafts)
 	})
 	if errors.Is(err, store.ErrPublicationCompleted) {
 		return w.refuseCompletedPublicationContinuation(ctx, source)

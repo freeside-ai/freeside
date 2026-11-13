@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationtext"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -61,6 +63,13 @@ const (
 	// adjudicator judged.
 	externalFollowUpFilingBodyQuoteLimit = externalFindingModelTextLimit
 
+	// authoredFollowUpFilingFallbackSection replaces an authored body field
+	// the screen refuses or that would open a block outside its section. It
+	// holds no agent or repository text; the Origin section always carries the
+	// composed record of the finding.
+	authoredFollowUpFilingFallbackSection = "Not drafted: the authored text for this section did not pass " +
+		"the issue-text screen. Read the finding under Origin below."
+
 	followUpFilingBatchVersion = "freeside.follow-up-filing.batch/v1"
 )
 
@@ -104,13 +113,154 @@ func followUpFilingText(
 		domain.IssueTextRulesetGitHubIssue1, body, domain.MaxFollowUpFilingBodyBytes) != nil {
 		body = fallbackBody
 	}
+	return passedFollowUpFilingText(title), passedFollowUpFilingText(body)
+}
 
-	passed := func(text string) domain.ScreenedIssueText {
-		return domain.ScreenedIssueText{
-			Text: text, Ruleset: domain.IssueTextRulesetGitHubIssue1, Verdict: domain.ScreeningVerdictPassed,
+// passedFollowUpFilingText records text the caller screened under
+// github-issue/1 and passed. The store's gate screens it again.
+func passedFollowUpFilingText(text string) domain.ScreenedIssueText {
+	return domain.ScreenedIssueText{
+		Text: text, Ruleset: domain.IssueTextRulesetGitHubIssue1, Verdict: domain.ScreeningVerdictPassed,
+	}
+}
+
+// authoredFollowUpFilingText renders a draft from the follow-up authoring
+// site into a filing's title and body in the work-unit form's shape, and
+// returns the draft's kind (plan §5.17). Nothing here reaches the filing
+// target: the kind only picks a label from the enum's fixed table.
+//
+// Each authored field is screened on its own under github-issue/1 with its
+// own cap, and a refused or blank field takes its fixed fallback while the
+// others stand: the title falls back to the composed title, a body field to
+// authoredFollowUpFilingFallbackSection. A body field must also stay in its
+// section, so one that opens a heading, a code fence, or an HTML block, or
+// holds an HTML comment, is refused too: otherwise it could forge a later
+// section, such as Dependencies, or swallow the sections after it. The
+// Dependencies section is lineage-derived and never authored. The Origin
+// section, last so nothing follows it, carries the composed body
+// (followUpFilingText) with its headings escaped, cut to its cap.
+//
+// The fields' caps sum below domain.MaxFollowUpFilingBodyBytes, so the
+// rendered body never exceeds it. It is screened whole as a backstop, and a
+// body the whole screen refuses yields the composed title and body and no
+// kind, exactly as with no draft.
+func authoredFollowUpFilingText(
+	finding domain.Finding, entry domain.FindingAdjudicationEntry,
+	draft inference.FollowUpFilingDraft, boundIssue int,
+) (domain.ScreenedIssueText, domain.ScreenedIssueText, domain.FollowUpFilingKind) {
+	composedTitle, composedBody := followUpFilingText(finding, entry)
+	title := composedTitle
+	if strings.TrimSpace(draft.Title) != "" && publicationtext.ScreenIssueTitle(
+		domain.IssueTextRulesetGitHubIssue1, draft.Title, domain.MaxFollowUpFilingTitleBytes) == nil {
+		title = passedFollowUpFilingText(draft.Title)
+	}
+	body := renderAuthoredFollowUpFilingBody(draft, boundIssue, composedBody.Text)
+	if publicationtext.ScreenIssueBody(
+		domain.IssueTextRulesetGitHubIssue1, body, domain.MaxFollowUpFilingBodyBytes) != nil {
+		return composedTitle, composedBody, ""
+	}
+	return title, passedFollowUpFilingText(body), draft.Kind
+}
+
+// renderAuthoredFollowUpFilingBody lays the sections out under the form's
+// headings, each heading and its text separated by a blank line.
+func renderAuthoredFollowUpFilingBody(draft inference.FollowUpFilingDraft, boundIssue int, origin string) string {
+	sections := []struct{ heading, text string }{
+		{"Objective", authoredFollowUpFilingSection(draft.Objective, domain.MaxFollowUpFilingObjectiveBytes)},
+		{"Non-goals", authoredFollowUpFilingSection(draft.NonGoals, domain.MaxFollowUpFilingNonGoalsBytes)},
+		{"Affected interfaces/contracts", authoredFollowUpFilingSection(
+			draft.AffectedContracts, domain.MaxFollowUpFilingAffectedContractsBytes)},
+		{"Acceptance", authoredFollowUpFilingSection(draft.Acceptance, domain.MaxFollowUpFilingAcceptanceBytes)},
+		{"Scope / declared paths", authoredFollowUpFilingSection(draft.Scope, domain.MaxFollowUpFilingScopeBytes)},
+		{"Dependencies", followUpFilingDependencies(boundIssue)},
+		{"Origin", strings.TrimSpace(boundValidText(
+			escapeFollowUpFilingHeadings(origin), domain.MaxFollowUpFilingOriginBytes))},
+	}
+	parts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		parts = append(parts, "### "+section.heading+"\n\n"+section.text)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// authoredFollowUpFilingSection is one authored body field as it renders, or
+// the fixed fallback when the field is blank, refused by the screen under
+// its own cap, or would open a block outside its section.
+func authoredFollowUpFilingSection(text string, maxBytes int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || opensFollowUpFilingBlock(text) || publicationtext.ScreenIssueBody(
+		domain.IssueTextRulesetGitHubIssue1, text, maxBytes) != nil {
+		return authoredFollowUpFilingFallbackSection
+	}
+	return text
+}
+
+// opensFollowUpFilingBlock reports whether text has a line that opens an ATX
+// heading, underlines the line above it into a setext heading, or opens a
+// fenced code block, or holds anything that starts an HTML tag, comment, or
+// declaration. GitHub renders a heading as a section of its own, and a fence
+// or an open HTML element can run past the field's end and draw the sections
+// after it into code, a comment, or the element. Refusing every tag-like "<"
+// also refuses prose such as "Result<T>", which then takes the fallback; the
+// instruction asks the model for plain prose.
+func opensFollowUpFilingBlock(text string) bool {
+	if followUpFilingHTMLRe.MatchString(text) {
+		return true
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if atxHeadingRe.MatchString(line) || setextUnderlineRe.MatchString(line) ||
+			publicationtext.FenceOpener(line) != "" {
+			return true
 		}
 	}
-	return passed(title), passed(body)
+	return false
+}
+
+var (
+	// followUpFilingHTMLRe matches what can open raw HTML in CommonMark: a
+	// start or end tag, a comment, a declaration, or a processing instruction.
+	followUpFilingHTMLRe = regexp.MustCompile(`<[A-Za-z/!?]`)
+	// setextUnderlineRe matches a setext heading underline.
+	setextUnderlineRe = regexp.MustCompile(`^ {0,3}(=+|-+)[ \t]*$`)
+)
+
+// escapeFollowUpFilingHeadings escapes the first # of every line outside a
+// fenced code block that would open an ATX heading, so the composed text
+// under Origin renders the line literally and cannot start a section of its
+// own. Origin is the last section, so a fence it leaves open draws nothing
+// in after it.
+func escapeFollowUpFilingHeadings(text string) string {
+	lines := strings.Split(text, "\n")
+	var fence string // nonempty while inside a fenced code block
+	for i, line := range lines {
+		if fence != "" {
+			if publicationtext.ClosesFence(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if opener := publicationtext.FenceOpener(line); opener != "" {
+			fence = opener
+			continue
+		}
+		if atxHeadingRe.MatchString(line) {
+			hash := strings.IndexByte(line, '#')
+			lines[i] = line[:hash] + `\` + line[hash:]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// followUpFilingDependencies is the Dependencies section's one line, derived
+// from the run's lineage and never authored: the issue the run is bound to,
+// typed starts-after because the follow-up was set aside from its work, or
+// none. The planner confirms or replaces it when it completes the issue.
+func followUpFilingDependencies(boundIssue int) string {
+	if boundIssue <= 0 {
+		return "none"
+	}
+	return fmt.Sprintf("starts-after #%d: set aside during the review of #%d; the planner confirms the relationship",
+		boundIssue, boundIssue)
 }
 
 // followUpFilingDraft drafts the text for a finding of Freeside's own. The
@@ -242,14 +392,16 @@ func followUpFilingEntries(
 }
 
 // followUpFilingPlan is what one pass still has to propose: the selected
-// entries with no instance yet, the subject and target they file under, and
-// the issue the run is bound to (zero when it has none).
+// entries with no instance yet, the subject and target they file under, the
+// issue the run is bound to (zero when it has none), and the paths its
+// work-unit declaration names.
 type followUpFilingPlan struct {
-	pending    []followUpFilingEntry
-	handle     domain.OpaqueSubjectHandle
-	policy     domain.ResolvedPolicy
-	target     domain.FollowUpFilingTarget
-	boundIssue int
+	pending       []followUpFilingEntry
+	handle        domain.OpaqueSubjectHandle
+	policy        domain.ResolvedPolicy
+	target        domain.FollowUpFilingTarget
+	boundIssue    int
+	declaredPaths []string
 }
 
 // planFollowUpFilings reads what is left to propose. An entry whose instance
@@ -302,7 +454,7 @@ func planFollowUpFilings(
 	if err != nil {
 		return followUpFilingPlan{}, err
 	}
-	plan.policy = policy
+	plan.policy, plan.declaredPaths = policy, declaration.DeclaredPaths
 	if declaration.BoundIssue != nil {
 		plan.boundIssue = *declaration.BoundIssue
 	}
@@ -312,10 +464,11 @@ func planFollowUpFilings(
 
 // proposeFollowUpFilings writes, in the caller's transaction, one filing
 // proposal and its open card for each entry the source kind selects whose
-// duplicate search answered "new"; the caller runs searchFollowUpDuplicates
-// first, outside the transaction. A deferred source needs its disposition row
-// written first in the same transaction: admission checks that the finding
-// is effectively deferred under this artifact.
+// duplicate search answered "new"; the caller runs prepareFollowUpFilings
+// first, outside the transaction, and passes the drafts it returned. A
+// deferred source needs its disposition row written first in the same
+// transaction: admission checks that the finding is effectively deferred
+// under this artifact.
 //
 // It never fails the caller for a refusal that would repeat on every retry.
 // A propagated error stops the publication lane, so a run that can carry no
@@ -327,6 +480,7 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 	artifact domain.FindingAdjudication,
 	routes map[domain.FindingID]domain.AdjudicationRoute,
 	kind domain.FollowUpSourceKind,
+	drafts followUpFilingDrafts,
 ) error {
 	entries := followUpFilingEntries(artifact, routes, kind)
 	if len(entries) == 0 {
@@ -342,7 +496,7 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 	if plan.pending, err = searchedNewFollowUpFilings(ctx, &tx.ReadTx, artifact, plan.pending); err != nil {
 		return err
 	}
-	return w.allocateFollowUpFilings(ctx, tx, artifact, kind, plan)
+	return w.allocateFollowUpFilings(ctx, tx, artifact, kind, plan, drafts)
 }
 
 // proposeSeparateWorkFilings proposes for the accepted park_separate_work
@@ -366,7 +520,8 @@ func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 	if len(entries) == 0 {
 		return nil
 	}
-	if err := w.searchFollowUpDuplicates(ctx, task.ProjectID, artifact, routes, kind); err != nil {
+	drafts, err := w.prepareFollowUpFilings(ctx, task.ProjectID, artifact, routes, kind)
+	if err != nil {
 		return err
 	}
 	settled := false
@@ -391,18 +546,21 @@ func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 		return err
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return w.proposeFollowUpFilings(ctx, tx, task.ProjectID, artifact, routes, kind)
+		return w.proposeFollowUpFilings(ctx, tx, task.ProjectID, artifact, routes, kind, drafts)
 	})
 }
 
 // allocateFollowUpFilings allocates the planned instances and opens a card
-// for each one this pass inserted, so a decided card is never reopened.
+// for each one this pass inserted, so a decided card is never reopened. An
+// entry with a draft takes the authored text and kind; any other takes the
+// composed text and no kind.
 func (w *productionPublicationWorkflow) allocateFollowUpFilings(
 	ctx context.Context,
 	tx *store.WriteTx,
 	artifact domain.FindingAdjudication,
 	kind domain.FollowUpSourceKind,
 	plan followUpFilingPlan,
+	drafts followUpFilingDrafts,
 ) error {
 	batchID := followUpFilingBatchID(artifact.Digest)
 	now := w.attentionCreatedAt()
@@ -412,12 +570,21 @@ func (w *productionPublicationWorkflow) allocateFollowUpFilings(
 			return err
 		}
 		title, body := followUpFilingText(finding, candidate.entry)
+		var workKind domain.FollowUpFilingKind
+		if draft, ok := drafts[candidate.entry.FindingID]; ok {
+			title, body, workKind = authoredFollowUpFilingText(finding, candidate.entry, draft, plan.boundIssue)
+		}
+		if len(plan.target.Labels) >= domain.MaxFollowUpFilingLabels {
+			// Policy already fills the label bound, and the kind's label would
+			// push the set past it and refuse the proposal on every pass.
+			workKind = ""
+		}
 		proposal, err := domain.NewEffectProposal(domain.EffectFollowUpFiling, domain.FollowUpFilingInput{
 			SubjectHandle: plan.handle, Target: plan.target,
 			Source: domain.FollowUpFilingSource{
 				FindingID: candidate.entry.FindingID, AdjudicationDigest: artifact.Digest, Kind: kind,
 			},
-			Title: title, Body: body,
+			Title: title, Body: body, Kind: workKind,
 		}, plan.policy)
 		if err != nil {
 			return err

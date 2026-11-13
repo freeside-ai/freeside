@@ -1,0 +1,9 @@
+Title: Retry budget is unbounded
+Label: none
+
+Retry budget is unbounded
+The client retries a failed push forever.
+
+Location: daemon/internal/sync/push.go:40-52
+
+Adjudication rationale: adjacent to the goal: the unit changes the push path, not its retries

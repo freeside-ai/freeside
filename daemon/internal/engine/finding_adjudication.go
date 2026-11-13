@@ -1935,10 +1935,12 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 	}
 
-	// Deferred findings are searched for duplicates before the write that
-	// proposes their filings: the search calls GitHub and a model.
-	if err := w.searchFollowUpDuplicates(ctx, task.ProjectID, artifact, routes,
-		domain.FollowUpSourceDeferredDisposition); err != nil {
+	// Deferred findings are searched for duplicates, and the new ones
+	// drafted, before the write that proposes their filings: both call a
+	// model, and the search calls GitHub.
+	drafts, err := w.prepareFollowUpFilings(ctx, task.ProjectID, artifact, routes,
+		domain.FollowUpSourceDeferredDisposition)
+	if err != nil {
 		return productionReviewPending, err
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -1958,7 +1960,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				return err
 			}
 		}
-		return w.persistUnresolvedFindingRoutes(ctx, tx, task.ProjectID, artifact, routes, dispositionAt)
+		return w.persistUnresolvedFindingRoutes(ctx, tx, task.ProjectID, artifact, routes, dispositionAt, drafts)
 	}); err != nil {
 		return productionReviewPending, err
 	}

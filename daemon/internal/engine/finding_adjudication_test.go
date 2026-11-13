@@ -273,6 +273,7 @@ func newFindingAdjudicationFixtureWithOptions(
 		Sites: []inference.Site{
 			inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
 			inference.DriftAuditorSite(budget), inference.DuplicateSearchSite(budget),
+			inference.FollowUpFilingAuthorSite(budget),
 		},
 		Advisory: advisoryStore, Now: func() time.Time { return now },
 	})

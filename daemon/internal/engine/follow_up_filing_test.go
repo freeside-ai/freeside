@@ -437,7 +437,7 @@ func TestFollowUpFilingSkipsAStaleSource(t *testing.T) {
 	routes := map[domain.FindingID]domain.AdjudicationRoute{f.finding.ID: domain.RouteDefer}
 	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
 		return f.workflow.proposeFollowUpFilings(f.ctx, tx, f.task.ProjectID, artifact, routes,
-			domain.FollowUpSourceDeferredDisposition)
+			domain.FollowUpSourceDeferredDisposition, nil)
 	}); err != nil {
 		t.Fatalf("propose over a stale source: %v", err)
 	}
