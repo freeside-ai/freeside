@@ -4355,9 +4355,19 @@ composition manifest.
 `codex_cli`, so a settings file written before it keeps its revision.
 `claude_code` adopts a Claude reviewer (Select Agents Through The Lineup) and
 requires `review.auth_mode` `setup_token`, with `review.auth_snapshot` naming
-the review identity's setup token. The deputy records the Codex review
-identity itself but not a Claude one: enroll `agent_tree.review_auth_identity`
-with `auth add -client claude_code` before the first run.
+the review identity's setup token.
+
+The reviewer's identity rule depends on the harness. A Codex reviewer's
+`agent_tree.review_auth_identity` must differ from `agent_tree.auth_identity`,
+since a Codex identity can't be a Claude writer's; the deputy records it
+itself. A Claude reviewer may share the writer's identity, and then
+`agent_tree.review_cost_owner` must equal `agent_tree.cost_owner`. The deputy
+records the shared identity as the writer, so it needs no `auth add`, and
+`review.auth_snapshot` holds a setup token for `agent_tree.claude_account`;
+the daemon checks the token's shape, not its account. A Claude reviewer on its
+own identity is not recorded by the deputy: enroll
+`agent_tree.review_auth_identity` with `auth add -client claude_code` before
+the first run.
 
 `agent_tree.second_writer` may be absent too, with the same effect on the
 revision. When present it is an object whose four keys are all required:

@@ -133,6 +133,16 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"same identity twice": {func(s map[string]any) {
 			s["agent_tree"].(map[string]any)["review_auth_identity"] = "claude-1"
 		}, "agent_tree.review_auth_identity must differ"},
+		"same identity twice with a Codex reviewer": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["review_harness"] = "codex_cli"
+			s["agent_tree"].(map[string]any)["review_auth_identity"] = "claude-1"
+		}, "agent_tree.review_auth_identity must differ"},
+		"shared Claude reviewer identity with another cost owner": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["review_harness"] = "claude_code"
+			s["agent_tree"].(map[string]any)["review_auth_identity"] = "claude-1"
+			s["agent_tree"].(map[string]any)["review_cost_owner"] = "someone-else"
+			s["review"].(map[string]any)["auth_mode"] = "setup_token"
+		}, "agent_tree.review_cost_owner must equal agent_tree.cost_owner"},
 		"bad auth mode": {func(s map[string]any) {
 			s["review"].(map[string]any)["auth_mode"] = "oauth"
 		}, "review.auth_mode"},
@@ -381,19 +391,27 @@ func TestLoadDeputySettingsRefusesWrongModeAndDuplicateKeys(t *testing.T) {
 func TestLoadDeputySettingsReviewHarness(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		harness, mode string
-		want          domain.HarnessClientKind
-		storeRoot     bool
+		harness, mode  string
+		want           domain.HarnessClientKind
+		storeRoot      bool
+		sharedIdentity bool
 	}{
-		"absent":      {"", "subscription", domain.HarnessClientCodexCLI, true},
-		"codex_cli":   {"codex_cli", "subscription", domain.HarnessClientCodexCLI, true},
-		"claude_code": {"claude_code", "setup_token", domain.HarnessClientClaudeCode, false},
+		"absent":      {"", "subscription", domain.HarnessClientCodexCLI, true, false},
+		"codex_cli":   {"codex_cli", "subscription", domain.HarnessClientCodexCLI, true, false},
+		"claude_code": {"claude_code", "setup_token", domain.HarnessClientClaudeCode, false, false},
+		// The fixture's cost owners match, so the shared identity loads.
+		"claude_code on the writer's identity": {
+			"claude_code", "setup_token", domain.HarnessClientClaudeCode, false, true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			settings := deputySettingsFixture(t)
 			if tc.harness != "" {
 				settings["agent_tree"].(map[string]any)["review_harness"] = tc.harness
+			}
+			if tc.sharedIdentity {
+				settings["agent_tree"].(map[string]any)["review_auth_identity"] = "claude-1"
 			}
 			settings["review"].(map[string]any)["auth_mode"] = tc.mode
 			path, _ := writeDeputySettings(t, settings, 0o600)
