@@ -479,3 +479,50 @@ func TestCachedTokenSourceValidation(t *testing.T) {
 		t.Error("empty repo accepted, want error")
 	}
 }
+
+// TestHandBackLabelTokenSourceMintsOnlyLabelRemoval: the label remover's
+// token carries pull_requests:write and metadata:read and nothing else; any
+// other grant is refused before it is cached or audited.
+func TestHandBackLabelTokenSourceMintsOnlyLabelRemoval(t *testing.T) {
+	t.Parallel()
+	want := publish.Permissions{PullRequests: "write", Metadata: "read"}
+	if publish.HandBackLabelPermissions != want {
+		t.Fatalf("HandBackLabelPermissions = %+v, want %+v", publish.HandBackLabelPermissions, want)
+	}
+	for name, scopes := range map[string]map[string]string{
+		"exact":             {"pull_requests": "write", "metadata": "read"},
+		"read only":         {"pull_requests": "read", "metadata": "read"},
+		"publication scope": {"pull_requests": "write", "metadata": "read", "contents": "write"},
+		"issues scope":      {"pull_requests": "write", "metadata": "read", "issues": "write"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var requested map[string]string
+			srv := newMintServer(t, func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Permissions map[string]string `json:"permissions"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				requested = request.Permissions
+				writeFilingTokenResponse(t, w, scopes)
+			})
+			defer srv.Close()
+			recorder := &captureRecorder{}
+			m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, recorder, conformantTrust(t), fixedNow)
+			token, err := publish.NewHandBackLabelTokenSource(m, fixedNow).Token(context.Background(), testTrustRepo)
+			if len(requested) != 2 || requested["pull_requests"] != "write" || requested["metadata"] != "read" {
+				t.Errorf("mint request permissions = %v", requested)
+			}
+			if name == "exact" {
+				if err != nil || token.Permissions != want || len(recorder.records) != 1 {
+					t.Fatalf("exact grant: permissions %+v, audits %d, err %v", token.Permissions, len(recorder.records), err)
+				}
+				return
+			}
+			if !errors.Is(err, publish.ErrGrantMismatch) || token.Token.Reveal() != "" || len(recorder.records) != 0 {
+				t.Fatal("a different grant returned a token, lacked ErrGrantMismatch, or reached the audit")
+			}
+		})
+	}
+}

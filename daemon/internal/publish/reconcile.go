@@ -141,7 +141,11 @@ type PullObservation struct {
 	BaseRepoID     int64
 	Merged         bool
 	MergeCommitSHA string
-	NotModified    bool
+	// Labels are the pull request's label names. A label change moves the
+	// pull request's ETag like any other field, so a 304 carries the cached
+	// set unchanged.
+	Labels      []string
+	NotModified bool
 }
 
 // IssueObservation is the reconciled state of one issue; see
@@ -310,6 +314,7 @@ func (r *Reconciler) ReconcilePull(ctx context.Context, repo string, number int)
 		BaseRepoID:     read.PR.BaseRepoID,
 		Merged:         read.PR.Merged,
 		MergeCommitSHA: read.PR.MergeCommitSHA,
+		Labels:         read.PR.Labels,
 	}
 	r.mu.Lock()
 	if epoch == r.cacheEpoch {

@@ -70,6 +70,8 @@ type fakePR struct {
 	// NodeID is emitted as the PR's GraphQL global id; setPRDraft binds it, so
 	// a fixture that drives the draft mutation must set it.
 	NodeID string
+	// Labels are emitted as the response's label objects, by name.
+	Labels []string
 }
 
 // fakeIssueEvent is one row of an issue's REST event list; CommitID nil is a
@@ -793,7 +795,12 @@ func prJSON(pr fakePR) map[string]any {
 	if pr.MergedAt != "" {
 		mergedAt = pr.MergedAt
 	}
+	labels := []map[string]any{}
+	for i, name := range pr.Labels {
+		labels = append(labels, map[string]any{"id": i + 1, "name": name, "color": "ededed"})
+	}
 	return map[string]any{
+		"labels":           labels,
 		"number":           pr.Number,
 		"state":            pr.State,
 		"title":            pr.Title,

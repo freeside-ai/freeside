@@ -112,6 +112,19 @@ var issueInspectionPermissionScopes = map[string]string{
 	"metadata": IssueInspectionPermissions.Metadata,
 }
 
+// HandBackLabelPermissions grants only what removing the hand-back label
+// from a pull request needs (issue #3160): GitHub's label endpoints accept
+// pull_requests:write for a pull request, so the mint holds no issues grant
+// and no contents grant. The registration already declares
+// pull_requests:write for publication, so this mint narrows an existing
+// grant and needs no App change.
+var HandBackLabelPermissions = Permissions{PullRequests: "write", Metadata: "read"}
+
+var handBackLabelPermissionScopes = map[string]string{
+	"pull_requests": HandBackLabelPermissions.PullRequests,
+	"metadata":      HandBackLabelPermissions.Metadata,
+}
+
 // RegistrationPermissions declares all capabilities the App may need; each
 // token source narrows its mint to the effect it performs. workflows:write
 // serves only publication under an advisory profile (PublishWorkflowPermissions).
