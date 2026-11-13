@@ -1902,6 +1902,60 @@ The check covers whether this build can read this data, not whether it then
 behaves correctly, and it does not cover daemons started with a driver, the
 fake lane, or a scenario.
 
+### Undo A Failed Update
+
+`freesided undo-update` puts back the database an installer checkpointed
+before an update, once the updated daemon failed to start (#3108). The
+installer runs it from the new build, because the old build lacks it
+(app/README.md, Installing the Operator Client); run it by hand with the
+same files:
+
+```sh
+freesided undo-update -db <live-db> -checkpoint <state-dir>/update-checkpoint/freeside.db \
+  -sha256 <hex from update.env>
+```
+
+It takes the daemon lock, so it refuses while any daemon runs on `-db`, and
+it reads both databases' update drain logs without opening either as a
+store, so it works when the failed build migrated the live file to a schema
+this build cannot open. It restores only when the logs prove the new build
+never lifted the drain the checkpoint was taken under:
+
+- **The checkpoint's latest drain row is draining.** A checkpoint taken with
+  no update drain in force is refused.
+- **The live log holds that same row at the same id**, so the live database
+  descends from the checkpoint.
+- **The live log has nothing after it.** A lifted row means the new build
+  started and may have launched work and published, so restoring would
+  discard real state; any other later row refuses too, because an update
+  that never reopened cannot explain it.
+
+It copies the checkpoint beside the live file (`<db>.update-restore`), gives
+the copy a new `sync_epoch` as `freesided restore` does, moves the live file
+and its `-wal`, `-shm`, and `-journal` aside to `<db>.update-failed`, and
+renames the copy into place. It then deletes the local backup checkpoint
+(`<db>.checkpoints/latest.backup`), the set-aside files, and, last, the
+checkpoint, so a missing checkpoint means the undo finished. The local
+backup goes because the failed build may have rewritten it at its newer
+schema, which the restored build refuses to start over; the restored build
+writes a fresh one when it starts. A run
+killed at any step resumes from those files on the next run with the same
+flags and never repeats a finished swap. With both the live file and the
+set-aside one present, it finishes only when the live file is the copy it
+staged (the checkpoint's drain log and schema version under a new
+`sync_epoch`); otherwise, such as when a daemon created an empty database
+at the live path mid-swap, it refuses and keeps both. It prints the checkpoint's time and
+the restored schema version, never row content. The restored database
+carries the update drain the checkpoint was taken under; lift it with
+`freesided drain -cancel` once the old daemon runs.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Restored, or finished an interrupted undo. |
+| `1` | Refused or failed: a daemon holds the lock, the sha256 does not match, the logs do not prove the drain held, nothing is pending, or a set-aside file is not this undo's. Nothing more was changed. |
+| `2` | Usage: a missing flag or an extra argument. |
+| `3` | The new build lifted the drain; nothing was restored. |
+
 ### Drain For An Update
 
 `freesided drain -db <database>` asks the running daemon to finish what it

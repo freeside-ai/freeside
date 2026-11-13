@@ -221,6 +221,9 @@ func main() {
 		case "check-database":
 			runCheckDatabaseMain(os.Args[2:])
 			return
+		case "undo-update":
+			runUndoUpdateMain(os.Args[2:])
+			return
 		case "publication-formats":
 			runPublicationFormatsMain(os.Args[2:])
 			return
