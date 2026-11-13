@@ -90,6 +90,8 @@ func closureRetirementReason(origin domain.PublicationSuccessorOrigin) (string, 
 		return "Superseded because the pull request's head or base moved after it was ready.", true
 	case domain.PublicationSuccessorExternalReview:
 		return "", false
+	case domain.PublicationSuccessorHandBack:
+		return "Superseded because the pull request was handed back; Freeside reworks its current head on the target tip.", true
 	case domain.PublicationSuccessorHandoffConflict:
 		return "Superseded because the pull request's head conflicted with the target tip at handoff; a remediated head replaces it.", true
 	}
@@ -165,7 +167,8 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 		return err
 	}
 	switch successor.EffectiveOrigin() {
-	case domain.PublicationSuccessorReadinessInvalidation, domain.PublicationSuccessorExternalReview:
+	case domain.PublicationSuccessorReadinessInvalidation, domain.PublicationSuccessorExternalReview,
+		domain.PublicationSuccessorHandBack:
 		return tx.validateReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorUnpublishedBaseAdvance:
 		return tx.validateUnpublishedReentrySuccessor(ctx, successor)
@@ -201,13 +204,13 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 }
 
 // requireCurrentExternalReviewAdmission is the seal-time half of external
-// review admission. The gate proves the profile an external_review authority
+// review and hand-back admission. The gate proves the profile the authority
 // names admits its reviewer; a new cycle additionally needs that profile to
 // be the repository's active one, so removing a reviewer stops new cycles. It
 // runs only when the record is first sealed: a sealed cycle keeps reading
 // under the profile it named, and its replay converges.
 func (tx *ReadTx) requireCurrentExternalReviewAdmission(ctx context.Context, successor domain.PublicationSuccessor) error {
-	if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview {
+	if !successor.AnswersExternalFindings() {
 		return nil
 	}
 	// The gate admits any superseded, uninvalidated ready item, which is also
@@ -219,6 +222,7 @@ func (tx *ReadTx) requireCurrentExternalReviewAdmission(ctx context.Context, suc
 		return err
 	}
 	current := domain.ProductionReadyItemID(successor.RunID)
+	handedBack := false
 	for _, sealed := range chain {
 		// One finding starts one cycle. A cycle that re-earned readiness in
 		// place leaves the finding on the published head, where it would
@@ -226,12 +230,13 @@ func (tx *ReadTx) requireCurrentExternalReviewAdmission(ctx context.Context, suc
 		if sealed.ExternalFindingID == successor.ExternalFindingID {
 			return domain.ErrParentKeyMismatch
 		}
+		handedBack = handedBack || sealed.HandsBack()
 		current = sealed.ReadyItemID()
 	}
 	if current != successor.PredecessorItemID {
 		return domain.ErrParentKeyMismatch
 	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
+	ready, err := tx.publishedReadyAtOrBefore(ctx, successor.RunID, successor.PredecessorItemID)
 	if err != nil {
 		return err
 	}
@@ -240,7 +245,125 @@ func (tx *ReadTx) requireCurrentExternalReviewAdmission(ctx context.Context, suc
 		return fmt.Errorf("seal external review re-entry under trust profile %s: %w",
 			successor.AdmittingProfileDigest, errors.Join(err, domain.ErrExternalReviewNotAdmitted))
 	}
+	if successor.HandsBack() {
+		return tx.requireCurrentHandBack(ctx, successor, ready, handedBack)
+	}
 	return nil
+}
+
+// requireCurrentHandBack is the seal-time half of the hand-back gate (issue
+// #3160): what holds only at the moment a cycle starts. The pull request is
+// open and unmerged, and its latest recorded head is the one the authority
+// adopts; the every-read gate accepts any recorded fact with that head,
+// because the cycle's own push moves the latest one. And when an earlier
+// hand-back cycle of the run ended on a person, a new comment does not
+// start another over that person's open item.
+//
+// The hand-back label is not checked here. It is a forge observation the
+// store does not record, and Freeside removes it once the cycle succeeds, so
+// the trigger checks it instead.
+func (tx *ReadTx) requireCurrentHandBack(
+	ctx context.Context, successor domain.PublicationSuccessor, ready domain.ReadyItemPRBinding, handedBack bool,
+) error {
+	latest, err := tx.LatestPullMergeFact(ctx, ready.RepositoryID, ready.PRNumber)
+	if err != nil || !handBackPullFact(latest, ready, successor.Reentry.HeadSHA) {
+		return fmt.Errorf("seal hand-back on head %s: %w", successor.Reentry.HeadSHA,
+			errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if !handedBack {
+		return nil
+	}
+	open, err := tx.ListOpenAttentionItemRecordsForRun(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	for _, item := range open {
+		if item.Type == domain.AttentionPublishBlocked || item.Type == domain.AttentionReviewDispute ||
+			item.Type == domain.AttentionReviewDiminishing {
+			return fmt.Errorf("seal hand-back while %s is open: %w", item.ID, domain.ErrParentKeyMismatch)
+		}
+	}
+	return nil
+}
+
+// handBackPullFact reports whether a recorded pull fact shows the bound pull
+// request open and unmerged on head, against the bound base branch.
+func handBackPullFact(fact domain.PullMergeFact, ready domain.ReadyItemPRBinding, head string) bool {
+	return fact.Repo == ready.Repo && fact.RepositoryID == ready.RepositoryID && fact.PRNumber == ready.PRNumber &&
+		fact.State == domain.PullRequestOpen && !fact.Merged && fact.BaseRef == ready.BaseRef && fact.HeadSHA == head
+}
+
+// handBackPredecessorBinding is the every-read gate of a hand_back authority
+// (issue #3160). The head it adopts is one no Freeside invocation produced:
+// the lander or the owner pushed it, then handed the pull request back. So,
+// as for head_changed, the record's coordinates are never trusted, and every
+// read re-proves each one from the daemon's own records:
+//
+//   - The prior review is the round before the cycle's. The cycle's base is
+//     not proved here: it is the adopted head's merge base with the target
+//     as the forge reported it, which the store cannot check, so the cycle
+//     proves it with git before it reviews (the base is reachable from the
+//     target branch and the head descends from it).
+//   - The predecessor is the run's root ready item or a sealed successor's,
+//     and it is not open: the trigger supersedes an open one as it seals.
+//     It may have no item at all, as after a proven rebase ends a
+//     head_changed cycle quietly, so the pull request is the one the latest
+//     published ready binding at or before it names.
+//   - The daemon recorded that pull request open and unmerged on the adopted
+//     head, against the bound base branch.
+//   - The finding is an external one on this run, left as a conversation
+//     comment on the adopted head, and the profile the authority names
+//     admits its author.
+//
+// It returns that published binding, as reentryPredecessorBinding does.
+func (tx *ReadTx) handBackPredecessorBinding(
+	ctx context.Context, successor domain.PublicationSuccessor,
+) (domain.ReadyItemPRBinding, error) {
+	none := domain.ReadyItemPRBinding{}
+	reentry := successor.Reentry
+	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if successor.PredecessorItemID != domain.ProductionReadyItemID(successor.RunID) {
+		if _, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID); err != nil {
+			return none, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+	case err != nil:
+		return none, err
+	case item.Type != domain.AttentionReadyForFinalReview || item.Status == domain.StatusOpen:
+		return none, domain.ErrParentKeyMismatch
+	}
+	ready, err := tx.publishedReadyAtOrBefore(ctx, successor.RunID, successor.PredecessorItemID)
+	if err != nil {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	facts, err := tx.ListPullMergeFacts(ctx, ready.RepositoryID, ready.PRNumber)
+	if err != nil {
+		return none, err
+	}
+	if !slices.ContainsFunc(facts, func(fact domain.PullMergeFact) bool {
+		return handBackPullFact(fact, ready, reentry.HeadSHA)
+	}) {
+		return none, fmt.Errorf("hand-back head %s was never recorded open: %w", reentry.HeadSHA, domain.ErrParentKeyMismatch)
+	}
+	finding, err := tx.GetFinding(ctx, successor.ExternalFindingID)
+	if err != nil || finding.External == nil || finding.RunID != successor.RunID ||
+		!finding.External.OnConversationThread() || finding.External.HeadSHA != reentry.HeadSHA {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	profile, err := tx.GetTrustProfile(ctx, successor.AdmittingProfileDigest)
+	if err != nil {
+		return none, errors.Join(err, domain.ErrExternalReviewNotAdmitted)
+	}
+	if err := externalFindingAdmittedBy(finding, profile, ready); err != nil {
+		return none, err
+	}
+	return ready, nil
 }
 
 // publicationReservationKind is publish.IntentKindReservation, the kind a
@@ -384,7 +507,7 @@ func (tx *ReadTx) validateHandoffConflictSuccessor(ctx context.Context, successo
 			return fmt.Errorf("handoff conflict on the foreign head of %s: %w",
 				parent.PublicationID(), domain.ErrParentKeyMismatch)
 		}
-		publication = parent.PublicationID()
+		publication = handoffCheckPublication(parent, reentry.HeadSHA)
 	}
 	check, err := tx.GetHandoffCheck(ctx, successor.RunID, publication)
 	if err != nil || check.TipSHA != reentry.BaseSHA || check.HeadSHA != reentry.HeadSHA ||
@@ -419,6 +542,18 @@ func (tx *ReadTx) validateHandoffConflictSuccessor(ctx context.Context, successo
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
+}
+
+// handoffCheckPublication names the handoff check a conflict on head under
+// parent resolved. A hand_back cycle hands its adopted head off under its own
+// key before it re-earns readiness (domain InPlaceHandoffID); a head a fix
+// remediation built hands off under the cycle's publication ID, as every
+// other cycle's does.
+func handoffCheckPublication(parent domain.PublicationSuccessor, head string) domain.InvocationID {
+	if parent.HandsBack() && parent.Reentry.HeadSHA == head {
+		return parent.InPlaceHandoffID()
+	}
+	return parent.PublicationID()
 }
 
 // runWorkflowAudits lists the workflow audits recorded for the one repository
@@ -467,6 +602,9 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 	reentry := successor.Reentry
 	if reentry == nil {
 		return none, domain.ErrParentKeyMismatch
+	}
+	if successor.HandsBack() {
+		return tx.handBackPredecessorBinding(ctx, successor)
 	}
 	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
 	if err != nil {
@@ -567,8 +705,10 @@ func (tx *ReadTx) requireAdmittedExternalFinding(
 // binding came from a head_changed re-entry, that is, from commits no Freeside
 // invocation produced. An in-place binding inherits its head from the
 // authority it re-entered under: head_changed observed a foreign one,
-// external_review was itself refused on one by this check, and base_advanced
-// kept its predecessor's, so only that link is followed further. The walk
+// external_review was itself refused on one by this check, hand_back adopted
+// one under an authority that permits replacing it (issue #3160), and
+// base_advanced kept its predecessor's, so only that link is followed
+// further. The walk
 // reads rows without re-running their gates: authenticating the binding it
 // starts from already authenticated every ancestor, and a gated read per
 // level would make the cost grow with every consecutive re-entry.
@@ -583,7 +723,7 @@ func (tx *ReadTx) publishedHeadIsForeign(ctx context.Context, ready domain.Ready
 		if err != nil || authority.Reentry == nil {
 			return false, errors.Join(err, domain.ErrParentKeyMismatch)
 		}
-		if authority.EffectiveOrigin() == domain.PublicationSuccessorExternalReview {
+		if authority.AnswersExternalFindings() {
 			return false, nil
 		}
 		if authority.Reentry.Reason != domain.ReadinessInvalidationBaseAdvanced {
@@ -1032,7 +1172,7 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	// take that route away, so the recorded route is necessary, and the
 	// engine's gate holds the request to the exact effective set.
 	var cycle *externalReviewCycleAdmission
-	if successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
+	if successor.AnswersExternalFindings() &&
 		successor.Reentry != nil && request.Round == successor.ReviewRound {
 		admission, err := tx.externalReviewCycleAdmission(ctx, successor)
 		if err != nil {
@@ -1062,6 +1202,90 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
+}
+
+// HandBackReadyBinding returns the binding of the run's current ready item
+// when a hand-back cycle earned it (issue #3160): the item is open, and a
+// hand_back authority lies on the chain between it and the last ready item
+// that published before it. The hand-back label comes off such a pull
+// request. It reports false for any other run, and reads every authority it
+// walks through its gate.
+func (tx *ReadTx) HandBackReadyBinding(
+	ctx context.Context, runID domain.RunID,
+) (domain.ReadyItemPRBinding, bool, error) {
+	none := domain.ReadyItemPRBinding{}
+	itemID, err := tx.CurrentProductionReadyItemID(ctx, runID)
+	if err != nil || itemID == domain.ProductionReadyItemID(runID) {
+		return none, false, err
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, itemID)
+	if errors.Is(err, ErrNotFound) {
+		return none, false, nil
+	}
+	if err != nil || item.Status != domain.StatusOpen || item.Type != domain.AttentionReadyForFinalReview {
+		return none, false, err
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
+	if err != nil {
+		return none, false, err
+	}
+	authority, err := tx.PublicationSuccessorForReadyItem(ctx, runID, itemID)
+	for err == nil && !authority.HandsBack() {
+		predecessor := authority.PredecessorItemID
+		var published bool
+		if err = tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
+			predecessor).Scan(&published); err != nil || published || predecessor == domain.ProductionReadyItemID(runID) {
+			return none, false, err
+		}
+		authority, err = tx.PublicationSuccessorForReadyItem(ctx, runID, predecessor)
+	}
+	if err != nil {
+		return none, false, err
+	}
+	return ready, true, nil
+}
+
+// handBackHeadBefore returns the head on the pull request when an unpublished
+// hand_back cycle lies between itemID and the last ready item that published:
+// that cycle adopted the head the lander or the owner pushed, which is what
+// the pull request carries until a later cycle publishes. It walks sealed
+// authorities read through their gates, nearest first.
+func (tx *ReadTx) handBackHeadBefore(
+	ctx context.Context, runID domain.RunID, itemID domain.ItemID,
+) (string, bool, error) {
+	for itemID != domain.ProductionReadyItemID(runID) {
+		var published bool
+		if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
+			itemID).Scan(&published); err != nil {
+			return "", false, err
+		}
+		if published {
+			return "", false, nil
+		}
+		parent, err := tx.PublicationSuccessorForReadyItem(ctx, runID, itemID)
+		if err != nil {
+			return "", false, err
+		}
+		if parent.HandsBack() {
+			return parent.Reentry.HeadSHA, true, nil
+		}
+		itemID = parent.PredecessorItemID
+	}
+	return "", false, nil
+}
+
+// ReentryPredecessorBinding returns the published binding an in-place
+// re-entry continues: the predecessor's own, or for a hand_back authority,
+// whose predecessor may have ended without one (a head_changed cycle that
+// proved a rebase, or a cycle that stopped), the last binding at or before
+// it, the one handBackPredecessorBinding proves the authority against.
+func (tx *ReadTx) ReentryPredecessorBinding(
+	ctx context.Context, successor domain.PublicationSuccessor,
+) (domain.ReadyItemPRBinding, error) {
+	if successor.HandsBack() {
+		return tx.publishedReadyAtOrBefore(ctx, successor.RunID, successor.PredecessorItemID)
+	}
+	return tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
 }
 
 // PublicationSuccessorTarget derives branch and PR coordinates from the
@@ -1100,9 +1324,19 @@ func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.R
 		ItemID: ready.ItemID, Identity: ready.PublicationIdentity, HeadSHA: ready.HeadSHA,
 		PRNumber: ready.PRNumber, Branch: outcome.Branch,
 	}
+	// An unpublished hand_back cycle before this one adopted the head the
+	// pull request carries, which is not the published ancestor's.
+	adopted, found, err := tx.handBackHeadBefore(ctx, runID, successor.PredecessorItemID)
+	if err != nil {
+		return publicationrecord.SuccessorTarget{}, err
+	}
+	if found {
+		target.HeadSHA = adopted
+	}
 	// An in-place re-entry's head is the one on the pull request, which may
 	// not be the published ancestor's. A handoff conflict's head never
-	// published, so the pull request still carries the ancestor's.
+	// published, so the pull request still carries the ancestor's, or the
+	// head a hand_back cycle before it adopted.
 	if successor.Reentry != nil && !successor.ReentersUnpublishedHead() && !successor.RemediatesHandoffConflict() {
 		target.HeadSHA = successor.Reentry.HeadSHA
 	}

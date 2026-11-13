@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,6 +78,28 @@ type ExternalFindingProvenance struct {
 	RawSourceDigest Digest `json:"raw_source_digest"`
 	// HeadSHA is the published head the finding was left on.
 	HeadSHA string `json:"head_sha"`
+}
+
+// externalConversationThreadPrefix starts the thread ID of a comment in a
+// pull request's main conversation (#3127).
+const externalConversationThreadPrefix = "issue_comment/"
+
+// OnConversationThread reports whether the finding was left as a comment in
+// the pull request's main conversation rather than on a review: the thread ID
+// is "issue_comment/" and a canonical positive comment ID. The publish
+// package writes that shape; the store reads it here because it cannot
+// import publish, and a hand-back authority (issue #3160) names only such a
+// finding.
+func (p ExternalFindingProvenance) OnConversationThread() bool {
+	return IsExternalConversationThread(p.ThreadID)
+}
+
+// IsExternalConversationThread reports whether thread is a conversation
+// comment's thread ID. See OnConversationThread.
+func IsExternalConversationThread(thread string) bool {
+	value, ok := strings.CutPrefix(thread, externalConversationThreadPrefix)
+	id, err := strconv.ParseInt(value, 10, 64)
+	return ok && err == nil && id > 0 && strconv.FormatInt(id, 10) == value
 }
 
 // ExternalFindingSource is the Source label of every external finding from

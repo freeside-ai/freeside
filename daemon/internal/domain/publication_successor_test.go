@@ -31,6 +31,7 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		{"publication-successor-v5", unpublishedReentrySuccessor()},
 		{"publication-successor-v6", successorReentrySuccessor()},
 		{"publication-successor-v7", handoffConflictSuccessor()},
+		{"publication-successor-v8", handBackSuccessor()},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			if err := fixture.value.Validate(); err != nil {
@@ -73,6 +74,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value = successorReentrySuccessor()
 		case domain.PublicationSuccessorHandoffConflict:
 			value = handoffConflictSuccessor()
+		case domain.PublicationSuccessorHandBack:
+			value = handBackSuccessor()
 		case domain.PublicationSuccessorRemediation:
 		}
 		if err := value.Validate(); err != nil {
@@ -163,6 +166,94 @@ func externalReviewSuccessor() domain.PublicationSuccessor {
 		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
 		Reentry:           &domain.PublicationSuccessorReentry{BaseSHA: "base-1", HeadSHA: "head-1"},
 		ExternalFindingID: "external-0123456789abcdef0123456789abcdef", AdmittingProfileDigest: "sha256:profile",
+	}
+}
+
+func handBackSuccessor() domain.PublicationSuccessor {
+	return domain.PublicationSuccessor{
+		Version: domain.PublicationHandBackVersion, Origin: domain.PublicationSuccessorHandBack,
+		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
+		Reentry:           &domain.PublicationSuccessorReentry{BaseSHA: "base-1", HeadSHA: "handed-back-head"},
+		ExternalFindingID: "external-0123456789abcdef0123456789abcdef", AdmittingProfileDigest: "sha256:profile",
+	}
+}
+
+// A hand_back record (issue #3160) has the external_review shape under its own
+// version and origin, and neither pairs with the other's.
+func TestPublicationSuccessorHandBackValidation(t *testing.T) {
+	valid := handBackSuccessor()
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !valid.HandsBack() || !valid.AnswersExternalFindings() || valid.CarriesForeignHead() ||
+		valid.AdmitsSuccessorReentry() || valid.RemediatesHandoffConflict() {
+		t.Fatal("hand_back predicates")
+	}
+	if external := externalReviewSuccessor(); external.HandsBack() || !external.AnswersExternalFindings() {
+		t.Fatal("external_review predicates")
+	}
+	if valid.InPlaceHandoffID() == valid.PublicationID() {
+		t.Fatal("the in-place handoff shares the cycle's publication ID")
+	}
+	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
+		"no finding":             func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "" },
+		"no profile":             func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "" },
+		"invalidation reason":    func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationHeadChanged },
+		"no base":                func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
+		"no head":                func(s *domain.PublicationSuccessor) { s.Reentry.HeadSHA = "" },
+		"no reentry":             func(s *domain.PublicationSuccessor) { s.Reentry = nil },
+		"command":                func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
+		"feedback invocation":    func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
+		"reevaluation command":   func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
+		"external review origin": func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
+		"external review version": func(s *domain.PublicationSuccessor) {
+			s.Version = domain.PublicationExternalReviewVersion
+		},
+		"conflict cause":    func(s *domain.PublicationSuccessor) { s.HandoffConflictCause = domain.HandoffConflictTextual },
+		"first publication": func(s *domain.PublicationSuccessor) { s.FirstPublication = true },
+		"first round":       func(s *domain.PublicationSuccessor) { s.ReviewRound = 1 },
+	} {
+		invalid := handBackSuccessor()
+		reentry := *invalid.Reentry
+		invalid.Reentry = &reentry
+		mutate(&invalid)
+		if invalid.Validate() == nil {
+			t.Errorf("%s: invalid hand_back successor accepted", name)
+		}
+	}
+	// One superseded item admits one commandless successor, whatever its
+	// origin.
+	external := externalReviewSuccessor()
+	if valid.PublicationID() != external.PublicationID() || valid.Key() != external.Key() ||
+		valid.ReadyItemID() != external.ReadyItemID() || valid.TaskKey() != external.TaskKey() {
+		t.Fatal("hand_back and external_review re-entries of one item have different identities")
+	}
+}
+
+// The adopted head is foreign, yet the authority admits remediation on it at
+// the base its prior review used: the authority is the permission to replace
+// it.
+func TestPublicationSuccessorHandBackRemediation(t *testing.T) {
+	successor := handBackSuccessor()
+	request := domain.RemediationInvocationIntent{
+		RunID: successor.RunID, SuccessorPublicationID: successor.PublicationID(),
+		Round: successor.ReviewRound, ReviewInvocationID: "review-2",
+		BaseSHA: successor.Reentry.BaseSHA, HeadSHA: successor.Reentry.HeadSHA,
+		FindingIDs: []domain.FindingID{successor.ExternalFindingID}, AdjudicationDigest: "sha256:adjudication",
+	}
+	if !successor.AllowsRemediation(request) {
+		t.Fatal("hand_back refused a remediation of the adopted head")
+	}
+	for name, mutate := range map[string]func(*domain.RemediationInvocationIntent){
+		"other base":  func(r *domain.RemediationInvocationIntent) { r.BaseSHA = "base-2" },
+		"prior round": func(r *domain.RemediationInvocationIntent) { r.Round = successor.ReviewRound - 1 },
+		"other run":   func(r *domain.RemediationInvocationIntent) { r.RunID = "run-2" },
+	} {
+		invalid := request
+		mutate(&invalid)
+		if successor.AllowsRemediation(invalid) {
+			t.Errorf("%s: hand_back admitted the remediation", name)
+		}
 	}
 }
 

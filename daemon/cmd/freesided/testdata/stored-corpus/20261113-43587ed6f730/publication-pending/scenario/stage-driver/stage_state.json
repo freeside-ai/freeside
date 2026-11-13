@@ -1,0 +1,115 @@
+{
+  "scripts": {
+    "inv-implement-run-7492d669781867241228209401db8aec837a2e8a94fc0e8ee2f983fb560073a4": {
+      "pending_inspects": 1,
+      "running_inspects": 0,
+      "outcome": "complete",
+      "result": {
+        "invocation_id": "",
+        "status": "",
+        "head_sha": "",
+        "artifacts": null,
+        "summary": "The scenario implementer delivered its files.",
+        "usage": null
+      }
+    },
+    "inv-specify-run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af-1": {
+      "pending_inspects": 0,
+      "running_inspects": 0,
+      "outcome": "complete",
+      "result": {
+        "invocation_id": "",
+        "status": "",
+        "head_sha": "",
+        "artifacts": [],
+        "summary": "Specifier returned structured output.",
+        "usage": null
+      },
+      "transcript": "eyJ0eXBlIjoicmVzdWx0Iiwic3VidHlwZSI6InN1Y2Nlc3MiLCJpc19lcnJvciI6ZmFsc2UsInJlc3VsdCI6IntcImZldGNoX3JlcXVlc3RzXCI6bnVsbCxcInNwZWNpZmljYXRpb25cIjp7XCJ0aXRsZVwiOlwiRGVzY3JpYmUgdGhlIHNjZW5hcmlvIHJlcG9zaXRvcnlcIixcInN1bW1hcnlcIjpcIlNheSBpbiB0aGUgUkVBRE1FIHdoYXQgdGhlIHNjZW5hcmlvIHJlcG9zaXRvcnkgaXMgZm9yLlwiLFwiYm9keVwiOlwiIyMgQ2hhbmdlXFxuXFxuQWRkIGEgcGFyYWdyYXBoIHRvIFJFQURNRS5tZCBzYXlpbmcgdGhlIHJlcG9zaXRvcnkgZXhpc3RzIGZvciBzY3JpcHRlZCBGcmVlc2lkZSBydW5zIGFuZCBob2xkcyBub3RoaW5nIGVsc2UuXFxuXFxuIyMgQWNjZXB0YW5jZVxcblxcbi0gUkVBRE1FLm1kIHN0YXRlcyB0aGUgcmVwb3NpdG9yeSdzIHB1cnBvc2UuXCIsXCJhZGRyZXNzYWxzXCI6W119LFwicmVwbHlcIjpudWxsLFwiZGVjaXNpb25zXCI6bnVsbH0iLCJzdHJ1Y3R1cmVkX291dHB1dCI6eyJmZXRjaF9yZXF1ZXN0cyI6bnVsbCwic3BlY2lmaWNhdGlvbiI6eyJ0aXRsZSI6IkRlc2NyaWJlIHRoZSBzY2VuYXJpbyByZXBvc2l0b3J5Iiwic3VtbWFyeSI6IlNheSBpbiB0aGUgUkVBRE1FIHdoYXQgdGhlIHNjZW5hcmlvIHJlcG9zaXRvcnkgaXMgZm9yLiIsImJvZHkiOiIjIyBDaGFuZ2VcblxuQWRkIGEgcGFyYWdyYXBoIHRvIFJFQURNRS5tZCBzYXlpbmcgdGhlIHJlcG9zaXRvcnkgZXhpc3RzIGZvciBzY3JpcHRlZCBGcmVlc2lkZSBydW5zIGFuZCBob2xkcyBub3RoaW5nIGVsc2UuXG5cbiMjIEFjY2VwdGFuY2VcblxuLSBSRUFETUUubWQgc3RhdGVzIHRoZSByZXBvc2l0b3J5J3MgcHVycG9zZS4iLCJhZGRyZXNzYWxzIjpbXX0sInJlcGx5IjpudWxsLCJkZWNpc2lvbnMiOm51bGx9fQo="
+    }
+  },
+  "committed": {
+    "inv-specify-run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af-1": {
+      "invocation_id": "inv-specify-run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af-1",
+      "status": "completed",
+      "head_sha": "",
+      "artifacts": [],
+      "summary": "Specifier returned structured output.",
+      "usage": null
+    }
+  },
+  "intents": {
+    "inv-implement-run-7492d669781867241228209401db8aec837a2e8a94fc0e8ee2f983fb560073a4": {
+      "run_id": "run-7492d669781867241228209401db8aec837a2e8a94fc0e8ee2f983fb560073a4",
+      "stage_id": "implement-run-7492d669781867241228209401db8aec837a2e8a94fc0e8ee2f983fb560073a4",
+      "attempt_id": "attempt-inv-implement-run-7492d669781867241228209401db8aec837a2e8a94fc0e8ee2f983fb560073a4",
+      "input_digest": "sha256:f8f7ed272420e4a6c39fe08197d880a93d5502b98c713627a6d8397431c700db",
+      "spec_digest": "sha256:5f561fb6a4ec3ee0ad753058eb3cd20d8a02e22abaa02d9adfdcc80100186107",
+      "policy_digest": "sha256:850d5e94e356e19b0a83e6df9ba4f59db9afbe435ae2dad5e10a3c1ecd0dfa5f",
+      "base": {
+        "repo": "freeside-scenario/scenario",
+        "repository_id": 1,
+        "base_ref": "main",
+        "base_sha": "9fbf70251c7fbe3172ff64a242a40d2b1a595d87"
+      },
+      "workspace": "scenario-workspace",
+      "image_ref": "ghcr.io/freeside-ai/scenario-project@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "credential_mode": "subscription_contained",
+      "egress_profile": "provider_only",
+      "auth_identity_id": "auth-scenario",
+      "admission_id": "sha256:9e445dfd166bca0ccda989500933b42926ee78074f4b68c3af06524f1697b646",
+      "stage_inputs": {
+        "id": "sha256:d2b280ace6ed49fe78ede383833b3364fd5337dd194a6ab70c2c0f624210bf94",
+        "input_digest": "sha256:f8f7ed272420e4a6c39fe08197d880a93d5502b98c713627a6d8397431c700db",
+        "specification_digest": "sha256:5f561fb6a4ec3ee0ad753058eb3cd20d8a02e22abaa02d9adfdcc80100186107",
+        "prompt_package_digest": "sha256:b04509c780f00f93c6ddff4c05cbb5285ceaf1c9cad6f56a47ada854b607ee25",
+        "policy_digest": "sha256:850d5e94e356e19b0a83e6df9ba4f59db9afbe435ae2dad5e10a3c1ecd0dfa5f",
+        "vendor_instructions": {
+          "vendor": "claude",
+          "delivery": "append_file",
+          "digest": "sha256:444ae2a70f83888cd11230c72b5780b496443a72b25277f80b6cd536e37b11d0"
+        },
+        "prior_artifact_digests": [],
+        "image_input_digests": []
+      },
+      "route_model_id": "claude-scenario",
+      "native_effort": "high"
+    },
+    "inv-specify-run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af-1": {
+      "run_id": "run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af",
+      "stage_id": "specify-run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af",
+      "attempt_id": "attempt-inv-specify-run-specification-596d8f49bc8e4c031f1cbe87df83af911c035817e1711a4e4112f09fa3bbc6af-1",
+      "input_digest": "sha256:e7fdd0474cf37bde24df78da528a021ddedf535f6bdfd54b27b8740949fa71ce",
+      "spec_digest": "sha256:7a7c40b6ed70a7ba0b420bff3fced924bd74861f5010351b9a95b42a6709d6fa",
+      "policy_digest": "sha256:850d5e94e356e19b0a83e6df9ba4f59db9afbe435ae2dad5e10a3c1ecd0dfa5f",
+      "base": {
+        "repo": "freeside-scenario/scenario",
+        "repository_id": 1,
+        "base_ref": "main",
+        "base_sha": "9fbf70251c7fbe3172ff64a242a40d2b1a595d87"
+      },
+      "workspace": "scenario-workspace",
+      "image_ref": "ghcr.io/freeside-ai/scenario-project@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "credential_mode": "subscription_contained",
+      "egress_profile": "provider_only",
+      "auth_identity_id": "auth-scenario",
+      "admission_id": "sha256:404cc7d55aaf65174535b9dca90665a995477edb2882260697580149585a7e24",
+      "stage_inputs": {
+        "id": "sha256:993194d3727bad9e9349f569fad52c9c7a2710e280d61ccf407e164d5fbaebb1",
+        "input_digest": "sha256:e7fdd0474cf37bde24df78da528a021ddedf535f6bdfd54b27b8740949fa71ce",
+        "specification_digest": "sha256:7a7c40b6ed70a7ba0b420bff3fced924bd74861f5010351b9a95b42a6709d6fa",
+        "prompt_package_digest": "sha256:253ceef57f8c24282c164967ae653dec68f3a9d5a4a2824f7cb5daa6f6e05e19",
+        "policy_digest": "sha256:850d5e94e356e19b0a83e6df9ba4f59db9afbe435ae2dad5e10a3c1ecd0dfa5f",
+        "vendor_instructions": {
+          "vendor": "claude",
+          "delivery": "append_file",
+          "digest": "sha256:3d16de6427cc5ebd55a4f0949c1bd3810f77c4b43569bdd73ee1dd1ef7cce562"
+        },
+        "prior_artifact_digests": [],
+        "image_input_digests": []
+      },
+      "route_model_id": "claude-scenario-specifier",
+      "native_effort": "high"
+    }
+  }
+}

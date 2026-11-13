@@ -18,6 +18,7 @@ import (
 // wider CHECK it leaves admits every row 0138 could hold.
 func rewindIssueCommentLedger(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindHandBackExternalDispositions(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE posted_issue_comments`,
 		`DROP TABLE issue_comment_attempts`,

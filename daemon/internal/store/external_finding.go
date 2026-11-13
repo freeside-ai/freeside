@@ -141,7 +141,7 @@ func (tx *ReadTx) ListExternalFindings(ctx context.Context, runID domain.RunID) 
 }
 
 // ExternalReviewCycleFindings returns the external findings one
-// external_review cycle answers: the run's external findings on the cycle's
+// external_review or hand_back cycle answers: the run's external findings on the cycle's
 // head whose reviewer the profile the authority names admits, earliest first.
 // The authority is read through its gate, and the named profile is used, not
 // the active one, so the set reads the same after the owner edits the
@@ -180,9 +180,10 @@ func (tx *ReadTx) ExternalReviewCycleFindings(
 }
 
 // externalReviewCycleAdmission is what decides whether an external finding
-// belongs to one external_review cycle: the authority, already read through
-// its gate, the binding of the ready item it superseded, and the trust
-// profile it names.
+// belongs to one external_review or hand_back cycle: the authority, already
+// read through its gate, the published binding at or before the ready item it
+// superseded, and the trust profile it names. An external_review cycle's
+// predecessor is itself published; a hand_back cycle's may have no binding.
 type externalReviewCycleAdmission struct {
 	authority domain.PublicationSuccessor
 	ready     domain.ReadyItemPRBinding
@@ -193,10 +194,10 @@ func (tx *ReadTx) externalReviewCycleAdmission(
 	ctx context.Context, authority domain.PublicationSuccessor,
 ) (externalReviewCycleAdmission, error) {
 	none := externalReviewCycleAdmission{}
-	if authority.EffectiveOrigin() != domain.PublicationSuccessorExternalReview || authority.Reentry == nil {
+	if !authority.AnswersExternalFindings() || authority.Reentry == nil {
 		return none, fmt.Errorf("not an external review cycle: %w", domain.ErrParentKeyMismatch)
 	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, authority.PredecessorItemID)
+	ready, err := tx.publishedReadyAtOrBefore(ctx, authority.RunID, authority.PredecessorItemID)
 	if err != nil || ready.RunID != authority.RunID {
 		return none, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
@@ -222,7 +223,7 @@ func (a externalReviewCycleAdmission) admits(finding domain.Finding) error {
 }
 
 // externalReviewAuthorityForRound picks, from a run's linked successors, the
-// external_review one whose cycle starts at the given round, and false when
+// external_review or hand_back one whose cycle starts at the given round, and false when
 // there is none. Two for one round are refused: nothing says which of them
 // names the findings the round answers.
 //
@@ -237,8 +238,7 @@ func externalReviewAuthorityForRound(
 		found     bool
 	)
 	for _, successor := range chain {
-		if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview ||
-			successor.ReviewRound != round {
+		if !successor.AnswersExternalFindings() || successor.ReviewRound != round {
 			continue
 		}
 		if found {
@@ -249,12 +249,12 @@ func externalReviewAuthorityForRound(
 	return authority, found, nil
 }
 
-// externalReviewCycleForRound returns the external_review authority whose
-// cycle starts at the given review record's round, read through its gate, and
-// false when the run has none. A cycle that does start there must have
-// reviewed what its authority names: a record on another base or head fails
-// with ErrParentKeyMismatch, because everything bound to "the cycle's first
-// round" would otherwise rest on a review of some other commit.
+// externalReviewCycleForRound returns the external_review or hand_back
+// authority whose cycle starts at the given review record's round, read
+// through its gate, and false when the run has none. A cycle that does start
+// there must have reviewed what its authority names: a record on another base
+// or head fails with ErrParentKeyMismatch, because everything bound to "the
+// cycle's first round" would otherwise rest on a review of some other commit.
 //
 // The authority must be on the run's one authenticated successor chain. Its
 // own gate is not enough: it admits any superseded ready item, including one
