@@ -33,8 +33,9 @@ import (
 // match the identity Package.resolved records.
 
 const (
-	swiftCacheDirName      = "swift-cache"
-	swiftCacheRecordName   = "record.json"
+	swiftCacheDirName = "swift-cache"
+	// cacheRecordName is every cache entry's record, Swift's and Go's.
+	cacheRecordName        = "record.json"
 	swiftCacheKeyVersion   = "freeside.macverify.swift-cache-key/v1"
 	swiftCacheRecordFormat = "freeside.macverify.swift-cache-record/v1"
 	packageResolvedName    = "Package.resolved"
@@ -46,9 +47,9 @@ var ErrSwiftCacheMissing = errors.New("macverify: no complete Swift dependency c
 
 var swiftCacheKeyPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// resolvedFile is one Package.resolved in a workspace: its slash-separated
+// keyedFile is one file a dependency cache key covers: its slash-separated
 // path relative to the workspace and the SHA-256 of its bytes.
-type resolvedFile struct {
+type keyedFile struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 }
@@ -57,7 +58,7 @@ type resolvedFile struct {
 // workspace holds no Package.resolved and needs no cache.
 type swiftCacheKey struct {
 	Key   string
-	Files []resolvedFile
+	Files []keyedFile
 }
 
 func (k swiftCacheKey) paths() []string {
@@ -76,21 +77,32 @@ func (k swiftCacheKey) paths() []string {
 func skipSourceDir(name string) bool { return name == ".git" || name == ".build" }
 
 // workspaceSwiftCacheKey computes the key over every Package.resolved under
-// workdir, outside skipSourceDir's directories: one SHA-256 over the sorted
-// list of each file's relative path and its own SHA-256. The walk never
-// follows a symlink, and a Package.resolved that is not a regular file is
-// refused, since SwiftPM would read through it to bytes the key does not
-// cover.
+// workdir, outside skipSourceDir's directories (workspaceFileKey).
 func workspaceSwiftCacheKey(workdir string) (swiftCacheKey, error) {
-	var files []resolvedFile
+	key, files, err := workspaceFileKey(workdir, swiftCacheKeyVersion, skipSourceDir,
+		func(name string) bool { return name == packageResolvedName })
+	if err != nil {
+		return swiftCacheKey{}, fmt.Errorf("compute Swift dependency key: %w", err)
+	}
+	return swiftCacheKey{Key: key, Files: files}, nil
+}
+
+// workspaceFileKey computes a dependency cache key over every file under
+// workdir whose name match accepts, outside the directories skip names: one
+// SHA-256 over version and the sorted list of each file's relative path and
+// its own SHA-256. The walk never follows a symlink, and a matched file that
+// is not a regular file is refused, since a tool would read through it to
+// bytes the key does not cover. No matched file means no key: "" and nil.
+func workspaceFileKey(workdir, version string, skip, match func(name string) bool) (string, []keyedFile, error) {
+	var files []keyedFile
 	err := filepath.WalkDir(workdir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && path != workdir && skipSourceDir(d.Name()) {
+		if d.IsDir() && path != workdir && skip(d.Name()) {
 			return filepath.SkipDir
 		}
-		if d.Name() != packageResolvedName {
+		if !match(d.Name()) {
 			return nil
 		}
 		rel, err := filepath.Rel(workdir, path)
@@ -106,36 +118,36 @@ func workspaceSwiftCacheKey(workdir string) (swiftCacheKey, error) {
 			return err
 		}
 		sum := sha256.Sum256(body)
-		files = append(files, resolvedFile{Path: rel, SHA256: hex.EncodeToString(sum[:])})
+		files = append(files, keyedFile{Path: rel, SHA256: hex.EncodeToString(sum[:])})
 		return nil
 	})
 	if err != nil {
-		return swiftCacheKey{}, fmt.Errorf("compute Swift dependency key: %w", err)
+		return "", nil, err
 	}
 	if len(files) == 0 {
-		return swiftCacheKey{}, nil
+		return "", nil, nil
 	}
-	slices.SortFunc(files, func(a, b resolvedFile) int { return strings.Compare(a.Path, b.Path) })
+	slices.SortFunc(files, func(a, b keyedFile) int { return strings.Compare(a.Path, b.Path) })
 	// JSON keeps the encoding unambiguous for any file name.
 	body, err := json.Marshal(struct {
-		Version string         `json:"version"`
-		Files   []resolvedFile `json:"files"`
-	}{swiftCacheKeyVersion, files})
+		Version string      `json:"version"`
+		Files   []keyedFile `json:"files"`
+	}{version, files})
 	if err != nil {
-		return swiftCacheKey{}, fmt.Errorf("compute Swift dependency key: %w", err)
+		return "", nil, err
 	}
 	sum := sha256.Sum256(body)
-	return swiftCacheKey{Key: hex.EncodeToString(sum[:]), Files: files}, nil
+	return hex.EncodeToString(sum[:]), files, nil
 }
 
 // swiftCacheRecord is an entry's record.json, written last by populate.
 type swiftCacheRecord struct {
-	Format    string         `json:"format"`
-	Key       string         `json:"key"`
-	Files     []resolvedFile `json:"files"`
-	URLs      []string       `json:"urls"`
-	Packages  []string       `json:"swiftpm_packages"`
-	Container string         `json:"xcode_container,omitempty"`
+	Format    string      `json:"format"`
+	Key       string      `json:"key"`
+	Files     []keyedFile `json:"files"`
+	URLs      []string    `json:"urls"`
+	Packages  []string    `json:"swiftpm_packages"`
+	Container string      `json:"xcode_container,omitempty"`
 	Toolchain struct {
 		XcodeBuild string `json:"xcode_build"`
 		Swift      string `json:"swift"`
@@ -169,7 +181,7 @@ func checkSwiftCacheEntry(root, key string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", entry)
 	}
-	recordPath := filepath.Join(entry, swiftCacheRecordName)
+	recordPath := filepath.Join(entry, cacheRecordName)
 	info, err = os.Lstat(recordPath)
 	if err != nil {
 		return fmt.Errorf("the entry is incomplete: %w", err)
@@ -191,14 +203,14 @@ func checkSwiftCacheEntry(root, key string) error {
 	return nil
 }
 
-// writeRecord writes record.json through a rename, so the entry is never
-// seen with a partial record.
-func writeRecord(entry string, record swiftCacheRecord) error {
+// writeRecord writes an entry's record.json through a rename, so the entry
+// is never seen with a partial record.
+func writeRecord(entry string, record any) error {
 	body, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(entry, swiftCacheRecordName+".tmp")
+	tmp := filepath.Join(entry, cacheRecordName+".tmp")
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // G302,G304: the entry's own record; slots may read it
 	if err != nil {
 		return err
@@ -214,5 +226,5 @@ func writeRecord(entry string, record swiftCacheRecord) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(entry, swiftCacheRecordName))
+	return os.Rename(tmp, filepath.Join(entry, cacheRecordName))
 }

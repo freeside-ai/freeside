@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -36,6 +37,24 @@ func TestRunProbeRefusesBadUsage(t *testing.T) {
 // sandbox: every network attempt and every outside write must fail its
 // check, and the parser must refuse the report. The writes it made succeed,
 // so the probe removes them.
+// freePorts returns n distinct ports nothing held on 127.0.0.1 a moment ago.
+func freePorts(t *testing.T, n int) []int {
+	t.Helper()
+	ports := make([]int, 0, n)
+	for len(ports) < n {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		if !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+	}
+	return ports
+}
+
 func TestRunProbeUnconfinedFailsEverySandboxCheck(t *testing.T) {
 	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -53,9 +72,18 @@ func TestRunProbeUnconfinedFailsEverySandboxCheck(t *testing.T) {
 	answer := udpAnswerer(t)
 	outside := t.TempDir()
 	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	free := freePorts(t, 5)
 	spec := sandboxProbe(sandboxTargets{
-		loopbackPort: port, resolverHost: "localhost", tcp: closedAddr, udp: answer, outsideDirs: []string{outside},
+		loopbackPort: port, resolverHost: "localhost", tcp: closedAddr, udp: answer,
+		ports: slotPortSet(free[:4]), foreignPort: free[4], outsideDirs: []string{outside},
 	})
+
+	ipv6Loopback := true
+	if ln, err := net.Listen("tcp6", "[::1]:0"); err != nil {
+		ipv6Loopback = false
+	} else {
+		_ = ln.Close()
+	}
 
 	var out bytes.Buffer
 	code := RunProbe(append([]string{spec.mode}, spec.args...), &out)
@@ -64,8 +92,14 @@ func TestRunProbeUnconfinedFailsEverySandboxCheck(t *testing.T) {
 	}
 	for _, c := range spec.checks {
 		want := "FAIL " + c.name + ": "
-		if c.name == checkWriteJobDir {
+		// Unconfined, the job directory and the reserved ports still work.
+		if c.name == checkWriteJobDir || strings.HasPrefix(c.name, "reserved-port ") {
 			want = "ok " + c.name + "\n"
+		}
+		// A host without IPv6 loopback, such as a container, cannot pass
+		// a reserved-port check, which needs ::1 too.
+		if strings.HasPrefix(c.name, "reserved-port ") && !ipv6Loopback {
+			continue
 		}
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())

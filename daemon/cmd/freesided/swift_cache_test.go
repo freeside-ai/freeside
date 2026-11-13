@@ -18,7 +18,7 @@ func TestSwiftCacheCommandPassesFlagsToPopulate(t *testing.T) {
 		return macverify.PopulateResult{Key: "abc", Files: []string{"app/Package.resolved"}, Populated: true}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	err := runSwiftCacheCommand(t.Context(),
+	err := runCacheCommand(t.Context(), "swift-cache",
 		[]string{"populate", "--executor-root", "/Library/Freeside/macverify", "--source", "checkout"},
 		&stdout, &stderr, populate)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestSwiftCacheCommandRefusesBadUsage(t *testing.T) {
 		"extra positional": {"populate", "--executor-root", "/r", "--source", "x", "y"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if err := runSwiftCacheCommand(t.Context(), args, &stdout, &stderr, populate); err == nil {
+		if err := runCacheCommand(t.Context(), "swift-cache", args, &stdout, &stderr, populate); err == nil {
 			t.Errorf("%s: command accepted %v", name, args)
 		} else if name == "no subcommand" && !strings.Contains(err.Error(), "usage") {
 			t.Errorf("%s: error %v does not show usage", name, err)

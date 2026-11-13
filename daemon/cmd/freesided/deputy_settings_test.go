@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 )
 
 // deputySettingsFixture is a complete, valid settings object as generic JSON,
@@ -434,7 +435,8 @@ func macosVerificationWith(key string, value any) map[string]any {
 
 // macos_verification is optional under the same settings revision: a file
 // without it loads with none and maps to no executor, and a file with it
-// loads the four values and maps them to the executor configuration.
+// loads its values and maps them, with the listen port, to the executor
+// configuration. An omitted port_base maps to the default.
 func TestLoadDeputySettingsMapsTheMacOSVerificationExecutor(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -445,6 +447,12 @@ func TestLoadDeputySettingsMapsTheMacOSVerificationExecutor(t *testing.T) {
 		"present": {macosVerificationFixture(), daemoncompose.MacverifyExecutorConfig{
 			Root: "/Library/Freeside/macverify", Slots: []string{"fvslot2", "fvslot1"},
 			XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2",
+			PortBase: macverify.DefaultPortBase, ListenPort: 7340,
+		}},
+		"port base": {macosVerificationWith("port_base", 46000), daemoncompose.MacverifyExecutorConfig{
+			Root: "/Library/Freeside/macverify", Slots: []string{"fvslot2", "fvslot1"},
+			XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2",
+			PortBase: 46000, ListenPort: 7340,
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -477,7 +485,7 @@ func TestLoadDeputySettingsMapsTheMacOSVerificationExecutor(t *testing.T) {
 func TestDeputyMacverifyExecutorConfigCopiesTheSlots(t *testing.T) {
 	t.Parallel()
 	section := &deputyMacverify{Root: "/r", Slots: []string{"fvslot1"}, XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"}
-	cfg := deputyMacverifyExecutorConfig(section)
+	cfg := deputyMacverifyExecutorConfig(section, "127.0.0.1:0")
 	section.Slots[0] = "changed"
 	if cfg.Slots[0] != "fvslot1" {
 		t.Fatalf("slots alias the settings: %v", cfg.Slots)

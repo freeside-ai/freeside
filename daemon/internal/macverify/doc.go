@@ -53,10 +53,14 @@
 // (checkProbeReport). The Room refuses a job unless the installed helper is
 // the embedded one and root-owned, the host's Xcode and Swift match the
 // configuration's pin, a workspace holding a Package.resolved has a complete
-// offline Swift dependency cache entry for its key (swiftcache.go), and the
+// offline Swift dependency cache entry for its key (swiftcache.go), a
+// workspace holding a go.mod or go.sum has the pinned Go toolchain and a
+// complete offline Go module cache entry for its key (gocache.go), and the
 // leased slot passes the pre-job probe; it re-checks the job directory and
-// cache entry prepare reports, and releases a slot only once its uid owns no
-// process. Populate (swiftcache_populate.go) admits only https dependency
-// URLs and writes an entry's record last, after proving the entry resolves
-// offline.
+// cache entries prepare reports, and releases a slot only once its uid owns
+// no process. Swift populate (swiftcache_populate.go) admits only https
+// dependency URLs; Go populate (gocache_populate.go) installs the toolchain
+// only from an archive with the pinned SHA-256 and refuses a go.mod that
+// asks for a newer Go. Each writes an entry's record last, after proving the
+// entry resolves offline.
 package macverify

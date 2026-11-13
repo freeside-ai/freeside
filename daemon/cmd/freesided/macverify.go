@@ -68,6 +68,8 @@ func parseMacverifySpec(verb string, args []string, operator string) (macverify.
 	flags.StringVar(&spec.Anchor, "anchor", "freeside-macverify", "pf anchor name under com.apple/")
 	flags.StringVar(&spec.Label, "label", "ai.freeside.macverify.pf", "boot LaunchDaemon label")
 	flags.StringVar(&spec.SudoersName, "sudoers-name", "freeside-slot-run", "sudoers drop-in name under /etc/sudoers.d")
+	flags.IntVar(&spec.PortBase, "port-base", macverify.DefaultPortBase,
+		"first reserved port; each slot reserves four, below the ephemeral range")
 	if err := flags.Parse(args); err != nil {
 		return spec, fmt.Errorf("%w: %w", errMacverifyUsage, err)
 	}
@@ -95,7 +97,8 @@ func runMacverifyCommand(args []string, stdout io.Writer, host macverify.Host, o
 		cfg := spec.Config()
 		return writeLines(stdout, []string{
 			"installed " + spec.Root,
-			fmt.Sprintf("macverify.Config: ExecutorRoot %s, Slots %s", cfg.ExecutorRoot, strings.Join(cfg.Slots, ",")),
+			fmt.Sprintf("macverify.Config: ExecutorRoot %s, Slots %s, PortBase %d",
+				cfg.ExecutorRoot, strings.Join(cfg.Slots, ","), cfg.PortBase),
 		})
 	case "check":
 		findings, err := macverify.Inspect(spec, host)

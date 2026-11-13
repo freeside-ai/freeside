@@ -836,7 +836,7 @@ func deputyClaudeDriverConfig(
 		ReviewAuthMode:     settings.Review.AuthMode,
 		ReviewAuthSnapshot: settings.Review.AuthSnapshot, ReviewInstructions: settings.Review.Instructions,
 		ReviewWorkspaceSizeMB: deputyReviewWorkspaceSizeMB,
-		HostVerification:      deputyMacverifyExecutorConfig(settings.MacosVerification),
+		HostVerification:      deputyMacverifyExecutorConfig(settings.MacosVerification, settings.Listen),
 	}
 }
 

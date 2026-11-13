@@ -48,6 +48,10 @@ type Config struct {
 	// Toolchain pins the operator-installed Xcode and Swift the recipe runs
 	// under. The room refuses a job when the host's differ (#2880).
 	Toolchain Toolchain
+	// PortBase is the first of the slots' reserved ports (ports.go): slot i
+	// in sorted order holds PortBase+4i through PortBase+4i+3. It must match
+	// the base install wrote into bin/ports.conf, or the room refuses jobs.
+	PortBase int
 }
 
 func (c Config) validate() error {
@@ -74,6 +78,13 @@ func (c Config) validate() error {
 		}
 	}
 	if err := c.Toolchain.validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	ephemeralFirst, err := ephemeralPortFirst()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	if err := validatePortBase(c.PortBase, len(c.Slots), ephemeralFirst); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	return nil
@@ -115,6 +126,14 @@ type conformanceConfiguration struct {
 	Slots             []string `json:"slots"`
 	XcodeBuild        string   `json:"xcode_build"`
 	Swift             string   `json:"swift"`
+	// Go names the Go toolchain pin slots run. The daemon's identity already
+	// covers it, since the pin is compiled in; naming it makes the record
+	// say which Go a pass proved.
+	Go string `json:"go"`
+	// PortBase and PortsPerSlot fix every slot's reserved ports, which the
+	// probe proves reachable and the profile admits.
+	PortBase     int `json:"port_base"`
+	PortsPerSlot int `json:"ports_per_slot"`
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -168,7 +187,7 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		return ""
 	}
 	body, err := json.Marshal(conformanceConfiguration{
-		Version:           "freeside.macverify.conformance-configuration/v2",
+		Version:           "freeside.macverify.conformance-configuration/v3",
 		Daemon:            b.daemonIdentity,
 		ExecutorRoot:      b.cfg.ExecutorRoot,
 		SandboxProfile:    contentaddr.Sum(b.cfg.SandboxProfile),
@@ -176,6 +195,9 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		Slots:             b.cfg.Slots,
 		XcodeBuild:        b.cfg.Toolchain.XcodeBuild,
 		Swift:             b.cfg.Toolchain.Swift,
+		Go:                "go" + goToolchainVersion,
+		PortBase:          b.cfg.PortBase,
+		PortsPerSlot:      portsPerSlot,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal macverify conformance configuration: %v", err))

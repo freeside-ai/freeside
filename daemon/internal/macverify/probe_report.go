@@ -2,6 +2,7 @@ package macverify
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -18,18 +19,22 @@ const (
 // The probe's check names. RunProbe prints them and checkProbeReport
 // requires them, so the two cannot drift.
 const (
-	checkLoopbackRefused = "loopback-refused"
-	checkResolverEmpty   = "resolver-empty"
-	checkTCPRefused      = "tcp-refused"
-	checkUDPRefused      = "udp-refused"
-	checkWriteJobDir     = "write-job-dir"
-	checkTCPDropped      = "tcp-dropped"
-	checkUDPDropped      = "udp-dropped"
-	checkHomeMarked      = "home-marked"
-	checkHomeReset       = "home-reset"
+	checkLoopbackRefused       = "loopback-refused"
+	checkForeignBindRefused    = "foreign-bind-refused"
+	checkForeignConnectRefused = "foreign-connect-refused"
+	checkResolverEmpty         = "resolver-empty"
+	checkTCPRefused            = "tcp-refused"
+	checkUDPRefused            = "udp-refused"
+	checkWriteJobDir           = "write-job-dir"
+	checkTCPDropped            = "tcp-dropped"
+	checkUDPDropped            = "udp-dropped"
+	checkHomeMarked            = "home-marked"
+	checkHomeReset             = "home-reset"
 )
 
 func checkWriteDenied(dir string) string { return "write-denied " + dir }
+
+func checkReservedPort(port int) string { return "reserved-port " + strconv.Itoa(port) }
 
 // probeExecutable is the probe's file name in the probe workspace, and
 // probeCommand the arguments before the mode: the daemon's own hidden verb,
@@ -62,23 +67,36 @@ func (s probeSpec) argv() []string {
 }
 
 // sandboxTargets are what the sandbox mode tries to reach and write. Off-host
-// targets are host:port literals the probe dials without resolving.
+// targets are host:port literals the probe dials without resolving. ports are
+// the slot's reserved ports, which the probe must be able to use, and
+// foreignPort one outside them, which it must not.
 type sandboxTargets struct {
 	loopbackPort string
 	resolverHost string
 	tcp          string
 	udp          string
+	ports        slotPortSet
+	foreignPort  int
 	outsideDirs  []string
 }
 
 func sandboxProbe(t sandboxTargets) probeSpec {
-	args := append([]string{t.loopbackPort, t.resolverHost, t.tcp, t.udp}, t.outsideDirs...)
+	args := append([]string{
+		t.loopbackPort, t.resolverHost, t.tcp, t.udp, t.ports.String(), strconv.Itoa(t.foreignPort),
+	}, t.outsideDirs...)
 	checks := []probeCheck{
 		{checkLoopbackRefused, ConfinementSandboxNetwork},
-		{checkResolverEmpty, ConfinementSandboxNetwork},
-		{checkTCPRefused, ConfinementSandboxNetwork},
-		{checkUDPRefused, ConfinementSandboxNetwork},
 	}
+	for _, port := range t.ports {
+		checks = append(checks, probeCheck{checkReservedPort(port), ConfinementSandboxNetwork})
+	}
+	checks = append(checks,
+		probeCheck{checkForeignBindRefused, ConfinementSandboxNetwork},
+		probeCheck{checkForeignConnectRefused, ConfinementSandboxNetwork},
+		probeCheck{checkResolverEmpty, ConfinementSandboxNetwork},
+		probeCheck{checkTCPRefused, ConfinementSandboxNetwork},
+		probeCheck{checkUDPRefused, ConfinementSandboxNetwork},
+	)
 	for _, dir := range t.outsideDirs {
 		checks = append(checks, probeCheck{checkWriteDenied(dir), ConfinementWriteConfinement})
 	}

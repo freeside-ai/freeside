@@ -117,9 +117,16 @@ func TestFullProvesEverySlotAndDeclares(t *testing.T) {
 		t.Fatalf("jobs =\n%q\nwant\n%q", got, want)
 	}
 	sandbox, filter := specFromArgv(runs[0].Argv), specFromArgv(runs[1].Argv)
-	wantTail := append([]string{defaultResolverHost, s.fx.OffHostTCP, s.fx.OffHostUDP}, s.room.outsideDirs...)
+	// Each slot proves its own ports and that the next slot's first port
+	// is refused.
+	wantTail := append([]string{
+		defaultResolverHost, s.fx.OffHostTCP, s.fx.OffHostUDP, "47000,47001,47002,47003", "47004",
+	}, s.room.outsideDirs...)
 	if !slices.Equal(sandbox.args[1:], wantTail) || !slices.Equal(filter.args, []string{s.fx.OffHostTCP, s.fx.OffHostUDP}) {
 		t.Fatalf("targets: sandbox %q, packet filter %q", sandbox.args, filter.args)
+	}
+	if got := specFromArgv(runs[4].Argv).args[4:6]; !slices.Equal(got, []string{"47004,47005,47006,47007", "47000"}) {
+		t.Fatalf("slot2's ports and foreign port = %q", got)
 	}
 	for _, slot := range []string{"slot1", "slot2"} {
 		if err := s.room.pool.leaseNamed(slot); err != nil {

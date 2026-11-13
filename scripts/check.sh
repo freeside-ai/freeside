@@ -46,6 +46,10 @@
 #                  steps run exactly as CI runs them. The trusted recipe
 #                  sets it because it can't name a `..` path itself
 #                  (devlog/2026-11-10-1040-app-steps-executor-switch.md).
+#                  `convergence run` passes it on: run-convergence.sh adds
+#                  --disable-sandbox to its swift commands, and in a slot
+#                  it also binds the harness to the slot's reserved ports
+#                  (FREESIDE_VERIFY_PORTS, which the room sets).
 #
 # Daemon Go flags:
 #   Every daemon step appends -trimpath to GOFLAGS: unset becomes

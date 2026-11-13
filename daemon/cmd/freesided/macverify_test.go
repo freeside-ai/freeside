@@ -18,7 +18,7 @@ func TestParseMacverifySpecDefaults(t *testing.T) {
 	want := macverify.InstallSpec{
 		Root: "/Library/Freeside/macverify", SlotPrefix: "fvslot", SlotCount: 2, Group: "fvslots", FirstID: 460,
 		Operator: "benja", Anchor: "freeside-macverify", Label: "ai.freeside.macverify.pf",
-		SudoersName: "freeside-slot-run",
+		SudoersName: "freeside-slot-run", PortBase: macverify.DefaultPortBase,
 	}
 	if spec != want {
 		t.Fatalf("spec = %+v, want %+v", spec, want)

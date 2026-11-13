@@ -10,12 +10,15 @@
 # refuses a job when the installed copy differs.
 #
 # Operations (every slot argument must be listed in slots.conf beside this
-# script; a job id is 32 lowercase hex characters):
+# script, with its reserved ports in ports.conf; a job id is 32 lowercase hex
+# characters):
 #
-#   prepare <slot> <job-id> <workdir> [<swift-cache-key>]
+#   prepare <slot> <job-id> <workdir> [swift=<key>] [go=<key>]
 #                                       sandbox profile on stdin
 #   run     <slot> <job-id> HOME=… TMPDIR=… PATH=… LC_ALL=C
-#                 JOB_DIR=… SLOT_HOME=… SLOT_TMP=… SLOT_CACHE=… -- <argv>…
+#                 FREESIDE_VERIFY_PORTS=… [GO…=…]
+#                 JOB_DIR=… SLOT_HOME=… SLOT_TMP=… SLOT_CACHE=…
+#                 PORT_1=… PORT_2=… PORT_3=… PORT_4=… -- <argv>…
 #   reap    <slot>
 #   cleanup <slot> <job-id>
 #
@@ -24,6 +27,17 @@
 # (64 lowercase hex characters) names an entry under <root>/swift-cache
 # whose seed prepare copies into the job directory and the slot's home
 # (#2880); the mirrors the seed points at stay in the entry, read in place.
+# A Go cache key names an entry under <root>/go-cache whose module cache the
+# command reads in place, with the pinned toolchain beside it (#3155).
+# prepare records the key root-owned beside the job's profile, and run
+# derives the command's Go environment from that record alone, so the
+# daemon's argument cannot point the command at another cache.
+#
+# ports.conf names each slot's four reserved ports, one line per slot:
+# `<slot> <p1> <p2> <p3> <p4>` (#3155). The sandbox profile admits only
+# those ports, through its PORT_1 to PORT_4 parameters, and the command
+# finds them in FREESIDE_VERIFY_PORTS, comma-separated. prepare reports them
+# so the daemon can check them against its configuration.
 #
 # Trust: the executor root is the parent of this script's directory, never an
 # argument, and every directory from here to / must be root-owned and not
@@ -48,6 +62,9 @@ REFUSED=120
 # COMMAND_PATH is the only PATH a recipe command sees. The daemon's copy of
 # this constant must match (TestHelperScriptConstants).
 COMMAND_PATH=/usr/bin:/bin:/usr/sbin:/sbin
+# GO_VERSION is the pinned Go toolchain's version; the daemon's copy must
+# match (TestHelperScriptConstants).
+GO_VERSION=1.27.4
 MAX_PROFILE_BYTES=262144
 
 # shellcheck disable=SC2154 # status is assigned inside the trap itself
@@ -92,8 +109,11 @@ done
 [ -f "$self" ] && [ ! -L "$self" ] || refuse "$self is not a regular file"
 root_owned "$self"
 conf=$bindir/slots.conf
-[ -f "$conf" ] && [ ! -L "$conf" ] || refuse "$conf is not a regular file"
-root_owned "$conf"
+portsconf=$bindir/ports.conf
+for file in "$conf" "$portsconf"; do
+	[ -f "$file" ] && [ ! -L "$file" ] || refuse "$file is not a regular file"
+	root_owned "$file"
+done
 for dir in "$root/jobs" "$root/homes" "$root/template" "$root/template/home"; do
 	[ -d "$dir" ] && [ ! -L "$dir" ] || refuse "$dir is not a directory"
 	root_owned "$dir"
@@ -123,6 +143,17 @@ select_slot() {
 		fi
 	done <"$conf"
 	[ "$listed" = yes ] || refuse "slot $slot is not in $conf"
+	slot_ports=
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in
+		"$slot "*)
+			[ -z "$slot_ports" ] || refuse "$portsconf lists $slot twice"
+			slot_ports=${line#"$slot "}
+			;;
+		esac
+	done <"$portsconf"
+	[ -n "$slot_ports" ] || refuse "slot $slot has no ports in $portsconf"
+	select_ports "$slot_ports"
 	uid=$(id -u "$slot" 2>/dev/null) || refuse "no account named $slot"
 	case $uid in
 	'' | *[!0-9]*) refuse "account $slot has no numeric uid" ;;
@@ -140,6 +171,32 @@ select_slot() {
 	recorded=$(dscl . -read "/Users/$slot" NFSHomeDirectory 2>/dev/null) ||
 		refuse "cannot read the home of $slot"
 	[ "$recorded" = "NFSHomeDirectory: $home" ] || refuse "the home of $slot is not $home"
+}
+
+# select_ports sets port1 to port4 and ports_csv from a ports.conf line's
+# ports: exactly four, each a decimal from 1024 to 65535 with no leading
+# zero. Globbing is off while the line splits on spaces.
+select_ports() {
+	set -f
+	saved_ifs=$IFS
+	IFS=' '
+	# shellcheck disable=SC2086 # the line splits into its ports
+	set -- $1
+	IFS=$saved_ifs
+	set +f
+	[ "$#" -eq 4 ] || refuse "slot $slot does not have four ports in $portsconf"
+	for port in "$@"; do
+		case $port in
+		'' | 0* | *[!0-9]*) refuse "malformed port $port for $slot in $portsconf" ;;
+		esac
+		[ "${#port}" -le 5 ] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] ||
+			refuse "port $port for $slot in $portsconf is outside 1024-65535"
+	done
+	port1=$1
+	port2=$2
+	port3=$3
+	port4=$4
+	ports_csv=$1,$2,$3,$4
 }
 
 # caller_owned refuses a path that is not owned by the caller or that group
@@ -171,6 +228,26 @@ select_swift_cache() {
 		refuse "Swift cache entry $key is incomplete"
 }
 
+# select_go_cache sets go_entry and goroot for a Go module cache key, on
+# the same terms as select_swift_cache: no one but the caller could have
+# written the directories the command reads, and the entry is complete.
+select_go_cache() {
+	go_key=$1
+	case $go_key in
+	*[!0-9a-f]*) refuse "malformed Go cache key" ;;
+	esac
+	[ "${#go_key}" -eq 64 ] || refuse "malformed Go cache key"
+	go_entry=$root/go-cache/$go_key
+	goroot=$root/go-cache/go$GO_VERSION
+	for dir in "$root/go-cache" "$go_entry" "$go_entry/modcache" "$goroot" "$goroot/bin"; do
+		[ -d "$dir" ] && [ ! -L "$dir" ] || refuse "$dir is not a directory"
+		caller_owned "$dir"
+	done
+	[ -f "$go_entry/record.json" ] && [ ! -L "$go_entry/record.json" ] ||
+		refuse "Go cache entry $go_key is incomplete"
+	[ -f "$goroot/bin/go" ] && [ ! -L "$goroot/bin/go" ] || refuse "the Go $GO_VERSION toolchain is incomplete"
+}
+
 select_job() {
 	job=$1
 	case $job in
@@ -180,6 +257,7 @@ select_job() {
 	jobdir=$jobs/$job
 	profile=$jobs/$job.sb
 	archive=$jobs/$job.tar
+	gorecord=$jobs/$job.go
 }
 
 # live_count prints how many processes the slot owns, by real or effective uid.
@@ -327,12 +405,27 @@ reset_home() {
 }
 
 op_prepare() {
-	[ "$#" -eq 3 ] || [ "$#" -eq 4 ] || refuse "usage: prepare <slot> <job-id> <workdir> [<swift-cache-key>]"
+	usage="usage: prepare <slot> <job-id> <workdir> [swift=<key>] [go=<key>]"
+	[ "$#" -ge 3 ] || refuse "$usage"
 	select_slot "$1"
 	select_job "$2"
 	src=$3
+	shift 3
 	entry=
-	[ "$#" -eq 3 ] || select_swift_cache "$4"
+	go_key=
+	case ${1:-} in
+	swift=*)
+		select_swift_cache "${1#swift=}"
+		shift
+		;;
+	esac
+	case ${1:-} in
+	go=*)
+		select_go_cache "${1#go=}"
+		shift
+		;;
+	esac
+	[ "$#" -eq 0 ] || refuse "$usage"
 	case $src in
 	/*) ;;
 	*) refuse "workdir must be absolute" ;;
@@ -354,6 +447,10 @@ op_prepare() {
 	[ "$size" -gt 0 ] || refuse "empty sandbox profile"
 	[ "$size" -le "$MAX_PROFILE_BYTES" ] || refuse "sandbox profile exceeds $MAX_PROFILE_BYTES bytes"
 	chmod 0644 "$profile"
+	if [ -n "$go_key" ]; then
+		printf '%s\n' "$go_key" >"$gorecord"
+		chmod 0644 "$gorecord"
+	fi
 	select_user_dirs
 	reset_home
 	empty_user_dir "$tmp" temp
@@ -365,6 +462,7 @@ op_prepare() {
 	# does not compile is a refusal here and not the command's exit status.
 	sudo -u "$slot" /usr/bin/sandbox-exec -f "$profile" \
 		-D "JOB_DIR=$jobdir" -D "SLOT_HOME=$home" -D "SLOT_TMP=$tmp" -D "SLOT_CACHE=$cache" \
+		-D "PORT_1=$port1" -D "PORT_2=$port2" -D "PORT_3=$port3" -D "PORT_4=$port4" \
 		-- /usr/bin/true || refuse "the sandbox profile does not apply"
 	# The caller reads its own workspace and the slot writes the copy, so
 	# root neither reads a path the caller could not nor writes one the slot
@@ -400,12 +498,12 @@ op_prepare() {
 	fi
 	rm -f "$archive"
 	assert_idle
-	printf 'root=%s\nuid=%s\nhome=%s\ntmp=%s\ncache=%s\nswift_cache=%s\n' \
-		"$root" "$uid" "$home" "$tmp" "$cache" "$swift_cache"
+	printf 'root=%s\nuid=%s\nhome=%s\ntmp=%s\ncache=%s\nports=%s\nswift_cache=%s\ngo_cache=%s\n' \
+		"$root" "$uid" "$home" "$tmp" "$cache" "$ports_csv" "$swift_cache" "${go_key:-none}"
 }
 
 op_run() {
-	[ "$#" -ge 12 ] || refuse "usage: run <slot> <job-id> <environment> <parameters> -- <argv>"
+	[ "$#" -ge 17 ] || refuse "usage: run <slot> <job-id> <environment> <parameters> -- <argv>"
 	select_slot "$1"
 	select_job "$2"
 	shift 2
@@ -414,10 +512,31 @@ op_run() {
 	[ "$(stat -f '%u %Lp' "$jobdir")" = "$uid 700" ] || refuse "$jobdir is not $slot's at 0700"
 	[ -f "$profile" ] && [ ! -L "$profile" ] || refuse "$profile is not a regular file"
 	root_owned "$profile"
+	# A job prepared with a Go cache gets the pinned toolchain first on its
+	# PATH and the Go environment, one newline-separated assignment per line,
+	# from the record prepare left. Every value is built from the checked
+	# root and key, so word splitting on IFS (a newline) yields exactly those
+	# assignments and no pattern characters.
+	command_path=$COMMAND_PATH
+	go_env=
+	if [ -e "$gorecord" ] || [ -L "$gorecord" ]; then
+		[ -f "$gorecord" ] && [ ! -L "$gorecord" ] || refuse "$gorecord is not a regular file"
+		root_owned "$gorecord"
+		select_go_cache "$(cat "$gorecord")"
+		command_path=$goroot/bin:$COMMAND_PATH
+		go_env="GOFLAGS=-mod=readonly
+GOMODCACHE=$go_entry/modcache
+GOPROXY=off
+GOTOOLCHAIN=local
+GOWORK=off"
+	fi
 	# The daemon names the environment and sandbox parameters it expects;
 	# they must be exactly the ones this script derives.
-	for want in "HOME=$home" "TMPDIR=$tmp" "PATH=$COMMAND_PATH" "LC_ALL=C" \
-		"JOB_DIR=$jobdir" "SLOT_HOME=$home" "SLOT_TMP=$tmp" "SLOT_CACHE=$cache" --; do
+	# shellcheck disable=SC2086 # go_env splits into its assignments (above)
+	for want in "HOME=$home" "TMPDIR=$tmp" "PATH=$command_path" "LC_ALL=C" \
+		"FREESIDE_VERIFY_PORTS=$ports_csv" $go_env \
+		"JOB_DIR=$jobdir" "SLOT_HOME=$home" "SLOT_TMP=$tmp" "SLOT_CACHE=$cache" \
+		"PORT_1=$port1" "PORT_2=$port2" "PORT_3=$port3" "PORT_4=$port4" --; do
 		[ "$1" = "$want" ] || refuse "expected $want, got $1"
 		shift
 	done
@@ -425,10 +544,13 @@ op_run() {
 	cd "$jobdir/workspace" || refuse "cannot enter $jobdir/workspace"
 	# Spike 1: only the slot's own launchd context is free of the operator's
 	# window-server session.
+	# shellcheck disable=SC2086 # go_env splits into its assignments (above)
 	exec launchctl asuser "$uid" sudo -u "$slot" \
-		/usr/bin/env -i "HOME=$home" "TMPDIR=$tmp" "PATH=$COMMAND_PATH" LC_ALL=C \
+		/usr/bin/env -i "HOME=$home" "TMPDIR=$tmp" "PATH=$command_path" LC_ALL=C \
+		"FREESIDE_VERIFY_PORTS=$ports_csv" $go_env \
 		/usr/bin/sandbox-exec -f "$profile" \
 		-D "JOB_DIR=$jobdir" -D "SLOT_HOME=$home" -D "SLOT_TMP=$tmp" -D "SLOT_CACHE=$cache" \
+		-D "PORT_1=$port1" -D "PORT_2=$port2" -D "PORT_3=$port3" -D "PORT_4=$port4" \
 		-- "$@"
 }
 
@@ -462,7 +584,7 @@ op_cleanup() {
 	select_job "$2"
 	assert_idle
 	remove "$jobdir"
-	rm -f "$profile" "$archive"
+	rm -f "$profile" "$archive" "$gorecord"
 	select_user_dirs
 	reset_home
 	empty_user_dir "$tmp" temp

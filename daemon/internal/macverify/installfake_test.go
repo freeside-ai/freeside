@@ -329,7 +329,8 @@ func (h *fakeHost) loadAnchor(anchor, path string) error {
 		if !ok {
 			return fmt.Errorf("unknown user %s", fields[len(fields)-1])
 		}
-		rules = append(rules, strings.Join(fields[:4], " ")+" all user = "+strconv.Itoa(a.UID))
+		// pfctl prints "<rule> user <name>" as "<rule> all user = <uid>".
+		rules = append(rules, strings.Join(fields[:len(fields)-2], " ")+" all user = "+strconv.Itoa(a.UID))
 	}
 	h.anchors[anchor] = rules
 	return nil

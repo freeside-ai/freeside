@@ -23,6 +23,11 @@ type MacverifyExecutorConfig struct {
 	// XcodeBuild and Swift pin the host toolchain recipe commands run
 	// under; a host whose toolchain differs refuses each job.
 	XcodeBuild, Swift string
+	// PortBase is the first reserved port, as the install wrote it.
+	PortBase int
+	// ListenPort is the daemon's listen port, 0 when the kernel picks one.
+	// No slot may reserve it, or a job could reach the daemon's API.
+	ListenPort int
 }
 
 // proveHostVerification runs the executor's full conformance pass and records
@@ -60,13 +65,18 @@ func ComposeHostVerificationExecutor(
 		return nil, nil
 	}
 	slots := slices.Sorted(slices.Values(cfg.Slots))
-	backend, err := macverify.New(macverify.Config{
+	config := macverify.Config{
 		ExecutorRoot:      cfg.Root,
 		SandboxProfile:    macverify.DefaultSandboxProfile(),
 		PacketFilterRules: macverify.PacketFilterRules(slots),
 		Slots:             slots,
 		Toolchain:         macverify.Toolchain{XcodeBuild: cfg.XcodeBuild, Swift: cfg.Swift},
-	})
+		PortBase:          cfg.PortBase,
+	}
+	if cfg.ListenPort != 0 && config.ReservesPort(cfg.ListenPort) {
+		return nil, fmt.Errorf("configure the macOS verification executor: the daemon's listen port %d is a slot's reserved port; choose another -listen port or -macverify-port-base", cfg.ListenPort)
+	}
+	backend, err := macverify.New(config)
 	if err != nil {
 		return nil, fmt.Errorf("configure the macOS verification executor: %w", err)
 	}

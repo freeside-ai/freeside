@@ -18,23 +18,24 @@ import (
 func runSwiftCacheMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := runSwiftCacheCommand(ctx, args, os.Stdout, os.Stderr, macverify.PopulateSwiftCache); err != nil {
+	if err := runCacheCommand(ctx, "swift-cache", args, os.Stdout, os.Stderr, macverify.PopulateSwiftCache); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided swift-cache:", err)
 		os.Exit(1)
 	}
 }
 
-// runSwiftCacheCommand is the operator's door to the macOS verification
-// executor's offline Swift dependency cache (#2880). It only parses flags;
-// macverify owns every check and write, so this file stays off the Tier A
-// list.
-func runSwiftCacheCommand(ctx context.Context, args []string, stdout, stderr io.Writer,
+// runCacheCommand is the operator's door to one of the macOS verification
+// executor's offline caches, named by verb: swift-cache for Swift
+// dependencies (#2880), go-cache for the Go toolchain and modules (#3155).
+// It only parses flags; macverify owns every check and write, so this file
+// and go_cache.go stay off the Tier A list.
+func runCacheCommand(ctx context.Context, verb string, args []string, stdout, stderr io.Writer,
 	populate func(context.Context, macverify.PopulateOptions) (macverify.PopulateResult, error),
 ) error {
 	if len(args) == 0 || args[0] != "populate" {
-		return errors.New("usage: freesided swift-cache populate --executor-root <root> --source <checkout>")
+		return fmt.Errorf("usage: freesided %s populate --executor-root <root> --source <checkout>", verb)
 	}
-	flags := flag.NewFlagSet("freesided swift-cache populate", flag.ContinueOnError)
+	flags := flag.NewFlagSet("freesided "+verb+" populate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("executor-root", "", "macOS verification executor root (required)")
 	source := flags.String("source", "", "checkout of the project at the commit to serve (required)")

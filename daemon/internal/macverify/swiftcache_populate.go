@@ -24,9 +24,9 @@ import (
 // PopulateOptions names the cache a populate run fills and the project
 // checkout it fills it for.
 type PopulateOptions struct {
-	// ExecutorRoot is the executor root whose swift-cache directory the
-	// entry goes in. The operator creates that directory, owned by the
-	// daemon user and not group- or world-writable.
+	// ExecutorRoot is the executor root whose swift-cache or go-cache
+	// directory the entry goes in. The operator creates that directory,
+	// owned by the daemon user and not group- or world-writable.
 	ExecutorRoot string
 	// Source is a checkout of the project at the commit to serve. Populate
 	// works on scratch copies and never writes to it.

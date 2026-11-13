@@ -18,6 +18,7 @@ func testConfig() macverify.Config {
 		PacketFilterRules: []byte("block drop quick user slot1"),
 		Slots:             []string{"slot1", "slot2"},
 		Toolchain:         macverify.Toolchain{XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"},
+		PortBase:          macverify.DefaultPortBase,
 	}
 }
 

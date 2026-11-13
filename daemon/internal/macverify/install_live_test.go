@@ -33,11 +33,12 @@ func TestLiveInstall(t *testing.T) {
 		Root: "/Library/Freeside/macverify-livetest", SlotPrefix: "fvtest", SlotCount: 2, Group: "fvtests",
 		FirstID: 470, Operator: os.Getenv("USER"), Anchor: "freeside-macverify-livetest",
 		Label: "ai.freeside.macverify.pf.livetest", SudoersName: "freeside-slot-run-livetest",
+		PortBase: DefaultPortBase + 100,
 	}
 	flags := []string{
 		"-root", spec.Root, "-slot-prefix", spec.SlotPrefix, "-slots", strconv.Itoa(spec.SlotCount),
 		"-group", spec.Group, "-first-id", strconv.Itoa(spec.FirstID), "-anchor", spec.Anchor,
-		"-label", spec.Label, "-sudoers-name", spec.SudoersName,
+		"-label", spec.Label, "-sudoers-name", spec.SudoersName, "-port-base", strconv.Itoa(spec.PortBase),
 	}
 	bin := filepath.Join(t.TempDir(), "freesided")
 	build := exec.Command("go", "build", "-o", bin, "github.com/freeside-ai/freeside/daemon/cmd/freesided") //nolint:gosec // G204: the go tool building this module's daemon

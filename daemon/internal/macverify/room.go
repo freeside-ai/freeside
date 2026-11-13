@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -95,6 +96,14 @@ type Room struct {
 	// swiftCacheMasked makes the room serve no Swift dependency cache, so
 	// the live suite can show a job without it attempts the network.
 	swiftCacheMasked bool
+	// ports are each slot's reserved ports and portBase the first of them
+	// (ports.go); portHolders reports what holds a port on the host
+	// (hostPortHolders outside tests), and portUsable is the conformance
+	// pass's positive control on one (reservedPortUsable outside tests).
+	ports       map[string]slotPortSet
+	portBase    int
+	portHolders func(context.Context, int) ([]string, error)
+	portUsable  func(int) error
 	// backend's declaration is withdrawn when a pre-job probe finds a
 	// confinement broken.
 	backend *Backend
@@ -144,6 +153,10 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 		hostSupported:   hostSupported,
 		toolchain:       b.cfg.Toolchain,
 		hostToolchain:   HostToolchain,
+		ports:           reservedPorts(b.cfg.PortBase, b.cfg.Slots),
+		portBase:        b.cfg.PortBase,
+		portHolders:     hostPortHolders,
+		portUsable:      reservedPortUsable,
 		backend:         b,
 		// Only the sandbox can refuse a slot's write to a world-writable
 		// directory, so EPERM there proves the confinement. The daemon
@@ -165,7 +178,9 @@ func NewRoom(b *Backend, opts RoomOptions) (*Room, error) {
 // embedded one (checkInstalledHelper); the host's Xcode and Swift are the
 // configuration's pin (checkToolchain); a workspace holding a
 // Package.resolved has a complete Swift dependency cache entry for its key,
-// and prepare seeded exactly that entry (swiftCacheFor, checkPrepared); the
+// and one holding a go.mod or go.sum has a complete Go module cache entry
+// and the pinned Go toolchain, and prepare set the job up from exactly those
+// entries (swiftCacheFor, goCacheFor, checkPrepared); the
 // leased slot passes the pre-job probe, its sandbox network and write
 // confinements, before the command is launched (preJobProbe); the prepared
 // job directory is the slot's own at 0700 (checkPrepared); and, before the
@@ -199,11 +214,21 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 	if err != nil {
 		return verify.StepResult{}, err
 	}
+	goCache, err := r.goCacheFor(workdir)
+	if err != nil {
+		return verify.StepResult{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return verify.StepResult{}, err
 	}
 	slot, err := r.pool.lease()
 	if err != nil {
+		return verify.StepResult{}, err
+	}
+	// A host listener on the slot's ports is no fault of the slot's, so the
+	// slot goes back to the pool and the declaration stands.
+	if err := checkReservedPortsFree(ctx, r.portHolders, slot, r.ports[slot]); err != nil {
+		r.pool.release(slot)
 		return verify.StepResult{}, err
 	}
 	if err := r.preJobProbe(ctx, slot); err != nil {
@@ -219,7 +244,7 @@ func (r *Room) Run(ctx context.Context, workdir string, argv []string) (verify.S
 		}
 		return verify.StepResult{}, fmt.Errorf("pre-job probe: %w", err)
 	}
-	result, err := r.runOnSlot(ctx, slot, r.profile, workdir, swiftCache, argv, r.maxOutput)
+	result, err := r.runOnSlot(ctx, slot, r.profile, workdir, jobCaches{Swift: swiftCache, Go: goCache}, argv, r.maxOutput)
 	if !errors.Is(err, ErrAbsenceUnproven) {
 		r.pool.release(slot)
 	}
@@ -247,9 +272,24 @@ func (r *Room) preJobProbe(ctx context.Context, slot string) error {
 		resolverHost: preJobResolverHost,
 		tcp:          preJobTCP,
 		udp:          preJobUDP,
+		ports:        r.ports[slot],
+		foreignPort:  r.foreignPort(slot),
 		outsideDirs:  r.outsideDirs,
 	})
 	return r.runProbe(ctx, slot, workspace, r.profile, spec)
+}
+
+// foreignPort is a port outside slot's set that the probe must be refused
+// binding and connecting on: the next slot's first reserved port, so the
+// check shows one slot cannot reach another's, or with a single slot the
+// port just below the reservation.
+func (r *Room) foreignPort(slot string) int {
+	slots := slices.Sorted(maps.Keys(r.ports))
+	if len(slots) < 2 {
+		return r.portBase - 1
+	}
+	i := slices.Index(slots, slot)
+	return r.ports[slots[(i+1)%len(slots)]][0]
 }
 
 // runProbe runs one probe job on a slot the caller has leased and checks its
@@ -261,7 +301,7 @@ func (r *Room) preJobProbe(ctx context.Context, slot string) error {
 func (r *Room) runProbe(ctx context.Context, slot, workspace string, profile []byte, spec probeSpec) error {
 	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	res, err := r.runOnSlot(probeCtx, slot, profile, workspace, "", spec.argv(), maxProbeReport)
+	res, err := r.runOnSlot(probeCtx, slot, profile, workspace, jobCaches{}, spec.argv(), maxProbeReport)
 	if err != nil {
 		return fmt.Errorf("%s probe: %w", spec.mode, err)
 	}
@@ -275,12 +315,12 @@ func (r *Room) runProbe(ctx context.Context, slot, workspace string, profile []b
 // tear down. Recipe commands and probes take this one path. On an error
 // wrapping ErrAbsenceUnproven it has quarantined the slot; otherwise the
 // slot is free of the job and the caller releases it.
-func (r *Room) runOnSlot(ctx context.Context, slot string, profile []byte, workdir, swiftCache string, argv []string, maxOutput int64) (verify.StepResult, error) {
+func (r *Room) runOnSlot(ctx context.Context, slot string, profile []byte, workdir string, caches jobCaches, argv []string, maxOutput int64) (verify.StepResult, error) {
 	jobID, err := newJobID()
 	if err != nil {
 		return verify.StepResult{}, err
 	}
-	result, preparedUID, runErr := r.runJob(ctx, slot, jobID, profile, workdir, swiftCache, argv, maxOutput)
+	result, preparedUID, runErr := r.runJob(ctx, slot, jobID, profile, workdir, caches, argv, maxOutput)
 	if errors.Is(runErr, errHelperAbandoned) {
 		// Tearing down under a live helper would race it, and the teardown
 		// could not prove the helper would not touch the slot afterwards.
@@ -307,15 +347,15 @@ func (r *Room) runOnSlot(ctx context.Context, slot string, profile []byte, workd
 // runJob prepares the slot and runs the command. It returns the uid prepare
 // reported (zero if prepare failed), for the teardown to cross-check. An
 // error wrapping errHelperAbandoned means a helper may still be running.
-func (r *Room) runJob(ctx context.Context, slot, jobID string, profile []byte, workdir, swiftCache string, argv []string, maxOutput int64) (verify.StepResult, int, error) {
+func (r *Room) runJob(ctx context.Context, slot, jobID string, profile []byte, workdir string, caches jobCaches, argv []string, maxOutput int64) (verify.StepResult, int, error) {
 	prepareCtx, cancelPrepare := context.WithTimeout(context.WithoutCancel(ctx), r.prepareTimeout)
-	prepared, err := r.launcher.prepare(prepareCtx, slot, jobID, workdir, profile, swiftCache)
+	prepared, err := r.launcher.prepare(prepareCtx, slot, jobID, workdir, profile, caches)
 	cancelPrepare()
 	if err != nil {
 		return verify.StepResult{}, 0, fmt.Errorf("prepare slot %s: %w", slot, err)
 	}
 	jobDir := filepath.Join(r.root, "jobs", slot, jobID)
-	if err := r.checkPrepared(slot, jobDir, swiftCache, prepared); err != nil {
+	if err := r.checkPrepared(slot, jobDir, caches, prepared); err != nil {
 		return verify.StepResult{}, prepared.UID, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -361,15 +401,21 @@ func (r *Room) runJob(ctx context.Context, slot, jobID string, profile []byte, w
 }
 
 // checkPrepared re-checks what prepare reported against this room's
-// configuration, the Swift dependency cache entry the room chose, and the
-// job directory on disk, which the daemon can inspect without privilege: the
+// configuration, the dependency cache entries the room chose, and the job
+// directory on disk, which the daemon can inspect without privilege: the
 // slot's own at 0700, not a symlink.
-func (r *Room) checkPrepared(slot, jobDir, swiftCache string, p preparedJob) error {
+func (r *Room) checkPrepared(slot, jobDir string, caches jobCaches, p preparedJob) error {
 	if p.Root != r.root {
 		return fmt.Errorf("slot-run acted on executor root %s, configured %s", p.Root, r.root)
 	}
-	if p.SwiftCache != swiftCache {
-		return fmt.Errorf("slot-run seeded Swift cache %q, want %q", p.SwiftCache, swiftCache)
+	if p.Caches.Swift != caches.Swift {
+		return fmt.Errorf("slot-run seeded Swift cache %q, want %q", p.Caches.Swift, caches.Swift)
+	}
+	if p.Caches.Go != caches.Go {
+		return fmt.Errorf("slot-run set up Go cache %q, want %q", p.Caches.Go, caches.Go)
+	}
+	if want := r.ports[slot]; p.Ports != want {
+		return fmt.Errorf("slot-run reserved ports %s for slot %s, configured %s", p.Ports, slot, want)
 	}
 	if want := filepath.Join(r.root, "homes", slot); p.Home != want {
 		return fmt.Errorf("slot-run prepared home %s for slot %s, want %s", p.Home, slot, want)
@@ -417,6 +463,24 @@ func (r *Room) swiftCacheFor(workdir string) (string, error) {
 	return key.Key, nil
 }
 
+// goCacheFor returns the Go module cache key the job reads its modules
+// from, or "" for a workspace with no go.mod or go.sum. A workspace whose
+// key has no complete entry, or a host without the pinned toolchain, is
+// refused with ErrGoCacheMissing before any slot is leased.
+func (r *Room) goCacheFor(workdir string) (string, error) {
+	key, err := workspaceGoCacheKey(workdir)
+	if err != nil {
+		return "", err
+	}
+	if key.Key == "" {
+		return "", nil
+	}
+	if err := lookupGoCache(r.root, key); err != nil {
+		return "", err
+	}
+	return key.Key, nil
+}
+
 // teardown proves the slot is free again: reap, wait until the slot's uid
 // owns no process, clean up, and check once more, since cleanup itself runs
 // short-lived processes as the slot.
@@ -459,15 +523,31 @@ func (r *Room) awaitAbsence(ctx context.Context, uid int) error {
 }
 
 // commandEnv is the command's whole environment: nothing is inherited, and
-// none of it is a credential.
+// none of it is a credential. A job with a Go cache entry gets the pinned
+// toolchain first on its PATH and Go held to that toolchain and the entry,
+// offline (slot-run's run derives the same values).
 func commandEnv(p preparedJob) []string {
-	return []string{"HOME=" + p.Home, "TMPDIR=" + p.Tmp, "PATH=" + commandPath, "LC_ALL=C"}
+	ports := "FREESIDE_VERIFY_PORTS=" + p.Ports.String()
+	if p.Caches.Go == "" {
+		return []string{"HOME=" + p.Home, "TMPDIR=" + p.Tmp, "PATH=" + commandPath, "LC_ALL=C", ports}
+	}
+	return []string{
+		"HOME=" + p.Home, "TMPDIR=" + p.Tmp,
+		"PATH=" + filepath.Join(goToolchainRoot(p.Root), "bin") + ":" + commandPath, "LC_ALL=C", ports,
+		"GOFLAGS=-mod=readonly", "GOMODCACHE=" + filepath.Join(goCacheEntry(p.Root, p.Caches.Go), goCacheModcache),
+		"GOPROXY=off", "GOTOOLCHAIN=local", "GOWORK=off",
+	}
 }
 
-// sandboxParams are the sandbox-exec -D parameters the profile confines
-// writes to.
+// sandboxParams are the sandbox-exec -D parameters: the directories the
+// profile confines writes to and the slot's reserved ports, PORT_1 to
+// PORT_4, the only ports it admits.
 func sandboxParams(jobDir string, p preparedJob) []string {
-	return []string{"JOB_DIR=" + jobDir, "SLOT_HOME=" + p.Home, "SLOT_TMP=" + p.Tmp, "SLOT_CACHE=" + p.Cache}
+	params := []string{"JOB_DIR=" + jobDir, "SLOT_HOME=" + p.Home, "SLOT_TMP=" + p.Tmp, "SLOT_CACHE=" + p.Cache}
+	for i, port := range p.Ports {
+		params = append(params, fmt.Sprintf("PORT_%d=%d", i+1, port))
+	}
+	return params
 }
 
 func validateArgv(argv []string) error {

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -27,15 +28,18 @@ const probeHomeMarker = "freeside-probe-marker"
 // "  (…)" detail lines, to stdout and nothing else, and returns 0 when every
 // check passed, 1 when any failed, and 2 for a usage error.
 //
-//	sandbox <loopback-port> <resolver-host> <tcp-addr> <udp-addr> <outside-dir>…
+//	sandbox <loopback-port> <resolver-host> <tcp-addr> <udp-addr> <ports> <foreign-port> <outside-dir>…
 //	packet-filter <tcp-addr> <udp-addr>
 //	home-mark
 //	home-clean
 //
-// The sandbox mode requires the sandbox's own refusal, EPERM, from every
-// network attempt and every write outside the working directory, so a
-// refusal for any other reason (an unreachable target, an absent directory,
-// file permissions) fails the check. The packet-filter mode runs with the
+// The sandbox mode requires that each of the slot's reserved ports (<ports>,
+// comma-separated) listens, accepts, and exchanges a datagram on 127.0.0.1
+// and ::1, and the sandbox's own refusal, EPERM, from every other network
+// attempt (a bind and a connect on <foreign-port> among them) and every
+// write outside the working directory, so a refusal for any other reason
+// (an unreachable target, an absent directory, file permissions) fails the
+// check. The packet-filter mode runs with the
 // sandbox off, where EPERM would mean the sandbox was on after all, so it
 // requires the packet filter's refusal instead.
 func RunProbe(args []string, stdout io.Writer) int {
@@ -46,11 +50,20 @@ func RunProbe(args []string, stdout io.Writer) int {
 	mode, args := args[0], args[1:]
 	switch mode {
 	case probeModeSandbox:
-		if len(args) < 5 {
+		if len(args) < 7 {
+			return p.usage()
+		}
+		ports, err := parsePorts(args[4])
+		if err != nil {
+			return p.usage()
+		}
+		foreign, err := strconv.Atoi(args[5])
+		if err != nil {
 			return p.usage()
 		}
 		p.sandbox(sandboxTargets{
-			loopbackPort: args[0], resolverHost: args[1], tcp: args[2], udp: args[3], outsideDirs: args[4:],
+			loopbackPort: args[0], resolverHost: args[1], tcp: args[2], udp: args[3],
+			ports: ports, foreignPort: foreign, outsideDirs: args[6:],
 		})
 	case probeModePacketFilter:
 		if len(args) != 2 {
@@ -101,6 +114,12 @@ func (p *probe) detail(format string, args ...any) {
 
 func (p *probe) sandbox(t sandboxTargets) {
 	p.check(checkLoopbackRefused, p.sandboxRefused(dialTCP(net.JoinHostPort("127.0.0.1", t.loopbackPort))))
+	for _, port := range t.ports {
+		p.check(checkReservedPort(port), reservedPortUsable(port))
+	}
+	foreign := net.JoinHostPort("127.0.0.1", strconv.Itoa(t.foreignPort))
+	p.check(checkForeignBindRefused, p.sandboxRefused(listenTCP(foreign)))
+	p.check(checkForeignConnectRefused, p.sandboxRefused(dialTCP(foreign)))
 	p.check(checkResolverEmpty, p.resolverEmpty(t.resolverHost))
 	p.check(checkTCPRefused, p.sandboxRefused(dialTCP(t.tcp)))
 	p.check(checkUDPRefused, p.sandboxRefused(sendUDP(t.udp)))
@@ -175,6 +194,88 @@ func (p *probe) filterRefused(err error) error {
 func isTimeout(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// reservedPortUsable listens on port and connects to it over TCP, and binds
+// it and sends to it over UDP, on 127.0.0.1 and then ::1.
+func reservedPortUsable(port int) error {
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
+		if err := tcpRoundTrip(addr); err != nil {
+			return fmt.Errorf("tcp %s: %w", addr, err)
+		}
+		if err := udpRoundTrip(addr); err != nil {
+			return fmt.Errorf("udp %s: %w", addr, err)
+		}
+	}
+	return nil
+}
+
+// tcpRoundTrip listens on addr, connects to it, and accepts the connection.
+// Both ends close with a reset, so neither leaves a TIME_WAIT on the
+// reserved port: one the daemon user left there would make the slot's own
+// bind of that port fail.
+func tcpRoundTrip(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ln.Close() }()
+	conn, err := net.DialTimeout("tcp", addr, probeDialTimeout)
+	if err != nil {
+		return err
+	}
+	if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(probeDialTimeout)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	peer, err := ln.Accept()
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	// Both before either closes: macOS refuses SO_LINGER with EINVAL on a
+	// socket its peer has already reset.
+	lingerErr := errors.Join(conn.(*net.TCPConn).SetLinger(0), peer.(*net.TCPConn).SetLinger(0))
+	return errors.Join(lingerErr, conn.Close(), peer.Close())
+}
+
+// udpRoundTrip binds addr and receives one datagram sent to it.
+func udpRoundTrip(addr string) error {
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pc.Close() }()
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	want := []byte("freeside-probe")
+	if _, err := conn.Write(want); err != nil {
+		return err
+	}
+	if err := pc.SetReadDeadline(time.Now().Add(probeDialTimeout)); err != nil {
+		return err
+	}
+	buf := make([]byte, 64)
+	n, _, err := pc.ReadFrom(buf)
+	if err != nil {
+		return err
+	}
+	if string(buf[:n]) != string(want) {
+		return fmt.Errorf("received %q", buf[:n])
+	}
+	return nil
+}
+
+func listenTCP(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		_ = ln.Close()
+	}
+	return err
 }
 
 func dialTCP(addr string) error {

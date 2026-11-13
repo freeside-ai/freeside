@@ -36,6 +36,15 @@
 # whose key hashes all of app/, so the bundle was built from this tree
 # (#2291). The harness is always built here.
 #
+# In a slot of the macOS verification executor (#3155) the sandbox admits
+# only the slot's reserved ports, which the room passes as
+# FREESIDE_VERIFY_PORTS, comma-separated. When it is set, the harness
+# listens on the first two (API and control) and its ntfy URL names the
+# third, where nothing answers, as nothing answers port 1 otherwise.
+# APP_MACVERIFY non-empty adds --disable-sandbox to every swift command,
+# since SwiftPM's sandbox does not nest inside the room's. With neither set,
+# the script runs exactly as CI runs it.
+#
 # Requires: Go (daemon toolchain), Swift (app toolchain), macOS.
 set -euo pipefail
 
@@ -68,6 +77,30 @@ if [[ -n "$all_tests" ]]; then
     echo "run-convergence: CONVERGENCE_SCREENSHOT_SHARDS must be a positive integer, got: $shards" >&2
     exit 2
   fi
+fi
+
+listen_addr="127.0.0.1:0"
+control_addr="127.0.0.1:0"
+ntfy_url="http://127.0.0.1:1"
+if [[ -n "${FREESIDE_VERIFY_PORTS:-}" ]]; then
+  IFS=, read -r -a verify_ports <<<"$FREESIDE_VERIFY_PORTS"
+  if ((${#verify_ports[@]} < 3)); then
+    echo "run-convergence: FREESIDE_VERIFY_PORTS needs at least three ports, got: $FREESIDE_VERIFY_PORTS" >&2
+    exit 2
+  fi
+  for port in "${verify_ports[@]}"; do
+    if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || ((port > 65535)); then
+      echo "run-convergence: FREESIDE_VERIFY_PORTS holds a malformed port: $FREESIDE_VERIFY_PORTS" >&2
+      exit 2
+    fi
+  done
+  listen_addr="127.0.0.1:${verify_ports[0]}"
+  control_addr="127.0.0.1:${verify_ports[1]}"
+  ntfy_url="http://127.0.0.1:${verify_ports[2]}"
+fi
+sandbox_args=()
+if [[ -n "${APP_MACVERIFY:-}" ]]; then
+  sandbox_args=(--disable-sandbox)
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -124,7 +157,8 @@ echo "building freeside-signet-dev" >&2
 # Pairing now grants a usable ntfy subscription. The convergence matrix does
 # not publish notifications, so a valid loopback sink is enough to compose
 # the same required contract without introducing network access.
-"$workdir/freeside-signet-dev" -db "$workdir/signet.db" -ntfy-url "http://127.0.0.1:1" > "$workdir/readiness.json" &
+"$workdir/freeside-signet-dev" -db "$workdir/signet.db" -listen "$listen_addr" -control "$control_addr" \
+  -ntfy-url "$ntfy_url" > "$workdir/readiness.json" &
 harness_pid=$!
 
 # The harness prints one JSON readiness line on stdout once both
@@ -162,7 +196,7 @@ echo "harness ready: api=$api_url control=$control_url" >&2
 # evidence is demanded of an --all-tests run, where the suite is one of
 # many. The command line goes to stderr so a CI log shows whether the
 # build was skipped.
-swift_args=(--only-use-versions-from-resolved-file)
+swift_args=(--only-use-versions-from-resolved-file ${sandbox_args[@]+"${sandbox_args[@]}"})
 if [[ -z "$all_tests" ]]; then
   swift_args+=(--filter FreesideConvergenceTests)
 fi
@@ -191,10 +225,11 @@ fi
 # swift_args, so a flag added there reaches each of them.
 run_args=("${swift_args[@]}")
 if [[ -z "$skip_build" ]]; then
-  echo "running: swift build --build-tests --only-use-versions-from-resolved-file" >&2
+  build_args=(--build-tests --only-use-versions-from-resolved-file ${sandbox_args[@]+"${sandbox_args[@]}"})
+  echo "running: swift build ${build_args[*]}" >&2
   (
     cd "$repo_root/app" &&
-      swift build --build-tests --only-use-versions-from-resolved-file
+      swift build "${build_args[@]}"
   ) 2>&1 | tee "$workdir/swift-build.log"
   run_args+=(--skip-build)
 fi

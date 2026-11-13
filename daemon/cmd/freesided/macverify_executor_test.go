@@ -25,12 +25,17 @@ func refuseProve(context.Context, *macverify.Backend, macverify.ConformanceRecor
 
 func parseHostVerificationFlags(t *testing.T, args ...string) daemoncompose.MacverifyExecutorConfig {
 	t.Helper()
+	return parseHostVerificationFlagsListening(t, "127.0.0.1:0", args...)
+}
+
+func parseHostVerificationFlagsListening(t *testing.T, listen string, args ...string) daemoncompose.MacverifyExecutorConfig {
+	t.Helper()
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
 	config := macverifyExecutorFlags(flags)
 	if err := flags.Parse(args); err != nil {
 		t.Fatal(err)
 	}
-	return config()
+	return config(listen)
 }
 
 func hostVerificationFlags(root string) []string {
@@ -92,6 +97,7 @@ func TestHostVerificationExecutorBuildsFromFlags(t *testing.T) {
 		ExecutorRoot: root, SandboxProfile: macverify.DefaultSandboxProfile(),
 		PacketFilterRules: macverify.PacketFilterRules(slots), Slots: slots,
 		Toolchain: macverify.Toolchain{XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"},
+		PortBase:  macverify.DefaultPortBase,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +112,38 @@ func TestHostVerificationExecutorBuildsFromFlags(t *testing.T) {
 		context.Background(), st, missingToolchain, false, nil, refuseProve,
 	); !errors.Is(err, macverify.ErrInvalidConfig) {
 		t.Fatalf("root without a toolchain pin = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestHostVerificationExecutorRefusesAReservedListenPort: the daemon may not
+// listen on a port a slot reserves, or a job could reach its API. Two slots
+// from base 47000 reserve 47000 to 47007; the port base is in the digest.
+func TestHostVerificationExecutorRefusesAReservedListenPort(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "macverify")
+	compose := func(listen string, extra ...string) (*macverify.Backend, error) {
+		st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+		cfg := parseHostVerificationFlagsListening(t, listen, append(hostVerificationFlags(root), extra...)...)
+		return daemoncompose.ComposeHostVerificationExecutor(context.Background(), st, cfg, false, nil, refuseProve)
+	}
+	for _, listen := range []string{"127.0.0.1:47000", "127.0.0.1:47007", "[::1]:47004"} {
+		if _, err := compose(listen); err == nil {
+			t.Errorf("listen %s = nil, want a refusal", listen)
+		}
+	}
+	base, err := compose("127.0.0.1:47008")
+	if err != nil {
+		t.Fatalf("listen past the last reserved port = %v", err)
+	}
+	if _, err := compose("127.0.0.1:47000", "-macverify-port-base", "46000"); err != nil {
+		t.Fatalf("listen outside a moved reservation = %v", err)
+	}
+	moved, err := compose("127.0.0.1:0", "-macverify-port-base", "46000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.ConfigurationDigest() == base.ConfigurationDigest() {
+		t.Error("the port base does not change the configuration digest")
 	}
 }
 

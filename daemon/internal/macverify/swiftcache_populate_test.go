@@ -240,7 +240,7 @@ func TestPopulateSwiftCacheFillsAndProvesAnEntry(t *testing.T) {
 
 	entry := swiftCacheEntry(root, key.Key)
 	var record swiftCacheRecord
-	body, err := os.ReadFile(filepath.Join(entry, swiftCacheRecordName)) //nolint:gosec // G304: the entry under test
+	body, err := os.ReadFile(filepath.Join(entry, cacheRecordName)) //nolint:gosec // G304: the entry under test
 	if err != nil {
 		t.Fatal(err)
 	}

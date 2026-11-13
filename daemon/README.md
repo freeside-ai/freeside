@@ -4184,7 +4184,7 @@ these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
-  twelve commands. Eight run in the project image. The first two are the
+  thirteen commands. Eight run in the project image. The first two are the
   history commands, `bash scripts/verify-range-check.sh
   scripts/check-commit-messages.sh` and the same wrapper over
   `scripts/check-migration-history.sh`, each with `"history": true` (A
@@ -4195,13 +4195,16 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   operator approves the new recipe digest before it runs. Then come the
   four `daemon`, `docs`, `api`, and `scripts` commands sized above, then
   `bash scripts/check.sh app generate` and
-  `bash scripts/check.sh app linux`. Four run on the macOS verification
+  `bash scripts/check.sh app linux`. Five run on the macOS verification
   executor (`macos_host`): `app format`, `app test`,
-  `app build-mac`, and `app build-ios`. The last three run as
-  `env APP_MACVERIFY=1 bash scripts/check.sh app <step>`. The switch adds
-  the executor flags documented under Install the macOS Verification
-  Executor, because the recipe can't name the job's `../source-packages`
-  itself: `verify.ParseRecipe` refuses a `..` path segment. `app generate`
+  `app build-mac`, `app build-ios`, and `convergence run`. The last four
+  run as `env APP_MACVERIFY=1 bash scripts/check.sh <component> <step>`.
+  The switch adds the executor flags documented under Install the macOS
+  Verification Executor, because the recipe can't name the job's
+  `../source-packages` itself: `verify.ParseRecipe` refuses a `..` path
+  segment. For `convergence run` it adds `--disable-sandbox` to the swift
+  commands, and the harness listens on the slot's reserved ports, which the
+  room passes in `FREESIDE_VERIFY_PORTS` (Reserved ports). `app generate`
   builds the generator offline from the image's baked mirrors. In a tree
   without `.git` it compares the generated outputs with a snapshot it takes
   before regenerating, so it fails a schema change whose committed client is
@@ -4210,10 +4213,13 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   has neither `go.mod` nor `Package.swift`, and the one image bakes both.
 - **Prerequisites:** the executor installed and proved on the daemon host
   (Install the macOS Verification Executor, Prove the Executor), and a Swift
-  cache entry for the onboarded commit (`freesided swift-cache populate`).
+  cache entry and a Go cache entry for the onboarded commit
+  (`freesided swift-cache populate` and `freesided go-cache populate`;
+  `convergence run` builds the daemon's harness offline from the Go
+  entry).
   A deputy run names the executor in its `macos_verification` setting (Run
   Real Work With The Deputy); without it the `macos_host` commands fail.
-- **Executor measurements:** all four `macos_host` commands pass as slots
+- **Executor measurements:** all five `macos_host` commands pass as slots
   with networking denied. Measured on 2026-11-12 on the reference host
   (macOS 27.2 build 26B123, Xcode 27.2 build 27B52) at `main`
   `0b38be48c`. Each command ran in its own slot job, through
@@ -4230,6 +4236,7 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   | `app test` | passes; flaky under load (#2323) | 1506 MiB | 906 s |
   | `app build-mac` | passes | 706 MiB | 250 s |
   | `app build-ios` | passes | 691 MiB | 246 s |
+  | `convergence run` | passes | 1850 MiB | 132 s |
 
   The host was busy with other work: load average 105 to 132 at the start
   of each command in the first run, on 10 CPUs, so its walls run long. In
@@ -4238,7 +4245,11 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   starved main actor; it peaked at 1693 MiB and took 1079 s. Its row is a
   rerun at the same commit, load average 66 at the start. The two builds
   resolve packages offline under `-skipPackageUpdates`, and `build-ios`
-  needs no window-server session.
+  needs no window-server session. The `convergence run` row was measured
+  the same way later that day at this change's branch commit `84ee53db7`,
+  load average 26 at the start: the harness listened on the slot's
+  reserved ports 47000 and 47001, built offline from the Go entry, and the
+  23 `FreesideConvergenceTests` passed.
 - **Protected paths:** none. Pass no `-protected-path` flag, so Freeside's
   profile widens no class, and an agent's edit to the hooks, the recipe,
   the check scripts, `prompts/`, `policy/`, `docs/plan.md`, or a `.github/`
@@ -4373,7 +4384,8 @@ present it is an object whose four keys are all required and set: `root`,
 `slots`, `xcode_build`, and `swift`, the values of `-macverify-root`,
 `-macverify-slots`, `-macverify-xcode-build`, and `-macverify-swift` (Prove
 the Executor). `slots` has no default, unlike the flag: list every slot the
-install created. An empty value, an empty or repeated slot, or a `root`
+install created. An optional fifth key, `port_base`, is the value of
+`-macverify-port-base` and defaults to 47000 when omitted (Reserved Ports). An empty value, an empty or repeated slot, or a `root`
 that is not an absolute clean path is refused before the lease; a malformed
 toolchain token is refused at daemon start, as for the flags. A configured
 executor runs its full conformance pass at every start whose self-check
@@ -4399,7 +4411,7 @@ container volume, not a host path.
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
 | `build` | `proxy`, `base_build_ref`, `dns` |
-| `macos_verification` | Optional: `root`, `slots`, `xcode_build`, `swift`, all required when present |
+| `macos_verification` | Optional: `root`, `slots`, `xcode_build`, `swift`, all required when present; `port_base`, optional, defaults to 47000 |
 
 `repository.project` is the project ID that `submit -project` and the
 manual-submission file repeat. Use the managed repository's name (`gh-imgup`
@@ -5040,6 +5052,7 @@ world-writable unless noted, and so is every ancestor of the root:
 <root>/
   bin/slot-run             the helper, mode 0755
   bin/slots.conf           one slot account name per line, mode 0644
+  bin/ports.conf           each slot's four reserved ports, `<slot> <p1> <p2> <p3> <p4>`, mode 0644
   template/home/           copied into a slot's home before and after each job
   homes/<slot>/            the slot's home and its account's NFSHomeDirectory (slot, 0700)
   jobs/<slot>/<job-id>/    a job's directory, holding workspace/ (slot, 0700)
@@ -5047,6 +5060,9 @@ world-writable unless noted, and so is every ancestor of the root:
   pf/anchor.conf           the slots' packet-filter anchor, mode 0644
   swift-cache/             the offline Swift dependency cache (the operator, 0755)
   swift-cache/<key>/       one entry per dependency key (the operator, 0755)
+  go-cache/                the Go toolchain and module cache (the operator, 0755)
+  go-cache/go<version>/    the pinned Go toolchain (the operator, 0755)
+  go-cache/<key>/          one entry per Go module key (the operator, 0755)
 ```
 
 **Profile.** `macverify.DefaultSandboxProfile()` denies all network access,
@@ -5068,7 +5084,8 @@ run sometimes leaves one there that no one can remove, and Foundation names
 each at random, so a later job can reach it only by its name (#3009).
 Nothing bounds what collects there, so a job can use up disk space. The
 command's environment is exactly
-`HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`. A
+`HOME`, `TMPDIR`, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and `LC_ALL=C`, plus
+the Go variables under Go Toolchain and Modules for a workspace with Go. A
 SwiftPM recipe command must pass `--disable-sandbox`: SwiftPM sandboxes its
 manifest build with `sandbox-exec`, which cannot nest inside the room's.
 
@@ -5085,8 +5102,9 @@ sudo freesided macverify check      # also read the loaded pf rules and pf state
 read the sudoers drop-in and pf, and reports those pieces `unread` without it.
 `check` exits nonzero when any piece is missing, misconfigured, or foreign.
 Every name has a flag (`-root`, `-slots`, `-slot-prefix`, `-group`,
-`-first-id`, `-operator`, `-anchor`, `-label`, `-sudoers-name`); the defaults
-are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
+`-first-id`, `-operator`, `-anchor`, `-label`, `-sudoers-name`, `-port-base`);
+the defaults are below, and `-operator` defaults to the user who ran `sudo`.
+Install writes:
 
 - **The slot group and accounts:** group `fvslots` (gid 460) and accounts
   `fvslot1` to `fvslot<N>` (uid 460+n, `-slots 2` by default), each hidden,
@@ -5094,20 +5112,26 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   `<root>/homes/<slot>`.
 - **The executor root** (`/Library/Freeside/macverify`) in the layout above,
   plus `pf/`, each slot's home (the slot's, `0700`), and an empty
-  `swift-cache/` (the operator's, `0755`). It creates a missing
+  `swift-cache/` and `go-cache/` (the operator's, `0755`). It creates a missing
   `/Library/Freeside` but never changes an existing ancestor.
-- **The helper and slot list:** `bin/slot-run` from the daemon's embedded copy
-  and `bin/slots.conf`. Rerun install after upgrading the daemon: it rewrites a
-  helper that differs, and the room refuses jobs until it does.
+- **The helper, slot list, and reserved ports:** `bin/slot-run` from the
+  daemon's embedded copy, `bin/slots.conf`, and `bin/ports.conf` (Reserved
+  Ports below). Rerun install after upgrading the daemon: it rewrites a helper
+  that differs, and the room refuses jobs until it does.
 - **The sudoers drop-in:** `/etc/sudoers.d/freeside-slot-run` (`0440`), one
   rule letting the operator run `<root>/bin/slot-run` as root with no
   password, checked with `visudo -cf` before it lands. Stock macOS includes
   `/private/etc/sudoers.d`.
 - **The packet-filter anchor:** `<root>/pf/anchor.conf`, holding
-  `block drop out quick user <slot>` and its `in` twin per slot (the bytes
-  `macverify.PacketFilterRules` renders for `Config.PacketFilterRules`),
+  `block drop out quick on ! lo0 user <slot>` and its `in` twin per slot (the
+  bytes `macverify.PacketFilterRules` renders for `Config.PacketFilterRules`),
   loaded as `com.apple/freeside-macverify`. The stock `/etc/pf.conf`
-  evaluates every `com.apple/*` child, beside a VPN client's anchor.
+  evaluates every `com.apple/*` child, beside a VPN client's anchor. The
+  rules spare loopback so a job can reach its own reserved ports; the sandbox
+  profile alone decides which loopback ports a job may use, and pf still drops
+  everything bound off the host. `check` reports an anchor loaded before
+  that exemption (`block drop out quick all user = <uid>`) as a stale rule,
+  and rerunning install reloads it.
 - **The boot LaunchDaemon:** `/Library/LaunchDaemons/ai.freeside.macverify.pf.plist`
   runs `pfctl -E -a com.apple/freeside-macverify -f <root>/pf/anchor.conf` at
   load. Stock macOS loads `/etc/pf.conf` at boot but never enables pf, and the
@@ -5117,8 +5141,9 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   anchor itself while the job's load is in flight (pf refuses the second load
   as `Resource busy`).
 
-Install prints the `macverify.Config` values it determines (`ExecutorRoot`
-and `Slots`); the daemon's `Config` also names the `Toolchain` pin below. A
+Install prints the `macverify.Config` values it determines (`ExecutorRoot`,
+`Slots`, and `PortBase`); the daemon's `Config` also names the `Toolchain` pin
+below. A
 rerun changes nothing when nothing is missing.
 
 **Adoption.** Install refuses, changing nothing, when a slot or group name or
@@ -5126,9 +5151,9 @@ id is held by something it did not create, when the operator is root or
 unknown, when an ancestor of the root is not root-owned or is group- or
 world-writable, or when the root or a directory in it is owned by another
 user or holds anything install does not write (so `-root /usr/local` is
-refused, not adopted). The Swift cache is the operator's instead: install
-refuses one another user owns and hands a root-owned one to the operator,
-and never reads what is in it. An existing account counts as a slot only when its primary
+refused, not adopted). The Swift and Go caches are the operator's instead:
+install refuses one another user owns and hands a root-owned one to the
+operator, and never reads what is in it. An existing account counts as a slot only when its primary
 group id is the slot group's and its home is `<root>/homes/<slot>`; install
 then repairs its other attributes but never renumbers it. The group counts as
 install's only when every member, and every account with it as primary group,
@@ -5143,6 +5168,36 @@ Swift by its `swiftlang-` token (in `swift --version`, such as
 the job with `ErrToolchainMismatch`, naming both, when either differs. The pin
 is part of the configuration digest, so updating Xcode means updating the pin
 and earning the conformance record again.
+
+**Reserved ports.** Each slot reserves four ports its jobs may bind and
+connect on, over TCP and UDP, on `127.0.0.1` and `::1`; the command finds them
+in `FREESIDE_VERIFY_PORTS`, comma-separated. Slot n in sorted order holds the
+four from `<port-base>+4(n-1)`, so the defaults give `fvslot1` 47000 to 47003
+and `fvslot2` 47004 to 47007. The sandbox profile admits only those ports
+(its `PORT_1` to `PORT_4` parameters); every other port, the resolver, and
+anything off the host stay refused.
+
+- **The rules.** Every port is at least 1024 and below the ephemeral range
+  (`sysctl net.inet.ip.portrange.first`, 49152 by default), so the kernel
+  never hands one to an unrelated socket. Install and the daemon both refuse a
+  base that breaks a rule, and the daemon refuses to start when its `-listen`
+  port is a reserved one.
+- **The two bases match.** Install's `-port-base` writes `bin/ports.conf`;
+  the daemon takes its base from `-macverify-port-base` (a deputy's
+  `port_base`). Both default to 47000. The room refuses a job whose prepare
+  reports other ports than the daemon's configuration names. The base and the
+  port count are part of the configuration digest.
+- **Nothing else may hold them.** Before each job the room checks each of
+  the slot's ports: over TCP it connects on loopback and binds on every other
+  interface address, and over UDP it binds on the wildcard, loopback, and
+  interface addresses. It refuses the job with `ErrReservedPortBusy`, naming
+  the holder, when a connection is accepted or a bind is refused as in use.
+  The slot is released, not quarantined. The check asks the kernel rather
+  than `netstat`, whose inet listing comes back empty when a Go process runs
+  it. A connection a finished job left in `TIME_WAIT` on loopback does not
+  count: it accepts nothing, though it refuses another user's TCP bind of
+  loopback or the wildcard, which is why TCP on loopback is checked by
+  connecting.
 
 **Swift dependencies.** Verification never fetches. When a job's workspace
 holds any `Package.resolved`, its key is a SHA-256 over every
@@ -5211,6 +5266,54 @@ cannot nest inside the room's profile. `-skipMacroValidation` and
 `-skipPackagePluginValidation` stand in for the trust prompt a fresh slot home
 has never answered. Decision record: `devlog/2026-11-09-0909-macos-swift-cache.md`.
 
+**Go toolchain and modules.** A job whose workspace holds any `go.mod` or
+`go.sum` runs Go from a toolchain the daemon pins, Go 1.27.4, by version and
+by the SHA-256 of each darwin archive on go.dev. It takes its modules from an
+offline cache entry keyed by a SHA-256 over every `go.mod` and `go.sum`
+outside `.git`, `.build`, and `testdata` directories. The room refuses the
+job before any slot is leased, with `ErrGoCacheMissing` naming the key and
+the files, unless `<root>/go-cache/go1.27.4/bin/go` and a complete
+`<root>/go-cache/<key>/` are in place. The command then runs with the
+toolchain first on its `PATH` and Go held to it and to the entry, offline:
+
+```text
+PATH=<root>/go-cache/go1.27.4/bin:/usr/bin:/bin:/usr/sbin:/sbin
+GOFLAGS=-mod=readonly  GOMODCACHE=<root>/go-cache/<key>/modcache
+GOPROXY=off  GOTOOLCHAIN=local  GOWORK=off
+```
+
+`GOCACHE` stays at its default under the slot's home, which the helper resets
+every job. Fill an entry as the operator, on the host, with network, from a
+checkout of the commit to verify, and again whenever a `go.mod` or `go.sum`
+changes:
+
+```sh
+freesided go-cache populate --executor-root /Library/Freeside/macverify --source <checkout>
+```
+
+Populate refuses a `go.mod` whose `go` or `toolchain` line asks for a Go newer
+than the pin, since `GOTOOLCHAIN=local` would refuse it in every job; raising
+the daemon's own `go` line means raising the pin with it. When the toolchain
+is absent it downloads the pinned archive, refuses it unless its SHA-256
+matches, extracts it beside the cache, and renames it into place, so the
+toolchain is whole or absent; a toolchain directory without its `go` binary
+is refused for the operator to remove. It then runs `go mod download` for
+each module through the Go module proxy and checksum database, proves the
+entry offline with `go list -deps -test ./...` for each module under
+`GOPROXY=off` with every proxy pointed at a closed port, and writes
+`record.json` last, naming the Go version that proved it. A failed populate
+leaves no entry, and a record from another Go version is refused. An entry
+holds `record.json` and `modcache/`, the job's `GOMODCACHE`.
+
+The slot reads the toolchain and the module cache in place: populate leaves
+every file `0644` or `0755` and every directory `0755`, owned by the
+operator, so a slot cannot write them, and Go reads a complete module cache
+without writing to it. The helper's `prepare` refuses a Go key unless
+`go-cache/`, the entry, `modcache/`, the toolchain, and its `bin/` are real
+directories the operator owns that are not group- or world-writable, and
+`record.json` and `bin/go` are regular files. The toolchain's version is part
+of the configuration digest.
+
 **Run the live suites.** The room suite runs probes through the production
 room as real slots of an installed executor, with the packet-filter rules
 install loads: the full conformance pass over every slot, the pre-job probe
@@ -5219,7 +5322,9 @@ pre-job probe leaves out (the job's environment and directory owner, writable
 home and `TMPDIR`, no window-server session), a signal death read as `-1`, a
 timeout that reaps a descendant that left its session, and the helper refusing
 accounts outside `slots.conf`. Set `FREESIDE_MACVERIFY_OFF_HOST_UDP` to an
-`IP:port` DNS server when the resolver in `/etc/resolv.conf` does not answer:
+`IP:port` DNS server when the resolver in `/etc/resolv.conf` does not answer,
+and `FREESIDE_MACVERIFY_PORT_BASE` to the install's `-port-base` when it
+isn't the default:
 
 ```sh
 FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify \
@@ -5237,6 +5342,18 @@ FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_SWIFT_LIVE_TEST=1 \
   FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify FREESIDE_MACVERIFY_SLOTS=fvslot1,fvslot2 \
   bash scripts/check.sh daemon test -- ./internal/macverify/... \
   -run LiveRoomServesSwift -v -timeout 90m
+```
+
+The Go live suite populates the Go cache for the tree at `HEAD`, or at
+`FREESIDE_MACVERIFY_GO_COMMIT`, installing the toolchain if it is absent,
+builds the daemon as a slot with networking denied, and shows the job can
+write neither the module cache nor the toolchain:
+
+```sh
+FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_GO_LIVE_TEST=1 \
+  FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify FREESIDE_MACVERIFY_SLOTS=fvslot1,fvslot2 \
+  bash scripts/check.sh daemon test -- ./internal/macverify/... \
+  -run 'LiveRoomBuildsGo|LiveHelperRefusesAnUnsafeGo' -v -timeout 30m
 ```
 
 The install suite builds `freesided`, installs two slots under names disjoint
@@ -5260,8 +5377,8 @@ Removal deletes the sudoers drop-in first, so the daemon starts no job while
 it runs, then the LaunchDaemon, each slot account listed in
 `<root>/bin/slots.conf` that the adoption rule marks as a slot (after killing
 its processes), the loaded anchor rules, the group once nothing names it, the
-entries install writes under the root (the Swift cache with every entry in
-it), and the root and `/Library/Freeside`
+entries install writes under the root (the Swift and Go caches with every
+entry in them), and the root and `/Library/Freeside`
 if that leaves each empty. It deletes the sudoers drop-in and LaunchDaemon
 only when their content is exactly what install writes, the group only when
 it found a root-owned `slots.conf` or helper, and the root's entries only when
@@ -5275,12 +5392,13 @@ cache directories under `/private/var/folders` stay too.
 
 The backend declares `supports_credential_free_host_verification` only after
 a passing conformance pass is durably recorded for its configuration digest
-(the daemon binary, profile, anchor rules, slots, root, and toolchain pin).
+(the daemon binary, profile, anchor rules, slots, root, toolchain pins, and
+reserved ports).
 `macverify.NewSuite` builds the pass and `Suite.Full` runs it; give it
 `WithConformanceRecorder`, since a pass with no recorder never declares.
 Decision record: `devlog/2026-11-09-1830-macos-conformance-probe.md`.
 
-**Configure the daemon.** `freesided` builds the executor from four flags.
+**Configure the daemon.** `freesided` builds the executor from five flags.
 With no `-macverify-root` it configures none, and the gate refuses every
 `macos_host` job.
 
@@ -5290,6 +5408,7 @@ With no `-macverify-root` it configures none, and the gate refuses every
 | `-macverify-slots` | The slot account names the install created, comma-separated; default `fvslot1,fvslot2` |
 | `-macverify-xcode-build` | The Xcode build number `xcodebuild -version` prints, such as `17F42`; required with a root |
 | `-macverify-swift` | The `swiftlang-` token `swift --version` prints; required with a root |
+| `-macverify-port-base` | The first reserved port, the install's `-port-base`; default 47000 (Reserved Ports) |
 
 An invalid configuration fails startup. Under `-run-conformance` the daemon
 runs `Suite.Full` with the store's recorder at startup, after the ward's
@@ -5300,7 +5419,7 @@ stop startup: the daemon logs that the executor declares nothing. Under
 `unattended`, each `macos_host` job is then refused by name until a pass
 under `-run-conformance`; under `attended_dev`, jobs are still admitted.
 Since the digest names the daemon binary, a rebuilt `freesided` needs a fresh
-pass. `freesided deputy` takes the same four values from its
+pass. `freesided deputy` takes the same five values from its
 `macos_verification` setting (Run Real Work With The Deputy).
 
 **The pass.** Full refuses off macOS and records nothing there. Otherwise it
@@ -5312,18 +5431,26 @@ control for every network check as the daemon user, since a slot's refusal
 proves nothing when the target was unreachable anyway: it connects to its own
 loopback listener, resolves `github.com`, connects to that name's first IPv4
 address on port 443, and gets an answer from the first off-host `nameserver`
-in `/etc/resolv.conf`. `SuiteFixture` overrides each target. Last, on every
-slot, it runs four probe jobs through the room's ordinary job path:
+in `/etc/resolv.conf`. `SuiteFixture` overrides each target. It also refuses
+the pass when anything holds a slot's reserved port, as the room does before a
+job, and proves the daemon user can use each reserved port over TCP and UDP on
+`127.0.0.1` and `::1`. Last, on every slot, it runs four probe jobs through the
+room's ordinary job path:
 
 | Job | Profile | Checks | Confinement |
 | --- | --- | --- | --- |
-| `sandbox` | configured | `loopback-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
+| `sandbox` | configured | `loopback-refused`, `reserved-port <p>` for each of the slot's four, `foreign-bind-refused`, `foreign-connect-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
 | `sandbox` | configured | `write-denied` in `/private/tmp` and `/Users/Shared`; `write-job-dir` | `write_confinement` |
 | `packet-filter` | permissive (`(allow default)`) | `tcp-dropped`, `udp-dropped` to the control targets | `packet_filter` |
 | `home-mark`, then `home-clean` | configured | a marker left in the slot's home is gone in the next job | `home_reset` |
 
 A sandbox check passes only on `EPERM`, the sandbox's own refusal, so an
-unreachable target or a missing directory fails it. Only the sandbox can
+unreachable target or a missing directory fails it. The exceptions are the
+`reserved-port` checks, which pass only when the slot can listen on, connect
+to, and exchange a datagram over its own port on `127.0.0.1` and `::1`. The
+foreign checks bind and connect to another slot's first port (with one slot,
+the port below its set), which the sandbox must refuse even with a listener
+there. Only the sandbox can
 refuse a slot's write to those two world-writable directories. The daemon
 user's home is not a target: file permissions refuse the slot there anyway,
 as `EACCES` when the home is `0750`, so its answer cannot show the sandbox. A packet-filter check
@@ -5338,8 +5465,9 @@ failure superseded records nothing and says so.
 
 **The pre-job probe.** Before every recipe command, the room runs the
 `sandbox` job on the leased slot under the configured profile, against fixed
-targets: a loopback listener it opens, `github.com`, `192.0.2.1:443`,
-`192.0.2.1:53`, and the two directories above. It needs no positive control,
+targets: a loopback listener it opens, the slot's reserved ports and a
+foreign port, `github.com`, `192.0.2.1:443`, `192.0.2.1:53`, and the two
+directories above. It needs no positive control,
 because `EPERM` is the sandbox's answer whatever the target. A confinement
 failure refuses the command before it runs, quarantines the slot until the
 daemon restarts, and withdraws the declaration in memory. A pass refuses a

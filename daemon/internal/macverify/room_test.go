@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -45,11 +47,13 @@ type fakeLauncher struct {
 	prepareHook func(ctx context.Context) error
 	// prepareErr fails every prepare, probe jobs included.
 	prepareErr error
-	// reportSwiftCache overrides the Swift cache key a recipe job's prepare
-	// reports.
-	reportSwiftCache *string
-	reapErr          error
-	cleanupErr       error
+	// reportCaches overrides the cache keys a recipe job's prepare reports.
+	reportCaches *jobCaches
+	// ports are what prepare reports for each slot: the room's own sets,
+	// as newTestRoom sets them, unless a test changes one.
+	ports      map[string]slotPortSet
+	reapErr    error
+	cleanupErr error
 	// recipeCleanupErr fails only a recipe job's cleanup.
 	recipeCleanupErr error
 	// command plays a recipe command; reaped closes on the first reap after
@@ -65,8 +69,9 @@ type fakeLauncher struct {
 }
 
 type prepareCall struct {
-	slot, jobID, workdir, swiftCache string
-	profile                          []byte
+	slot, jobID, workdir string
+	caches               jobCaches
+	profile              []byte
 }
 
 func newFakeLauncher() *fakeLauncher {
@@ -89,8 +94,17 @@ func specFromArgv(argv []string) probeSpec {
 	mode, args := argv[len(probeCommand)], argv[len(probeCommand)+1:]
 	switch mode {
 	case probeModeSandbox:
+		ports, err := parsePorts(args[4])
+		if err != nil {
+			panic(err)
+		}
+		foreign, err := strconv.Atoi(args[5])
+		if err != nil {
+			panic(err)
+		}
 		return sandboxProbe(sandboxTargets{
-			loopbackPort: args[0], resolverHost: args[1], tcp: args[2], udp: args[3], outsideDirs: args[4:],
+			loopbackPort: args[0], resolverHost: args[1], tcp: args[2], udp: args[3],
+			ports: ports, foreignPort: foreign, outsideDirs: args[6:],
 		})
 	case probeModePacketFilter:
 		return packetFilterProbe(args[0], args[1])
@@ -141,11 +155,11 @@ func (f *fakeLauncher) slotUID() int {
 	return testSlotUID()
 }
 
-func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, swiftCache string) (preparedJob, error) {
+func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string, profile []byte, caches jobCaches) (preparedJob, error) {
 	f.record("prepare " + slot)
 	f.mu.Lock()
 	f.prepares = append(f.prepares, prepareCall{
-		slot: slot, jobID: jobID, workdir: workdir, swiftCache: swiftCache, profile: slices.Clone(profile),
+		slot: slot, jobID: jobID, workdir: workdir, caches: caches, profile: slices.Clone(profile),
 	})
 	f.profiles[jobID] = slices.Clone(profile)
 	f.mu.Unlock()
@@ -179,17 +193,18 @@ func (f *fakeLauncher) prepare(ctx context.Context, slot, jobID, workdir string,
 			return preparedJob{}, err
 		}
 	}
-	reported := swiftCache
-	if recipe && f.reportSwiftCache != nil {
-		reported = *f.reportSwiftCache
+	reported := caches
+	if recipe && f.reportCaches != nil {
+		reported = *f.reportCaches
 	}
 	return preparedJob{
-		Root:       f.root,
-		UID:        f.slotUID(),
-		Home:       filepath.Join(f.root, "homes", slot),
-		Tmp:        "/private/var/folders/ab/" + slot + "/T",
-		Cache:      "/private/var/folders/ab/" + slot + "/C",
-		SwiftCache: reported,
+		Root:   f.root,
+		UID:    f.slotUID(),
+		Home:   filepath.Join(f.root, "homes", slot),
+		Tmp:    "/private/var/folders/ab/" + slot + "/T",
+		Cache:  "/private/var/folders/ab/" + slot + "/C",
+		Ports:  f.ports[slot],
+		Caches: reported,
 	}, nil
 }
 
@@ -290,6 +305,7 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 		PacketFilterRules: []byte("block drop quick user slot1"),
 		Slots:             slots,
 		Toolchain:         testToolchain,
+		PortBase:          DefaultPortBase,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -301,8 +317,11 @@ func newTestRoom(t *testing.T, fake *fakeLauncher, slots ...string) *Room {
 	installHelper(t, room.helperPath, helperScript)
 	fake.root = root
 	fake.probeDir = t.TempDir()
+	fake.ports = maps.Clone(room.ports)
 	room.probeWorkspace = func() (string, error) { return fake.probeDir, nil }
 	room.launcher = fake
+	room.portHolders = func(context.Context, int) ([]string, error) { return nil, nil }
+	room.portUsable = func(int) error { return nil }
 	room.helperOwner = uint32(os.Getuid()) //nolint:gosec // G115: a uid fits
 	room.hostSupported = true
 	room.hostToolchain = func(context.Context) (Toolchain, error) { return testToolchain, nil }
@@ -356,11 +375,17 @@ func TestRunPreparesRunsAndReleasesSlot(t *testing.T) {
 	req := runs[0]
 	home := filepath.Join(fake.root, "homes", "slot1")
 	tmp, cache := "/private/var/folders/ab/slot1/T", "/private/var/folders/ab/slot1/C"
-	if want := []string{"HOME=" + home, "TMPDIR=" + tmp, "PATH=" + commandPath, "LC_ALL=C"}; !slices.Equal(req.Env, want) {
+	if want := []string{
+		"HOME=" + home, "TMPDIR=" + tmp, "PATH=" + commandPath, "LC_ALL=C",
+		"FREESIDE_VERIFY_PORTS=47000,47001,47002,47003",
+	}; !slices.Equal(req.Env, want) {
 		t.Fatalf("environment = %v, want exactly %v", req.Env, want)
 	}
 	jobDir := filepath.Join(fake.root, "jobs", "slot1", p.jobID)
-	if want := []string{"JOB_DIR=" + jobDir, "SLOT_HOME=" + home, "SLOT_TMP=" + tmp, "SLOT_CACHE=" + cache}; !slices.Equal(req.Params, want) {
+	if want := []string{
+		"JOB_DIR=" + jobDir, "SLOT_HOME=" + home, "SLOT_TMP=" + tmp, "SLOT_CACHE=" + cache,
+		"PORT_1=47000", "PORT_2=47001", "PORT_3=47002", "PORT_4=47003",
+	}; !slices.Equal(req.Params, want) {
 		t.Fatalf("sandbox parameters = %v, want %v", req.Params, want)
 	}
 	if req.Slot != "slot1" || req.JobID != p.jobID || !slices.Equal(req.Argv, []string{"swift", "test", "--disable-sandbox"}) {
@@ -530,6 +555,7 @@ func TestRoomsOverOneBackendShareSlots(t *testing.T) {
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
 		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
+		PortBase: DefaultPortBase,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -796,6 +822,7 @@ func TestNewRoomRefusesToRunOffMacOS(t *testing.T) {
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
 		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
+		PortBase: DefaultPortBase,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -814,6 +841,7 @@ func TestNewRoomRejectsInvalidOptions(t *testing.T) {
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
 		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
+		PortBase: DefaultPortBase,
 	})
 	if err != nil {
 		t.Fatal(err)

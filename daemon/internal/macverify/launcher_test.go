@@ -14,7 +14,7 @@ import (
 func TestParsePrepared(t *testing.T) {
 	t.Parallel()
 	valid := "root=/opt/fv\nuid=401\nhome=/opt/fv/homes/slot1\ntmp=/private/var/folders/ab/x/T\ncache=/private/var/folders/ab/x/C\n" +
-		"swift_cache=none\n"
+		"ports=47000,47001,47002,47003\nswift_cache=none\ngo_cache=none\n"
 	got, err := parsePrepared([]byte(valid))
 	if err != nil {
 		t.Fatalf("parsePrepared: %v", err)
@@ -22,14 +22,19 @@ func TestParsePrepared(t *testing.T) {
 	want := preparedJob{
 		Root: "/opt/fv", UID: 401, Home: "/opt/fv/homes/slot1",
 		Tmp: "/private/var/folders/ab/x/T", Cache: "/private/var/folders/ab/x/C",
+		Ports: slotPortSet{47000, 47001, 47002, 47003},
 	}
 	if got != want {
 		t.Fatalf("parsePrepared = %+v, want %+v", got, want)
 	}
 	key := strings.Repeat("ab", 32)
 	got, err = parsePrepared([]byte(strings.Replace(valid, "swift_cache=none", "swift_cache="+key, 1)))
-	if err != nil || got.SwiftCache != key {
+	if err != nil || got.Caches != (jobCaches{Swift: key}) {
 		t.Fatalf("parsePrepared with a Swift cache = %+v, %v; want key %s", got, err, key)
+	}
+	got, err = parsePrepared([]byte(strings.Replace(valid, "go_cache=none", "go_cache="+key, 1)))
+	if err != nil || got.Caches != (jobCaches{Go: key}) {
+		t.Fatalf("parsePrepared with a Go cache = %+v, %v; want key %s", got, err, key)
 	}
 	for name, report := range map[string]string{
 		"missing key":       strings.Replace(valid, "cache=/private/var/folders/ab/x/C\n", "", 1),
@@ -45,6 +50,16 @@ func TestParsePrepared(t *testing.T) {
 		"empty swift cache": strings.Replace(valid, "swift_cache=none", "swift_cache=", 1),
 		"short swift cache": strings.Replace(valid, "swift_cache=none", "swift_cache=abc", 1),
 		"upper swift cache": strings.Replace(valid, "swift_cache=none", "swift_cache="+strings.Repeat("AB", 32), 1),
+		"no go cache":       strings.Replace(valid, "go_cache=none\n", "", 1),
+		"short go cache":    strings.Replace(valid, "go_cache=none", "go_cache=abc", 1),
+		"no ports":          strings.Replace(valid, "ports=47000,47001,47002,47003\n", "", 1),
+		"three ports":       strings.Replace(valid, "47000,47001,47002,47003", "47000,47001,47002", 1),
+		"five ports":        strings.Replace(valid, "47000,47001,47002,47003", "47000,47001,47002,47003,47004", 1),
+		"privileged port":   strings.Replace(valid, "47000,", "1023,", 1),
+		"port past 65535":   strings.Replace(valid, "47003", "65536", 1),
+		"padded port":       strings.Replace(valid, "47000,", "047000,", 1),
+		"signed port":       strings.Replace(valid, "47000,", "+47000,", 1),
+		"spaced ports":      strings.Replace(valid, "47000,47001", "47000, 47001", 1),
 		"empty":             "",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -88,6 +103,7 @@ func TestHelperScriptConstants(t *testing.T) {
 	for _, line := range []string{
 		fmt.Sprintf("REFUSED=%d\n", helperRefused),
 		"COMMAND_PATH=" + commandPath + "\n",
+		"GO_VERSION=" + goToolchainVersion + "\n",
 	} {
 		if !bytes.Contains(helperScript, []byte("\n"+line)) {
 			t.Errorf("slot-run.sh does not define %q", strings.TrimSpace(line))

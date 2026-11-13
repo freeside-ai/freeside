@@ -153,7 +153,7 @@ func TestLiveHelperRefusesAnUnsafeSwiftCacheEntry(t *testing.T) {
 	prepare := func(name string) {
 		t.Helper()
 		cmd := exec.Command(sudoPath, "-n", helperPath(cfg.ExecutorRoot), "prepare", cfg.Slots[0], //nolint:gosec // G204: fixed sudo and helper path; the refusal under test is the point
-			strings.Repeat("a", 32), t.TempDir(), key)
+			strings.Repeat("a", 32), t.TempDir(), "swift="+key)
 		cmd.Stdin = strings.NewReader("")
 		out, err := cmd.CombinedOutput()
 		var exit *exec.ExitError
