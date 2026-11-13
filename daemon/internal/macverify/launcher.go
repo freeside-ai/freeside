@@ -56,6 +56,9 @@ type preparedJob struct {
 	Tmp    string
 	Cache  string
 	Caches jobCaches
+	// Ports are the slot's reserved ports, as slot-run read them from
+	// bin/ports.conf.
+	Ports slotPortSet
 }
 
 // runRequest is one command launch as a slot. Env and Params are the exact
@@ -203,7 +206,7 @@ func (sudoLauncher) ownsProcess(uid int) (bool, error) { return uidOwnsProcess(u
 // swift_cache, and go_cache, with every path clean and absolute and each
 // cache either none or a cache key.
 func parsePrepared(out []byte) (preparedJob, error) {
-	fields, err := parseReport(out, "root", "uid", "home", "tmp", "cache", "swift_cache", "go_cache")
+	fields, err := parseReport(out, "root", "uid", "home", "tmp", "cache", "ports", "swift_cache", "go_cache")
 	if err != nil {
 		return preparedJob{}, err
 	}
@@ -227,10 +230,32 @@ func parsePrepared(out []byte) (preparedJob, error) {
 			return preparedJob{}, fmt.Errorf("slot-run reported %s %q, not none or a cache key", key, value)
 		}
 	}
+	ports, err := parsePorts(fields["ports"])
+	if err != nil {
+		return preparedJob{}, err
+	}
 	return preparedJob{
 		Root: fields["root"], UID: uid, Home: fields["home"], Tmp: fields["tmp"], Cache: fields["cache"],
-		Caches: jobCaches{Swift: caches[0], Go: caches[1]},
+		Caches: jobCaches{Swift: caches[0], Go: caches[1]}, Ports: ports,
 	}, nil
+}
+
+// parsePorts reads a slot's reserved ports as slot-run reports them, in
+// slotPortSet.String's form, each in canonical decimal.
+func parsePorts(s string) (slotPortSet, error) {
+	var set slotPortSet
+	parts := strings.Split(s, ",")
+	if len(parts) != len(set) {
+		return set, fmt.Errorf("slot-run reported ports %q, not %d ports", s, len(set))
+	}
+	for i, part := range parts {
+		port, err := strconv.Atoi(part)
+		if err != nil || port < minReservedPort || port > 65535 || strconv.Itoa(port) != part {
+			return set, fmt.Errorf("slot-run reported ports %q, not %d ports", s, len(set))
+		}
+		set[i] = port
+	}
+	return set, nil
 }
 
 // parseReport reads key=value lines and requires exactly the given keys,

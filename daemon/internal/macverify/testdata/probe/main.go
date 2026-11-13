@@ -122,13 +122,13 @@ func jobDirOwned(workspace string) error {
 }
 
 func environmentAllowlist() error {
-	keys := make([]string, 0, 4)
+	keys := make([]string, 0, 5)
 	for _, kv := range os.Environ() {
 		key, _, _ := strings.Cut(kv, "=")
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
-	if want := []string{"HOME", "LC_ALL", "PATH", "TMPDIR"}; !slices.Equal(keys, want) {
+	if want := []string{"FREESIDE_VERIFY_PORTS", "HOME", "LC_ALL", "PATH", "TMPDIR"}; !slices.Equal(keys, want) {
 		return fmt.Errorf("environment keys %v, want %v", keys, want)
 	}
 	return nil

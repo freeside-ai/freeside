@@ -152,7 +152,7 @@ func TestRunServesTheGoToolchainAndACompleteGoCacheEntry(t *testing.T) {
 	want := []string{
 		"HOME=" + home, "TMPDIR=/private/var/folders/ab/slot1/T",
 		"PATH=" + filepath.Join(fake.root, goCacheDirName, "go"+goToolchainVersion, "bin") + ":" + commandPath,
-		"LC_ALL=C", "GOFLAGS=-mod=readonly",
+		"LC_ALL=C", "FREESIDE_VERIFY_PORTS=47000,47001,47002,47003", "GOFLAGS=-mod=readonly",
 		"GOMODCACHE=" + filepath.Join(fake.root, goCacheDirName, key.Key, goCacheModcache),
 		"GOPROXY=off", "GOTOOLCHAIN=local", "GOWORK=off",
 	}

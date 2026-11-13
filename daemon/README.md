@@ -4373,7 +4373,8 @@ present it is an object whose four keys are all required and set: `root`,
 `slots`, `xcode_build`, and `swift`, the values of `-macverify-root`,
 `-macverify-slots`, `-macverify-xcode-build`, and `-macverify-swift` (Prove
 the Executor). `slots` has no default, unlike the flag: list every slot the
-install created. An empty value, an empty or repeated slot, or a `root`
+install created. An optional fifth key, `port_base`, is the value of
+`-macverify-port-base` and defaults to 47000 when omitted (Reserved Ports). An empty value, an empty or repeated slot, or a `root`
 that is not an absolute clean path is refused before the lease; a malformed
 toolchain token is refused at daemon start, as for the flags. A configured
 executor runs its full conformance pass at every start whose self-check
@@ -4399,7 +4400,7 @@ container volume, not a host path.
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
 | `build` | `proxy`, `base_build_ref`, `dns` |
-| `macos_verification` | Optional: `root`, `slots`, `xcode_build`, `swift`, all required when present |
+| `macos_verification` | Optional: `root`, `slots`, `xcode_build`, `swift`, all required when present; `port_base`, optional, defaults to 47000 |
 
 `repository.project` is the project ID that `submit -project` and the
 manual-submission file repeat. Use the managed repository's name (`gh-imgup`
@@ -5040,6 +5041,7 @@ world-writable unless noted, and so is every ancestor of the root:
 <root>/
   bin/slot-run             the helper, mode 0755
   bin/slots.conf           one slot account name per line, mode 0644
+  bin/ports.conf           each slot's four reserved ports, `<slot> <p1> <p2> <p3> <p4>`, mode 0644
   template/home/           copied into a slot's home before and after each job
   homes/<slot>/            the slot's home and its account's NFSHomeDirectory (slot, 0700)
   jobs/<slot>/<job-id>/    a job's directory, holding workspace/ (slot, 0700)
@@ -5089,8 +5091,9 @@ sudo freesided macverify check      # also read the loaded pf rules and pf state
 read the sudoers drop-in and pf, and reports those pieces `unread` without it.
 `check` exits nonzero when any piece is missing, misconfigured, or foreign.
 Every name has a flag (`-root`, `-slots`, `-slot-prefix`, `-group`,
-`-first-id`, `-operator`, `-anchor`, `-label`, `-sudoers-name`); the defaults
-are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
+`-first-id`, `-operator`, `-anchor`, `-label`, `-sudoers-name`, `-port-base`);
+the defaults are below, and `-operator` defaults to the user who ran `sudo`.
+Install writes:
 
 - **The slot group and accounts:** group `fvslots` (gid 460) and accounts
   `fvslot1` to `fvslot<N>` (uid 460+n, `-slots 2` by default), each hidden,
@@ -5100,18 +5103,24 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   plus `pf/`, each slot's home (the slot's, `0700`), and an empty
   `swift-cache/` and `go-cache/` (the operator's, `0755`). It creates a missing
   `/Library/Freeside` but never changes an existing ancestor.
-- **The helper and slot list:** `bin/slot-run` from the daemon's embedded copy
-  and `bin/slots.conf`. Rerun install after upgrading the daemon: it rewrites a
-  helper that differs, and the room refuses jobs until it does.
+- **The helper, slot list, and reserved ports:** `bin/slot-run` from the
+  daemon's embedded copy, `bin/slots.conf`, and `bin/ports.conf` (Reserved
+  Ports below). Rerun install after upgrading the daemon: it rewrites a helper
+  that differs, and the room refuses jobs until it does.
 - **The sudoers drop-in:** `/etc/sudoers.d/freeside-slot-run` (`0440`), one
   rule letting the operator run `<root>/bin/slot-run` as root with no
   password, checked with `visudo -cf` before it lands. Stock macOS includes
   `/private/etc/sudoers.d`.
 - **The packet-filter anchor:** `<root>/pf/anchor.conf`, holding
-  `block drop out quick user <slot>` and its `in` twin per slot (the bytes
-  `macverify.PacketFilterRules` renders for `Config.PacketFilterRules`),
+  `block drop out quick on ! lo0 user <slot>` and its `in` twin per slot (the
+  bytes `macverify.PacketFilterRules` renders for `Config.PacketFilterRules`),
   loaded as `com.apple/freeside-macverify`. The stock `/etc/pf.conf`
-  evaluates every `com.apple/*` child, beside a VPN client's anchor.
+  evaluates every `com.apple/*` child, beside a VPN client's anchor. The
+  rules spare loopback so a job can reach its own reserved ports; the sandbox
+  profile alone decides which loopback ports a job may use, and pf still drops
+  everything bound off the host. `check` reports an anchor loaded before
+  that exemption (`block drop out quick all user = <uid>`) as a stale rule,
+  and rerunning install reloads it.
 - **The boot LaunchDaemon:** `/Library/LaunchDaemons/ai.freeside.macverify.pf.plist`
   runs `pfctl -E -a com.apple/freeside-macverify -f <root>/pf/anchor.conf` at
   load. Stock macOS loads `/etc/pf.conf` at boot but never enables pf, and the
@@ -5121,8 +5130,9 @@ are below, and `-operator` defaults to the user who ran `sudo`. Install writes:
   anchor itself while the job's load is in flight (pf refuses the second load
   as `Resource busy`).
 
-Install prints the `macverify.Config` values it determines (`ExecutorRoot`
-and `Slots`); the daemon's `Config` also names the `Toolchain` pin below. A
+Install prints the `macverify.Config` values it determines (`ExecutorRoot`,
+`Slots`, and `PortBase`); the daemon's `Config` also names the `Toolchain` pin
+below. A
 rerun changes nothing when nothing is missing.
 
 **Adoption.** Install refuses, changing nothing, when a slot or group name or
@@ -5147,6 +5157,36 @@ Swift by its `swiftlang-` token (in `swift --version`, such as
 the job with `ErrToolchainMismatch`, naming both, when either differs. The pin
 is part of the configuration digest, so updating Xcode means updating the pin
 and earning the conformance record again.
+
+**Reserved ports.** Each slot reserves four ports its jobs may bind and
+connect on, over TCP and UDP, on `127.0.0.1` and `::1`; the command finds them
+in `FREESIDE_VERIFY_PORTS`, comma-separated. Slot n in sorted order holds the
+four from `<port-base>+4(n-1)`, so the defaults give `fvslot1` 47000 to 47003
+and `fvslot2` 47004 to 47007. The sandbox profile admits only those ports
+(its `PORT_1` to `PORT_4` parameters); every other port, the resolver, and
+anything off the host stay refused.
+
+- **The rules.** Every port is at least 1024 and below the ephemeral range
+  (`sysctl net.inet.ip.portrange.first`, 49152 by default), so the kernel
+  never hands one to an unrelated socket. Install and the daemon both refuse a
+  base that breaks a rule, and the daemon refuses to start when its `-listen`
+  port is a reserved one.
+- **The two bases match.** Install's `-port-base` writes `bin/ports.conf`;
+  the daemon takes its base from `-macverify-port-base` (a deputy's
+  `port_base`). Both default to 47000. The room refuses a job whose prepare
+  reports other ports than the daemon's configuration names. The base and the
+  port count are part of the configuration digest.
+- **Nothing else may hold them.** Before each job the room checks each of
+  the slot's ports: over TCP it connects on loopback and binds on every other
+  interface address, and over UDP it binds on the wildcard, loopback, and
+  interface addresses. It refuses the job with `ErrReservedPortBusy`, naming
+  the holder, when a connection is accepted or a bind is refused as in use.
+  The slot is released, not quarantined. The check asks the kernel rather
+  than `netstat`, whose inet listing comes back empty when a Go process runs
+  it. A connection a finished job left in `TIME_WAIT` on loopback does not
+  count: it accepts nothing, though it refuses another user's TCP bind of
+  loopback or the wildcard, which is why TCP on loopback is checked by
+  connecting.
 
 **Swift dependencies.** Verification never fetches. When a job's workspace
 holds any `Package.resolved`, its key is a SHA-256 over every
@@ -5271,7 +5311,9 @@ pre-job probe leaves out (the job's environment and directory owner, writable
 home and `TMPDIR`, no window-server session), a signal death read as `-1`, a
 timeout that reaps a descendant that left its session, and the helper refusing
 accounts outside `slots.conf`. Set `FREESIDE_MACVERIFY_OFF_HOST_UDP` to an
-`IP:port` DNS server when the resolver in `/etc/resolv.conf` does not answer:
+`IP:port` DNS server when the resolver in `/etc/resolv.conf` does not answer,
+and `FREESIDE_MACVERIFY_PORT_BASE` to the install's `-port-base` when it
+isn't the default:
 
 ```sh
 FREESIDE_MACVERIFY_LIVE_TEST=1 FREESIDE_MACVERIFY_ROOT=/Library/Freeside/macverify \
@@ -5339,12 +5381,13 @@ cache directories under `/private/var/folders` stay too.
 
 The backend declares `supports_credential_free_host_verification` only after
 a passing conformance pass is durably recorded for its configuration digest
-(the daemon binary, profile, anchor rules, slots, root, and toolchain pins).
+(the daemon binary, profile, anchor rules, slots, root, toolchain pins, and
+reserved ports).
 `macverify.NewSuite` builds the pass and `Suite.Full` runs it; give it
 `WithConformanceRecorder`, since a pass with no recorder never declares.
 Decision record: `devlog/2026-11-09-1830-macos-conformance-probe.md`.
 
-**Configure the daemon.** `freesided` builds the executor from four flags.
+**Configure the daemon.** `freesided` builds the executor from five flags.
 With no `-macverify-root` it configures none, and the gate refuses every
 `macos_host` job.
 
@@ -5354,6 +5397,7 @@ With no `-macverify-root` it configures none, and the gate refuses every
 | `-macverify-slots` | The slot account names the install created, comma-separated; default `fvslot1,fvslot2` |
 | `-macverify-xcode-build` | The Xcode build number `xcodebuild -version` prints, such as `17F42`; required with a root |
 | `-macverify-swift` | The `swiftlang-` token `swift --version` prints; required with a root |
+| `-macverify-port-base` | The first reserved port, the install's `-port-base`; default 47000 (Reserved Ports) |
 
 An invalid configuration fails startup. Under `-run-conformance` the daemon
 runs `Suite.Full` with the store's recorder at startup, after the ward's
@@ -5364,7 +5408,7 @@ stop startup: the daemon logs that the executor declares nothing. Under
 `unattended`, each `macos_host` job is then refused by name until a pass
 under `-run-conformance`; under `attended_dev`, jobs are still admitted.
 Since the digest names the daemon binary, a rebuilt `freesided` needs a fresh
-pass. `freesided deputy` takes the same four values from its
+pass. `freesided deputy` takes the same five values from its
 `macos_verification` setting (Run Real Work With The Deputy).
 
 **The pass.** Full refuses off macOS and records nothing there. Otherwise it
@@ -5376,18 +5420,26 @@ control for every network check as the daemon user, since a slot's refusal
 proves nothing when the target was unreachable anyway: it connects to its own
 loopback listener, resolves `github.com`, connects to that name's first IPv4
 address on port 443, and gets an answer from the first off-host `nameserver`
-in `/etc/resolv.conf`. `SuiteFixture` overrides each target. Last, on every
-slot, it runs four probe jobs through the room's ordinary job path:
+in `/etc/resolv.conf`. `SuiteFixture` overrides each target. It also refuses
+the pass when anything holds a slot's reserved port, as the room does before a
+job, and proves the daemon user can use each reserved port over TCP and UDP on
+`127.0.0.1` and `::1`. Last, on every slot, it runs four probe jobs through the
+room's ordinary job path:
 
 | Job | Profile | Checks | Confinement |
 | --- | --- | --- | --- |
-| `sandbox` | configured | `loopback-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
+| `sandbox` | configured | `loopback-refused`, `reserved-port <p>` for each of the slot's four, `foreign-bind-refused`, `foreign-connect-refused`, `resolver-empty`, `tcp-refused`, `udp-refused` | `sandbox_network` |
 | `sandbox` | configured | `write-denied` in `/private/tmp` and `/Users/Shared`; `write-job-dir` | `write_confinement` |
 | `packet-filter` | permissive (`(allow default)`) | `tcp-dropped`, `udp-dropped` to the control targets | `packet_filter` |
 | `home-mark`, then `home-clean` | configured | a marker left in the slot's home is gone in the next job | `home_reset` |
 
 A sandbox check passes only on `EPERM`, the sandbox's own refusal, so an
-unreachable target or a missing directory fails it. Only the sandbox can
+unreachable target or a missing directory fails it. The exceptions are the
+`reserved-port` checks, which pass only when the slot can listen on, connect
+to, and exchange a datagram over its own port on `127.0.0.1` and `::1`. The
+foreign checks bind and connect to another slot's first port (with one slot,
+the port below its set), which the sandbox must refuse even with a listener
+there. Only the sandbox can
 refuse a slot's write to those two world-writable directories. The daemon
 user's home is not a target: file permissions refuse the slot there anyway,
 as `EACCES` when the home is `0750`, so its answer cannot show the sandbox. A packet-filter check
@@ -5402,8 +5454,9 @@ failure superseded records nothing and says so.
 
 **The pre-job probe.** Before every recipe command, the room runs the
 `sandbox` job on the leased slot under the configured profile, against fixed
-targets: a loopback listener it opens, `github.com`, `192.0.2.1:443`,
-`192.0.2.1:53`, and the two directories above. It needs no positive control,
+targets: a loopback listener it opens, the slot's reserved ports and a
+foreign port, `github.com`, `192.0.2.1:443`, `192.0.2.1:53`, and the two
+directories above. It needs no positive control,
 because `EPERM` is the sandbox's answer whatever the target. A confinement
 failure refuses the command before it runs, quarantines the slot until the
 daemon restarts, and withdraws the declaration in memory. A pass refuses a

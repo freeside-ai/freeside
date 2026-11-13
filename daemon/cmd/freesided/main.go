@@ -496,7 +496,7 @@ func main() {
 			ShadowReviewAuthSnapshot:    review.ShadowAuthSnapshot,
 			ShadowReviewWorkspaceSizeMB: review.ShadowWorkspaceSizeMB,
 			ShadowReviewRate:            review.ShadowRate,
-			HostVerification:            hostVerification(),
+			HostVerification:            hostVerification(*listenAddr),
 		}
 	}
 	h, err := run(ctx, stop, daemonConfig)

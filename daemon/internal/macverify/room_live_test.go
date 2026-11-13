@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 //	FREESIDE_MACVERIFY_LIVE_TEST=1
 //	FREESIDE_MACVERIFY_ROOT=<executor root>
 //	FREESIDE_MACVERIFY_SLOTS=<slot>[,<slot>…]
+//	FREESIDE_MACVERIFY_PORT_BASE=<port>     optional; the install's -port-base
 const liveSkip = "set FREESIDE_MACVERIFY_LIVE_TEST=1, FREESIDE_MACVERIFY_ROOT, and FREESIDE_MACVERIFY_SLOTS " +
 	"on a host with the executor installed (daemon/README.md)"
 
@@ -37,12 +39,19 @@ func liveRoom(t *testing.T) (*Room, Config) {
 	if err != nil {
 		t.Fatalf("HostToolchain: %v", err)
 	}
+	portBase := DefaultPortBase
+	if s := os.Getenv("FREESIDE_MACVERIFY_PORT_BASE"); s != "" {
+		if portBase, err = strconv.Atoi(s); err != nil {
+			t.Fatalf("FREESIDE_MACVERIFY_PORT_BASE: %v", err)
+		}
+	}
 	cfg := Config{
 		ExecutorRoot:      root,
 		SandboxProfile:    DefaultSandboxProfile(),
 		PacketFilterRules: PacketFilterRules(strings.Split(slots, ",")),
 		Slots:             strings.Split(slots, ","),
 		Toolchain:         toolchain,
+		PortBase:          portBase,
 	}
 	b, err := New(cfg)
 	if err != nil {
@@ -110,7 +119,10 @@ func TestLiveRoomReportsSignalDeath(t *testing.T) {
 //nolint:paralleltest // Serial: each live test builds its own Backend, and Backends do not share leases, so parallel tests could lease one slot twice.
 func TestLiveRoomTimeoutReapsEscapedDescendant(t *testing.T) {
 	room, _ := liveRoom(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	// The budget covers the lease, prepare, and the pre-job probe before the
+	// command starts, which take 7 to 10 seconds on a loaded reference host;
+	// the probe sleeps ten minutes, so the job still times out.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	res, err := room.Run(ctx, probeWorkspace(t), []string{"./probe", "linger"})
 	if err != nil || res.ExitCode != -1 {

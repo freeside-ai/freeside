@@ -1,16 +1,33 @@
 ;; The macOS verification executor's default sandbox profile (#2877).
 ;;
-;; A recipe command runs under this profile as a slot account. It may not use
-;; the network at all, local sockets included, and it may write only to the
-;; job directory and to the slot's home, temporary, and cache directories,
-;; each of which slot-run resets between jobs. It may not create launchd
-;; jobs or open applications through Launch Services. The paths arrive as
-;; sandbox-exec -D parameters, so the profile's bytes stay fixed per
-;; configuration and the configuration digest names exactly what every job
-;; runs under.
+;; A recipe command runs under this profile as a slot account. Its only
+;; network use is its slot's four reserved ports, PORT_1 to PORT_4, on the
+;; host's own addresses, over TCP and UDP (#3155): it may bind, listen, and
+;; accept on them and connect or send to them, and nothing else, no other
+;; port, no off-host address, no resolver, and no local socket. It may write
+;; only to the job directory and to the slot's home, temporary, and cache
+;; directories, each of which slot-run resets between jobs. It may not
+;; create launchd jobs or open applications through Launch Services. The
+;; paths and ports arrive as sandbox-exec -D parameters, so the profile's
+;; bytes stay fixed per configuration and the configuration digest names
+;; exactly what every job runs under.
 (version 1)
 (allow default)
 (deny network*)
+;; A filter takes one port and only "localhost" or "*" as its host, so each
+;; reserved port is its own parameter, and "localhost" admits every address
+;; the host owns, not loopback alone
+;; (devlog/2026-11-12-1107-macos-job-loopback-ports.md).
+(allow network-bind network-inbound
+  (local ip (string-append "localhost:" (param "PORT_1")))
+  (local ip (string-append "localhost:" (param "PORT_2")))
+  (local ip (string-append "localhost:" (param "PORT_3")))
+  (local ip (string-append "localhost:" (param "PORT_4"))))
+(allow network-outbound
+  (remote ip (string-append "localhost:" (param "PORT_1")))
+  (remote ip (string-append "localhost:" (param "PORT_2")))
+  (remote ip (string-append "localhost:" (param "PORT_3")))
+  (remote ip (string-append "localhost:" (param "PORT_4"))))
 ;; A launchd job the command submits would run outside this sandbox and could
 ;; outlive the job without owning a process the absence proof would see.
 (deny job-creation)

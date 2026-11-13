@@ -137,9 +137,11 @@ func (s *Suite) recordStep(ctx context.Context, outcome domain.ConformanceOutcom
 }
 
 // Full runs the conformance pass: the positive controls as the daemon user,
-// then, on every configured slot as that slot, the sandbox network and write
-// checks under the configured profile, the packet-filter checks with the
-// sandbox off, and the home reset across two jobs. A nil error means every
+// then, on every configured slot, the reserved-port listener check and a
+// positive control on the slot's ports as the daemon user, and as that slot
+// the sandbox network and write checks under the configured profile, the
+// packet-filter checks with the sandbox off, and the home reset across two
+// jobs. A nil error means every
 // check passed and, with a recorder, the pass is recorded and declared.
 //
 // Tier A gate. Full refuses off macOS before taking a generation, so it
@@ -206,7 +208,21 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		loopbackPort: port, resolverHost: s.fx.ResolverHost, tcp: tcp, udp: udp, outsideDirs: s.room.outsideDirs,
 	}
 	for _, slot := range s.b.cfg.Slots {
-		if err := s.proveSlot(ctx, slot, workspace, targets); err != nil {
+		set := s.room.ports[slot]
+		if err := checkReservedPortsFree(ctx, s.room.portHolders, slot, set); err != nil {
+			return fmt.Errorf("conformance: %w", err)
+		}
+		for _, port := range set {
+			if err := s.room.portUsable(port); err != nil {
+				return &ConformanceFailure{
+					Confinement: ConfinementSandboxNetwork, Slot: slot,
+					Reason: fmt.Sprintf("positive control as the daemon user: reserved port %d: %v", port, err),
+				}
+			}
+		}
+		slotTargets := targets
+		slotTargets.ports, slotTargets.foreignPort = set, s.room.foreignPort(slot)
+		if err := s.proveSlot(ctx, slot, workspace, slotTargets); err != nil {
 			return err
 		}
 	}

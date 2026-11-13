@@ -78,9 +78,16 @@ type InstallSpec struct {
 	Label string
 	// SudoersName is the drop-in's file name under /etc/sudoers.d.
 	SudoersName string
+	// PortBase is the first reserved port; bin/ports.conf gives slot n in
+	// sorted order the portsPerSlot ports from PortBase+portsPerSlot*(n-1).
+	PortBase int
 }
 
-func (s InstallSpec) validate(requireOperator bool) error {
+// validate checks the spec. forInstall adds what only install and inspect
+// read: the operator and the port base. Removal reads neither, since
+// bin/ports.conf goes with the tree, so a host whose ephemeral range has
+// moved can still remove an install.
+func (s InstallSpec) validate(forInstall bool) error {
 	if !filepath.IsAbs(s.Root) || filepath.Clean(s.Root) != s.Root || s.Root == "/" ||
 		!rootPattern.MatchString(s.Root) {
 		return fmt.Errorf("%w: root %q must be a clean absolute path other than / using [A-Za-z0-9/._-]",
@@ -100,7 +107,7 @@ func (s InstallSpec) validate(requireOperator bool) error {
 	if s.FirstID < 1 || s.FirstID+s.SlotCount > 1<<31-1 {
 		return fmt.Errorf("%w: first id %d out of range", ErrInvalidSpec, s.FirstID)
 	}
-	if requireOperator {
+	if forInstall {
 		if !operatorPattern.MatchString(s.Operator) {
 			return fmt.Errorf("%w: operator %q must match %s", ErrInvalidSpec, s.Operator, operatorPattern)
 		}
@@ -117,6 +124,15 @@ func (s InstallSpec) validate(requireOperator bool) error {
 	if !sudoersNamePattern.MatchString(s.SudoersName) {
 		return fmt.Errorf("%w: sudoers name %q must match %s", ErrInvalidSpec, s.SudoersName, sudoersNamePattern)
 	}
+	if forInstall {
+		first, err := ephemeralPortFirst()
+		if err != nil {
+			return err
+		}
+		if err := validatePortBase(s.PortBase, s.SlotCount, first); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidSpec, err)
+		}
+	}
 	return nil
 }
 
@@ -130,11 +146,11 @@ func (s InstallSpec) Slots() []string {
 }
 
 // Config returns the macverify.Config fields this install determines:
-// ExecutorRoot, Slots (sorted), and PacketFilterRules.
+// ExecutorRoot, Slots (sorted), PacketFilterRules, and PortBase.
 func (s InstallSpec) Config() Config {
 	slots := s.Slots()
 	slices.Sort(slots)
-	return Config{ExecutorRoot: s.Root, Slots: slots, PacketFilterRules: PacketFilterRules(slots)}
+	return Config{ExecutorRoot: s.Root, Slots: slots, PacketFilterRules: PacketFilterRules(slots), PortBase: s.PortBase}
 }
 
 func (s InstallSpec) path(elem ...string) string {
@@ -142,6 +158,7 @@ func (s InstallSpec) path(elem ...string) string {
 }
 
 func (s InstallSpec) slotsConfPath() string  { return s.path("bin", "slots.conf") }
+func (s InstallSpec) portsConfPath() string  { return s.path("bin", "ports.conf") }
 func (s InstallSpec) anchorFilePath() string { return s.path("pf", "anchor.conf") }
 func (s InstallSpec) anchorPath() string     { return anchorParent + "/" + s.Anchor }
 func (s InstallSpec) sudoersPath() string    { return filepath.Join(sudoersDir, s.SudoersName) }
@@ -172,7 +189,7 @@ func (s InstallSpec) treeEntries(dir string) []string {
 	case s.Root:
 		return rootEntries
 	case s.path("bin"):
-		return []string{"slot-run", "slots.conf"}
+		return []string{"slot-run", "slots.conf", "ports.conf"}
 	case s.path("jobs"), s.path("homes"):
 		return s.Slots()
 	case s.path("template"):
@@ -242,6 +259,7 @@ func (in installer) pieces() []piece {
 		in.operatorCachePiece("Go cache", goCacheDirName),
 		in.filePiece("helper", helperPath(s.Root), helperScript, 0o755, nil),
 		in.filePiece("slot list", s.slotsConfPath(), renderSlotsConf(s.Slots()), 0o644, nil),
+		in.filePiece("reserved ports", s.portsConfPath(), RenderPortsConf(s.PortBase, s.Slots()), 0o644, nil),
 		in.groupPiece(),
 	)
 	for i, slot := range s.Slots() {
@@ -737,6 +755,9 @@ func (in installer) anchorRulesPiece() piece {
 					who = uid
 				}
 				key := dir + " " + who
+				if anchorRuleStale(rule) {
+					return StateMisconfigured, fmt.Sprintf("stale rule %q drops loopback; reload the anchor", rule), nil
+				}
 				if !ok || !want[key] {
 					return StateMisconfigured, fmt.Sprintf("unexpected rule %q", rule), nil
 				}
@@ -751,14 +772,26 @@ func (in installer) anchorRulesPiece() piece {
 	}
 }
 
-// anchorRuleKey reads "block drop <dir> quick ... user = <who>".
+// anchorRuleKey reads a rule as pfctl prints PacketFilterRules' shape,
+// "block drop <dir> quick on ! lo0 all user = <who>". The shape before the
+// loopback exemption, "block drop <dir> quick all user = <who>", is not
+// read: Inspect reports it as stale (anchorRuleStale).
 func anchorRuleKey(rule string) (dir, who string, ok bool) {
 	fields := strings.Fields(rule)
-	if len(fields) < 7 || fields[0] != "block" || fields[1] != "drop" || fields[3] != "quick" ||
-		fields[len(fields)-3] != "user" || fields[len(fields)-2] != "=" {
+	if len(fields) != 11 || fields[0] != "block" || fields[1] != "drop" || fields[3] != "quick" ||
+		fields[4] != "on" || fields[5] != "!" || fields[6] != "lo0" || fields[7] != "all" ||
+		fields[8] != "user" || fields[9] != "=" {
 		return "", "", false
 	}
-	return fields[2], fields[len(fields)-1], true
+	return fields[2], fields[10], true
+}
+
+// anchorRuleStale reports whether rule has the shape install loaded before
+// the loopback exemption (#3155), which drops a job's loopback traffic.
+func anchorRuleStale(rule string) bool {
+	fields := strings.Fields(rule)
+	return len(fields) == 8 && fields[0] == "block" && fields[1] == "drop" && fields[3] == "quick" &&
+		fields[4] == "all" && fields[5] == "user" && fields[6] == "="
 }
 
 func (in installer) packetFilterPiece() piece {

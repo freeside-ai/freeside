@@ -44,7 +44,10 @@ func TestRunPreJobProbeRunsTheSandboxModeFirst(t *testing.T) {
 	if !isProbeArgv(argv) || argv[3] != probeModeSandbox {
 		t.Fatalf("probe argv = %q, want the sandbox mode", argv)
 	}
-	wantTail := append([]string{preJobResolverHost, preJobTCP, preJobUDP}, room.outsideDirs...)
+	// A lone slot's foreign port is the one below its set.
+	wantTail := append([]string{
+		preJobResolverHost, preJobTCP, preJobUDP, "47000,47001,47002,47003", "46999",
+	}, room.outsideDirs...)
 	if !slices.Equal(argv[5:], wantTail) {
 		t.Fatalf("probe targets = %q, want %q", argv[5:], wantTail)
 	}
@@ -308,6 +311,7 @@ func TestNewRoomStagesTheRunningBinary(t *testing.T) {
 	b, err := New(Config{
 		ExecutorRoot: "/var/freeside/macverify", SandboxProfile: DefaultSandboxProfile(),
 		PacketFilterRules: []byte("rules"), Slots: []string{"slot1"}, Toolchain: testToolchain,
+		PortBase: DefaultPortBase,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 func reportSpec() probeSpec {
 	return sandboxProbe(sandboxTargets{
 		loopbackPort: "4242", resolverHost: "github.com", tcp: "192.0.2.1:443", udp: "192.0.2.1:53",
+		ports: slotPortSet{47000, 47001, 47002, 47003}, foreignPort: 47004,
 		outsideDirs: []string{"/private/tmp", "/Users/operator"},
 	})
 }

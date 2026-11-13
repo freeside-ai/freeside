@@ -12,7 +12,7 @@ func testSpec() InstallSpec {
 	return InstallSpec{
 		Root: "/Library/Freeside/macverify", SlotPrefix: "fvslot", SlotCount: 2, Group: "fvslots", FirstID: 460,
 		Operator: "benja", Anchor: "freeside-macverify", Label: "ai.freeside.macverify.pf",
-		SudoersName: "freeside-slot-run",
+		SudoersName: "freeside-slot-run", PortBase: DefaultPortBase,
 	}
 }
 
@@ -57,6 +57,9 @@ func TestInstallSpecValidate(t *testing.T) {
 		"anchor with slash":   func(s *InstallSpec) { s.Anchor = "a/b" },
 		"label with xml":      func(s *InstallSpec) { s.Label = "a<b" },
 		"sudoers with dot":    func(s *InstallSpec) { s.SudoersName = "a.b" },
+		"no port base":        func(s *InstallSpec) { s.PortBase = 0 },
+		"privileged ports":    func(s *InstallSpec) { s.PortBase = 1000 },
+		"ephemeral ports":     func(s *InstallSpec) { s.PortBase = 49150 },
 	} {
 		spec := testSpec()
 		mutate(&spec)
@@ -66,6 +69,13 @@ func TestInstallSpecValidate(t *testing.T) {
 	}
 	if err := testSpec().validate(true); err != nil {
 		t.Fatalf("default spec: %v", err)
+	}
+	// Removal reads no port base, so one that breaks a rule, or none,
+	// still removes.
+	spec := testSpec()
+	spec.PortBase = 0
+	if err := spec.validate(false); err != nil {
+		t.Fatalf("removal spec without a port base: %v", err)
 	}
 }
 
@@ -85,12 +95,17 @@ func TestInstallFresh(t *testing.T) {
 	if got := string(h.files["/Library/Freeside/macverify/bin/slots.conf"].data); got != "fvslot1\nfvslot2\n" {
 		t.Errorf("slots.conf = %q", got)
 	}
+	ports := h.files["/Library/Freeside/macverify/bin/ports.conf"]
+	if got := string(ports.data); got != "fvslot1 47000 47001 47002 47003\nfvslot2 47004 47005 47006 47007\n" ||
+		ports.info.UID != 0 || ports.info.Mode != 0o644 {
+		t.Errorf("ports.conf = %v %q", ports.info, got)
+	}
 	sudoers := h.files["/etc/sudoers.d/freeside-slot-run"]
 	if !strings.HasSuffix(string(sudoers.data), "\nbenja ALL=(root) NOPASSWD: /Library/Freeside/macverify/bin/slot-run\n") ||
 		sudoers.info.Mode != 0o440 {
 		t.Errorf("sudoers = %v %q", sudoers.info.Mode, sudoers.data)
 	}
-	if got := h.anchors["com.apple/freeside-macverify"]; len(got) != 4 || got[0] != "block drop out quick all user = 461" {
+	if got := h.anchors["com.apple/freeside-macverify"]; len(got) != 4 || got[0] != "block drop out quick on ! lo0 all user = 461" {
 		t.Errorf("loaded anchor = %q", got)
 	}
 	if home := h.files["/Library/Freeside/macverify/homes/fvslot1"].info; home.UID != 461 || home.Mode != 0o700 {
@@ -459,6 +474,7 @@ func TestInspectNamesEachMissingPiece(t *testing.T) {
 		"directory /Library/Freeside/macverify/template", "directory /Library/Freeside/macverify/template/home",
 		"directory /Library/Freeside/macverify/pf", "Swift cache /Library/Freeside/macverify/swift-cache", "Go cache /Library/Freeside/macverify/go-cache",
 		"helper /Library/Freeside/macverify/bin/slot-run", "slot list /Library/Freeside/macverify/bin/slots.conf",
+		"reserved ports /Library/Freeside/macverify/bin/ports.conf",
 		"group fvslots", "account fvslot1", "account fvslot2", "home fvslot1", "home fvslot2",
 		"sudoers file /etc/sudoers.d/freeside-slot-run", "anchor file /Library/Freeside/macverify/pf/anchor.conf",
 		"boot LaunchDaemon /Library/LaunchDaemons/ai.freeside.macverify.pf.plist",
@@ -642,8 +658,8 @@ func TestInspectCountsAnchorRulesPerSlot(t *testing.T) {
 	h, spec := installed(t)
 	// Every rule names a slot, but each slot misses a direction.
 	h.anchors[spec.anchorPath()] = []string{
-		"block drop in quick all user = 461", "block drop in quick all user = fvslot1",
-		"block drop out quick all user = 462", "block drop out quick all user = fvslot2",
+		"block drop in quick on ! lo0 all user = 461", "block drop in quick on ! lo0 all user = fvslot1",
+		"block drop out quick on ! lo0 all user = 462", "block drop out quick on ! lo0 all user = fvslot2",
 	}
 	findings, err := Inspect(spec, h)
 	if err != nil {
@@ -720,5 +736,53 @@ func TestRemoveKeepsEntriesInstallDidNotWrite(t *testing.T) {
 	}
 	if len(report.Left) != 1 || !strings.Contains(report.Left[0], "entries install did not write") {
 		t.Errorf("left %q", report.Left)
+	}
+}
+
+// TestInspectReportsTheAnchorBeforeTheLoopbackExemptionAsStale: rules
+// loaded before #3155 drop a slot's loopback traffic. Inspect names them
+// stale, and install reloads the anchor in the new shape.
+func TestInspectReportsTheAnchorBeforeTheLoopbackExemptionAsStale(t *testing.T) {
+	t.Parallel()
+	h, spec := installed(t)
+	h.anchors[spec.anchorPath()] = []string{
+		"block drop out quick all user = 461", "block drop in quick all user = 461",
+		"block drop out quick all user = 462", "block drop in quick all user = 462",
+	}
+	findings, err := Inspect(spec, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range findings {
+		if f.Piece == "loaded rules "+spec.anchorPath() {
+			found = true
+			if f.State != StateMisconfigured || !strings.Contains(f.Detail, "stale rule") {
+				t.Fatalf("old anchor = %s %q, want misconfigured as stale", f.State, f.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Inspect reported no loaded rules")
+	}
+	if _, err := Install(spec, h); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if got := h.anchors[spec.anchorPath()]; len(got) != 4 || got[0] != "block drop out quick on ! lo0 all user = 461" {
+		t.Fatalf("reloaded anchor = %q", got)
+	}
+}
+
+// TestRemoveReadsNoPortBase: removal needs no port base, even one install
+// would refuse, and still deletes ports.conf with the tree.
+func TestRemoveReadsNoPortBase(t *testing.T) {
+	t.Parallel()
+	h, spec := installed(t)
+	spec.PortBase = 0
+	if _, err := Remove(spec, h); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, ok := h.files[spec.portsConfPath()]; ok {
+		t.Fatal("ports.conf survived removal")
 	}
 }
