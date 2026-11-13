@@ -797,6 +797,10 @@ var storedRowKinds = []storedRowKind{
 		})},
 	{"follow-up filing", []string{"follow_up_filing_intents", "follow_up_filing_attempts", "follow_up_filed_issues"}, walkFollowUpFiling},
 	{"issue comment", []string{"issue_comment_intents", "issue_comment_attempts", "posted_issue_comments"}, walkIssueComments},
+	{"issue comment policy approval", []string{"issue_comment_policy_approvals"}, eachKey(`SELECT instance_id FROM issue_comment_policy_approvals`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.ApprovedIssueComment(ctx, domain.ProposalInstanceID(k.s[0])))
+		})},
 }
 
 // walkFollowUpFiling reads each intent, which reconstructs its attempts, and

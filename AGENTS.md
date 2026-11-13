@@ -663,9 +663,11 @@ directory named before it in the same bullet. All under `daemon/`:
   handle rule decides which issue a verdict names, and the filing gate
   reads before admitting or approving a filing),
   `internal/domain/issue_comment.go`, `internal/domain/issue_comment_ledger.go`,
-  and `internal/store/issue_comment_ledger.go` (the comment's target gate
-  against its search record, and the post ledger the dispatcher re-gates
-  against its approved instance on read),
+  `internal/store/issue_comment_ledger.go`, and
+  `internal/store/issue_comment_policy_approval.go` (the comment's target
+  gate against its search record, the post ledger the dispatcher re-gates
+  against its approved instance on read, and the policy approval that
+  stands in for a card when `gates.issue_comment` is off),
   `internal/domain/decision_surface.go`,
   `internal/domain/closure_approval.go`,
   `internal/domain/agent_decision.go`, `internal/domain/authorization.go`,

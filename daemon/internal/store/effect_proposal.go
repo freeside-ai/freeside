@@ -1532,9 +1532,21 @@ func (tx *WriteTx) RecordProposalDecision(
 			return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
 		}
 	}
-	if kind == domain.EffectIssueComment && action == domain.ActionApprove {
-		if err := tx.gateIssueCommentApproval(ctx, instanceID); err != nil {
-			return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
+	if kind == domain.EffectIssueComment {
+		// The second-actor rule for a comment: a policy approval
+		// (RecordPolicyIssueCommentApproval) is the other recorder, so no
+		// decision, a decline included, lands beside one.
+		policies, err := tx.countIssueCommentPolicyApprovals(ctx, instanceID)
+		if err != nil {
+			return fmt.Errorf("record proposal decision command %q policy approvals: %w", commandID, err)
+		}
+		if policies > 0 {
+			return fmt.Errorf("record proposal decision command %q: %w", commandID, ErrIssueCommentApprovalActorConflict)
+		}
+		if action == domain.ActionApprove {
+			if err := tx.gateIssueCommentApproval(ctx, instanceID); err != nil {
+				return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
+			}
 		}
 	}
 	if err := tx.checkDecisionSelection(ctx, instanceID, commandID, action, selectedDigest, boundDigest); err != nil {

@@ -18,6 +18,7 @@ const externalDispositionTrigger = "external_finding_disposition_requires_admitt
 // which admits an external_review round only.
 func rewindHandBackExternalDispositions(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindIssueCommentPolicyApprovals(t, ctx, db)
 	body, err := fs.ReadFile(migrations.FS, "0090_external_finding_dispositions.sql")
 	if err != nil {
 		t.Fatal(err)
