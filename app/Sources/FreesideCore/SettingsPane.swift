@@ -33,6 +33,7 @@ enum SettingsClient {
 struct SettingsSync {
     let devices: DevicesModel
     let routing: RoutingPolicyModel
+    let workflow: WorkflowPolicyModel
     let usage: AccountUsageModel
     let freshness: InboxStore.Freshness
     let lastUpdatedAt: Date?
@@ -84,6 +85,22 @@ enum SettingsSummary {
     }
 
     /// Usage: an unanswered command, or how many pools sync holds.
+    /// The gates that ask first in any section, or Autonomous when none
+    /// does.
+    static func workflow(_ workflow: WorkflowPolicyModel) -> String {
+        if let pending = workflow.pending, pending.receipt == nil { return "Unconfirmed" }
+        guard workflow.policy != nil else { return "Not synced" }
+        let asking = Set(
+            workflow.sections.flatMap { workflow.settings(in: $0) }
+                .filter { WorkflowPolicyView.isGate($0.key) && $0.value == "true" }
+                .map(\.key))
+        switch asking.count {
+        case 0: return "Autonomous"
+        case 1: return "1 gate asks first"
+        case let count: return "\(count) gates ask first"
+        }
+    }
+
     static func usage(_ usage: AccountUsageModel) -> String {
         if let pending = usage.pending, pending.receipt == nil { return "Unconfirmed" }
         switch usage.pools.count {
@@ -450,6 +467,16 @@ struct SettingsPaneView: View {
             if let sync {
                 RoutingPolicyView(
                     model: sync.routing, deviceNames: sync.deviceNames, client: client,
+                    rendersInteractiveControls: rendersInteractiveControls
+                )
+                .padding(SettingsPaneInsets.grammar(client))
+            } else {
+                unpaired
+            }
+        case .workflow:
+            if let sync {
+                WorkflowPolicyView(
+                    model: sync.workflow, deviceNames: sync.deviceNames, client: client,
                     rendersInteractiveControls: rendersInteractiveControls
                 )
                 .padding(SettingsPaneInsets.grammar(client))

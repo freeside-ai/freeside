@@ -1049,6 +1049,7 @@
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600),
                 notificationsOn: true)
             let routing = await RoutingPolicyScreenshots.model(.policy)
+            let workflow = await WorkflowPolicyScreenshots.model(.layers)
             let usage = await AccountUsageScreenshots.model(.usage)
             let settingsDefaults = try #require(
                 UserDefaults(suiteName: "FreesideScreenshotSettings-\(UUID().uuidString)"))
@@ -1081,13 +1082,14 @@
                 await preloadReferences(snapshot.item, into: healthStore)
             }
             func settingsSync(
-                _ devices: DevicesModel, routing: RoutingPolicyModel = routing, usage: AccountUsageModel = usage,
+                _ devices: DevicesModel, routing: RoutingPolicyModel = routing,
+                workflow: WorkflowPolicyModel = workflow, usage: AccountUsageModel = usage,
                 store: InboxStore = store,
                 unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = healthStopped,
                 age: TimeInterval = 120
             ) -> SettingsSync {
                 SettingsSync(
-                    devices: devices, routing: routing, usage: usage, freshness: .fresh,
+                    devices: devices, routing: routing, workflow: workflow, usage: usage, freshness: .fresh,
                     lastUpdatedAt: screenshotNow.addingTimeInterval(-age), revision: 4812,
                     projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
                     deviceID: DeviceIdentity.mock.deviceID, unresolvedActionCount: 0, store: store,
@@ -1218,6 +1220,25 @@
                         Surface(
                             name: state.surface + "-phone" + suffix, width: 390, colorScheme: scheme,
                             view: phonePane(.agents, sync: settingsSync(devicesModel, routing: stateModel))))
+                }
+            }
+
+            // The Workflow pane (#3145): the general layer and the served
+            // project's, each row's winning value and origin, with a
+            // project row offering its reset to general; then an unanswered
+            // change and a change refused because another device changed
+            // the policy first.
+            for state in WorkflowPolicyScreenshots.State.allCases {
+                let stateModel = await WorkflowPolicyScreenshots.model(state)
+                for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + suffix, width: 760, colorScheme: scheme,
+                            view: settingsWindow(.workflow, sync: settingsSync(devicesModel, workflow: stateModel))))
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + "-phone" + suffix, width: 390, colorScheme: scheme,
+                            view: phonePane(.workflow, sync: settingsSync(devicesModel, workflow: stateModel))))
                 }
             }
 

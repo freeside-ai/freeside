@@ -65,6 +65,7 @@ public final class NavigationModel {
     public enum SettingsPage: String, CaseIterable, Hashable, Sendable {
         case general
         case agents
+        case workflow
         case usage
         case devices
         case notifications
@@ -75,6 +76,7 @@ public final class NavigationModel {
             switch self {
             case .general: "General"
             case .agents: "Agents"
+            case .workflow: "Workflow"
             case .usage: "Usage"
             case .devices: "Devices"
             case .notifications: "Notifications"
