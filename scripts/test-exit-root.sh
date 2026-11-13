@@ -6,7 +6,9 @@
 # rerun on the second commit is a prompt-package change. A stand-in `go`
 # writes a fake freesided whose subcommands agree with each other: `deputy`
 # emits a tree patch derived from the settings' prompt package and second
-# writer, and reports a mismatch until agent_tree.commit holds that tree;
+# writer, reports a mismatch until agent_tree.commit holds that tree, and,
+# as the real one does, writes its composition manifest before it serves
+# and removes it on every stop, clean or not;
 # `prelaunch` derives first_missing from the same tree, a trust marker that
 # `onboard -approve` writes, and the image and recipe that approval prints;
 # `routing`, `set-pool-limit`, and `probe-lineup` record their arguments.
@@ -195,21 +197,28 @@ deputy)
     exit 2
   }
   echo "freesided deputy: build fake" >&2
-  rm -f "$root/daemon/composition-manifest.json"
+  manifest=$root/daemon/composition-manifest.json
+  rm -f "$manifest"
+  # stop <status>: the real deputy's lease release removes the manifest
+  # on every stop, so it binds nothing once the run is gone.
+  stop() {
+    rm -f "$manifest"
+    exit "$1"
+  }
   : >"$root/daemon/freeside.db"
   if [[ "${FAKE_DEPUTY_MODE:-}" == exporter ]]; then
     echo "freesided deputy: exporter_image failed; execution stays disabled (fake)" >&2
-    trap 'exit 0' TERM
+    trap 'stop 0' TERM
     echo '{"api_url":"http://x"}'
     for _ in $(seq 1 300); do sleep 0.1; done
-    exit 0
+    stop 0
   fi
   printf 'diff --git a/policy/lineup b/policy/lineup\nnew file mode 100644\n--- /dev/null\n+++ b/policy/lineup\n@@ -0,0 +1 @@\n+%s\n' \
     "$(expected_lineup "$settings")" >"$root/daemon/agent-tree.patch"
   if ! tree_matches "$settings"; then
     echo "freesided deputy: agent_tree failed; execution stays disabled (fake mismatch)" >&2
   else
-    jq -n --arg d "$REVIEW_DIGEST" '{review_configuration_digest: $d}' >"$root/daemon/composition-manifest.json"
+    jq -n --arg d "$REVIEW_DIGEST" '{review_configuration_digest: $d}' >"$manifest"
     if [[ "$(cat "$root/daemon/fake-trust" 2>/dev/null)" != "$REVIEW_DIGEST" ]]; then
       echo "freesided deputy: trust_profile failed; execution stays disabled (fake)" >&2
     else
@@ -217,13 +226,14 @@ deputy)
     fi
   fi
   if [[ "${FAKE_DEPUTY_MODE:-}" == dirty-exit ]]; then
-    trap 'exit 1' TERM
+    trap 'stop 1' TERM
   else
-    trap 'exit 0' TERM
+    trap 'stop 0' TERM
   fi
   printf '{"api_url":"http://%s","pairing_code":"ABCD","environment":"ephemeral","run_id":"r1"}\n' \
     "$(jq -r '.listen' "$settings")"
   for _ in $(seq 1 300); do sleep 0.1; done
+  stop 0
   ;;
 onboard)
   n=$(find "$STUB_DIR" -name 'onboard-*.args' | wc -l | tr -d ' ')
@@ -366,6 +376,10 @@ case $approval in
 esac
 if grep -qx -- -approve "$CASE_DIR"/onboard-*.args; then report_failure "the script itself passed -approve"; else ok; fi
 assert_line "$CASE_DIR/onboard-1.args" "$REVIEW_DIGEST"
+assert_not_exists "$FIX/daemon/composition-manifest.json"
+assert_eq "$(jq -r .review_configuration_digest "$FIX/exit-root.json")" "$REVIEW_DIGEST" 'state review digest'
+mode=$(stat -c %a "$FIX/logs/composition-manifest.json" 2>/dev/null || stat -f %Lp "$FIX/logs/composition-manifest.json" 2>/dev/null || true)
+assert_eq "$mode" 600 'manifest copy mode'
 assert_line "$CASE_DIR/onboard-1.args" "$CLONE"
 assert_line "$CASE_DIR/onboard-1.args" '584dba6120ee6e126460438032c3189762603306'
 assert_line "$CASE_DIR/onboard-1.args" '-image-name'
@@ -504,6 +518,8 @@ assert_contains 'approval=complete the GitHub App installation for freeasinbird/
 FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" pending
 assert_rc 3
 assert_line "$CASE_DIR/onboard-2.args" '-resume'
+assert_line "$CASE_DIR/onboard-2.args" "$REVIEW_DIGEST"
+assert_not_contains 'starting the deputy'
 case $(sed -n 's/^approval=//p' "$CASE_DIR/stdout") in
 *" -resume -approve $APPROVAL_DIGEST "*) ok ;;
 *) report_failure "the approve command lacks -resume" ;;
