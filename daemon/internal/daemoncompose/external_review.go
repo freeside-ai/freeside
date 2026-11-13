@@ -72,15 +72,17 @@ func (r ActiveResourceReconciler) conversationBotUserID(
 // commit and range, which the forge keeps when it re-anchors the comment to a
 // newer head. Bound to the moving commit, an old comment would become a new
 // finding on every later head. A conversation comment has no commit, so it
-// binds to the ready item's head at this read; commitExternalFindings keeps
-// it from becoming a new finding under a later head. The timestamp is the
+// binds to conversationHead, the head this pass observed: the ready item's
+// own head while it is bound, and the head a hand-back adopts after
+// readiness ended (issue #3160). commitExternalFindings keeps it from
+// becoming a new finding under a later head. The timestamp is the
 // forge's, so a later pass over the same activity rebuilds the same bytes.
 //
 // Activity that cannot be a valid finding is reported in skipped and stored
 // nowhere: text is never truncated to fit, since the finding's digest names
 // the reviewer's exact words.
 func buildExternalFindings(
-	obs publish.PullReviewObservation, binding domain.ReadyItemPRBinding, botUserID int64,
+	obs publish.PullReviewObservation, binding domain.ReadyItemPRBinding, conversationHead string, botUserID int64,
 ) (findings []domain.Finding, skipped []error) {
 	seen := map[domain.FindingID]bool{}
 	add := func(what string, id int64, in domain.ExternalFindingInput) bool {
@@ -163,7 +165,7 @@ func buildExternalFindings(
 		}
 		add("conversation comment", c.ID, domain.ExternalFindingInput{
 			ReviewerAccountID: c.AuthorID, ReviewerLogin: c.AuthorLogin,
-			ThreadID: publish.ExternalReviewConversationThreadID(c.ID), HeadSHA: binding.HeadSHA,
+			ThreadID: publish.ExternalReviewConversationThreadID(c.ID), HeadSHA: conversationHead,
 			RawText: c.Body, CreatedAt: c.CreatedAt.UTC(),
 		})
 	}

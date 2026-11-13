@@ -58,6 +58,10 @@ type deputySettings struct {
 		AllowedPaths []string         `json:"allowed_paths"`
 		Checkout     string           `json:"checkout"`
 		Project      domain.ProjectID `json:"project"`
+		// HandBackLabel is the label the landing batch puts on a pull
+		// request it hands back for rework; Freeside then reworks the pull
+		// request (issue #3160). Empty leaves hand-backs with a person.
+		HandBackLabel string `json:"hand_back_label,omitempty"`
 	} `json:"repository"`
 	Prompts struct {
 		PromptPackage              string `json:"prompt_package"`
@@ -314,6 +318,9 @@ func (s *loadedDeputySettings) validate() error {
 	}
 	if publish.ValidateCommitSHA(s.Repository.BaseSHA) != nil {
 		return errors.New("repository.base_sha is not a full commit SHA")
+	}
+	if s.Repository.HandBackLabel != "" && publish.ValidateLabelName(s.Repository.HandBackLabel) != nil {
+		return errors.New("repository.hand_back_label is not a label name")
 	}
 	if len(s.Repository.AllowedPaths) == 0 {
 		return errors.New("repository.allowed_paths is empty")

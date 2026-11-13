@@ -828,6 +828,7 @@ func deputyClaudeDriverConfig(
 		VendorInstructions:             settings.Prompts.VendorInstructions,
 		Repo:                           settings.Repository.Repo, RepositoryID: settings.Repository.RepositoryID,
 		BaseRef: settings.Repository.BaseRef, BaseSHA: settings.Repository.BaseSHA,
+		HandBackLabel:     settings.Repository.HandBackLabel,
 		AgentTreeCheckout: settings.AgentTree.Checkout, AgentTreeCommit: settings.AgentTree.Commit,
 		AllowedPaths:   settings.Repository.AllowedPaths,
 		RunConformance: true,

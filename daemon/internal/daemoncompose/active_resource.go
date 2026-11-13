@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,6 +41,14 @@ type ActiveResourceReconciler struct {
 	// as review (#3127). Optional: without it no conversation comment becomes
 	// an external finding.
 	appBotIdentity appBotIdentitySource
+	// handBackLabel is the label the landing batch puts on a pull request it
+	// hands back for rework (issue #3160). Empty turns hand-back intake off.
+	// The label is a trigger, not an authority: the store re-proves the
+	// cycle from its own records when it seals one.
+	handBackLabel string
+	// mergeBase reads a head's merge base with the target branch, the base a
+	// hand-back cycle reviews against. Required when handBackLabel is set.
+	mergeBase func(ctx context.Context, repo, baseRef, head string) (string, error)
 	// reviewInvalidate drops the observer's cached validators for a PR when the
 	// durable append of its native observations fails, so the next tick
 	// re-fetches unconditionally instead of riding a 304 and permanently
@@ -122,7 +131,12 @@ type activeResourceObservation struct {
 	// boundOpen reports that the pass saw the pull request open and still the
 	// bound one, the only state in which its review activity is read and an
 	// external finding may start a cycle.
-	boundOpen   bool
+	boundOpen bool
+	// handBack reports that the pass saw the run's pull request open,
+	// unmerged, on its bound target, and carrying the hand-back label. Its
+	// conversation comments then bind to the observed head, which a hand-back
+	// cycle adopts, and the external review trigger waits.
+	handBack    bool
 	foreclosure *completionForeclosure
 	// held marks an observation of a publication hold's pull request, read
 	// through the held binding because the run has no ready item (issue #531).
@@ -501,6 +515,9 @@ func (r *ActiveResourceReconciler) Reconcile(
 						return result, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
 					}
 				}
+				if observation.handBack {
+					r.intakeHandBack(ctx, item.ID, observation, &result)
+				}
 				if observation.foreclosure != nil {
 					if err := r.convergeCompletionForeclosure(ctx, item, *observation.foreclosure); err != nil {
 						return result, fmt.Errorf("surface ready resource completion foreclosure %s: %w", item.ID, err)
@@ -590,7 +607,13 @@ func (r *ActiveResourceReconciler) Reconcile(
 		// picks up a finding stored before a crash and a reviewer the owner
 		// listed after their comment arrived. A failure is isolated like the
 		// intake's and retried on the next pass.
-		if observation.boundOpen && observation.invalidation == nil && !observation.conclude {
+		// A handed-back pull request starts a hand-back cycle instead: the
+		// comment that hands it back is not a review of the published head.
+		if observation.handBack && observation.invalidation == nil && !observation.conclude {
+			if err := r.startHandBack(ctx, observation.binding.RunID, observation.binding.Repo, *observation.pull); err != nil {
+				result.Failures = append(result.Failures, fmt.Errorf("start hand-back %s: %w", item.ID, err))
+			}
+		} else if observation.boundOpen && observation.invalidation == nil && !observation.conclude {
 			if err := r.startExternalReview(ctx, item.ID, observation.pull.ObservedAt); err != nil {
 				result.Failures = append(result.Failures,
 					fmt.Errorf("start external review %s: %w", item.ID, err))
@@ -690,6 +713,79 @@ func (r ActiveResourceReconciler) startExternalReview(
 		// The item is no longer ready, so its watches end with it.
 		return concludePublicationSchedules(ctx, tx, itemID, observedAt)
 	})
+}
+
+// intakeHandBack stores a handed-back pull request's review activity and
+// starts the hand-back cycle for a run whose ready item already ended. Each
+// failure is isolated like the open path's and retried on the next pass.
+func (r *ActiveResourceReconciler) intakeHandBack(
+	ctx context.Context, itemID domain.ItemID, observation activeResourceObservation,
+	result *activeResourceReconcileResult,
+) {
+	if observation.nativeErr != nil {
+		result.Failures = append(result.Failures, fmt.Errorf("hand-back %s: %w", itemID, observation.nativeErr))
+	}
+	result.Skipped = append(result.Skipped, observation.externalSkipped...)
+	if len(observation.externalFindings) > 0 {
+		if err := r.commitExternalFindings(ctx, observation); err != nil {
+			result.Failures = append(result.Failures, fmt.Errorf("record hand-back review %s: %w", itemID, err))
+			r.dropReviewCache(observation.binding)
+			return
+		}
+	}
+	if err := r.startHandBack(ctx, observation.binding.RunID, observation.binding.Repo, *observation.pull); err != nil {
+		result.Failures = append(result.Failures, fmt.Errorf("start hand-back %s: %w", itemID, err))
+	}
+}
+
+// startHandBack starts a hand-back cycle for the run when one is due on the
+// observed head (engine.StartHandBackReentry). Like startExternalReview it
+// opens a write transaction only when a cycle is due, and the supersession
+// of an open ready item, the authority, and the task commit together.
+func (r ActiveResourceReconciler) startHandBack(
+	ctx context.Context, runID domain.RunID, repo string, pull domain.PullMergeFact,
+) error {
+	var due bool
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		due, err = engine.HandBackReentryDue(ctx, tx, runID, pull.HeadSHA)
+		return err
+	}); err != nil || !due {
+		return err
+	}
+	if r.mergeBase == nil {
+		return errors.New("hand-back intake has no merge-base reader")
+	}
+	base, err := r.mergeBase(ctx, repo, pull.BaseRef, pull.HeadSHA)
+	if err != nil {
+		return fmt.Errorf("read merge base: %w", err)
+	}
+	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
+		superseded, started, err := engine.StartHandBackReentry(ctx, tx, runID, pull.HeadSHA, base)
+		if err != nil || !started || superseded == "" {
+			return err
+		}
+		// The superseded item is no longer ready, so its watches end with it.
+		return concludePublicationSchedules(ctx, tx, superseded, pull.ObservedAt)
+	})
+}
+
+// publishedPullOpen reports whether binding is its run's published ready
+// item and its pull request was last recorded open and unmerged: the only
+// concluded item a hand-back can still reach.
+func publishedPullOpen(ctx context.Context, tx *store.ReadTx, binding domain.ReadyItemPRBinding) (bool, error) {
+	published, err := tx.PublishedProductionReadyItemID(ctx, binding.RunID)
+	if err != nil || published != binding.ItemID {
+		return false, err
+	}
+	latest, err := tx.LatestPullMergeFact(ctx, binding.RepositoryID, binding.PRNumber)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return latest.State == domain.PullRequestOpen && !latest.Merged, nil
 }
 
 // reconcileHeldResource observes the pull request behind an open publication
@@ -1056,6 +1152,10 @@ func (r ActiveResourceReconciler) observeReadyResource(
 		bindingAbsent bool
 		mergeRecorded bool
 		reviewFetched bool
+		// handBackWatch keeps the pull read going for a run's published,
+		// concluded ready item whose pull request was last seen open, so a
+		// hand-back after readiness ended still reaches the run.
+		handBackWatch bool
 	)
 	if held && !completionOnly {
 		return activeResourceObservation{}, errors.New("a held resource is observed for completion only")
@@ -1085,6 +1185,11 @@ func (r ActiveResourceReconciler) observeReadyResource(
 			}
 			declaration, unitBinding = state.declaration, state.binding
 			completed, foreclosure = state.completed, state.foreclosure
+			if !held && r.handBackLabel != "" {
+				if handBackWatch, err = publishedPullOpen(ctx, tx, binding); err != nil {
+					return err
+				}
+			}
 			if held {
 				latest, err := tx.LatestPullMergeFact(ctx, binding.RepositoryID, binding.PRNumber)
 				switch {
@@ -1145,7 +1250,7 @@ func (r ActiveResourceReconciler) observeReadyResource(
 		// only a declared unit's completion is left to observe. A hold has
 		// recorded nothing yet: keep polling until its merge is on record. A
 		// closed pull request can reopen, so only a merge stops the polling.
-		if !held || mergeRecorded {
+		if (!held || mergeRecorded) && !handBackWatch {
 			return observation, nil
 		}
 	}
@@ -1205,7 +1310,18 @@ func (r ActiveResourceReconciler) observeReadyResource(
 	// it never blocks the pull/issue facts; on success, unchanged activity
 	// (a 304 across all sub-resources) yields nothing to record.
 	observation.boundOpen = !completionOnly && exact && pullFact.State == domain.PullRequestOpen
-	if observation.boundOpen && r.Review != nil {
+	observation.handBack = r.handBackLabel != "" && !held && slices.Contains(observed.Labels, r.handBackLabel) &&
+		pullFact.State == domain.PullRequestOpen && !pullFact.Merged && pullFact.BaseRef == binding.BaseRef &&
+		(handBackWatch || !completionOnly)
+	// A conversation comment binds to the head the pass observed. That is the
+	// ready item's own head while it is bound, and under a hand-back after
+	// readiness ended it is the head the hand-back adopts.
+	conversationHead := binding.HeadSHA
+	readReview := observation.boundOpen
+	if completionOnly && observation.handBack {
+		conversationHead, readReview = pullFact.HeadSHA, true
+	}
+	if readReview && r.Review != nil {
 		reviewObs, err := r.Review(ctx, binding.Repo, binding.PRNumber)
 		if err == nil {
 			observation.reviewRead = true
@@ -1216,7 +1332,11 @@ func (r ActiveResourceReconciler) observeReadyResource(
 			observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, err)
 		case !reviewObs.NotModified:
 			reviewFetched = true
-			observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.Reviewers, observedAt)
+			// Native evidence describes a ready item's live candidate, so a
+			// hand-back read after readiness ended records none.
+			if observation.boundOpen {
+				observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.Reviewers, observedAt)
+			}
 			botUserID, identityErr := r.conversationBotUserID(ctx, binding.Repo, reviewObs)
 			if identityErr != nil {
 				// The reviews and inline comments are still stored. The
@@ -1225,7 +1345,8 @@ func (r ActiveResourceReconciler) observeReadyResource(
 				observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, identityErr)
 				r.dropReviewCache(binding)
 			}
-			observation.externalFindings, observation.externalSkipped = buildExternalFindings(reviewObs, binding, botUserID)
+			observation.externalFindings, observation.externalSkipped = buildExternalFindings(
+				reviewObs, binding, conversationHead, botUserID)
 		}
 	}
 	// Completion compares the unit's effective head, which a proven rebase
@@ -1441,7 +1562,12 @@ func (r ActiveResourceReconciler) commit(ctx context.Context, observation active
 				// A head change re-enters verification and review in this
 				// transaction (issue #502); any other invalidation, and a unit
 				// this pass just completed, starts nothing and stays with a
-				// person.
+				// person. A handed-back pull request's new head waits for the
+				// hand-back cycle instead, which adopts it and also hands it
+				// off (issue #3160).
+				if observation.handBack {
+					break
+				}
 				if _, err := engine.StartReadinessReentry(ctx, tx, item); err != nil {
 					return err
 				}

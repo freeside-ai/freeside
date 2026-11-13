@@ -4424,7 +4424,7 @@ container volume, not a host path.
 | --- | --- |
 | top level | `listen`, `seed_root`, `approved_recipe`, `manual_submission_config`, `memory_budget_mib` (positive; Bound Container Memory) |
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
-| `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
+| `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project`, and the optional `hand_back_label` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
 | `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` and `second_writer`. `pricing_revision` and `offer_not_after` are still required but ignored, because the tree carries no offers (#2599) |
 | `review` | `input_root`, `auth_mode` (`subscription` with a Codex reviewer, `setup_token` with a Claude one; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
@@ -4443,6 +4443,21 @@ two. Each root has its own database, so no run, wave, or date suffix is needed
 to keep runs apart. The exit run's fixture pass is the one exception: it keeps
 the `fixture` its settings table fixes
 ([Rehearse Before The Real Run](../docs/production-walkthrough.md#rehearse-before-the-real-run)).
+
+`repository.hand_back_label` is the label the landing batch puts on a pull
+request it hands back for rework (`needs-rework` for a repository whose
+landing record names it). When it is set, a conversation comment from an
+admitted reviewer account on a labeled pull request's current head starts a
+hand-back cycle (#3160): Freeside adopts that head as it is, even one it did
+not push, verifies and reviews it against its merge base with the target,
+answers the comment, hands the head off onto the current tip, and removes
+the label once the run is ready again. So the lander's account must be on
+the trust profile's external-reviewer allowlist, and the lander must comment
+after it pushes, since a comment binds to the head Freeside reads with it.
+While the label is on, a moved head starts no ordinary head-change re-entry,
+so a labeled pull request whose head moved waits on that comment. Without
+the setting, a moved head re-enters as before. The label is at most 50
+characters, with no surrounding spaces or control characters.
 
 The deputy fixes, rather than reads from settings, the Claude driver, unattended
 mode, run conformance, provider-only egress to `api.anthropic.com:443`, and

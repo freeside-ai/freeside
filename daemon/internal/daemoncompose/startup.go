@@ -506,6 +506,8 @@ func ComposeClaudeLoops(
 		Reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
 		reviewInvalidate: claudeWiring.reviewInvalidate,
 		appBotIdentity:   claudeWiring.appBotIdentity,
+		handBackLabel:    cfg.Claude.HandBackLabel,
+		mergeBase:        claudeWiring.mergeBase,
 		evictConcluded:   claudeWiring.evictConcluded,
 		tipWatch: repositoryTipWatch{
 			Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,

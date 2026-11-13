@@ -85,6 +85,10 @@ type ClaudeDriverConfig struct {
 	RepositoryID                   int64
 	BaseRef                        string
 	BaseSHA                        string
+	// HandBackLabel is the label the landing batch puts on a pull request
+	// it hands back for rework (issue #3160). Empty turns hand-back rework
+	// off: no pull request's labels start a cycle and none is removed.
+	HandBackLabel string
 	// AgentTreeCheckout and AgentTreeCommit name the admitted-agent tree: a
 	// local checkout and the exact commit whose policy/ tree admission reads.
 	// Every identity the daemon runs under comes from that tree's lineup.
@@ -654,14 +658,16 @@ func isPermanentSeedCredentialError(err error) bool {
 // matching prior pass is restored. The daemon keeps the same conformance
 // closure for every scheduled doctor pass.
 type ClaudeComposition struct {
-	driver                          *claude.Driver
-	Backend                         *ward.Backend
-	authority                       *publish.InstallationAuthorityStore
-	publicationTransport            engine.PublicationTransport
-	publisher                       *publish.Publisher
-	FollowUpFiler                   *publish.FollowUpFiler
-	IssueCommentDispatcher          *publish.IssueCommentDispatcher
-	ReviewReplier                   *publish.ExternalReviewReplier
+	driver                 *claude.Driver
+	Backend                *ward.Backend
+	authority              *publish.InstallationAuthorityStore
+	publicationTransport   engine.PublicationTransport
+	publisher              *publish.Publisher
+	FollowUpFiler          *publish.FollowUpFiler
+	IssueCommentDispatcher *publish.IssueCommentDispatcher
+	ReviewReplier          *publish.ExternalReviewReplier
+	// HandBackLabels is nil when no hand-back label is configured.
+	HandBackLabels                  *publish.HandBackLabelRemover
 	reviewSource                    exec.ReviewSource
 	shadowReviewSource              exec.ReviewSource
 	reviewAdmission                 engine.ReviewAdmitter
@@ -702,6 +708,9 @@ type ClaudeComposition struct {
 	// conditional reads through the same reconciler.
 	observePull  pullObserver
 	observeIssue issueObserver
+	// mergeBase reads a head's merge base with the target branch through the
+	// same reconciler, for hand-back intake (issue #3160).
+	mergeBase func(ctx context.Context, repo, baseRef, head string) (string, error)
 	// observeLabelIssues is the label-intake loop's conditional read of the open
 	// issues carrying one initiator label, through the same reconciler (#659).
 	observeLabelIssues labelIssueObserver
@@ -886,7 +895,7 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, publisher, commitAuthors, posters, janitor, reconciler, reviewReplier, issueReadTokens, err := claudeTransport(ctx, st, cfg, authority)
+	transport, publisher, commitAuthors, posters, janitor, reconciler, reviewReplier, handBackLabels, issueReadTokens, err := claudeTransport(ctx, st, cfg, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -1216,6 +1225,7 @@ func composeClaudeDriver(
 		FollowUpFiler:          posters.filer,
 		IssueCommentDispatcher: posters.comments,
 		ReviewReplier:          reviewReplier,
+		HandBackLabels:         handBackLabels,
 		issueReadTokens:        issueReadTokens,
 		openIssues: publish.NewOpenIssueLister(
 			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
@@ -1239,6 +1249,7 @@ func composeClaudeDriver(
 		observeIssue: func(obsCtx context.Context, repo string, number int) (publish.IssueObservation, error) {
 			return reconciler.ReconcileIssue(obsCtx, repo, number)
 		},
+		mergeBase: reconciler.MergeBase,
 		observeLabelIssues: func(obsCtx context.Context, repo, label string) (publish.LabelIssuesObservation, error) {
 			return reconciler.ReconcileLabelIssues(obsCtx, repo, label)
 		},
@@ -1735,26 +1746,26 @@ func claudeTransport(
 	st *store.Store,
 	cfg ClaudeDriverConfig,
 	authority *publish.InstallationAuthorityStore,
-) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, followUpPosters, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, publish.TokenSource, error) {
+) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, followUpPosters, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, *publish.HandBackLabelRemover, publish.TokenSource, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, DefaultGitHubAPIBase, authority, authority, recorder, recorder, time.Now,
 		DefaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, DefaultGitHubAPIBase, recorder, trust, time.Now, janitor,
@@ -1764,49 +1775,59 @@ func claudeTransport(
 		tokens, keystore, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	reviewReplier, err := publish.NewExternalReviewReplier(st, tokens, client, DefaultGitHubAPIBase, commitAuthors, time.Now)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+	}
+	var handBackLabels *publish.HandBackLabelRemover
+	if cfg.HandBackLabel != "" {
+		// The remover's own token source mints only the label grant, so the
+		// publication token never reaches the label call.
+		handBackLabels, err = publish.NewHandBackLabelRemover(st, publish.NewHandBackLabelTokenSource(minter, time.Now),
+			client, DefaultGitHubAPIBase, cfg.HandBackLabel)
+		if err != nil {
+			return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		}
 	}
 	transport, err := publish.NewTransport(
 		tokens,
 		publish.TransportOptions{RemoteBase: DefaultGitHubRemoteBase},
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	auditor, err := publish.NewGitHubWorkflowAuditor(
 		tokens, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	posters, err := composeFollowUpFiler(st, minter, keystore, client, DefaultGitHubAPIBase, auditor)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	ledger, err := publish.NewStoreLedger(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	authorizations, err := publish.NewStoreAuthorizationSource(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	publisher := publish.NewPublisher(
 		tokens, client, DefaultGitHubAPIBase, auditor, ledger, trust, authorizations,
 	)
 	if err := transport.AuthorizePublisher(publisher); err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}
 	if len(apps) == 0 {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, publish.ErrNoAppCredentials
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, publish.ErrNoAppCredentials
 	}
 	registrationIDs := make([]int64, 0, len(apps))
 	for _, app := range apps {
@@ -1814,13 +1835,13 @@ func claudeTransport(
 	}
 	session, err := startJanitorSession(ctx, janitor, registrationIDs)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
 	// Research reads the managed repository's issues on its own read-only
 	// grant, never on the publication token.
 	issueReadTokens := publish.NewIssueReadTokenSource(minter, time.Now)
 	return transport, publisher, commitAuthors, posters, session,
-		publish.NewReconciler(tokens, client, DefaultGitHubAPIBase), reviewReplier, issueReadTokens, nil
+		publish.NewReconciler(tokens, client, DefaultGitHubAPIBase), reviewReplier, handBackLabels, issueReadTokens, nil
 }
 
 // followUpPosters are the dispatchers that post what a human approved from a

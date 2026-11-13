@@ -282,6 +282,8 @@ func main() {
 	repo := flags.String("repo", "", "managed owner/name repository")
 	baseRef := flags.String("base-ref", "", "managed repository base branch")
 	baseSHA := flags.String("base-sha", "", "exact 40-character base commit tasks run against")
+	handBackLabel := flags.String("hand-back-label", "",
+		"label the landing batch puts on a pull request it hands back; Freeside reworks such a pull request (empty: off)")
 	allowedPaths := flags.String("allowed-paths", "", "comma-separated candidate path allowlist (required in claude driver mode)")
 	var review reviewFlagValues
 	reviewFlags(flags, &review)
@@ -482,7 +484,7 @@ func main() {
 			RemediationPromptPackageFile:   *remediationPromptPackage,
 			VendorInstructions:             *vendorInstructions,
 			Repo:                           *repo, RepositoryID: id,
-			BaseRef: *baseRef, BaseSHA: *baseSHA,
+			BaseRef: *baseRef, BaseSHA: *baseSHA, HandBackLabel: *handBackLabel,
 			AgentTreeCheckout: *agentTree, AgentTreeCommit: *agentTreeCommit,
 			AllowedPaths:   engine.SplitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,
