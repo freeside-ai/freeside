@@ -45,13 +45,16 @@
 #      its patch on branch exit-root/<pass> of the agent-tree checkout, never
 #      touching the checkout's current branch or working tree, and start
 #      again. Prelaunch can't see such a change, since it compares the tree
-#      only with the last start's patch. A start that composes enables
-#      execution until it is stopped, so on a root that already ran tasks a
-#      rerun may resume one; reruns are for iterating, and a counted pass
-#      uses a fresh root.
+#      only with the last start's patch. The start's composition manifest
+#      is copied to <root>/logs while the deputy serves, since its stop
+#      removes the original, and the copy's review_configuration_digest
+#      goes to the state file. A start that composes enables execution
+#      until it is stopped, so on a root that already ran tasks a rerun may
+#      resume one; reruns are for iterating, and a counted pass uses a
+#      fresh root.
 #   6. Run `freesided prelaunch -no-live` and act on its first_missing:
-#      trust_profile: run the onboarding review (never -approve) and stop
-#        with the approval command;
+#      trust_profile: run the onboarding review (never -approve) with the
+#        state file's review digest and stop with the approval command;
 #      project_image, approved_recipe: take both from the approving run's
 #        output, <root>/daemon/onboard-approved.json.
 #   7. Apply the pass's routing order and pool limits, run
@@ -415,15 +418,18 @@ prelaunch_failures() {
 # identities and the tree and, when the tree matches, writes the composition
 # manifest. Sets start_result to tree_mismatch or composed (the manifest was
 # written, whatever composition checks failed); a failure before the tree
-# comparison, such as exporter_image, ends the script.
+# comparison, such as exporter_image, ends the script. The deputy writes the
+# manifest before it prints api_url and removes it on every stop, so the
+# manifest is copied to the logs while the deputy serves; a composed start
+# records the copy's review_configuration_digest in the state file.
 start_result=''
 setup_start() {
   local out="$logs/deputy-setup.out" err="$logs/deputy-setup.err" manifest="$root/daemon/composition-manifest.json"
-  local pid rc=0 _ line
+  local copy="$logs/composition-manifest.json" pid rc=0 _ line
   say "starting the deputy once on $root (log: $err)"
-  # The deputy removes an earlier manifest itself; removing it here too
-  # keeps a stale one from passing for this start's.
-  rm -f "$manifest"
+  # The deputy removes an earlier manifest itself; removing it and the
+  # copy here too keeps a stale one from passing for this start's.
+  rm -f "$manifest" "$copy"
   "$freesided" deputy -root "$root" >"$out" 2>"$err" &
   pid=$!
   for _ in $(seq 1 4500); do
@@ -437,6 +443,9 @@ setup_start() {
     tail -n 20 "$err" >&2
     die "the deputy exited or never served (status $rc)"
   fi
+  # Kept at the deputy's own mode, and outside daemon/, where
+  # submit --require-composition would read it as this run's manifest.
+  [[ ! -f "$manifest" ]] || (umask 077 && cp "$manifest" "$copy")
   # TERM ends the deputy as Ctrl-C does (its signal context takes both), and
   # unlike INT a background job can receive it.
   kill -TERM "$pid"
@@ -451,7 +460,8 @@ setup_start() {
     die "the deputy exited $rc; it may have left the rig lease: $freesided rig recover -state-root $root/daemon -confirm"
   }
   state_set api_url "$(head -n 1 "$out" | jq -c '.api_url')"
-  if [[ -f "$manifest" ]]; then
+  if [[ -f "$copy" ]]; then
+    state_set review_configuration_digest "$(jq -c '.review_configuration_digest // null' "$copy")"
     start_result=composed
   elif grep -q '^freesided deputy: agent_tree failed;' "$err"; then
     start_result=tree_mismatch
@@ -495,10 +505,12 @@ emit_head() {
 }
 
 # onboard_review: the one-time review, never -approve; stops with exit 3.
+# The digest comes from the state file, so a rerun that starts no deputy
+# (the installation resume) still has it.
 onboard_review() {
   local digest args=() arg status review="$root/daemon/onboard-review.json" approved="$root/daemon/onboard-approved.json"
-  digest=$(jq -r '.review_configuration_digest // empty' "$root/daemon/composition-manifest.json" 2>/dev/null || true)
-  [[ -n "$digest" ]] || die "the composition manifest names no review_configuration_digest"
+  digest=$(state_get .review_configuration_digest)
+  [[ -n "$digest" ]] || die "the last composed start's manifest names no review_configuration_digest; see $logs/composition-manifest.json"
   args=(onboard "$(setting .repository.repo)" -db "$root/daemon/freeside.db"
     -repository-id "$(setting .repository.repository_id)" -commit "$(setting .repository.base_sha)"
     -base-ref "$(setting .repository.base_ref)" -source "$repo_checkout" -review-config-digest "$digest")
