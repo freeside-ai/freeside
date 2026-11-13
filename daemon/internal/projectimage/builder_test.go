@@ -959,6 +959,17 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 			t.Errorf("Node toolchain launcher omits fresh bound execution step %q", freshBinding)
 		}
 	}
+	// Every process in a project room gets the baked npm configuration, not
+	// only the preparation helper, so a writer's own npm ci stays offline.
+	const launcherConfig = "export NPM_CONFIG_GLOBALCONFIG=/usr/local/etc/npmrc NPM_CONFIG_USERCONFIG=/dev/null\n" +
+		"case \"${0##*/}\" in"
+	if !strings.Contains(string(launcher), launcherConfig) {
+		t.Errorf("Node toolchain launcher does not fix the npm configuration before dispatch")
+	}
+	// The writer runs unprivileged, and npm writes the cache owner-only.
+	if !strings.Contains(string(containerfile), "chmod -R a+rX "+NPMCachePath+"\n") {
+		t.Error("cache warming does not open the baked cache for reading")
+	}
 	for _, manifest := range []string{"package.json", "package-lock.json"} {
 		if !strings.Contains(
 			string(preparation),
