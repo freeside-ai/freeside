@@ -593,7 +593,9 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/engine/production_review_gate.go` (decides whether a reviewed
   candidate may reach publication),
   `internal/engine/production_reentry*.go` (re-earn readiness against a
-  new base), `internal/engine/production_handoff.go` (verifies
+  new base), `internal/engine/hand_back_reentry.go` (seals the authority
+  that adopts a handed-back head Freeside did not push),
+  `internal/engine/production_handoff.go` (verifies
   the merge into a moved tip and decides whether the handoff may publish),
   `internal/engine/production_rebuild.go` (binds the image that verifies a
   candidate and writes a refused rebuild's failed verification),

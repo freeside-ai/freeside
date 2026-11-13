@@ -66,7 +66,7 @@ func storedExternalFindings(t *testing.T, st *store.Store, runID domain.RunID) [
 func TestBuildExternalFindingsConversation(t *testing.T) {
 	t.Parallel()
 	binding := externalTestBinding()
-	findings, skipped := buildExternalFindings(conversationActivity("Please also check the docs."), binding, conversationTestBotID)
+	findings, skipped := buildExternalFindings(conversationActivity("Please also check the docs."), binding, binding.HeadSHA, conversationTestBotID)
 	if len(skipped) != 0 || len(findings) != 1 {
 		t.Fatalf("findings = %+v, skipped = %v; want the maintainer's comment alone", findings, skipped)
 	}
@@ -78,7 +78,7 @@ func TestBuildExternalFindingsConversation(t *testing.T) {
 		t.Fatalf("conversation finding = %+v (%+v)", got, got.External)
 	}
 
-	if unknown, _ := buildExternalFindings(conversationActivity("Please also check the docs."), binding, 0); len(unknown) != 0 {
+	if unknown, _ := buildExternalFindings(conversationActivity("Please also check the docs."), binding, binding.HeadSHA, 0); len(unknown) != 0 {
 		t.Fatalf("with no known bot, conversation findings = %+v; want none", unknown)
 	}
 }
@@ -171,7 +171,7 @@ func TestActiveResourceConversationCommentIsFinal(t *testing.T) {
 	}
 	later := binding
 	later.HeadSHA = strings.Repeat("b", 40)
-	moved, _ := buildExternalFindings(conversationActivity("Please also check the docs."), later, conversationTestBotID)
+	moved, _ := buildExternalFindings(conversationActivity("Please also check the docs."), later, later.HeadSHA, conversationTestBotID)
 	if len(moved) != 1 || moved[0].ID == first[0].ID {
 		t.Fatalf("later-head build = %+v; want one finding with a new ID", moved)
 	}

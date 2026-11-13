@@ -155,7 +155,7 @@ func (w *productionPublicationWorkflow) reentryPullMerged(
 ) (bool, error) {
 	var merged bool
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		predecessor, err := tx.GetReadyItemPRBinding(ctx, task.Successor.PredecessorItemID)
+		predecessor, err := tx.ReentryPredecessorBinding(ctx, *task.Successor)
 		if err != nil {
 			return err
 		}

@@ -513,3 +513,25 @@ func TestNativeReviewObservationRefusesExternalFinding(t *testing.T) {
 		t.Fatal("a changed external provenance did not read as a material change")
 	}
 }
+
+// A conversation comment's thread ID is the one shape a hand-back authority
+// names (issue #3160); the publish package writes it.
+func TestIsExternalConversationThread(t *testing.T) {
+	for thread, want := range map[string]bool{
+		"issue_comment/1":                   true,
+		"issue_comment/9223372036854775807": true,
+		"issue_comment/0":                   false,
+		"issue_comment/-1":                  false,
+		"issue_comment/01":                  false,
+		"issue_comment/+1":                  false,
+		"issue_comment/":                    false,
+		"issue_comment/9223372036854775808": false,
+		"review/1":                          false,
+		"review_comment/1":                  false,
+		"PRRT_kwDOexample":                  false,
+	} {
+		if got := domain.IsExternalConversationThread(thread); got != want {
+			t.Errorf("%q: %t, want %t", thread, got, want)
+		}
+	}
+}

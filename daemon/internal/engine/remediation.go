@@ -1009,8 +1009,7 @@ func (w *productionPublicationWorkflow) reconcileRemediationReview(
 			external      []domain.Finding
 			externalRound int
 		)
-		if task.Successor != nil && task.Successor.EffectiveOrigin() == domain.PublicationSuccessorExternalReview &&
-			task.Successor.Reentry != nil {
+		if task.Successor != nil && task.Successor.AnswersExternalFindings() && task.Successor.Reentry != nil {
 			externalRound = task.Successor.ReviewRound
 			if external, err = tx.ExternalReviewCycleFindings(ctx, task.RunID, task.PublicationID); err != nil {
 				return err

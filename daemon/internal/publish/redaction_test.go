@@ -86,6 +86,8 @@ func TestNoCredentialValueRenders(t *testing.T) {
 	filing := publish.NewFollowUpFilingTokenSource(
 		coveredMinter(map[string]string{"issues": "write", "metadata": "read"}), fixedNow)
 	issueRead := publish.NewIssueReadTokenSource(coveredMinter(issueReadGrant), fixedNow)
+	handBackLabel := publish.NewHandBackLabelTokenSource(
+		coveredMinter(map[string]string{"pull_requests": "write", "metadata": "read"}), fixedNow)
 
 	onboardingKeystore := newTestKeystore(t)
 	if err := onboardingKeystore.SaveApp(publicFixtureCredentials(t)); err != nil {
@@ -104,6 +106,7 @@ func TestNoCredentialValueRenders(t *testing.T) {
 		"CachedTokenSource":         publication,
 		"FollowUpFilingTokenSource": filing,
 		"IssueReadTokenSource":      issueRead,
+		"HandBackLabelTokenSource":  handBackLabel,
 		"OnboardingTokenSource":     onboarding,
 	}
 	var issueReadToken publish.InstallationToken

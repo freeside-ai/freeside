@@ -106,6 +106,8 @@
 //   - external_finding_quote.go, external_review_cycle.go, external_review_reentry.go
 //     admitted external findings as model input, and the re-entry cycle they
 //     start
+//   - hand_back_reentry.go the hand-back cycle a lander's comment starts on
+//     the head it pushed
 //   - operator_feedback.go, operator_feedback_retry.go
 //     operator feedback invocations and their retries
 //   - production_publication.go the production publication workflow: the

@@ -29,6 +29,10 @@ const (
 	// first-publication flag, for a remediation at the tip a handoff check
 	// sealed (issue #2646).
 	PublicationHandoffConflictVersion = "freeside.publication-successor/v7"
+	// PublicationHandBackVersion is the v4 shape for a hand_back re-entry: the
+	// hand-back comment and the trust profile that admitted its author
+	// (issue #3160).
+	PublicationHandBackVersion = "freeside.publication-successor/v8"
 )
 
 type PublicationSuccessorOrigin string
@@ -70,19 +74,28 @@ const (
 	// otherwise updates the run's pull request. No operator command starts
 	// it, so its identities key on its predecessor.
 	PublicationSuccessorHandoffConflict PublicationSuccessorOrigin = "handoff_conflict"
+	// PublicationSuccessorHandBack reworks a pull request the lander handed
+	// back (plan §7; issue #3160). It adopts the pull request's current head,
+	// which no Freeside invocation produced, verifies and reviews it in full,
+	// and then hands it off again on the target's current tip. The hand-back
+	// label and an admitted account's comment on that head are its trigger;
+	// the comment and the profile that admitted its author are named on the
+	// record. No operator command starts it, so its identities key on its
+	// predecessor.
+	PublicationSuccessorHandBack PublicationSuccessorOrigin = "hand_back"
 )
 
 var AllPublicationSuccessorOrigins = []PublicationSuccessorOrigin{
 	PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
 	PublicationSuccessorExternalReview, PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorBaseAdvance,
-	PublicationSuccessorHandoffConflict,
+	PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack,
 }
 
 func (o PublicationSuccessorOrigin) valid() bool {
 	switch o {
 	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
 		PublicationSuccessorExternalReview, PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorBaseAdvance,
-		PublicationSuccessorHandoffConflict:
+		PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
 		return true
 	default:
 		return false
@@ -155,8 +168,9 @@ type PublicationSuccessor struct {
 	ReevaluationCommandID   string                       `json:"reevaluation_command_id,omitempty"`
 	Reentry                 *PublicationSuccessorReentry `json:"reentry,omitempty"`
 	// ExternalFindingID and AdmittingProfileDigest are set together, on an
-	// external_review record only: the finding that triggered the cycle and
-	// the trust profile revision whose allowlist admitted its reviewer. The
+	// external_review or hand_back record only: the finding that triggered
+	// the cycle (for hand_back, the hand-back comment) and the trust profile
+	// revision whose allowlist admitted its reviewer. The
 	// profile is named, not looked up, so removing the reviewer later stops
 	// new cycles without making this one unreadable.
 	ExternalFindingID      FindingID `json:"external_finding_id,omitempty"`
@@ -256,8 +270,12 @@ func (s PublicationSuccessor) Validate() error {
 	if s.HandoffConflictCause != "" || s.FirstPublication {
 		return ErrParentKeyMismatch
 	}
-	if s.Version == PublicationExternalReviewVersion {
-		if s.Origin != PublicationSuccessorExternalReview || s.CommandID != "" ||
+	if s.Version == PublicationExternalReviewVersion || s.Version == PublicationHandBackVersion {
+		origin := PublicationSuccessorExternalReview
+		if s.Version == PublicationHandBackVersion {
+			origin = PublicationSuccessorHandBack
+		}
+		if s.Origin != origin || s.CommandID != "" ||
 			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
 			s.Reentry == nil || s.Reentry.Reason != "" || s.Reentry.BaseSHA == "" || s.Reentry.HeadSHA == "" ||
 			s.ExternalFindingID == "" || s.AdmittingProfileDigest == "" {
@@ -311,7 +329,7 @@ func (s PublicationSuccessor) Validate() error {
 		}
 	case PublicationSuccessorReadinessInvalidation, PublicationSuccessorExternalReview,
 		PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorBaseAdvance,
-		PublicationSuccessorHandoffConflict:
+		PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
 		return ErrParentKeyMismatch
 	}
 	return nil
@@ -337,8 +355,45 @@ func (s PublicationSuccessor) MakesFirstPublication() bool {
 // invocation produced: a head_changed readiness re-entry adopts the head
 // someone pushed to the branch. A handoff conflict on such a head gets no
 // remediation (issue #2646), since rewriting it would overwrite their work.
+//
+// A hand_back head is foreign too, but the authority itself is the
+// permission to adopt it (issue #3160), so it is not refused as one.
 func (s PublicationSuccessor) CarriesForeignHead() bool {
 	return s.Reentry != nil && s.Reentry.Reason == ReadinessInvalidationHeadChanged
+}
+
+// HandsBack reports whether the authority reworks a pull request the lander
+// handed back (v8).
+func (s PublicationSuccessor) HandsBack() bool {
+	return s.EffectiveOrigin() == PublicationSuccessorHandBack
+}
+
+// AnswersExternalFindings reports whether the cycle answers admitted
+// external findings in its first round: an external_review re-entry (v4), or
+// a hand_back one (v8), whose findings are the hand-back comment and any other
+// admitted comment on the adopted head. The two share the first round's
+// adjudication, dispositions, and producer gates.
+func (s PublicationSuccessor) AnswersExternalFindings() bool {
+	origin := s.EffectiveOrigin()
+	return origin == PublicationSuccessorExternalReview || origin == PublicationSuccessorHandBack
+}
+
+// HandBackComment reports whether finding is the conversation comment this
+// hand_back authority consumed. The comment asks for rework of the pull
+// request as a whole, so it carries no location, and it is the one finding a
+// fix may answer without one: a person may route it to a fix and the engine
+// grants it `allowed` (HandBackCommentCompatibility), while the import still
+// holds the fix to the run's declared paths (issue #3160).
+func (s PublicationSuccessor) HandBackComment(finding Finding) bool {
+	return s.HandsBack() && finding.ID == s.ExternalFindingID && finding.Location == nil
+}
+
+// InPlaceHandoffID names the handoff check a hand_back cycle runs on its
+// adopted head before it re-earns readiness. It is not the cycle's
+// publication ID: a fix the cycle starts publishes under that ID and hands
+// its own head off there, and a publication has one handoff check.
+func (s PublicationSuccessor) InPlaceHandoffID() InvocationID {
+	return InvocationID("handoff-" + string(s.PublicationID()))
 }
 
 // RemediatesHandoffConflict reports whether the authority remediates a head
@@ -369,7 +424,8 @@ func (s PublicationSuccessor) AdmitsSuccessorReentry() bool {
 	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorBaseAdvance:
 		return true
 	case PublicationSuccessorReadinessInvalidation, PublicationSuccessorExternalReview,
-		PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorHandoffConflict:
+		PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorHandoffConflict,
+		PublicationSuccessorHandBack:
 		return false
 	}
 	return false
@@ -388,6 +444,10 @@ func (s PublicationSuccessor) AdmitsSuccessorReentry() bool {
 // base the composition derives, the run's admitted one, and a fix built there
 // would be a candidate on the base the re-entry left behind. A successor's
 // re-entry (v6) admits none for the same reason.
+//
+// A hand_back re-entry (v8) adopts a head no Freeside invocation produced,
+// and admits remediation on it all the same: its authority is the permission
+// to replace that head, and its cycle verified and reviewed it first.
 //
 // A handoff conflict (v7) is the one authority whose remediations are
 // admitted at a base other than the run's: every one is at the tip it
@@ -408,7 +468,7 @@ func (s PublicationSuccessor) AllowsRemediation(r RemediationInvocationIntent) b
 	}
 	if s.Reentry != nil {
 		ownHead := s.Reentry.Reason == ReadinessInvalidationBaseAdvanced ||
-			s.Origin == PublicationSuccessorExternalReview
+			s.AnswersExternalFindings()
 		if !ownHead || r.BaseSHA != s.Reentry.BaseSHA ||
 			(r.Round == s.ReviewRound && r.HeadSHA != s.Reentry.HeadSHA) {
 			return false
@@ -421,9 +481,9 @@ func (s PublicationSuccessor) AllowsRemediation(r RemediationInvocationIntent) b
 
 // AdmitsHandoffConflictRemediation reports whether r is the cycle's first
 // remediation: the one that answers the conflict itself rather than a
-// finding. It names no finding and no adjudication, because the prior review
-// converged, and it is on the prior review's round and invocation and the
-// head that conflicted, at the sealed tip.
+// review. It names no adjudication, because no round adjudicated it, and it
+// is on the prior review's round and invocation and the head that
+// conflicted, at the sealed tip.
 func (s PublicationSuccessor) AdmitsHandoffConflictRemediation(r RemediationInvocationIntent) bool {
 	return s.RemediatesHandoffConflict() && r.RunID == s.RunID &&
 		r.SuccessorPublicationID == s.PublicationID() &&

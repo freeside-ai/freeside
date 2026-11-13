@@ -308,10 +308,11 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 // the composition, not the engine, knows the ward's workspace naming scheme
 // and how the operator resolves a base (#237). The engine replaces the
 // derived base commit in three cases: a maintenance task runs at its
-// refusal's tip (repairTaskRefusal), a handoff conflict's remediation at the
-// tip its sealed authority names (handoffConflictAdmission), and a later
-// return to the agent or remediation at that tip when its candidate was
-// written there (handoffConflictTipAdmission). Each tip is read from an
+// refusal's tip (repairTaskRefusal), a handoff conflict's or hand-back
+// cycle's remediation at the base its sealed authority names
+// (handoffConflictAdmission), and a later return to the agent or remediation
+// at that base when its candidate was written there
+// (handoffConflictTipAdmission). Each tip is read from an
 // immutable record, so every attempt derives the same base without the Run
 // carrying one.
 type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
@@ -1051,7 +1052,12 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 // conflict's authority is admitted at, and false for every other invocation.
 // The commit is the tip the authority sealed, read through the authority's
 // gate, which proved it against the predecessor's sealed handoff check; the
-// request's own base is never the source. The repository coordinates are the
+// request's own base is never the source.
+//
+// A remediation under a hand_back authority is admitted at that authority's
+// base too (issue #3160): the adopted head's merge base with the target, which
+// the cycle proved reachable from the target branch, with the head descending
+// from it, before its review routed a finding to a fix. The repository coordinates are the
 // run's production admission's, the ones the handoff audited, so the caller
 // refuses a derived base of another repository or branch.
 func handoffConflictAdmission(
@@ -1079,7 +1085,7 @@ func handoffConflictAdmission(
 			return err
 		}
 		successor, err := tx.GetPublicationSuccessor(ctx, runID, request.SuccessorPublicationID)
-		if err != nil || !successor.RemediatesHandoffConflict() {
+		if err != nil || (!successor.RemediatesHandoffConflict() && !successor.HandsBack()) {
 			return err
 		}
 		if !successor.AllowsRemediation(domain.RemediationInvocationIntent(request)) {
@@ -1109,7 +1115,8 @@ func handoffConflictAdmission(
 // through the store's gate (PublicationSuccessorChain), which re-proves each
 // authority against its sealed handoff check. A request naming any other
 // commit keeps the derived base. The repository coordinates are the run's
-// production admission's, as for handoffConflictAdmission.
+// production admission's, as for handoffConflictAdmission. A hand_back
+// authority in the chain admits its base the same way (issue #3160).
 //
 // Every attempt derives the same base: the request is immutable, and a
 // candidate is written on a sealed tip only after the authority naming it
@@ -1174,7 +1181,7 @@ func handoffConflictTipAdmission(
 			return err
 		}
 		if !slices.ContainsFunc(chain, func(s domain.PublicationSuccessor) bool {
-			return s.RemediatesHandoffConflict() && s.Reentry.BaseSHA == requested
+			return (s.RemediatesHandoffConflict() || s.HandsBack()) && s.Reentry.BaseSHA == requested
 		}) {
 			return nil
 		}

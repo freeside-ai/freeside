@@ -68,21 +68,21 @@ type productionHandoffStop struct {
 // the merge.
 func handoffCheckpointKey(task productionPublicationTask) string {
 	return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") +
-		"/handoff/" + string(task.PublicationID)
+		"/handoff/" + string(task.handoffID())
 }
 
 // handoffStopKey names a publication's handoff stop row, beside its
 // checkpoint. A handoff has a checkpoint or a stop, never both.
 func handoffStopKey(task productionPublicationTask) string {
 	return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") +
-		"/handoff-stop/" + string(task.PublicationID)
+		"/handoff-stop/" + string(task.handoffID())
 }
 
 // handoffVerificationInvocationID is the verification invocation of a
 // publication's handoff merge, apart from the candidate's own so the evidence
 // the stored authorization names stays where it is.
 func handoffVerificationInvocationID(task productionPublicationTask) domain.InvocationID {
-	return domain.InvocationID("verify-handoff-" + string(task.PublicationID))
+	return domain.InvocationID("verify-handoff-" + string(task.handoffID()))
 }
 
 // reconcileHandoff returns the publication's satisfied handoff check, sealing
@@ -111,7 +111,7 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 		// candidate's base away from what that decision named.
 		base := binding.admission.Base.BaseSHA
 		return domain.HandoffCheck{
-			RunID: task.RunID, PublicationID: task.PublicationID, HeadSHA: task.HeadSHA,
+			RunID: task.RunID, PublicationID: task.handoffID(), HeadSHA: task.HeadSHA,
 			EvidenceBaseSHA: base, TipSHA: base,
 		}, nil, nil
 	}
@@ -189,7 +189,7 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 		if stop.MergeSHA != merge {
 			return domain.HandoffCheck{}, nil, fmt.Errorf(
 				"handoff stop of %s names merge %s, the tip and head now merge to %s: %w",
-				task.PublicationID, stop.MergeSHA, merge, domain.ErrParentKeyMismatch)
+				task.handoffID(), stop.MergeSHA, merge, domain.ErrParentKeyMismatch)
 		}
 		return block(productionBlockHandoffVerification, stop.Artifacts)
 	}
@@ -266,7 +266,7 @@ func (w *productionPublicationWorkflow) sealHandoffTip(
 		return domain.HandoffCheck{}, false, err
 	}
 	check = domain.HandoffCheck{
-		RunID: task.RunID, PublicationID: task.PublicationID, HeadSHA: task.HeadSHA,
+		RunID: task.RunID, PublicationID: task.handoffID(), HeadSHA: task.HeadSHA,
 		EvidenceBaseSHA: base.BaseSHA, TipSHA: audit.AuditedCommitSHA,
 	}
 	if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -288,7 +288,7 @@ func (w *productionPublicationWorkflow) loadHandoffCheck(
 ) (check domain.HandoffCheck, found bool, err error) {
 	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		check, err = tx.GetHandoffCheck(ctx, task.RunID, task.PublicationID)
+		check, err = tx.GetHandoffCheck(ctx, task.RunID, task.handoffID())
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -296,7 +296,7 @@ func (w *productionPublicationWorkflow) loadHandoffCheck(
 	}
 	if err == nil && check.HeadSHA != task.HeadSHA {
 		err = fmt.Errorf("handoff check of %s names head %s, task publishes %s: %w",
-			task.PublicationID, check.HeadSHA, task.HeadSHA, domain.ErrParentKeyMismatch)
+			task.handoffID(), check.HeadSHA, task.HeadSHA, domain.ErrParentKeyMismatch)
 	}
 	return check, err == nil, err
 }
@@ -369,6 +369,12 @@ func (w *productionPublicationWorkflow) blockHandoff(
 	artifacts []domain.Artifact,
 	reason string,
 ) (productionTaskOutcome, error) {
+	if task.reentersInPlace() {
+		// A cycle that re-entered in place hands off only a head the pull
+		// request already carries, so a failed handoff stops the cycle on
+		// that pull request instead of ending the run.
+		return w.stopReentryCycle(ctx, task, reason, artifacts)
+	}
 	facts, err := definitivePublishBlockFacts(reason)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -475,7 +481,7 @@ func (w *productionPublicationWorkflow) recordHandoffStop(
 		}
 		if entry.Kind != productionHandoffStopKind || !bytes.Equal(entry.Payload, payload) {
 			return fmt.Errorf("handoff stop of %s disagrees with stored row: %w",
-				task.PublicationID, domain.ErrImmutableTransition)
+				task.handoffID(), domain.ErrImmutableTransition)
 		}
 		return nil
 	}); err != nil {
@@ -510,20 +516,20 @@ func (w *productionPublicationWorkflow) loadHandoffStop(
 	}
 	if entry.Kind != productionHandoffStopKind {
 		return productionHandoffStop{}, false, fmt.Errorf("handoff stop of %s has kind %q: %w",
-			task.PublicationID, entry.Kind, domain.ErrParentKeyMismatch)
+			task.handoffID(), entry.Kind, domain.ErrParentKeyMismatch)
 	}
 	var stop productionHandoffStop
 	if err := strictjson.Decode(
 		entry.Payload, &stop, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
 	); err != nil {
 		return productionHandoffStop{}, false, fmt.Errorf("decode handoff stop of %s: %w",
-			task.PublicationID, errors.Join(err, domain.ErrParentKeyMismatch))
+			task.handoffID(), errors.Join(err, domain.ErrParentKeyMismatch))
 	}
 	if stop.Version != productionHandoffStopVersion || stop.TaskKey != task.intentKey() ||
 		stop.HeadSHA != task.HeadSHA || stop.TipSHA != check.TipSHA ||
 		!validCommitSHA(stop.MergeSHA) || len(stop.Artifacts) != 1 {
 		return productionHandoffStop{}, false, fmt.Errorf("handoff stop of %s disagrees with task: %w",
-			task.PublicationID, domain.ErrParentKeyMismatch)
+			task.handoffID(), domain.ErrParentKeyMismatch)
 	}
 	for _, artifact := range stop.Artifacts {
 		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
@@ -554,7 +560,7 @@ func (w *productionPublicationWorkflow) withPublishedHandoff(
 	if !check.Proved() {
 		return productionReadiness{}, fmt.Errorf(
 			"published %s has an unproved handoff merge onto tip %s: %w",
-			task.PublicationID, check.TipSHA, domain.ErrParentKeyMismatch)
+			task.handoffID(), check.TipSHA, domain.ErrParentKeyMismatch)
 	}
 	merge := ""
 	if check.Merge != nil {
@@ -575,7 +581,7 @@ func (w *productionPublicationWorkflow) handoffBlockArtifacts(
 	}
 	if !found || !check.Moved() || check.Merge != nil {
 		return nil, fmt.Errorf("handoff verification block of %s has no failed merge: %w",
-			task.PublicationID, domain.ErrParentKeyMismatch)
+			task.handoffID(), domain.ErrParentKeyMismatch)
 	}
 	stop, stopped, err := w.loadHandoffStop(ctx, task, check)
 	if err != nil {
@@ -603,7 +609,7 @@ func (w *productionPublicationWorkflow) handoffBlockArtifacts(
 	}
 	if !found || stored.clean() {
 		return nil, fmt.Errorf("handoff verification block of %s has no failed verification: %w",
-			task.PublicationID, domain.ErrParentKeyMismatch)
+			task.handoffID(), domain.ErrParentKeyMismatch)
 	}
 	return stored.Artifacts, nil
 }
@@ -633,7 +639,7 @@ func (w *productionPublicationWorkflow) loadHandoffCheckpointMerge(
 		return nil
 	})
 	if err == nil && merge == "" {
-		err = fmt.Errorf("handoff checkpoint of %s names no merge: %w", task.PublicationID, domain.ErrParentKeyMismatch)
+		err = fmt.Errorf("handoff checkpoint of %s names no merge: %w", task.handoffID(), domain.ErrParentKeyMismatch)
 	}
 	return merge, err
 }

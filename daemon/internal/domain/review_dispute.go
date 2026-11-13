@@ -12,10 +12,17 @@ import (
 )
 
 // ReviewDisputeRoutes derives executable routes from the immutable run scope.
-// A missing or out-of-scope location cannot authorize remediation.
-func ReviewDisputeRoutes(finding Finding, declaredPaths []string) []AdjudicationRoute {
+// A missing or out-of-scope location cannot authorize remediation, except on
+// the comment a hand_back cycle answers: handBackComment is
+// PublicationSuccessor.HandBackComment for the round's authority, and such a
+// comment is offered a fix whenever HandBackCommentCompatibility allows one.
+func ReviewDisputeRoutes(finding Finding, declaredPaths []string, handBackComment bool) []AdjudicationRoute {
 	routes := []AdjudicationRoute{RouteDecline, RouteDefer}
-	if finding.Location != nil && canonicalRepoPath(finding.Location.Path) && pathfold.MatchAny(declaredPaths, finding.Location.Path, false) {
+	located := finding.Location != nil && canonicalRepoPath(finding.Location.Path) &&
+		pathfold.MatchAny(declaredPaths, finding.Location.Path, false)
+	wholeScope := handBackComment && finding.Location == nil &&
+		HandBackCommentCompatibility(declaredPaths) == CompatibilityAllowed
+	if located || wholeScope {
 		routes = append([]AdjudicationRoute{RouteRemediate}, routes...)
 	}
 	return routes

@@ -641,7 +641,8 @@ func DeriveRemediationSurface(
 	return &RemediationSurface{path: location.Path, derived: true}, nil
 }
 
-// EngineCompatibility is the sole producer of `allowed`. It returns `allowed`
+// EngineCompatibility is the producer of `allowed` for a located finding;
+// HandBackCommentCompatibility is the only other. It returns `allowed`
 // only when the presumptive surface is contained in the work unit's declared
 // paths, and the fail-closed `unknown` on a nil surface or a surface that exits
 // the declared paths (which requires rule interpretation, the model residue).
@@ -669,6 +670,19 @@ func EngineCompatibility(
 		return CompatibilityAllowed
 	}
 	return CompatibilityUnknown
+}
+
+// HandBackCommentCompatibility is the engine's compatibility for the comment a
+// hand_back cycle answers (PublicationSuccessor.HandBackComment). The comment
+// names no path, so no surface can be derived; it asks for rework of the
+// pull request, whose scope is the run's declared paths. It is `allowed`
+// whenever the run declares a path, because the import refuses a fix that
+// leaves them, and `unknown` otherwise.
+func HandBackCommentCompatibility(declaredPaths []string) WorkUnitCompatibility {
+	if len(declaredPaths) == 0 {
+		return CompatibilityUnknown
+	}
+	return CompatibilityAllowed
 }
 
 // canonicalRepoPath reports whether p is a canonical repository-relative path:

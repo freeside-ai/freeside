@@ -152,7 +152,7 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 	// Only an artifact that names a finding outside the record reads the
 	// cycle, so an ordinary round's adjudication depends on no successor.
 	if len(outsideRecord) > 0 {
-		if err := tx.requireAdmittedExternalEntries(ctx, record, outsideRecord); err != nil {
+		if _, err := tx.requireAdmittedExternalEntries(ctx, record, outsideRecord); err != nil {
 			return err
 		}
 	}
@@ -186,24 +186,33 @@ func (tx *ReadTx) validateFindingAdjudicationBinding(
 // else is a foreign finding, as it was before external entries existed.
 func (tx *ReadTx) requireAdmittedExternalEntries(
 	ctx context.Context, record domain.ReviewRecord, ids []domain.FindingID,
-) error {
+) (domain.PublicationSuccessor, error) {
 	authority, found, err := tx.externalReviewCycleForRound(ctx, record)
 	if err != nil {
-		return err
+		return domain.PublicationSuccessor{}, err
 	}
 	if !found {
-		return domain.ErrParentKeyMismatch
+		return domain.PublicationSuccessor{}, domain.ErrParentKeyMismatch
 	}
 	admitted, err := tx.ExternalReviewCycleFindings(ctx, record.RunID, authority.PublicationID())
 	if err != nil {
-		return err
+		return domain.PublicationSuccessor{}, err
 	}
 	for _, id := range ids {
 		if !slices.ContainsFunc(admitted, func(finding domain.Finding) bool { return finding.ID == id }) {
-			return domain.ErrParentKeyMismatch
+			return domain.PublicationSuccessor{}, domain.ErrParentKeyMismatch
 		}
 	}
-	return nil
+	return authority, nil
+}
+
+// ExternalReviewAuthorityForRound returns the external_review or hand_back
+// authority whose first round record is, read through its gate. found is
+// false for any other round.
+func (tx *ReadTx) ExternalReviewAuthorityForRound(
+	ctx context.Context, record domain.ReviewRecord,
+) (domain.PublicationSuccessor, bool, error) {
+	return tx.externalReviewCycleForRound(ctx, record)
 }
 
 // validateAdjudicationFeedback re-derives a successor's feedback provenance

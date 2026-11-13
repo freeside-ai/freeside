@@ -16,12 +16,12 @@ import (
 func TestReviewDisputeRoutesRespectCanonicalScope(t *testing.T) {
 	for _, path := range []string{"daemon/a.go", "app/a.go", "daemon/../app/a.go", "daemon//a.go", "/daemon/a.go", "daemon/./a.go", "daemon/a\\b.go", "daemon/a\n.go"} {
 		finding := domain.Finding{Location: &domain.FindingLocation{Path: path}}
-		routes := domain.ReviewDisputeRoutes(finding, []string{"daemon/**"})
+		routes := domain.ReviewDisputeRoutes(finding, []string{"daemon/**"}, false)
 		if slices.Contains(routes, domain.RouteRemediate) != (path == "daemon/a.go") {
 			t.Errorf("%q routes = %v", path, routes)
 		}
 	}
-	if slices.Contains(domain.ReviewDisputeRoutes(domain.Finding{}, []string{"**"}), domain.RouteRemediate) {
+	if slices.Contains(domain.ReviewDisputeRoutes(domain.Finding{}, []string{"**"}, false), domain.RouteRemediate) {
 		t.Fatal("locationless remediation offered")
 	}
 }

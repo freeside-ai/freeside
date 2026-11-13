@@ -61,9 +61,12 @@ func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.C
 			if err != nil {
 				return err
 			}
+			handBackComment := !slices.Contains(record.FindingIDs, id) &&
+				task.Successor != nil && task.Successor.HandBackComment(finding)
 			row := domain.DisputedFinding{
 				FindingID: id, Message: finding.Message, Location: finding.Location,
-				Severity: finding.Severity, OfferedRoutes: domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy)),
+				Severity:      finding.Severity,
+				OfferedRoutes: domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy), handBackComment),
 			}
 			if finding.External != nil {
 				row.External = &domain.DisputedFindingExternal{ReviewerLogin: finding.External.ReviewerLogin, ThreadID: finding.External.ThreadID}

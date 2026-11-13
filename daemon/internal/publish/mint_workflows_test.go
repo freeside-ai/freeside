@@ -95,6 +95,7 @@ func TestMintPublicationPermissionsFollowProfileStance(t *testing.T) {
 	for name, set := range map[string]publish.Permissions{
 		"workflow audit": publish.WorkflowAuditPermissions, "follow-up filing": publish.FollowUpFilingPermissions,
 		"issue read": publish.IssueReadPermissions, "issue inspection": publish.IssueInspectionPermissions,
+		"hand-back label": publish.HandBackLabelPermissions,
 	} {
 		if set.Workflows != "" {
 			t.Errorf("%s permissions carry workflows %q", name, set.Workflows)

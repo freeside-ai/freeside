@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -135,7 +137,7 @@ func TestReconcilePullConditional(t *testing.T) {
 		t.Error("unchanged PR did not report NotModified")
 	}
 	second.NotModified = false
-	if second != first {
+	if !reflect.DeepEqual(second, first) {
 		t.Errorf("304 churned the observation: %+v vs %+v", second, first)
 	}
 	if conditionalRequests(gh) != 1 {
@@ -150,6 +152,30 @@ func TestReconcilePullConditional(t *testing.T) {
 	}
 	if third.NotModified || third.State != "closed" {
 		t.Errorf("changed PR observed as %+v", third)
+	}
+}
+
+// TestReconcilePullLabels: the observation carries the pull request's label
+// names, a 304 keeps them, and a label change arrives as a new observation
+// (issue #3160).
+func TestReconcilePullLabels(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	gh.prs = append(gh.prs, fakePR{Number: 7, State: "open", HeadRef: "freeside/publish/abcd", HeadSHA: testHeadSHA})
+	r := newTestReconciler(t, gh)
+	first, err := r.ReconcilePull(t.Context(), testRepo, 7)
+	if err != nil || first.Labels != nil {
+		t.Fatalf("unlabeled pull = %+v, %v", first, err)
+	}
+	gh.prs[0].Labels = []string{"needs-rework", "approved"}
+	gh.prRevs[7]++
+	labeled, err := r.ReconcilePull(t.Context(), testRepo, 7)
+	if err != nil || labeled.NotModified || !slices.Equal(labeled.Labels, []string{"needs-rework", "approved"}) {
+		t.Fatalf("labeled pull = %+v, %v", labeled, err)
+	}
+	cached, err := r.ReconcilePull(t.Context(), testRepo, 7)
+	if err != nil || !cached.NotModified || !slices.Equal(cached.Labels, labeled.Labels) {
+		t.Fatalf("cached labeled pull = %+v, %v", cached, err)
 	}
 }
 

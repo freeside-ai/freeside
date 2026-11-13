@@ -31,8 +31,7 @@ func ExternalReviewConversationThreadID(commentID int64) string {
 // final (#3127): the comment has no commit, so an edit or a later head would
 // otherwise make it a new finding and start another round.
 func IsExternalReviewConversationThread(thread string) bool {
-	parsed, err := parseExternalReplyThread(thread)
-	return err == nil && parsed.comment > 0
+	return domain.IsExternalConversationThread(thread)
 }
 
 // externalReplyThread holds exactly one of a review body, an inline thread's

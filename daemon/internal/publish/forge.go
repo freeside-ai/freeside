@@ -209,6 +209,10 @@ type prState struct {
 	// the mark-ready/convert-to-draft mutations bind: REST cannot toggle draft.
 	Draft  bool
 	NodeID string
+	// Labels are the names of the labels on the pull request, in the order
+	// the forge returned them. The hand-back intake reads them (issue #3160);
+	// nothing on the publish path does.
+	Labels []string
 }
 
 // prResponse is the wire shape a pull-request read decodes.
@@ -240,6 +244,9 @@ type prResponse struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"base"`
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
 }
 
 // state maps the wire shape to the domain observation. Every caller rejects a
@@ -250,6 +257,10 @@ func (r prResponse) state() prState {
 	mergeCommit := ""
 	if merged {
 		mergeCommit = r.MergeCommitSHA
+	}
+	var labels []string
+	for _, label := range r.Labels {
+		labels = append(labels, label.Name)
 	}
 	return prState{
 		Number:         r.Number,
@@ -266,6 +277,7 @@ func (r prResponse) state() prState {
 		MergeCommitSHA: mergeCommit,
 		Draft:          *r.Draft,
 		NodeID:         r.NodeID,
+		Labels:         labels,
 	}
 }
 

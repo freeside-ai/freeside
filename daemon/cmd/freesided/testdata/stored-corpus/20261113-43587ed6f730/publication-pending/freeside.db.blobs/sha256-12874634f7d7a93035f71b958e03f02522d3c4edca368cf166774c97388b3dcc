@@ -1,0 +1,19 @@
+{
+  "head_sha": "b1baeca6f8165d1bbc2c6571a5e65a95a1cff5dc",
+  "base_sha": "9fbf70251c7fbe3172ff64a242a40d2b1a595d87",
+  "recipe_path": ".freeside/verify.json",
+  "recipe_digest": "sha256:2e9d5b0029e535f7010d002666cad09c6a481131c28af0139007f4cb3949fbb1",
+  "outcome": "passed",
+  "steps": [
+    {
+      "argv": [
+        "/usr/bin/true"
+      ],
+      "room": "project_image",
+      "exit_code": 0,
+      "output_truncated": false
+    }
+  ],
+  "findings": [],
+  "transcript_truncated": false
+}

@@ -5689,6 +5689,15 @@ under the same check. That covers a feedback return, a remediation
 continuation, and a head someone else pushed. A target-branch advance alone
 starts nothing: no check or review reruns, and the run does not re-enter.
 
+A pull request the lander hands back is reworked on the current target tip.
+Freeside adopts its current head, even one it did not push, only while the
+pull request carries the configured hand-back label and an admitted account
+has commented on that head, and only to verify and review that head in full
+before any remediation or publication. The adopted head is then handed off on
+the current tip as any head is. Freeside removes the label when the pull
+request is ready again and leaves it when the cycle ends on a person; the
+owner's earlier approval does not carry over to the reworked head.
+
 **Between handoff and merge, nothing in Freeside checks the PR against the
 latest target branch.** Only the merge-time checks the target repository
 enforces, such as required checks on an up-to-date branch, cover that interval,
@@ -5910,7 +5919,11 @@ deterministic route. A finding whose location is missing, non-path, or
 unresolvable in both trees yields no presumptive surface, and never a vacuously
 contained `allowed`. When its goal relationship is `required`, it falls to
 `unknown` or attention. A non-`required` finding routes by its own row, and that
-row consumes no surface.
+row consumes no surface. One finding is the exception: the comment a hand-back
+cycle answers names no path, because it asks for rework of the pull request as
+a whole, so its surface is the task's declared paths. The engine grants it
+`allowed`, and offers a person a fix for it, only while the task declares a
+path; the import boundary still holds the fix to those paths.
 
 For each finding, the artifact records two normalized axes, a recommended route,
 rationale and evidence, cited repository rules, assumptions, viable
@@ -5995,7 +6008,8 @@ Remediation is presumptively `allowed` when its proposed surface stays within
 the task's declared paths carried by this run's work-unit declaration. And
 `allowed` is representable only as an
 engine-derived value. The deterministic declared-path containment check is its
-sole producer. So model output cannot mint permission, and the adjudicator
+producer, and the hand-back comment's whole-scope surface, also engine-derived,
+is the only other. So model output cannot mint permission, and the adjudicator
 structurally cannot infer permission to exit the declared surface.
 
 Rule interpretation is required only where remediation would exit that surface

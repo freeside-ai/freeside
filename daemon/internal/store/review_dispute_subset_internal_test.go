@@ -42,7 +42,7 @@ func subsetDisputeFixture(t *testing.T, withPrior bool) (externalCycleFixture, d
 		binding.Findings = []domain.DisputedFinding{{
 			FindingID: f.internal.ID, Message: f.internal.Message,
 			Location: f.internal.Location, Severity: f.internal.Severity,
-			OfferedRoutes: domain.ReviewDisputeRoutes(f.internal, domain.CanonicalDeclaredPaths(policy)),
+			OfferedRoutes: domain.ReviewDisputeRoutes(f.internal, domain.CanonicalDeclaredPaths(policy), false),
 		}}
 		item, err = domain.NewAttentionItem(domain.AttentionItemInput{
 			ID:        domain.ProductionFindingAdjudicationItemID(f.run.ID, externalCycleRound, 1),

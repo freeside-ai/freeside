@@ -140,6 +140,18 @@ func (t productionPublicationTask) reentersInPlace() bool {
 	return t.Successor != nil && t.Successor.Reentry != nil && t.ProducingInvocationID == ""
 }
 
+// handoffID names the record a task's handoff check, verification, and stop
+// are keyed by. A hand-back cycle hands its adopted head off in place, before
+// it re-earns readiness, under an ID of its own: a fix the cycle starts
+// publishes under the cycle's publication ID and needs its own handoff check
+// there (issue #3160).
+func (t productionPublicationTask) handoffID() domain.InvocationID {
+	if t.reentersInPlace() && t.Successor.HandsBack() {
+		return t.Successor.InPlaceHandoffID()
+	}
+	return t.PublicationID
+}
+
 // admittedBaseSHA is the base the task's candidate was admitted at: the
 // replay's observed base, and for a cycle that re-enters in place, which has
 // no replay, or one that re-enters before publication, which reviews its head
@@ -242,7 +254,7 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 			return err
 		}
 		cycle.createdAt = entry.CreatedAt.UTC()
-		cycle.predecessor, err = tx.GetReadyItemPRBinding(ctx, task.Successor.PredecessorItemID)
+		cycle.predecessor, err = tx.ReentryPredecessorBinding(ctx, *task.Successor)
 		if err != nil {
 			return err
 		}
@@ -341,7 +353,7 @@ func (w *productionPublicationWorkflow) reentryPullRequest(
 	var predecessor domain.ReadyItemPRBinding
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		predecessor, err = tx.GetReadyItemPRBinding(ctx, task.Successor.PredecessorItemID)
+		predecessor, err = tx.ReentryPredecessorBinding(ctx, *task.Successor)
 		return err
 	}); err != nil {
 		return nil, fmt.Errorf("load re-entry pull request: %w", err)
@@ -407,7 +419,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	// advanced base; one still in flight now evaluates its head like any
 	// other, so a head built on the old base stops below for a person.
 	if !fetched.DescendsFromBase {
-		if task.answersExternalReview() {
+		if task.answersExternalReview() && !task.Successor.HandsBack() {
 			// The last review covered the head's merge into an advanced base.
 			// The external review authority admits no prospective merge, so
 			// this cycle has nothing it may review.
@@ -512,7 +524,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		return productionTaskOutcome{}, fmt.Errorf(
 			"review continuation escaped the review gate: %w", domain.ErrParentKeyMismatch)
 	}
-	return w.completeReentryTask(ctx, task, binding, checkpoint, checkout, reviewInstructions)
+	return w.completeReentryTask(ctx, task, binding, checkpoint, checkout, checkoutDir, reviewInstructions)
 }
 
 // publicationTransportFailure classifies a failed transport call on any
@@ -1291,6 +1303,7 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	checkout PublicationCheckout,
+	checkoutDir string,
 	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionTaskOutcome, error) {
 	cycle := binding.reentry
@@ -1317,10 +1330,25 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 		}
 		return productionTaskOutcome{}, err
 	}
-	// The cycle verified the head on the base its authority names, and ran
-	// no handoff of its own: the sealed check under this publication ID is
-	// the original publication's and names the old head.
-	readiness, err = readiness.withHandoff(binding.admission.Base.BaseSHA, "")
+	if task.Successor.HandsBack() {
+		// A hand-back cycle adopted a head no Freeside handoff checked, so
+		// it hands that head off onto the target's tip before it is ready
+		// (issue #3160). A conflict there starts the conflict's remediation,
+		// and a failed merge stops the cycle.
+		if _, outcome, err := w.reconcileHandoff(
+			ctx, task, binding, checkout, checkoutDir, checkpoint); err != nil || outcome != nil {
+			if outcome == nil {
+				return productionTaskOutcome{}, err
+			}
+			return *outcome, err
+		}
+		readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
+	} else {
+		// The cycle verified the head on the base its authority names, and
+		// ran no handoff of its own: the sealed check under this publication
+		// ID is the original publication's and names the old head.
+		readiness, err = readiness.withHandoff(binding.admission.Base.BaseSHA, "")
+	}
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}

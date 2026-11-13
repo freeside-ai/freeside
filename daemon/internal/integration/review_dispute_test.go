@@ -55,7 +55,7 @@ func TestExternalReviewDisputeHumanDecisionSurvivesRestart(t *testing.T) {
 					Findings: []domain.DisputedFinding{{
 						FindingID: finding.ID, Message: finding.Message, Location: finding.Location, Severity: finding.Severity,
 						External:      &domain.DisputedFindingExternal{ReviewerLogin: finding.External.ReviewerLogin, ThreadID: finding.External.ThreadID},
-						OfferedRoutes: domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy)),
+						OfferedRoutes: domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy), false),
 					}},
 				},
 				PRHeadSHA: record.HeadSHA, ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
