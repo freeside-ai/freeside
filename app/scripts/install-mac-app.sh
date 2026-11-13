@@ -2,8 +2,8 @@
 # install-mac-app.sh — install and update FreesideMac as the operator's
 # real client (plan §10, issue #444).
 #
-# Usage: install-mac-app.sh [dev|prod] [--prod] --daemon-path <absolute-path>
-#                           [--server-url <url>] [--launch]
+# Usage: install-mac-app.sh [dev|prod] [--prod] [--daemon-path <absolute-path>]
+#                           [--server-url <url>] [--launch] [--force]
 #
 # The target is an environment tier (plan "Environments: Prod, Dev, and
 # Ephemeral"; default prod). Each tier derives its own identity, so the two
@@ -32,8 +32,27 @@
 # from UserDefaults), so the app reaches the operator's daemon when it
 # is launched from the Dock rather than with launch arguments.
 #
-# --daemon-path supplies the freesided binary copied into the app bundle
-# before the app receives its final code-signature seal.
+# The installer builds freesided from this checkout with
+# `go build -trimpath -buildvcs=false`, so the same sources give the same
+# bytes, and copies it into the app bundle before the app receives its final
+# code-signature seal. --daemon-path supplies a binary to use instead. The
+# bundle's Info.plist records the checkout's commit (FreesideBuildCommit,
+# with -dirty for uncommitted changes) and the sha256 of the unsigned daemon
+# (FreesideDaemonDigest).
+#
+# An update that leaves the daemon unchanged (same digest, LaunchAgent, and
+# signing requirement, with the registration marker set) keeps it running and
+# replaces the app only. An update that changes it drains the running daemon
+# first: it prints the installed and new commits, asks the daemon to start no
+# new work (`freesided drain`), names what it waits on, and swaps only once
+# the daemon reports it is ready to restart; then it opens the new app, whose
+# daemon starts on the new build and lifts the drain. --force drains with
+# `freesided drain -force`, which cancels running implementations and
+# re-runs them after the drain lifts. A failure or interrupt before the new
+# app verifies cancels the drain, so the old install keeps serving. A killed
+# install can leave the drain in force: open the new app if it is in place,
+# otherwise re-run the installer or lift the drain with
+# `freesided drain -cancel -db <tier database>`.
 #
 # Signing identity, in resolution order:
 #   FREESIDE_MAC_SIGNING_IDENTITY  explicit Apple Development identity, by
@@ -53,10 +72,11 @@
 #                             ~/Library/Application Support/<app name>); the
 #                             daemon's state directory is <root>/daemon
 #
-# Requires: macOS, Xcode.
+# Requires: macOS, Xcode, jq, and Go unless --daemon-path is given.
 set -euo pipefail
 
 app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(dirname "$app_dir")"
 
 target=""
 prod_confirmed=false
@@ -65,6 +85,7 @@ server_url_given=false
 daemon_path=""
 daemon_path_given=false
 launch_after_install=false
+force_drain=false
 
 die() {
     echo "install-mac-app: $1" >&2
@@ -134,6 +155,10 @@ while [[ $# -gt 0 ]]; do
         launch_after_install=true
         shift
         ;;
+    --force)
+        force_drain=true
+        shift
+        ;;
     --prod)
         prod_confirmed=true
         shift
@@ -183,11 +208,16 @@ state_root="${FREESIDE_MAC_STATE_ROOT:-$HOME/Library/Application Support/$displa
     die "FREESIDE_MAC_STATE_ROOT must be absolute: $state_root"
 daemon_state_dir="$state_root/daemon"
 
-[[ "$daemon_path_given" == true ]] ||
-    die "--daemon-path is required so the bundled LaunchAgent can run freesided"
-[[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
-[[ -f "$daemon_path" && -x "$daemon_path" ]] ||
-    die "--daemon-path is not an executable file: $daemon_path"
+if [[ "$daemon_path_given" == true ]]; then
+    [[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
+    [[ -f "$daemon_path" && -x "$daemon_path" ]] ||
+        die "--daemon-path is not an executable file: $daemon_path"
+else
+    command -v go >/dev/null 2>&1 ||
+        die "go is required to build freesided; install Go or pass --daemon-path"
+fi
+command -v jq >/dev/null 2>&1 ||
+    die "jq is required to read the daemon's restart readiness; it ships with macOS 15 and later"
 
 # The daemon URL becomes a durable preference of the installed app, so a
 # malformed one would strand every later launch on the mock composition
@@ -651,13 +681,6 @@ if [[ -e "$destination" ]]; then
     previous_requirement="$(designated_requirement "$destination")"
 fi
 
-# Invalidate before any fallible build or swap step. A failed install may make
-# the old app re-register its unchanged helper once, which is harmless; waiting
-# until the new bundle is canonical creates a SIGKILL window where launchd can
-# remain bound to the old generation indefinitely.
-defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
-    >/dev/null 2>&1 || true
-
 mkdir -p "$daemon_state_dir"
 [[ -d "$daemon_state_dir" && ! -L "$daemon_state_dir" ]] ||
     die "the daemon state path is not a regular directory: $daemon_state_dir"
@@ -670,6 +693,33 @@ identity_certificate "$identity" |
     die "could not encode the '$identity' signing certificate"
 [[ -s "$signing_certificate" ]] ||
     die "the '$identity' signing certificate is empty"
+
+build_commit=$(git -C "$repo_root" rev-parse HEAD) ||
+    die "could not read the commit of the checkout at $repo_root"
+checkout_status=$(git -C "$repo_root" status --porcelain) ||
+    die "could not read the status of the checkout at $repo_root"
+[[ -z "$checkout_status" ]] || build_commit+="-dirty"
+echo "install-mac-app: building commit $build_commit"
+
+# -trimpath and -buildvcs=false keep the checkout's path and VCS state out
+# of the binary, so the same sources give the same bytes from any checkout,
+# and an unchanged daemon can be recognized by its digest below. GOFLAGS is
+# cleared so an operator's setting cannot change the bytes either.
+if [[ "$daemon_path_given" == false ]]; then
+    daemon_path="$build_dir/freesided"
+    daemon_build_log="$build_dir/go-build.log"
+    echo "install-mac-app: building freesided (log: $daemon_build_log)"
+    if ! GOFLAGS='' go build -C "$repo_root/daemon" -trimpath -buildvcs=false \
+        -o "$daemon_path" ./cmd/freesided >"$daemon_build_log" 2>&1; then
+        tail -40 "$daemon_build_log" >&2
+        die "the freesided build failed; full log at $daemon_build_log"
+    fi
+fi
+# The digest of the unsigned binary: signing changes the bytes, so only this
+# one is comparable across installs.
+new_daemon_digest=$(shasum -a 256 "$daemon_path" | awk '{ print $1 }') ||
+    die "could not compute the sha256 of $daemon_path"
+
 build_log="$build_dir/xcodebuild.log"
 echo "install-mac-app: building Release (log: $build_log)"
 if ! xcodebuild \
@@ -708,10 +758,17 @@ plutil -replace CFBundleName -string "$bundle_name" "$built_info" ||
     die "could not set the app bundle name"
 plutil -replace FreesideEnvironment -string "$target" "$built_info" ||
     die "could not set the app environment"
+# The build identity, which the next install compares against.
+plutil -replace FreesideBuildCommit -string "$build_commit" "$built_info" ||
+    die "could not record the build commit"
+plutil -replace FreesideDaemonDigest -string "$new_daemon_digest" "$built_info" ||
+    die "could not record the daemon digest"
 require_plist_value "$built_info" CFBundleDisplayName "$display_name" "the app display name"
 require_plist_value "$built_info" CFBundleName "$bundle_name" "the app bundle name"
 require_plist_value "$built_info" CFBundleIconName "$app_icon_name" "the app icon name"
 require_plist_value "$built_info" FreesideEnvironment "$target" "the app environment"
+require_plist_value "$built_info" FreesideBuildCommit "$build_commit" "the build commit"
+require_plist_value "$built_info" FreesideDaemonDigest "$new_daemon_digest" "the daemon digest"
 # The app registers the plist its FreesideEnvironment names, so a dev bundle
 # ships its own file and label rather than a second ai.freeside.daemon.
 launch_agent_dir="$built_app/Contents/Library/LaunchAgents"
@@ -785,6 +842,55 @@ codesign --force --sign "$identity" "$bundled_daemon" ||
     die "the bundled freesided executable could not be signed"
 codesign --verify --strict "$bundled_daemon" ||
     die "the bundled freesided executable failed signature verification"
+
+# The registration marker tells the app its LaunchAgent registration is
+# current. Deleting it makes the next app launch re-register the LaunchAgent,
+# which restarts the daemon from the bundle then installed. Its prior value is
+# recorded the first time, so an undo can put it back.
+registration_marker=FreesideLaunchAgentRegistrationCurrent
+
+# The daemon is unchanged when the installed bundle recorded the same
+# unsigned digest, its LaunchAgent plist is byte-identical to the new one,
+# its helper has the same designated requirement as the one just signed, and
+# the registration marker is set. An install that predates the digest key
+# counts as changed. An unchanged daemon keeps running: the marker stays, so
+# the new app leaves the LaunchAgent alone, and nothing restarts it. With the
+# marker absent, the next app launch restarts the daemon anyway, and the
+# running daemon may still be the old build: an install killed after a
+# drained swap leaves exactly that, drained, so it must take the drain path
+# again to finish.
+daemon_unchanged=false
+installed_daemon="$destination/Contents/Resources/freesided"
+installed_launch_agent="$destination/Contents/Library/LaunchAgents/$daemon_label.plist"
+if [[ -d "$destination" && -f "$installed_daemon" ]] &&
+    installed_digest=$(plist_value "$destination/Contents/Info.plist" FreesideDaemonDigest) &&
+    [[ "$installed_digest" == "$new_daemon_digest" ]] &&
+    cmp -s "$installed_launch_agent" "$launch_agent_plist" &&
+    installed_helper_requirement=$(designated_requirement "$installed_daemon") &&
+    new_helper_requirement=$(designated_requirement "$bundled_daemon") &&
+    [[ -n "$installed_helper_requirement" &&
+        "$installed_helper_requirement" == "$new_helper_requirement" ]] &&
+    [[ "$(defaults read "$bundle_id" "$registration_marker" 2>/dev/null)" == 1 ]]; then
+    daemon_unchanged=true
+fi
+if [[ "$daemon_unchanged" == true ]]; then
+    echo "install-mac-app: freesided is unchanged; leaving the daemon and its registration as they are"
+    # Ship the installed, already-signed bytes, not the copy just signed. The
+    # daemon's build identity is the sha256 of its executable (ExecutableBuild
+    # in daemon/internal/daemoncompose/update_drain.go), and a re-signed copy
+    # hashes differently because its signature differs. A crash restart in
+    # the middle of a later drain would then read as a new build and lift the
+    # drain.
+    ditto "$installed_daemon" "$bundled_daemon" ||
+        die "could not copy the installed freesided into the app bundle"
+    cmp -s "$installed_daemon" "$bundled_daemon" ||
+        die "the bundled freesided differs from the installed one it was copied from"
+    codesign --verify --strict "$bundled_daemon" ||
+        die "the installed freesided failed signature verification"
+else
+    echo "install-mac-app: freesided changed; the daemon restarts on the new build"
+fi
+
 codesign --force --sign "$identity" --entitlements "$preserved_entitlements" "$built_app" ||
     die "the templated app could not be signed"
 final_entitlements="$build_dir/FreesideMac.final.entitlements"
@@ -805,6 +911,121 @@ if [[ -e "$db_path" ]]; then
         die "the new freesided failed its database check; the installed app and daemon are unchanged"
 else
     echo "install-mac-app: skipped the database check: the $target tier has no database yet"
+fi
+
+marker_recorded=false
+marker_was_set=false
+invalidate_registration() {
+    if [[ "$marker_recorded" == false ]]; then
+        [[ "$(defaults read "$bundle_id" "$registration_marker" 2>/dev/null)" != 1 ]] ||
+            marker_was_set=true
+        marker_recorded=true
+    fi
+    defaults delete "$bundle_id" "$registration_marker" >/dev/null 2>&1 || true
+}
+
+# The new bundle's freesided sends every drain request: it is the binary known
+# to have the drain command, and it reaches the running daemon through that
+# daemon's control socket.
+drain_requested=false
+drain_error="$build_dir/drain.stderr"
+drain_daemon() {
+    "$bundled_daemon" drain -db "$db_path" "$@" >/dev/null 2>"$drain_error"
+}
+
+# Undo an update that has not verified, so the old install keeps serving
+# without a surprise restart: lift the drain this run requested, and put back
+# a marker it deleted. Neither step restarts the daemon. The drain flag clears
+# only once the cancel has returned: a second interrupt kills the cancel, and
+# bash 5 re-enters the signal handler, which must then try again.
+undo_update() {
+    if [[ "$drain_requested" == true ]]; then
+        if drain_daemon -cancel; then
+            drain_requested=false
+            echo "install-mac-app: canceled the drain; the installed daemon keeps serving" >&2
+        else
+            drain_requested=false
+            cat "$drain_error" >&2
+            echo "install-mac-app: could not cancel the drain request. If a drain is in" >&2
+            echo "  force, lift it once the daemon runs: \"$bundled_daemon\" drain -cancel -db \"$db_path\"" >&2
+        fi
+    fi
+    if [[ "$marker_was_set" == true ]]; then
+        marker_was_set=false
+        defaults write "$bundle_id" "$registration_marker" -bool true ||
+            echo "install-mac-app: could not restore $registration_marker for $bundle_id" >&2
+    fi
+}
+
+# A signal trap must terminate, not just clean up: bash resumes the
+# interrupted script once the handler returns.
+undo_update_and_abort() {
+    undo_update
+    trap - EXIT
+    exit 130
+}
+
+wait_for_drain() {
+    local readiness ready blockers waiting_on=""
+    while true; do
+        if ! readiness=$("$bundled_daemon" drain -db "$db_path" -status 2>"$drain_error"); then
+            cat "$drain_error" >&2
+            die "could not read the daemon's restart readiness"
+        fi
+        ready=$(jq -r '.ready | if type == "boolean" then . else error("no ready flag") end' \
+            <<<"$readiness") || die "unreadable restart readiness: $readiness"
+        [[ "$ready" == false ]] || return 0
+        blockers=$(jq -r '[.blockers[]? | "\(.count) \(.kind)"] | join(", ")' \
+            <<<"$readiness") || die "unreadable restart readiness: $readiness"
+        if [[ "$blockers" != "$waiting_on" ]]; then
+            echo "install-mac-app: waiting for the daemon to drain: ${blockers:-the drain to take effect}"
+            waiting_on=$blockers
+        fi
+        sleep 5
+    done
+}
+
+# An unchanged daemon keeps running, so it has nothing to drain. A changed one
+# must stop launching work and finish (or, forced, cancel) what runs before
+# the swap, because the new app restarts it on the new build. The daemon is
+# asked, not stopped: it waits as long as its work takes, and the operator
+# interrupts to give up, which cancels the drain. There is no timeout.
+if [[ "$daemon_unchanged" == true ]]; then
+    [[ "$force_drain" == false ]] ||
+        echo "install-mac-app: --force has nothing to do: the daemon is unchanged and keeps running"
+else
+    installed_commit="none, a first install"
+    if [[ -d "$destination" ]]; then
+        installed_commit=$(plist_value "$destination/Contents/Info.plist" FreesideBuildCommit) ||
+            installed_commit="unknown, installed before the commit was recorded"
+    fi
+    echo "install-mac-app: installed commit: $installed_commit"
+    echo "install-mac-app: new commit: $build_commit"
+    drain_flag=""
+    drain_kind=drain
+    if [[ "$force_drain" == true ]]; then
+        drain_flag=-force
+        drain_kind="forced drain"
+    fi
+    # Armed before the request: an interrupt while it is in flight, or a
+    # failure after the daemon recorded it, may leave a drain in force.
+    drain_requested=true
+    trap undo_update EXIT
+    trap undo_update_and_abort INT TERM
+    if drain_daemon ${drain_flag:+"$drain_flag"}; then
+        echo "install-mac-app: requested a $drain_kind; waiting until the daemon is ready to restart"
+        wait_for_drain
+        echo "install-mac-app: the daemon is drained and ready to restart"
+        invalidate_registration
+    elif grep -Fq "no daemon is running" "$drain_error"; then
+        drain_requested=false
+        trap - EXIT INT TERM
+        echo "install-mac-app: no $target daemon is running, so there is nothing to drain"
+    else
+        cat "$drain_error" >&2
+        die "the running daemon could not drain, so nothing was replaced. Stop the
+  daemon from the Freeside menu, then re-run the installer."
+    fi
 fi
 
 # A running instance holds the bundle open and would keep serving stale
@@ -874,7 +1095,15 @@ destination_is_staged_bundle() {
     [[ "$current" == "$staged_inode" ]]
 }
 
+# The undo goes first: errexit still applies in a trap handler, so a failed
+# restore would end it before a later undo ran, leaving the drain in force.
+# The undo touches neither bundle, so its order against the restore is free.
 roll_back_install() {
+    undo_update
+    restore_previous_install
+}
+
+restore_previous_install() {
     if [[ -d "$superseded" ]]; then
         if destination_is_staged_bundle; then
             rm -rf "$destination"
@@ -904,12 +1133,17 @@ roll_back_and_abort() {
 trap roll_back_install EXIT
 trap roll_back_and_abort INT TERM
 
-# The old app can re-register its unchanged helper while the build runs and
-# restore the marker deleted above. It has now been stopped; invalidate that
-# stale generation again at the last possible point before the replacement
-# becomes canonical.
-defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
-    >/dev/null 2>&1 || true
+# A changed daemon needs the new app to re-register the LaunchAgent, which
+# restarts the daemon from the new bundle; deleting the registration marker
+# asks for that. It is deleted only now, with the old app stopped: deleted
+# earlier, an app launch during the build would re-register the old helper
+# and restart the daemon, canceling its work. It is deleted before the swap,
+# so a SIGKILL after the swap cannot leave launchd bound to the old
+# generation. After a drain it was deleted once already; the old app could
+# have re-registered and restored it before it quit.
+if [[ "$daemon_unchanged" == false ]]; then
+    invalidate_registration
+fi
 
 if [[ -e "$destination" ]]; then
     mv "$destination" "$superseded"
@@ -954,6 +1188,12 @@ if [[ -n "$previous_requirement" && "$previous_requirement" != "$new_requirement
     echo "  the device must be re-paired. Previous: $previous_requirement" >&2
 fi
 
-if [[ "$launch_after_install" == true ]]; then
-    open "$destination"
+# The drained daemon holds all work until the new app re-registers the
+# LaunchAgent and the new build starts and lifts the drain, so a drained
+# install opens the app even without --launch.
+if [[ "$drain_requested" == true ]]; then
+    echo "install-mac-app: opening the new app, which restarts the drained daemon on the new build"
+fi
+if [[ "$launch_after_install" == true || "$drain_requested" == true ]]; then
+    open "$destination" || die "could not open $destination"
 fi
