@@ -114,7 +114,7 @@ func readFollowUpFilingAuthorWork(
 	if err != nil || len(plan.pending) == 0 {
 		return nil, err
 	}
-	searched, err := searchedNewFollowUpFilings(ctx, tx, artifact, plan.pending)
+	searched, _, err := splitSearchedFollowUps(ctx, tx, artifact, plan.pending)
 	if err != nil {
 		return nil, err
 	}

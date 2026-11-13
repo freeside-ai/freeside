@@ -4731,8 +4731,8 @@ dispatches without a card when `gates.issue_comment` resolves off (Section
 that acceptance the comment is a definite refusal, never a card, and the
 refusal is recorded beside the finding's deferred disposition. A comment on
 the issue the task is bound to is not this kind and takes no
-`gates.issue_comment` key. Not yet built: #3147 adds the kind, #3150
-dispatches it without a card, and #1435 builds the `issue_comment` audit.
+`gates.issue_comment` key. Not yet built: #3150 dispatches it without a
+card, and #1435 builds the `issue_comment` audit.
 
 ### 5.14 Client Synchronization and Conversations
 
@@ -5988,8 +5988,7 @@ not the finding adjudicator, whose contract is ceiling-bounded annotation.
 candidate yields an `issue_comment` proposal on that issue (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)),
 not a filing. The site never names a target: an answer outside the listed
-handles is invalid. Not yet built: #3147 proposes the comment; until it
-does, a chosen candidate yields no proposal.
+handles is invalid.
 
 Permission has a presumptive baseline, not an affirmative-citation requirement.
 Remediation is presumptively `allowed` when its proposed surface stays within

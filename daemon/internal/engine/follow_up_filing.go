@@ -464,11 +464,12 @@ func planFollowUpFilings(
 
 // proposeFollowUpFilings writes, in the caller's transaction, one filing
 // proposal and its open card for each entry the source kind selects whose
-// duplicate search answered "new"; the caller runs prepareFollowUpFilings
-// first, outside the transaction, and passes the drafts it returned. A
-// deferred source needs its disposition row written first in the same
-// transaction: admission checks that the finding is effectively deferred
-// under this artifact.
+// duplicate search answered "new", and one issue comment proposal for each
+// whose search named an open issue (proposeIssueComments); the caller runs
+// prepareFollowUpFilings first, outside the transaction, and passes the
+// drafts it returned. A deferred source needs its disposition row written
+// first in the same transaction: admission checks that the finding is
+// effectively deferred under this artifact.
 //
 // It never fails the caller for a refusal that would repeat on every retry.
 // A propagated error stops the publication lane, so a run that can carry no
@@ -493,10 +494,15 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 	if err != nil {
 		return err
 	}
-	if plan.pending, err = searchedNewFollowUpFilings(ctx, &tx.ReadTx, artifact, plan.pending); err != nil {
+	fresh, duplicates, err := splitSearchedFollowUps(ctx, &tx.ReadTx, artifact, plan.pending)
+	if err != nil {
 		return err
 	}
-	return w.allocateFollowUpFilings(ctx, tx, artifact, kind, plan, drafts)
+	plan.pending = fresh
+	if err := w.allocateFollowUpFilings(ctx, tx, artifact, kind, plan, drafts); err != nil {
+		return err
+	}
+	return w.proposeIssueComments(ctx, tx, projectID, artifact, plan, duplicates)
 }
 
 // proposeSeparateWorkFilings proposes for the accepted park_separate_work
@@ -507,8 +513,9 @@ func (w *productionPublicationWorkflow) proposeFollowUpFilings(
 //
 // The parked run re-enters on each reconcile, and every committed write
 // advances the revision clients sync against, so a pass with nothing left to
-// write stays a read: an entry whose search named an open issue, or that has
-// no search because the search raised the run's notice, has nothing to write.
+// write stays a read: an entry with no search because the search raised the
+// run's notice has nothing to write, and neither has an entry whose search
+// named an open issue once its comment is proposed or refused with a notice.
 func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -539,8 +546,11 @@ func (w *productionPublicationWorkflow) proposeSeparateWorkFilings(
 		if err != nil {
 			return err
 		}
-		searched, err := searchedNewFollowUpFilings(ctx, tx, artifact, plan.pending)
-		settled = len(searched) == 0
+		fresh, duplicates, err := splitSearchedFollowUps(ctx, tx, artifact, plan.pending)
+		if err != nil || len(fresh) > 0 {
+			return err
+		}
+		settled, err = issueCommentsSettled(ctx, tx, artifact, plan, duplicates)
 		return err
 	}); err != nil || settled {
 		return err
@@ -627,10 +637,8 @@ func followUpFilingRefusalClass(err error) (string, bool) {
 }
 
 // recordFollowUpFilingRefused raises the run's one notice that its follow-up
-// filings cannot be proposed. It is a system_health advisory offering
-// acknowledge, the type the tree uses for a run-scoped notice nothing else
-// can close (#1342). A later refusal for the same run keeps the first notice,
-// whatever its class.
+// filings cannot be proposed. A later refusal for the same run keeps the
+// first notice, whatever its class.
 func (w *productionPublicationWorkflow) recordFollowUpFilingRefused(
 	ctx context.Context,
 	tx *store.WriteTx,
@@ -638,14 +646,31 @@ func (w *productionPublicationWorkflow) recordFollowUpFilingRefused(
 	runID domain.RunID,
 	class string,
 ) error {
-	itemID := followUpFilingRefusedItemID(runID)
+	return w.recordRunProposalNotice(ctx, tx, projectID, runID,
+		followUpFilingRefusedItemID(runID), "follow_up_filing_refused", fmt.Sprintf(
+			"Follow-up issues cannot be proposed for run %s (%s). Its deferred and separate-work findings have no filing proposal.",
+			runID, class))
+}
+
+// recordRunProposalNotice raises one run-scoped notice that a run's
+// proposals cannot be made. It is a system_health advisory offering
+// acknowledge, the type the tree uses for a run-scoped notice nothing else
+// can close (#1342). An existing notice under itemID is kept as it is.
+func (w *productionPublicationWorkflow) recordRunProposalNotice(
+	ctx context.Context,
+	tx *store.WriteTx,
+	projectID domain.ProjectID,
+	runID domain.RunID,
+	itemID domain.ItemID,
+	code, reason string,
+) error {
 	existing, err := tx.GetAttentionItem(ctx, itemID)
 	if err == nil {
 		validSubject := existing.Subject.Type == domain.SubjectRun &&
 			existing.Subject.ID == domain.SubjectID(runID) &&
 			existing.Subject.RunID != nil && *existing.Subject.RunID == runID
 		if existing.Type != domain.AttentionSystemHealth || existing.ProjectID != projectID || !validSubject {
-			return fmt.Errorf("follow-up filing notice %q disagrees with run %q: %w",
+			return fmt.Errorf("run proposal notice %q disagrees with run %q: %w",
 				itemID, runID, domain.ErrParentKeyMismatch)
 		}
 		return nil
@@ -663,15 +688,11 @@ func (w *productionPublicationWorkflow) recordFollowUpFilingRefused(
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: itemID, ProjectID: projectID,
 		Subject: subject, Type: domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
-		Reason: fmt.Sprintf(
-			"Follow-up issues cannot be proposed for run %s (%s). Its deferred and separate-work findings have no filing proposal.",
-			runID, class),
+		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		// Advisory: review and publication continue; only the proposals are missing.
-		HealthDiagnostic: &domain.HealthDiagnostic{
-			Code: "follow_up_filing_refused", Impairs: domain.ImpairedCapabilityNone,
-		},
-		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		HealthDiagnostic: &domain.HealthDiagnostic{Code: code, Impairs: domain.ImpairedCapabilityNone},
+		ItemVersion:      1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: &advisory,
 	}, w.operatorRecipes)
 	if err != nil {

@@ -101,6 +101,8 @@
 //     waits on
 //   - follow_up_filing_author.go the model draft a filing renders in the
 //     work-unit form's shape
+//   - issue_comment_proposal.go the comment a duplicate proposes in place of
+//     a filing
 //   - external_finding_quote.go, external_review_cycle.go, external_review_reentry.go
 //     admitted external findings as model input, and the re-entry cycle they
 //     start
