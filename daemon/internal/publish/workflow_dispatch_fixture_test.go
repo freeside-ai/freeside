@@ -62,6 +62,13 @@ func CloseWorkflowAtDispatchForTest(
 	}
 }
 
+// CloseWorkflowForTest abandons the run's task and closes its workflow
+// episode through the real API.
+func CloseWorkflowForTest(t *testing.T, st *store.Store, runID domain.RunID, at time.Time) {
+	t.Helper()
+	closeWorkflowForTest(t, st, runID, at)
+}
+
 func closeWorkflowForTest(t *testing.T, st *store.Store, runID domain.RunID, at time.Time) (domain.TaskID, int) {
 	t.Helper()
 	var taskID domain.TaskID

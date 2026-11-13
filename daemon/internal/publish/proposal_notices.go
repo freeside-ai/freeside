@@ -62,14 +62,21 @@ func (n *proposalNotices) hold(id domain.ProposalInstanceID, code string) {
 func (n *proposalNotices) startPass() { clear(n.holding) }
 
 // put opens one advisory, acknowledge-only system_health item on the
-// proposal's own subject. Its ID is fixed by the proposal and the code, so
-// raising a notice that already exists writes nothing. A transient notice
-// that was resolved is final, so the condition's return opens the next
-// numbered one.
+// proposal's own subject, unless the proposal's workflow is closed. Its ID is
+// fixed by the proposal and the code, so raising a notice that already exists
+// writes nothing. A transient notice that was resolved is final, so the
+// condition's return opens the next numbered one.
 func (n *proposalNotices) put(ctx context.Context, tx *store.WriteTx, ref filingRef, code, reason string) error {
 	if err := tx.RequireProposalWorkflowOpen(ctx, ref.instanceID); errors.Is(err, store.ErrTaskWorkflowClosed) {
 		return nil
 	}
+	return n.observe(ctx, tx, ref, code, reason)
+}
+
+// observe opens the notice as put does, even when the proposal's workflow is
+// closed. It is for a notice that reports an effect already made on GitHub:
+// closure forbids advancing a workflow, not observing what it did.
+func (n *proposalNotices) observe(ctx context.Context, tx *store.WriteTx, ref filingRef, code, reason string) error {
 	first := n.prefix + string(ref.instanceID) + "/" + code
 	id := domain.ItemID(first)
 	for occurrence := 2; ; occurrence++ {
