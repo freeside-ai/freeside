@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 124
+revision: 125
 status: active
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 # Freeside
@@ -119,6 +119,7 @@ why.
     - [1B.0: The Useful Loop](#1b0-the-useful-loop)
     - [1B.1: Decision, Operational, and Provider Closure](#1b1-decision-operational-and-provider-closure)
     - [1B.2: The Initiative View](#1b2-the-initiative-view)
+  - [One Daemon for Every Project, in Three Stages](#one-daemon-for-every-project-in-three-stages)
   - [Implementation Coordination (Building Freeside with Agents)](#implementation-coordination-building-freeside-with-agents)
   - [Phase 2: Breadth and Hardening](#phase-2-breadth-and-hardening)
   - [Phase 3: Comprehension and Interaction](#phase-3-comprehension-and-interaction)
@@ -882,6 +883,17 @@ stands for the operator stop and for every system stop (a restart never
 reopens unattended admission). The update drain below is the one state a
 start may lift, and among starts only that of a different build lifts it.
 
+**Execution pause** (revision 125; not built yet, Stage 1 of tracker #3201).
+An execution pause is a use of the durable operator stop above, so a deputy
+run (Section [10](#10-operations-and-onboarding), Environments) can hold the
+App authority. `freesided execution pause` applies the stop, lets running
+work finish, releases the authority, and exits to be restarted: a deliberate
+exit on the operator's command, which this contract allows, not a fault. The
+daemon comes back serving without a driver and stays so across restarts
+until `freesided execution resume` lifts the pause and the stop and restarts
+it again. The pause is not the update drain below, which stays reserved for
+swapping builds, so a new build's start never lifts a pause.
+
 **Update drain** (revision 116;
 [decision note](../devlog/2026-11-11-1630-graceful-updates-and-version-skew.md);
 not built yet, tracker #3113). An update drains the daemon before it replaces
@@ -1260,6 +1272,22 @@ This keeps the broadest credential-exfiltration surface away from the
 injection-exposed stage. The rejected alternatives are in the
 [researcher note](../devlog/2026-09-30-1830-researcher-role.md).
 
+**Only shared resources bound throughput, never the project or the
+process** (revision 125; not built yet, Stage 2 of tracker #3201). A task
+waits only for a resource limit the operator sets or for its own project's
+state. The limits are four: the instance's memory budget (Machine Capacity
+below); each usage pool's limits, its parallel executions and its calls per
+judgment site (item 2 below); the macOS verification executor's slots
+(Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
+Execution); and the image builder limit (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Project-image
+upkeep). Every container the daemon starts on its own counts against the
+memory budget, and only a command the operator runs by hand stays outside it
+(Stage 1 of tracker #3201). No daemon-wide lane makes one task's long work
+wait behind another's, and no lock that tasks share is held across a network
+call. With one instance the limits span every project, and there is still
+no coordinator across instances (Machine Capacity).
+
 Provider concurrency has two independent controls, one on the identity and
 one on its usage pool. The records that carry them, `AuthIdentity`,
 `UsagePool`, and `ClientEnrollment` with its generations, are defined in
@@ -1285,9 +1313,16 @@ one on its usage pool. The records that carry them, `AuthIdentity`,
    A research launch starts only after the specifier invocation that asked
    for it has ended, so a specification run holds one slot at a time. A call launch takes no
    slot, because a one-turn call queued behind hour-long stage runs would
-   stall adjudication and naming. Each Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) site runs at most one
-   call at a time, so calls can exceed a pool's limit by at most one request
-   per site that draws on it. The operator records each pool's limit. Each
+   stall adjudication and naming. How many calls a Section
+   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+   site runs at once is a second limit the operator sets on the pool,
+   starting at one, so calls can exceed a pool's parallel limit by at most
+   that many requests per site that draws on it. A call to a busy site
+   waits its turn and never returns the site's fallback because another
+   task is calling (revision 125; not built yet, Stage 2 of tracker #3201).
+   Until Stage 2 lands, each site runs at most one call at a time and a
+   second call gets the site's fallback. The operator records each pool's
+   limits. Each
    daemon instance counts only its own slots, so instances that draw on one
    pool (`prod` and `dev` on one subscription) split its limit between the
    limits they record, and the operator keeps their sum within what the
@@ -1325,7 +1360,11 @@ far more than one machine holds.
   job starts, the daemon reserves its declared memory plus one per-VM overhead
   against the budget, in the same transaction that takes the launch's pool
   slot when it has one (verification draws on no pool); this sum is the
-  launch's reservation (revision 105). The full declared size stays reserved,
+  launch's reservation (revision 105). Every other container the daemon
+  starts on its own, such as an image upkeep build and its probes, a ward
+  proof pass, or a model discovery probe, reserves the same way (revision
+  125; not built yet, Stage 1 of tracker #3201); until then only stage
+  launches and verification jobs reserve. The full declared size stays reserved,
   never a recorded peak, because a container's VM keeps the memory a build
   touched until the container is deleted, and one overhead per launch covers
   it because its containers run one at a time. CPU caps are not reserved and
@@ -1385,10 +1424,13 @@ far more than one machine holds.
   while a task waits on a human (revision 1 item 6). So open tasks are not
   bounded by the machine, and neither Freeside nor the plan caps them
   system-wide.
-- **Calls and onboarding stay outside.** A call launch runs on the host with
-  no container and reserves nothing. Operator-attended onboarding commands
-  (image builds, their probes, and the retained local registry) run outside
-  the budget, when the operator chooses to run them.
+- **Calls and hand-run commands stay outside.** A call launch runs on the
+  host with no container and reserves nothing. Only a command the operator
+  runs by hand, such as onboarding (its image builds, their probes, and the
+  retained local registry), runs outside the budget, when the operator
+  chooses to run it (revision 125; not built yet, Stage 1 of tracker #3201).
+  Until then, every container that is not part of a stage launch or a
+  verification job runs outside it as well.
 
 The budget is a scheduling bound, not a measurement. The runtime enforces each
 container's limits, and the budget keeps the sum of the launches'
@@ -2325,7 +2367,11 @@ until it lands every merged workflow change still needs a profile review.
 
 Phase 1A supports one repository with a machine-readable profile. A human
 reviews it once; the daemon binds it by digest; drift fails closed, except
-for a merged workflow change accepted as above.
+for a merged workflow change accepted as above. One repository per daemon is
+a limit, not a commitment: one daemon serves every onboarded project, each
+with its own profile (Section [10](#10-operations-and-onboarding),
+Environments; revision 125; not built yet, Stage 2 of tracker #3201, which
+lifts the limit).
 
 Publication authenticates as a per-user agent principal under Section [10](#10-operations-and-onboarding)'s
 GitHub App identity model. Every trusted registration is bound to that principal
@@ -2850,10 +2896,14 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
   serves it. A task ends in the blocked outcome #1784 defines only when its
   refusal has no pending resolution (an unsupported Go or npm input, a
   declined adoption) or when no admitted image can serve its base.
-- **Serialization.** One builder runs at a time per daemon, within a
-  bounded time. An upkeep rebuild and a run's policy-gated rebuild take
-  turns on the project's pointer: the second re-checks admissibility against
-  the pointer the first advanced before it builds. Neither holds the
+- **Serialization.** How many builders run at once is the builder limit in
+  the instance settings (Section [10](#10-operations-and-onboarding),
+  Environments), starting at one, and each runs within a bounded time
+  (revision 125; not built yet, Stage 2 of tracker #3201). Until Stage 2
+  lands, one builder runs at a time per daemon. An upkeep rebuild and a
+  run's policy-gated rebuild take turns on the project's pointer: the
+  second re-checks admissibility against the pointer the first advanced
+  before it builds. Neither holds the
   publication lane while it waits. After a daemon upgrade, the start trigger
   checks every project right away. The bound, the queue, and the recorded
   refusal classes are in `daemon/README.md`
@@ -5002,7 +5052,9 @@ Four machine-enforced rules govern evidence:
    publish the same candidate for one repository to the same head branch
    converge on one PR. Section
    [10](#10-operations-and-onboarding) prevents that: `prod` runs without a
-   driver during an attended real-work run, so it never publishes, and the
+   driver during a deputy run (paused; revision 125, not built yet, Stage 1
+   of tracker #3201), so it
+   never publishes then, and the
    operator never runs one work unit in both while either has it active.
    The publisher waits for 1B because the first repository is deliberately
    non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
@@ -6805,15 +6857,22 @@ GitHub App credentials, or block its restart under launchd `KeepAlive`. The
 per-database lock refuses a second daemon on the same `-db` and nothing else.
 
 - **`prod`:** one instance, launchd-supervised (Section [5.2](#52-the-daemon-and-its-supervisor)): the operator's
-  real deployment.
+  real deployment, and where real work runs. It starts executing when its
+  stored settings (Settings below) say so and its checks pass, and launchd
+  keeps it running across updates and crashes (revision 125; not built yet,
+  Stage 1 of tracker #3201). It serves every onboarded project: a project is
+  a stored record, and adding one is onboarding, never a new state root or
+  a second process (revision 125; not built yet, Stage 2 of tracker #3201).
+  Until Stage 1 lands, the installed `prod` runs no driver, and real work
+  runs only in the deputy's attended run below.
 - **`dev`:** one instance, launchd-supervised: the operator's own development
   install. It coexists with `prod` and shares none of its identifiers.
 - **`ephemeral`:** any number of instances, unsupervised: a foreground run per
   worktree or `mktemp -d` root, listening on `127.0.0.1:0` by default, with no
   launchd registration and no installed app bundle. Agents run this tier and
-  no other. The operator's attended real-work run (`freesided deputy`) is
-  also `ephemeral`; it shares the `prod` App's publication authority under
-  Rules below.
+  no other. The operator's attended run of an unreleased build
+  (`freesided deputy`) is also `ephemeral`; it shares the `prod` App's
+  publication authority under Rules below.
   A debug app build is `ephemeral`.
 
 **Derived identifiers.** `prod` and `dev` derive the identifiers below from
@@ -6874,32 +6933,56 @@ stay with that run.
   pass `-environment prod` or `-environment dev` explicitly.
 - **Unknown values fail at launch** in both resolvers.
 
+**Settings** (revision 125; not built yet, Stage 1 of tracker #3201). An
+instance's run settings live in its store, in three scopes: instance (host
+and build), identity (agents and credentials, already stored; Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)), and project,
+one record per onboarded project. Keeping a setting in the store changes
+where it lives, not who may change it: a setting that carries authority
+still changes only through the path Section
+[5.8](#58-control-plane-trust) gives it. A task binds the
+settings revisions it was admitted under, so a later edit changes only later
+tasks. One exception always wins: each gate re-checks stored authority
+against current policy, so an edit to authority, such as a project's path
+allowlist, approved recipe, or publication repository, can stop an in-flight
+task at its next gate (Stage 2 of tracker #3201). In Stage 1 the gates read
+a project's authority once per process, so until Stage 2 lands such an edit
+takes effect at the daemon's next start. These
+scopes are not the Workflow settings layers of Section
+[3.2](#32-the-interruption-budget), which resolve a run's workflow policy.
+
 **Rules.**
 
-- **Production publication credentials stay in `prod`, except in attended
-  real work.** A `dev` or `ephemeral` instance starts with no publication
+- **Production publication credentials stay in `prod`, except in a deputy
+  run.** A `dev` or `ephemeral` instance starts with no publication
   credentials: its `-publication-credentials-dir` and onboard
   `-credentials-dir` resolve under its own root, which starts empty. Test and
   agent instances never hold the `prod` GitHub App's credentials. The one
-  exception is an attended real-work run (`freesided deputy`, which
-  phase-exit runs use), because it is real work
+  exception is the deputy's attended run of an unreleased build
+  (`freesided deputy`, which phase-exit runs use), because it does real work
   and publishes as the real App. It uses `prod`'s own publication authority
   state directory and credentials directory (`<root>/daemon/` and
   `<root>/credentials/` in the table), never a copy, and only while it holds
   the production rig lease. The App's trusted installations, pending
   envelope, and janitor journal live in those directories, so a copy would be
   a second authority for one App (GitHub App Agent Identity below). This holds
-  even while `prod` itself does not publish: `prod`'s directories are where
-  the App's single authority lives. `prod` keeps running for the whole run,
-  but without a driver: a driverless `prod` never opens those directories,
-  so the authority keeps one writer. Both sides enforce this, so neither
-  needs a lock on the other (#2080). The deputy checks the loaded `prod` once
-  it holds the lease and enables execution only when `prod` reports
-  `disabled` over its control socket or is not running; a `prod` that does
-  not answer that read fails the check. A `prod` that starts while a
-  production rig lease, live or stale, exists refuses `-driver fake` and
-  `-driver claude`. The supervised `dev`
-  label is unaffected. A real-work build must read and write the authority
+  whether or not `prod` itself publishes: `prod`'s directories are where the
+  App's single authority lives. Until Stage 1 of tracker #3201 lands, `prod`
+  never publishes.
+  **The App authority never has two holders at once, and the daemon enforces
+  that** (revision 125; not built yet, Stage 1 of tracker #3201). Pausing
+  `prod` (Section [5.2](#52-the-daemon-and-its-supervisor), Execution pause)
+  before a deputy run is the operator's procedure. A paused `prod` keeps
+  running for the whole run, but without a driver, and a driverless `prod`
+  never opens those directories. A deputy refuses while `prod` reports that
+  it is executing: it checks the loaded `prod` once it holds the lease and
+  enables execution only when `prod` reports that it is not executing or is
+  not running, and a `prod` that does not answer that read fails the check.
+  A `prod` that starts while a production rig lease, live or stale, exists
+  runs no driver. Until Stage 1 lands, these two start-time checks are the whole
+  enforcement, and a `prod` that starts while a lease exists refuses
+  `-driver fake` and `-driver claude` (#2080). The supervised `dev`
+  label is unaffected. A deputy's build must read and write the authority
   and janitor journal formats that the installed `prod` build accepts. The
   daemon enforces the exception (#1583): its `-prod-app-authority` flag
   admits exactly those two directories, only with a live production rig
@@ -6913,8 +6996,8 @@ stay with that run.
   and `-input-root`, and `freesided setup` takes `-config-dir`. None of them,
   nor any other path flag, may resolve under the `prod` state root from a
   `dev` or `ephemeral` instance. The one exception is the pair of App
-  directories above, named by an attended real-work run that holds the rig
-  lease; no other `prod` path.
+  directories above, named by a deputy run that holds the rig lease; no
+  other `prod` path.
 - **Host-side runners are `ephemeral` only.** A runner class that executes on
   the host rather than in a ward runs only under the `attended_dev` operating
   mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) and only in an `ephemeral` instance. The one exception
@@ -6946,7 +7029,7 @@ stay with that run.
   stopped, such as `renew-codex`, `rig`, and `preflight`'s database checks,
   refuse. To inspect a live supervised database, `freesided snapshot` writes
   an owner-only copy for offline `sqlite3` use.
-- **Production lifecycle control has two sanctioned paths.** The installer
+- **Production lifecycle control has three sanctioned paths.** The installer
   remains the first: `prod` adopts a merged daemon change when the operator
   re-runs `app/scripts/install-mac-app.sh --daemon-path ...`. The control
   plane's daemon has no self-updater: the operator starts every update of it.
@@ -6957,9 +7040,12 @@ stay with that run.
   #3113): today the installer's re-run restarts the daemon with no drain.
   The installed app's `daemon start|stop|status` command is the
   second, and it is the operator's. No procedure names it for a script or
-  agent any longer: since #2080 a real-work run leaves `prod` running. Tests,
-  scripts, and agents never stop, unload, or re-register
-  `ai.freeside.daemon`.
+  agent any longer: since #2080 a deputy run leaves `prod` running. The
+  third is `freesided execution pause` and `execution resume`, which only
+  the operator runs and which make the daemon exit itself to be restarted
+  (Section [5.2](#52-the-daemon-and-its-supervisor), Execution pause;
+  revision 125; not built yet, Stage 1 of tracker #3201). Tests, scripts,
+  and agents never stop, unload, or re-register `ai.freeside.daemon`.
 - **An update is provisional until the new build reopens** (revision 116; not
   built yet, tracker #3113). A new build is checked against a copy of the
   database before the drain, so a build that can't read the data is refused
@@ -6978,13 +7064,12 @@ guarantee these rules approximate: a separate account owns the `prod` state
 root, so no process running as the operator can reach it at all. Until it is
 scheduled, the Phase 1 stand-in is the ephemeral guard: an `ephemeral` daemon
 refuses to start when a database, state, or credentials path resolves under a
-supervised tier's state root, except the two App directories an attended
-real-work run names under Rules, or when it is asked to listen on a
-supervised tier's port. Because an attended real-work run publishes
-through those two directories, the dedicated-user mode must give it a path
-to the App's single authority that does not open them as the operator, such
-as publishing through the production account; the mode's own unit chooses
-the mechanism.
+supervised tier's state root, except the two App directories a deputy run
+names under Rules, or when it is asked to listen on a supervised tier's
+port. Because a deputy run publishes through those two directories, the
+dedicated-user mode must give it a path to the App's single authority that
+does not open them as the operator, such as publishing through the
+production account; the mode's own unit chooses the mechanism.
 Every such guard runs in the process it constrains. The guards stop
 accidental misuse, not a process that deliberately claims `prod`.
 Production's own protection is the per-database lock, which refuses a
@@ -7507,6 +7592,44 @@ by itself. On it the planner schedules #1016 into the open wave, or into the
 next wave at planning when none is open (revision 46). If none fires in 1B,
 the exit records this carve-out and #1016 drains with Phase 2.
 
+### One Daemon for Every Project, in Three Stages
+
+Revision 125 commits Freeside to one supervised daemon that runs real work
+for every onboarded project, and returns the deputy to an attended run of an
+unreleased build (Section [10](#10-operations-and-onboarding), Environments).
+Three stages deliver it. The work runs on the ad hoc tracker #3201, which
+lists its units, and the units start by fiat. The tracker's interim rule
+is that hand-run sessions stay the working path, and the deputy keeps
+working, until it closes.
+
+- **Stage 1: `prod` executes, one project enabled.** The installed `prod`
+  reads its settings from the store and runs real work for one project
+  under launchd. It hands the App authority to a deputy run only through an
+  execution pause (Section [5.2](#52-the-daemon-and-its-supervisor)), and
+  every container it starts on its own reserves memory (Section
+  [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine
+  Capacity). Exit: a real Freeside issue goes from submission to a ready
+  pull request on the installed daemon, which recovers the run after
+  `kill -9`, with a card approved from the phone and no new pairing; a
+  deputy run completes after `execution pause`, `prod` executes again after
+  `execution resume`, and neither process opens the App authority beside the
+  other; and with the memory budget full, image upkeep and a scheduled proof
+  pass wait for memory.
+- **Stage 2: many projects, and the process-wide waits removed.** Every
+  gate and loop resolves per project, and a task waits only for the four
+  resource limits or its own project's state. Exit: tasks from two
+  projects on different images are in flight at once in one daemon, their
+  verifications overlap, and breaking one project's readiness holds only
+  that project; and with one project's GitHub, research, and provider calls
+  stalled, the other still dispatches, verifies, and publishes, and the only
+  waits observed are the four resource limits (Section
+  [5.4](#54-credential-modes-egress-profiles-and-concurrency)), a project's
+  own state, and bounds kept on purpose, such as oldest-first memory order.
+- **Stage 3: operate and measure.** Measure the installed daemon's pace with
+  the resource limits raised to what the host carries, and close or
+  re-scope the open issues the change affects. Exit: a week's measured pace
+  on the installed daemon is recorded, with the binding constraint named.
+
 ### Implementation Coordination (Building Freeside with Agents)
 
 Contracts and fakes coordinate implementation. The required check on the
@@ -7707,32 +7830,70 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 124 ("An Over-Long Review Guide Is Trimmed, Not Refused"):
+Revision 125 ("One Supervised Daemon Runs Every Project"):
 
-1. **A review guide over a size bound is trimmed to the bound and recorded
-   on the ready item, never refused** (Section
-   [9](#9-comprehension), Summary Provenance). The daemon keeps the first
-   stops, excerpts, questions, and lines up to their bounds and cuts an
-   over-long string to fit; the ready item records each cut so the card
-   says the guide was trimmed. A guide file too large to read is left out,
-   and the item records that. Credential screening still reads the guide
-   as written, so it covers what a trim cuts, and reads a guide left out as
-   it reads any other evidence. Every other fault, a malformed shape, an
-   unreadable range, an over-long path, or a bad declaration, still fails
-   the import closed, and the failure now names invalid evidence as its
-   cause instead of unknown. This narrows revision
-   112's "a malformed one is invalid evidence": exceeding a size bound no
-   longer counts as malformed. It follows the #2753 exit run, whose
-   finished change was discarded because one excerpt ran 116 lines against
-   an 80-line bound. Rejected: keeping the fail-closed rule, which spends a
-   whole run on a cosmetic overrun of an optional card section; trimming
-   without a record, which would show the operator a guide that differs
-   from what the agent wrote without saying so; and dropping the whole
-   guide on any overrun, which discards a guide that is useful once
-   trimmed.
+1. **One daemon executes** (Section [10](#10-operations-and-onboarding),
+   Environments). The launchd-supervised `prod` daemon runs real work. It
+   starts executing when its stored settings say so and its checks pass, and
+   launchd keeps it running across updates and crashes.
+2. **One daemon serves every onboarded project** (Section
+   [10](#10-operations-and-onboarding), Environments). A project is a stored
+   record, and adding one is onboarding, never a new state root or a second
+   process. Phase 1A's one repository becomes a limit that Stage 2 lifts
+   (Section [5.5](#55-the-ci-trust-boundary)).
+3. **Only shared resources bound throughput, never the project or the
+   process** (Section
+   [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
+   A task waits only for a resource limit the operator sets or for its own
+   project's state. The limits are four: the memory budget, each usage
+   pool's limits, the macOS verification executor's slots, and the image
+   builder limit. No daemon-wide lane makes one task's long work wait behind
+   another's, and no lock that tasks share is held across a network call.
+4. **Settings live in the store, in three scopes** (Section
+   [10](#10-operations-and-onboarding), Environments): instance, identity,
+   and project. A task binds the settings revisions it was admitted under,
+   and a later edit changes only later tasks, except that each gate still
+   re-checks stored authority against current policy, so an edit to
+   authority can stop an in-flight task at its next gate.
+5. **The deputy is the attended run of an unreleased build** (Section
+   [10](#10-operations-and-onboarding), Environments). The App authority
+   never has two holders at once, and the daemon enforces that, where
+   #2080's two start-time checks alone left a gap. Pausing `prod` before a
+   deputy run is the operator's procedure, and a deputy refuses while `prod`
+   reports that it is executing.
 
-(Owner decision of 2026-11-13 on #3180;
-[decision note](../devlog/2026-11-13-0957-review-guide-caps-trim.md).)
+Four rules change with them. A busy Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+judgment site makes a call wait its turn instead of returning its fallback,
+and how many calls it runs at once is a limit on the pool, starting at one,
+in place of a fixed one. Every container the daemon starts on its own
+reserves memory, and only a command the operator runs by hand stays outside
+the budget. One builder per daemon becomes a builder limit in the instance
+settings, starting at one (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). And
+`freesided execution pause` and `execution resume` are a use of the durable
+operator stop, never the update drain, and a third sanctioned lifecycle path
+(Section [5.2](#52-the-daemon-and-its-supervisor)).
+
+This narrows revision 71's rejection of running real work through `prod`'s
+own store: its reason, that the harness isolates a run's database from
+`prod` on purpose, still holds for an unreleased build and doesn't apply to
+daily work. Rejected: a persistent deputy that serves many projects, which
+duplicates `prod` and keeps the App authority on permanent loan; one deputy
+per repository, which the App's single authority forbids and which splits
+the memory and pool limits by hand; many projects before `prod` executes,
+when the supervised launch is the smaller step; keeping #2080's two
+start-time checks without a lock, whose gap an executing `prod` under
+`KeepAlive` reaches on every restart; and importing the deputy roots' task
+history, a Tier A data import for display only.
+
+Nothing in this revision is built yet: tracker #3201 builds it in the three
+stages of Section [11](#11-roadmap-build-order-and-coordination)
+([One Daemon for Every Project, in Three Stages](#one-daemon-for-every-project-in-three-stages)), and
+each passage names the stage that delivers it.
+
+(Owner decision of 2026-11-13 on #3201;
+[decision note](../devlog/2026-11-14-1114-one-daemon-every-project.md).)
 
 ## 14. Risks
 
