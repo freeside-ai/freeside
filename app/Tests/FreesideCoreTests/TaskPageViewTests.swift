@@ -1310,7 +1310,8 @@ import Testing
         #expect(TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: nil) == "claude · pool A")
 
         var timeline = Components.Schemas.RunTimeline(
-            as_of_revision: 1, as_of: now, run_id: run.run_id, milestones: [], invocations: [], admissions: [])
+            as_of_revision: 1, as_of: now, run_id: run.run_id, milestones: [], invocations: [], admissions: [],
+            outcomes: RunFixtures.noOutcomes)
         // An admission for another role, or a review's, is not this run's.
         timeline.admissions = [RunFixtures.writerAdmission("inv-spec", role: .specifier, at: now)]
         #expect(

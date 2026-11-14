@@ -362,7 +362,7 @@ import Testing
         let reviewed = Components.Schemas.RunTimeline(
             as_of_revision: 1, as_of: RunFixtures.screenshotInstant, run_id: current.run.run_id, milestones: [],
             invocations: [], review: .init(value1: .init(rounds: [RunFixtures.reviewRound(.running)])),
-            admissions: [])
+            admissions: [], outcomes: RunFixtures.noOutcomes)
         let withRound = try #require(
             TaskTimelinePresentation.currentRunSection(
                 page.task, timeline: history, runTimelines: [current.run.run_id: reviewed], schedules: []))

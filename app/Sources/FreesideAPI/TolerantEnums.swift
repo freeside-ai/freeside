@@ -29,6 +29,9 @@ extension Components.Schemas.TriageOutcome: UnknownTolerantEnum {}
 extension Components.Schemas.TriageTier: UnknownTolerantEnum {}
 extension Components.Schemas.TaskEventKind: UnknownTolerantEnum {}
 extension Components.Schemas.TaskRunRole: UnknownTolerantEnum {}
+extension Components.Schemas.RunOutcomePostState: UnknownTolerantEnum {}
+extension Components.Schemas.RunOutcomePost.refusal_reasonPayload: UnknownTolerantEnum {}
+extension Components.Schemas.RunOutcomeFinding.dispositionPayload: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewProgressState: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewEvidenceAvailability: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewSubjectKind: UnknownTolerantEnum {}
@@ -142,6 +145,9 @@ public enum TolerantEnums {
         Components.Schemas.TriageTier.self,
         Components.Schemas.TaskEventKind.self,
         Components.Schemas.TaskRunRole.self,
+        Components.Schemas.RunOutcomePostState.self,
+        Components.Schemas.RunOutcomePost.refusal_reasonPayload.self,
+        Components.Schemas.RunOutcomeFinding.dispositionPayload.self,
         Components.Schemas.ReviewProgressState.self,
         Components.Schemas.ReviewEvidenceAvailability.self,
         Components.Schemas.ReviewSubjectKind.self,

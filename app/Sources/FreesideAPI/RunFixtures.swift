@@ -175,7 +175,8 @@ public enum RunFixtures {
                 reviewerAdmission(
                     round.invocation_id, at: date(3_600),
                     implementer: .differed, remediator: .differed),
-            ])
+            ],
+            outcomes: noOutcomes)
     }
 
     /// The purposes the specification-history run's attempts record, in
@@ -224,7 +225,8 @@ public enum RunFixtures {
             admissions: attempts.map { attempt in
                 writerAdmission(
                     "inv-\(id)-\(attempt)", role: .specifier, at: date(TimeInterval(attempt * 600 - 540)))
-            })
+            },
+            outcomes: noOutcomes)
     }
 
     public static func completedTimeline() -> Components.Schemas.RunTimeline {
@@ -244,8 +246,42 @@ public enum RunFixtures {
             ],
             completion: .init(value1: completedFacts),
             billable_cost_so_far: .init(value1: completedCost),
-            admissions: [writerAdmission("inv-\(completedRunID)-1", at: date(60))])
+            admissions: [writerAdmission("inv-\(completedRunID)-1", at: date(60))],
+            outcomes: noOutcomes)
     }
+
+    /// The outcome list of a run that posted nothing and set nothing aside.
+    public static let noOutcomes = Components.Schemas.RunOutcomes(posts: [], findings: [], complete: true)
+
+    /// The ready run's outcome list: a filed issue, a posted comment, a
+    /// filing the per-run cap stopped, and a declined finding, one of each
+    /// kind the ready card lists.
+    public static let readyOutcomes = Components.Schemas.RunOutcomes(
+        posts: [
+            .init(
+                effect_kind: .follow_up_filing, finding_id: "finding-654-2", state: .completed,
+                repository: .init(value1: .init(repo: "freeside-ai/freeside", repository_id: 84_958_515)),
+                issue_number: 3_201),
+            .init(
+                effect_kind: .issue_comment, finding_id: "finding-654-3", state: .completed,
+                repository: .init(value1: .init(repo: "freeside-ai/freeside", repository_id: 84_958_515)),
+                issue_number: 3_188, comment_id: 6_866_052_816),
+            .init(
+                effect_kind: .follow_up_filing, finding_id: "finding-654-4", state: .capped,
+                repository: .init(value1: .init(repo: "freeside-ai/freeside", repository_id: 84_958_515)),
+                refusal_reason: .precondition_failed,
+                notice: .init(
+                    value1: .init(
+                        code: "follow_up_filing_capped",
+                        reason: "This run already filed its limit of follow-up issues."))),
+        ],
+        findings: [
+            .init(
+                finding_id: "finding-654-1", disposition: .declined, round: 1, external: false,
+                message: "The retry loop has no upper bound.",
+                reason: "The caller bounds it at three attempts.")
+        ],
+        complete: true)
 
     /// What ran a writing invocation, as its execution admission recorded
     /// it: Claude Code under the operator's subscription.
@@ -442,7 +478,8 @@ public enum RunFixtures {
                     reviewerAdmission(
                         "review-\(activeRunID)-2", at: date(1_800),
                         implementer: .differed, remediator: .unknown),
-                ]),
+                ],
+                outcomes: noOutcomes),
             .init(
                 as_of_revision: 12, as_of: date(1_080), run_id: readyRunID,
                 milestones: [
@@ -458,7 +495,8 @@ public enum RunFixtures {
                 ],
                 completion: nil,
                 billable_cost_so_far: nil,
-                admissions: [writerAdmission("inv-\(readyRunID)-1", at: date(60))]),
+                admissions: [writerAdmission("inv-\(readyRunID)-1", at: date(60))],
+                outcomes: readyOutcomes),
             .init(
                 as_of_revision: 12, as_of: date(600), run_id: "run-oriole-121",
                 milestones: [
@@ -473,7 +511,8 @@ public enum RunFixtures {
                 ],
                 completion: nil,
                 billable_cost_so_far: nil,
-                admissions: [legacyAdmission("inv-run-oriole-121-1", at: date(60))]),
+                admissions: [legacyAdmission("inv-run-oriole-121-1", at: date(60))],
+                outcomes: noOutcomes),
             // The legacy run's timeline is empty: no milestones synthesized,
             // matching the daemon's no-backfill projection of an unobserved run.
             .init(
@@ -482,21 +521,24 @@ public enum RunFixtures {
                 invocations: [],
                 completion: nil,
                 billable_cost_so_far: nil,
-                admissions: []),
+                admissions: [],
+                outcomes: noOutcomes),
             .init(
                 as_of_revision: 12, as_of: date(900), run_id: "run-freeside-656",
                 milestones: [
                     milestone(.run_submitted, runID: "run-freeside-656", minute: 0),
                     milestone(.terminal_recorded, runID: "run-freeside-656", minute: 15),
                 ],
-                invocations: [], completion: nil, billable_cost_so_far: nil, admissions: []),
+                invocations: [], completion: nil, billable_cost_so_far: nil, admissions: [],
+                outcomes: noOutcomes),
             .init(
                 as_of_revision: 12, as_of: date(300), run_id: "run-freeside-specification",
                 milestones: [
                     milestone(.run_submitted, runID: "run-freeside-specification", minute: 0),
                     milestone(.execution_export_recorded, runID: "run-freeside-specification", minute: 5),
                 ],
-                invocations: [], completion: nil, billable_cost_so_far: nil, admissions: []),
+                invocations: [], completion: nil, billable_cost_so_far: nil, admissions: [],
+                outcomes: noOutcomes),
             completedTimeline(),
         ]
     }

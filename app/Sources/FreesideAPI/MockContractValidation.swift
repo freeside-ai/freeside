@@ -149,6 +149,57 @@ enum MockContractValidation {
         return nil
     }
 
+    /// Validate a run timeline's outcome list, mirroring what
+    /// signet.ReadRunOutcomes can serve: an unreadable post carries only its
+    /// kind; a readable one names its finding and repository; a comment
+    /// always names its issue; only a completed post carries what it
+    /// created; only a refused or capped one carries a refusal reason; and a
+    /// cap is always read from its notice. The schema leaves the list
+    /// optional for daemons built before it, but this daemon always serves it.
+    static func runOutcomesBreach(_ outcomes: Components.Schemas.RunOutcomes?) -> String? {
+        guard let outcomes else { return "missing outcome list" }
+        for post in outcomes.posts {
+            guard post.effect_kind == .follow_up_filing || post.effect_kind == .issue_comment else {
+                return "outcome post is not a filing or comment"
+            }
+            let comment = post.effect_kind == .issue_comment
+            let completed = post.state == .completed
+            let refused = post.state == .refused || post.state == .capped
+            if post.state == .unreadable {
+                if post.finding_id != nil || post.repository != nil || post.issue_number != nil
+                    || post.comment_id != nil || post.refusal_reason != nil || post.notice != nil
+                {
+                    return "unreadable outcome post carries details"
+                }
+                continue
+            }
+            if post.finding_id?.isEmpty != false || post.repository == nil { return "outcome post lacks its source" }
+            if (post.issue_number != nil) != (comment || completed) || (post.issue_number ?? 1) < 1 {
+                return "outcome post issue disagrees with its state"
+            }
+            if (post.comment_id != nil) != (comment && completed) || (post.comment_id ?? 1) < 1 {
+                return "outcome post comment disagrees with its state"
+            }
+            if (post.refusal_reason != nil) != refused { return "outcome post refusal disagrees with its state" }
+            if let notice = post.notice?.value1 {
+                if !refused && post.state != .ambiguous { return "outcome post notice on an unstopped post" }
+                if notice.code.isEmpty || notice.reason.isEmpty { return "empty outcome post notice" }
+            } else if post.state == .capped {
+                return "capped outcome post has no notice"
+            }
+        }
+        for finding in outcomes.findings {
+            if finding.finding_id.isEmpty || finding.round < 1 { return "invalid outcome finding" }
+            if finding.disposition != .declined && finding.disposition != .deferred {
+                return "outcome finding was not set aside"
+            }
+            if finding.message.utf8.count > 4096 || finding.reason.utf8.count > 4096 {
+                return "outcome finding text over its bound"
+            }
+        }
+        return nil
+    }
+
     static func runSnapshotBreach(
         _ snapshot: Components.Schemas.RunSnapshot, serverRevision: Int64
     ) -> String? {

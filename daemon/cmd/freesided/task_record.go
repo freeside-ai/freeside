@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v15"
+const taskRecordVersion = "freeside-task-record-v16"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -115,7 +115,10 @@ type taskRecordRun struct {
 	// admission order, so the agent, model, and effort each review ran on
 	// read here.
 	ReviewAdmissions []taskRecordReviewAdmission `json:"review_admissions"`
-	Errors           []taskRecordRunError        `json:"errors"`
+	// Outcomes is the run's outcome list, as the run timeline serves it:
+	// what the run posted or tried to post, and the findings it set aside.
+	Outcomes *signet.RunOutcomes  `json:"outcomes"`
+	Errors   []taskRecordRunError `json:"errors"`
 }
 
 // taskRecordReviewAdmission is one review invocation's admission. It leaves
@@ -215,6 +218,11 @@ const (
 	// authenticating the run's specification chain.
 	taskRecordRunSpecificationRetries taskRecordRunSection = "specification_retries"
 	taskRecordRunReviewAdmissions     taskRecordRunSection = "review_admissions"
+	taskRecordRunOutcomes             taskRecordRunSection = "outcomes"
+	// taskRecordRunOutcomeEntries is one entry of Outcomes the read could not
+	// reconstruct. Outcomes stays, marked incomplete, with that entry
+	// unreadable or missing.
+	taskRecordRunOutcomeEntries taskRecordRunSection = "outcome_entries"
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
@@ -222,6 +230,7 @@ var allTaskRecordRunSections = []taskRecordRunSection{
 	taskRecordRunObservation, taskRecordRunConclusion,
 	taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
 	taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions,
+	taskRecordRunOutcomes, taskRecordRunOutcomeEntries,
 }
 
 func (s taskRecordRunSection) valid() bool {
@@ -229,7 +238,8 @@ func (s taskRecordRunSection) valid() bool {
 	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 		taskRecordRunObservation, taskRecordRunConclusion,
 		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
-		taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions:
+		taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions,
+		taskRecordRunOutcomes, taskRecordRunOutcomeEntries:
 		return true
 	default:
 		return false
@@ -603,6 +613,14 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 				LineageGroup: optionalString(admission.LineageGroup), AdmittedAt: admission.AdmittedAt,
 				Agent: projectTaskRecordAgent(admission.AgentBinding),
 			})
+		}
+	}
+	if outcomes, faults, err := signet.ReadRunOutcomes(ctx, tx, runID); err != nil {
+		fail(taskRecordRunOutcomes, err)
+	} else {
+		out.Outcomes = &outcomes
+		for _, fault := range faults {
+			fail(taskRecordRunOutcomeEntries, fault)
 		}
 	}
 	observation, err := tx.ObserveRun(ctx, runID) //nolint:forbidigo // the conclusion reads the stored observation, so a status authentication failure leaves it standing

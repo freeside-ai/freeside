@@ -110,5 +110,145 @@
         }
       ]
     }
-  ]
+  ],
+  "outcomes": {
+    "posts": [
+      {
+        "effect_kind": "follow_up_filing",
+        "finding_id": "finding-1",
+        "state": "completed",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": 3201,
+        "comment_id": null,
+        "refusal_reason": null,
+        "notice": null
+      },
+      {
+        "effect_kind": "issue_comment",
+        "finding_id": "finding-2",
+        "state": "completed",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": 3188,
+        "comment_id": 6866052816,
+        "refusal_reason": null,
+        "notice": null
+      },
+      {
+        "effect_kind": "follow_up_filing",
+        "finding_id": "finding-3",
+        "state": "capped",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": null,
+        "comment_id": null,
+        "refusal_reason": "precondition_failed",
+        "notice": {
+          "code": "follow_up_filing_capped",
+          "reason": "Follow-up issue for proposal instance pi-3 was not filed: the run already filed 3 issues and comments, the follow_up_filing.max_per_run cap. No issue was created, and this proposal will not be retried."
+        }
+      },
+      {
+        "effect_kind": "issue_comment",
+        "finding_id": "finding-4",
+        "state": "refused",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": 3190,
+        "comment_id": null,
+        "refusal_reason": "retry_bound_spent",
+        "notice": null
+      },
+      {
+        "effect_kind": "follow_up_filing",
+        "finding_id": "finding-5",
+        "state": "ambiguous",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": null,
+        "comment_id": null,
+        "refusal_reason": null,
+        "notice": null
+      },
+      {
+        "effect_kind": "follow_up_filing",
+        "finding_id": "finding-6",
+        "state": "pending",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": null,
+        "comment_id": null,
+        "refusal_reason": null,
+        "notice": null
+      },
+      {
+        "effect_kind": "follow_up_filing",
+        "finding_id": "finding-7",
+        "state": "card_declined",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": null,
+        "comment_id": null,
+        "refusal_reason": null,
+        "notice": null
+      },
+      {
+        "effect_kind": "follow_up_filing",
+        "finding_id": "finding-8",
+        "state": "withdrawn",
+        "repository": {
+          "repo": "freeside-ai/freeside",
+          "repository_id": 4242
+        },
+        "issue_number": null,
+        "comment_id": null,
+        "refusal_reason": null,
+        "notice": null
+      },
+      {
+        "effect_kind": "issue_comment",
+        "finding_id": null,
+        "state": "unreadable",
+        "repository": null,
+        "issue_number": null,
+        "comment_id": null,
+        "refusal_reason": null,
+        "notice": null
+      }
+    ],
+    "findings": [
+      {
+        "finding_id": "finding-9",
+        "disposition": "declined",
+        "round": 2,
+        "external": false,
+        "message": "The retry loop has no upper bound.",
+        "reason": "The caller already bounds retries."
+      },
+      {
+        "finding_id": "finding-10",
+        "disposition": "deferred",
+        "round": 1,
+        "external": true,
+        "message": "Rename the helper for clarity.",
+        "reason": "Out of scope for this change."
+      }
+    ],
+    "complete": false
+  }
 }

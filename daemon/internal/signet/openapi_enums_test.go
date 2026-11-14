@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"gopkg.in/yaml.v3"
 )
 
@@ -81,6 +82,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"ImageUpkeepPending":         enumStrings(domain.AllImageUpkeepPendings),
 		"RunOutcome":                 enumStrings(domain.AllRunOutcomes),
 		"RunLifecycle":               enumStrings(domain.AllRunLifecycles),
+		"RunOutcomePostState":        enumStrings(signet.AllRunOutcomePostStates),
 		"AdjudicationProducer":       enumStrings(domain.AllAdjudicationProducers),
 		"DriftVerdict":               enumStrings(domain.AllDriftVerdicts),
 		"ReviewDiminishingCause":     enumStrings(domain.AllReviewDiminishingCauses),

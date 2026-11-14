@@ -252,7 +252,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			},
 			LineupRevision: lineupRevision(agentCatalogFixture(t)),
 		}},
-		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, timelineFacts)},
+		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, timelineFacts, runOutcomesFixture())},
 		{name: "task-timeline", value: taskTimelineFixture(t)},
 		{name: "pairing-facts", value: pairingFacts},
 		{
@@ -683,5 +683,51 @@ func routingPolicyFixture(t *testing.T, at time.Time) *RoutingPolicySnapshot {
 	}
 	return &RoutingPolicySnapshot{
 		AsOfRevision: 23, EntityVersion: 2, Policy: renderRoutingPolicy(policy),
+	}
+}
+
+// runOutcomesFixture holds one post in every state the daemon serves and one
+// finding of each kind the list carries.
+func runOutcomesFixture() RunOutcomes {
+	repository := &domain.FollowUpFilingRepository{Repo: "freeside-ai/freeside", RepositoryID: 4242}
+	refused := domain.FollowUpFilingRefusalRetryBoundSpent
+	capped := domain.FollowUpFilingRefusalPreconditionFailed
+	post := func(kind domain.EffectKind, finding string, state RunOutcomePostState) RunOutcomePost {
+		return RunOutcomePost{
+			EffectKind: kind, FindingID: new(domain.FindingID(finding)), State: state, Repository: repository,
+		}
+	}
+	filed := post(domain.EffectFollowUpFiling, "finding-1", RunOutcomeCompleted)
+	filed.IssueNumber = new(3201)
+	posted := post(domain.EffectIssueComment, "finding-2", RunOutcomeCompleted)
+	posted.IssueNumber, posted.CommentID = new(3188), new(int64(6866052816))
+	cappedFiling := post(domain.EffectFollowUpFiling, "finding-3", RunOutcomeCapped)
+	cappedFiling.RefusalReason = &capped
+	cappedFiling.Notice = &RunOutcomeNotice{
+		Code:   "follow_up_filing_capped",
+		Reason: "Follow-up issue for proposal instance pi-3 was not filed: the run already filed 3 issues and comments, the follow_up_filing.max_per_run cap. No issue was created, and this proposal will not be retried.",
+	}
+	refusedComment := post(domain.EffectIssueComment, "finding-4", RunOutcomeRefused)
+	refusedComment.IssueNumber, refusedComment.RefusalReason = new(3190), &refused
+	ambiguous := post(domain.EffectFollowUpFiling, "finding-5", RunOutcomeAmbiguous)
+	return RunOutcomes{
+		Posts: []RunOutcomePost{
+			filed, posted, cappedFiling, refusedComment, ambiguous,
+			post(domain.EffectFollowUpFiling, "finding-6", RunOutcomePending),
+			post(domain.EffectFollowUpFiling, "finding-7", RunOutcomeCardDeclined),
+			post(domain.EffectFollowUpFiling, "finding-8", RunOutcomeWithdrawn),
+			{EffectKind: domain.EffectIssueComment, State: RunOutcomeUnreadable},
+		},
+		Findings: []RunOutcomeFinding{
+			{
+				FindingID: "finding-9", Disposition: domain.ReviewDispositionDeclined, Round: 2,
+				Message: "The retry loop has no upper bound.", Reason: "The caller already bounds retries.",
+			},
+			{
+				FindingID: "finding-10", Disposition: domain.ReviewDispositionDeferred, Round: 1, External: true,
+				Message: "Rename the helper for clarity.", Reason: "Out of scope for this change.",
+			},
+		},
+		Complete: false,
 	}
 }

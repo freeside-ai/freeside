@@ -6,7 +6,7 @@ package signet
 // from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact
 // bytes. The daemon reports it on GET /health to name its contract.
 // Regenerate with scripts/api-contract-digest.sh --write.
-const APIContractDigest = "sha256:ce7373c9e4d58138c722918035ce35d8caaf1310fd9e4592f4a49f9cc760209a"
+const APIContractDigest = "sha256:d3f50da1699cadacaa9ed0934a59f9775fe05272e2b8074b761a61df27da6616"
 
 // APIContractCompatibilityLevel is the spec's x-compatibility-level: the
 // count of changes that broke apps built before them. The daemon reports

@@ -5400,7 +5400,7 @@ public enum Components {
             case implementation = "implementation"
             case unknown = "unknown"
         }
-        /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate.
+        /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate. outcomes is what the run posted or tried to post and the findings it set aside; every daemon that has the list serves it, empty or not. It is optional so an app still reads the timeline from a daemon built before the list existed, where an absent list is unknown, not empty.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RunTimeline`.
@@ -5514,6 +5514,8 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunTimeline/admissions`.
             public var admissions: [Components.Schemas.InvocationAdmissionFacts]
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/outcomes`.
+            public var outcomes: Components.Schemas.RunOutcomes?
             /// Creates a new `RunTimeline`.
             ///
             /// - Parameters:
@@ -5527,6 +5529,7 @@ public enum Components {
             ///   - completion: The work unit's completion facts once a work_unit_completed milestone ends the timeline; null before then.
             ///   - billable_cost_so_far: The run's billable spend so far, computed the same way attention cards compute theirs; null before any billable observation.
             ///   - admissions: What ran each admitted invocation of the run, as its execution or review admission recorded it, ordered by admitted_at then invocation_id. Only the run timeline carries it.
+            ///   - outcomes:
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 as_of: Foundation.Date,
@@ -5537,7 +5540,8 @@ public enum Components {
                 review: Components.Schemas.RunTimeline.reviewPayload? = nil,
                 completion: Components.Schemas.RunTimeline.completionPayload? = nil,
                 billable_cost_so_far: Components.Schemas.RunTimeline.billable_cost_so_farPayload? = nil,
-                admissions: [Components.Schemas.InvocationAdmissionFacts]
+                admissions: [Components.Schemas.InvocationAdmissionFacts],
+                outcomes: Components.Schemas.RunOutcomes? = nil
             ) {
                 self.as_of_revision = as_of_revision
                 self.as_of = as_of
@@ -5549,6 +5553,7 @@ public enum Components {
                 self.completion = completion
                 self.billable_cost_so_far = billable_cost_so_far
                 self.admissions = admissions
+                self.outcomes = outcomes
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -5561,6 +5566,253 @@ public enum Components {
                 case completion
                 case billable_cost_so_far
                 case admissions
+                case outcomes
+            }
+        }
+        /// What a run produced besides its pull request: each follow-up issue it filed or proposed, each issue comment it posted or proposed, and each finding whose latest disposition set it aside. Read from the proposal, intent, and disposition records and the notices the filer and comment dispatcher raised; it decides nothing. Only the run timeline carries it. complete is false when part of the list could not be read; the parts that could are still listed, and an unreadable post is listed as unreadable.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunOutcomes`.
+        public struct RunOutcomes: Codable, Hashable, Sendable {
+            /// One entry per follow-up filing or issue comment proposal of the run.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunOutcomes/posts`.
+            public var posts: [Components.Schemas.RunOutcomePost]
+            /// One entry per finding whose latest disposition is declined or deferred: the run's own review findings as they stand after its latest round, then its external findings.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunOutcomes/findings`.
+            public var findings: [Components.Schemas.RunOutcomeFinding]
+            /// - Remark: Generated from `#/components/schemas/RunOutcomes/complete`.
+            public var complete: Swift.Bool
+            /// Creates a new `RunOutcomes`.
+            ///
+            /// - Parameters:
+            ///   - posts: One entry per follow-up filing or issue comment proposal of the run.
+            ///   - findings: One entry per finding whose latest disposition is declined or deferred: the run's own review findings as they stand after its latest round, then its external findings.
+            ///   - complete:
+            public init(
+                posts: [Components.Schemas.RunOutcomePost],
+                findings: [Components.Schemas.RunOutcomeFinding],
+                complete: Swift.Bool
+            ) {
+                self.posts = posts
+                self.findings = findings
+                self.complete = complete
+            }
+            public enum CodingKeys: String, CodingKey {
+                case posts
+                case findings
+                case complete
+            }
+        }
+        /// Where one follow-up filing or issue comment stands. pending: nothing final yet (the card is open, or the proposal is approved, on its card or by policy, and the post isn't finished). card_declined: a person declined the card. withdrawn: the post will never be sent (no approval and no open card, or nothing sent when the run's workflow closed). completed: the issue or comment exists and is in the ledger. refused: the post ended refused. capped: a refusal its notice says a cap caused. ambiguous: the create may have reached GitHub and no issue or comment is recorded. unreadable: the daemon could not read the proposal, because its stored rows fail the daemon's checks or the read failed.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunOutcomePostState`.
+        @frozen public enum RunOutcomePostState: String, Codable, Hashable, Sendable, CaseIterable {
+            case pending = "pending"
+            case card_declined = "card_declined"
+            case withdrawn = "withdrawn"
+            case completed = "completed"
+            case refused = "refused"
+            case capped = "capped"
+            case ambiguous = "ambiguous"
+            case unreadable = "unreadable"
+            case unknown = "unknown"
+        }
+        /// One follow-up filing or issue comment proposal of the run. effect_kind is follow_up_filing or issue_comment. finding_id and repository are null only when state is unreadable. issue_number is the filed issue once a filing completes, and the issue a comment targets in any readable state; comment_id is set once a comment completes. refusal_reason is the ledger's reason for a refused or capped post. notice is the notice that explains a refused, capped, or ambiguous outcome, when one was raised.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunOutcomePost`.
+        public struct RunOutcomePost: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/effect_kind`.
+            public var effect_kind: Components.Schemas.EffectKind
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/finding_id`.
+            public var finding_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/state`.
+            public var state: Components.Schemas.RunOutcomePostState
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/repository`.
+            public struct repositoryPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunOutcomePost/repository/value1`.
+                public var value1: Components.Schemas.ProjectRepository
+                /// Creates a new `repositoryPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ProjectRepository) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/repository`.
+            public var repository: Components.Schemas.RunOutcomePost.repositoryPayload?
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/issue_number`.
+            public var issue_number: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/comment_id`.
+            public var comment_id: Swift.Int64?
+            /// Why the intent ended refused. Matches domain.AllFollowUpFilingRefusalReasons.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/refusal_reason`.
+            @frozen public enum refusal_reasonPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case definite_rejection = "definite_rejection"
+                case retry_bound_spent = "retry_bound_spent"
+                case precondition_failed = "precondition_failed"
+                case _empty = ""
+                case unknown = "unknown"
+            }
+            /// Why the intent ended refused. Matches domain.AllFollowUpFilingRefusalReasons.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/refusal_reason`.
+            public var refusal_reason: Components.Schemas.RunOutcomePost.refusal_reasonPayload?
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/notice`.
+            public struct noticePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunOutcomePost/notice/value1`.
+                public var value1: Components.Schemas.RunOutcomeNotice
+                /// Creates a new `noticePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunOutcomeNotice) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunOutcomePost/notice`.
+            public var notice: Components.Schemas.RunOutcomePost.noticePayload?
+            /// Creates a new `RunOutcomePost`.
+            ///
+            /// - Parameters:
+            ///   - effect_kind:
+            ///   - finding_id:
+            ///   - state:
+            ///   - repository:
+            ///   - issue_number:
+            ///   - comment_id:
+            ///   - refusal_reason: Why the intent ended refused. Matches domain.AllFollowUpFilingRefusalReasons.
+            ///   - notice:
+            public init(
+                effect_kind: Components.Schemas.EffectKind,
+                finding_id: Swift.String? = nil,
+                state: Components.Schemas.RunOutcomePostState,
+                repository: Components.Schemas.RunOutcomePost.repositoryPayload? = nil,
+                issue_number: Swift.Int? = nil,
+                comment_id: Swift.Int64? = nil,
+                refusal_reason: Components.Schemas.RunOutcomePost.refusal_reasonPayload? = nil,
+                notice: Components.Schemas.RunOutcomePost.noticePayload? = nil
+            ) {
+                self.effect_kind = effect_kind
+                self.finding_id = finding_id
+                self.state = state
+                self.repository = repository
+                self.issue_number = issue_number
+                self.comment_id = comment_id
+                self.refusal_reason = refusal_reason
+                self.notice = notice
+            }
+            public enum CodingKeys: String, CodingKey {
+                case effect_kind
+                case finding_id
+                case state
+                case repository
+                case issue_number
+                case comment_id
+                case refusal_reason
+                case notice
+            }
+        }
+        /// The code and text of the advisory notice the filer or comment dispatcher raised for a post's terminal outcome.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunOutcomeNotice`.
+        public struct RunOutcomeNotice: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeNotice/code`.
+            public var code: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeNotice/reason`.
+            public var reason: Swift.String
+            /// Creates a new `RunOutcomeNotice`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - reason:
+            public init(
+                code: Swift.String,
+                reason: Swift.String
+            ) {
+                self.code = code
+                self.reason = reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case code
+                case reason
+            }
+        }
+        /// One finding whose latest disposition is declined or deferred. round is the round that disposition was recorded in, or the round that found a fix reversed. message is the finding's message and reason the disposition's reason: agent or reviewer text, each cut to 4096 bytes with a " (truncated)" note.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding`.
+        public struct RunOutcomeFinding: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/finding_id`.
+            public var finding_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/disposition`.
+            @frozen public enum dispositionPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case declined = "declined"
+                case deferred = "deferred"
+                case unknown = "unknown"
+            }
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/disposition`.
+            public var disposition: Components.Schemas.RunOutcomeFinding.dispositionPayload
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/round`.
+            public var round: Swift.Int
+            /// True for a finding from an external review on the pull request.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/external`.
+            public var external: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunOutcomeFinding/reason`.
+            public var reason: Swift.String
+            /// Creates a new `RunOutcomeFinding`.
+            ///
+            /// - Parameters:
+            ///   - finding_id:
+            ///   - disposition:
+            ///   - round:
+            ///   - external: True for a finding from an external review on the pull request.
+            ///   - message:
+            ///   - reason:
+            public init(
+                finding_id: Swift.String,
+                disposition: Components.Schemas.RunOutcomeFinding.dispositionPayload,
+                round: Swift.Int,
+                external: Swift.Bool,
+                message: Swift.String,
+                reason: Swift.String
+            ) {
+                self.finding_id = finding_id
+                self.disposition = disposition
+                self.round = round
+                self.external = external
+                self.message = message
+                self.reason = reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case finding_id
+                case disposition
+                case round
+                case external
+                case message
+                case reason
             }
         }
         /// Primary review history in ascending round order.

@@ -3087,7 +3087,7 @@ public actor MockServer {
                     run_id: runID, kind: .run_submitted,
                     invocation_id: "inv-\(runID)-1", recorded_at: currentTime)
             ],
-            invocations: [], admissions: [])
+            invocations: [], admissions: [], outcomes: RunFixtures.noOutcomes)
         // The task projects its one specification run: an active, work-in-progress
         // task positioned at that run, with the run and its campaign in the task's
         // membership so taskTimeline agrees with the run store (mirrors the daemon
