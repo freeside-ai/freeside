@@ -694,7 +694,11 @@ directory named before it in the same bullet. All under `daemon/`:
   fold that names a missing section), and
   `internal/store/instance_settings.go` and
   `internal/store/project_settings.go` (the append-only revisions and the
-  check of a project's repository against its `projects` binding).
+  check of a project's repository against its `projects` binding), and
+  `internal/daemoncompose/settings_gate.go` and
+  `internal/daemoncompose/run_settings.go` (the settings gate and the
+  loader that re-checks stored settings against current policy before a
+  run composes from them).
 - **Client authority:** `internal/signet/device.go` (the paired-device
   bearer check), `internal/signet/http.go` (where requests meet it),
   `internal/signet/pairing.go`, `internal/signet/secret.go`,

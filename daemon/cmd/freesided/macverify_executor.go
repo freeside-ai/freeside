@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"net"
-	"slices"
 	"strconv"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
@@ -63,22 +62,4 @@ func validateDeputyMacverify(section *deputyMacverify) error {
 		return nil
 	}
 	return section.Validate()
-}
-
-// deputyMacverifyExecutorConfig maps the settings section and the deputy's
-// listen address to the executor configuration. An absent section maps to
-// the zero value, whose empty Root configures no executor, as an empty
-// -macverify-root does.
-func deputyMacverifyExecutorConfig(section *deputyMacverify, listen string) daemoncompose.MacverifyExecutorConfig {
-	if section == nil {
-		return daemoncompose.MacverifyExecutorConfig{}
-	}
-	portBase := section.PortBase
-	if portBase == 0 {
-		portBase = macverify.DefaultPortBase
-	}
-	return daemoncompose.MacverifyExecutorConfig{
-		Root: section.Root, Slots: slices.Clone(section.Slots), XcodeBuild: section.XcodeBuild, Swift: section.Swift,
-		PortBase: portBase, ListenPort: listenPort(listen),
-	}
 }
