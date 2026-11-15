@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -240,18 +241,18 @@ func (r *InstallationResolver) resolve(
 	//
 	// This is a guard, not an invariant, and no snapshot of coverage could make
 	// it one: a pass may begin after the count and before the requests go out,
-	// so a listing can always reach GitHub for a registration that is uncovered
-	// by the time it arrives. Coverage is empty for the duration of every pass
-	// anyway (`janitor.go`'s Run withdraws it before each one) while the
-	// janitor itself contacts every registration. The invariant is the token
-	// gate below, which is re-read after matching and re-checked at the mint.
-	covered := 0
-	for _, app := range apps {
-		if janitorActiveFor(r.janitor, app.AppID) {
-			covered++
-		}
-	}
-	if covered == 0 {
+	// so a listing can always reach GitHub for a registration whose pass is
+	// about to fail and withdraw it. The invariant is the token gate below,
+	// which is re-read after matching and re-checked at the mint.
+	// The floor needs one covered registration, so it reads the served view
+	// first and waits for a running pass only when that view covers none: a
+	// faulted sibling must not hold this resolution for a whole pass.
+	covered := slices.ContainsFunc(apps, func(app AppCredentials) bool {
+		return r.janitor != nil && r.janitor.ActiveFor(app.AppID)
+	}) || slices.ContainsFunc(apps, func(app AppCredentials) bool {
+		return janitorActiveFor(r.janitor, app.AppID)
+	})
+	if !covered {
 		registrationIDs := make([]int64, len(apps))
 		for i, app := range apps {
 			registrationIDs[i] = app.AppID

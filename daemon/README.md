@@ -4054,10 +4054,10 @@ healthy pass resolves that item. Production driver mode supplies its live
 backend digest and runs the same composition at startup and every 24 hours by
 default (`-doctor-interval` overrides the cadence). The production daemon
 accepts the same repeatable `-approved-recipe` flag and supplies that exact set
-to persistence reconstruction and every scheduled doctor pass. Scheduled
-conformance holds the janitor's latest completed coverage stable for its
-authenticated fetch, so the janitor's deliberate mid-pass withdrawal cannot
-terminate the daemon. Doctor applies the selected mode's full capability floor; unattended
+to persistence reconstruction and every scheduled doctor pass. A janitor
+pass in progress serves the last completed pass's coverage (#3215), so
+scheduled conformance's authenticated fetch never meets coverage withdrawn
+mid-pass and cannot terminate the daemon that way. Doctor applies the selected mode's full capability floor; unattended
 health therefore requires the networkless-export and enforced-provider-egress
 proofs in addition to the attended handoff floor. The minimum is per backend
 class: the one host-side class `unattended` admits, the credential-free macOS

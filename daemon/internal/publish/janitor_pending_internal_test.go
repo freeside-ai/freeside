@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"errors"
 	"testing"
 	"time"
 )
@@ -57,66 +56,17 @@ func TestPendingReadyNeverGrantsRuntimeAuthority(t *testing.T) {
 	}
 }
 
-func TestStableCoverageExcludesReconciliationWithdrawal(t *testing.T) {
+// TestCoverageGatesServeTheLastPassWhileOneRuns: while a pass runs, a grant
+// the last complete pass covered is answered at once, with no wait on the
+// pass, and a grant it lacks waits for the running pass and reads its result
+// (#3215).
+func TestCoverageGatesServeTheLastPassWhileOneRuns(t *testing.T) {
 	t.Parallel()
 	janitor := &InstallationJanitor{
 		covered: map[int64]registrationCoverage{
 			11: {
 				registrationID: 11,
-				repositories: map[int64]map[int64]struct{}{
-					22: {33: {}},
-				},
-			},
-		},
-	}
-	probeEntered := make(chan struct{})
-	releaseProbe := make(chan struct{})
-	probeDone := make(chan error, 1)
-	go func() {
-		probeDone <- janitor.WithStableCoverage(func() error {
-			close(probeEntered)
-			<-releaseProbe
-			if !janitor.AllowsRepository(11, 22, 33) {
-				return errors.New("coverage changed during coordinated probe")
-			}
-			return nil
-		})
-	}()
-	<-probeEntered
-	passStarted := make(chan struct{})
-	passDone := make(chan struct{})
-	go func() {
-		close(passStarted)
-		janitor.cycleMu.Lock()
-		janitor.withdrawCoverage()
-		janitor.cycleMu.Unlock()
-		close(passDone)
-	}()
-	<-passStarted
-	select {
-	case <-passDone:
-		t.Fatal("reconciliation withdrew coverage during coordinated probe")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(releaseProbe)
-	if err := <-probeDone; err != nil {
-		t.Fatal(err)
-	}
-	<-passDone
-	if janitor.AllowsRepository(11, 22, 33) {
-		t.Fatal("reconciliation did not withdraw coverage after coordinated probe")
-	}
-}
-
-func TestCoordinatedCoverageDoesNotRelockStableSection(t *testing.T) {
-	t.Parallel()
-	janitor := &InstallationJanitor{
-		covered: map[int64]registrationCoverage{
-			11: {
-				registrationID: 11,
-				repositories: map[int64]map[int64]struct{}{
-					22: {33: {}},
-				},
+				repositories:   map[int64]map[int64]struct{}{22: {33: {}}},
 				pendingReady: &pendingCoverage{
 					activeEpoch: 7, durableIntentRevision: 9,
 					installationID: 22, repositories: map[int64]struct{}{33: {}},
@@ -129,27 +79,39 @@ func TestCoordinatedCoverageDoesNotRelockStableSection(t *testing.T) {
 		RegistrationID: 11, InstallationID: 22,
 		ExpectedRepositoryIDs: []int64{33},
 	}
-	probeDone := make(chan error, 1)
-	go func() {
-		probeDone <- janitor.WithStableCoverage(func() error {
-			if !janitor.AwaitActiveFor(11) {
-				return errors.New("coordinated active probe denied stable coverage")
-			}
-			if !janitor.AwaitAllowsRepository(11, 22, 33) {
-				return errors.New("coordinated repository probe denied stable coverage")
-			}
-			if installationID, ready := janitor.AwaitPendingReady(envelope); !ready || installationID != 22 {
-				return errors.New("coordinated pending probe denied stable coverage")
-			}
-			return nil
-		})
-	}()
+	done := janitor.beginPublishedPass()
+	if !janitor.AwaitActiveFor(11) || !janitor.AwaitAllowsRepository(11, 22, 33) {
+		t.Fatal("covered grant was not served while a pass runs")
+	}
+	if installationID, ready := janitor.AwaitPendingReady(envelope); !ready || installationID != 22 {
+		t.Fatal("ready envelope was not served while a pass runs")
+	}
+	added := make(chan bool, 1)
+	go func() { added <- janitor.AwaitAllowsRepository(11, 22, 34) }()
+	unknown := make(chan bool, 1)
+	go func() { unknown <- janitor.AwaitActiveFor(12) }()
 	select {
-	case err := <-probeDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("coordinated coverage probe deadlocked inside stable section")
+	case <-added:
+		t.Fatal("uncovered grant answered before the running pass published")
+	case <-unknown:
+		t.Fatal("uncovered registration answered before the running pass published")
+	case <-time.After(20 * time.Millisecond):
+	}
+	janitor.publishPass(janitorPass{
+		registrations: []int64{11},
+		covered: []registrationCoverage{{
+			registrationID: 11,
+			repositories:   map[int64]map[int64]struct{}{22: {33: {}, 34: {}}},
+		}},
+	})
+	janitor.endPublishedPass(done)
+	if !<-added {
+		t.Fatal("grant the running pass covered was denied after it published")
+	}
+	if <-unknown {
+		t.Fatal("registration no pass covered was allowed")
+	}
+	if _, ready := janitor.AwaitPendingReady(envelope); ready {
+		t.Fatal("pending readiness outlived the pass that replaced it")
 	}
 }

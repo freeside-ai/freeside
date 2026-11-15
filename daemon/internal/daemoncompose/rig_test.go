@@ -119,7 +119,7 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	}
 	err := runClaudeConformance(t.Context(), nil, nil, nil, ClaudeDriverConfig{
 		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: blockedSeedRoot,
-	}, nil, nil)
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "create conformance seed root") {
 		t.Fatalf("conformance setup error = %v, want blocked seed root", err)
 	}
@@ -361,9 +361,6 @@ func TestRunClaudeConformanceNeedsAnObservedTip(t *testing.T) {
 	err := runClaudeConformance(t.Context(), st, nil, nil, ClaudeDriverConfig{
 		Repo: "owner/repo", RepositoryID: 7, BaseRef: "main",
 		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: seedRoot,
-	}, func(func() error) error {
-		t.Fatal("the pass fetched a seed with no observed tip")
-		return nil
 	}, nil)
 	if !errors.Is(err, exec.ErrInputUnavailable) {
 		t.Fatalf("conformance with no stored tip = %v, want ErrInputUnavailable", err)

@@ -908,23 +908,19 @@ func composeClaudeDriver(
 		}
 	}()
 	// A base tree exists only on the remote, so reading it waits for the
-	// transport. Stable coverage keeps the fetch's installation token from
-	// failing under a concurrent pass.
+	// transport. A janitor pass in progress keeps serving the last complete
+	// coverage, so the fetch's installation token needs no coordination.
 	baseInputs := newBaseInputsMemo(func(
 		ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
-	) (inputs domain.ProjectImageBaseInputs, err error) {
-		err = janitor.WithStableCoverage(func() error {
-			inputs, err = ObserveCompositionBaseInputs(ctx,
-				func(ctx context.Context, dir string) (int64, error) {
-					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, baseSHA, dir)
-					if err != nil {
-						return 0, err
-					}
-					return checkout.RepositoryID(), nil
-				}, cfg.RepositoryID, baseSHA, layout)
-			return err
-		})
-		return inputs, err
+	) (domain.ProjectImageBaseInputs, error) {
+		return ObserveCompositionBaseInputs(ctx,
+			func(ctx context.Context, dir string) (int64, error) {
+				checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, baseSHA, dir)
+				if err != nil {
+					return 0, err
+				}
+				return checkout.RepositoryID(), nil
+			}, cfg.RepositoryID, baseSHA, layout)
 	})
 	if cfg.OperatingMode == domain.ModeUnattended {
 		if err := seedAdmittedImagePointer(ctx, st, image, utcNow(), logger); err != nil {
@@ -1116,7 +1112,7 @@ func composeClaudeDriver(
 	}
 	if cfg.RunConformance {
 		if err := runClaudeConformance(
-			ctx, st, transport, backend, cfg, janitor.WithStableCoverage, conformanceLeaser,
+			ctx, st, transport, backend, cfg, conformanceLeaser,
 		); err != nil {
 			return nil, fmt.Errorf("run ward conformance: %w", err)
 		}
@@ -1209,7 +1205,7 @@ func composeClaudeDriver(
 		Agents: agents,
 	}
 	follower := newConformanceFollower(backend, func(runCtx context.Context) error {
-		return runClaudeConformance(runCtx, st, transport, backend, cfg, janitor.WithStableCoverage, conformanceLeaser)
+		return runClaudeConformance(runCtx, st, transport, backend, cfg, conformanceLeaser)
 	}, time.Now, logger.With("subsystem", "writer_image_conformance"))
 	var (
 		selectImage     engine.ImageSelection
@@ -1234,18 +1230,12 @@ func composeClaudeDriver(
 		issueReadTokens:        issueReadTokens,
 		openIssues: publish.NewOpenIssueLister(
 			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
-		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (repositoryID int64, err error) {
-			// Stable coverage keeps the fetch's installation token from
-			// failing under a concurrent janitor pass.
-			err = janitor.WithStableCoverage(func() error {
-				checkout, err := transport.FetchBase(fetchCtx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
-				if err != nil {
-					return err
-				}
-				repositoryID = checkout.RepositoryID()
-				return nil
-			})
-			return repositoryID, err
+		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (int64, error) {
+			checkout, err := transport.FetchBase(fetchCtx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
+			if err != nil {
+				return 0, err
+			}
+			return checkout.RepositoryID(), nil
 		},
 		observeRepositoryTip: observeRefTip,
 		observePull: func(obsCtx context.Context, repo string, number int) (publish.PullObservation, error) {
@@ -1628,7 +1618,6 @@ func runClaudeConformance(
 	transport *publish.Transport,
 	backend *ward.Backend,
 	cfg ClaudeDriverConfig,
-	withStableCoverage func(func() error) error,
 	leaser *AdapterConformanceLeaser,
 ) error {
 	if backend != nil {
@@ -1670,9 +1659,6 @@ func runClaudeConformance(
 	// refused as dirty before conformance can pass. These are the only two
 	// production SeedBaseCheckout sources; the publication lane's fetches
 	// keep the repository-only shape on purpose.
-	if withStableCoverage == nil {
-		return errors.New("conformance: nil janitor coverage coordinator")
-	}
 	// Each pass seeds at the tip the tip watch last stored, the base a new
 	// run would start at now, so a pass proves a workspace like the next
 	// one admission seeds.
@@ -1680,11 +1666,9 @@ func runClaudeConformance(
 	if err != nil {
 		return fmt.Errorf("conformance base: %w", err)
 	}
-	if err := withStableCoverage(func() error {
-		return (transportSeeder{transport: transport}).FetchBaseWorktree(
-			ctx, base.Repo, base.BaseRef, base.BaseSHA, seedDir,
-		)
-	}); err != nil {
+	if err := (transportSeeder{transport: transport}).FetchBaseWorktree(
+		ctx, base.Repo, base.BaseRef, base.BaseSHA, seedDir,
+	); err != nil {
 		return fmt.Errorf("fetch exact conformance base: %w", err)
 	}
 	// The suite proves the image ward currently names, which follows writer
@@ -1965,16 +1949,15 @@ const janitorStartupTimeout = 2 * time.Minute
 type janitorRunner interface {
 	RunScheduledPass(context.Context) error
 	ActiveFor(int64) bool
-	WithStableCoverage(func() error) error
 	RegistrationFaults() []publish.JanitorRegistrationFault
 	ChurningRegistrations() []publish.JanitorRegistrationChurn
 	IncompleteRegistrations() []publish.JanitorRegistrationIncomplete
 	PendingReady(publish.PendingInstallationEnvelope) (int64, bool)
 }
 
-// janitorSession exposes the daemon's janitor to the composition: the
-// stable-coverage coordinator conformance uses, and the scheduled pass the
-// §5.16 scheduler's janitor kind fires. The pre-1B always-on goroutine is
+// janitorSession exposes the daemon's janitor to the composition: its
+// coverage diagnostics, and the scheduled pass the §5.16 scheduler's janitor
+// kind fires. The pre-1B always-on goroutine is
 // gone — startJanitorSession primes coverage with one synchronous pass (the
 // same coverage-before-ready startup gate the loop start used to provide)
 // and the durable scheduler owns every later pass; a pass failure there
@@ -2043,13 +2026,6 @@ func (s *janitorSession) RegistrationFaults() []publish.JanitorRegistrationFault
 		return nil
 	}
 	return s.janitor.RegistrationFaults()
-}
-
-func (s *janitorSession) WithStableCoverage(fn func() error) error {
-	if s == nil || s.janitor == nil {
-		return errors.New("nil installation janitor session")
-	}
-	return s.janitor.WithStableCoverage(fn)
 }
 
 // PendingReady is the janitor's onboarding transition signal, exposed for
