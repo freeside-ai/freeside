@@ -1105,7 +1105,7 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("restore ward backend conformance: %w", err)
 	}
 	// Every start refreshes the stored tip before anything reads it: start
-	// selection and the first admissions.
+	// selection, the start's conformance pass, and the first admissions.
 	tip, err := startupRepositoryTip(ctx, st, cfg, refTipObserver(reconciler), utcNow(), logger)
 	if err != nil {
 		return nil, err
@@ -1676,15 +1676,22 @@ func runClaudeConformance(
 	if withStableCoverage == nil {
 		return errors.New("conformance: nil janitor coverage coordinator")
 	}
+	// Each pass seeds at the tip the tip watch last stored, the base a new
+	// run would start at now, so a pass proves a workspace like the next
+	// one admission seeds.
+	base, err := storedRepositoryTip(ctx, st, cfg)
+	if err != nil {
+		return fmt.Errorf("conformance base: %w", err)
+	}
 	if err := withStableCoverage(func() error {
 		return (transportSeeder{transport: transport}).FetchBaseWorktree(
-			ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, seedDir,
+			ctx, base.Repo, base.BaseRef, base.BaseSHA, seedDir,
 		)
 	}); err != nil {
 		return fmt.Errorf("fetch exact conformance base: %w", err)
 	}
 	// The suite proves the image ward currently names, which follows writer
-	// selection, not the configured seed.
+	// selection, not the seed's base.
 	agentImage, _ := backend.ConformanceIdentity()
 	suite, err := ward.NewSuite(backend, ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
 		AgentImage:       agentImage,
@@ -1695,10 +1702,7 @@ func runClaudeConformance(
 		Seed: ward.WorkspaceSeed{
 			Mode:      ward.SeedBaseCheckout,
 			SourceDir: seedDir,
-			Base: domain.BaseRevision{
-				Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
-				BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
-			},
+			Base:      base,
 		},
 	}, ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st}))
 	if err != nil {
@@ -1713,7 +1717,7 @@ func runClaudeConformance(
 	// its line is marked or expiring) records nothing, and the adapter's last
 	// record stands across an image change: that record is scoped to the
 	// harness build its digest names, not the image.
-	return proveClaudeAdapter(ctx, st, backend, cfg, leaser)
+	return proveClaudeAdapter(ctx, st, backend, cfg, base, leaser)
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the
