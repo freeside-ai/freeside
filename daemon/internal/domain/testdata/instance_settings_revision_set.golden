@@ -1,0 +1,9 @@
+{
+  "revision": 1,
+  "section": "host_tools",
+  "value": {
+    "container": "/usr/local/bin/container"
+  },
+  "set_by": "cli:operator",
+  "set_at": "2026-11-15T12:00:00Z"
+}

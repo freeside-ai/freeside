@@ -1,0 +1,13 @@
+{
+  "repository": {
+    "repo": "acme/widgets",
+    "repository_id": 42,
+    "base_ref": "main"
+  },
+  "allowed_paths": [
+    "src/**"
+  ],
+  "approved_recipe": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "agent_image": "registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "hand_back_label": "needs-rework"
+}
