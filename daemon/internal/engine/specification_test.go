@@ -1203,7 +1203,7 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 	if !ok {
 		t.Fatal("approved implementation has no production stage")
 	}
-	implementationAdmission, admitted, err := engine.admitAttempt(
+	implementationAdmission, _, admitted, err := engine.admitAttempt(
 		t.Context(), implementationBinding, implementationStage, implementationID,
 	)
 	if err != nil || !admitted {
@@ -2363,7 +2363,7 @@ func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	if !ok {
 		t.Fatal("revised implementation has no production stage")
 	}
-	admission, admitted, err := engine.admitAttempt(t.Context(), binding, stage, implementationID)
+	admission, _, admitted, err := engine.admitAttempt(t.Context(), binding, stage, implementationID)
 	if err != nil || !admitted || admission.SpecDigest != approvedDigest {
 		t.Fatalf("admit revised implementation = %+v, admitted=%t, err=%v", admission, admitted, err)
 	}

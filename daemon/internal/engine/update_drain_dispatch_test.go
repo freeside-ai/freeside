@@ -166,7 +166,7 @@ func TestUpdateDrainBackstopsTheAttemptWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, _, err = h.engine.recordAttempt(
-		t.Context(), run.ID, run.Stages[0].ID, h.invocationID, nil, "pending", nil)
+		t.Context(), run.ID, run.Stages[0].ID, h.invocationID, nil, "pending", nil, domain.BaseRevision{})
 	if !errors.Is(err, store.ErrUpdateDrainInForce) {
 		t.Fatalf("attempt write under a drain = %v, want the drain refusal", err)
 	}

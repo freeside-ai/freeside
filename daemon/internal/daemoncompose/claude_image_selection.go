@@ -294,7 +294,7 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 // holds as unserved once the pointer has moved on, never in another image.
 // It never takes upkeep's hold, which names the task itself.
 func (s *claudeImageSelector) selectImage(
-	ctx context.Context, _ domain.InvocationID, repair *domain.ImageUpkeepRefusal,
+	ctx context.Context, _ domain.InvocationID, _ domain.BaseRevision, repair *domain.ImageUpkeepRefusal,
 ) (domain.ImageRef, error) {
 	proved, _ := s.backend.ConformanceIdentity()
 	var (

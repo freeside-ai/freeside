@@ -316,7 +316,7 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 		backend: backend, base: base, follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
 		t.Fatalf("select before upkeep is bound = %v, want unserved", err)
 	}
 	var pending *domain.ImageUpkeepHold
@@ -325,16 +325,16 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 
 	pending = &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
 	var upkeep *engine.ImageUpkeepPendingError
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.As(err, &upkeep) ||
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !errors.As(err, &upkeep) ||
 		upkeep.Hold.Pending != domain.ImageUpkeepPendingRebuild {
 		t.Fatalf("select with a rebuild pending = %v, want an image_upkeep_pending rebuild", err)
 	}
 	pending = nil
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
 		t.Fatalf("select with nothing pending = %v, want unserved", err)
 	}
 	lookupErr = errors.New("tip read failed")
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, lookupErr) ||
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !errors.Is(err, lookupErr) ||
 		errors.Is(err, engine.ErrProjectImageUnserved) || errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("select with a failed lookup = %v, want the failure itself", err)
 	}
@@ -366,12 +366,12 @@ func TestClaudeImageSelectorFollowsTheSelectedImage(t *testing.T) {
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !unproved(err) {
 		t.Fatalf("select under the stale proof = %v, want the image held as unproved", err)
 	}
 	<-started
 	// Ward already names the selected image, but its pass has not ended.
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !unproved(err) {
 		t.Fatalf("select during the pass = %v, want the image held as unproved", err)
 	}
 	if follower.passMu.TryLock() {
@@ -381,7 +381,7 @@ func TestClaudeImageSelectorFollowsTheSelectedImage(t *testing.T) {
 	if err := follower.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := selector.selectImage(t.Context(), "", nil)
+	got, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("select after the pass = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
@@ -415,26 +415,26 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 	selector.bindImageUpkeep(func(context.Context) (*domain.ImageUpkeepHold, error) {
 		return &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingMaintenanceTask, MaintenanceTaskID: &task}, nil
 	})
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, engine.ErrImageUpkeepPending) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("an ordinary attempt = %v, want it held on the maintenance task", err)
 	}
 	refusal := &domain.ImageUpkeepRefusal{ID: domain.Digest("sha256:" + strings.Repeat("7", 64)), MeasuredFromImageID: pointed.ID}
 
-	if _, err := selector.selectImage(t.Context(), "", refusal); !errors.Is(err, engine.ErrImageNotProved) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, refusal); !errors.Is(err, engine.ErrImageNotProved) {
 		t.Fatalf("repair under another image's proof = %v, want it held as unproved", err)
 	}
 	<-passed
 	if err := follower.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := selector.selectImage(t.Context(), "", refusal)
+	got, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, refusal)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("repair = (%s, %v), want the pointed-to image %s", got, err, pointed.ImageRef)
 	}
 
 	moved := *refusal
 	moved.MeasuredFromImageID = other.ID
-	if _, err := selector.selectImage(t.Context(), "", &moved); !errors.Is(err, engine.ErrProjectImageUnserved) ||
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, &moved); !errors.Is(err, engine.ErrProjectImageUnserved) ||
 		errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("repair after the pointer moved = %v, want unserved", err)
 	}
@@ -458,14 +458,14 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !unproved(err) {
 		t.Fatalf("select under the stale proof = %v, want the image held as unproved", err)
 	}
 	suite.end(errors.New("the VM did not start"))
 	follower.wg.Wait()
 
 	clock.advance(followerRetryBackoff - time.Nanosecond)
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) ||
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !unproved(err) ||
 		!strings.Contains(err.Error(), "no published conformance proof") {
 		t.Fatalf("select after the failed pass = %v, want the image held as having no published proof", err)
 	}
@@ -473,7 +473,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 		t.Fatal("the failed pass was retried before its backoff")
 	}
 	clock.advance(time.Nanosecond)
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !unproved(err) {
 		t.Fatalf("select after the backoff = %v, want the image held as unproved", err)
 	}
 	if !follower.pendingFor(pointed.ImageRef) {
@@ -482,7 +482,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 	suite.end(nil)
 	follower.wg.Wait()
 
-	got, err := selector.selectImage(t.Context(), "", nil)
+	got, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("select after the retry = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
@@ -601,7 +601,7 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if got, err := selector.selectImage(t.Context(), "", nil); err != nil || got != pointed.ImageRef {
+	if got, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); err != nil || got != pointed.ImageRef {
 		t.Fatalf("select under the proof = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
 	scheduled := make(chan error, 1)
@@ -612,7 +612,7 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 	}
 	for _, wait := range []time.Duration{0, 24 * time.Hour} {
 		clock.advance(wait)
-		if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+		if _, err := selector.selectImage(t.Context(), "", domain.BaseRevision{}, nil); !unproved(err) {
 			t.Fatalf("select %s after the failed scheduled pass = %v, want the image held as unproved", wait, err)
 		}
 		if follower.pendingFor(pointed.ImageRef) {

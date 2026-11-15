@@ -196,7 +196,8 @@ func (f *agentAdmissionFixture) recordCLISubmission(
 
 func (f *agentAdmissionFixture) admit(t *testing.T) (domain.ExecutionAdmission, bool, error) {
 	t.Helper()
-	return f.engine.admitAttempt(context.Background(), f.binding, f.stage, f.binding.invocation.ID)
+	admission, _, admitted, err := f.engine.admitAttempt(context.Background(), f.binding, f.stage, f.binding.invocation.ID)
+	return admission, admitted, err
 }
 
 // TestTaskLineAdmissionBindsTheLinesAgent is the acceptance fixture: a task

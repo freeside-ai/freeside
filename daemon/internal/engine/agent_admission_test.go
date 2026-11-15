@@ -300,7 +300,7 @@ func TestLineupAdmissionBindsTheRolesAgent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
-	admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+	admission, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 	if err != nil || !admitted {
 		t.Fatalf("admitAttempt = %t, %v", admitted, err)
 	}
@@ -369,7 +369,7 @@ func TestFlagSelectedAdmissionStillAdmitsAnAdoptedIdentity(t *testing.T) {
 	identity := f.identity.ID
 	f.engine.admission.environment.Agents = nil
 	f.engine.admission.environment.AuthIdentityID = &identity
-	admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+	admission, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 	if err != nil || !admitted {
 		t.Fatalf("admitAttempt = %t, %v", admitted, err)
 	}
@@ -441,7 +441,7 @@ func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
 				t.Fatal(err)
 			}
 			binding.invocation = invocation
-			admission, admitted, err := f.engine.admitAttempt(ctx, binding, tc.stage, tc.invocation)
+			admission, _, admitted, err := f.engine.admitAttempt(ctx, binding, tc.stage, tc.invocation)
 			if err != nil || !admitted || admission.AgentBinding == nil {
 				t.Fatalf("admitAttempt = %t, %v", admitted, err)
 			}
@@ -467,7 +467,7 @@ func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
 	}
 	binding := f.binding
 	binding.invocation = other
-	if _, admitted, err := f.engine.admitAttempt(
+	if _, _, admitted, err := f.engine.admitAttempt(
 		ctx, binding, domain.Stage{ID: "stage-other", Name: "verify"}, other.ID,
 	); admitted || !errors.Is(err, ErrAgentNotAdmissible) {
 		t.Fatalf("non-ward stage = %t, %v", admitted, err)
@@ -683,7 +683,7 @@ func TestLineupAdmissionGateHoldsEveryAttempt(t *testing.T) {
 	f := newAgentAdmissionFixture(t)
 	held := errors.New("selection is not active")
 	f.engine.admission.environment.Agents.Gate = func(context.Context) error { return held }
-	_, admitted, err := f.engine.admitAttempt(context.Background(), f.binding, f.stage, f.binding.invocation.ID)
+	_, _, admitted, err := f.engine.admitAttempt(context.Background(), f.binding, f.stage, f.binding.invocation.ID)
 	if admitted || !errors.Is(err, ErrAgentNotAdmissible) || !errors.Is(err, held) {
 		t.Fatalf("admitAttempt behind a closed gate = %t, %v", admitted, err)
 	}
@@ -729,7 +729,7 @@ func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
 	// Before the cutover: the daemon runs on -auth-identity.
 	f.engine.admission.environment.Agents = nil
 	f.engine.admission.environment.AuthIdentityID = &identity
-	legacy, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+	legacy, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 	if err != nil || !admitted || legacy.AgentBinding != nil {
 		t.Fatalf("flag-selected admitAttempt = %t, %v, binding %v", admitted, err, legacy.AgentBinding)
 	}
@@ -764,7 +764,7 @@ func TestCutoverLeavesLegacyAdmissionsAndBindsQueuedRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admission, admitted, err := f.engine.admitAttempt(
+	admission, _, admitted, err := f.engine.admitAttempt(
 		ctx, invocationBinding{run: queued, invocation: invocation}, queuedStage, invocation.ID)
 	if err != nil || !admitted || admission.AgentBinding == nil {
 		t.Fatalf("queued run admitAttempt = %t, %v", admitted, err)
@@ -833,7 +833,7 @@ func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
 			_, err = f.selection.CheckRole(ctx, f.store, domain.RoleImplementer,
 				agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt)
 			assertRefusal("CheckRole", err)
-			_, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+			_, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 			if admitted {
 				t.Fatal("an attempt was admitted on a marked generation")
 			}
@@ -871,7 +871,7 @@ func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
 			if _, err := ResolveRole(ctx, f.store, f.selection.Tree, domain.RoleImplementer); err != nil {
 				t.Fatalf("ResolveRole after re-enrollment: %v", err)
 			}
-			admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+			admission, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 			if err != nil || !admitted {
 				t.Fatalf("admitAttempt after re-enrollment = %t, %v", admitted, err)
 			}
@@ -971,7 +971,7 @@ func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAgentAdmissionFixture(t)
-	admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+	admission, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 	if err != nil || !admitted {
 		t.Fatalf("admitAttempt = %t, %v", admitted, err)
 	}

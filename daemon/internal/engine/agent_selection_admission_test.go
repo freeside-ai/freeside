@@ -207,7 +207,7 @@ func TestStageAdmissionRecordsTheSelection(t *testing.T) {
 	t.Run("the attempt's admission records the selection", func(t *testing.T) {
 		t.Parallel()
 		f := newAgentAdmissionFixture(t)
-		admission, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
+		admission, _, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 		if err != nil || !admitted {
 			t.Fatalf("admitAttempt = %t, %v", admitted, err)
 		}

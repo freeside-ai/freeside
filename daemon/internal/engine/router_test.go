@@ -230,7 +230,7 @@ func (f *agentAdmissionFixture) admitRun(t *testing.T, run domain.Run, at time.T
 		t.Fatal(err)
 	}
 	f.engine.admission.now = func() time.Time { return at }
-	admission, admitted, err := f.engine.admitAttempt(context.Background(),
+	admission, _, admitted, err := f.engine.admitAttempt(context.Background(),
 		invocationBinding{run: run, invocation: invocation},
 		domain.Stage{ID: productionStageID(run.ID), RunID: run.ID, Name: productionStageName}, invocation.ID)
 	if err == nil && !admitted {

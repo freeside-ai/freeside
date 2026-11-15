@@ -108,7 +108,8 @@ func (f inputFilesFixture) admitAs(t *testing.T, role domain.RoleName) (domain.E
 	default:
 		t.Fatalf("role %s is not a writer", role)
 	}
-	return f.engine.admitAttempt(context.Background(), binding, stage, binding.invocation.ID)
+	admission, _, admitted, err := f.engine.admitAttempt(context.Background(), binding, stage, binding.invocation.ID)
+	return admission, admitted, err
 }
 
 // Every Ward writer receives the task's attachments, in submitted order and

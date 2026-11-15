@@ -382,12 +382,13 @@ func TestFeedbackRetryAfterAHandoffConflictStartsAtTheTip(t *testing.T) {
 	assertAdmittedAtTheTip(t, retry, tip)
 }
 
-// TestReturnToAgentWithoutAHandoffConflictKeepsTheDerivedBase: a feedback
-// whose returned candidate's base differs from the derived base, with no
-// handoff_conflict authority naming it, keeps the derived base. Here the
-// operator restarted the daemon on a newer base after the run published;
-// only a sealed authority moves the feedback to its candidate's base.
-func TestReturnToAgentWithoutAHandoffConflictKeepsTheDerivedBase(t *testing.T) {
+// TestReturnToAgentWithoutAHandoffConflictStartsAtTheRunBase: a feedback
+// whose derived base has moved past the run's, with no handoff_conflict
+// authority naming a tip, starts at the run's base, the commit its returned
+// candidate was written on (#3203). Here the operator restarted the daemon
+// on a newer base after the run published; only a sealed authority moves the
+// feedback to another base.
+func TestReturnToAgentWithoutAHandoffConflictStartsAtTheRunBase(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
@@ -407,9 +408,9 @@ func TestReturnToAgentWithoutAHandoffConflictKeepsTheDerivedBase(t *testing.T) {
 		}),
 	)
 	f := p.dispatchFeedback(t, p.submitReturnToAgent(t, "return-after-restart"), feedbackCompletes)
-	if f.inputBase != written || f.admission.Base.BaseSHA != restarted {
-		t.Fatalf("feedback with input base %s admitted at %s, want the derived base %s",
-			f.inputBase, f.admission.Base.BaseSHA, restarted)
+	if f.inputBase != written || f.admission.Base.BaseSHA != written {
+		t.Fatalf("feedback with input base %s admitted at %s, want the run base %s, not the derived %s",
+			f.inputBase, f.admission.Base.BaseSHA, written, restarted)
 	}
 }
 

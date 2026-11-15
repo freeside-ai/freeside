@@ -167,12 +167,12 @@ func newBlockedImplementationFixtureCore(
 	if !ok {
 		t.Fatal("approved implementation has no production stage")
 	}
-	admission, admitted, err := engine.admitAttempt(t.Context(), binding, stage, implementationID)
+	admission, base, admitted, err := engine.admitAttempt(t.Context(), binding, stage, implementationID)
 	if err != nil || !admitted {
 		t.Fatalf("admit implementation = admitted %t, %v", admitted, err)
 	}
 	_, effective, bound, err := engine.recordAttempt(
-		t.Context(), binding.run.ID, stage.ID, implementationID, binding.purpose, entry.Status, &admission,
+		t.Context(), binding.run.ID, stage.ID, implementationID, binding.purpose, entry.Status, &admission, base,
 	)
 	if err != nil || !bound {
 		t.Fatalf("record implementation attempt = bound %t, %v", bound, err)
