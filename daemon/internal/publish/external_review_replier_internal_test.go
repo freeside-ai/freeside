@@ -36,11 +36,16 @@ type replyHarness struct {
 	commitUnknown bool
 	step          func(string)
 	beforeSend    func()
+	// tokenFor, when set, sees each token request's repository first.
+	tokenFor func(repo string)
 }
 
 type replyTestBoundary struct{ h *replyHarness }
 
-func (b replyTestBoundary) Token(ctx context.Context, _ string) (InstallationToken, error) {
+func (b replyTestBoundary) Token(ctx context.Context, repo string) (InstallationToken, error) {
+	if b.h.tokenFor != nil {
+		b.h.tokenFor(repo)
+	}
 	if b.h.step != nil {
 		b.h.step("token")
 	}

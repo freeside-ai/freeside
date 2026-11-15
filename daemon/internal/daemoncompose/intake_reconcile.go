@@ -12,12 +12,14 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/intake"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -115,6 +117,9 @@ type intakeReconciler struct {
 	evictLabel func(repo, label string)
 	initiators []IntakeInitiator
 	now        func() time.Time
+	// repos runs each repository's initiators apart, so one repository's
+	// stalled GitHub call holds up only its own intake (#3215).
+	repos keyedrun.Group[string]
 }
 
 // Run drives the loop: an immediate startup pass, then one pass per interval.
@@ -130,7 +135,12 @@ func (r *intakeReconciler) Run(ctx context.Context, interval time.Duration, logg
 	}
 	logger = logger.With("subsystem", "label-intake")
 	logger.Info("label-intake reconciler started", "interval", interval, "initiators", len(r.initiators))
-	r.reconcile(ctx, logger)
+	// Each pass runs on its own goroutine, so a pass waiting on a stalled
+	// repository never delays the next tick; that pass skips the busy
+	// repository.
+	var passes sync.WaitGroup
+	defer passes.Wait()
+	passes.Go(func() { r.reconcile(ctx, logger) })
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	for {
@@ -140,16 +150,27 @@ func (r *intakeReconciler) Run(ctx context.Context, interval time.Duration, logg
 			return nil
 		case <-timer.C:
 		}
-		r.reconcile(ctx, logger)
+		passes.Go(func() { r.reconcile(ctx, logger) })
 		timer.Reset(interval)
 	}
 }
 
+// reconcile drives each repository's initiators on its own goroutine and
+// returns once the repositories it started finish. A repository whose
+// previous run has not returned is skipped.
 func (r *intakeReconciler) reconcile(ctx context.Context, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	for _, init := range r.initiators {
+	parts := keyedrun.Partition(r.initiators, func(init IntakeInitiator) string { return init.Repo })
+	_ = keyedrun.Run(&r.repos, parts, func(initiators []IntakeInitiator) error {
+		r.reconcileRepo(ctx, initiators, logger)
+		return nil
+	})
+}
+
+func (r *intakeReconciler) reconcileRepo(ctx context.Context, initiators []IntakeInitiator, logger *slog.Logger) {
+	for _, init := range initiators {
 		if ctx.Err() != nil {
 			return
 		}

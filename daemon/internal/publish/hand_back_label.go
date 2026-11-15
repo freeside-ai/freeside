@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -61,7 +62,9 @@ type HandBackLabelRemover struct {
 	store *store.Store
 	forge *forge
 	label string
-	mu    sync.Mutex
+	// projects runs each project's removals apart, so one repository's
+	// stalled GitHub call holds up only its own pull requests (#3215).
+	projects keyedrun.Group[domain.ProjectID]
 }
 
 // NewHandBackLabelRemover wires the remover. tokens must mint only
@@ -88,10 +91,16 @@ func (r *HandBackLabelRemover) Run(ctx context.Context, interval time.Duration, 
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// Each pass runs on its own goroutine, so a pass waiting on a stalled
+	// project never delays the next tick; that pass skips the busy project.
+	var passes sync.WaitGroup
+	defer passes.Wait()
 	for {
-		if err := r.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
-			report(err)
-		}
+		passes.Go(func() {
+			if err := r.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
+				report(err)
+			}
+		})
 		select {
 		case <-ctx.Done():
 			return nil
@@ -101,11 +110,11 @@ func (r *HandBackLabelRemover) Run(ctx context.Context, interval time.Duration, 
 }
 
 // Pass removes the label from every pull request a hand-back cycle made
-// ready since the last pass. Errors crossing this boundary are fixed text:
-// transports and token sources may echo credentials.
+// ready since the last pass, one goroutine per project, and returns once the
+// projects it started finish. A project whose previous run has not returned
+// is skipped. Errors crossing this boundary are fixed text: transports and
+// token sources may echo credentials.
 func (r *HandBackLabelRemover) Pass(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err := r.pass(ctx); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -120,16 +129,28 @@ func (r *HandBackLabelRemover) pass(ctx context.Context) error {
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) (err error) { runs, err = tx.ListRuns(ctx); return err }); err != nil {
 		return err
 	}
-	var errs []error
-	for _, snapshot := range runs {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	return r.removeEach(ctx, runs, r.remove)
+}
+
+// removeEach calls remove for each run, one goroutine per project.
+func (r *HandBackLabelRemover) removeEach(
+	ctx context.Context, runs []store.Snapshotted[domain.Run], remove func(context.Context, domain.RunID) error,
+) error {
+	parts := keyedrun.Partition(runs, func(s store.Snapshotted[domain.Run]) domain.ProjectID { return s.Value.ProjectID })
+	err := keyedrun.Run(&r.projects, parts, func(runs []store.Snapshotted[domain.Run]) error {
+		var errs []error
+		for _, run := range runs {
+			if ctx.Err() != nil {
+				break
+			}
+			errs = append(errs, remove(ctx, run.Value.ID))
 		}
-		if err := r.remove(ctx, snapshot.Value.ID); err != nil {
-			errs = append(errs, err)
-		}
+		return errors.Join(errs...)
+	})
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
-	return errors.Join(errs...)
+	return err
 }
 
 func (r *HandBackLabelRemover) remove(ctx context.Context, runID domain.RunID) error {

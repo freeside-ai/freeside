@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -169,12 +170,17 @@ func (r *ExternalReviewReplier) priorAmbiguousReply(ctx context.Context, i exter
 }
 
 // ExternalReviewReplier publishes recorded dispositions and reconciles
-// uncertain sends. One daemon owns the store; mu also serializes local passes.
+// uncertain sends. One daemon owns the store.
 type ExternalReviewReplier struct {
-	store       *store.Store
-	forge       *forge
-	identity    FollowUpFilingIdentitySource
-	now         func() time.Time
+	store    *store.Store
+	forge    *forge
+	identity FollowUpFilingIdentitySource
+	now      func() time.Time
+	// projects runs each project's dispositions apart, so one repository's
+	// stalled GitHub call holds up only its own replies (#3215). An intent
+	// belongs to one project, so only that project's run touches its keys.
+	projects keyedrun.Group[domain.ProjectID]
+	// mu guards only the three maps below and is never held across a call.
 	mu          sync.Mutex
 	settleAfter map[string]time.Time
 	attempts    map[string]int
@@ -200,10 +206,16 @@ func (r *ExternalReviewReplier) Run(ctx context.Context, interval time.Duration,
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// Each pass runs on its own goroutine, so a pass waiting on a stalled
+	// project never delays the next tick; that pass skips the busy project.
+	var passes sync.WaitGroup
+	defer passes.Wait()
 	for {
-		if err := r.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
-			report(err)
-		}
+		passes.Go(func() {
+			if err := r.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
+				report(err)
+			}
+		})
 		select {
 		case <-ctx.Done():
 			return nil
@@ -212,11 +224,12 @@ func (r *ExternalReviewReplier) Run(ctx context.Context, interval time.Duration,
 	}
 }
 
-// Pass reconstructs source authority every time. Errors crossing this public
-// boundary are fixed text: transports and token sources may echo credentials.
+// Pass reconstructs source authority every time. It drives each project's
+// dispositions on its own goroutine and returns once the projects it started
+// finish; a project whose previous run has not returned is skipped. Errors
+// crossing this public boundary are fixed text: transports and token sources
+// may echo credentials.
 func (r *ExternalReviewReplier) Pass(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err := r.pass(ctx); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -231,6 +244,18 @@ func (r *ExternalReviewReplier) pass(ctx context.Context) error {
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error { var err error; runs, err = tx.ListRuns(ctx); return err }); err != nil {
 		return err
 	}
+	parts := keyedrun.Partition(runs, func(s store.Snapshotted[domain.Run]) domain.ProjectID { return s.Value.ProjectID })
+	err := keyedrun.Run(&r.projects, parts, func(runs []store.Snapshotted[domain.Run]) error {
+		return r.driveRuns(ctx, runs)
+	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+// driveRuns drives one project's runs in order.
+func (r *ExternalReviewReplier) driveRuns(ctx context.Context, runs []store.Snapshotted[domain.Run]) error {
 	var errs []error
 	for _, snapshot := range runs {
 		run := snapshot.Value
@@ -532,7 +557,10 @@ func (r *ExternalReviewReplier) comments(ctx context.Context, i externalReplyInt
 }
 
 func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d domain.ExternalFindingDisposition, source externalReplySource, i externalReplyIntent) error {
-	if r.now().Before(r.retryAfter[i.key()]) {
+	r.mu.Lock()
+	retryAfter := r.retryAfter[i.key()]
+	r.mu.Unlock()
+	if r.now().Before(retryAfter) {
 		return nil
 	}
 	thread, err := parseExternalReplyThread(i.Thread)
@@ -595,8 +623,11 @@ func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d doma
 	if err != nil || !claimed {
 		return err
 	}
+	r.mu.Lock()
 	r.settleAfter[i.key()] = r.now().Add(externalReplySettle)
 	r.attempts[i.key()]++
+	attempts := r.attempts[i.key()]
+	r.mu.Unlock()
 	result, sendErr := r.forge.sendReviewReply(req, repo, i.PRNumber, thread.root)
 	switch classifyForgeCreate(result.Status, result.Header, result.Comment != nil, sendErr) {
 	case domain.FollowUpFilingResponseSuccess:
@@ -607,10 +638,12 @@ func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d doma
 	case domain.FollowUpFilingResponseDefiniteRejection:
 		return r.finish(ctx, run, d, externalReplyRefused, 0, "GitHub rejected the reply. It will not be retried.")
 	case domain.FollowUpFilingResponseTransientRejection:
-		if r.attempts[i.key()] >= externalReplyAttemptBound {
+		if attempts >= externalReplyAttemptBound {
 			return r.finish(ctx, run, d, externalReplyRefused, 0, "GitHub repeatedly rate-limited the reply. It will not be retried.")
 		}
+		r.mu.Lock()
 		r.retryAfter[i.key()] = r.now().Add(time.Minute)
+		r.mu.Unlock()
 		return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error { return tx.ReleaseOutboxDispatch(ctx, i.key()) })
 	case domain.FollowUpFilingResponseUnproven:
 	}
@@ -618,11 +651,15 @@ func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d doma
 }
 
 func (r *ExternalReviewReplier) settle(ctx context.Context, run domain.Run, d domain.ExternalFindingDisposition, i externalReplyIntent) error {
+	r.mu.Lock()
 	deadline, ok := r.settleAfter[i.key()]
 	if !ok {
 		// A restart cannot know when a pending row was last dispatched.
 		// Wait a full interval from first observation, not from intent age.
 		r.settleAfter[i.key()] = r.now().Add(externalReplySettle)
+	}
+	r.mu.Unlock()
+	if !ok {
 		return nil
 	}
 	if r.now().Before(deadline) {
