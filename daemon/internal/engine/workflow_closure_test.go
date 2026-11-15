@@ -119,8 +119,13 @@ func TestWorkflowClosureDuringDiscussionPreparationDoesNotInventFallbackReply(t 
 	if _, err := e.produceAttentionDiscussionReply(t.Context(), *discussion); !errors.Is(err, store.ErrTaskWorkflowClosed) {
 		t.Fatalf("discussion dispatch refusal = %v", err)
 	}
-	if _, err := e.reconcileAttentionDiscussions(t.Context()); err != nil {
-		t.Fatal(err)
+	// The first pass starts the call off the pass; the second takes its
+	// refusal (#3215).
+	for range 2 {
+		if _, err := e.reconcileAttentionDiscussions(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		e.waitOffPass()
 	}
 	if got := len(driver.Requests()); got != 0 {
 		t.Fatalf("closed discussion dispatched %d calls", got)
@@ -181,19 +186,25 @@ func TestWorkflowClosureAfterDiscussionClaimAllowsPrivatePreparation(t *testing.
 	}
 	e := f.engine(t, true)
 	armed = true
-	done := make(chan error, 1)
+	// The pass starts the reply off the pass and returns; the next pass
+	// takes it (#3215).
+	if _, err := e.reconcileAttentionDiscussions(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	offPass := make(chan struct{})
 	go func() {
-		_, err := e.reconcileAttentionDiscussions(t.Context())
-		done <- err
+		e.waitOffPass()
+		close(offPass)
 	}()
 	select {
 	case <-entered:
-	case err := <-done:
-		t.Fatalf("discussion did not reach role preparation: %v", err)
+	case <-offPass:
+		t.Fatal("discussion did not reach role preparation")
 	}
 	closeWorkflowThroughEngineForTest(t, e, "run-discussion")
 	close(release)
-	if err := <-done; err != nil {
+	<-offPass
+	if _, err := e.reconcileAttentionDiscussions(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(driver.Requests()); got != 1 {
@@ -454,8 +465,15 @@ func TestWorkflowClosureRetainsInflightDiscussionWithoutDecisionAdvance(t *testi
 			f = newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, driver)
 			f.submit(t)
 			e := f.engine(t, true)
-			if result, err := e.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
-				t.Fatalf("late reply = %+v, %v", result, err)
+			// The reply is answered and accepted off the pass (#3215). Its
+			// outcome is read here, not through another pass, which would
+			// also commit the pending cleanup this case checks is absent.
+			if _, err := e.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			e.waitOffPass()
+			if accepted, err := e.discussionOutcomes.collect(); err != nil || accepted != 1 {
+				t.Fatalf("late reply accepted = %d, %v", accepted, err)
 			}
 			if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 				item, err := tx.GetAttentionItem(t.Context(), f.item.ID)

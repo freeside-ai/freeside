@@ -186,8 +186,17 @@ func TestSpecificationWriteRefusalRecordsHold(t *testing.T) {
 		accept func(*Engine, domain.Run, specificationRequest, specify.Policy) (bool, error)
 	}{
 		{"research", func(e *Engine, run domain.Run, request specificationRequest, settings specify.Policy) (bool, error) {
-			return e.acceptResearchRequests(t.Context(), run, request,
-				[]specify.FetchRequest{{URL: "https://docs.example/guide", Purpose: "Read the guide."}}, settings)
+			accept := func() (bool, error) {
+				return e.acceptResearchRequests(t.Context(), run, request,
+					[]specify.FetchRequest{{URL: "https://docs.example/guide", Purpose: "Read the guide."}}, settings)
+			}
+			// The first call starts the fetch off the pass; the second
+			// takes its result and makes the refused write (#3215).
+			if accepted, err := accept(); err != nil || accepted {
+				return accepted, err
+			}
+			e.waitOffPass()
+			return accept()
 		}},
 		{"specification", func(e *Engine, run domain.Run, request specificationRequest, settings specify.Policy) (bool, error) {
 			return e.acceptSpecification(t.Context(), run, request, specify.Specification{

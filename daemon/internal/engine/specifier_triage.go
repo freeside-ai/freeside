@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -31,6 +32,12 @@ const triageSourceUnavailable = "source_unavailable"
 // triager line each escalate with their outcome, so an unavailable triager
 // never puts a complex task on the smaller model. Only a failed store read or
 // write returns an error, which fails the admission for a later retry.
+//
+// The call runs outside the pass, one per task (#3215): while it runs, and
+// on the pass that starts it, triageSpecifier returns errSpecifierTriagePending,
+// which holds this invocation and lets the pass go on. The call records the
+// triage, and the next pass finds the record and admits. A failed record
+// write is logged and the next pass calls again.
 func (e *Engine) triageSpecifier(
 	ctx context.Context, selection AgentSelection, runID domain.RunID, now func() time.Time,
 ) error {
@@ -71,6 +78,31 @@ func (e *Engine) triageSpecifier(
 	// resolves against the enrollment's catalog is admission's to decide,
 	// which refuses it rather than leave a complex task on the smaller model.
 	counterpartSelection := counterpart.TaskLineSelection()
+	e.triages.Go(run.TaskID, func() {
+		// A run for this task that finished after the check above may have
+		// recorded the triage already, so check again before calling.
+		needed, err := e.specifierTriageNeeded(ctx, run.TaskID)
+		if err == nil && needed {
+			err = e.recordSpecifierTriage(ctx, run, lineup, counterpartSelection, now)
+		}
+		if err != nil && ctx.Err() == nil {
+			e.triageOutcomes.record(false, fmt.Errorf("specifier triage for task %s: %w", run.TaskID, err))
+		}
+	})
+	return errSpecifierTriagePending
+}
+
+// errSpecifierTriagePending holds a specifier's admission while its task's
+// triage call runs outside the pass.
+var errSpecifierTriagePending = errors.New("specifier triage in progress")
+
+// recordSpecifierTriage calls the triager and records its outcome. A record
+// or specifier line written meanwhile wins (RecordSpecifierTriage refuses a
+// second), and the next admission reads it.
+func (e *Engine) recordSpecifierTriage(
+	ctx context.Context, run domain.Run, lineup domain.Lineup,
+	counterpartSelection domain.TaskLineSelection, now func() time.Time,
+) error {
 	record, err := e.callTriager(ctx, run, lineup)
 	if err != nil {
 		return err

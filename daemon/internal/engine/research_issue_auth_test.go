@@ -188,7 +188,7 @@ func TestSpecificationResearchReadsAPrivateProjectIssue(t *testing.T) {
 	// The third request names a repository the token is not for, so its
 	// unauthenticated 404 is recorded as research and the run goes on.
 	for pass := 1; pass <= 3; pass++ {
-		if _, err := engine.Reconcile(t.Context()); err != nil {
+		if _, err := reconcileSettled(t, engine); err != nil {
 			t.Fatalf("reconcile pass %d: %v", pass, err)
 		}
 	}
@@ -269,7 +269,7 @@ func TestSpecificationResearchReadsAPrivateProjectPullRequest(t *testing.T) {
 	f.submit(t)
 	engine := f.newEngine(t, driver)
 	for pass := 1; pass <= 2; pass++ {
-		if _, err := engine.Reconcile(t.Context()); err != nil {
+		if _, err := reconcileSettled(t, engine); err != nil {
 			t.Fatalf("reconcile pass %d: %v", pass, err)
 		}
 	}
@@ -333,7 +333,7 @@ func TestSpecificationResearchHandsBackWhyAPrivateIssueFailed(t *testing.T) {
 			f.submit(t)
 			engine := f.newEngine(t, capturing)
 			for pass := 1; pass <= 2; pass++ {
-				if _, err := engine.Reconcile(t.Context()); err != nil {
+				if _, err := reconcileSettled(t, engine); err != nil {
 					t.Fatalf("reconcile pass %d: %v", pass, err)
 				}
 			}
@@ -378,7 +378,7 @@ func TestSpecificationResearchFailuresStayWithinTheIterationBudget(t *testing.T)
 	f.submit(t)
 	engine := f.newEngine(t, driver)
 	for pass := 1; pass <= 2; pass++ {
-		if _, err := engine.Reconcile(t.Context()); err != nil {
+		if _, err := reconcileSettled(t, engine); err != nil {
 			t.Fatalf("reconcile pass %d: %v", pass, err)
 		}
 	}

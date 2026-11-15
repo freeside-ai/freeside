@@ -2845,6 +2845,14 @@ func researchScope(ctx context.Context, tx *store.ReadTx, projectID domain.Proje
 	return specify.ManagedRepository{Repo: project.Repo, RepositoryID: project.RepositoryID}, nil
 }
 
+// acceptResearchRequests fetches the research a specifier asked for and
+// starts its next iteration. The fetches run outside the pass, one loop per
+// specifier invocation (#3215): the pass that starts them, and any pass while
+// they run, returns not accepted, and the next pass after they finish
+// accepts. The acceptance write's own checks are the re-check of what the
+// pass knew when the fetches began. A restart forgets a finished loop; the
+// next loop finds each registered fetch by its artifact id and fetches
+// nothing again.
 func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, request specificationRequest, requests []specify.FetchRequest, settings specify.Policy) (bool, error) {
 	var scope specify.ManagedRepository
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -2854,19 +2862,28 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 	}); err != nil {
 		return false, err
 	}
-	ids := make([]domain.ArtifactID, 0, len(requests))
-	for index, fetchRequest := range requests {
-		// A fetch that fails comes back to the specifier as research naming
-		// the cause; only a refusal or limit below fails the run.
-		artifact, err := e.specification.fetcher.FetchOrRecordFailure(ctx, request.InvocationID, index+1, fetchRequest, scope,
-			settings.ResearchAllowlist, settings.ResearchMaxBytes)
-		if err != nil {
-			if specify.IsResearchRequestFailure(err) {
-				return false, e.recordSpecificationInterpretationFailure(ctx, run, request, researchFailureCause(err), err.Error())
+	ids, fetched, err := e.research.take(ctx, request.InvocationID, func(ctx context.Context) ([]domain.ArtifactID, error) {
+		ids := make([]domain.ArtifactID, 0, len(requests))
+		for index, fetchRequest := range requests {
+			artifact, err := e.specification.fetcher.FetchOrRecordFailure(ctx, request.InvocationID, index+1, fetchRequest, scope,
+				settings.ResearchAllowlist, settings.ResearchMaxBytes)
+			if err != nil {
+				return nil, err
 			}
-			return false, err
+			ids = append(ids, artifact.Artifact.ID)
 		}
-		ids = append(ids, artifact.Artifact.ID)
+		return ids, nil
+	})
+	if !fetched {
+		return false, nil
+	}
+	if err != nil {
+		// A fetch that fails comes back to the specifier as research naming
+		// the cause; only a refusal or limit fails the run.
+		if specify.IsResearchRequestFailure(err) {
+			return false, e.recordSpecificationInterpretationFailure(ctx, run, request, researchFailureCause(err), err.Error())
+		}
+		return false, err
 	}
 	// Rebuild the vector by role instead of appending to the persisted order.
 	// Revision feedback and the current prior specification trail all
