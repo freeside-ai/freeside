@@ -14,7 +14,14 @@ type Run struct {
 	AttemptNumber int        `json:"attempt_number,omitempty"`
 	AttemptReason string     `json:"attempt_reason,omitempty"`
 	ParentRunID   RunID      `json:"parent_run_id,omitempty"`
-	Stages        []Stage    `json:"stages"`
+	// Base is the commit the run's writers start from, recorded once by the
+	// transaction that records the run's first admission and never changed
+	// after (ValidateRunTransition). It is nil until then, so a run held
+	// before its first admission follows the project's observed tip. A run
+	// stored before #3203 has none even when admitted; its next admission
+	// adopts the base of its earliest recorded admission.
+	Base   *BaseRevision `json:"base"`
+	Stages []Stage       `json:"stages"`
 }
 
 // Validate reports whether the run is well-formed. A run is project-scoped and
@@ -36,6 +43,11 @@ func (r Run) Validate() error {
 	}
 	if err := validateProductionLineage(r.CampaignID, r.AttemptNumber, r.AttemptReason, r.ParentRunID); err != nil {
 		return fmt.Errorf("run %s: %w", r.ID, err)
+	}
+	if r.Base != nil {
+		if err := r.Base.Validate(); err != nil {
+			return fmt.Errorf("run %s base: %w", r.ID, err)
+		}
 	}
 	seenStages := make(map[StageID]struct{}, len(r.Stages))
 	// invocation_id is the run-wide reconciliation key (plan §5.3: one committed

@@ -44,6 +44,9 @@ func TestRunValidate(t *testing.T) {
 		{"attempt empty purpose", func(r *domain.Run) {
 			r.Stages[0].Attempts[0].Purpose = new(domain.AttemptPurpose(""))
 		}, domain.ErrInvalidAttemptPurpose},
+		{"base without commit", func(r *domain.Run) {
+			r.Base = &domain.BaseRevision{Repo: "o/r", RepositoryID: 1, BaseRef: "main"}
+		}, domain.ErrEmptyField},
 		{"duplicate stage id", func(r *domain.Run) {
 			r.Stages = append(r.Stages, r.Stages[0])
 		}, domain.ErrDuplicate},

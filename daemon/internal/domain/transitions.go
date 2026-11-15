@@ -33,7 +33,9 @@ import (
 // ValidateRunTransition reports whether updated is a legal successor to the
 // stored run old. Project, approved spec, and resolved policy are fixed at run
 // creation (plan §5.3 binds a run to its spec and policy digests), and
-// stages/attempts are recorded history: an update may only append.
+// stages/attempts are recorded history: an update may only append. The base
+// is set once: an update may record it on a run that has none, and never
+// changes or clears a recorded one.
 func ValidateRunTransition(old, updated Run) error {
 	if updated.ID != old.ID {
 		return fmt.Errorf("run %s: identity would change from %s: %w", updated.ID, old.ID, ErrImmutableTransition)
@@ -43,6 +45,9 @@ func ValidateRunTransition(old, updated Run) error {
 		updated.AttemptNumber != old.AttemptNumber || updated.AttemptReason != old.AttemptReason ||
 		updated.ParentRunID != old.ParentRunID || !stagesExtend(old.Stages, updated.Stages) {
 		return fmt.Errorf("run %s: fixed bindings or recorded history would change: %w", updated.ID, ErrImmutableTransition)
+	}
+	if old.Base != nil && (updated.Base == nil || *updated.Base != *old.Base) {
+		return fmt.Errorf("run %s: recorded base would change: %w", updated.ID, ErrImmutableTransition)
 	}
 	return nil
 }
