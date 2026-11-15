@@ -123,7 +123,7 @@ func TriageFallbackOutcome(reason FallbackReason) domain.TriageOutcome {
 	case FallbackRoleOff, FallbackRoleSourceAbsent:
 		return domain.TriageOutcomeNoTriagerLine
 	case FallbackFieldPolicyRejected, FallbackFieldNotUTF8, FallbackFieldAllowlistIncomplete,
-		FallbackRoleUnbound, FallbackInputTooLarge, FallbackDriverAbsent, FallbackCallInFlight,
+		FallbackRoleUnbound, FallbackInputTooLarge, FallbackDriverAbsent,
 		FallbackLedgerUnavailable, FallbackDriverFailed, FallbackDeadlineExceeded,
 		FallbackCallRecordPersistenceFailed, FallbackAuditPersistenceFailed:
 		return domain.TriageOutcomeCallFailed

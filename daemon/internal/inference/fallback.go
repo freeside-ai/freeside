@@ -12,7 +12,6 @@ const (
 	FallbackRoleUnbound                 FallbackReason = "role_unbound"
 	FallbackInputTooLarge               FallbackReason = "input_too_large"
 	FallbackDriverAbsent                FallbackReason = "driver_absent"
-	FallbackCallInFlight                FallbackReason = "call_in_flight"
 	FallbackBudgetExhausted             FallbackReason = "budget_exhausted"
 	FallbackLedgerUnavailable           FallbackReason = "ledger_unavailable"
 	FallbackDriverFailed                FallbackReason = "driver_failed"
@@ -26,7 +25,7 @@ const (
 var AllFallbackReasons = []FallbackReason{
 	FallbackFieldPolicyRejected, FallbackFieldNotUTF8, FallbackFieldAllowlistIncomplete,
 	FallbackRoleSourceAbsent, FallbackRoleOff, FallbackRoleUnbound, FallbackInputTooLarge,
-	FallbackDriverAbsent, FallbackCallInFlight, FallbackBudgetExhausted, FallbackLedgerUnavailable,
+	FallbackDriverAbsent, FallbackBudgetExhausted, FallbackLedgerUnavailable,
 	FallbackDriverFailed, FallbackDeadlineExceeded, FallbackResponseExceededContract,
 	FallbackCallRecordPersistenceFailed, FallbackOutputSchemaRejected, FallbackAuditPersistenceFailed,
 }
@@ -35,7 +34,7 @@ func (r FallbackReason) valid() bool {
 	switch r {
 	case FallbackFieldPolicyRejected, FallbackFieldNotUTF8, FallbackFieldAllowlistIncomplete,
 		FallbackRoleSourceAbsent, FallbackRoleOff, FallbackRoleUnbound, FallbackInputTooLarge,
-		FallbackDriverAbsent, FallbackCallInFlight, FallbackBudgetExhausted, FallbackLedgerUnavailable,
+		FallbackDriverAbsent, FallbackBudgetExhausted, FallbackLedgerUnavailable,
 		FallbackDriverFailed, FallbackDeadlineExceeded, FallbackResponseExceededContract,
 		FallbackCallRecordPersistenceFailed, FallbackOutputSchemaRejected, FallbackAuditPersistenceFailed:
 		return true

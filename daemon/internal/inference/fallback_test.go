@@ -81,16 +81,6 @@ func TestCallFallbackCausesAndLogs(t *testing.T) {
 					fields["reason"] = field
 				case inference.FallbackDriverAbsent:
 					driver = nil
-				case inference.FallbackCallInFlight:
-					release := make(chan struct{})
-					defer close(release)
-					driver = stuckDriver{release: release}
-					beforeCall = func(c *inference.Client) {
-						first, err := c.Call(t.Context(), site.ID, "project", "run", fields)
-						if err != nil || first.Reason != inference.FallbackDeadlineExceeded {
-							t.Fatalf("first call: %+v, %v", first, err)
-						}
-					}
 				case inference.FallbackBudgetExhausted:
 					beforeCall = func(c *inference.Client) {
 						first, err := c.Call(t.Context(), site.ID, "project", "run", fields)

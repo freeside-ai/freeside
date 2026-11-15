@@ -613,7 +613,11 @@ func TestClientEnforcesHardTimeoutWhenDriverIgnoresContext(t *testing.T) {
 	if !decision.Fallback || time.Since(started) > time.Second {
 		t.Fatalf("hard-timeout decision = %#v after %s", decision, time.Since(started))
 	}
-	second, err := client.ClassifyFinding(context.Background(), "project-1", "run-1", finding("high"), 2)
+	// The orphaned provider call keeps its place, so the next call waits
+	// for it and stops when its own context ends.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	second, err := client.ClassifyFinding(ctx, "project-1", "run-1", finding("high"), 2)
 	if err != nil || !second.Fallback {
 		t.Fatalf("orphan-bounded decision = %#v, %v", second, err)
 	}

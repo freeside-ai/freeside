@@ -71,15 +71,6 @@ func (e *Engine) triageSpecifier(
 	// resolves against the enrollment's catalog is admission's to decide,
 	// which refuses it rather than leave a complex task on the smaller model.
 	counterpartSelection := counterpart.TaskLineSelection()
-	// One triage call at a time: the inference client refuses a second call
-	// at a site while one is in flight, which would escalate a task for no
-	// reason of its own. The check repeats under the lock, so a task another
-	// admission triaged meanwhile is not triaged twice.
-	e.triageMu.Lock()
-	defer e.triageMu.Unlock()
-	if needed, err := e.specifierTriageNeeded(ctx, run.TaskID); err != nil || !needed {
-		return err
-	}
 	record, err := e.callTriager(ctx, run, lineup)
 	if err != nil {
 		return err

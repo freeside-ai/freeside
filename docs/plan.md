@@ -1319,9 +1319,7 @@ one on its usage pool. The records that carry them, `AuthIdentity`,
    starting at one, so calls can exceed a pool's parallel limit by at most
    that many requests per site that draws on it. A call to a busy site
    waits its turn and never returns the site's fallback because another
-   task is calling (revision 125; not built yet, Stage 2 of tracker #3201).
-   Until Stage 2 lands, each site runs at most one call at a time and a
-   second call gets the site's fallback. The operator records each pool's
+   task is calling (revision 125). The operator records each pool's
    limits. Each
    daemon instance counts only its own slots, so instances that draw on one
    pool (`prod` and `dev` on one subscription) split its limit between the

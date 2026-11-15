@@ -596,6 +596,54 @@ func TestJudgmentLinesLaunchTheirOwnModelAndEffort(t *testing.T) {
 	})
 }
 
+// TestJudgmentRolesNameTheirPoolAndItsCallLimit: a resolved role carries the
+// pool its enrollment's identity draws on and that pool's call limit as the
+// store holds it at the call, so a new limit applies to the next call.
+func TestJudgmentRolesNameTheirPoolAndItsCallLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args(adoptEscalatedArgs()...))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	f.withStore(t, func(st *store.Store) {
+		roles := daemoncompose.JudgmentRoles{
+			Store: st, Tree: tree, Revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+			Runtime:     daemoncompose.JudgmentRuntime{Driver: inferencefake.New()},
+			Credentials: fixedJudgmentCredentials(t),
+		}
+		call, err := roles.ResolveRole(ctx, domain.RoleFindingClassifier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pool domain.UsagePool
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			identity, err := tx.GetAuthIdentity(ctx, call.Enrollment.AuthIdentityID)
+			if err != nil {
+				return err
+			}
+			pool, err = tx.GetUsagePool(ctx, identity.EffectiveUsagePool())
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if call.UsagePool != pool.ID || call.MaxCallsPerSite != 1 {
+			t.Fatalf("role call names pool %q at %d calls, want %q at 1", call.UsagePool, call.MaxCallsPerSite, pool.ID)
+		}
+		pool.MaxCallsPerSite = 3
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordUsagePool(ctx, pool, time.Now().UTC())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if call, err = roles.ResolveRole(ctx, domain.RoleFindingClassifier); err != nil || call.MaxCallsPerSite != 3 {
+			t.Fatalf("after the new limit: %d calls, %v; want 3", call.MaxCallsPerSite, err)
+		}
+	})
+}
+
 // An item never outlives its reason across a restart: a daemon started after
 // a partial fix replaces the item with one that says what is still wrong. In
 // one process a changed reason is not rewritten, because some reasons name

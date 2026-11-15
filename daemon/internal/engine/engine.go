@@ -70,8 +70,6 @@ type Engine struct {
 	taskNamesActive     map[domain.TaskID]struct{}
 	taskNamesFullWarned bool
 
-	// triageMu serializes specifier triage calls (triageSpecifier).
-	triageMu sync.Mutex
 	// startedRoots holds the root implementation invocations this process
 	// started (domain.InvocationID keys). Their loss is a live failure, not
 	// one a restart caused, so it keeps its card (daemon_rerun.go).

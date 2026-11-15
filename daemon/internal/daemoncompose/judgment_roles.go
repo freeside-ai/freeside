@@ -149,6 +149,16 @@ func (j JudgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 	if err != nil {
 		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
 	}
+	// The pool's call limit is read at every call, so set-pool-limit applies
+	// to the next call without a restart.
+	var pool domain.UsagePool
+	if err := j.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pool, err = tx.GetUsagePool(ctx, agent.Identity.EffectiveUsagePool())
+		return err
+	}); err != nil {
+		return inference.RoleCall{}, fmt.Errorf("role %s: %w", role, err)
+	}
 	call := inference.RoleCall{
 		Line: agent.Line, LineupRevision: j.Revision,
 		Selection: agent.Selection, Route: agent.Route, Adapter: agent.Adapter,
@@ -156,6 +166,7 @@ func (j JudgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 		LaunchProof: judgmentCallAuditFor(agent.Adapter.Digest), Prompt: prompt,
 		Driver: j.Runtime.Driver, Credential: credential,
 		CredentialSource: inference.CredentialSourceEnrollment,
+		UsagePool:        pool.ID, MaxCallsPerSite: pool.MaxCallsPerSite,
 	}
 	if role.JudgesWrittenWork() {
 		if call.WriterLineage, err = WriterLineages(ctx, j.Store, j.Tree); err != nil {
