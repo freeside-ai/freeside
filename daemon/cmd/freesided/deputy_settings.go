@@ -517,6 +517,27 @@ func (s *loadedDeputySettings) runSettings(containerBin string) daemoncompose.Ru
 	}
 }
 
+// keysNotImported are the file's keys that runSettings leaves out, so
+// settings import can name what the records will not hold. Optional keys
+// are named only when the file sets them.
+func (s *loadedDeputySettings) keysNotImported() []string {
+	keys := []string{
+		"version", "listen", "repository.base_sha", "repository.checkout",
+		"agent_tree.auth_identity", "agent_tree.review_auth_identity", "agent_tree.cost_owner",
+		"agent_tree.review_cost_owner", "agent_tree.claude_account", "agent_tree.terms_basis_date",
+		"agent_tree.pricing_revision", "agent_tree.offer_not_after", "agent_tree.auth_volume",
+	}
+	if s.AgentTree.ReviewHarness != "" {
+		keys = append(keys, "agent_tree.review_harness")
+	}
+	if s.AgentTree.SecondWriter != nil {
+		keys = append(keys, "agent_tree.second_writer")
+	}
+	keys = append(keys, "writers", "review.model", "review.effort", "judgment.model", "judgment.effort",
+		"prod", "memory_budget_mib")
+	return keys
+}
+
 // rebuildInputs are the daemon's rebuild flags, which it takes only with a
 // base ref.
 func (s *loadedDeputySettings) rebuildInputs() projectimage.BuildInputs {

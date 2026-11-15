@@ -7,10 +7,14 @@ import (
 	"errors"
 	"os/user"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -149,5 +153,161 @@ func TestSettingsSetAndShowUseTheRunningDaemonStore(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSettingsImportYieldsTheFileSettings imports the deputy fixture, with
+// and without every optional key, and loads the records back: the loader
+// yields the settings the file maps to, and both compose the same Claude
+// driver configuration.
+func TestSettingsImportYieldsTheFileSettings(t *testing.T) {
+	t.Parallel()
+	for name, fixture := range map[string]func(*testing.T) map[string]any{
+		"fixture":      deputySettingsFixture,
+		"every option": deputySettingsFixtureWithEveryOption,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			seedTemplateStore(t, dbPath)
+			settingsPath, _ := writeDeputySettings(t, fixture(t), 0o600)
+			out, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
+				"-container-bin", settingsTestContainer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result settingsImportResult
+			if err := json.Unmarshal([]byte(out), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Project != "project-widgets" || result.InstanceRevision == 0 || result.ProjectRevision == 0 ||
+				!slices.Contains(result.NotImported, "listen") || !slices.Contains(result.NotImported, "writers") {
+				t.Fatalf("import result %+v", result)
+			}
+
+			loaded, err := loadDeputySettings(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := loaded.runSettings(settingsTestContainer)
+			st, err := store.Open(t.Context(), dbPath, store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			got, err := daemoncompose.LoadRunSettings(t.Context(), st, "project-widgets")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.InstanceRevision != result.InstanceRevision || got.ProjectRevision != result.ProjectRevision {
+				t.Fatalf("loaded revisions %d and %d, import wrote %d and %d",
+					got.InstanceRevision, got.ProjectRevision, result.InstanceRevision, result.ProjectRevision)
+			}
+			got.InstanceRevision, got.ProjectRevision = 0, 0
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("loaded settings\n%+v\nfile settings\n%+v", got, want)
+			}
+			launch := daemoncompose.RunLaunch{BaseSHA: strings.Repeat("c", 40), StateDir: "/rig/daemon", ListenPort: 7340}
+			if !reflect.DeepEqual(daemoncompose.NewClaudeDriverConfig(got, launch),
+				daemoncompose.NewClaudeDriverConfig(want, launch)) {
+				t.Fatal("the loaded and file settings compose different driver configurations")
+			}
+
+			if _, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
+				"-container-bin", settingsTestContainer); err == nil || !strings.Contains(err.Error(), "already have revision") {
+				t.Fatalf("second import error %v", err)
+			}
+		})
+	}
+}
+
+// TestSettingsImportRefusesAProjectAlreadySet refuses an import into a
+// project that has a revision, though the instance has none, and writes
+// nothing.
+func TestSettingsImportRefusesAProjectAlreadySet(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	if _, err := runSettings(t, t.Context(), "set", "-db", dbPath, "-project", "project-widgets",
+		"-section", "allowed_paths", "-value", `["src/**"]`); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	if _, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
+		"-container-bin", settingsTestContainer); err == nil || !strings.Contains(err.Error(), `project "project-widgets"`) {
+		t.Fatalf("import error %v", err)
+	}
+	out, err := runSettings(t, t.Context(), "show", "-db", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var instance domain.InstanceSettingsRecord
+	if err := json.Unmarshal([]byte(out), &instance); err != nil {
+		t.Fatal(err)
+	}
+	if instance.Revision != 0 {
+		t.Fatalf("refused import wrote instance revision %d", instance.Revision)
+	}
+}
+
+func TestSettingsImportRefusesARelativeContainerTool(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	settingsPath, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	if _, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
+		"-container-bin", "bin/container"); err == nil || !strings.Contains(err.Error(), "-container-bin") {
+		t.Fatalf("import error %v", err)
+	}
+}
+
+// TestSettingsImportNeedsTheContainerToolOnPath sets PATH, so it cannot run
+// in parallel.
+func TestSettingsImportNeedsTheContainerToolOnPath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	settingsPath, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	t.Setenv("PATH", "")
+	if _, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath); err == nil ||
+		!strings.Contains(err.Error(), "not on PATH") {
+		t.Fatalf("import error %v", err)
+	}
+}
+
+// TestSettingsImportThroughTheRunningDaemon imports without -container-bin
+// through a running daemon: the command resolves the tool on its PATH and
+// the daemon stores that path. It sets PATH, so it cannot run in parallel.
+func TestSettingsImportThroughTheRunningDaemon(t *testing.T) {
+	toolDir := t.TempDir()
+	container := filepath.Join(toolDir, deputyContainerBin)
+	execfixture.Write(t, container, []byte("#!/bin/sh\n"), 0o700)
+	t.Setenv("PATH", toolDir)
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	h, err := run(t.Context(), nil, config{
+		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx := context.WithValue(t.Context(), directStoreOpenerKey{}, directStoreOpener(
+		func(context.Context, string, store.Options, storeOpenMode) (*store.Store, error) {
+			return nil, errors.New("unexpected direct store open")
+		}))
+	settingsPath, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	if _, err := runSettings(t, ctx, "import", "-db", dbPath, "-settings", settingsPath); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := daemoncompose.LoadRunSettings(t.Context(), h.Store, "project-widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Instance.HostTools.Container != container {
+		t.Fatalf("stored container tool %q, want %q", settings.Instance.HostTools.Container, container)
 	}
 }
