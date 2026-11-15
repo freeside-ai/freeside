@@ -94,11 +94,10 @@ func checkRunSettings(instanceRecord domain.InstanceSettingsRecord, projectRecor
 }
 
 // RunLaunch is what composing the Claude driver needs beyond the stored
-// settings: the inputs of one launch (the base commit, the state paths, the
-// rig token, the App directories, the listen port, the judgment digest the
-// launch's manifest names) and the launcher's fixed bindings.
+// settings: the inputs of one launch (the state paths, the rig token, the
+// App directories, the listen port, the judgment digest the launch's
+// manifest names) and the launcher's fixed bindings.
 type RunLaunch struct {
-	BaseSHA               string
 	StateDir              string
 	RigTokenFile          string
 	AppStateDir           string
@@ -133,7 +132,7 @@ func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverC
 		RemediationPromptPackageFile:   instance.Prompts.RemediationPromptPackage,
 		VendorInstructions:             instance.Prompts.VendorInstructions,
 		Repo:                           project.Repository.Repo, RepositoryID: project.Repository.RepositoryID,
-		BaseRef: project.Repository.BaseRef, BaseSHA: launch.BaseSHA,
+		BaseRef:           project.Repository.BaseRef,
 		HandBackLabel:     handBackLabel,
 		AgentTreeCheckout: instance.AgentTree.Checkout, AgentTreeCommit: instance.AgentTree.Commit,
 		AllowedPaths:   project.AllowedPaths,

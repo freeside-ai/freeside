@@ -287,7 +287,6 @@ func main() {
 	vendorInstructions := flags.String("vendor-instructions", "", "host vendor-instruction file (CLAUDE.md)")
 	repo := flags.String("repo", "", "managed owner/name repository")
 	baseRef := flags.String("base-ref", "", "managed repository base branch")
-	baseSHA := flags.String("base-sha", "", "exact 40-character base commit tasks run against")
 	handBackLabel := flags.String("hand-back-label", "",
 		"label the landing batch puts on a pull request it hands back; Freeside reworks such a pull request (empty: off)")
 	allowedPaths := flags.String("allowed-paths", "", "comma-separated candidate path allowlist (required in claude driver mode)")
@@ -490,7 +489,7 @@ func main() {
 			RemediationPromptPackageFile:   *remediationPromptPackage,
 			VendorInstructions:             *vendorInstructions,
 			Repo:                           *repo, RepositoryID: id,
-			BaseRef: *baseRef, BaseSHA: *baseSHA, HandBackLabel: *handBackLabel,
+			BaseRef: *baseRef, HandBackLabel: *handBackLabel,
 			AgentTreeCheckout: *agentTree, AgentTreeCommit: *agentTreeCommit,
 			AllowedPaths:   engine.SplitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,

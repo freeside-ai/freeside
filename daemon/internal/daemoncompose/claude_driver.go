@@ -84,7 +84,6 @@ type ClaudeDriverConfig struct {
 	Repo                           string
 	RepositoryID                   int64
 	BaseRef                        string
-	BaseSHA                        string
 	// HandBackLabel is the label the landing batch puts on a pull request
 	// it hands back for rework (issue #3160). Empty turns hand-back rework
 	// off: no pull request's labels start a cycle and none is removed.
@@ -161,14 +160,12 @@ func (c ClaudeDriverConfig) Validate() error {
 		return fmt.Errorf("-remediation-prompt-package is required in claude driver mode")
 	case c.VendorInstructions == "":
 		return fmt.Errorf("-vendor-instructions is required in claude driver mode")
-	case c.Repo == "" || c.RepositoryID <= 0 || c.BaseRef == "" || c.BaseSHA == "":
-		return fmt.Errorf("-repo, -repository-id, -base-ref, and -base-sha are required in claude driver mode")
+	case c.Repo == "" || c.RepositoryID <= 0 || c.BaseRef == "":
+		return fmt.Errorf("-repo, -repository-id, and -base-ref are required in claude driver mode")
 	case publish.ValidateRepository(c.Repo) != nil:
 		return fmt.Errorf("-repo is not a valid transport repository")
 	case strings.HasPrefix(c.BaseRef, "refs/") || publish.ValidateBranchName(c.BaseRef) != nil:
 		return fmt.Errorf("-base-ref is not a valid transport branch")
-	case publish.ValidateCommitSHA(c.BaseSHA) != nil:
-		return fmt.Errorf("-base-sha must be a full lowercase commit SHA")
 	case c.AgentTreeCheckout == "" || c.AgentTreeCommit == "":
 		return fmt.Errorf("-agent-tree and -agent-tree-commit are required in claude driver mode")
 	case !filepath.IsAbs(c.AgentTreeCheckout) || filepath.Clean(c.AgentTreeCheckout) != c.AgentTreeCheckout:
@@ -742,7 +739,7 @@ type ClaudeComposition struct {
 // seedAdmittedImagePointer makes the configured agent image the pointer's
 // seed (plan §5.7, Project-image upkeep): a repository with no pointer for
 // the Claude agent base gets one naming the configured image, whether or not
-// it serves the configured base, since a base no image serves holds attempts
+// it serves the observed tip, since a base no image serves holds attempts
 // rather than refusing the start. An existing pointer is never overwritten,
 // because once the upkeep job owns it the configured flag may be the older
 // image; a disagreement is logged and the pointer kept. Writer selection
@@ -776,7 +773,7 @@ func seedAdmittedImagePointer(
 	return nil
 }
 
-// ExactBaseFetcher materializes the configured base at dir, which does not
+// ExactBaseFetcher materializes a base commit at dir, which does not
 // exist yet, and reports the numeric identity of the repository it fetched
 // from. Production binds it to the publication transport's FetchBase.
 type ExactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64, err error)

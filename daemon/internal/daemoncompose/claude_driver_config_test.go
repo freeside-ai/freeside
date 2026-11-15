@@ -28,7 +28,7 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		RemediationPromptPackageFile:   "/Users/operator/remediator.md",
 		VendorInstructions:             "/Users/operator/CLAUDE.md",
 		Repo:                           "freeside-ai/candidate", RepositoryID: 42,
-		BaseRef: "main", BaseSHA: strings.Repeat("d", 40),
+		BaseRef:           "main",
 		AgentTreeCheckout: "/var/freeside/policy-checkout", AgentTreeCommit: strings.Repeat("e", 40),
 		AllowedPaths: []string{"daemon/**", "docs/**"},
 		StateRoot:    "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
@@ -55,15 +55,11 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		"remediation prompt package":   func(c *ClaudeDriverConfig) { c.RemediationPromptPackageFile = "" },
 		"instructions":                 func(c *ClaudeDriverConfig) { c.VendorInstructions = "" },
 		"repository id":                func(c *ClaudeDriverConfig) { c.RepositoryID = 0 },
-		"base sha":                     func(c *ClaudeDriverConfig) { c.BaseSHA = "" },
 		"repository shape": func(c *ClaudeDriverConfig) {
 			c.Repo = ".unsafe/repo"
 		},
 		"base ref shape": func(c *ClaudeDriverConfig) {
 			c.BaseRef = "refs/heads/main"
-		},
-		"base sha shape": func(c *ClaudeDriverConfig) {
-			c.BaseSHA = strings.Repeat("D", 40)
 		},
 		// The lineup names every identity, so the tree it is read from is a
 		// required binding.
@@ -137,7 +133,6 @@ func TestClaudeDriverConfigAttendedModeDoesNotRequireProductionReview(t *testing
 		Repo:                           "freeside-ai/candidate",
 		RepositoryID:                   42,
 		BaseRef:                        "main",
-		BaseSHA:                        strings.Repeat("d", 40),
 		AgentTreeCheckout:              "/var/freeside/policy-checkout",
 		AgentTreeCommit:                strings.Repeat("e", 40),
 		AllowedPaths:                   []string{"daemon/**", "docs/**"},
@@ -162,7 +157,7 @@ func TestClaudeShadowReviewConfigurationIsExplicitAndDigestBound(t *testing.T) {
 		RemediationPromptPackageFile:   "/Users/operator/remediation.md",
 		VendorInstructions:             "/Users/operator/CLAUDE.md",
 		Repo:                           "freeside-ai/candidate", RepositoryID: 42,
-		BaseRef: "main", BaseSHA: strings.Repeat("d", 40),
+		BaseRef:                    "main",
 		ShadowReviewAuthIdentityID: "auth-claude-owner", AllowedPaths: []string{"daemon/**"},
 		AgentTreeCheckout: "/var/freeside/policy-checkout", AgentTreeCommit: strings.Repeat("e", 40),
 		StateRoot: "/var/freeside/app", CredentialsDir: "/var/freeside/creds",
