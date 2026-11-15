@@ -172,6 +172,12 @@ type Driver struct {
 	// re-derives it, so a repaired intent is adopted at the next start.
 	quarantined map[string]struct{}
 	closed      bool
+	// recoveryFailures holds, per invocation, the error a recovery Inspect
+	// started returned, for the next Inspect to report. Guarded by mu.
+	recoveryFailures map[domain.InvocationID]error
+	// recoveries counts the recoveries Inspect started; Close waits for
+	// them.
+	recoveries sync.WaitGroup
 }
 
 // recoveryDeferral records the running state of one released export's bounded
@@ -572,6 +578,7 @@ func New(cfg Config) (*Driver, error) {
 		running:           map[domain.InvocationID]*session{},
 		recovering:        map[domain.InvocationID]struct{}{},
 		deferred:          map[domain.InvocationID]recoveryDeferral{},
+		recoveryFailures:  map[domain.InvocationID]error{},
 		seedCleanupWarned: map[domain.InvocationID]string{},
 	}, nil
 }
@@ -609,6 +616,14 @@ func cliSafeMountField(value string) bool {
 func (d *Driver) StartWithInputs(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec, load exec.StageInputLoader,
 ) error {
+	// A new invocation's first current-authority check can reach GitHub
+	// through its commit-author authentication, so it runs before mu, which
+	// every session's commit and every Inspect also takes (#3215). Its
+	// success leaves the invocation authenticated in the authority's cache,
+	// so the full re-check under mu below makes no network call.
+	if err := d.authority.AuthenticateStart(ctx, id, spec); err != nil {
+		return fmt.Errorf("authenticate current intent %s: %w", id, err)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
@@ -774,7 +789,8 @@ func WithTaskCancellation(ctx, task context.Context) context.Context {
 }
 
 // Close prevents new starts, cancels every in-process session, and waits for
-// each pipeline to finish ward teardown. Durable preterminal intent remains
+// each pipeline to finish ward teardown and for each recovery Inspect
+// started to return. Durable preterminal intent remains
 // recoverable if terminal persistence cannot complete during shutdown.
 func (d *Driver) Close(ctx context.Context) error {
 	type sessionRef struct {
@@ -826,6 +842,19 @@ func (d *Driver) Close(ctx context.Context) error {
 			return errors.Join(closeErrs...)
 		}
 	}
+	// A recovery Inspect started may still be fetching or importing; closed
+	// keeps it from starting a session, and Close waits for it to return.
+	recovered := make(chan struct{})
+	go func() {
+		d.recoveries.Wait()
+		close(recovered)
+	}()
+	select {
+	case <-recovered:
+	case <-ctx.Done():
+		closeErrs = append(closeErrs, fmt.Errorf("close %s: recoveries: %w", d.errorPrefix, ctx.Err()))
+		return errors.Join(closeErrs...)
+	}
 	d.seedMu.Lock()
 	defer d.seedMu.Unlock()
 	if d.seedFS != nil {
@@ -855,6 +884,13 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 	if quarantined {
 		return exec.Inspection{Status: exec.StatusRunning}, nil
 	}
+	d.mu.Lock()
+	recoveryErr, failed := d.recoveryFailures[id]
+	delete(d.recoveryFailures, id)
+	d.mu.Unlock()
+	if failed {
+		return exec.Inspection{}, fmt.Errorf("reconcile invocation %s: %w", id, recoveryErr)
+	}
 	in, live, err := d.inspectIntent(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
@@ -880,32 +916,51 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 	// the next daemon start to call Reconcile would make the current engine see
 	// a gone invocation with no collectable result and stop. Adopt the orphan
 	// here so every later reconcile pass can retry recovery safely.
-	if err := d.reconcileIntent(ctx, in); err != nil {
-		if errors.Is(err, ErrRecoveryRetryable) {
-			d.logger.Debug("inspect maps retryable reconcile to running",
-				"invocation", string(id), "error", err.Error())
-			return exec.Inspection{Status: exec.StatusRunning}, nil
-		}
-		return exec.Inspection{}, fmt.Errorf("reconcile invocation %s: %w", id, err)
-	}
-
-	in, live, err = d.inspectIntent(ctx, id)
-	if err != nil {
-		return exec.Inspection{}, err
-	}
+	//
+	// Recovery fetches and imports, so it runs outside the caller's pass
+	// (#3215) and Inspect reports running while it does: recovery can
+	// restart a pre-handoff pipeline or leave a running handoff pending
+	// another ward observation, and both are live workflow states, not proof
+	// that the invocation was lost. A later Inspect reads the phase recovery
+	// left, or reports the error it returned.
 	switch in.Phase {
-	case phaseCommitted:
-		return exec.Inspection{Status: in.Result.Status}, nil
-	case phaseLost:
-		return exec.Inspection{Status: exec.StatusGone}, nil
 	case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
-		// Recovery can restart a pre-handoff pipeline asynchronously, or leave
-		// a running handoff pending another ward observation. Both are live
-		// workflow states, not proof that the invocation was lost; liveness is
-		// whatever the recovery actually re-observed.
-		return exec.Inspection{Status: exec.StatusRunning, Live: live}, nil
+		d.startRecovery(ctx, in)
+		return exec.Inspection{Status: exec.StatusRunning}, nil
+	case phaseCommitted, phaseLost:
 	}
 	return exec.Inspection{}, fmt.Errorf("invocation %s: phase %q: %w", id, in.Phase, exec.ErrInvalidStatus)
+}
+
+// startRecovery runs reconcileIntent for in outside the caller, under a
+// context that keeps the caller's values and ends with the caller's or the
+// driver's lifetime. reconcileIntent skips an invocation already running or
+// recovering, so a second start while one runs does nothing. A retryable
+// error stays a running inspection; any other is kept for the next Inspect,
+// which returns it as the inline recovery did.
+func (d *Driver) startRecovery(ctx context.Context, in intent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return
+	}
+	recoverCtx, cancel := context.WithCancel(ctx)
+	stopLifetime := context.AfterFunc(d.lifetime, cancel)
+	d.recoveries.Go(func() {
+		defer cancel()
+		defer stopLifetime()
+		err := d.reconcileIntent(recoverCtx, in)
+		switch {
+		case err == nil, recoverCtx.Err() != nil:
+		case errors.Is(err, ErrRecoveryRetryable):
+			d.logger.Debug("inspect maps retryable reconcile to running",
+				"invocation", string(in.InvocationID), "error", err.Error())
+		default:
+			d.mu.Lock()
+			d.recoveryFailures[in.InvocationID] = err
+			d.mu.Unlock()
+		}
+	})
 }
 
 func (d *Driver) inspectIntent(

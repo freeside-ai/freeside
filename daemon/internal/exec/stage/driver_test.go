@@ -3072,7 +3072,7 @@ func TestRecoveryOfLostHandoffReportsNoResult(t *testing.T) {
 	if err := d.saveIntent(in); err != nil {
 		t.Fatalf("save orphan intent: %v", err)
 	}
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusGone {
+	if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusGone {
 		t.Fatalf("orphan Inspect = %q, %v; want gone", status.Status, err)
 	}
 	reconcileClean(t, ctx, d)

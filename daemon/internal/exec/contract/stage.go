@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -150,7 +151,7 @@ func RunStageDriverContract(t *testing.T, factory StageDriverFactory) {
 		}
 		h.Finish(t, id)
 		driver := h.Restart(t)
-		inspection, err := driver.Inspect(t.Context(), id)
+		inspection, err := inspectRecovered(t, driver, id)
 		if err != nil || inspection.Status != exec.StatusGone {
 			return wrongValue("Inspect after crash-before-result", inspection, err, "StatusGone")
 		}
@@ -285,4 +286,20 @@ func readStageStream(
 		return nil, fmt.Errorf("read Stream: %w", errors.Join(readErr, closeErr))
 	}
 	return body, nil
+}
+
+// inspectRecovered inspects id until it stops reporting a non-live running
+// invocation, which is how a driver answers while recovery it started outside
+// the caller runs (#3215). A driver that recovers inline answers on the first
+// call. The wait is bounded so a driver that never recovers fails the case.
+func inspectRecovered(t *testing.T, driver exec.StageDriver, id domain.InvocationID) (exec.Inspection, error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		inspection, err := driver.Inspect(t.Context(), id)
+		if err != nil || inspection.Status != exec.StatusRunning || inspection.Live || time.Now().After(deadline) {
+			return inspection, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
