@@ -241,6 +241,7 @@ func (p *pairingControl) registerControlRoutes(
 	command(releaseVerificationMemoryRoute, runReleaseVerificationMemoryCommand)
 	command("/tasks/lines", runTaskLineCommand)
 	command(routingPolicyRoute, runRoutingCommand)
+	command(settingsRoute, runSettingsCommand)
 	command("/auth/list", runAuthListCommand)
 	command("/auth/usage/refresh", runAuthRefreshUsageCommand)
 	command("/auth/usage/seed-exhausted", runAuthSeedExhaustedCommand)
