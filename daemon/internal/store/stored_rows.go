@@ -801,6 +801,13 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.ApprovedIssueComment(ctx, domain.ProposalInstanceID(k.s[0])))
 		})},
+	{"instance settings", []string{"instance_settings_revisions"}, inRead(func(ctx context.Context, tx *ReadTx) error {
+		return discard(tx.InstanceSettingsRevisions(ctx))
+	})},
+	{"project settings", []string{"project_settings_revisions"}, eachKey(`SELECT DISTINCT project_id FROM project_settings_revisions`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.ProjectSettingsRevisions(ctx, domain.ProjectID(k.s[0])))
+		})},
 }
 
 // walkFollowUpFiling reads each intent, which reconstructs its attempts, and
