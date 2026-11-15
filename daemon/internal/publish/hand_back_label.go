@@ -203,16 +203,13 @@ func (f *forge) removeLabel(ctx context.Context, repo repoRef, number int, label
 type HandBackLabelTokenSource struct {
 	minter *Minter
 	now    func() time.Time
-	mu     sync.Mutex
-
-	// tokens holds pointers so a holder that keeps this source in an
-	// unexported field cannot print a cached token (see
-	// FollowUpFilingTokenSource). Token returns a copy.
-	tokens map[tokenCacheKey]*InstallationToken
+	// cache holds no lock across the authority resolution or the mint
+	// (tokenCache).
+	cache *tokenCache
 }
 
 func NewHandBackLabelTokenSource(m *Minter, now func() time.Time) *HandBackLabelTokenSource {
-	return &HandBackLabelTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]*InstallationToken{}}
+	return &HandBackLabelTokenSource{minter: m, now: now, cache: newTokenCache(now)}
 }
 
 // Format renders the source without its cache.
@@ -226,8 +223,6 @@ func (s *HandBackLabelTokenSource) Token(ctx context.Context, repo string) (Inst
 	if s == nil || s.minter == nil || s.now == nil {
 		return InstallationToken{}, errors.New("hand-back label token: nil dependency")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	binding, parsed, repositoryID, _, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
@@ -237,16 +232,10 @@ func (s *HandBackLabelTokenSource) Token(ctx context.Context, repo string) (Inst
 		installationID: binding.InstallationID,
 		repositoryID:   repositoryID,
 	}
-	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return *tok, nil
-	}
-	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
-		HandBackLabelPermissions, handBackLabelPermissionScopes)
-	if err != nil {
-		return InstallationToken{}, err
-	}
-	s.tokens[key] = &tok
-	return tok, nil
+	return s.cache.get(ctx, key, func() (InstallationToken, error) {
+		return s.minter.mintResolved(ctx, binding, parsed, repositoryID,
+			HandBackLabelPermissions, handBackLabelPermissionScopes)
+	})
 }
 
 // ValidateLabelName refuses a string that cannot be a GitHub label name: an

@@ -35,19 +35,11 @@ const tokenExpirySkew = 2 * time.Minute
 type CachedTokenSource struct {
 	minter *Minter
 	now    func() time.Time
-
-	// mu is held across a mint so concurrent callers converge on one
-	// minted token (and one audit row) instead of racing mints.
-	mu sync.Mutex
-
-	// tokens holds pointers so a holder that keeps this source in an
-	// unexported field cannot print a cached token. Under a verb a
-	// pointer does not support (%s, %q, %t), fmt cannot call Format
-	// through that field; it reprints the source pointer under %v, which
-	// prints a pointer below the top level as an address, so each entry
-	// shows only its address. Format still guards direct rendering.
-	// Token returns a copy, so no caller can mutate an entry.
-	tokens map[tokenCacheKey]*InstallationToken
+	// cache holds no lock across the authority resolution or the mint, and
+	// lets one caller per key mint, so concurrent callers converge on one
+	// minted token (and one audit row) without one repository's mint
+	// delaying another's.
+	cache *tokenCache
 }
 
 type tokenCacheKey struct {
@@ -190,7 +182,7 @@ func NewCachedTokenSource(m *Minter, now func() time.Time) *CachedTokenSource {
 	return &CachedTokenSource{
 		minter: m,
 		now:    now,
-		tokens: map[tokenCacheKey]*InstallationToken{},
+		cache:  newTokenCache(now),
 	}
 }
 
@@ -207,8 +199,6 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 	if s == nil || s.minter == nil || s.now == nil {
 		return InstallationToken{}, errors.New("token: nil dependency")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	binding, parsed, repositoryID, stance, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
@@ -219,16 +209,10 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 		repositoryID:   repositoryID,
 		stance:         stance,
 	}
-	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return *tok, nil
-	}
 	permissions, scopes := publicationPermissions(stance)
-	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID, permissions, scopes)
-	if err != nil {
-		return InstallationToken{}, err
-	}
-	s.tokens[key] = &tok
-	return tok, nil
+	return s.cache.get(ctx, key, func() (InstallationToken, error) {
+		return s.minter.mintResolved(ctx, binding, parsed, repositoryID, permissions, scopes)
+	})
 }
 
 // FollowUpFilingTokenSource caches only the issue-filing grant, separately from
@@ -236,20 +220,11 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 type FollowUpFilingTokenSource struct {
 	minter *Minter
 	now    func() time.Time
-	mu     sync.Mutex
-
-	// tokens holds pointers so a holder that keeps this source in an
-	// unexported field cannot print a cached token. Under a verb a
-	// pointer does not support (%s, %q, %t), fmt cannot call Format
-	// through that field; it reprints the source pointer under %v, which
-	// prints a pointer below the top level as an address, so each entry
-	// shows only its address. Format still guards direct rendering.
-	// Token returns a copy, so no caller can mutate an entry.
-	tokens map[tokenCacheKey]*InstallationToken
+	cache  *tokenCache
 }
 
 func NewFollowUpFilingTokenSource(m *Minter, now func() time.Time) *FollowUpFilingTokenSource {
-	return &FollowUpFilingTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]*InstallationToken{}}
+	return &FollowUpFilingTokenSource{minter: m, now: now, cache: newTokenCache(now)}
 }
 
 // Format renders the source without its cache. fmt prints values reached
@@ -265,8 +240,6 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 	if s == nil || s.minter == nil || s.now == nil {
 		return InstallationToken{}, errors.New("filing token: nil dependency")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	binding, parsed, repositoryID, _, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
@@ -276,16 +249,10 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 		installationID: binding.InstallationID,
 		repositoryID:   repositoryID,
 	}
-	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return *tok, nil
-	}
-	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
-		FollowUpFilingPermissions, followUpFilingPermissionScopes)
-	if err != nil {
-		return InstallationToken{}, err
-	}
-	s.tokens[key] = &tok
-	return tok, nil
+	return s.cache.get(ctx, key, func() (InstallationToken, error) {
+		return s.minter.mintResolved(ctx, binding, parsed, repositoryID,
+			FollowUpFilingPermissions, followUpFilingPermissionScopes)
+	})
 }
 
 // IssueReadTokenSource caches only the read-only issue and pull request
@@ -294,20 +261,11 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 type IssueReadTokenSource struct {
 	minter *Minter
 	now    func() time.Time
-	mu     sync.Mutex
-
-	// tokens holds pointers so a holder that keeps this source in an
-	// unexported field cannot print a cached token. Under a verb a
-	// pointer does not support (%s, %q, %t), fmt cannot call Format
-	// through that field; it reprints the source pointer under %v, which
-	// prints a pointer below the top level as an address, so each entry
-	// shows only its address. Format still guards direct rendering.
-	// Token returns a copy, so no caller can mutate an entry.
-	tokens map[tokenCacheKey]*InstallationToken
+	cache  *tokenCache
 }
 
 func NewIssueReadTokenSource(m *Minter, now func() time.Time) *IssueReadTokenSource {
-	return &IssueReadTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]*InstallationToken{}}
+	return &IssueReadTokenSource{minter: m, now: now, cache: newTokenCache(now)}
 }
 
 // Format renders the source without its cache. fmt prints values reached
@@ -323,8 +281,6 @@ func (s *IssueReadTokenSource) Token(ctx context.Context, repo string) (Installa
 	if s == nil || s.minter == nil || s.now == nil {
 		return InstallationToken{}, errors.New("issue read token: nil dependency")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	binding, parsed, repositoryID, _, err := s.minter.resolveTrusted(ctx, repo)
 	if err != nil {
 		return InstallationToken{}, err
@@ -334,16 +290,10 @@ func (s *IssueReadTokenSource) Token(ctx context.Context, repo string) (Installa
 		installationID: binding.InstallationID,
 		repositoryID:   repositoryID,
 	}
-	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
-		return *tok, nil
-	}
-	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
-		IssueReadPermissions, issueReadPermissionScopes)
-	if err != nil {
-		return InstallationToken{}, err
-	}
-	s.tokens[key] = &tok
-	return tok, nil
+	return s.cache.get(ctx, key, func() (InstallationToken, error) {
+		return s.minter.mintResolved(ctx, binding, parsed, repositoryID,
+			IssueReadPermissions, issueReadPermissionScopes)
+	})
 }
 
 // OnboardingGate exposes the janitor's two distinct reconciliation signals:

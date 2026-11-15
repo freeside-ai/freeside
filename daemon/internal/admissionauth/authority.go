@@ -112,14 +112,21 @@ func (c *CommitAuthorCache) authenticate(
 	if c == nil {
 		return authenticate()
 	}
+	// The lock guards only the map. authenticate reaches GitHub through the
+	// bot identity lookup, so holding the lock across it would make every
+	// invocation's check wait on one repository's slow call; two checks of
+	// one invocation at once both authenticate, which is harmless.
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if cached, ok := c.entries[id]; ok && cached == binding {
+	cached, ok := c.entries[id]
+	c.mu.Unlock()
+	if ok && cached == binding {
 		return nil
 	}
 	if err := authenticate(); err != nil {
 		return err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if _, exists := c.entries[id]; !exists && len(c.entries) >= maxProductionCommitAuthorAuthentications {
 		clear(c.entries)
 	}
