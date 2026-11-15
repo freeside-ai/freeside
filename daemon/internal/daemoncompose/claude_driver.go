@@ -1284,7 +1284,7 @@ func composeClaudeDriver(
 		env:                             env,
 		specificationPromptPackage:      specificationPromptPackage,
 		remediationPromptPackage:        remediationPromptPackage,
-		derive:                          claudeAdmissionDerivation(cfg),
+		derive:                          claudeAdmissionDerivation(st, cfg),
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
 		runConformance:                  follower.runScheduled,
@@ -1708,32 +1708,51 @@ func runClaudeConformance(
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the
-// operator-configured base beside it.
+// project's latest observed tip beside it.
 //
 // The workspace must be derived per attempt (each ward handoff owns its own
 // volume) and is derived exactly as the driver derives it, so the gate
-// creates the volume the admission recorded. The base is the operator's
-// -base-sha: Phase 1A.2 runs under manually configured unattended
-// preconditions, and resolving a branch tip at admission time would need a
-// publish-lane transport capability that does not exist yet. Deferred
-// deliberately: pinning the base per run, rather than per daemon, is a
-// shared-contract change (the Run carries no base).
-//
-// Three exceptions need no such change, and the engine applies them after
-// this derivation. It admits a maintenance task at its refusal's tip, a
-// handoff conflict's remediation at the tip its handoff check sealed (issue
-// #2646), and a later return to the agent or remediation at that tip when
-// its candidate was written there (issue #2699), instead of this base. Each
-// tip comes from an immutable record, the refusal or the sealed
-// handoff_conflict authority, so every attempt derives the same one.
-func claudeAdmissionDerivation(cfg ClaudeDriverConfig) engine.AdmissionDerivation {
-	base := domain.BaseRevision{
-		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
-		BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
+// creates the volume the admission recorded. The base is the tip the tip
+// watch last stored for the configured repository and branch
+// (observeRepositoryTip), which a start stores when none is. It is where a
+// run that has not been admitted starts: the engine records it on the run
+// with the run's first admission and admits every later attempt of the run
+// at that recorded base instead, then applies its three exceptions (see
+// engine.AdmissionDerivation). With no stored tip for this repository and
+// branch the attempt holds as input_unavailable rather than starting
+// anywhere.
+func claudeAdmissionDerivation(st *store.Store, cfg ClaudeDriverConfig) engine.AdmissionDerivation {
+	return func(ctx context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
+		tip, err := storedRepositoryTip(ctx, st, cfg)
+		if err != nil {
+			return "", domain.BaseRevision{}, err
+		}
+		return claude.WorkspaceFor(id), tip, nil
 	}
-	return func(_ context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
-		return claude.WorkspaceFor(id), base, nil
+}
+
+// storedRepositoryTip reads the tip observation stored for cfg's repository
+// and branch. A missing observation, or one for another repository or
+// branch, is exec.ErrInputUnavailable.
+func storedRepositoryTip(ctx context.Context, st *store.Store, cfg ClaudeDriverConfig) (domain.BaseRevision, error) {
+	var (
+		observation domain.RepositoryTipObservation
+		found       bool
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		observation, found, err = tx.GetRepositoryTipObservation(ctx, cfg.RepositoryID)
+		return err
+	}); err != nil {
+		return domain.BaseRevision{}, fmt.Errorf("read the observed tip: %w", err)
 	}
+	if !found || observation.Repository != cfg.Repo || observation.Branch != cfg.BaseRef {
+		return domain.BaseRevision{}, fmt.Errorf("no observed tip of %s@%s: %w",
+			cfg.Repo, cfg.BaseRef, exec.ErrInputUnavailable)
+	}
+	return domain.BaseRevision{
+		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: observation.TipSHA,
+	}, nil
 }
 
 // claudeTransport builds the authenticated exact-base transport the driver
