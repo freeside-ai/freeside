@@ -781,13 +781,14 @@ func seedAdmittedImagePointer(
 // from. Production binds it to the publication transport's FetchBase.
 type ExactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64, err error)
 
-// ObserveCompositionBaseInputs fetches the configured base once into private
-// scratch and reads the project-image inputs from it. Startup has no checkout
-// of the managed repository, and the transport's exact-base fetch is the same
-// proof every later boundary uses: the checkout holds cfg.BaseSHA only when
-// the remote's base branch does.
+// ObserveCompositionBaseInputs fetches baseSHA once into private scratch and
+// reads the project-image inputs from it. The daemon has no checkout of the
+// managed repository, and the transport's exact-base fetch is the same proof
+// every later boundary uses: the checkout holds baseSHA only when the
+// remote's base branch does. repositoryID is the configured repository the
+// fetch must have reached.
 func ObserveCompositionBaseInputs(
-	ctx context.Context, fetch ExactBaseFetcher, cfg ClaudeDriverConfig,
+	ctx context.Context, fetch ExactBaseFetcher, repositoryID int64, baseSHA string,
 	layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
 	scratch, err := os.MkdirTemp("", "freesided-project-image-base-")
@@ -796,18 +797,18 @@ func ObserveCompositionBaseInputs(
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort cleanup of startup-owned observation state
 	dir := filepath.Join(scratch, "checkout")
-	repositoryID, err := fetch(ctx, dir)
+	fetchedID, err := fetch(ctx, dir)
 	if err != nil {
 		return domain.ProjectImageBaseInputs{}, fmt.Errorf("fetch exact base: %w", err)
 	}
-	if repositoryID != cfg.RepositoryID {
+	if fetchedID != repositoryID {
 		return domain.ProjectImageBaseInputs{}, fmt.Errorf(
 			"fetched base carries repository id %d, not the configured %d: %w",
-			repositoryID, cfg.RepositoryID, domain.ErrRepositoryIdentityMismatch)
+			fetchedID, repositoryID, domain.ErrRepositoryIdentityMismatch)
 	}
 	// "git" from PATH is the binary the transport that fetched dir runs
 	// (claudeTransport leaves TransportOptions.GitPath at its default).
-	return projectimage.ObserveBaseInputs(ctx, "git", dir, cfg.BaseSHA, layout)
+	return projectimage.ObserveBaseInputs(ctx, "git", dir, baseSHA, layout)
 }
 
 // wardEnforceableEgressProfiles is the closed set of writer egress profiles
@@ -908,21 +909,21 @@ func composeClaudeDriver(
 			err = errors.Join(err, janitor.Close(context.Background()))
 		}
 	}()
-	// The base tree exists only on the remote, so reading it waits for the
+	// A base tree exists only on the remote, so reading it waits for the
 	// transport. Stable coverage keeps the fetch's installation token from
 	// failing under a concurrent pass.
 	baseInputs := newBaseInputsMemo(func(
-		ctx context.Context, layout domain.ProjectImageInputLayout,
+		ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
 	) (inputs domain.ProjectImageBaseInputs, err error) {
 		err = janitor.WithStableCoverage(func() error {
 			inputs, err = ObserveCompositionBaseInputs(ctx,
 				func(ctx context.Context, dir string) (int64, error) {
-					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, dir)
+					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, baseSHA, dir)
 					if err != nil {
 						return 0, err
 					}
 					return checkout.RepositoryID(), nil
-				}, cfg, layout)
+				}, cfg.RepositoryID, baseSHA, layout)
 			return err
 		})
 		return inputs, err
@@ -1212,7 +1213,7 @@ func composeClaudeDriver(
 	)
 	if cfg.OperatingMode == domain.ModeUnattended {
 		selector := &claudeImageSelector{
-			store: st, repo: cfg.Repo, repositoryID: cfg.RepositoryID, baseSHA: cfg.BaseSHA,
+			store: st, repo: cfg.Repo, repositoryID: cfg.RepositoryID,
 			backend: backend, base: baseInputs, follower: follower,
 		}
 		selectImage, bindImageUpkeep = selector.selectImage, selector.bindImageUpkeep
