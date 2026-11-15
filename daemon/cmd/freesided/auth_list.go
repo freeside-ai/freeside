@@ -26,10 +26,12 @@ type authListIdentity struct {
 	Label     string `json:"label"`
 	Enabled   bool   `json:"enabled"`
 	CostOwner string `json:"cost_owner"`
-	// UsagePool is the effective pool, and MaxParallelExecutions its limit:
-	// the id set-pool-limit takes, even for an identity with no pool of its own.
+	// UsagePool is the effective pool, and MaxParallelExecutions and
+	// MaxCallsPerSite its limits: the id set-pool-limit takes, even for an
+	// identity with no pool of its own.
 	UsagePool             domain.UsagePoolID   `json:"usage_pool"`
 	MaxParallelExecutions int                  `json:"max_parallel_executions"`
+	MaxCallsPerSite       int                  `json:"max_calls_per_site"`
 	Interim               bool                 `json:"interim"`
 	Enrollments           []authListEnrollment `json:"enrollments"`
 }
@@ -115,6 +117,7 @@ func readAuthList(ctx context.Context, tx *store.ReadTx) (authListOutput, error)
 			Label:   maskAccountBinding(identity.AccountBinding),
 			Enabled: identity.Enabled, CostOwner: identity.CostOwner, UsagePool: pool.ID,
 			MaxParallelExecutions: pool.MaxParallelExecutions,
+			MaxCallsPerSite:       pool.MaxCallsPerSite,
 			Interim:               identity.Interim.Present(),
 			Enrollments:           make([]authListEnrollment, 0, len(enrollments)),
 		}

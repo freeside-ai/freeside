@@ -71,7 +71,7 @@ func RecordIdentityOnPool(
 	ctx context.Context, tx *store.WriteTx, identity domain.AuthIdentity, limit int, at time.Time,
 ) error {
 	if err := tx.RecordUsagePool(ctx, domain.UsagePool{
-		ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: limit,
+		ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: limit, MaxCallsPerSite: 1,
 	}, at); err != nil {
 		return err
 	}

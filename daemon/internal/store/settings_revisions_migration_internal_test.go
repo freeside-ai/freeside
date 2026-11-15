@@ -12,6 +12,7 @@ import (
 // leaves: it drops the tables 0142 creates and forgets 0142.
 func rewindSettingsRevisions(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindUsagePoolCallLimit(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE instance_settings_revisions`,
 		`DROP TABLE project_settings_revisions`,

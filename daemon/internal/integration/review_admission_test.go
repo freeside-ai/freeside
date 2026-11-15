@@ -170,7 +170,7 @@ func TestProductionReviewWaitsForItsUsagePool(t *testing.T) {
 	pool := identity.EffectiveUsagePool()
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		return tx.RecordUsagePool(p.ctx, domain.UsagePool{
-			ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1,
+			ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1, MaxCallsPerSite: 1,
 		}, p.now.Add(time.Second))
 	}); err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestProductionRecoveredReviewContradictionFreesItsSlot(t *testing.T) {
 			pool := identity.EffectiveUsagePool()
 			if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 				return tx.RecordUsagePool(p.ctx, domain.UsagePool{
-					ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1,
+					ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1, MaxCallsPerSite: 1,
 				}, p.now.Add(time.Second))
 			}); err != nil {
 				t.Fatal(err)

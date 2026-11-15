@@ -1,5 +1,6 @@
 {
   "id": "claude-owner-subscription",
   "provider": "claude",
-  "max_parallel_executions": 2
+  "max_parallel_executions": 2,
+  "max_calls_per_site": 1
 }

@@ -2757,7 +2757,7 @@ func TestGolden(t *testing.T) {
 		{"attempt", attempt},
 		{"auth_identity", identity},
 		{"usage_pool", domain.UsagePool{
-			ID: "claude-owner-subscription", Provider: "claude", MaxParallelExecutions: 2,
+			ID: "claude-owner-subscription", Provider: "claude", MaxParallelExecutions: 2, MaxCallsPerSite: 1,
 		}},
 		{"routing_policy", routingPolicy},
 		{"routing_policy_drain_first", drainFirstRoutingPolicy},

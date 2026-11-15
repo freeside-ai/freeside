@@ -94,6 +94,50 @@ func TestIdentityCharacterizationTakesTheLowerLimit(t *testing.T) {
 	}
 }
 
+// TestIdentityCharacterizationTakesTheLowerCallLimit: the call limit per site
+// settles as the launch limit does, so joining a pool never raises how many
+// judgment calls a site runs on it.
+func TestIdentityCharacterizationTakesTheLowerCallLimit(t *testing.T) {
+	t.Parallel()
+	setCalls := func(t *testing.T, st *Store, id domain.UsagePoolID, calls int, at time.Time) {
+		t.Helper()
+		pool := readPool(t, st, id)
+		pool.MaxCallsPerSite = calls
+		if err := st.Write(t.Context(), func(tx *WriteTx) error {
+			return tx.RecordUsagePool(t.Context(), pool, at)
+		}); err != nil {
+			t.Fatalf("set pool %s call limit: %v", id, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		soloCalls, poolCalls, want int
+	}{
+		"identity brings the lower call limit": {soloCalls: 1, poolCalls: 3, want: 1},
+		"pool keeps the lower call limit":      {soloCalls: 4, poolCalls: 2, want: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := openSlotStore(t)
+			recordSlotIdentity(t, st, slotIdentity("auth-member", "pool-shared"), slotAt)
+			setCalls(t, st, "pool-shared", tc.poolCalls, slotAt.Add(time.Minute))
+
+			solo := slotIdentity("auth-solo", "")
+			recordSlotIdentity(t, st, solo, slotAt)
+			if got := readPool(t, st, solo.EffectiveUsagePool()).MaxCallsPerSite; got != 1 {
+				t.Fatalf("new identity's pool call limit = %d, want 1", got)
+			}
+			setCalls(t, st, solo.EffectiveUsagePool(), tc.soloCalls, slotAt.Add(time.Minute))
+
+			solo.UsagePool = "pool-shared"
+			recordSlotIdentity(t, st, solo, slotAt.Add(time.Hour))
+			got := readPool(t, st, "pool-shared")
+			if got.MaxCallsPerSite != tc.want || got.MaxParallelExecutions != 1 {
+				t.Fatalf("pool = %#v, want %d calls per site and the launch limit unchanged", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestNewIdentityJoinsAPoolWithoutChangingIt: a new identity has no limit to
 // bring, so a recorded pool keeps its own.
 func TestNewIdentityJoinsAPoolWithoutChangingIt(t *testing.T) {
