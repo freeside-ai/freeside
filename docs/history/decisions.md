@@ -3976,3 +3976,30 @@ Nothing in this revision is built yet: #3155 builds it.
 
 (Owner decision of 2026-11-12 on #3132, recorded in #3148's contract;
 [decision note](../../devlog/2026-11-13-1119-follow-up-filing-author.md).)
+
+## Revision 124 ("An Over-Long Review Guide Is Trimmed, Not Refused"):
+
+1. **A review guide over a size bound is trimmed to the bound and recorded
+   on the ready item, never refused** (Section
+   [9](../plan.md#9-comprehension), Summary Provenance). The daemon keeps the first
+   stops, excerpts, questions, and lines up to their bounds and cuts an
+   over-long string to fit; the ready item records each cut so the card
+   says the guide was trimmed. A guide file too large to read is left out,
+   and the item records that. Credential screening still reads the guide
+   as written, so it covers what a trim cuts, and reads a guide left out as
+   it reads any other evidence. Every other fault, a malformed shape, an
+   unreadable range, an over-long path, or a bad declaration, still fails
+   the import closed, and the failure now names invalid evidence as its
+   cause instead of unknown. This narrows revision
+   112's "a malformed one is invalid evidence": exceeding a size bound no
+   longer counts as malformed. It follows the #2753 exit run, whose
+   finished change was discarded because one excerpt ran 116 lines against
+   an 80-line bound. Rejected: keeping the fail-closed rule, which spends a
+   whole run on a cosmetic overrun of an optional card section; trimming
+   without a record, which would show the operator a guide that differs
+   from what the agent wrote without saying so; and dropping the whole
+   guide on any overrun, which discards a guide that is useful once
+   trimmed.
+
+(Owner decision of 2026-11-13 on #3180;
+[decision note](../../devlog/2026-11-13-0957-review-guide-caps-trim.md).)
