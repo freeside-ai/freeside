@@ -271,9 +271,8 @@ func TestStartWardOnSelectedImage(t *testing.T) {
 				conformance = *tc.conformance
 			}
 			if err := startWardOnSelectedImage(t.Context(), st, backend, ClaudeDriverConfig{
-				Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase,
-				RunConformance: tc.runConformance,
-			}, selectorBaseInputs(tc.manifest, nil), tc.images[0].ImageRef, conformance, tc.conformance != nil,
+				Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: tc.runConformance,
+			}, selectorBase, selectorBaseInputs(tc.manifest, nil), tc.images[0].ImageRef, conformance, tc.conformance != nil,
 				slog.New(slog.DiscardHandler)); err != nil {
 				t.Fatalf("start = %v, want it to succeed", err)
 			}
@@ -288,8 +287,8 @@ func TestStartWardOnSelectedImage(t *testing.T) {
 		st := selectorStore(t, pointed)
 		failure := errors.New("fetch failed")
 		err := startWardOnSelectedImage(t.Context(), st, &fakeWard{}, ClaudeDriverConfig{
-			Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase, RunConformance: true,
-		}, selectorBaseInputs("2", failure), pointed.ImageRef, domain.BackendConformance{}, false,
+			Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: true,
+		}, selectorBase, selectorBaseInputs("2", failure), pointed.ImageRef, domain.BackendConformance{}, false,
 			slog.New(slog.DiscardHandler))
 		if !errors.Is(err, failure) || !errors.Is(err, exec.ErrInputUnavailable) {
 			t.Fatalf("start = %v, want the read failure as input_unavailable", err)
@@ -308,8 +307,8 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	// The start itself repoints ward from no image to the pointed-to one;
 	// only later repoints would follow an attempt.
 	if err := startWardOnSelectedImage(t.Context(), st, backend, ClaudeDriverConfig{
-		Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase, RunConformance: true,
-	}, base, pointed.ImageRef, domain.BackendConformance{}, false, slog.New(slog.DiscardHandler)); err != nil {
+		Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: true,
+	}, selectorBase, base, pointed.ImageRef, domain.BackendConformance{}, false, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("start = %v, want an unserved base to start", err)
 	}
 	follower := newConformanceFollower(backend, func(context.Context) error {

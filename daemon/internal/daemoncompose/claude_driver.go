@@ -822,10 +822,11 @@ func wardEnforceableEgressProfiles() []domain.EgressProfile {
 
 // composeClaudeDriver builds the production ward gate and Claude driver. Its
 // network work is the publication transport's: the janitor's startup pass,
-// and one exact-base fetch when the project image was built at a commit other
-// than the configured base. It starts no runtime work unless cfg.RunConformance
-// asks for the suite; the caller runs the driver's restart reconciliation
-// before the engine loop starts.
+// one read of the base branch's tip (startupRepositoryTip), and one
+// exact-base fetch when the project image was built at a commit other than
+// that tip. It starts no runtime work unless cfg.RunConformance asks for the
+// suite; the caller runs the driver's restart reconciliation before the
+// engine loop starts.
 // usage receives an unattended writer turn's Claude usage capture when its
 // export is recorded; nil, as for a daemon without the Claude collector,
 // drops it with a warning.
@@ -1103,9 +1104,15 @@ func composeClaudeDriver(
 	}); err != nil {
 		return nil, fmt.Errorf("restore ward backend conformance: %w", err)
 	}
+	// Every start refreshes the stored tip before anything reads it: start
+	// selection and the first admissions.
+	tip, err := startupRepositoryTip(ctx, st, cfg, refTipObserver(reconciler), utcNow(), logger)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.OperatingMode == domain.ModeUnattended {
 		if err := startWardOnSelectedImage(
-			ctx, st, backend, cfg, baseInputs, image.ImageRef, conformance, haveConformance, logger,
+			ctx, st, backend, cfg, tip.BaseSHA, baseInputs, image.ImageRef, conformance, haveConformance, logger,
 		); err != nil {
 			return nil, err
 		}
@@ -1297,21 +1304,22 @@ func composeClaudeDriver(
 	return composition, nil
 }
 
-// startWardOnSelectedImage points ward at the image this start selects
-// before any proof is restored or run (startupWriterImage). A base the start
+// startWardOnSelectedImage points ward at the image this start selects at
+// tipSHA, the observed tip (startupRepositoryTip), before any proof is
+// restored or run (startupWriterImage). A base the start
 // cannot read fails the start, as reading it always has; a base no image
 // serves does not.
 func startWardOnSelectedImage(
 	ctx context.Context, st *store.Store, backend startupWardBackend, cfg ClaudeDriverConfig,
-	base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance, haveConformance bool,
-	logger *slog.Logger,
+	tipSHA string, base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance,
+	haveConformance bool, logger *slog.Logger,
 ) error {
 	proved, err := startupProvedImage(ctx, st, cfg.RepositoryID, backend.ConfigurationDigestFor,
 		conformance, haveConformance)
 	if err != nil {
 		return fmt.Errorf("find the proved writer image: %w", err)
 	}
-	selected, found, err := selectRecordedImage(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseSHA, proved, base)
+	selected, found, err := selectRecordedImage(ctx, st, cfg.Repo, cfg.RepositoryID, tipSHA, proved, base)
 	if err != nil {
 		return err
 	}
@@ -1327,8 +1335,8 @@ func startWardOnSelectedImage(
 		}); err != nil {
 			return fmt.Errorf("read admitted image pointer: %w", err)
 		}
-		logger.Warn("no admitted project image serves the configured base; writer attempts hold until one does",
-			"base_sha", cfg.BaseSHA, "pointer_image_ref", pointed)
+		logger.Warn("no admitted project image serves the observed tip; writer attempts hold until one does",
+			"tip_sha", tipSHA, "pointer_image_ref", pointed)
 	}
 	initial := startupWriterImage(selected, found, pointed, proved, cfg.RunConformance)
 	if err := backend.RepointAgentImage(string(initial)); err != nil {
@@ -1730,6 +1738,39 @@ func claudeAdmissionDerivation(st *store.Store, cfg ClaudeDriverConfig) engine.A
 		}
 		return claude.WorkspaceFor(id), tip, nil
 	}
+}
+
+// startupRepositoryTip reads the tip through observe and stores it through
+// the tip watch's own write, before the engine loop can admit anything, and
+// returns it for the start to select ward's image at. A stored tip can be
+// stale: the branch may have moved, or been reset, while the daemon was
+// down, and a first admission before the watch's first pass would record
+// it as the run's base. A failed read falls back to a stored tip, which the
+// watch then corrects, and fails the start only when none is stored, since
+// the daemon then has no base to start at.
+func startupRepositoryTip(
+	ctx context.Context, st *store.Store, cfg ClaudeDriverConfig,
+	observe func(ctx context.Context, repo, branch string) (string, error), now time.Time, logger *slog.Logger,
+) (domain.BaseRevision, error) {
+	sha, err := observe(ctx, cfg.Repo, cfg.BaseRef)
+	if err != nil {
+		stored, storedErr := storedRepositoryTip(ctx, st, cfg)
+		if storedErr != nil {
+			return domain.BaseRevision{}, errors.Join(
+				fmt.Errorf("read the tip of %s@%s: %w", cfg.Repo, cfg.BaseRef, err), storedErr)
+		}
+		logger.Warn("could not read the tip at start; starting at the stored tip until the tip watch reads it",
+			"repo", cfg.Repo, "branch", cfg.BaseRef, "tip_sha", stored.BaseSHA, "error", err)
+		return stored, nil
+	}
+	watch := repositoryTipWatch{Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, Branch: cfg.BaseRef}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := recordRepositoryTip(ctx, tx, watch, sha, now)
+		return err
+	}); err != nil {
+		return domain.BaseRevision{}, fmt.Errorf("record the tip of %s@%s: %w", cfg.Repo, cfg.BaseRef, err)
+	}
+	return domain.BaseRevision{Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: sha}, nil
 }
 
 // storedRepositoryTip reads the tip observation stored for cfg's repository
