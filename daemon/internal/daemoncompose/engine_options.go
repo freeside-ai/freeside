@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -23,9 +24,9 @@ import (
 // none of them. Required fields always become their option, nil or not, so
 // the engine's own checks still fail startup on a missing part. Optional
 // fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink,
-// HostVerification, Running, ReadinessGate) become their option only when non-nil, because each of
-// those engine options rejects nil; a nil optional field means the part is
-// not installed.
+// HostVerification, Running, ReadinessGate, StartAuthority) become their
+// option only when non-nil, because each of those engine options rejects
+// nil; a nil optional field means the part is not installed.
 type ProductionEngine struct {
 	// Required.
 	Lock  *daemonlock.Lock
@@ -57,6 +58,10 @@ type ProductionEngine struct {
 	// ReadinessGate is the project readiness gate, set when the daemon
 	// evaluates a project's readiness (#3205).
 	ReadinessGate engine.ProjectReadinessGate
+	// StartAuthority, when set, is the stage driver's own first
+	// start-authority check, which the engine runs outside its pass before
+	// Start because it can call GitHub (#3224).
+	StartAuthority func(context.Context, domain.InvocationID, exec.StartSpec) error
 }
 
 // Options returns the engine Options in the order the Claude workflow has
@@ -104,6 +109,9 @@ func (p ProductionEngine) Options() []engine.Option {
 	}
 	if p.Running != nil {
 		options = append(options, engine.WithRunningWork(p.Running))
+	}
+	if p.StartAuthority != nil {
+		options = append(options, engine.WithStartAuthorityCheck(p.StartAuthority))
 	}
 	return options
 }

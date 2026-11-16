@@ -61,6 +61,58 @@ func (r *researchFetches) take(
 	return nil, false, nil
 }
 
+// startChecks runs an invocation's first start-authority check outside the
+// reconcile pass, one run per invocation, and keeps its answer for the pass
+// that next reaches the invocation, so one repository's hung GitHub call
+// never holds up another project's dispatch (#3224). The answer only decides
+// when Start is called: Start runs the same check again, so a passed check
+// grants nothing on its own.
+//
+// An answer lives only in memory. A restart forgets it and the next pass
+// checks again.
+type startChecks struct {
+	runs keyedrun.Group[domain.InvocationID]
+	mu   sync.Mutex
+	done map[domain.InvocationID]error
+}
+
+// take returns id's finished check and forgets it, with done true and the
+// check's error. With no finished check it starts check unless one for id is
+// running, and returns done false. A check whose context ended keeps no
+// answer, so the next pass checks again rather than reading a cancellation as
+// a refusal.
+func (c *startChecks) take(
+	ctx context.Context, id domain.InvocationID, check func(context.Context) error,
+) (done bool, err error) {
+	// Holding mu across the lookup and the start means a run for id either
+	// stored its answer before the lookup or is still running, so a finished
+	// check is never started again.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err, ok := c.done[id]; ok {
+		delete(c.done, id)
+		return true, err
+	}
+	c.runs.Go(id, func() {
+		err := check(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.done == nil {
+			c.done = map[domain.InvocationID]error{}
+		}
+		c.done[id] = err
+	})
+	return false, nil
+}
+
+// errStartAuthorityPending holds an invocation's start while its
+// start-authority check runs outside the pass. The next pass that reaches
+// the invocation finds the check's answer.
+var errStartAuthorityPending = errors.New("start authority check in progress")
+
 // offPassOutcomes carries what work done outside a pass accepted, and any
 // error that would have stopped the pass had the work run inside it, to the
 // next pass, which reports the count and returns the errors (#3215). A

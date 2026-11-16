@@ -247,6 +247,7 @@ func ComposeClaudeWorkflow(
 		Logger:           cfg.Logger,
 		UsageSink:        claudeUsageCaptures,
 		Running:          running,
+		StartAuthority:   claudeWiring.driver.AuthenticateStart,
 	}
 	judgmentBudget := inference.Budget{
 		Window: 24 * time.Hour,

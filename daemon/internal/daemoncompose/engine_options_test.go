@@ -42,6 +42,9 @@ func TestProductionEngineOptionsInstallOptionalPartsOnlyWhenSet(t *testing.T) {
 		"logger":            func(p *ProductionEngine) { p.Logger = slog.New(slog.DiscardHandler) },
 		"usage sink":        func(p *ProductionEngine) { p.UsageSink = stubClaudeUsageSink{} },
 		"host verification": func(p *ProductionEngine) { p.HostVerification = &macverify.Backend{} },
+		"start authority": func(p *ProductionEngine) {
+			p.StartAuthority = func(context.Context, domain.InvocationID, exec.StartSpec) error { return nil }
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
