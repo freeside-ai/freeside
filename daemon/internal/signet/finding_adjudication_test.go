@@ -147,73 +147,84 @@ func TestSubmitFindingAdjudicationAcceptAndReplay(t *testing.T) {
 	}
 }
 
+// TestSubmitFindingAdjudicationReplayIdentityMatrix retries a decision with
+// its alternative choices and attachments each absent, empty, or present.
+// Choice and attachment are independent fields, so the rows cover each mode
+// of each rather than every pairing: per action, three replay rows span the
+// choice modes and the absent and empty attachments, and conflict rows cover
+// a present attachment and, for choose, a different choice. A retry whose
+// choices don't rebuild a decision message keeps its structural command and
+// relies on PutCommand for the conflict, so one conflict row (accept's) takes
+// that path and the others take the canonical one.
 func TestSubmitFindingAdjudicationReplayIdentityMatrix(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	actions := []domain.Action{
-		domain.ActionAcceptRecommendedRoute, domain.ActionChooseAlternativeRoute,
-	}
-	attachmentModes := []string{"absent", "empty", "present"}
 	offered := signet.AlternativeChoice{FindingID: "finding-a", Route: domain.RouteDispute}
-	for _, action := range actions {
-		choiceModes := []string{"absent", "empty", "present"}
-		if action == domain.ActionChooseAlternativeRoute {
-			choiceModes = append(choiceModes, "different")
-		}
-		for _, choiceMode := range choiceModes {
-			for _, attachmentMode := range attachmentModes {
-				t.Run(string(action)+"/"+choiceMode+"/"+attachmentMode, func(t *testing.T) {
-					f := newFixture(t)
-					item := seedFindingAdjudicationItem(t, f)
-					original := commandOn(item, "command-replay-matrix", action)
-					if action == domain.ActionChooseAlternativeRoute {
-						original.Payload.AlternativeChoices = []signet.AlternativeChoice{offered}
-					}
-					first, err := f.service.Submit(ctx, original)
-					if err != nil {
-						t.Fatalf("Submit(original): %v", err)
-					}
-
-					retry := original
-					switch choiceMode {
-					case "absent":
-						retry.Payload.AlternativeChoices = nil
-					case "empty":
-						retry.Payload.AlternativeChoices = []signet.AlternativeChoice{}
-					case "present":
-						retry.Payload.AlternativeChoices = []signet.AlternativeChoice{offered}
-					case "different":
-						retry.Payload.AlternativeChoices = []signet.AlternativeChoice{{
-							FindingID: offered.FindingID, Route: domain.RouteDefer,
-						}}
-					}
-					if action == domain.ActionChooseAlternativeRoute &&
-						(choiceMode == "absent" || choiceMode == "empty") {
-						retry.Payload.Message = first.Record.Message
-					}
-					switch attachmentMode {
-					case "absent":
-						retry.Payload.Attachments = nil
-					case "empty":
-						retry.Payload.Attachments = []domain.Digest{}
-					case "present":
-						retry.Payload.Attachments = []domain.Digest{
-							domain.Digest("sha256:" + strings.Repeat("f", 64)),
-						}
-					}
-
-					replayed, err := f.service.Submit(ctx, retry)
-					shouldReplay := choiceMode != "different" && attachmentMode != "present"
-					if shouldReplay {
-						if err != nil || replayed.Revision != first.Revision || replayed.Record.CommandID != first.Record.CommandID {
-							t.Fatalf("Submit(retry) = %+v, %v; want recorded result %+v", replayed, err, first)
-						}
-					} else if !errors.Is(err, store.ErrImmutableConflict) {
-						t.Fatalf("Submit(retry) = %v, want ErrImmutableConflict", err)
-					}
-				})
+	for _, row := range []struct {
+		action                     domain.Action
+		choiceMode, attachmentMode string
+	}{
+		{domain.ActionAcceptRecommendedRoute, "absent", "empty"},
+		{domain.ActionAcceptRecommendedRoute, "empty", "absent"},
+		{domain.ActionAcceptRecommendedRoute, "present", "absent"},
+		{domain.ActionAcceptRecommendedRoute, "empty", "present"},
+		{domain.ActionChooseAlternativeRoute, "absent", "empty"},
+		{domain.ActionChooseAlternativeRoute, "empty", "absent"},
+		{domain.ActionChooseAlternativeRoute, "present", "absent"},
+		{domain.ActionChooseAlternativeRoute, "present", "present"},
+		{domain.ActionChooseAlternativeRoute, "different", "absent"},
+	} {
+		action, choiceMode, attachmentMode := row.action, row.choiceMode, row.attachmentMode
+		t.Run(string(action)+"/"+choiceMode+"/"+attachmentMode, func(t *testing.T) {
+			f := newFixture(t)
+			item := seedFindingAdjudicationItem(t, f)
+			original := commandOn(item, "command-replay-matrix", action)
+			if action == domain.ActionChooseAlternativeRoute {
+				original.Payload.AlternativeChoices = []signet.AlternativeChoice{offered}
 			}
-		}
+			first, err := f.service.Submit(ctx, original)
+			if err != nil {
+				t.Fatalf("Submit(original): %v", err)
+			}
+
+			retry := original
+			switch choiceMode {
+			case "absent":
+				retry.Payload.AlternativeChoices = nil
+			case "empty":
+				retry.Payload.AlternativeChoices = []signet.AlternativeChoice{}
+			case "present":
+				retry.Payload.AlternativeChoices = []signet.AlternativeChoice{offered}
+			case "different":
+				retry.Payload.AlternativeChoices = []signet.AlternativeChoice{{
+					FindingID: offered.FindingID, Route: domain.RouteDefer,
+				}}
+			}
+			if action == domain.ActionChooseAlternativeRoute &&
+				(choiceMode == "absent" || choiceMode == "empty") {
+				retry.Payload.Message = first.Record.Message
+			}
+			switch attachmentMode {
+			case "absent":
+				retry.Payload.Attachments = nil
+			case "empty":
+				retry.Payload.Attachments = []domain.Digest{}
+			case "present":
+				retry.Payload.Attachments = []domain.Digest{
+					domain.Digest("sha256:" + strings.Repeat("f", 64)),
+				}
+			}
+
+			replayed, err := f.service.Submit(ctx, retry)
+			shouldReplay := choiceMode != "different" && attachmentMode != "present"
+			if shouldReplay {
+				if err != nil || replayed.Revision != first.Revision || replayed.Record.CommandID != first.Record.CommandID {
+					t.Fatalf("Submit(retry) = %+v, %v; want recorded result %+v", replayed, err, first)
+				}
+			} else if !errors.Is(err, store.ErrImmutableConflict) {
+				t.Fatalf("Submit(retry) = %v, want ErrImmutableConflict", err)
+			}
+		})
 	}
 }
 

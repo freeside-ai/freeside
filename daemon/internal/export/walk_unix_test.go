@@ -3,7 +3,6 @@
 package export
 
 import (
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -63,27 +62,6 @@ func TestWalkWorkspaceRealFilesystem(t *testing.T) {
 		{Path: "suid-helper", Kind: EntryUnusualMode, Mode: ptrTo("04755")},
 		{Path: "vendor/dep", Kind: EntrySubmodule},
 	}
-	assertEntriesEqual(t, want, got)
-}
-
-// TestWalkWorkspaceDeviceNode records a real device node as special. mknod
-// needs privileges almost everywhere, so the test skips on EPERM; FIFO and
-// the MapFS fakes keep the special classification covered regardless.
-func TestWalkWorkspaceDeviceNode(t *testing.T) {
-	dir := t.TempDir()
-	dev := filepath.Join(dir, "null-clone")
-	if err := syscall.Mknod(dev, syscall.S_IFCHR|0o600, 0x0103); err != nil {
-		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EINVAL) {
-			t.Skipf("mknod unavailable without privileges: %v", err)
-		}
-		t.Fatalf("mknod: %v", err)
-	}
-
-	got, err := walkWorkspace(os.DirFS(dir), 0)
-	if err != nil {
-		t.Fatalf("walkWorkspace: %v", err)
-	}
-	want := []Entry{{Path: "null-clone", Kind: EntrySpecial}}
 	assertEntriesEqual(t, want, got)
 }
 

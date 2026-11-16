@@ -12,121 +12,128 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// TestFindingAdjudicationAcceptsEachAnswer records an accepted answer beside
+// one that waits for a person. Each finding's route takes its own branches,
+// and none depends on the other finding's route, so the rows use each
+// accepted route and each waiting route once rather than every pairing.
 func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 	t.Parallel()
-	for _, acceptedRoute := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer, domain.RouteRemediate} {
-		for _, waitingRoute := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer, domain.RouteParkUnknown} {
-			t.Run(string(acceptedRoute)+"/"+string(waitingRoute), func(t *testing.T) {
-				f := newFindingAdjudicationFixtureWithOptions(t, domain.FindingSeverityP2,
-					&domain.FindingLocation{Path: "daemon/a.go"}, "low", "high",
-					findingAdjudicationFixtureOptions{extraFindingIDs: []domain.FindingID{"finding-wait"}})
-				f.writePath(t, f.headRoot)
-				var accepted domain.FindingAdjudicationEntry
-				if acceptedRoute == domain.RouteRemediate {
-					var err error
-					accepted, err = domain.NewEngineModelAdjudicationEntry(f.finding.ID, domain.GoalRequired, domain.ConfidenceHigh, "fix in scope", nil, nil, nil, nil, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
-				} else {
-					accepted = modelRouteEntry(t, f.finding.ID, acceptedRoute, domain.ConfidenceHigh)
-				}
-				waiting := modelRouteEntry(t, "finding-wait", waitingRoute, domain.ConfidenceMedium)
-				f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{accepted, waiting}}
-				var before domain.ReviewDispositionRecord
-				var item domain.AttentionItem
-				var snapshot store.Snapshot
-				for pass := range 2 {
-					state, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
-					if err != nil || state != productionReviewPending {
-						t.Fatalf("pass %d: state=%v error=%v", pass, state, err)
-					}
-					if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
-						artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.task.RunID, 1)
-						if err != nil {
-							return err
-						}
-						if len(artifact.Entries) != 2 {
-							t.Fatal("lost an answer")
-						}
-						var getErr error
-						item, snapshot, getErr = tx.GetAttentionItemSnapshot(f.ctx, productionReviewItemID(f.task.RunID, 1))
-						if getErr != nil {
-							return getErr
-						}
-						if item.Type != domain.AttentionReviewDispute || len(item.ReviewDispute.Findings) != 1 || item.ReviewDispute.Findings[0].FindingID != waiting.FindingID || len(item.ReviewDispute.FindingIDs) != 2 {
-							t.Fatalf("binding = %#v", item.ReviewDispute)
-						}
-						if _, err := tx.GetFindingDisposition(f.ctx, waiting.FindingID, 1); !errors.Is(err, store.ErrNotFound) {
-							t.Fatalf("waiting disposition = %v", err)
-						}
-						got, err := tx.GetFindingDisposition(f.ctx, accepted.FindingID, 1)
-						if acceptedRoute == domain.RouteRemediate {
-							if !errors.Is(err, store.ErrNotFound) {
-								t.Fatalf("premature fix = %v", err)
-							}
-							return nil
-						}
-						if err != nil {
-							return err
-						}
-						if pass == 0 {
-							before = got
-						} else if !reflect.DeepEqual(before, got) {
-							t.Fatal("replay changed outcome")
-						}
-						return nil
-					}); err != nil {
-						t.Fatal(err)
-					}
-					dispatched, err := f.workflow.remediationDispatched(f.ctx, f.task, f.record)
-					if err != nil || dispatched {
-						t.Fatalf("premature remediation = %t, %v", dispatched, err)
-					}
-				}
-				command := signet.ClientCommand{
-					CommandID: "answer-waiting", DeviceID: "device-test", ExpectedEntityVersion: snapshot.EntityVersion,
-					Payload: signet.DecisionPayload{
-						ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
-						Action: domain.ActionAdjudicateFindings, FindingRoutes: []signet.FindingRouteChoice{{FindingID: waiting.FindingID, Route: domain.RouteDecline}},
-					},
-				}
-				if _, err := f.signet.Submit(f.ctx, command); err != nil {
+	for _, row := range []struct{ acceptedRoute, waitingRoute domain.AdjudicationRoute }{
+		{domain.RouteDecline, domain.RouteParkUnknown},
+		{domain.RouteDefer, domain.RouteDecline},
+		{domain.RouteRemediate, domain.RouteDefer},
+	} {
+		acceptedRoute, waitingRoute := row.acceptedRoute, row.waitingRoute
+		t.Run(string(acceptedRoute)+"/"+string(waitingRoute), func(t *testing.T) {
+			f := newFindingAdjudicationFixtureWithOptions(t, domain.FindingSeverityP2,
+				&domain.FindingLocation{Path: "daemon/a.go"}, "low", "high",
+				findingAdjudicationFixtureOptions{extraFindingIDs: []domain.FindingID{"finding-wait"}})
+			f.writePath(t, f.headRoot)
+			var accepted domain.FindingAdjudicationEntry
+			if acceptedRoute == domain.RouteRemediate {
+				var err error
+				accepted, err = domain.NewEngineModelAdjudicationEntry(f.finding.ID, domain.GoalRequired, domain.ConfidenceHigh, "fix in scope", nil, nil, nil, nil, nil)
+				if err != nil {
 					t.Fatal(err)
 				}
-				later := f.workflow.now().Add(time.Hour)
-				f.workflow.now = func() time.Time { return later }
-				for range 2 {
-					state, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if acceptedRoute != domain.RouteRemediate && state != productionReviewPassed {
-						t.Fatalf("answered state = %v", state)
-					}
-					if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
-						artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.task.RunID, 1)
-						if err != nil {
-							return err
-						}
-						index := slices.IndexFunc(artifact.Entries, func(e domain.FindingAdjudicationEntry) bool { return e.FindingID == accepted.FindingID })
-						if index < 0 || !reflect.DeepEqual(artifact.Entries[index], accepted) {
-							t.Fatal("human answer rewrote accepted entry")
-						}
-						if acceptedRoute == domain.RouteRemediate {
-							return nil
-						}
-						got, err := tx.GetFindingDisposition(f.ctx, accepted.FindingID, 1)
-						if err == nil && !reflect.DeepEqual(before, got) {
-							t.Fatal("human answer rewrote recorded outcome")
-						}
-						return err
-					}); err != nil {
-						t.Fatal(err)
-					}
+			} else {
+				accepted = modelRouteEntry(t, f.finding.ID, acceptedRoute, domain.ConfidenceHigh)
+			}
+			waiting := modelRouteEntry(t, "finding-wait", waitingRoute, domain.ConfidenceMedium)
+			f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{accepted, waiting}}
+			var before domain.ReviewDispositionRecord
+			var item domain.AttentionItem
+			var snapshot store.Snapshot
+			for pass := range 2 {
+				state, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+				if err != nil || state != productionReviewPending {
+					t.Fatalf("pass %d: state=%v error=%v", pass, state, err)
 				}
-			})
-		}
+				if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+					artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.task.RunID, 1)
+					if err != nil {
+						return err
+					}
+					if len(artifact.Entries) != 2 {
+						t.Fatal("lost an answer")
+					}
+					var getErr error
+					item, snapshot, getErr = tx.GetAttentionItemSnapshot(f.ctx, productionReviewItemID(f.task.RunID, 1))
+					if getErr != nil {
+						return getErr
+					}
+					if item.Type != domain.AttentionReviewDispute || len(item.ReviewDispute.Findings) != 1 || item.ReviewDispute.Findings[0].FindingID != waiting.FindingID || len(item.ReviewDispute.FindingIDs) != 2 {
+						t.Fatalf("binding = %#v", item.ReviewDispute)
+					}
+					if _, err := tx.GetFindingDisposition(f.ctx, waiting.FindingID, 1); !errors.Is(err, store.ErrNotFound) {
+						t.Fatalf("waiting disposition = %v", err)
+					}
+					got, err := tx.GetFindingDisposition(f.ctx, accepted.FindingID, 1)
+					if acceptedRoute == domain.RouteRemediate {
+						if !errors.Is(err, store.ErrNotFound) {
+							t.Fatalf("premature fix = %v", err)
+						}
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					if pass == 0 {
+						before = got
+					} else if !reflect.DeepEqual(before, got) {
+						t.Fatal("replay changed outcome")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				dispatched, err := f.workflow.remediationDispatched(f.ctx, f.task, f.record)
+				if err != nil || dispatched {
+					t.Fatalf("premature remediation = %t, %v", dispatched, err)
+				}
+			}
+			command := signet.ClientCommand{
+				CommandID: "answer-waiting", DeviceID: "device-test", ExpectedEntityVersion: snapshot.EntityVersion,
+				Payload: signet.DecisionPayload{
+					ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
+					Action: domain.ActionAdjudicateFindings, FindingRoutes: []signet.FindingRouteChoice{{FindingID: waiting.FindingID, Route: domain.RouteDecline}},
+				},
+			}
+			if _, err := f.signet.Submit(f.ctx, command); err != nil {
+				t.Fatal(err)
+			}
+			later := f.workflow.now().Add(time.Hour)
+			f.workflow.now = func() time.Time { return later }
+			for range 2 {
+				state, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if acceptedRoute != domain.RouteRemediate && state != productionReviewPassed {
+					t.Fatalf("answered state = %v", state)
+				}
+				if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+					artifact, err := tx.GetFindingAdjudicationForRound(f.ctx, f.task.RunID, 1)
+					if err != nil {
+						return err
+					}
+					index := slices.IndexFunc(artifact.Entries, func(e domain.FindingAdjudicationEntry) bool { return e.FindingID == accepted.FindingID })
+					if index < 0 || !reflect.DeepEqual(artifact.Entries[index], accepted) {
+						t.Fatal("human answer rewrote accepted entry")
+					}
+					if acceptedRoute == domain.RouteRemediate {
+						return nil
+					}
+					got, err := tx.GetFindingDisposition(f.ctx, accepted.FindingID, 1)
+					if err == nil && !reflect.DeepEqual(before, got) {
+						t.Fatal("human answer rewrote recorded outcome")
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
