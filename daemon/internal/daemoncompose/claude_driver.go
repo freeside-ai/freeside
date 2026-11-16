@@ -943,7 +943,9 @@ func composeClaudeDriver(
 	}()
 	// A base tree exists only on the remote, so reading it waits for the
 	// transport. A janitor pass in progress keeps serving the last complete
-	// coverage, so the fetch's installation token needs no coordination.
+	// coverage, so the fetch's installation token needs no coordination. A
+	// miss in the engine's pass starts the fetch on the memo's worker, so
+	// the pass never waits on it.
 	baseInputs := newBaseInputsMemo(func(
 		ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
 	) (domain.ProjectImageBaseInputs, error) {
@@ -955,7 +957,7 @@ func composeClaudeDriver(
 				}
 				return checkout.RepositoryID(), nil
 			}, cfg.RepositoryID, baseSHA, layout)
-	})
+	}, logger)
 	if cfg.OperatingMode == domain.ModeUnattended {
 		if err := seedAdmittedImagePointer(ctx, st, image, utcNow(), logger); err != nil {
 			return nil, err
@@ -1325,9 +1327,9 @@ func composeClaudeDriver(
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
 		runConformance:                  follower.runScheduled,
-		// The follower stops first, so a pass in flight ends before the
-		// janitor its fetches ride on closes.
-		Closer:  sessionGroup{follower, driver, janitor},
+		// The follower and the base fetches stop first, so a pass or fetch
+		// in flight ends before the janitor its fetches ride on closes.
+		Closer:  sessionGroup{follower, baseInputs, driver, janitor},
 		janitor: janitor,
 	}
 	if cfg.OperatingMode == domain.ModeUnattended && cfg.ProjectID != "" {

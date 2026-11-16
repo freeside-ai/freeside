@@ -262,6 +262,11 @@ var holdClasses = []holdClass{
 	// the record. It records no reason: the call is seconds of the daemon's
 	// own work, and nothing waits on an operator.
 	{sentinel: errSpecifierTriagePending, action: holdActionInvocation},
+	// A base fetch in flight holds its attempt the same way until a later
+	// pass finds the fetch in image selection's memo. The fetch is the
+	// daemon's own short work under a deadline, and nothing waits on an
+	// operator; a failed fetch holds as input_unavailable instead.
+	{sentinel: ErrBaseInputsPending, action: holdActionInvocation},
 }
 
 // firstHoldClass is the first row that matches err and satisfies keep.

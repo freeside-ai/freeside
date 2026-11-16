@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -42,18 +43,48 @@ const (
 // bases keeps the fetches rare without growing as the tip advances.
 const baseInputsMemoBases = 8
 
+// A fetch the engine's pass starts (baseInputsMemo.lookup) is bounded by
+// baseFetchTimeout, so a hung fetch fails and holds its attempt visibly as
+// input_unavailable instead of under a pending hold that records nothing. A
+// failed fetch is served for baseFetchRetryBackoff before the base is
+// fetched again: the engine passes every 100 ms (cmd/freesided's reconcile
+// interval), and a base that keeps failing would otherwise be refetched on
+// nearly every pass.
+const (
+	baseFetchTimeout      = 5 * time.Minute
+	baseFetchRetryBackoff = time.Minute
+)
+
 // baseInputsMemo reads what a base commit holds for each input layout once.
 // A commit's tree cannot change, so an observation stays true for the
-// process's life; a failed read is not kept and the next selection tries
-// again. It keeps the baseInputsMemoBases most recently first-read commits
-// and forgets the oldest past that, so a long-running daemon whose tip keeps
-// advancing holds a bounded set.
+// process's life. It keeps the baseInputsMemoBases most recently first-read
+// commits and forgets the oldest past that, so a long-running daemon whose
+// tip keeps advancing holds a bounded set. It is per composition, which
+// serves one repository, so a base commit and layout name a project's base.
+//
+// The engine's pass reads it with lookup, which never waits on the network:
+// a miss starts the fetch on a worker and answers engine.ErrBaseInputsPending.
+// The start reads it with read, which waits for the fetch. Neither holds the
+// lock across a fetch.
 type baseInputsMemo struct {
 	mu      sync.Mutex
 	observe func(context.Context, string, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error)
 	inputs  map[baseInputsKey]domain.ProjectImageBaseInputs
 	// bases lists the commits inputs holds, oldest first.
 	bases []string
+	// failures holds each key whose last worker fetch failed, until its
+	// retry time. Recording a failure drops the expired ones, so it holds
+	// only the failures of the last baseFetchRetryBackoff. read keeps no
+	// failure: the start fails on it.
+	failures map[baseInputsKey]baseFetchFailure
+
+	fetches keyedrun.Group[baseInputsKey]
+	now     func() time.Time
+	timeout time.Duration
+	logger  *slog.Logger
+	// ctx is what the worker fetches run under; Close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 type baseInputsKey struct {
@@ -61,26 +92,105 @@ type baseInputsKey struct {
 	layout  domain.ProjectImageInputLayout
 }
 
-func newBaseInputsMemo(
-	observe func(context.Context, string, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
-) *baseInputsMemo {
-	return &baseInputsMemo{observe: observe, inputs: map[baseInputsKey]domain.ProjectImageBaseInputs{}}
+// baseFetchFailure is a worker fetch's error and when the base may be
+// fetched again.
+type baseFetchFailure struct {
+	err     error
+	retryAt time.Time
 }
 
+func newBaseInputsMemo(
+	observe func(context.Context, string, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
+	logger *slog.Logger,
+) *baseInputsMemo {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &baseInputsMemo{
+		observe: observe, inputs: map[baseInputsKey]domain.ProjectImageBaseInputs{},
+		failures: map[baseInputsKey]baseFetchFailure{},
+		now:      time.Now, timeout: baseFetchTimeout, logger: logger, ctx: ctx, cancel: cancel,
+	}
+}
+
+// read returns what baseSHA holds for layout, fetching it under ctx and
+// waiting when it is not stored. A failed read is not kept.
 func (m *baseInputsMemo) read(
 	ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	key := baseInputsKey{baseSHA: baseSHA, layout: layout}
-	if inputs, ok := m.inputs[key]; ok {
+	m.mu.Lock()
+	inputs, ok := m.inputs[key]
+	m.mu.Unlock()
+	if ok {
 		return inputs, nil
 	}
 	inputs, err := m.observe(ctx, baseSHA, layout)
 	if err != nil {
 		return domain.ProjectImageBaseInputs{}, err
 	}
-	if !slices.Contains(m.bases, baseSHA) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.storeLocked(key, inputs)
+	return inputs, nil
+}
+
+// lookup is the engine pass's read: it never waits on a fetch. It returns
+// what baseSHA holds for layout when stored, and the error of a failed fetch
+// until that fetch's backoff ends. Otherwise it starts the fetch on a worker,
+// unless one for the key is running, and returns engine.ErrBaseInputsPending;
+// a later pass finds the result.
+func (m *baseInputsMemo) lookup(baseSHA string, layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
+	key := baseInputsKey{baseSHA: baseSHA, layout: layout}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inputs, ok := m.inputs[key]; ok {
+		return inputs, nil
+	}
+	if failure, ok := m.failures[key]; ok {
+		if m.now().Before(failure.retryAt) {
+			return domain.ProjectImageBaseInputs{}, failure.err
+		}
+		delete(m.failures, key)
+	}
+	// Starting the fetch under the lock means a worker cannot store its
+	// result between the checks above and the start, so no key is fetched
+	// twice, and no fetch starts once Close has canceled the memo. Go only
+	// starts a goroutine, so the lock never spans the fetch.
+	if m.ctx.Err() == nil {
+		m.fetches.Go(key, func() { m.fetch(key) })
+	}
+	return domain.ProjectImageBaseInputs{}, engine.ErrBaseInputsPending
+}
+
+// fetch is one worker fetch. A fetch Close canceled stores nothing: it says
+// nothing of the base.
+func (m *baseInputsMemo) fetch(key baseInputsKey) {
+	ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
+	defer cancel()
+	inputs, err := m.observe(ctx, key.baseSHA, key.layout)
+	if m.ctx.Err() != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		now := m.now()
+		maps.DeleteFunc(m.failures, func(_ baseInputsKey, failure baseFetchFailure) bool {
+			return !now.Before(failure.retryAt)
+		})
+		retryAt := now.Add(baseFetchRetryBackoff)
+		m.failures[key] = baseFetchFailure{err: err, retryAt: retryAt}
+		m.logger.Warn("fetching a run's base for image selection failed",
+			"base", key.baseSHA, "layout", key.layout, "retry_at", retryAt, "error", err)
+		return
+	}
+	delete(m.failures, key)
+	m.storeLocked(key, inputs)
+}
+
+// storeLocked stores an observation, forgetting the oldest base when a new
+// one passes baseInputsMemoBases. The caller holds m.mu.
+func (m *baseInputsMemo) storeLocked(key baseInputsKey, inputs domain.ProjectImageBaseInputs) {
+	if !slices.Contains(m.bases, key.baseSHA) {
 		if len(m.bases) == baseInputsMemoBases {
 			oldest := m.bases[0]
 			m.bases = m.bases[1:]
@@ -88,10 +198,29 @@ func (m *baseInputsMemo) read(
 				return k.baseSHA == oldest
 			})
 		}
-		m.bases = append(m.bases, baseSHA)
+		m.bases = append(m.bases, key.baseSHA)
 	}
 	m.inputs[key] = inputs
-	return inputs, nil
+}
+
+// Close cancels the worker fetches and waits for them, so none outlives the
+// transport it fetches through. The daemon closes it while an engine pass
+// may still run; a lookup after Close starts no fetch.
+func (m *baseInputsMemo) Close(ctx context.Context) error {
+	m.mu.Lock()
+	m.cancel()
+	m.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		m.fetches.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stop the base fetches: %w", ctx.Err())
+	}
 }
 
 // proofLedger is the part of ward's backend the follower reads: the images
@@ -416,7 +545,9 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 // or the error that holds the attempt: image_upkeep_pending or the unserved
 // admission_policy_refused hold when no image serves base, the run's base,
 // backend_not_conformant while ward holds no published proof of the
-// selected image, and input_unavailable when the base could not be read.
+// selected image, input_unavailable when the base could not be read, and
+// engine.ErrBaseInputsPending, which records no reason, while the base is
+// fetched off the pass.
 //
 // Selection prefers an image ward has proved (engine.SelectProjectImage).
 // Ward publishes an image's proof, the two capabilities a pass earns
@@ -526,7 +657,8 @@ func (s *claudeImageSelector) repairImage(
 // and selects among them (engine.SelectProjectImage). found is false when no
 // image serves the base, including when no pointer exists. A base that
 // cannot be read is exec.ErrInputUnavailable, which holds the attempt
-// instead of failing the dispatch pass.
+// instead of failing the dispatch pass. A base not yet read is fetched off
+// the pass (baseInputsMemo.lookup) and is engine.ErrBaseInputsPending.
 func selectRecordedImage(
 	ctx context.Context, st *store.Store, repo string, repositoryID int64, baseSHA string,
 	proved []domain.ImageRef, base *baseInputsMemo,
@@ -552,7 +684,7 @@ func selectRecordedImage(
 	}
 	return SelectAmongRecordedImages(pointed, images, repo, baseSHA, proved,
 		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
-			return base.read(ctx, baseSHA, layout)
+			return base.lookup(baseSHA, layout)
 		})
 }
 
@@ -561,7 +693,9 @@ func selectRecordedImage(
 // (selectPreflightWriterImage) share it so both answer the same question. A
 // pointer whose repository disagrees with repo is
 // domain.ErrRepositoryIdentityMismatch; a base that cannot be read is
-// exec.ErrInputUnavailable.
+// exec.ErrInputUnavailable. A base still being fetched is
+// engine.ErrBaseInputsPending, returned without that join: joined, its
+// hold would match input_unavailable first and record that reason.
 func SelectAmongRecordedImages(
 	pointed domain.ProjectImage, images []domain.ProjectImage, repo, baseSHA string, proved []domain.ImageRef,
 	baseInputs func(domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
@@ -575,6 +709,9 @@ func SelectAmongRecordedImages(
 		Proved: proved, Pointed: pointed, Images: images, BaseSHA: baseSHA,
 		BaseInputs: baseInputs, Preparation: projectimage.PreparationDigest(),
 	})
+	if errors.Is(err, engine.ErrBaseInputsPending) {
+		return domain.ProjectImage{}, false, fmt.Errorf("select project image: %w", err)
+	}
 	if err != nil {
 		return domain.ProjectImage{}, false, fmt.Errorf("select project image: %w",
 			errors.Join(exec.ErrInputUnavailable, err))

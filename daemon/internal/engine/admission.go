@@ -344,8 +344,10 @@ func WithAdmissionDerivation(derive AdmissionDerivation) Option {
 
 // ImageSelection selects the writer image one attempt runs in. It returns
 // the image, or an error that holds the attempt: an ImageUpkeepPendingError
-// while upkeep may still make an image serve the base, or
-// ErrProjectImageUnserved when nothing pending would.
+// while upkeep may still make an image serve the base,
+// ErrProjectImageUnserved when nothing pending would, or
+// ErrBaseInputsPending while the base it must select at is fetched outside
+// the pass.
 //
 // base is the run's base (runBase), which the image must serve. repair is
 // the refusal a maintenance task's run repairs, nil for every other run. A
@@ -374,6 +376,13 @@ func WithAdmissionImageSelection(selectImage ImageSelection) Option {
 // it joined with domain.ErrAdmissionConfigurationMismatch, so it holds under
 // backend_not_conformant until the backend proves the image.
 var ErrImageNotProved = errors.New("the runner backend holds no published proof of the selected image")
+
+// ErrBaseInputsPending holds an attempt while the base its image must be
+// selected at is fetched outside the engine's pass. It records no hold
+// reason: the fetch is the daemon's own short work, bounded by a deadline,
+// and nothing waits on an operator. A later pass selects from the finished
+// fetch, and a fetch that failed holds as input_unavailable.
+var ErrBaseInputsPending = errors.New("the run's base is being fetched")
 
 // ErrEgressProfileNotEnforceable refuses an attempt whose requested egress
 // profile is outside the composition's EnforceableEgressProfiles.

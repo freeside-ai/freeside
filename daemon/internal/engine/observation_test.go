@@ -58,10 +58,12 @@ func TestDispatchHoldReasonCoversEveryHoldClass(t *testing.T) {
 		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", sentinel)
 		reason, ok := dispatchHoldReason(wrapped)
 		if class.reason == "" {
-			// A triage call in progress is the one reasonless row that is not
-			// fenced: it holds until the next pass finds the record (#3215).
-			if !workflowAdvancementFenced(wrapped) && !errors.Is(wrapped, errSpecifierTriagePending) {
-				t.Errorf("%v has no reason but is neither a fenced no-more-work outcome nor a pending triage", sentinel)
+			// A triage call or base fetch in progress are the reasonless rows
+			// that are not fenced: each holds until a later pass finds its
+			// result (#3215, #3229).
+			pending := errors.Is(wrapped, errSpecifierTriagePending) || errors.Is(wrapped, ErrBaseInputsPending)
+			if !workflowAdvancementFenced(wrapped) && !pending {
+				t.Errorf("%v has no reason but is neither a fenced no-more-work outcome nor a pending triage or base fetch", sentinel)
 			}
 			if ok {
 				t.Errorf("fenced %v maps to reason %q", sentinel, reason)

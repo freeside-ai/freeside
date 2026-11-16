@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -24,8 +25,10 @@ type selectionHoldFixture struct {
 	// selected is what the selection returns; selectErr, when set, wins.
 	selected  domain.ImageRef
 	selectErr error
-	// repairs records the repair refusal each selection was passed.
+	// repairs and bases record the repair refusal and the run's base each
+	// selection was passed.
 	repairs []*domain.ImageUpkeepRefusal
+	bases   []domain.BaseRevision
 }
 
 func newSelectionHoldFixture(t *testing.T) *selectionHoldFixture {
@@ -50,9 +53,10 @@ func newSelectionHoldFixtureSubmitting(
 	submit(f, t)
 	h := &selectionHoldFixture{fixture: f, engine: f.newEngine(t, driver), invocationID: invocationID}
 	h.engine.selectImage = func(
-		_ context.Context, _ domain.InvocationID, _ domain.BaseRevision, repair *domain.ImageUpkeepRefusal,
+		_ context.Context, _ domain.InvocationID, base domain.BaseRevision, repair *domain.ImageUpkeepRefusal,
 	) (domain.ImageRef, error) {
 		h.repairs = append(h.repairs, repair)
+		h.bases = append(h.bases, base)
 		return h.selected, h.selectErr
 	}
 	return h
@@ -124,6 +128,39 @@ func TestImageUpkeepHoldClearsWhenTheAttemptDispatches(t *testing.T) {
 	admission, err := h.admission(t)
 	if err != nil || admission.ImageRef != selectionTestImage {
 		t.Fatalf("admission image = %q, %v; want the selected image", admission.ImageRef, err)
+	}
+}
+
+// A base fetch in flight holds the attempt without recording a reason or an
+// admission, and the pass goes on. The next pass selects again at the run's
+// base, re-read like the first, and admits the attempt.
+func TestPendingBaseFetchHoldsWithoutAReason(t *testing.T) {
+	t.Parallel()
+	h := newSelectionHoldFixture(t)
+	h.selectErr = fmt.Errorf("select project image: %w", ErrBaseInputsPending)
+	if started := h.dispatch(t); started != 0 {
+		t.Fatalf("started %d while the base was fetched", started)
+	}
+	if hold, found := h.hold(t); found {
+		t.Fatalf("hold = %+v while the base was fetched, want no reason recorded", hold)
+	}
+	if _, err := h.admission(t); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("admission = %v, want none recorded while the base was fetched", err)
+	}
+
+	h.selectErr, h.selected = nil, selectionTestImage
+	if started := h.dispatch(t); started != 1 {
+		t.Fatalf("started %d once the fetch finished, want 1", started)
+	}
+	admission, err := h.admission(t)
+	if err != nil || admission.ImageRef != selectionTestImage {
+		t.Fatalf("admission image = %q, %v; want the selected image", admission.ImageRef, err)
+	}
+	if len(h.bases) != 2 || h.bases[0].BaseSHA == "" || h.bases[1] != h.bases[0] {
+		t.Fatalf("selection bases = %+v, want the run's base on both passes", h.bases)
+	}
+	if len(h.repairs) != 2 || h.repairs[0] != nil || h.repairs[1] != nil {
+		t.Fatalf("selection repairs = %v, want the run's (nil) refusal read on both passes", h.repairs)
 	}
 }
 
