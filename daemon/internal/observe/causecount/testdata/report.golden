@@ -1,0 +1,50 @@
+{
+  "project_id": "proj-1",
+  "period": {
+    "start": "2026-11-09T00:00:00Z",
+    "end": "2026-11-16T00:00:00Z"
+  },
+  "previous_period": {
+    "start": "2026-11-02T00:00:00Z",
+    "end": "2026-11-09T00:00:00Z"
+  },
+  "causes": [
+    {
+      "source": "failure_cause",
+      "cause": "quota",
+      "known": true,
+      "occurrences": 3,
+      "runs": 2,
+      "first_seen": "2026-11-10T00:00:00Z",
+      "last_seen": "2026-11-14T00:00:00Z",
+      "previous_occurrences": 1
+    },
+    {
+      "source": "terminal",
+      "cause": "failed",
+      "known": true,
+      "occurrences": 0,
+      "runs": 0,
+      "first_seen": null,
+      "last_seen": null,
+      "previous_occurrences": 2
+    },
+    {
+      "source": "review_failure",
+      "cause": "solar_flare",
+      "known": false,
+      "occurrences": 1,
+      "runs": 1,
+      "first_seen": "2026-11-15T00:00:00Z",
+      "last_seen": "2026-11-15T00:00:00Z",
+      "previous_occurrences": 0
+    }
+  ],
+  "skipped": [
+    {
+      "table": "run_milestones",
+      "row": "42",
+      "error": "recorded_at: parse RFC3339Nano timestamp: parsing time \"yesterday\" as \"2006-01-02T15:04:05.999999999Z07:00\": cannot parse \"yesterday\" as \"2006\""
+    }
+  ]
+}
