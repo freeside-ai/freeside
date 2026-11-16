@@ -2,10 +2,8 @@ package store
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"strings"
+	"path"
 	"testing"
 )
 
@@ -28,21 +26,15 @@ func TestRFC3339NanoRoutedThroughHelpers(t *testing.T) {
 		"pairing.go:parseTime":  true, // reads every stored RFC3339Nano column
 	}
 
-	// go test runs with the package directory as the working directory.
-	entries, err := os.ReadDir(".")
+	parsed, err := daemonSources()
 	if err != nil {
-		t.Fatalf("read package dir: %v", err)
+		t.Fatal(err)
 	}
-	fset := token.NewFileSet()
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+	for _, source := range parsed.sources {
+		if path.Dir(source.rel) != "internal/store" {
 			continue
 		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
+		name, file := path.Base(source.rel), source.file
 		ast.Inspect(file, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "RFC3339Nano" {
@@ -54,7 +46,7 @@ func TestRFC3339NanoRoutedThroughHelpers(t *testing.T) {
 			key := name + ":" + enclosingFuncName(file, sel.Pos())
 			if !allowed[key] {
 				t.Errorf("time.RFC3339Nano used at %s (%s): route it through formatTime/parseTime, or extend the allowed list with a justification",
-					fset.Position(sel.Pos()), key)
+					parsed.positionAs(sel.Pos(), name), key)
 			}
 			return true
 		})
