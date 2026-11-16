@@ -702,6 +702,24 @@ func (e *Engine) dispatchIntent(
 	return started, hold, err
 }
 
+// refuseStart answers a start the driver or the engine's start-authority
+// check refused: it releases a credentialed attempt's dispatch reservation
+// and returns the refusal wrapped as a failed start. One path for both keeps
+// a refused check from leaving different state than a refused Start.
+func (e *Engine) refuseStart(
+	ctx context.Context, entry store.QueueEntry, invocationID domain.InvocationID, reserved bool, err error,
+) error {
+	if reserved {
+		if releaseErr := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.ReleaseOutboxDispatch(ctx, string(invocationID))
+		}); releaseErr != nil {
+			return fmt.Errorf("intent %q release dispatch reservation: %w",
+				entry.IdempotencyKey, errors.Join(err, releaseErr))
+		}
+	}
+	return fmt.Errorf("intent %q: start: %w", entry.IdempotencyKey, err)
+}
+
 // dispatchAdmittedIntent admits, records, and starts one pending intent.
 func (e *Engine) dispatchAdmittedIntent(
 	ctx context.Context, entry store.QueueEntry, binding invocationBinding,
@@ -785,20 +803,29 @@ func (e *Engine) dispatchAdmittedIntent(
 	if bound {
 		startSpec = exec.StartSpecFromAdmission(effective)
 	}
+	reserved := bound && effective.AuthIdentityID != nil
+	if e.startAuthority != nil {
+		// The driver's first start-authority check can wait on GitHub, so it
+		// runs outside the pass and this invocation holds until a later pass
+		// finds the answer (#3224). A pending check keeps the dispatch
+		// reservation; a refused one is refused as a failed Start is. A
+		// passed check grants nothing: Start below checks again.
+		checked, err := e.startChecks.take(ctx, invocationID, func(ctx context.Context) error {
+			return e.startAuthority(ctx, invocationID, startSpec)
+		})
+		if !checked {
+			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, errStartAuthorityPending)
+		}
+		if err != nil {
+			return false, false, e.refuseStart(ctx, entry, invocationID, reserved, err)
+		}
+	}
 	startedNow := false
 	if err := e.launchTaskInvocation(ctx, binding.run, func(launchCtx context.Context) error {
 		return e.driver.Start(launchCtx, invocationID, startSpec)
 	}); err != nil {
 		if !errors.Is(err, exec.ErrDuplicateStart) {
-			if bound && effective.AuthIdentityID != nil {
-				if releaseErr := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-					return tx.ReleaseOutboxDispatch(ctx, string(invocationID))
-				}); releaseErr != nil {
-					return false, false, fmt.Errorf("intent %q release dispatch reservation: %w",
-						entry.IdempotencyKey, errors.Join(err, releaseErr))
-				}
-			}
-			return false, false, fmt.Errorf("intent %q: start: %w", entry.IdempotencyKey, err)
+			return false, false, e.refuseStart(ctx, entry, invocationID, reserved, err)
 		}
 	} else {
 		startedNow = true

@@ -267,6 +267,11 @@ var holdClasses = []holdClass{
 	// daemon's own short work under a deadline, and nothing waits on an
 	// operator; a failed fetch holds as input_unavailable instead.
 	{sentinel: ErrBaseInputsPending, action: holdActionInvocation},
+	// A start-authority check in progress holds its invocation until the
+	// next pass finds the answer (#3224). Like a triage call it records no
+	// reason: the check is the daemon's own short work, and nothing waits on
+	// an operator.
+	{sentinel: errStartAuthorityPending, action: holdActionInvocation},
 }
 
 // firstHoldClass is the first row that matches err and satisfies keep.

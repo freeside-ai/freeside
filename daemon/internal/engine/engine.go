@@ -74,14 +74,20 @@ type Engine struct {
 	// The network calls a pass starts outside itself (#3215): a task's
 	// specifier triage, a discussion's reply by its intent's idempotency
 	// key, each with what it reports to the next pass, a specification
-	// attempt's research fetches by its invocation, and a failed run's
-	// advisory diagnosis. Run joins them before it returns.
+	// attempt's research fetches by its invocation, a failed run's advisory
+	// diagnosis, and an invocation's first start-authority check (#3224).
+	// Run joins them before it returns.
 	triages            keyedrun.Group[domain.TaskID]
 	triageOutcomes     offPassOutcomes
 	discussions        keyedrun.Group[string]
 	discussionOutcomes offPassOutcomes
 	research           researchFetches
 	diagnoses          keyedrun.Group[domain.RunID]
+	startChecks        startChecks
+	// startAuthority is the driver's own first start-authority check, which
+	// the pass runs outside itself before Start (WithStartAuthorityCheck).
+	// Nil starts an invocation in the pass that reaches it.
+	startAuthority func(context.Context, domain.InvocationID, exec.StartSpec) error
 
 	// startedRoots holds the root implementation invocations this process
 	// started (domain.InvocationID keys). Their loss is a live failure, not
@@ -164,6 +170,25 @@ func WithProductionDeliveryValidation(
 			return errors.New("production delivery validation: nil validator")
 		}
 		e.productionDeliveryValidator = validate
+		return nil
+	}
+}
+
+// WithStartAuthorityCheck installs the stage driver's own first
+// start-authority check, which can call GitHub. The engine runs it outside
+// the reconcile pass before it calls Start, holds the invocation until a
+// later pass finds the answer, and refuses the start as a failed Start when
+// the check refuses (#3224). It is not the gate: Start runs the same check
+// again, answered from the authority's cache. Without the option a start
+// takes one pass, and Start makes the check inside it.
+func WithStartAuthorityCheck(
+	check func(context.Context, domain.InvocationID, exec.StartSpec) error,
+) Option {
+	return func(e *Engine) error {
+		if check == nil {
+			return errors.New("start authority check: nil check")
+		}
+		e.startAuthority = check
 		return nil
 	}
 }
@@ -478,6 +503,7 @@ func (e *Engine) waitOffPass() {
 	e.discussions.Wait()
 	e.research.runs.Wait()
 	e.diagnoses.Wait()
+	e.startChecks.runs.Wait()
 }
 
 // RunProductionPublications advances the production publication lane on its
