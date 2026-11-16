@@ -1238,8 +1238,15 @@ public actor MockServer {
         let reason: String
     }
 
+    /// The stored timeline with the run time fields the daemon derives at
+    /// each read: the hold history and the clocks at the timeline's as_of.
     func runTimeline(id: String) -> Components.Schemas.RunTimeline? {
-        timelinesByRunID[id]
+        guard var timeline = timelinesByRunID[id] else { return nil }
+        timeline.hold_history = MockRunTime.holdHistory(timeline)
+        timeline.clocks = MockRunTime.clocks(
+            timeline.milestones, finished: runsByID[id]?.run.lifecycle == .finished, asOf: timeline.as_of
+        ).map { .init(value1: $0) }
+        return timeline
     }
 
     func taskTimeline(id: String) throws -> Components.Schemas.TaskTimeline? {
@@ -1268,6 +1275,7 @@ public actor MockServer {
             let timeline = timelinesByRunID[snapshot.run.id]
             if let timeline,
                 let breach = MockContractValidation.taskTimelineObservationsBreach(timeline)
+                    ?? runTimeline(id: snapshot.run.id).flatMap(MockContractValidation.runTimeBreach)
             {
                 throw InvalidRunError(runID: snapshot.run.id, reason: breach)
             }

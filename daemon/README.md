@@ -1550,7 +1550,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v16`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v17`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1689,7 +1689,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v16`.
+  `freeside-task-record-v17`.
 - **`agent` says which enrollment, model, and effort an admission ran on.**
   On an execution admission and a review admission alike it carries the
   binding's digests, `route_model_id`, `enrollment_id`,
@@ -1719,7 +1719,7 @@ carry an operator's reason. The record also leaves out four facts no
 store read returns today:
 
 - Which device sent a Stop.
-- Cancellations before the latest one, and hold history.
+- Cancellations before the latest one.
 - Check proofs listed by run. Verification still appears as timeline events.
 - Token counts.
 
@@ -6053,7 +6053,18 @@ at all.
   `ClearRunHoldCause`, and `ClearUpdateDrainHolds` (a lifted update drain). A clear time before the span's `last_observed_at` is
   stored as `last_observed_at`. A current row that can't make a valid span
   ends with no span, and a restarted span of the same cause writes none.
-  Holds cleared before migration 0145 left no record.
+  Holds cleared before migration 0145 left no record. Both timelines serve
+  the history as `hold_history`, oldest first (issue #3236), so a held
+  run's last span is its current `hold` without the detail.
+- **Clocks** (issue #3236) are derived at each read and never stored. Both
+  timelines serve `clocks`: a run's start and end, its elapsed and active
+  time in whole seconds, and the active interval of each
+  `invocation_started` milestone. `domain.RunClocksOf` is the one
+  definition. A run ends at its newest milestone once its lifecycle is
+  finished, from the same settled conclusion the run summary reads, and
+  otherwise counts to the read's `as_of`. A hold doesn't reduce active
+  time (`devlog/2026-11-16-1845-run-clock-definition.md`). The task
+  timeline computes each run's clocks at its own `as_of`.
 - **Liveness** is derived, never stored: `DeriveInvocationLiveness`
   classifies the last observation (status, live bit, daemon-clock instant)
   against a freshness window, so a stopped daemon or unobservable runtime

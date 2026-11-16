@@ -236,7 +236,9 @@ public struct MockServerTransport: ClientTransport {
                     body: Components.Schemas._Error(
                         message: "no entity exists under the identifier"))
             }
-            if let breach = MockContractValidation.runOutcomesBreach(timeline.outcomes) {
+            if let breach = MockContractValidation.runOutcomesBreach(timeline.outcomes)
+                ?? MockContractValidation.runTimeBreach(timeline)
+            {
                 return try Self.json(
                     status: .internalServerError,
                     body: Components.Schemas._Error(message: "reconstruction failed: run \(runID): \(breach)"))

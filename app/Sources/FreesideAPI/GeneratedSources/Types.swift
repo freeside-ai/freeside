@@ -4745,6 +4745,37 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/events`.
             public var events: [Components.Schemas.TaskEvent]
+            /// The run timeline's hold_history, oldest first, unlike milestones here. Optional for the reason RunTimeline gives.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/hold_history`.
+            public var hold_history: [Components.Schemas.RunHoldSpan]?
+            /// The run timeline's clocks, computed at this timeline's as_of. Optional for the reason RunTimeline gives.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/clocks`.
+            public struct clocksPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/clocks/value1`.
+                public var value1: Components.Schemas.RunClocks
+                /// Creates a new `clocksPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunClocks) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The run timeline's clocks, computed at this timeline's as_of. Optional for the reason RunTimeline gives.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskTimelineRun/clocks`.
+            public var clocks: Components.Schemas.TaskTimelineRun.clocksPayload?
             /// Creates a new `TaskTimelineRun`.
             ///
             /// - Parameters:
@@ -4757,6 +4788,8 @@ public enum Components {
             ///   - milestones: Run milestones, newest first (the run timeline uses oldest first).
             ///   - hold:
             ///   - events: Run-level events, newest first.
+            ///   - hold_history: The run timeline's hold_history, oldest first, unlike milestones here. Optional for the reason RunTimeline gives.
+            ///   - clocks: The run timeline's clocks, computed at this timeline's as_of. Optional for the reason RunTimeline gives.
             public init(
                 run_id: Swift.String,
                 role: Components.Schemas.TaskTimelineRun.rolePayload? = nil,
@@ -4766,7 +4799,9 @@ public enum Components {
                 superseded_by: Swift.String? = nil,
                 milestones: [Components.Schemas.RunMilestone],
                 hold: Components.Schemas.TaskTimelineRun.holdPayload? = nil,
-                events: [Components.Schemas.TaskEvent]
+                events: [Components.Schemas.TaskEvent],
+                hold_history: [Components.Schemas.RunHoldSpan]? = nil,
+                clocks: Components.Schemas.TaskTimelineRun.clocksPayload? = nil
             ) {
                 self.run_id = run_id
                 self.role = role
@@ -4777,6 +4812,8 @@ public enum Components {
                 self.milestones = milestones
                 self.hold = hold
                 self.events = events
+                self.hold_history = hold_history
+                self.clocks = clocks
             }
             public enum CodingKeys: String, CodingKey {
                 case run_id
@@ -4788,6 +4825,8 @@ public enum Components {
                 case milestones
                 case hold
                 case events
+                case hold_history
+                case clocks
             }
         }
         /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. specifier_triaged requires triage and no run_id: the task's one triage record (plan §5.13), at its recorded_at. Its reason is advisory, for display only. All other details are null. Events are observations, never authority.
@@ -5400,7 +5439,7 @@ public enum Components {
             case implementation = "implementation"
             case unknown = "unknown"
         }
-        /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate. outcomes is what the run posted or tried to post and the findings it set aside; every daemon that has the list serves it, empty or not. It is optional so an app still reads the timeline from a daemon built before the list existed, where an absent list is unknown, not empty.
+        /// A computed, typed daemon-observation timeline for one run. Review facts are separate from retained reviewer output, which has its own authenticated route. Stage labels come from the Run aggregate. outcomes is what the run posted or tried to post and the findings it set aside; hold_history is every hold the run has been under; clocks is where the run's time went. Every daemon that has a field serves it. Each is optional so an app still reads the timeline from a daemon built before the field existed, where an absent field is unknown, not empty.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RunTimeline`.
@@ -5516,6 +5555,37 @@ public enum Components {
             public var admissions: [Components.Schemas.InvocationAdmissionFacts]
             /// - Remark: Generated from `#/components/schemas/RunTimeline/outcomes`.
             public var outcomes: Components.Schemas.RunOutcomes?
+            /// Every hold the run has been under, oldest first. The current hold, when there is one, is the last entry, with a null cleared_at and the same reason, invocation, and instants as hold, which keeps the hold's detail. An empty list on a run older than the daemon that began keeping hold history is not proof the run was never held. A finished run's last span can extend past its clocks' ended_at; that time belongs to no clock.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/hold_history`.
+            public var hold_history: [Components.Schemas.RunHoldSpan]?
+            /// Where the run's time went, computed at as_of from the milestones; null for a run with no milestone, because there is nothing to measure from.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/clocks`.
+            public struct clocksPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunTimeline/clocks/value1`.
+                public var value1: Components.Schemas.RunClocks
+                /// Creates a new `clocksPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RunClocks) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// Where the run's time went, computed at as_of from the milestones; null for a run with no milestone, because there is nothing to measure from.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/clocks`.
+            public var clocks: Components.Schemas.RunTimeline.clocksPayload?
             /// Creates a new `RunTimeline`.
             ///
             /// - Parameters:
@@ -5530,6 +5600,8 @@ public enum Components {
             ///   - billable_cost_so_far: The run's billable spend so far, computed the same way attention cards compute theirs; null before any billable observation.
             ///   - admissions: What ran each admitted invocation of the run, as its execution or review admission recorded it, ordered by admitted_at then invocation_id. Only the run timeline carries it.
             ///   - outcomes:
+            ///   - hold_history: Every hold the run has been under, oldest first. The current hold, when there is one, is the last entry, with a null cleared_at and the same reason, invocation, and instants as hold, which keeps the hold's detail. An empty list on a run older than the daemon that began keeping hold history is not proof the run was never held. A finished run's last span can extend past its clocks' ended_at; that time belongs to no clock.
+            ///   - clocks: Where the run's time went, computed at as_of from the milestones; null for a run with no milestone, because there is nothing to measure from.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 as_of: Foundation.Date,
@@ -5541,7 +5613,9 @@ public enum Components {
                 completion: Components.Schemas.RunTimeline.completionPayload? = nil,
                 billable_cost_so_far: Components.Schemas.RunTimeline.billable_cost_so_farPayload? = nil,
                 admissions: [Components.Schemas.InvocationAdmissionFacts],
-                outcomes: Components.Schemas.RunOutcomes? = nil
+                outcomes: Components.Schemas.RunOutcomes? = nil,
+                hold_history: [Components.Schemas.RunHoldSpan]? = nil,
+                clocks: Components.Schemas.RunTimeline.clocksPayload? = nil
             ) {
                 self.as_of_revision = as_of_revision
                 self.as_of = as_of
@@ -5554,6 +5628,8 @@ public enum Components {
                 self.billable_cost_so_far = billable_cost_so_far
                 self.admissions = admissions
                 self.outcomes = outcomes
+                self.hold_history = hold_history
+                self.clocks = clocks
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -5567,6 +5643,8 @@ public enum Components {
                 case billable_cost_so_far
                 case admissions
                 case outcomes
+                case hold_history
+                case clocks
             }
         }
         /// What a run produced besides its pull request: each follow-up issue it filed or proposed, each issue comment it posted or proposed, and each finding whose latest disposition set it aside. Read from the proposal, intent, and disposition records and the notices the filer and comment dispatcher raised; it decides nothing. Only the run timeline carries it. complete is false when part of the list could not be read; the parts that could are still listed, and an unreadable post is listed as unreadable.
@@ -7217,6 +7295,145 @@ public enum Components {
                 case machine_capacity
                 case first_observed_at
                 case last_observed_at
+            }
+        }
+        /// One hold a run was under: its cause and its instants, without the hold's detail. A closed span records when the hold ended; the run's current hold is an open span, with a null cleared_at.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunHoldSpan`.
+        public struct RunHoldSpan: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunHoldSpan/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunHoldSpan/invocation_id`.
+            public var invocation_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunHoldSpan/reason`.
+            public var reason: Components.Schemas.RunHoldReason
+            /// - Remark: Generated from `#/components/schemas/RunHoldSpan/first_observed_at`.
+            public var first_observed_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/RunHoldSpan/last_observed_at`.
+            public var last_observed_at: Foundation.Date
+            /// When the hold ended, never before last_observed_at; null while the hold is current.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHoldSpan/cleared_at`.
+            public var cleared_at: Foundation.Date?
+            /// Creates a new `RunHoldSpan`.
+            ///
+            /// - Parameters:
+            ///   - run_id:
+            ///   - invocation_id:
+            ///   - reason:
+            ///   - first_observed_at:
+            ///   - last_observed_at:
+            ///   - cleared_at: When the hold ended, never before last_observed_at; null while the hold is current.
+            public init(
+                run_id: Swift.String,
+                invocation_id: Swift.String? = nil,
+                reason: Components.Schemas.RunHoldReason,
+                first_observed_at: Foundation.Date,
+                last_observed_at: Foundation.Date,
+                cleared_at: Foundation.Date? = nil
+            ) {
+                self.run_id = run_id
+                self.invocation_id = invocation_id
+                self.reason = reason
+                self.first_observed_at = first_observed_at
+                self.last_observed_at = last_observed_at
+                self.cleared_at = cleared_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case run_id
+                case invocation_id
+                case reason
+                case first_observed_at
+                case last_observed_at
+                case cleared_at
+            }
+        }
+        /// A run's elapsed and active time. The run starts at its run_submitted milestone, or at its earliest milestone when it has none. A finished run (lifecycle finished) ends at its newest milestone; any other has no end and counts to the timeline's as_of, never to before its newest milestone. Elapsed time runs from the start to the end. Active time is the part of it during which at least one invocation is working (RunActiveInterval). A hold doesn't reduce active time: it records that the daemon refused or put off the run's next step, not that a started invocation stopped. Totals are computed from the exact instants and rounded down to whole seconds.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunClocks`.
+        public struct RunClocks: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunClocks/started_at`.
+            public var started_at: Foundation.Date
+            /// The run's end; null while the run isn't finished.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunClocks/ended_at`.
+            public var ended_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/RunClocks/elapsed_seconds`.
+            public var elapsed_seconds: Swift.Int64
+            /// The union of active_intervals within the elapsed time, so intervals that overlap count once; never more than elapsed_seconds.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunClocks/active_seconds`.
+            public var active_seconds: Swift.Int64
+            /// One entry per invocation_started milestone, in the order the daemon recorded them. Entries can overlap.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunClocks/active_intervals`.
+            public var active_intervals: [Components.Schemas.RunActiveInterval]
+            /// Creates a new `RunClocks`.
+            ///
+            /// - Parameters:
+            ///   - started_at:
+            ///   - ended_at: The run's end; null while the run isn't finished.
+            ///   - elapsed_seconds:
+            ///   - active_seconds: The union of active_intervals within the elapsed time, so intervals that overlap count once; never more than elapsed_seconds.
+            ///   - active_intervals: One entry per invocation_started milestone, in the order the daemon recorded them. Entries can overlap.
+            public init(
+                started_at: Foundation.Date,
+                ended_at: Foundation.Date? = nil,
+                elapsed_seconds: Swift.Int64,
+                active_seconds: Swift.Int64,
+                active_intervals: [Components.Schemas.RunActiveInterval]
+            ) {
+                self.started_at = started_at
+                self.ended_at = ended_at
+                self.elapsed_seconds = elapsed_seconds
+                self.active_seconds = active_seconds
+                self.active_intervals = active_intervals
+            }
+            public enum CodingKeys: String, CodingKey {
+                case started_at
+                case ended_at
+                case elapsed_seconds
+                case active_seconds
+                case active_intervals
+            }
+        }
+        /// The span one invocation was working: from its invocation_started milestone to its first later execution_export_recorded, execution_outcome_recorded, or terminal_recorded milestone. An invocation with none of the three works until the next invocation_started, or until the run's end when there is none.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunActiveInterval`.
+        public struct RunActiveInterval: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunActiveInterval/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunActiveInterval/started_at`.
+            public var started_at: Foundation.Date
+            /// Null while the invocation is still working at as_of.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunActiveInterval/ended_at`.
+            public var ended_at: Foundation.Date?
+            /// Creates a new `RunActiveInterval`.
+            ///
+            /// - Parameters:
+            ///   - invocation_id:
+            ///   - started_at:
+            ///   - ended_at: Null while the invocation is still working at as_of.
+            public init(
+                invocation_id: Swift.String,
+                started_at: Foundation.Date,
+                ended_at: Foundation.Date? = nil
+            ) {
+                self.invocation_id = invocation_id
+                self.started_at = started_at
+                self.ended_at = ended_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case invocation_id
+                case started_at
+                case ended_at
             }
         }
         /// The daemon's latest observation of one run invocation.

@@ -762,7 +762,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | --- | --- |
 | **GitHub** | Owns source, issues, PRs, reviews, checks, and merge. Native Codex review, when observed, is recorded as best-effort extra evidence (Section [7](#7-review-policy)). Freeside reconciles each active resource independently; there is no global cursor. |
 | **Event inbox** | Accepts reconciled GitHub state, intake scans, cron events, and manual events idempotently. |
-| **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest for each run. The daemon computes each run's separate active and elapsed clocks from the run's recorded history and serves them with the intervals behind them, each hold with its reason, so a client does no clock arithmetic (revision 126; not built yet, tracker #3231). |
+| **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest for each run. The daemon computes each run's separate active and elapsed clocks from the run's recorded history and serves them with the intervals behind them, each hold with its reason, so a client does no clock arithmetic (revision 126, tracker #3231). |
 | **Scheduler** | Owns the closed union of durable schedule kinds, fire-time validation, and transactional redelivery (Section [5.16](#516-the-durable-scheduler)). |
 | **signet** | Owns AttentionItems, deliveries, conversations, synchronization, device pairing, and ntfy integration. |
 | **Research fetcher** | Retrieves immutable, digest-addressed research artifacts for agents. |
@@ -6433,7 +6433,7 @@ Each run records:
   redacted, sourced derivative;
 - the history from which the daemon computes its active and elapsed
   clocks and serves them with the intervals behind them, each hold with its
-  reason (revision 126; not built yet, tracker #3231);
+  reason (revision 126, tracker #3231);
 - attempts, review rounds, and yield;
 - classifier samples and shadow results; and
 - outcome and human decisions.

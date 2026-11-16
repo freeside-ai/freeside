@@ -92,6 +92,14 @@ func TestTaskTimelineSpecificationOnly(t *testing.T) {
 		}); err != nil {
 			return err
 		}
+		// An update drain held the run first; the changed cause ends it at
+		// the second hold's first instant.
+		if err := tx.RecordRunHold(ctx, domain.RunHoldObservation{
+			RunID: specification, Reason: domain.HoldUpdateDrain,
+			FirstObservedAt: at.Add(10 * time.Second), LastObservedAt: at.Add(40 * time.Second),
+		}); err != nil {
+			return err
+		}
 		if err := tx.RecordRunHold(ctx, domain.RunHoldObservation{
 			RunID: specification, InvocationID: &invocation, Reason: domain.HoldAttendedModeActive,
 			FirstObservedAt: at.Add(time.Minute), LastObservedAt: at.Add(2 * time.Minute),
@@ -148,6 +156,43 @@ func TestTaskTimelineSpecificationOnly(t *testing.T) {
 	if len(run.Milestones) != 1 || run.Hold == nil || run.Hold.Reason != domain.HoldAttendedModeActive || len(run.Events) != 0 {
 		t.Fatalf("specification observations = %+v", run)
 	}
+	// The run timeline serves the hold history oldest first, ending with the
+	// current hold, and the task timeline serves the same history and clocks
+	// for the run at the same as_of (#3236).
+	runTimeline, err := f.service.GetRunTimeline(ctx, specification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, hold := runTimeline.HoldHistory, runTimeline.Hold
+	if len(history) != 2 || history[0].Reason != domain.HoldUpdateDrain || history[0].ClearedAt == nil ||
+		!history[0].ClearedAt.Equal(at.Add(time.Minute)) {
+		t.Fatalf("hold history = %+v, want the cleared update drain, then the current hold", history)
+	}
+	if current := history[1]; hold == nil || current.ClearedAt != nil || current.RunID != hold.RunID ||
+		current.Reason != hold.Reason || !reflect.DeepEqual(current.InvocationID, hold.InvocationID) ||
+		!current.FirstObservedAt.Equal(hold.FirstObservedAt) || !current.LastObservedAt.Equal(hold.LastObservedAt) {
+		t.Fatalf("last hold span = %+v, want the current hold %+v", current, hold)
+	}
+	// Submitted and never started: the clocks count to as_of, none of it
+	// active.
+	if c := runTimeline.Clocks; c == nil || !c.StartedAt.Equal(at) || c.EndedAt != nil || c.ActiveSeconds != 0 ||
+		c.ElapsedSeconds != int64(runTimeline.AsOf.Sub(at)/time.Second) {
+		t.Fatalf("clocks = %+v at as_of %s", runTimeline.Clocks, runTimeline.AsOf)
+	}
+	var atRunAsOf signet.TaskTimeline
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		atRunAsOf, err = signet.ReadTaskTimeline(ctx, tx, task.ID, runTimeline.AsOf)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if entry := atRunAsOf.Sections[0].Runs[0]; !reflect.DeepEqual(entry.HoldHistory, runTimeline.HoldHistory) ||
+		!reflect.DeepEqual(entry.Clocks, runTimeline.Clocks) {
+		t.Fatalf("task timeline run history %+v clocks %+v, want the run timeline's %+v and %+v",
+			entry.HoldHistory, entry.Clocks, runTimeline.HoldHistory, runTimeline.Clocks)
+	}
+
 	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
 	response := bearerRequest(t, handler, http.MethodGet, "/tasks/"+string(task.ID)+"/timeline", "Bearer test-device-1", nil)
 	if response.Code != http.StatusOK {

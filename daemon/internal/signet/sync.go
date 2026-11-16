@@ -270,6 +270,13 @@ type RunTimeline struct {
 	Admissions []domain.InvocationAdmissionFacts `json:"admissions"`
 	// Outcomes is what the run produced besides its pull request (#3149).
 	Outcomes RunOutcomes `json:"outcomes"`
+	// HoldHistory is every hold the run has been under, oldest first; the
+	// current hold, when there is one, is the last entry, with no clear
+	// time (#3236).
+	HoldHistory []domain.RunHoldSpan `json:"hold_history"`
+	// Clocks is the run's elapsed and active time as of AsOf
+	// (domain.RunClocksOf); nil for a run with no milestone.
+	Clocks *domain.RunClocks `json:"clocks"`
 }
 
 // ConversationSnapshot is a whole Conversation with its store-stamped sync
@@ -1165,6 +1172,9 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		if err := readTimelineTimeFacts(ctx, tx, run.Value, observation, &facts); err != nil {
+			return err
+		}
 		// An outcome that cannot be read is listed as such and never fails
 		// the timeline.
 		var outcomes RunOutcomes
@@ -1415,6 +1425,8 @@ func runTimeline(
 		BillableCostSoFar: facts.cost,
 		Admissions:        nonNilSlice(facts.admissions),
 		Outcomes:          outcomes,
+		HoldHistory:       nonNilSlice(facts.holdHistory),
+		Clocks:            domain.RunClocksOf(observation.Milestones, facts.finished, asOf),
 	}
 }
 
@@ -1430,6 +1442,10 @@ type runProjectionFacts struct {
 	// admissions is read only for the run timeline, beside review, so the
 	// run list never pays for it.
 	admissions []domain.InvocationAdmissionFacts
+	// holdHistory and finished are read only for the two timelines
+	// (readTimelineTimeFacts).
+	holdHistory []domain.RunHoldSpan
+	finished    bool
 }
 
 // runProjectionFactsFor reads the projection facts inside the same
@@ -1683,15 +1699,9 @@ func projectRunSnapshot(
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, err)
 	}
-	conclusion, err := AuthenticatedRunConclusion(
-		ctx, tx, run, observation, publicationReadyMilestone(observation),
-	)
+	conclusion, err := settledRunConclusion(ctx, tx, run, observation)
 	if err != nil {
-		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
-	}
-	conclusion, err = SettledRunConclusion(ctx, tx, run, observation, conclusion)
-	if err != nil {
-		return RunSnapshot{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
+		return RunSnapshot{}, err
 	}
 	facts, err := runProjectionFactsFor(ctx, tx, run, observation)
 	if err != nil {
@@ -1704,6 +1714,45 @@ func projectRunSnapshot(
 		return RunSnapshot{}, fmt.Errorf("run %q display names: %w", run.ID, err)
 	}
 	return runSnapshot(run, snapshot, observation, conclusion, state.Revision, displayNames, facts), nil
+}
+
+// settledRunConclusion is the run's authenticated, settled conclusion, the
+// input LifecycleOf reads. The run summary and both timelines read it, so a
+// timeline's clocks stop exactly when its run reads finished.
+func settledRunConclusion(
+	ctx context.Context, tx *store.ReadTx, run domain.Run, observation domain.RunObservation,
+) (domain.RunConclusion, error) {
+	conclusion, err := AuthenticatedRunConclusion(
+		ctx, tx, run, observation, publicationReadyMilestone(observation),
+	)
+	if err != nil {
+		return domain.RunConclusion{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
+	}
+	conclusion, err = SettledRunConclusion(ctx, tx, run, observation, conclusion)
+	if err != nil {
+		return domain.RunConclusion{}, fmt.Errorf("run %q conclusion: %w", run.ID, asRunObservationIntegrityError(err))
+	}
+	return conclusion, nil
+}
+
+// readTimelineTimeFacts reads what both timelines serve beside the
+// observation and the summary does not: the run's hold spans, oldest first,
+// and whether the run is finished, which stops its clocks.
+func readTimelineTimeFacts(
+	ctx context.Context, tx *store.ReadTx, run domain.Run, observation domain.RunObservation,
+	facts *runProjectionFacts,
+) error {
+	conclusion, err := settledRunConclusion(ctx, tx, run, observation)
+	if err != nil {
+		return err
+	}
+	spans, err := tx.ListRunHoldSpans(ctx, run.ID)
+	if err != nil {
+		return asRunObservationIntegrityError(err)
+	}
+	facts.holdHistory = spans
+	facts.finished = domain.LifecycleOf(conclusion, facts.supersededBy != nil) == domain.RunLifecycleFinished
+	return nil
 }
 
 // observeAuthenticatedRun is signet's own read of one run's observation for

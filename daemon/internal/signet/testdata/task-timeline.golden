@@ -444,7 +444,15 @@
             }
           ],
           "hold": null,
-          "events": []
+          "events": [],
+          "hold_history": [],
+          "clocks": {
+            "started_at": "2026-09-12T16:00:00Z",
+            "ended_at": null,
+            "elapsed_seconds": 7200,
+            "active_seconds": 0,
+            "active_intervals": []
+          }
         },
         {
           "run_id": "run-spec-2",
@@ -465,7 +473,15 @@
             }
           ],
           "hold": null,
-          "events": []
+          "events": [],
+          "hold_history": [],
+          "clocks": {
+            "started_at": "2026-09-12T15:00:00Z",
+            "ended_at": null,
+            "elapsed_seconds": 10800,
+            "active_seconds": 0,
+            "active_intervals": []
+          }
         }
       ]
     },
@@ -576,7 +592,15 @@
               "pr_number": 73,
               "merge_commit_sha": null
             }
-          ]
+          ],
+          "hold_history": [],
+          "clocks": {
+            "started_at": "2026-09-12T13:00:00Z",
+            "ended_at": null,
+            "elapsed_seconds": 18000,
+            "active_seconds": 0,
+            "active_intervals": []
+          }
         },
         {
           "run_id": "run-impl-1",
@@ -597,7 +621,15 @@
             }
           ],
           "hold": null,
-          "events": []
+          "events": [],
+          "hold_history": [],
+          "clocks": {
+            "started_at": "2026-09-12T12:00:00Z",
+            "ended_at": null,
+            "elapsed_seconds": 21600,
+            "active_seconds": 0,
+            "active_intervals": []
+          }
         },
         {
           "run_id": "run-spec-1",
@@ -618,7 +650,15 @@
             }
           ],
           "hold": null,
-          "events": []
+          "events": [],
+          "hold_history": [],
+          "clocks": {
+            "started_at": "2026-09-12T11:00:00Z",
+            "ended_at": null,
+            "elapsed_seconds": 25200,
+            "active_seconds": 0,
+            "active_intervals": []
+          }
         }
       ]
     }

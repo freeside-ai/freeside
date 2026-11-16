@@ -250,5 +250,13 @@
       }
     ],
     "complete": false
+  },
+  "hold_history": [],
+  "clocks": {
+    "started_at": "2026-08-10T12:34:56Z",
+    "ended_at": null,
+    "elapsed_seconds": 10800,
+    "active_seconds": 0,
+    "active_intervals": []
   }
 }

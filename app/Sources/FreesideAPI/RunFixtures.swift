@@ -626,7 +626,14 @@ public enum RunFixtures {
                         "review-\(activeRunID)-2", at: date(1_800),
                         implementer: .differed, remediator: .unknown),
                 ],
-                outcomes: noOutcomes),
+                outcomes: noOutcomes,
+                // Held for machine capacity before the second attempt, which
+                // its admission cleared; the mock appends the current hold.
+                hold_history: [
+                    .init(
+                        run_id: activeRunID, invocation_id: "inv-\(activeRunID)-2", reason: .machine_capacity,
+                        first_observed_at: date(1_150), last_observed_at: date(1_180), cleared_at: date(1_200))
+                ]),
             .init(
                 as_of_revision: 12, as_of: date(1_080), run_id: readyRunID,
                 milestones: [
