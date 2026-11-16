@@ -9,32 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func TestShadowReviewConfigurationApprovalMigrationAppliesFromPriorHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0056_")
-	if got := rawVersion(t, db); got != 55 {
-		t.Fatalf("prior schema version = %d, want 55", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, db)
-	for _, table := range []string{
-		"shadow_review_configuration_approvals",
-		"shadow_review_configuration_activations",
-	} {
-		var count int
-		if err := db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table,
-		).Scan(&count); err != nil || count != 1 {
-			t.Fatalf("table %s count=%d err=%v", table, count, err)
-		}
-	}
-}
 
 func TestShadowReviewConfigurationApprovalReconstructionRejectsTampering(t *testing.T) {
 	t.Parallel()

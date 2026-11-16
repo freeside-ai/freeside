@@ -1,3 +1,0 @@
--- Add return_to_agent to existing authenticated production ready items.
--- The synchronized item and decision-surface rewrites run in the store data
--- migration so they share this migration's transaction.

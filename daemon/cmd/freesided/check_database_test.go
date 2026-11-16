@@ -170,6 +170,26 @@ func TestCheckDatabaseNamesFailedMigration(t *testing.T) {
 	f.requireNoCopy(t)
 }
 
+// TestCheckDatabaseNamesBelowBaselineRefusal: a database below the migration
+// baseline gets the store's refusal, which names the baseline and a build
+// that migrates it, instead of the generic history mismatch.
+func TestCheckDatabaseNamesBelowBaselineRefusal(t *testing.T) {
+	t.Parallel()
+	f := newCheckDatabaseFixture(t)
+	seedTemplateStore(t, f.dbPath)
+	refusal := &store.BelowBaselineError{Database: 119, Baseline: 120}
+	_, err := f.run(t, t.Context(), checkDatabaseSeams{
+		open: func(context.Context, string, store.Options) (*store.Store, error) {
+			return nil, refusal
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), refusal.Error()) ||
+		!strings.HasSuffix(err.Error(), "; the live database is unchanged") {
+		t.Fatalf("err = %v, want the below-baseline refusal and the live database unchanged", err)
+	}
+	f.requireNoCopy(t)
+}
+
 // TestCheckDatabaseNamesFailedKindsOnly tampers a stored row; the check
 // fails naming the kind, and nothing from the row reaches its output.
 func TestCheckDatabaseNamesFailedKindsOnly(t *testing.T) {

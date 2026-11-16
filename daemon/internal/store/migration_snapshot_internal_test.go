@@ -14,9 +14,10 @@ import (
 )
 
 // snapshots caches raw database images by schema version for migration
-// tests that start from an empty database. A version is built from the
-// highest cached version below it, and every build also keeps the image at
-// each multiple of snapshotStride it passes. Parallel tests ask for
+// tests that start from an empty database. The first image is the
+// migration baseline, since no history below it exists. A version is built
+// from the highest cached version below it, and every build also keeps the
+// image at each multiple of snapshotStride it passes. Parallel tests ask for
 // versions in no particular order, so without those stops a request below
 // every cached version would rebuild from empty; with them it starts at
 // most snapshotStride-1 migrations back. One lock covers the builds, which
@@ -71,13 +72,25 @@ func snapshotImage(version int) ([]byte, error) {
 	if image, ok := snapshots.images[version]; ok {
 		return image, nil
 	}
+	history, err := loadMigrationHistory(migrations.FS)
+	if err != nil {
+		return nil, err
+	}
 	from := 0
 	var image []byte
-	for v := version - 1; v >= 1; v-- {
+	for v := version - 1; v >= history.baseline; v-- {
 		if cached, ok := snapshots.images[v]; ok {
 			from, image = v, cached
 			break
 		}
+	}
+	if image == nil && version >= history.baseline {
+		next, err := migrateImage(context.Background(), nil, history.baseline)
+		if err != nil {
+			return nil, err
+		}
+		from = history.baseline
+		snapshots.images[from], image = next, next
 	}
 	for stop := (from/snapshotStride + 1) * snapshotStride; stop <= version; stop += snapshotStride {
 		next, err := migrateImage(context.Background(), image, stop)
@@ -96,24 +109,24 @@ func snapshotImage(version int) ([]byte, error) {
 	return image, nil
 }
 
-// versionBefore is the schema version migrateThrough(before) leaves: the
-// count of embedded migrations whose names sort before before.
+// versionBefore is the schema version of the last embedded migration whose
+// name sorts before before.
 func versionBefore(t testing.TB, before string) int {
 	t.Helper()
-	names, err := migrationFiles(migrations.FS)
+	history, err := loadMigrationHistory(migrations.FS)
 	if err != nil {
 		t.Fatalf("list migrations: %v", err)
 	}
-	version, _ := slices.BinarySearch(names, before)
-	if version < 1 {
+	count, _ := slices.BinarySearch(history.files, before)
+	if count < 1 {
 		t.Fatalf("no migration sorts before %q", before)
 	}
-	return version
+	return history.baseline + count - 1
 }
 
 // copySnapshotThrough writes to path, which must not exist, a database at
-// the head immediately before the named migration: the state openRaw plus
-// migrateThrough(before) leaves, copied from the snapshot cache. It is for
+// the head immediately before the named migration, copied from the snapshot
+// cache. It is for
 // tests that open, close, and reopen path themselves; openRawThrough is the
 // handle-returning form.
 func copySnapshotThrough(t testing.TB, path, before string) {
@@ -143,10 +156,9 @@ func copySnapshotAt(t testing.TB, path string, version int) {
 	}
 }
 
-// openRawThrough replaces openRaw followed by migrateThrough(before) on the
-// empty database: a raw handle at the head immediately before the named
+// openRawThrough is a raw handle at the head immediately before the named
 // migration, closed at cleanup. A test that then seeds rows still calls
-// migrateThrough to run the migrations under test for real.
+// migrate to run the migrations under test for real.
 func openRawThrough(t *testing.T, before string) *sql.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "store.db")
@@ -167,8 +179,8 @@ func openRawThrough(t *testing.T, before string) *sql.DB {
 }
 
 // TestMigrationSnapshotsMatchInProcessMigration pins that a snapshot equals
-// the database migrateThrough would have left. One raw handle steps from
-// empty through every version in process; a second chain closes, copies,
+// the database an in-process migration would have left. One raw handle
+// steps from empty through the baseline and every version above it; a second chain closes, copies,
 // and reopens the file between every version, which is the most reopens
 // any snapshot cache chain can make. After each step both must hold the
 // same schema objects and the same applied migrations. A migration that
@@ -178,13 +190,13 @@ func openRawThrough(t *testing.T, before string) *sql.DB {
 func TestMigrationSnapshotsMatchInProcessMigration(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	head, err := CurrentSchemaVersion()
+	history, err := loadMigrationHistory(migrations.FS)
 	if err != nil {
-		t.Fatalf("current schema version: %v", err)
+		t.Fatalf("list migrations: %v", err)
 	}
 	stepped := openRaw(t)
 	var image []byte
-	for version := 1; version <= head; version++ {
+	for version := history.baseline; version <= history.head(); version++ {
 		prefix, err := migrationsThrough(version)
 		if err != nil {
 			t.Fatal(err)

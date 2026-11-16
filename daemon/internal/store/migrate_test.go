@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -11,7 +12,9 @@ import (
 )
 
 // headVersion derives the expected schema head from the embedded migration
-// set, so this test does not go stale as migrations land.
+// set, so this test does not go stale as migrations land. It reads the last
+// file's number rather than counting files, since the first file is a
+// baseline that stands for the versions it squashed.
 func headVersion(t *testing.T) int {
 	t.Helper()
 	names, err := fs.Glob(migrations.FS, "*.sql")
@@ -21,7 +24,12 @@ func headVersion(t *testing.T) int {
 	if len(names) == 0 {
 		t.Fatal("no embedded migrations")
 	}
-	return len(names)
+	last := names[len(names)-1]
+	version, err := strconv.Atoi(last[:4])
+	if err != nil {
+		t.Fatalf("migration %q has no version prefix: %v", last, err)
+	}
+	return version
 }
 
 // TestMigrateFreshAndIdempotent is acceptance fixture 2: a fresh database

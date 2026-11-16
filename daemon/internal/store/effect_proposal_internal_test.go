@@ -10,47 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0040_")
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, db)
-	for _, table := range []string{
-		"effect_proposal_instances", "effect_proposal_items", "effect_proposal_revisions",
-		"effect_proposal_decisions", "effect_proposal_snoozes", "effect_proposal_policy_approvals",
-	} {
-		assertTableExists(t, db, table, true)
-	}
-	// The 0077, 0088, 0110, and 0139 rebuilds widened the effect_kind CHECK
-	// to admit the second through fifth registry members while still
-	// rejecting any unknown kind, and the batch index and admission_key
-	// UNIQUE constraint survived every rebuild.
-	var schema string
-	if err := db.QueryRowContext(ctx,
-		`SELECT sql FROM sqlite_master WHERE type='table' AND name='effect_proposal_instances'`).Scan(&schema); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(schema, "effect_kind IN\n        ('run_proposal', 'source_issue_closure', 'follow_up_filing', 'image_policy_adoption',\n         'issue_comment')") {
-		t.Fatalf("rebuilt effect_kind CHECK missing a registered kind: %s", schema)
-	}
-	if !strings.Contains(schema, "admission_key           TEXT NOT NULL UNIQUE") {
-		t.Fatalf("rebuilt table lost admission_key UNIQUE: %s", schema)
-	}
-	var indexCount int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='effect_proposal_instances_batch'`).Scan(&indexCount); err != nil {
-		t.Fatal(err)
-	}
-	if indexCount != 1 {
-		t.Fatalf("effect_proposal_instances_batch index count = %d, want 1", indexCount)
-	}
-}
 
 func TestProposalInstanceReconstructionRejectsTampering(t *testing.T) {
 	t.Parallel()

@@ -7,11 +7,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -63,10 +63,11 @@ func assertAtHead(t *testing.T, db *sql.DB) {
 }
 
 // TestCurrentSchemaVersion requires every non-Go file checked into
-// daemon/migrations to be an embedded migration. The head is counted from the
-// directory on disk, not from migrations.FS, so a file the go:embed pattern
-// misses (a wrong extension or case) fails here instead of shipping a binary
-// without it, and adding a migration needs no edit to this test.
+// daemon/migrations to be embedded, and the head to be the last file's
+// version. The files are listed from the directory on disk, not from
+// migrations.FS, so a file the go:embed patterns miss (a wrong extension or
+// case) fails here instead of shipping a binary without it, and adding a
+// migration needs no edit to this test.
 func TestCurrentSchemaVersion(t *testing.T) {
 	t.Parallel()
 	got, err := CurrentSchemaVersion()
@@ -78,30 +79,34 @@ func TestCurrentSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrations directory: %v", err)
 	}
-	var onDisk []string
+	var onDisk, sqlFiles []string
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".go") {
 			onDisk = append(onDisk, entry.Name())
 		}
+		if strings.HasSuffix(entry.Name(), ".sql") {
+			sqlFiles = append(sqlFiles, entry.Name())
+		}
 	}
-	if len(onDisk) == 0 {
+	if len(sqlFiles) == 0 {
 		t.Fatalf("no migration files in %s", dir)
-	}
-	if got == len(onDisk) {
-		return
-	}
-	embedded, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatalf("list embedded migrations: %v", err)
 	}
 	var stray []string
 	for _, name := range onDisk {
-		if !slices.Contains(embedded, name) {
+		if _, err := fs.Stat(migrations.FS, name); err != nil {
 			stray = append(stray, name)
 		}
 	}
-	t.Fatalf("current schema version = %d, want %d files in %s; not embedded: %v",
-		got, len(onDisk), dir, stray)
+	if len(stray) > 0 {
+		t.Fatalf("files in %s not embedded: %v", dir, stray)
+	}
+	last, err := migrationVersion(sqlFiles[len(sqlFiles)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != last {
+		t.Fatalf("current schema version = %d, want %d, the version of %s", got, last, sqlFiles[len(sqlFiles)-1])
+	}
 }
 
 // TestFailingMigrationRollsBack is acceptance fixture 3: a deliberately
@@ -140,7 +145,8 @@ func assertTableExists(t *testing.T, db *sql.DB, name string, want bool) {
 	}
 }
 
-// TestMigrationFileValidation pins the naming and ordering rules.
+// TestMigrationFileValidation pins the naming and ordering rules and the
+// shape of the squashed history.
 func TestMigrationFileValidation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -158,14 +164,34 @@ func TestMigrationFileValidation(t *testing.T) {
 		{"bad name", map[string]string{
 			"first.sql": "SELECT 1;",
 		}},
-		{"not starting at 0001", map[string]string{
+		{"not starting at 0001, with no squashed history", map[string]string{
 			"0002_a.sql": "SELECT 1;",
+		}},
+		{"squashed history short of the baseline", map[string]string{
+			"0003_base.sql": "SELECT 1;",
+			squashedHistoryFile: "1 0001_a.sql " + contentaddr.Sum([]byte("a")) + "\n" +
+				"2 0002_b.sql " + contentaddr.Sum([]byte("b")) + "\n",
+		}},
+		{"squashed history out of order", map[string]string{
+			"0002_base.sql": "SELECT 1;",
+			squashedHistoryFile: "2 0002_b.sql " + contentaddr.Sum([]byte("b")) + "\n" +
+				"1 0001_a.sql " + contentaddr.Sum([]byte("a")) + "\n",
+		}},
+		{"squashed history names a file of another version", map[string]string{
+			"0002_base.sql": "SELECT 1;",
+			squashedHistoryFile: "1 0001_a.sql " + contentaddr.Sum([]byte("a")) + "\n" +
+				"2 0003_b.sql " + contentaddr.Sum([]byte("b")) + "\n",
+		}},
+		{"squashed history digest not canonical", map[string]string{
+			"0002_base.sql": "SELECT 1;",
+			squashedHistoryFile: "1 0001_a.sql " + contentaddr.Sum([]byte("a")) + "\n" +
+				"2 0002_b.sql sha256:short\n",
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := migrationFiles(mapFS(tc.files)); err == nil {
-				t.Fatal("migrationFiles succeeded, want error")
+			if _, err := loadMigrationHistory(mapFS(tc.files)); err == nil {
+				t.Fatal("loadMigrationHistory succeeded, want error")
 			}
 		})
 	}

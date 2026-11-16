@@ -354,46 +354,6 @@ func TestTaskNamePreservesOperatorChoice(t *testing.T) {
 	}
 }
 
-func TestTaskMigrationReusesLegacySource(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := openPreRenameDatabase(t)
-	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		spec, err := tx.GetRun(ctx, legacySpecificationRun)
-		if err != nil {
-			return err
-		}
-		impl, err := tx.GetRun(ctx, legacyImplementationRun)
-		if err != nil {
-			return err
-		}
-		if spec.TaskID == "" || spec.TaskID != impl.TaskID {
-			t.Fatalf("legacy task continuity: spec=%q implementation=%q", spec.TaskID, impl.TaskID)
-		}
-		task, err := tx.GetTask(ctx, spec.TaskID)
-		if err != nil {
-			return err
-		}
-		if task.Source == nil {
-			t.Fatal("legacy source artifact was not recovered")
-		}
-		replay, err := tx.GetOrCreateTask(ctx, task.ProjectID, *task.Source)
-		if err != nil {
-			return err
-		}
-		if replay.ID != task.ID {
-			t.Fatalf("later submit created %q, want migrated task %q", replay.ID, task.ID)
-		}
-		item, err := tx.GetAttentionItem(ctx, legacyApprovalItem)
-		if err == nil && (item.Subject.TaskID == nil || *item.Subject.TaskID != task.ID) {
-			t.Fatalf("legacy approval task: %+v", item.Subject)
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestTaskRetainsRetryAndLaterCampaignHistory(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

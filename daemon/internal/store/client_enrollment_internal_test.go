@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 const enrollmentManifest = domain.Digest(
@@ -69,64 +68,6 @@ func recordEnrollmentFixtures(t *testing.T, s *Store) {
 			time.Date(2026, 1, 2, 3, 1, 0, 0, time.UTC))
 	}); err != nil {
 		t.Fatalf("record fixtures: %v", err)
-	}
-}
-
-// TestAdmittedAgentsMigrationNarrowsIdentities proves 0052 rewrites a
-// pre-revision identity row into the narrowed shape: client facts under
-// interim, enabled backfilled true, account fields empty, and the row
-// readable through the cross-checked reconstruction.
-func TestAdmittedAgentsMigrationNarrowsIdentities(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "store.db")
-	copySnapshotThrough(t, path, "0052_")
-	db, err := openDB(path, Options{})
-	if err != nil {
-		t.Fatalf("openDB: %v", err)
-	}
-	legacyBody := `{"identity":{"id":"auth-legacy","provider":"claude",` +
-		`"auth_store_mutation_lease":true,"auth_store_volume":"claude-cred",` +
-		`"max_parallel_executions":2,"refresh_strategy":"refresh_external",` +
-		`"supports_read_only_auth_snapshot":true},` +
-		`"recorded_at":"2026-01-02T03:04:05Z"}`
-	if _, err := db.ExecContext(ctx, `
-INSERT INTO auth_identities
-    (id, provider, auth_store_mutation_lease, auth_store_volume, max_parallel_executions,
-     refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body)
-VALUES ('auth-legacy', 'claude', 1, 'claude-cred', 2, 'refresh_external', 1,
-        '2026-01-02T03:04:05Z', ?)`, legacyBody); err != nil {
-		t.Fatalf("insert legacy identity: %v", err)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close raw db: %v", err)
-	}
-	s, err := Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	var identity domain.AuthIdentity
-	if err := s.Read(ctx, func(tx *ReadTx) error {
-		var err error
-		identity, err = tx.GetAuthIdentity(ctx, "auth-legacy")
-		return err
-	}); err != nil {
-		t.Fatalf("read migrated identity: %v", err)
-	}
-	want := domain.AuthIdentity{
-		ID: "auth-legacy", Provider: "claude", AuthStoreMutationLease: true,
-		Enabled: true,
-		Interim: domain.InterimClientFacts{
-			AuthStoreVolume: "claude-cred", RefreshStrategy: domain.RefreshExternal,
-			SupportsReadOnlyAuthSnapshot: true,
-		},
-	}
-	if identity != want {
-		t.Fatalf("migrated identity = %+v, want %+v", identity, want)
 	}
 }
 

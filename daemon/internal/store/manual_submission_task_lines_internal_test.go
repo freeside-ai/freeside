@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // seedManualSubmissionTarget stores the project and specification artifact a
@@ -66,57 +65,6 @@ func readManualSubmission(t *testing.T, ctx context.Context, st *Store, identity
 		return err
 	})
 	return s, err
-}
-
-// TestManualSubmissionLinesMigrationKeepsOlderRows: a row stored before 0117
-// gains a NULL column and reads with no lines, and a retry of the request that
-// carried lines still replays it rather than conflicting. The digest the row
-// stores is the one that request produces, so it is the same request.
-func TestManualSubmissionLinesMigrationKeepsOlderRows(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openTemplateStoreAt(t, t.TempDir()+"/manual-submission-lines.db", Options{})
-	want := seedManualSubmissionTarget(t, ctx, st)
-	rewindRunHoldQuotaWindow(t, ctx, st.db)
-	for _, statement := range []string{
-		`DROP TABLE client_command_receipts`,
-		`ALTER TABLE pool_usage_observations DROP COLUMN entity_version`,
-		`ALTER TABLE pool_usage_observations DROP COLUMN as_of_revision`,
-		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
-		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
-		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
-	} {
-		if _, err := st.db.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := st.db.ExecContext(ctx, `INSERT INTO manual_submissions
-		(identity, project_id, source_artifact_id, source_digest, request_digest, implementation_run_id)
-		VALUES (?, ?, ?, ?, ?, ?)`, want.Identity, want.ProjectID, want.SourceArtifactID, want.SourceDigest,
-		want.RequestDigest, want.ImplementationRunID); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate(ctx, st.db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, st.db)
-
-	got, err := readManualSubmission(t, ctx, st, want.Identity)
-	if err != nil {
-		t.Fatalf("read after migration: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("submission = %+v, want %+v", got, want)
-	}
-	retry := want
-	retry.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleReviewer, Agent: "codex"}}
-	if err := acceptManualSubmission(t, ctx, st, retry); err != nil {
-		t.Fatalf("retry of a request recorded before the column: %v", err)
-	}
-	// The replay wrote nothing, so the record still predates the field.
-	if got, err := readManualSubmission(t, ctx, st, want.Identity); err != nil || got.TaskLines != nil {
-		t.Fatalf("after the retry: %+v, %v; want no lines", got, err)
-	}
 }
 
 // TestManualSubmissionLinesRoundTrip: a request with lines stores them and a

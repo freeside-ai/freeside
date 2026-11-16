@@ -286,8 +286,10 @@ func compactStoredCorpusDatabase(t *testing.T, dbPath string, forbidden []string
 		}
 	}
 	refuseStoredCorpusValues(t, db, forbidden)
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM schema_migrations").Scan(&fixture.SchemaVersion); err != nil {
-		t.Fatalf("count schema_migrations: %v", err)
+	// The highest version, not a row count: a database created after the
+	// migration squash records only the baseline and later.
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&fixture.SchemaVersion); err != nil {
+		t.Fatalf("read schema version: %v", err)
 	}
 	compact := filepath.Join(t.TempDir(), "compact.db")
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", compact); err != nil {

@@ -9,21 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-// TestPublicationAuthoringMigrationAppliesFromHead proves 0078 applies on top of
-// the prior schema and creates the authoring table at schema version 78.
-func TestPublicationAuthoringMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0077_")
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, db)
-	assertTableExists(t, db, "publication_authorings", true)
-}
 
 // TestPublicationAuthoringReconstructionRejectsTampering seeds a valid,
 // reference-free authoring artifact and proves each store-private lookup or

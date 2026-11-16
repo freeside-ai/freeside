@@ -3,13 +3,11 @@ package store
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // Credential-integrity marks at the store boundary (plan §5.4 admission rule
@@ -293,99 +291,5 @@ func TestReenrollmentClearsIntegrityMark(t *testing.T) {
 	assertMarkedRefusal(t, requireUnmarked(t, s, first.EnrollmentID, first.Ordinal), mark)
 	if after := integrityMarkBodies(t, s); !reflect.DeepEqual(after, before) {
 		t.Fatalf("re-enrollment changed the mark rows: %v, was %v", after, before)
-	}
-}
-
-// TestGenerationIntegrityMarksMigration proves 0087 applies to a store at the
-// previous schema head that already holds a generation, and leaves that
-// generation's row untouched and unmarked.
-func TestGenerationIntegrityMarksMigration(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	const selectGeneration = `
-SELECT enrollment_id || '/' || ordinal || ' ' || auth_store_volume || ' ' || store_manifest_digest || ' ' ||
-       lease_fence || ' ' || account_binding || ' ' || COALESCE(token_expiry, '') || ' ' || recorded_at || ' ' || body
-FROM client_enrollment_generations`
-
-	// The generation is written through the store's own accessors in a head
-	// store, then copied row for row into a database stopped one migration
-	// short: the three tables' shapes are the same at both schema versions.
-	sourcePath := filepath.Join(t.TempDir(), "source.db")
-	source := openTemplateStoreAt(t, sourcePath, Options{})
-	generation := seedAgentClosure(t, source)
-	if err := source.Close(); err != nil {
-		t.Fatalf("close source store: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "store.db")
-	copySnapshotThrough(t, path, "0087_")
-	db, err := openDB(path, Options{})
-	if err != nil {
-		t.Fatalf("openDB: %v", err)
-	}
-	if got := rawVersion(t, db); got != 86 {
-		t.Fatalf("prior schema version = %d, want 86", got)
-	}
-	// ATTACH is per connection, so the copy runs on one pinned connection.
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`ATTACH DATABASE '` + sourcePath + `' AS source`,
-		`INSERT INTO auth_identities
-			(id, provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
-			 auth_store_volume, max_parallel_executions, refresh_strategy,
-			 supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body)
-			SELECT id, provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
-			 auth_store_volume, 1, refresh_strategy,
-			 supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body
-			FROM source.auth_identities`,
-		`INSERT INTO client_enrollments SELECT * FROM source.client_enrollments`,
-		`INSERT INTO client_enrollment_generations SELECT * FROM source.client_enrollment_generations`,
-		`DETACH DATABASE source`,
-	} {
-		if _, err := conn.ExecContext(ctx, statement); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatal(err)
-	}
-	var before string
-	if err := db.QueryRowContext(ctx, selectGeneration).Scan(&before); err != nil {
-		t.Fatalf("read the generation row before the migration: %v", err)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close raw db: %v", err)
-	}
-
-	s, err := Open(ctx, path, Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	var after string
-	if err := s.db.QueryRowContext(ctx, selectGeneration).Scan(&after); err != nil {
-		t.Fatal(err)
-	}
-	if after != before {
-		t.Fatalf("the migration changed the generation row:\n got %s\nwant %s", after, before)
-	}
-	var current domain.EnrollmentGeneration
-	if err := s.Read(ctx, func(tx *ReadTx) error {
-		var err error
-		if current, err = tx.CurrentEnrollmentGeneration(ctx, generation.EnrollmentID); err != nil {
-			return err
-		}
-		return tx.RequireGenerationUnmarked(ctx, current.EnrollmentID, current.Ordinal)
-	}); err != nil {
-		t.Fatalf("a generation written before the migration: %v", err)
-	}
-	if !reflect.DeepEqual(current, generation) {
-		t.Fatalf("migrated generation = %+v, want %+v", current, generation)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -24,54 +23,6 @@ type schemaCheckpointTestStore struct {
 	source   BackupHealthSource
 	live     *Store
 	producer *LocalBackupProducer
-}
-
-func TestLocalBackupProducerReplacesOlderSchemaCheckpoint(t *testing.T) {
-	t.Parallel()
-	fixture := newSchemaCheckpointTestStore(t)
-	current := schemaTestBackupHealthContext(t, fixture.ctx, fixture.live)
-	const olderVersion = 34 // 0035 added the health_posture column read by the current closure scan.
-	if current.SchemaVersion <= olderVersion {
-		t.Fatalf("current schema version = %d, need newer than %d",
-			current.SchemaVersion, olderVersion)
-	}
-	installSchemaCheckpointFixture(t, fixture.ctx, fixture.files, olderVersion)
-	staleBody, err := os.ReadFile(fixture.files.checkpointPath)
-	if err != nil {
-		t.Fatalf("read older-schema checkpoint: %v", err)
-	}
-
-	health, err := fixture.source.BackupHealth(fixture.ctx, current)
-	if err != nil {
-		t.Fatalf("BackupHealth over older schema: %v", err)
-	}
-	if health != unhealthyBackupHealth() {
-		t.Fatalf("BackupHealth over older schema = %+v, want %+v",
-			health, unhealthyBackupHealth())
-	}
-
-	if err := fixture.producer.Maintain(fixture.ctx); err != nil {
-		t.Fatalf("Maintain over older schema: %v", err)
-	}
-	refreshedBody, err := os.ReadFile(fixture.files.checkpointPath)
-	if err != nil {
-		t.Fatalf("read refreshed checkpoint: %v", err)
-	}
-	if bytes.Equal(refreshedBody, staleBody) {
-		t.Fatal("maintenance retained the older-schema checkpoint")
-	}
-	snapshot, _, found, err := inspectEncryptedCheckpoint(
-		fixture.ctx, current.SchemaVersion, fixture.files, true, nil, nil)
-	if err != nil {
-		t.Fatalf("inspect refreshed checkpoint: %v", err)
-	}
-	if !found {
-		t.Fatal("refreshed checkpoint is unavailable")
-	}
-	if snapshot.schemaVersion != current.SchemaVersion {
-		t.Fatalf("refreshed schema version = %d, want %d",
-			snapshot.schemaVersion, current.SchemaVersion)
-	}
 }
 
 func TestLocalBackupProducerKeepsSameSchemaClosureFailureFatal(t *testing.T) {
@@ -163,59 +114,6 @@ func newSchemaCheckpointTestStore(t *testing.T) schemaCheckpointTestStore {
 	}
 	return schemaCheckpointTestStore{
 		ctx: ctx, files: files, source: source, live: live, producer: producer,
-	}
-}
-
-func installSchemaCheckpointFixture(
-	t *testing.T, ctx context.Context, files *LocalBackupFiles, schemaVersion int,
-) {
-	t.Helper()
-	// The cached image is the database migrationsThrough(schemaVersion)
-	// builds from empty; the fixture's own version check below still holds.
-	path := filepath.Join(t.TempDir(), "checkpoint.db")
-	copySnapshotAt(t, path, schemaVersion)
-	db, err := openDB(path, Options{})
-	if err != nil {
-		t.Fatalf("open checkpoint database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close checkpoint database: %v", err)
-		}
-	})
-	if err := seedEpoch(ctx, db); err != nil {
-		t.Fatalf("seed checkpoint epoch: %v", err)
-	}
-	plaintext, err := serializeStoreCheckpoint(ctx, &Store{db: db})
-	if err != nil {
-		t.Fatalf("serialize checkpoint database: %v", err)
-	}
-	snapshot, err := inspectBackupDB(ctx, db, digestBytes(plaintext), false, nil, nil)
-	if err != nil {
-		t.Fatalf("inspect checkpoint database metadata: %v", err)
-	}
-	if snapshot.schemaVersion != schemaVersion {
-		t.Fatalf("fixture schema version = %d, want %d", snapshot.schemaVersion, schemaVersion)
-	}
-	now := time.Now().UTC()
-	checkpoint := domain.BackupCheckpoint{
-		CheckpointID:           "older-schema-checkpoint",
-		SyncEpoch:              snapshot.state.SyncEpoch,
-		ServerRevision:         snapshot.state.Revision,
-		SQLiteSnapshotDigest:   snapshot.fileDigest,
-		ArtifactManifestDigest: artifactManifestDigest(nil),
-		CreatedAt:              now,
-		CompletedAt:            now,
-	}
-	body, err := sealEncryptedCheckpoint(plaintext, checkpoint, files.encryptionKey)
-	if err != nil {
-		t.Fatalf("seal schema checkpoint: %v", err)
-	}
-	if err := os.MkdirAll(files.dir, 0o700); err != nil {
-		t.Fatalf("create checkpoint directory: %v", err)
-	}
-	if err := installEncryptedCheckpoint(files.dir, files.checkpointPath, body); err != nil {
-		t.Fatalf("install schema checkpoint: %v", err)
 	}
 }
 

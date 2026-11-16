@@ -15,18 +15,19 @@ const externalDispositionTrigger = "external_finding_disposition_requires_admitt
 
 // rewindHandBackExternalDispositions returns a migrated store to the schema
 // 0139 leaves: the external-finding disposition guard as 0090 wrote it,
-// which admits an external_review round only.
+// which admits an external_review round only. The migration baseline holds
+// that guard verbatim, since nothing changed it before 0140.
 func rewindHandBackExternalDispositions(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	rewindIssueCommentPolicyApprovals(t, ctx, db)
-	body, err := fs.ReadFile(migrations.FS, "0090_external_finding_dispositions.sql")
+	body, err := fs.ReadFile(migrations.FS, "0120_baseline.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	start := strings.Index(string(body), "CREATE TRIGGER "+externalDispositionTrigger)
 	end := strings.Index(string(body)[max(start, 0):], "END;")
 	if start < 0 || end < 0 {
-		t.Fatal("0090 no longer holds the disposition guard")
+		t.Fatal("the migration baseline no longer holds the disposition guard")
 	}
 	for _, statement := range []string{
 		`DROP TRIGGER ` + externalDispositionTrigger,

@@ -9,66 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-// TestWorkUnitCompletedMilestoneMigrationAppliesFromHead is the migration
-// acceptance for 0066 (#1134): the rebuilt run_milestones keeps every durable
-// row and the first-observation-wins identity index, and the widened kind
-// CHECK accepts work_unit_completed where the prior head refused it.
-func TestWorkUnitCompletedMilestoneMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0066_")
-	if got := rawVersion(t, db); got != 65 {
-		t.Fatalf("prior schema version = %d, want 65", got)
-	}
-	const at = "2026-01-02T03:04:05Z"
-	seed := func(kind string) error {
-		_, err := db.ExecContext(ctx, `INSERT INTO run_milestones
-			   (run_id, kind, invocation_id, recorded_at)
-			 VALUES ('run-1', ?, 'publish-production-run-1', ?)`, kind, at)
-		return err
-	}
-	for _, kind := range []domain.RunMilestoneKind{
-		domain.MilestoneRunSubmitted, domain.MilestonePublicationReady,
-	} {
-		if err := seed(string(kind)); err != nil {
-			t.Fatalf("seed %s at prior head: %v", kind, err)
-		}
-	}
-	if err := seed(string(domain.MilestoneWorkUnitCompleted)); err == nil {
-		t.Fatal("prior head accepted work_unit_completed")
-	}
-
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	assertAtHead(t, db)
-	var kept int
-	if err := db.QueryRowContext(ctx,
-		`SELECT count(*) FROM run_milestones WHERE run_id = 'run-1' AND recorded_at = ?`, at,
-	).Scan(&kept); err != nil {
-		t.Fatal(err)
-	}
-	if kept != 2 {
-		t.Fatalf("rows preserved across the rebuild = %d, want 2", kept)
-	}
-	for _, kind := range domain.AllRunMilestoneKinds {
-		if kind == domain.MilestoneRunSubmitted || kind == domain.MilestonePublicationReady {
-			continue
-		}
-		if err := seed(string(kind)); err != nil {
-			t.Errorf("head refuses registered kind %s: %v", kind, err)
-		}
-	}
-	if err := seed(string(domain.MilestoneWorkUnitCompleted)); err == nil {
-		t.Fatal("identity index lost: a duplicate (run, kind, invocation) inserted")
-	}
-	if err := seed("shipped"); err == nil {
-		t.Fatal("head accepts an unregistered kind")
-	}
-}
 
 // TestRunSuccessor pins the supersession lookup (#1134): the run that retried
 // a parent is its successor, a run nobody retried has none, when more than

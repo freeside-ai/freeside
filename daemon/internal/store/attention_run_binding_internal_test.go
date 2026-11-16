@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func attentionItemForRun(t *testing.T, id domain.ItemID, runID domain.RunID) domain.AttentionItem {
@@ -68,74 +67,6 @@ func attentionItemWithEvidence(
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
 	return item
-}
-
-func TestAttentionSubjectRunBindingMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0050_")
-	if got := rawVersion(t, db); got != 49 {
-		t.Fatalf("prior schema version = %d, want 49", got)
-	}
-
-	runItem := attentionItemForRun(t, "run-item", "run-1")
-	runBody, err := encode(runItem)
-	if err != nil {
-		t.Fatalf("encode run item: %v", err)
-	}
-	nonRunItem := runItem
-	nonRunItem.ID = "system-item"
-	nonRunItem.Subject = domain.Subject{Type: domain.SubjectSystem, ID: "daemon"}
-	nonRunBody, err := encode(nonRunItem)
-	if err != nil {
-		t.Fatalf("encode non-run item: %v", err)
-	}
-	for _, row := range []struct {
-		id, body string
-	}{
-		{string(runItem.ID), runBody},
-		{string(nonRunItem.ID), nonRunBody},
-		{"malformed-item", "{"},
-	} {
-		if _, err := db.ExecContext(ctx, `
-INSERT INTO attention_items
-    (id, project_id, conversation_id, item_type, status, health_posture,
-     entity_version, as_of_revision, body)
-VALUES (?, 'proj-1', NULL, 'execution_failure', 'open', NULL, 1, 1, ?)`, row.id, row.body); err != nil {
-			t.Fatalf("seed %s: %v", row.id, err)
-		}
-	}
-
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	assertAtHead(t, db)
-	bindings := map[string]sql.NullString{}
-	for _, id := range []string{"run-item", "system-item", "malformed-item"} {
-		var binding sql.NullString
-		if err := db.QueryRowContext(ctx,
-			`SELECT subject_run_id FROM attention_items WHERE id = ?`, id).Scan(&binding); err != nil {
-			t.Fatalf("read binding for %s: %v", id, err)
-		}
-		bindings[id] = binding
-	}
-	if got := bindings["run-item"]; !got.Valid || got.String != "run-1" {
-		t.Fatalf("run binding = %+v, want run-1", got)
-	}
-	for _, id := range []string{"system-item", "malformed-item"} {
-		if got := bindings[id]; got.Valid {
-			t.Fatalf("%s binding = %+v, want NULL", id, got)
-		}
-	}
-	var indexSQL string
-	if err := db.QueryRowContext(ctx,
-		`SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'attention_items_open_by_run'`).
-		Scan(&indexSQL); err != nil {
-		t.Fatalf("read run-binding index: %v", err)
-	}
-	if !strings.Contains(indexSQL, "WHERE status = 'open'") {
-		t.Fatalf("run-binding index = %q, want open-item partial index", indexSQL)
-	}
 }
 
 func TestAttentionSubjectRunBindingWriteAndRead(t *testing.T) {

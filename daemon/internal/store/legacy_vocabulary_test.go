@@ -18,9 +18,11 @@ import (
 // The fixture is a sqlite3 .dump of a database the pre-rename daemon wrote:
 // freesided submit through the elaboration invocation, its terminal, the
 // spec-approval item, one operator discussion with its reply, the operator's
-// approval, and the reserved implementation run with its production attempt. Its bytes are frozen; the
-// test proves the renamed code opens, migrates, and reconstructs it without
-// rewriting a row.
+// approval, and the reserved implementation run with its production attempt.
+// The last build before the migration baseline migrated it to schema 146;
+// its rows still spell the pre-rename vocabulary. Its bytes are frozen; the
+// test proves the renamed code opens and reconstructs it without rewriting
+// a row.
 const (
 	legacySpecificationRun = domain.RunID(
 		"run-elaboration-694193339c5545bbeabec19b6fc46182625db76693811ba435eb18dcb2601160")

@@ -2,92 +2,13 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"io/fs"
 	"path/filepath"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-// migrateThrough brings a raw database to the head immediately before the
-// named migration, so an "applies from the current head" test runs the new
-// migration against a database that was actually at the real prior head.
-// It refuses an empty database: a test starts from the snapshot cache
-// (openRawThrough or copySnapshotThrough), so no test rebuilds a prefix the
-// cache already holds.
-func migrateThrough(t *testing.T, ctx context.Context, db *sql.DB, before string) {
-	t.Helper()
-	var tracked bool
-	if err := db.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')`,
-	).Scan(&tracked); err != nil {
-		t.Fatalf("read migration table: %v", err)
-	}
-	if !tracked || rawVersion(t, db) == 0 {
-		t.Fatalf("migrateThrough(%q) on an empty database: start from openRawThrough or copySnapshotThrough instead", before)
-	}
-	files, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatalf("glob migrations: %v", err)
-	}
-	prefix := fstest.MapFS{}
-	for _, name := range files {
-		if name >= before {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, name)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		prefix[name] = &fstest.MapFile{Data: body}
-	}
-	if err := migrate(ctx, db, prefix); err != nil {
-		t.Fatalf("migrate through the head before %s: %v", before, err)
-	}
-}
-
-// TestAuthIdentityMigrationAppliesFromHead is the migration acceptance: the
-// new tables land on a database sitting at the real prior head, carrying
-// existing rows, and nothing is backfilled into them.
-func TestAuthIdentityMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0013_")
-
-	// A run recorded under the old schema must survive untouched: the
-	// migration adds tables and rewrites nothing.
-	if _, err := db.ExecContext(ctx,
-		`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body)
-		 VALUES ('run-1', 'proj-1', 'sha256:policy', 1, 1, '{}')`); err != nil {
-		t.Fatalf("seed run: %v", err)
-	}
-
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-
-	var runs int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE id = 'run-1'`).Scan(&runs); err != nil {
-		t.Fatalf("count runs: %v", err)
-	}
-	if runs != 1 {
-		t.Errorf("pre-migration run count = %d, want 1", runs)
-	}
-	for _, table := range []string{"auth_identities", "auth_store_mutation_leases"} {
-		var rows int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&rows); err != nil {
-			t.Fatalf("count %s: %v", table, err)
-		}
-		if rows != 0 {
-			t.Errorf("%s = %d rows after migration, want 0 (nothing is backfilled)", table, rows)
-		}
-	}
-}
 
 // TestLeaseRowRequiresItsIdentity pins the foreign key: a lease row for an
 // identity that does not exist is unrepresentable, so a forged row cannot

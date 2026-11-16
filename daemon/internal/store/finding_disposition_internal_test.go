@@ -10,28 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func TestFindingDispositionMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0037_")
-	if got := rawVersion(t, db); got != 36 {
-		t.Fatalf("prior schema version = %d, want 36", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	assertAtHead(t, db)
-	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM finding_dispositions`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("new disposition table contains %d rows", count)
-	}
-}
 
 func seedFindingDisposition(t *testing.T) (*Store, domain.ReviewDispositionRecord, domain.Finding) {
 	t.Helper()

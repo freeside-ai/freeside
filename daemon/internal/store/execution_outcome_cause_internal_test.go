@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // causelessFailedBody is a failed outcome's body as it was stored before
@@ -110,82 +109,5 @@ func TestExecutionOutcomeCauseRoundTrip(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
-	}
-}
-
-// TestExecutionOutcomeCauseMigration is the migration acceptance for 0104: a
-// failed row written before it carries unknown afterwards, and a canceled row
-// carries no cause.
-func TestExecutionOutcomeCauseMigration(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s, admission := seedAdmission(t, nil)
-	seedRawAdmission(t, ctx, s, admission)
-	rewindUsagePools(t, ctx, s.db)
-	for _, statement := range []string{
-		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
-		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
-		`DROP TABLE routing_policies`,
-		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
-		`DROP TABLE task_line_changes`,
-		`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
-		`ALTER TABLE task_lines DROP COLUMN provenance`,
-		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,
-		`DROP TABLE image_policy_adoptions`,
-		`DELETE FROM schema_migrations WHERE name = '0110_image_policy_adoption.sql'`,
-		`DELETE FROM schema_migrations WHERE name = '0109_task_submission_origin.sql'`,
-		`DROP TABLE repository_tip_observations`,
-		`DROP TABLE image_upkeep_refusals`,
-		`DELETE FROM schema_migrations WHERE name = '0108_image_upkeep.sql'`,
-		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_pending`,
-		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_refusal_id`,
-		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_item_id`,
-		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_task_id`,
-		`DELETE FROM schema_migrations WHERE name = '0107_run_hold_image_upkeep.sql'`,
-		`DELETE FROM schema_migrations WHERE name = '0106_schedules_image_upkeep.sql'`,
-		`DROP TABLE admitted_image_pointers`,
-		`DELETE FROM schema_migrations WHERE name = '0105_admitted_image_pointers.sql'`,
-		`ALTER TABLE execution_outcomes DROP COLUMN cause`,
-		`DELETE FROM schema_migrations WHERE name = '0104_execution_outcome_cause.sql'`,
-	} {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	recordedAt := formatTime(admission.AdmittedAt.Add(time.Hour))
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO execution_outcomes
-		   (invocation_id, admission_id, status, summary, recorded_at, body)
-		 VALUES (?, ?, 'failed', 'failed before causes', ?, ?),
-		        ('inv-2', 'sha256:other', 'canceled', 'canceled', ?, '{}')`,
-		admission.InvocationID, admission.ID, recordedAt, causelessFailedBody(t, admission),
-		recordedAt); err != nil {
-		t.Fatalf("seed pre-migration outcomes: %v", err)
-	}
-
-	if err := migrate(ctx, s.db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	for invocation, want := range map[string]string{
-		string(admission.InvocationID): "unknown", "inv-2": "",
-	} {
-		var cause string
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT cause FROM execution_outcomes WHERE invocation_id = ?`, invocation).
-			Scan(&cause); err != nil {
-			t.Fatalf("read %s cause: %v", invocation, err)
-		}
-		if cause != want {
-			t.Errorf("%s cause = %q after migration, want %q", invocation, cause, want)
-		}
-	}
-	if err := s.Read(ctx, func(tx *ReadTx) error {
-		outcome, err := tx.GetExecutionOutcomeRecord(ctx, admission.InvocationID)
-		if err == nil && outcome.Cause != domain.FailureCauseUnknown {
-			t.Errorf("migrated failed outcome cause = %q, want unknown", outcome.Cause)
-		}
-		return err
-	}); err != nil {
-		t.Fatalf("read migrated failed outcome: %v", err)
 	}
 }

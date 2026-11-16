@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func testProjectImage(t *testing.T) domain.ProjectImage {
@@ -38,22 +37,6 @@ func openProjectImageStore(t *testing.T) *Store {
 		}
 	})
 	return s
-}
-
-func TestProjectImageMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0016_")
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	var rows int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_images`).Scan(&rows); err != nil {
-		t.Fatalf("count project_images: %v", err)
-	}
-	if rows != 0 {
-		t.Fatalf("project_images = %d rows after migration, want no invented provenance", rows)
-	}
 }
 
 func TestProjectImageRoundTripAndReplay(t *testing.T) {
@@ -220,59 +203,6 @@ func projectImageEnvironmentColumn(t *testing.T, s *Store, id domain.Digest) sql
 		t.Fatal(err)
 	}
 	return column
-}
-
-// 0091 lands on a store that already holds a project image: the row's body is
-// untouched, no environment is invented for it, and it reconstructs under its
-// original ID as a record without one.
-func TestProjectImageEnvironmentMigrationKeepsLegacyRows(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0091_")
-
-	legacy := testProjectImage(t)
-	current, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A row written before the environment existed has no such key at all.
-	body := strings.Replace(string(current), `,"environment":null`, "", 1)
-	if body == string(current) {
-		t.Fatal("fixture body carries no environment key to strip")
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO project_images
-		(id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		legacy.ID, legacy.Repository, legacy.RepositoryID, legacy.CommitSHA,
-		legacy.RecipeDigest, legacy.BaseImageRef, legacy.ImageRef, body); err != nil {
-		t.Fatalf("seed the pre-migration row: %v", err)
-	}
-
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	var stored string
-	var column sql.NullString
-	if err := db.QueryRowContext(ctx,
-		`SELECT body, environment_digest FROM project_images WHERE id = ?`, legacy.ID,
-	).Scan(&stored, &column); err != nil {
-		t.Fatal(err)
-	}
-	if stored != body || column.Valid {
-		t.Fatalf("migrated row = body %q, environment_digest %+v; want the body unchanged and NULL",
-			stored, column)
-	}
-	got, err := scanProjectImage(db.QueryRowContext(ctx, getProjectImageByRefSQL, legacy.ImageRef))
-	if err != nil {
-		t.Fatalf("reconstruct the legacy row: %v", err)
-	}
-	if got.ID != legacy.ID || got.Environment != nil {
-		t.Fatalf("legacy row = %+v, want ID %s with no environment", got, legacy.ID)
-	}
-	if _, err := db.ExecContext(ctx,
-		`UPDATE project_images SET environment_digest = '' WHERE id = ?`, legacy.ID); err == nil {
-		t.Fatal("the migrated schema admitted an empty environment digest")
-	}
 }
 
 func TestProjectImageEnvironmentRoundTrip(t *testing.T) {
