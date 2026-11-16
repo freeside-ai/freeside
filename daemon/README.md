@@ -1866,7 +1866,9 @@ waits for it.
 
 `freesided cause-counts` prints how often each typed cause occurred over a
 period, and how often in the period before it, so a cause that keeps coming
-back shows without an analysis. No model runs and nothing is written.
+back shows without an analysis. It also prints how often each hold reason
+held runs, and for how long, so the waits that repeat and what they cost
+show too. No model runs and nothing is written.
 
 ```sh
 freesided cause-counts -db <db> [-period 168h] [-end 2026-11-16T00:00:00Z] [-project <project-id>]
@@ -1906,8 +1908,31 @@ time; the rest still count. Open attention items, and items closed before
 conclusions were recorded, aren't counted.
 
 Failed outcomes recorded before causes existed read as `unknown` (migration
-0104), so `unknown` is inflated in an older database. Hold reasons aren't
-counted yet, because a cleared hold leaves no record (#3239).
+0104), so `unknown` is inflated in an older database.
+
+The `holds` object counts hold reasons (`domain.RunHoldReason`): cleared
+holds from `run_hold_spans` and each run's current hold from
+`run_hold_observations`. Each entry in `reasons` gives, per window, `holds`,
+distinct `runs`, and `held_seconds` (whole seconds), then the same three as
+`previous_holds`, `previous_runs`, and `previous_held_seconds`. A reason is
+listed when it held a run in either window; `known` is as for causes.
+
+- **A hold counts in each window it overlaps.** Only its time inside the
+  window adds to `held_seconds`, so a hold across the boundary counts once
+  in each window and splits its time. A hold runs from when its cause was
+  first observed to when it cleared.
+- **An open hold runs to now** (the daemon's now through the control
+  socket), so its time stops at the window end when `-end` is in the past.
+- **`recorded_since` is when the hold history began**, migration 0145's
+  `applied_at`. A hold that ended before then left no record; there is no
+  backfill. `period_coverage` and `previous_period_coverage` say how much of
+  each window the history covers: `full` when the window starts at or after
+  `recorded_since`; `partial` when it straddles it, so its figures count
+  only recorded holds and are a lower bound; `none` when it ends at or
+  before it, so its figures are `null`, never zero.
+- **A hold row that can't be decoded** (an unparseable time, an empty
+  reason, or a clear before its start) is listed in `skipped` under its
+  table, keyed by span id or, for a current hold, by run.
 
 ### Check A New Build Against The Live Database
 

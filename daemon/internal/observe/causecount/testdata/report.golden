@@ -40,6 +40,33 @@
       "previous_occurrences": 0
     }
   ],
+  "holds": {
+    "recorded_since": "2026-11-09T00:00:00Z",
+    "period_coverage": "full",
+    "previous_period_coverage": "none",
+    "reasons": [
+      {
+        "reason": "machine_capacity",
+        "known": true,
+        "holds": 3,
+        "runs": 2,
+        "held_seconds": 216000,
+        "previous_holds": null,
+        "previous_runs": null,
+        "previous_held_seconds": null
+      },
+      {
+        "reason": "solar_flare",
+        "known": false,
+        "holds": 1,
+        "runs": 1,
+        "held_seconds": 3600,
+        "previous_holds": null,
+        "previous_runs": null,
+        "previous_held_seconds": null
+      }
+    ]
+  },
   "skipped": [
     {
       "table": "run_milestones",

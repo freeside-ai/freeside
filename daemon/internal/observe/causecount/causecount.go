@@ -127,6 +127,7 @@ type Report struct {
 	Period         Window            `json:"period"`
 	PreviousPeriod Window            `json:"previous_period"`
 	Causes         []Count           `json:"causes"`
+	Holds          Holds             `json:"holds"`
 	Skipped        []Skipped         `json:"skipped"`
 }
 
@@ -191,7 +192,8 @@ func Compute(occurrences []Occurrence, period Window) []Count {
 // period with its previous period adjacent, and per cause a known source, a
 // non-empty value, at least one occurrence across the two periods, no more
 // runs than occurrences, and first and last seen set, ordered, and inside the
-// period exactly when the cause occurred in it.
+// period exactly when the cause occurred in it. It also checks the hold
+// section (Holds.validate).
 func (r Report) Validate() error {
 	if !r.Period.Start.Before(r.Period.End) {
 		return errors.New("period is empty")
@@ -204,6 +206,9 @@ func (r Report) Validate() error {
 		if err := c.validate(r.Period); err != nil {
 			return fmt.Errorf("cause %s/%q: %w", c.Source, c.Cause, err)
 		}
+	}
+	if err := r.Holds.validate(r.Period, r.PreviousPeriod); err != nil {
+		return fmt.Errorf("holds: %w", err)
 	}
 	return nil
 }
