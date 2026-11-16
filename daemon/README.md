@@ -795,9 +795,11 @@ drift axis needs both a preterminal refusal and a terminal-fact adoption case.
 ## Adding a Migration
 
 Name the file `NNNN_description.sql` in `migrations/` and take the next
-number after the highest one on your base. The store refuses duplicate
-numbers, gaps, and any change to a file a database has already applied, so a
-merged migration is immutable: fix one by adding another.
+number after the highest one on your base. Numbers run on from the migration
+baseline, `0120_baseline.sql` (Squashing Migrations, below), not from `0001`.
+The store refuses duplicate numbers, gaps, and any change to a file a
+database has already applied, so a merged migration is immutable: fix one by
+adding another.
 
 **Declare every name a migration removes.** Add one line per removed name,
 anywhere in the file:
@@ -814,9 +816,8 @@ name. `TestMigrationsDeclareDrops` in `internal/store` applies every
 migration in order on an empty database and fails on a removed name with no
 declaration, on a declared name that is still there, and on a malformed
 `-- drop:` line. Names a table rebuild recreates within the same file are not
-removals. Migrations 0001 to 0099 predate the line and can't gain one, so the
-test's frozen allowlist holds their removals and refuses an entry for any
-later file.
+removals. The test starts from the baseline, which creates every name it
+holds and removes none.
 
 **Give a new enum column no CHECK list.** A column that stores a Go enum
 gets no SQL `CHECK (... IN (...))` list, because SQLite can't alter one and
@@ -835,11 +836,8 @@ other:
    `git mv daemon/migrations/NNNN_name.sql daemon/migrations/MMMM_name.sql`
    with the next free number.
 2. Replace every reference to the old file name: `grep -rn 'NNNN_name.sql'
-   daemon/` from the repo root. Hits include a data hook's constant or case
-   in `internal/store` and the partial-schema skip lists in that package's
-   tests. The data hook matches on file name alone, and
-   `TestMigrationNamesReferencedFromGoExist` fails on a stale name in a
-   non-test file there.
+   daemon/` from the repo root. Hits include the partial-schema skip lists
+   and the `openRawThrough` names in `internal/store`'s tests.
 3. Run `bash scripts/check.sh daemon` from the repo root.
 
 A `dev` daemon that ran your branch build recorded the old name and digest,
@@ -850,7 +848,93 @@ and reinstall with `app/scripts/install-mac-app.sh dev --daemon-path
 <freesided>`. An `ephemeral` root is disposable already; start a new one.
 
 A migration also adds a fixture set to the stored-state corpus (Stored-State
-Corpus, next).
+Corpus).
+
+## Squashing Migrations
+
+`migrations/0120_baseline.sql` is migrations `0001` through `0120` squashed
+into one generated file (#3252): the schema those files built, Go data steps
+included, and the one row they seed. A new database applies it as version
+120, so it records 120 to head. Versions keep their numbers, so everything
+that compares `MAX(version)` (backups, restore, `undo-update`,
+`check-database`) works across the squash.
+
+**Which databases open.** `migrations/squashed_history.txt` lists, one
+`version name digest` line each, the 120 rows a database recorded for the
+removed files. Every open path (`Open`, `MigrateExisting`, `OpenExisting`,
+`OpenReadOnly`) accepts three recorded histories and refuses every other:
+
+- **Empty:** apply the baseline, then the rest.
+- **Starting at 120 with the baseline's own row:** a database created after
+  the squash.
+- **Starting at 1 and reaching at least 120, with rows 1 to 120 equal to the
+  list by name and digest:** a database created before the squash.
+
+Rows above the baseline match the files by name and digest, as before.
+
+**A database below the baseline is refused.** A history that starts at 1 and
+stops below 120 gets `store.BelowBaselineError` from every open path, before
+the store writes anything. Its text names the database's version, the
+baseline, and `main` commit `b7bd02f71`, whose build still migrates it (so
+does any later `main` build before the squash merged). Open the database
+once with that build, for example by starting its daemon on it, and this
+build then opens it. The same limit
+holds for the copies a database leaves:
+
+- **Restore** refuses a checkpoint whose schema version differs from the
+  live database's, so a backup taken below the baseline is refused like any
+  other older checkpoint. Restore it with a build at its version.
+- **`freesided check-database`** names the refusal instead of its generic
+  history mismatch (Check A New Build Against The Live Database).
+- **`freesided undo-update`** doesn't open a store, so the baseline doesn't
+  limit it (Undo A Failed Update).
+- **The stored-state corpus** can't resume a fixture set below the baseline
+  (Stored-State Corpus).
+
+**The squash rule.** A squash is due when 60 migrations sit above the
+baseline. The new baseline sits at least two weeks behind head, and only
+once each instance that keeps its database (`dev`, and `prod` unless it
+starts fresh) is confirmed at or above it: read the highest
+`schema_migrations` version from a `freesided snapshot` copy, then delete the
+copy, which holds credentials. The baseline also stays at or below the oldest
+corpus fixture set's schema version, unless the owner prunes the older sets.
+
+**Make the files** in a detached worktree at the squash branch's merge base,
+so the Go data steps of that build still run. Write
+`store.TemplateDatabaseAt(ctx, <baseline>)` to `v.db` from a scratch test
+there, then:
+
+```sh
+{ cat header.sql  # what the file replaces and how it was made
+  sqlite3 v.db "SELECT sql || ';' || char(10) FROM sqlite_schema
+    WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'
+    ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'view' THEN 2 ELSE 3 END, rowid"
+  sqlite3 v.db ".mode insert server_state" "SELECT * FROM server_state"
+} > daemon/migrations/NNNN_baseline.sql
+sqlite3 v.db "SELECT version || ' ' || name || ' ' || digest FROM schema_migrations ORDER BY version" \
+  > daemon/migrations/squashed_history.txt
+```
+
+Insert every table the old files seed, not only `server_state`; the
+comparison below catches a missed one. Delete the replaced files and set
+`lastUnsquashedCommit` in `internal/store/migrate.go` to the merge base.
+
+**Prove the squash** before review: build a head database from
+`store.TemplateDatabase` at the merge base and on the branch, and compare
+`SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name` and every
+row of every table except `schema_migrations`. Fix a difference in the
+generator, never by hand.
+
+**CI.** `scripts/check-migration-history.sh` fails on a removed migration
+unless the head's list names it with the digest of its content at the merge
+base, and fails on a removed or changed list line.
+
+**For the next squash.** The list holds one row per version, and a database
+created after this squash records `120 0120_baseline.sql`, not the list's
+row 120. So the next squash appends the files it removes to the list and
+extends the store rule to accept a history that starts at 120 with the old
+baseline's row. Keep at least one migration above the baseline: tests build a
+database at head minus one.
 
 ## Stored-State Corpus
 
@@ -865,13 +949,16 @@ carries the case's work to a published pull request. It fails on a fixture
 it can't migrate, start, read, or resume, on a durable stop, on an empty
 corpus, and on a case it doesn't know.
 
-**The ratchet.** A pull request that adds a migration, or changes a stored
-JSON body or its version, adds a fixture set written by the build before it:
+**The ratchet.** A pull request that adds or squashes migrations, or changes
+a stored JSON body or its version, adds a fixture set written by the build
+before it:
 the `origin/main` commit the branch started from. Every fixture stays in the
 corpus; only the owner prunes one. A newer database opened by an older build
 is out of scope, because the daemon refuses it. After a rebase, replace the
 branch's set with one written from the new merge base, so its name stays a
-`main` commit.
+`main` commit. Sets written before the migration squash carry their full
+history from version 1, which the store accepts; a set below the baseline
+can't resume (Squashing Migrations).
 
 The resume replays each case on the current build's named scenario, so the
 scenario worlds and the fakes' state formats are corpus inputs too: change
@@ -902,8 +989,8 @@ case directory holds:
   `scenario/review-source/`: the scenario fakes' durable state, which stands in for the driver's and reviewer's own
   records. A resume needs it, because the engine re-checks every recorded
   attempt of an open run against the driver.
-- `fixture.json`: the full build commit, the applied migration count, the
-  case, when and how it was produced, and the task and run the resume
+- `fixture.json`: the full build commit, the schema version (the highest
+  applied version, not a row count), the case, when and how it was produced, and the task and run the resume
   continues.
 
 No fixture holds a credential, a pairing code, or the ntfy topic key. The
@@ -1964,7 +2051,9 @@ walk; each such table carries its reason in `notWalkedTables`
 neither list. On failure it exits nonzero and names only the failing
 migration file, the kinds of stored row that failed to decode, or the startup
 step, never a row's content or the underlying error, which can quote stored
-values. To see why a kind failed, take a `freesided snapshot` and read it with
+values. A database below the migration baseline gets the store's refusal
+instead, which carries only versions and the build that migrates it
+(Squashing Migrations). To see why a kind failed, take a `freesided snapshot` and read it with
 the new build.
 
 The copy is removed when the check ends, including on `SIGINT`, `SIGTERM`,
@@ -1990,7 +2079,8 @@ freesided undo-update -db <live-db> -checkpoint <state-dir>/update-checkpoint/fr
 It takes the daemon lock, so it refuses while any daemon runs on `-db`, and
 it reads both databases' update drain logs without opening either as a
 store, so it works when the failed build migrated the live file to a schema
-this build cannot open. It restores only when the logs prove the new build
+this build cannot open, and the migration baseline doesn't limit it
+(Squashing Migrations). It restores only when the logs prove the new build
 never lifted the drain the checkpoint was taken under:
 
 - **The checkpoint's latest drain row is draining.** A checkpoint taken with

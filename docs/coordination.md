@@ -587,8 +587,10 @@ isolation alone never establishes independence.
 
 Migrations keep their contiguous numbering: the store pins each applied
 migration by name and digest, so every database has the same history and a
-renamed or rewritten applied file is refused. Two open migration PRs
-therefore land by renumbering, not by ordering their units:
+renamed or rewritten applied file is refused. Numbering runs on from the
+migration baseline, `0120_baseline.sql`, which replaced `0001` to `0120`.
+Two open migration PRs therefore land by renumbering, not by ordering their
+units:
 
 1. Take the next number after the highest one on your base.
 2. If another migration lands first, rename yours behind it at rebase with
@@ -598,13 +600,22 @@ therefore land by renumbering, not by ordering their units:
    state is disposable. A `dev` tier that ran the branch refuses the renamed
    history; clearing it is the operator's act, so report it rather than
    delete it.
-3. Declare every name a migration after 0099 removes (a table, column,
-   index, trigger, or view) with one `-- drop:` line each.
+3. Declare every name a migration removes (a table, column, index,
+   trigger, or view) with one `-- drop:` line each.
    `TestMigrationsDeclareDrops` fails on an undeclared removal, on a declared
-   name that is still there, and on a malformed line; migrations 0001 to
-   0099 predate the line.
+   name that is still there, and on a malformed line.
 
-The commands are in `daemon/README.md` (Adding a Migration). The test
+A squash replaces the oldest migrations with a new baseline and keeps the
+rows databases recorded for them in `daemon/migrations/squashed_history.txt`,
+so a database created before it still opens; one whose history stops below
+the baseline is refused. A squash is due when 60 migrations sit above the
+baseline. The new baseline sits at least two weeks behind head, once each
+instance that keeps its database is confirmed at or above it. It is a
+`kind:contract` unit of its own, and an open migration PR rebases onto it
+like any other.
+
+The commands are in `daemon/README.md` (Adding a Migration, Squashing
+Migrations). The test
 doesn't see a constraint change lost in a table rebuild, or two migrations
 rewriting the same rows. In both cases the second must be written against
 the first's result, so the planner orders them with `starts-after` (rule 3).
