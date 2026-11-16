@@ -46,5 +46,8 @@
     ],
     "xcode_build": "17A100",
     "swift": "swiftlang-6.2"
+  },
+  "execution_pause": {
+    "state": "requested"
   }
 }

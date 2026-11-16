@@ -196,6 +196,13 @@ func settingsSetWrite(project domain.ProjectID, name string, value json.RawMessa
 		if err != nil {
 			return nil, err
 		}
+		if section == domain.InstanceSectionExecutionPause {
+			// The pause is not run configuration: it is written only with
+			// the card that closes admission, and cleared only with that
+			// card's conclusion, so no settings edit can split them.
+			return nil, errors.New("settings set does not write execution_pause; " +
+				"use freesided execution pause and freesided execution resume")
+		}
 		if !cleared {
 			settings, _, err := domain.DecodeInstanceSection(section, value)
 			if err != nil {
@@ -342,12 +349,17 @@ func importContainerBin(flagValue string) (string, error) {
 func importRunSettings(
 	ctx context.Context, tx *store.InternalTx, run daemoncompose.RunSettings, setBy string, at time.Time,
 ) (instanceRevision, projectRevision int, err error) {
-	instanceRecord, err := tx.InstanceSettingsRecord(ctx)
+	instanceRevisions, err := tx.InstanceSettingsRevisions(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
-	if instanceRecord.Revision != 0 {
-		return 0, 0, fmt.Errorf("instance settings already have revision %d; set sections with settings set", instanceRecord.Revision)
+	// An execution pause, set or cleared, is not run configuration, so a
+	// store that was only ever paused still takes an import.
+	for _, revision := range instanceRevisions {
+		if revision.Section != domain.InstanceSectionExecutionPause {
+			return 0, 0, fmt.Errorf("instance settings already have revision %d; set sections with settings set",
+				instanceRevisions[len(instanceRevisions)-1].Revision)
+		}
 	}
 	projectRecord, err := tx.ProjectSettingsRecord(ctx, run.ProjectID)
 	if err != nil {

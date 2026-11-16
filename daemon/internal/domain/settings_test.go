@@ -43,6 +43,7 @@ func instanceSettingsFixture() domain.InstanceSettings {
 		MacosVerification: &domain.MacosVerificationSettings{
 			Root: "/opt/macverify", Slots: []string{"fvslot1", "fvslot2"}, XcodeBuild: "17A100", Swift: "swiftlang-6.2",
 		},
+		ExecutionPause: &domain.ExecutionPauseSettings{State: domain.ExecutionPauseRequested},
 	}
 }
 
@@ -234,6 +235,8 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.InstanceSectionManualSubmissionConfig, `"manual.json"`, "manual_submission_config must be an absolute path"},
 		{domain.InstanceSectionBuild, `{"proxy":"","base_build_ref":"","dns":["1.1.1.1"]}`, "build.dns requires build.base_build_ref"},
 		{domain.InstanceSectionMacosVerification, `{"root":"/m","slots":[],"xcode_build":"1","swift":"s"}`, "macos_verification.slots is empty"},
+		{domain.InstanceSectionExecutionPause, `{"state":"paused"}`, `execution_pause.state "paused" is not requested or released`},
+		{domain.InstanceSectionExecutionPause, `{}`, "execution_pause: state: required settings key is absent"},
 		{domain.InstanceSectionHostTools, `{"container":"/c","extra":1}`, "unknown"},
 		{domain.InstanceSectionHostTools, `{"container":"/c","container":"/d"}`, "duplicate"},
 	} {
@@ -350,5 +353,33 @@ func TestSettingsRevisionRefusesAMalformedSetter(t *testing.T) {
 	}
 	if _, err := domain.ParseProjectSettingsSection("checkout"); !errors.Is(err, domain.ErrUnknownSettingsSection) {
 		t.Errorf("ParseProjectSettingsSection(checkout): %v", err)
+	}
+}
+
+// TestExecutionPauseReadsAloneAndFollowsTheFold pins the pause read prod's
+// start makes: it answers from a record that holds no run section, follows a
+// later state, and reads none after a clear.
+func TestExecutionPauseReadsAloneAndFollowsTheFold(t *testing.T) {
+	var revisions []domain.InstanceSettingsRevision
+	for i, value := range []string{`{"state":"requested"}`, `{"state":"released"}`, ``} {
+		revisions = append(revisions, instanceRevision(t, i+1, domain.InstanceSectionExecutionPause, json.RawMessage(value)))
+		record, err := domain.NewInstanceSettingsRecord(revisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pause, err := record.ExecutionPause()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[int]domain.ExecutionPauseState{0: domain.ExecutionPauseRequested, 1: domain.ExecutionPauseReleased}[i]
+		if want == "" {
+			if pause != nil {
+				t.Fatalf("after the clear, pause = %+v, want none", pause)
+			}
+			continue
+		}
+		if pause == nil || pause.State != want {
+			t.Fatalf("revision %d: pause = %+v, want %s", i+1, pause, want)
+		}
 	}
 }

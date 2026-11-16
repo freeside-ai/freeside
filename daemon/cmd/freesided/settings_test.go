@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -103,6 +104,11 @@ func exerciseSettingsSetAndShow(t *testing.T, ctx context.Context, dbPath string
 		}, "allowed_paths"},
 		"required section cleared": {[]string{"-section", "host_tools", "-clear"}, "host_tools"},
 		"unknown section":          {[]string{"-section", "listen", "-value", `"x"`}, "listen"},
+		"execution pause set": {
+			[]string{"-section", "execution_pause", "-value", `{"state":"requested"}`},
+			"freesided execution pause",
+		},
+		"execution pause cleared": {[]string{"-section", "execution_pause", "-clear"}, "freesided execution resume"},
 	} {
 		if _, err := runSettings(t, ctx, append([]string{"set", "-db", dbPath}, tc.args...)...); err == nil ||
 			!strings.Contains(err.Error(), tc.want) {
@@ -247,6 +253,47 @@ func TestSettingsImportRefusesAProjectAlreadySet(t *testing.T) {
 	}
 	if instance.Revision != 0 {
 		t.Fatalf("refused import wrote instance revision %d", instance.Revision)
+	}
+}
+
+// TestSettingsImportAcceptsAStoreOnlyEverPaused pins that an execution pause
+// is not run configuration: a store whose instance revisions only paused and
+// resumed prod still takes an import.
+func TestSettingsImportAcceptsAStoreOnlyEverPaused(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	st, err := store.Open(t.Context(), dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		for _, value := range []string{`{"state":"requested"}`, ""} {
+			if _, err := tx.AppendInstanceSettingsRevision(t.Context(), domain.InstanceSettingsInput{
+				Section: domain.InstanceSectionExecutionPause, Value: json.RawMessage(value), SetBy: "cli:operator",
+			}, time.Now().UTC()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	out, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
+		"-container-bin", settingsTestContainer)
+	if err != nil {
+		t.Fatalf("import into a store only ever paused: %v", err)
+	}
+	var result settingsImportResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.InstanceRevision <= 2 {
+		t.Fatalf("import result %+v, want revisions after the pause's two", result)
 	}
 }
 

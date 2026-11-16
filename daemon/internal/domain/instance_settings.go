@@ -31,6 +31,10 @@ const (
 	InstanceSectionManualSubmissionConfig InstanceSettingsSection = "manual_submission_config"
 	InstanceSectionBuild                  InstanceSettingsSection = "build"
 	InstanceSectionMacosVerification      InstanceSettingsSection = "macos_verification"
+	// InstanceSectionExecutionPause is the operator's pause of prod's
+	// execution. Only freesided execution pause and resume write it; it
+	// configures no run.
+	InstanceSectionExecutionPause InstanceSettingsSection = "execution_pause"
 )
 
 // AllInstanceSettingsSections lists every InstanceSettingsSection in the
@@ -39,13 +43,15 @@ var AllInstanceSettingsSections = []InstanceSettingsSection{
 	InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 	InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 	InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
+	InstanceSectionExecutionPause,
 }
 
 func (s InstanceSettingsSection) valid() bool {
 	switch s {
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
-		InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification:
+		InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
+		InstanceSectionExecutionPause:
 		return true
 	default:
 		return false
@@ -64,7 +70,8 @@ func ParseInstanceSettingsSection(name string) (InstanceSettingsSection, error) 
 // section, so a revision may clear it.
 func (s InstanceSettingsSection) Optional() bool {
 	switch s {
-	case InstanceSectionJudgment, InstanceSectionManualSubmissionConfig, InstanceSectionMacosVerification:
+	case InstanceSectionJudgment, InstanceSectionManualSubmissionConfig, InstanceSectionMacosVerification,
+		InstanceSectionExecutionPause:
 		return true
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
@@ -199,6 +206,38 @@ func (m MacosVerificationSettings) Validate() error {
 	return nil
 }
 
+// ExecutionPauseState is how far an operator's pause of prod's execution has
+// gone. The zero value is invalid.
+type ExecutionPauseState string
+
+const (
+	// ExecutionPauseRequested: the operator asked prod to pause; it admits
+	// no new work and waits for running work to end.
+	ExecutionPauseRequested ExecutionPauseState = "requested"
+	// ExecutionPauseReleased: running work ended and prod gave up the App
+	// authority; it starts driverless until the pause clears.
+	ExecutionPauseReleased ExecutionPauseState = "released"
+)
+
+// AllExecutionPauseStates is the single registration point for
+// ExecutionPauseState.
+var AllExecutionPauseStates = []ExecutionPauseState{ExecutionPauseRequested, ExecutionPauseReleased}
+
+func (s ExecutionPauseState) valid() bool {
+	switch s {
+	case ExecutionPauseRequested, ExecutionPauseReleased:
+		return true
+	default:
+		return false
+	}
+}
+
+// ExecutionPauseSettings is the execution_pause section's value. The section
+// is absent when no pause is in force.
+type ExecutionPauseSettings struct {
+	State ExecutionPauseState `json:"state"`
+}
+
 // InstanceSettings is every instance section's value. An optional section is
 // a pointer, nil when unset. The rules here are shape rules only; the rules
 // of the packages that use a value (the allowed review auth modes, the build
@@ -215,6 +254,7 @@ type InstanceSettings struct {
 	ManualSubmissionConfig *string                    `json:"manual_submission_config"`
 	Build                  BuildSettings              `json:"build"`
 	MacosVerification      *MacosVerificationSettings `json:"macos_verification"`
+	ExecutionPause         *ExecutionPauseSettings    `json:"execution_pause"`
 }
 
 // Validate checks every section that is set and that every required one
@@ -240,6 +280,8 @@ func (s InstanceSettings) unset(section InstanceSettingsSection) bool {
 		return s.ManualSubmissionConfig == nil
 	case InstanceSectionMacosVerification:
 		return s.MacosVerification == nil
+	case InstanceSectionExecutionPause:
+		return s.ExecutionPause == nil
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
 		return false
@@ -297,6 +339,14 @@ func (s InstanceSettings) ValidateSection(section InstanceSettingsSection) error
 			return errors.New("macos_verification is required")
 		}
 		return s.MacosVerification.Validate()
+	case InstanceSectionExecutionPause:
+		if s.ExecutionPause == nil {
+			return errors.New("execution_pause is required")
+		}
+		if !s.ExecutionPause.State.valid() {
+			return fmt.Errorf("execution_pause.state %q is not requested or released", s.ExecutionPause.State)
+		}
+		return nil
 	}
 	return fmt.Errorf("instance settings section %q: %w", section, ErrUnknownSettingsSection)
 }
@@ -375,6 +425,8 @@ func (s *InstanceSettings) field(section InstanceSettingsSection) any {
 		return &s.Build
 	case InstanceSectionMacosVerification:
 		return &s.MacosVerification
+	case InstanceSectionExecutionPause:
+		return &s.ExecutionPause
 	}
 	return nil
 }
@@ -534,6 +586,27 @@ func (r InstanceSettingsRecord) Settings() (InstanceSettings, error) {
 		return InstanceSettings{}, fmt.Errorf("instance settings: %w", err)
 	}
 	return settings, nil
+}
+
+// ExecutionPause is the execution pause the record holds, or nil when none
+// is in force. It reads only that section, so it works on a record that
+// lacks the sections a run needs, as prod's does until it composes from
+// settings.
+func (r InstanceSettingsRecord) ExecutionPause() (*ExecutionPauseSettings, error) {
+	for _, revision := range r.Sections {
+		if revision.Section != InstanceSectionExecutionPause {
+			continue
+		}
+		var settings InstanceSettings
+		if err := decodeSettingsValue(revision.Value, settings.field(revision.Section)); err != nil {
+			return nil, fmt.Errorf("instance settings revision %d: %s: %w", revision.Revision, revision.Section, err)
+		}
+		if err := settings.ValidateSection(InstanceSectionExecutionPause); err != nil {
+			return nil, fmt.Errorf("instance settings revision %d: %w", revision.Revision, err)
+		}
+		return settings.ExecutionPause, nil
+	}
+	return nil, nil
 }
 
 // maxSettingsValueBytes bounds one section's value: the largest is a list of
