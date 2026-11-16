@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 125
+revision: 126
 status: active
-updated: 2026-11-14
+updated: 2026-11-16
 ---
 
 # Freeside
@@ -120,6 +120,7 @@ why.
     - [1B.1: Decision, Operational, and Provider Closure](#1b1-decision-operational-and-provider-closure)
     - [1B.2: The Initiative View](#1b2-the-initiative-view)
   - [One Daemon for Every Project, in Three Stages](#one-daemon-for-every-project-in-three-stages)
+  - [Timeline Strips, Work Status, and Cause Counts](#timeline-strips-work-status-and-cause-counts)
   - [Implementation Coordination (Building Freeside with Agents)](#implementation-coordination-building-freeside-with-agents)
   - [Phase 2: Breadth and Hardening](#phase-2-breadth-and-hardening)
   - [Phase 3: Comprehension and Interaction](#phase-3-comprehension-and-interaction)
@@ -761,7 +762,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | --- | --- |
 | **GitHub** | Owns source, issues, PRs, reviews, checks, and merge. Native Codex review, when observed, is recorded as best-effort extra evidence (Section [7](#7-review-policy)). Freeside reconciles each active resource independently; there is no global cursor. |
 | **Event inbox** | Accepts reconciled GitHub state, intake scans, cron events, and manual events idempotently. |
-| **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest and separate active and elapsed clocks for each run. |
+| **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest for each run. The daemon computes each run's separate active and elapsed clocks from the run's recorded history and serves them with the intervals behind them, each hold with its reason, so a client does no clock arithmetic (revision 126; not built yet, tracker #3231). |
 | **Scheduler** | Owns the closed union of durable schedule kinds, fire-time validation, and transactional redelivery (Section [5.16](#516-the-durable-scheduler)). |
 | **signet** | Owns AttentionItems, deliveries, conversations, synchronization, device pairing, and ntfy integration. |
 | **Research fetcher** | Retrieves immutable, digest-addressed research artifacts for agents. |
@@ -6421,7 +6422,9 @@ Each run records:
 - tokens and cost, as billable cost, reported usage, and quota consumed
   where the upstream exposes a unit, with the raw usage payload kept as a
   redacted, sourced derivative;
-- active and elapsed clocks;
+- the history from which the daemon computes its active and elapsed
+  clocks and serves them with the intervals behind them, each hold with its
+  reason (revision 126; not built yet, tracker #3231);
 - attempts, review rounds, and yield;
 - classifier samples and shadow results; and
 - outcome and human decisions.
@@ -6440,6 +6443,14 @@ opens are recorded per item and device, and sampled decision audits record
 comprehension defects. Both feed the Section [9](#9-comprehension) measurements. Passive baseline
 logging runs alongside Phase 1A. Usage is observed telemetry, never asserted
 quota state.
+
+**Work status view** (revision 126; not built yet, tracker #3231). The
+clients show where work stands in one view: how many tasks sit at each
+position now (a stage, a hold by its reason, or a wait on a decision), and
+how the hours of a chosen period divide by class, such as agent work,
+holds, and waits on a decision. The view reads stored records
+only. It is observation, never authority: nothing it shows orders, admits,
+or routes work.
 
 Subscription allowance is a fourth quantity, distinct from the three a run
 records (revision 77). Billable cost is what a run cost in money, reported
@@ -7632,6 +7643,25 @@ working, until it closes.
   re-scope the open issues the change affects. Exit: a week's measured pace
   on the installed daemon is recorded, with the binding constraint named.
 
+### Timeline Strips, Work Status, and Cause Counts
+
+Revision 126 commits Freeside to three ways to see where a task's time goes
+and which causes repeat. One of them, the work status view, comes forward
+from Phase 3. The work runs on the ad hoc tracker #3231, which is not a
+wave tracker; it lists the units and the exit checks, and its units start
+by fiat.
+
+- **Timeline strips.** A strip on the run timeline and the task page shows
+  to scale how long the agent worked, how long the run was held and why,
+  and how long it waited on a decision.
+- **The work status view.** Section
+  [8](#8-observability-and-optimization-telemetry) states what it shows.
+- **Cause counts.** A command counts which causes repeated in a period,
+  with no model run.
+
+All three read stored records and decide nothing. The initiative view
+stays in [1B.2](#1b2-the-initiative-view).
+
 ### Implementation Coordination (Building Freeside with Agents)
 
 Contracts and fakes coordinate implementation. The required check on the
@@ -7772,11 +7802,12 @@ is not enrolled.
 ### Phase 3: Comprehension and Interaction
 
 Add ACP interactive attachment, best-effort resume, material plan-change gates,
-briefings, evidence-informed routing, WIP views, and mature `auto_start`
-behavior. The initiative view moved to 1B.2 (revision 25), basic usage
-display to 1B.1 (revision 77), and usage-limit routing between subscriptions
-to 1B.1 (revision 99); routing on task class, quality, latency, and cost
-stays here.
+briefings, evidence-informed routing, and mature `auto_start` behavior. The
+initiative view moved to 1B.2 (revision 25), basic usage display to 1B.1
+(revision 77), usage-limit routing between subscriptions to 1B.1 (revision
+99), and the work status view, which this paragraph called "WIP views", to
+tracker #3231 (revision 126); routing on task class, quality, latency, and
+cost stays here.
 
 ### Phase 4: Generalization
 
@@ -7832,70 +7863,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 125 ("One Supervised Daemon Runs Every Project"):
+Revision 126 ("The Work Status View Comes Forward"):
 
-1. **One daemon executes** (Section [10](#10-operations-and-onboarding),
-   Environments). The launchd-supervised `prod` daemon runs real work. It
-   starts executing when its stored settings say so and its checks pass, and
-   launchd keeps it running across updates and crashes.
-2. **One daemon serves every onboarded project** (Section
-   [10](#10-operations-and-onboarding), Environments). A project is a stored
-   record, and adding one is onboarding, never a new state root or a second
-   process. Phase 1A's one repository becomes a limit that Stage 2 lifts
-   (Section [5.5](#55-the-ci-trust-boundary)).
-3. **Only shared resources bound throughput, never the project or the
-   process** (Section
-   [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
-   A task waits only for a resource limit the operator sets or for its own
-   project's state. The limits are four: the memory budget, each usage
-   pool's limits, the macOS verification executor's slots, and the image
-   builder limit. No daemon-wide lane makes one task's long work wait behind
-   another's, and no lock that tasks share is held across a network call.
-4. **Settings live in the store, in three scopes** (Section
-   [10](#10-operations-and-onboarding), Environments): instance, identity,
-   and project. A task binds the settings revisions it was admitted under,
-   and a later edit changes only later tasks, except that each gate still
-   re-checks stored authority against current policy, so an edit to
-   authority can stop an in-flight task at its next gate.
-5. **The deputy is the attended run of an unreleased build** (Section
-   [10](#10-operations-and-onboarding), Environments). The App authority
-   never has two holders at once, and the daemon enforces that, where
-   #2080's two start-time checks alone left a gap. Pausing `prod` before a
-   deputy run is the operator's procedure, and a deputy refuses while `prod`
-   reports that it is executing.
+1. **The plan commits to a work status view now, not in Phase 3**
+   (Section [8](#8-observability-and-optimization-telemetry), which
+   states what the view shows and that it decides nothing). Phase 3 had
+   listed it as "WIP views" since revision 25, with no decisions-log entry
+   of its own.
+2. **Tracker #3231 delivers three outcomes, and its units start by fiat**
+   (Section [11](#11-roadmap-build-order-and-coordination),
+   [Timeline Strips, Work Status, and Cause Counts](#timeline-strips-work-status-and-cause-counts)):
+   a time-scaled strip on the run timeline and the task page, the work
+   status view, and a command that counts repeated causes on demand. All
+   three read stored records and decide nothing.
+3. **The daemon computes and serves each run's clocks** (Sections
+   [5.1](#51-overview) and [8](#8-observability-and-optimization-telemetry)).
+   It works out each run's active and elapsed clocks from the run's
+   recorded history and serves them with the intervals behind them, each
+   hold with its reason, so a client does no clock arithmetic. This
+   replaces "the engine records" the clocks; nothing was built under the
+   old wording, and the engine still records the rein-policy digest.
 
-Four rules change with them. A busy Section
-[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
-judgment site makes a call wait its turn instead of returning its fallback,
-and how many calls it runs at once is a limit on the pool, starting at one,
-in place of a fixed one. Every container the daemon starts on its own
-reserves memory, and only a command the operator runs by hand stays outside
-the budget. One builder per daemon becomes a builder limit in the instance
-settings, starting at one (Section
-[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). And
-`freesided execution pause` and `execution resume` are a use of the durable
-operator stop, never the update drain, and a third sanctioned lifecycle path
-(Section [5.2](#52-the-daemon-and-its-supervisor)).
+Rejected: a standalone long-waits view, because most long waits follow the
+owner's workday, so the view would mostly show that; recurrence analysis
+run by a model, because cause counts are a plain query over typed causes;
+and compaction as a strip class, because the daemon records no compaction.
+The initiative view and its dependency graph stay Phase 1B.2 work (#885).
 
-This narrows revision 71's rejection of running real work through `prod`'s
-own store: its reason, that the harness isolates a run's database from
-`prod` on purpose, still holds for an unreleased build and doesn't apply to
-daily work. Rejected: a persistent deputy that serves many projects, which
-duplicates `prod` and keeps the App authority on permanent loan; one deputy
-per repository, which the App's single authority forbids and which splits
-the memory and pool limits by hand; many projects before `prod` executes,
-when the supervised launch is the smaller step; keeping #2080's two
-start-time checks without a lock, whose gap an executing `prod` under
-`KeepAlive` reaches on every restart; and importing the deputy roots' task
-history, a Tier A data import for display only.
+Nothing in this revision is built yet: tracker #3231 builds it.
 
-Nothing in this revision is built yet: tracker #3201 builds it in the three
-stages of Section [11](#11-roadmap-build-order-and-coordination)
-([One Daemon for Every Project, in Three Stages](#one-daemon-for-every-project-in-three-stages)), and
-each passage names the stage that delivers it.
-
-(Owner decision of 2026-11-13 on #3201;
-[decision note](../devlog/2026-11-14-1114-one-daemon-every-project.md).)
+(Owner decision of 2026-11-16 on #3231;
+[decision note](../devlog/2026-11-16-0951-work-status-view-forward.md).)
 
 ## 14. Risks
 
