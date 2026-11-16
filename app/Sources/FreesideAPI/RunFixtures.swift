@@ -178,6 +178,98 @@ public enum RunFixtures {
             outcomes: noOutcomes)
     }
 
+    /// The campaign behind the task strip's task (#3234).
+    public static let taskStripCampaignID = "campaign-freeside-task-strip"
+    public static let taskStripSpecificationRunID = "run-freeside-task-strip-specification"
+    public static let taskStripFirstRunID = "run-freeside-task-strip-1"
+    public static let taskStripRetryRunID = "run-freeside-task-strip-2"
+    public static let taskStripTaskName = Components.Schemas.DisplayName(
+        text: "Split the export into batches", source: ._operator)
+
+    /// The task strip's capture clock: the final review has waited 26
+    /// minutes.
+    public static let taskStripNow = date(290 * 60)
+
+    /// A task whose time spans three runs (#3234): a specification handed
+    /// to implementation, a first attempt that stopped on a question and
+    /// then failed, an hour and a quarter with no run, and the retry, which
+    /// exported and waits on the final review. Kept out of `defaultRuns()`
+    /// and `defaultTimelines()` so the runs-list digests do not churn; its
+    /// cards are `AttentionFixtures.taskStripItems()`.
+    public static func taskStripRuns() -> [Components.Schemas.RunSnapshot] {
+        let timelines = Dictionary(uniqueKeysWithValues: taskStripTimelines().map { ($0.run_id, $0) })
+        return [
+            snapshot(
+                id: taskStripSpecificationRunID, projectID: "freeside", stage: "specification",
+                attempt: 1, milestone: .terminal_recorded, outcome: .handed_off, lifecycle: .finished,
+                campaignID: taskStripCampaignID, campaignAttempt: 1, supersededBy: taskStripFirstRunID,
+                taskName: taskStripTaskName),
+            snapshot(
+                id: taskStripFirstRunID, projectID: "freeside", stage: "implementation",
+                attempt: 2, milestone: .terminal_recorded, outcome: .failed, lifecycle: .finished,
+                campaignID: taskStripCampaignID, campaignAttempt: 1, supersededBy: taskStripRetryRunID,
+                taskName: taskStripTaskName),
+            snapshot(
+                id: taskStripRetryRunID, projectID: "freeside", stage: "implementation",
+                attempt: 1, milestone: .execution_export_recorded, outcome: .pending, lifecycle: .active,
+                campaignID: taskStripCampaignID, campaignAttempt: 2,
+                attemptReason: "Retry after the staging database came back",
+                parentRunID: taskStripFirstRunID, taskName: taskStripTaskName),
+        ].map { projectingObservationTimes($0, from: timelines[$0.run.id]) }
+    }
+
+    public static func taskStripTimelines() -> [Components.Schemas.RunTimeline] {
+        let specification = taskStripSpecificationRunID
+        let first = taskStripFirstRunID
+        let retry = taskStripRetryRunID
+        var question = milestone(.execution_outcome_recorded, runID: first, minute: 70)
+        question.outcome = .init(value1: .blocked)
+        var failed = milestone(.terminal_recorded, runID: first, attempt: 2, minute: 140)
+        failed.terminal = .init(value1: .failed)
+        func timeline(
+            _ runID: String, _ milestones: [Components.Schemas.RunMilestone]
+        ) -> Components.Schemas.RunTimeline {
+            .init(
+                as_of_revision: 12, as_of: taskStripNow, run_id: runID, milestones: milestones, invocations: [],
+                completion: nil, billable_cost_so_far: nil, admissions: [], outcomes: noOutcomes)
+        }
+        return [
+            timeline(
+                specification,
+                [
+                    milestone(.run_submitted, runID: specification, minute: 0),
+                    milestone(.invocation_admitted, runID: specification, minute: 1),
+                    milestone(.invocation_started, runID: specification, minute: 2),
+                    milestone(.execution_export_recorded, runID: specification, minute: 30),
+                    milestone(.terminal_recorded, runID: specification, minute: 31),
+                ]),
+            timeline(
+                first,
+                [
+                    milestone(.run_submitted, runID: first, minute: 31),
+                    milestone(.invocation_admitted, runID: first, minute: 33),
+                    milestone(.invocation_started, runID: first, minute: 35),
+                    question,
+                    milestone(.invocation_admitted, runID: first, attempt: 2, minute: 102),
+                    milestone(.invocation_started, runID: first, attempt: 2, minute: 104),
+                    failed,
+                ]),
+            timeline(
+                retry,
+                [
+                    milestone(.run_submitted, runID: retry, minute: 215),
+                    milestone(.invocation_admitted, runID: retry, minute: 216),
+                    milestone(.invocation_started, runID: retry, minute: 218),
+                    milestone(.execution_export_recorded, runID: retry, minute: 262),
+                ]),
+        ]
+    }
+
+    /// `minute` minutes after the task strip's specification run started.
+    public static func taskStripInstant(minute: Int) -> Date {
+        date(TimeInterval(minute * 60))
+    }
+
     public static func refreshedHistoryTimeline() -> Components.Schemas.RunTimeline {
         let remediationInvocation = "inv-\(refreshedRunID)-remediation-1"
         var round = reviewRound(.completed)

@@ -3274,6 +3274,35 @@
                                     .environment(\.pinnedNow, RunFixtures.timeStripNow))))
                 }
             }
+            // Where a task's time went across its runs (#3234): three runs,
+            // an hour and a quarter between the last two, and a card on
+            // each of the last two, on their own coordinator so the inbox
+            // digests don't move.
+            let taskStrip = TaskFixtures.taskStrip()
+            let taskStripCache = InMemoryCacheStore()
+            try taskStripCache.save(
+                .init(
+                    cursors: .init(
+                        syncEpoch: "screenshot-epoch", lastFullSnapshotRevision: 12,
+                        highestObservedServerRevision: 12),
+                    attentionItems: AttentionFixtures.taskStripItems(),
+                    runs: taskStrip.runs,
+                    runTimelines: RunFixtures.taskStripTimelines()))
+            let taskStripCoordinator = SyncCoordinator(client: client, cache: taskStripCache)
+            for width in [CGFloat(390), CGFloat(820)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "task-page-strip-\(Int(width))-\(scheme)", width: width,
+                            colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(
+                                TaskPageView(
+                                    coordinator: taskStripCoordinator, snapshot: taskStrip.task, onOpenRun: { _ in }
+                                )
+                                .screenshotContent(taskStrip.history)
+                                .environment(\.pinnedNow, RunFixtures.taskStripNow))))
+                }
+            }
             // Attempt-ordered history (#1263): two early attempts re-observed
             // after a later completed attempt, plus a review round, so the
             // ordering does not follow observation time.

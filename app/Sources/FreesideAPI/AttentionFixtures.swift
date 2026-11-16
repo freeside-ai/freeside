@@ -265,6 +265,39 @@ public enum AttentionFixtures {
         return [question, review]
     }
 
+    /// The task strip's two cards (#3234): the first attempt's question,
+    /// answered 31 minutes after it stopped, and the retry's final review,
+    /// open since two minutes after its export.
+    public static func taskStripItems() -> [Components.Schemas.AttentionItemSnapshot] {
+        func subject(_ runID: String) -> Components.Schemas.Subject {
+            .run(
+                .init(
+                    subject_type: .run, subject_id: runID, run_id: runID,
+                    task_id: "task-\(RunFixtures.taskStripCampaignID)"))
+        }
+        var question = fixture(type: .agent_question)
+        question.item.id = "item-task-strip-question"
+        question.item.subject = subject(RunFixtures.taskStripFirstRunID)
+        question.item.created_at = RunFixtures.taskStripInstant(minute: 70)
+        let answeredAt = RunFixtures.taskStripInstant(minute: 101)
+        question.item.status = .resolved
+        question.item.item_version += 1
+        question.item.decided_at = answeredAt
+        question.item.conclusion = .init(
+            value1: .init(
+                cause: .decision, concluded_at: answeredAt, reason: "", successor_item_id: nil,
+                decision: .init(
+                    value1: .init(
+                        command_id: "cmd-task-strip-answer", action: .answer_and_retry,
+                        device_id: DeviceFixtures.otherDeviceID, device_display_name: "Ben's iPhone",
+                        finding_routes: nil, answer_route: nil))))
+        var review = fixture(type: .ready_for_final_review)
+        review.item.id = "item-task-strip-review"
+        review.item.subject = subject(RunFixtures.taskStripRetryRunID)
+        review.item.created_at = RunFixtures.taskStripInstant(minute: 264)
+        return [question, review]
+    }
+
     /// `snapshot` as the daemon closes it for `cause`, `offset` seconds
     /// after the fixtures' creation instant: the status the cause names,
     /// the next item version, and a conclusion with `reason` and the

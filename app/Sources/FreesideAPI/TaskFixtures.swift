@@ -238,66 +238,88 @@ public enum TaskFixtures {
 
     public static func defaultTasks() -> [Components.Schemas.TaskSnapshot] {
         let groups = Dictionary(grouping: RunFixtures.defaultRuns(), by: { $0.run.task_id })
-        return groups.keys.sorted().compactMap { id in
-            guard let snapshots = groups[id] else { return nil }
-            let runs = snapshots.map(\.run).sorted {
-                if $0.attempt_number != $1.attempt_number {
-                    return ($0.attempt_number ?? 0) < ($1.attempt_number ?? 0)
-                }
-                return ($0.created_at ?? .distantPast, $0.id) < ($1.created_at ?? .distantPast, $1.id)
-            }
-            guard let newest = runs.last else { return nil }
-            let created = runs.compactMap(\.created_at).min() ?? RunFixtures.screenshotInstant
-            let lastActivity = max(created, runs.compactMap(\.last_activity_at).max() ?? created)
-            var campaigns: [String] = []
-            for run in runs {
-                if let campaign = run.campaign_id, !campaigns.contains(campaign) {
-                    campaigns.append(campaign)
-                }
-            }
-            // The runs carry the task's current name, as the daemon copies it;
-            // a run without display names belongs to an identifier-only task.
-            let names = Components.Schemas.DisplayNames(
-                project: newest.display_names?.value1.project ?? .init(text: newest.project_id, source: .identifier),
-                task: newest.display_names?.value1.task ?? .init(text: id, source: .identifier))
-            let source: Components.Schemas.Task.sourcePayload? = issueNumbers[id].map { number in
-                .init(
-                    value1: .issue_subject(
-                        .init(
-                            kind: .issue_subject,
-                            issue_subject: .init(
-                                repo: "freeside-ai/freeside", repository_id: 1, issue_number: number))))
-            }
-            // A started fact opens the task's log; a finished task adds a
-            // completion bound to the newest run, so wip reads false. Active
-            // tasks hold their slot (#1318).
-            var lifecycleFacts: [Components.Schemas.TaskLifecycleFact] = [
-                .init(kind: .started, run_id: runs.first?.id ?? newest.id, recorded_at: created)
-            ]
-            let wip: Bool
-            switch newest.lifecycle {
-            case .finished:
-                lifecycleFacts.append(
-                    .init(
-                        kind: .completed, run_id: newest.id,
-                        binding_unit_id: "workunit-\(newest.id)", recorded_at: lastActivity))
-                wip = false
-            case .active, .unknown:
-                wip = true
-            }
-            return .init(
-                as_of_revision: snapshots.map(\.as_of_revision).max() ?? 1,
-                entity_version: snapshots.map(\.entity_version).max() ?? 1,
-                task: .init(
-                    id: id, project_id: newest.project_id, display_names: names, source: source,
-                    created_at: created, last_activity_at: lastActivity,
-                    lifecycle: .init(rawValue: newest.lifecycle.rawValue),
-                    current_position: .init(
-                        value1: .init(
-                            run_id: newest.id, stage: newest.stages.last?.name,
-                            hold_reason: newest.hold_reason.map { .init(value1: $0.value1) })),
-                    campaign_ids: campaigns, run_ids: runs.map(\.id),
-                    wip: wip, lifecycle_facts: lifecycleFacts, task_lines: [], attachments: []))
+        return groups.keys.sorted().compactMap { id in groups[id].flatMap { task(id: id, runs: $0) } }
+    }
+
+    /// The task strip's task (#3234): three runs with an hour and a quarter
+    /// between the last two, its runs, and its history.
+    public static func taskStrip() -> (
+        task: Components.Schemas.TaskSnapshot, runs: [Components.Schemas.RunSnapshot],
+        history: Components.Schemas.TaskTimeline
+    ) {
+        let runs = RunFixtures.taskStripRuns()
+        guard let task = task(id: "task-\(RunFixtures.taskStripCampaignID)", runs: runs) else {
+            preconditionFailure("The task strip's task requires its runs")
         }
+        let history = timeline(
+            for: task.task, runs: runs.map(\.run),
+            timelines: Dictionary(uniqueKeysWithValues: RunFixtures.taskStripTimelines().map { ($0.run_id, $0) }),
+            revision: task.as_of_revision, asOf: RunFixtures.taskStripNow)
+        return (task, runs, history)
+    }
+
+    /// The task snapshot the daemon would serve over `snapshots`, the
+    /// task's runs.
+    private static func task(
+        id: String, runs snapshots: [Components.Schemas.RunSnapshot]
+    ) -> Components.Schemas.TaskSnapshot? {
+        let runs = snapshots.map(\.run).sorted {
+            if $0.attempt_number != $1.attempt_number {
+                return ($0.attempt_number ?? 0) < ($1.attempt_number ?? 0)
+            }
+            return ($0.created_at ?? .distantPast, $0.id) < ($1.created_at ?? .distantPast, $1.id)
+        }
+        guard let newest = runs.last else { return nil }
+        let created = runs.compactMap(\.created_at).min() ?? RunFixtures.screenshotInstant
+        let lastActivity = max(created, runs.compactMap(\.last_activity_at).max() ?? created)
+        var campaigns: [String] = []
+        for run in runs {
+            if let campaign = run.campaign_id, !campaigns.contains(campaign) {
+                campaigns.append(campaign)
+            }
+        }
+        // The runs carry the task's current name, as the daemon copies it;
+        // a run without display names belongs to an identifier-only task.
+        let names = Components.Schemas.DisplayNames(
+            project: newest.display_names?.value1.project ?? .init(text: newest.project_id, source: .identifier),
+            task: newest.display_names?.value1.task ?? .init(text: id, source: .identifier))
+        let source: Components.Schemas.Task.sourcePayload? = issueNumbers[id].map { number in
+            .init(
+                value1: .issue_subject(
+                    .init(
+                        kind: .issue_subject,
+                        issue_subject: .init(
+                            repo: "freeside-ai/freeside", repository_id: 1, issue_number: number))))
+        }
+        // A started fact opens the task's log; a finished task adds a
+        // completion bound to the newest run, so wip reads false. Active
+        // tasks hold their slot (#1318).
+        var lifecycleFacts: [Components.Schemas.TaskLifecycleFact] = [
+            .init(kind: .started, run_id: runs.first?.id ?? newest.id, recorded_at: created)
+        ]
+        let wip: Bool
+        switch newest.lifecycle {
+        case .finished:
+            lifecycleFacts.append(
+                .init(
+                    kind: .completed, run_id: newest.id,
+                    binding_unit_id: "workunit-\(newest.id)", recorded_at: lastActivity))
+            wip = false
+        case .active, .unknown:
+            wip = true
+        }
+        return .init(
+            as_of_revision: snapshots.map(\.as_of_revision).max() ?? 1,
+            entity_version: snapshots.map(\.entity_version).max() ?? 1,
+            task: .init(
+                id: id, project_id: newest.project_id, display_names: names, source: source,
+                created_at: created, last_activity_at: lastActivity,
+                lifecycle: .init(rawValue: newest.lifecycle.rawValue),
+                current_position: .init(
+                    value1: .init(
+                        run_id: newest.id, stage: newest.stages.last?.name,
+                        hold_reason: newest.hold_reason.map { .init(value1: $0.value1) })),
+                campaign_ids: campaigns, run_ids: runs.map(\.id),
+                wip: wip, lifecycle_facts: lifecycleFacts, task_lines: [], attachments: []))
     }
 }

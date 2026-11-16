@@ -1262,6 +1262,7 @@ struct TaskPageView: View {
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
         let rowMarker: ((String) -> AnyView)? = scrollBy == nil ? nil : { holdMarker($0) }
         return VStack(alignment: .leading, spacing: 22) {
+            timeStrip(timeline)
             VStack(alignment: .leading, spacing: 11) {
                 KeywordLabel(text: "Timeline")
                     .accessibilityAddTraits(.isHeader)
@@ -1399,6 +1400,39 @@ struct TaskPageView: View {
             .padding(.horizontal, horizontalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+    }
+
+    /// Where the task's time went across its runs (#3234), above the
+    /// Timeline. A live page with a run still going grows it each minute;
+    /// a screenshot on its pinned clock, or a task whose runs all
+    /// finished, draws it once.
+    @ViewBuilder
+    private func timeStrip(_ timeline: Components.Schemas.TaskTimeline) -> some View {
+        let runs = TaskTimelinePresentation.timeStripRuns(timeline, task: snapshot.task, synced: coordinator.runs)
+        if scrollBy == nil || runs.allSatisfy(\.finished) {
+            timeStrip(timeline, runs: runs, now: now)
+        } else {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                timeStrip(timeline, runs: runs, now: pinnedNow ?? context.date)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func timeStrip(
+        _ timeline: Components.Schemas.TaskTimeline, runs: [TaskTimeStrip.Run], now: Date
+    ) -> some View {
+        if let strip = TaskTimeStrip.strip(
+            runs: runs, attentionItems: coordinator.store.orderedSnapshots, now: now)
+        {
+            TaskTimeStripView(
+                strip: strip,
+                titles: Dictionary(
+                    timeline.sections.flatMap(\.runs).map { ($0.run_id, TaskTimelinePresentation.runTitle($0)) },
+                    uniquingKeysWith: { first, _ in first }),
+                onOpenRun: onOpenRun
+            )
+        }
     }
 
     private func chip(
@@ -2997,6 +3031,31 @@ enum TaskTimelinePresentation {
         }
         let parts = [outcome, run.superseded_by == nil ? nil : "Superseded"].compactMap { $0 }
         return parts.isEmpty ? nil : (parts.joined(separator: " · "), .faint)
+    }
+
+    /// Whether the task strip ends `run` at its newest milestone (#3234).
+    /// The synced run's lifecycle says so when the client holds it; a task
+    /// timeline run carries no lifecycle, so otherwise the run chip's rule
+    /// stands in: a successor or the task leaving its active lifecycle
+    /// ended it.
+    static func runIsFinished(
+        _ run: Components.Schemas.TaskTimelineRun, task: Components.Schemas.Task, synced: Components.Schemas.Run?
+    ) -> Bool {
+        if let synced, synced.lifecycle != .unknown { return synced.lifecycle == .finished }
+        return run.superseded_by != nil || !TaskDisplay.isActive(task)
+    }
+
+    /// Every run of the timeline as the task strip takes it.
+    static func timeStripRuns(
+        _ timeline: Components.Schemas.TaskTimeline, task: Components.Schemas.Task,
+        synced: [Components.Schemas.RunSnapshot]
+    ) -> [TaskTimeStrip.Run] {
+        timeline.sections.flatMap(\.runs).map { run in
+            TaskTimeStrip.Run(
+                runID: run.run_id,
+                finished: runIsFinished(run, task: task, synced: synced.first { $0.run.id == run.run_id }?.run),
+                milestones: run.milestones)
+        }
     }
 
     static func newestMilestoneTime(_ run: Components.Schemas.TaskTimelineRun) -> Date? {
