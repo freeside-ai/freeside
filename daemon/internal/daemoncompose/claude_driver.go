@@ -93,6 +93,10 @@ type ClaudeDriverConfig struct {
 	// Every identity the daemon runs under comes from that tree's lineup.
 	AgentTreeCheckout, AgentTreeCommit string
 	AllowedPaths                       []string
+	// SettingsRevisions names the stored settings revisions this
+	// configuration was composed from, which every admission records. It is
+	// nil for a configuration from a settings file (the deputy).
+	SettingsRevisions *domain.SettingsRevisions
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -211,6 +215,11 @@ func (c ClaudeDriverConfig) Validate() error {
 		return fmt.Errorf("complete shadow review configuration is required when enabled")
 	case c.ShadowReviewImage != "" && domain.ImageRef(c.ShadowReviewImage).Validate() != nil:
 		return fmt.Errorf("-shadow-review-image must be digest-pinned")
+	}
+	if c.SettingsRevisions != nil {
+		if err := c.SettingsRevisions.Validate(); err != nil {
+			return fmt.Errorf("stored settings: %w", err)
+		}
 	}
 	return nil
 }
@@ -1207,7 +1216,8 @@ func composeClaudeDriver(
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second task
 		// is submitted.
-		Agents: agents,
+		Agents:            agents,
+		SettingsRevisions: cfg.SettingsRevisions,
 	}
 	follower = newConformanceFollower(followerConfig{
 		Ledger: backend,

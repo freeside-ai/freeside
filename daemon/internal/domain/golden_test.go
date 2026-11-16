@@ -1289,6 +1289,11 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	admission := domaintest.ExecutionAdmission()
+	// The settings-bound (v7) variant: the base admission composed from
+	// stored settings, naming the revisions it was admitted under.
+	settingsAdmission := domaintest.ExecutionAdmission(func(in *domain.ExecutionAdmissionInput) {
+		in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+	})
 
 	// The provider_registry variant: the profile is the only field that
 	// differs from the base admission. The declared registry set is not a
@@ -2795,6 +2800,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", selectedAgentAdmission},
 		{"execution_admission_no_hydration", noHydrationAdmission},
+		{"execution_admission_settings_revisions", settingsAdmission},
 		{"execution_admission_agent_explicit_model", selectedClaudeAdmission},
 		{"review_admission", selectedReviewAdmission},
 		{"execution_admission_task_line", selectedTaskLineAdmission},

@@ -99,6 +99,15 @@ func TestClaudeDriverConfigRequiresExplicitBindings(t *testing.T) {
 		"build dns shape": func(c *ClaudeDriverConfig) {
 			c.Rebuild = projectimage.BuildInputs{BaseBuildRef: "local/agent:test", DNS: []string{"--flag"}}
 		},
+		// A half-set pair names settings no store held together.
+		"half-set settings revisions": func(c *ClaudeDriverConfig) {
+			c.SettingsRevisions = &domain.SettingsRevisions{Instance: 3}
+		},
+	}
+	stored := valid
+	stored.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+	if err := stored.Validate(); err != nil {
+		t.Fatalf("config from stored settings rejected: %v", err)
 	}
 	rebuilding := valid
 	rebuilding.Rebuild = projectimage.BuildInputs{

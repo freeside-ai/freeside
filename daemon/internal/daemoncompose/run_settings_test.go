@@ -104,6 +104,26 @@ func TestLoadRunSettingsReadsCompleteRecords(t *testing.T) {
 	}
 }
 
+// TestNewClaudeDriverConfigCarriesTheSettingsRevisions: a composition from
+// stored settings names their revisions, and one from a file names none.
+func TestNewClaudeDriverConfigCarriesTheSettingsRevisions(t *testing.T) {
+	t.Parallel()
+	st := seedRunSettings(t, storedInstanceSections(), storedProjectSections())
+	settings, err := daemoncompose.LoadRunSettings(context.Background(), st, runSettingsProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := daemoncompose.NewClaudeDriverConfig(settings, daemoncompose.RunLaunch{})
+	want := domain.SettingsRevisions{Instance: settings.InstanceRevision, Project: settings.ProjectRevision}
+	if cfg.SettingsRevisions == nil || *cfg.SettingsRevisions != want {
+		t.Fatalf("composed revisions = %v, want %+v", cfg.SettingsRevisions, want)
+	}
+	settings.InstanceRevision, settings.ProjectRevision = 0, 0
+	if file := daemoncompose.NewClaudeDriverConfig(settings, daemoncompose.RunLaunch{}); file.SettingsRevisions != nil {
+		t.Fatalf("file settings composed revisions %+v", *file.SettingsRevisions)
+	}
+}
+
 // TestLoadRunSettingsRefusesWhatCurrentPolicyRefuses stores values that
 // domain validation accepts and the settings gate refuses; the loader
 // returns no settings.
