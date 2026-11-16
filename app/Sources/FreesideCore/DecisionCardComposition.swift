@@ -18,6 +18,9 @@ enum DecisionCardModule: String, CaseIterable {
     case stageRail
     case comparison
     case yieldChart
+    /// What the run filed, posted, or set aside around its pull request
+    /// (`DecisionOutcomesPresentation`).
+    case outcomes
     case summary
     /// The final review's reading order for its pull request (plan §7,
     /// §9): the agent's stops, each with the daemon's read of the lines it
@@ -581,6 +584,9 @@ struct DecisionCardComposition: Equatable {
         var hasComparison = false
         /// The card draws a follow-up filing's proposed title and body.
         var hasProposedIssueText = false
+        /// The card's outcome list holds set-aside findings, whose message
+        /// and reason are the reviewer's and the agent's words.
+        var hasOutcomeFindings = false
         var prominentClaimIndex: Int? = nil
     }
 
@@ -712,6 +718,8 @@ struct DecisionCardComposition: Equatable {
             return DecisionStopCausePresentation(item)?.audit != nil
         case .comparison:
             return context.hasComparison
+        case .outcomes:
+            return context.hasOutcomeFindings
         case .foldedFacts, .specRevision, .specification, .checklist, .stageRail,
             .yieldChart, .evidence, .details:
             return false
@@ -909,15 +917,18 @@ struct DecisionCardComposition: Equatable {
             // daemon's verdict on it, then View PR, so the supported next
             // step follows what it rests on. Returning the work sits below
             // any fact block; the review's round-by-round yield is history,
-            // so it folds under the actions.
+            // so it folds under the actions, and the run's outcome list
+            // follows it there: it reports what the run did around the pull
+            // request and carries no verdict on the merge (plan §9 revision
+            // 128).
             return .init(
                 modules: [
                     .recommendation, .summary, .reviewGuide, .facts, .checklist, .factBlock,
-                    .yieldChart, .claims, .evidence, .details,
+                    .yieldChart, .outcomes, .claims, .evidence, .details,
                 ],
                 actionInsertionIndex: 6,
                 reviewingActionInsertionIndex: 5,
-                foldedModuleCount: 1)
+                foldedModuleCount: 2)
         case .execution_failure:
             // Frame 5.3: what failed, then the agent's account of why, then
             // the stages the run reached, so the diagnostic is read before
@@ -1070,6 +1081,7 @@ struct DecisionRecordedContext: Equatable {
     var hasReason = false
     var hasRunDetails = false
     var hasReviewYield = false
+    var hasOutcomes = false
     /// The reading rows: `AttentionDisplay.detailReadingRows`, then the
     /// requested actions not offered on this surface.
     var readingRows: [AttentionDisplay.BindingRow] = []
@@ -1083,6 +1095,7 @@ struct DecisionRecordedContext: Equatable {
         if hasReason { parts.append("reason") }
         if hasRunDetails { parts.append("run details") }
         if hasReviewYield { parts.append("review yield") }
+        if hasOutcomes { parts.append("outcomes") }
         let readingParts = Set(readingRows.compactMap { Self.readingPart($0.label) })
         parts.append(contentsOf: Self.readingPartOrder.filter(readingParts.contains))
         if hasFactBlock { parts.append("facts") }

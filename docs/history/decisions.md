@@ -4100,3 +4100,31 @@ Nothing in this revision is built yet: tracker #3231 builds it.
 
 (Owner decision of 2026-11-16 on #3231;
 [decision note](../../devlog/2026-11-16-0951-work-status-view-forward.md).)
+
+## Revision 127 ("Ward Holds a Proof per Configuration"):
+
+1. **A conformance declaration is per configuration** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes)). The ward
+   backend yields one configuration per writer image and holds a proof for
+   each image in use. Admission and its later re-checks judge an attempt
+   by the newest record for the configuration its admission names, so
+   proving, failing, or retiring one image's configuration never admits or
+   refuses another's, and an attempt admitted on one image can start while
+   ward proves another. An admitted attempt starts only while the daemon
+   yields its admission's configuration. A configuration no attempt used
+   since the previous scheduled pass is retired by a superseding record,
+   which bounds how many proofs the scheduled pass renews.
+
+This narrows "a failed pass records the failure and invalidates the
+declaration": a failed pass now invalidates only its own configuration's
+declaration. A fault the pass found that every image shares, such as a
+broken egress path, closes the other configurations only at their next
+scheduled re-proof or at a failed pre-job probe, not at once. Rejected:
+keeping one proof per backend, which makes every project wait while ward
+re-proves for another project's image and lets a writer image change hold
+every in-flight attempt; and closing every configuration on any failed
+pass, which turns one project's broken image into a stop for all of them.
+
+(Planned in #3211's contract on tracker #3201 and handed to implementation
+by the owner on 2026-11-16;
+[decision note](../../devlog/2026-11-16-0920-ward-proof-per-configuration.md).)

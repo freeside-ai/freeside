@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 127
+revision: 128
 status: active
 updated: 2026-11-16
 ---
@@ -6603,7 +6603,7 @@ Actions and lifecycle live in Section [4](#4-the-attention-model); presentation 
 | `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
 | `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
 | `publish_blocked` | The trust rule that failed (daemon fact). | The failing artifact or scan detail. |
-| `ready_for_final_review` | The ask, a labeled change summary, then the review guide when the run wrote one: ordered stops whose prose is a labeled claim, each excerpt's text a daemon fact read from the imported commit or its base (Summary Provenance). Then daemon verification verdicts with diff stats. Then View PR, when the client supports it (revision 78). View PR is navigation: it never resolves the item, and capability filtering still decides whether it renders. | Digested review history, then the evidence packet and the routine bindings. |
+| `ready_for_final_review` | The ask, a labeled change summary, then the review guide when the run wrote one: ordered stops whose prose is a labeled claim, each excerpt's text a daemon fact read from the imported commit or its base (Summary Provenance). Then daemon verification verdicts with diff stats. Then View PR, when the client supports it (revision 78). View PR is navigation: it never resolves the item, and capability filtering still decides whether it renders. | Digested review history and the run's outcome list (revision 128): each follow-up issue or issue comment the run filed, posted, or proposed and where it stands, with the reason one ended refused, capped, or uncertain, and each finding it declined or deferred with its reason as a labeled claim. Then the evidence packet and the routine bindings. |
 | `task_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
 | `effect_proposal` | The requested effect as a daemon fact from the validated artifact (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)): kind, daemon-resolved target, and bounded parameters. Agent cost, safety, and scope assertions are labeled claims, never merged into the fact line. | Full proposal artifact; “approve with changes” shows the revised-digest diff. |
 | `system_health` | The diagnostic fact and the unattended capability it impairs. The card opens from the clients' System Health settings pane, not the inbox. | Doctor output. |
@@ -7873,33 +7873,24 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 127 ("Ward Holds a Proof per Configuration"):
+Revision 128 ("The Ready Card Shows the Run's Outcome List"):
 
-1. **A conformance declaration is per configuration** (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). The ward
-   backend yields one configuration per writer image and holds a proof for
-   each image in use. Admission and its later re-checks judge an attempt
-   by the newest record for the configuration its admission names, so
-   proving, failing, or retiring one image's configuration never admits or
-   refuses another's, and an attempt admitted on one image can start while
-   ward proves another. An admitted attempt starts only while the daemon
-   yields its admission's configuration. A configuration no attempt used
-   since the previous scheduled pass is retired by a superseding record,
-   which bounds how many proofs the scheduled pass renews.
+1. **The ready card lists what the run did around its pull request**
+   (Section [9](#9-comprehension), the `ready_for_final_review` row).
+   Below the actions, after the digested review history: each follow-up
+   issue or issue comment the run filed, posted, or proposed and where it
+   stands, a refused, capped, or uncertain one with its reason, and each
+   finding the run declined or deferred with its reason, which renders as
+   a labeled claim. The list reports and decides nothing: it carries no verdict,
+   exception, or restriction on the merge, so it is not a
+   [§9](#9-comprehension) exception and takes no first-viewport space.
 
-This narrows "a failed pass records the failure and invalidates the
-declaration": a failed pass now invalidates only its own configuration's
-declaration. A fault the pass found that every image shares, such as a
-broken egress path, closes the other configurations only at their next
-scheduled re-proof or at a failed pre-job probe, not at once. Rejected:
-keeping one proof per backend, which makes every project wait while ward
-re-proves for another project's image and lets a writer image change hold
-every in-flight attempt; and closing every configuration on any failed
-pass, which turns one project's broken image into a stop for all of them.
+Rejected: leading the card with the list ahead of the actions, which would
+spend the first viewport on history that doesn't bear on the merge
+decision (revision 78).
 
-(Planned in #3211's contract on tracker #3201 and handed to implementation
-by the owner on 2026-11-16;
-[decision note](../devlog/2026-11-16-0920-ward-proof-per-configuration.md).)
+(Owner decision of 2026-11-16 splitting #3149, applied as #3264;
+[decision note](../devlog/2026-11-16-1251-ready-card-outcome-list.md).)
 
 ## 14. Risks
 
