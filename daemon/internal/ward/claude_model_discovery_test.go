@@ -209,7 +209,7 @@ func TestLineupProbeKeepsItsOutputCap(t *testing.T) {
 	t.Parallel()
 	big := strings.Repeat("x", lineupProbeOutputCap+1)
 	rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("v\n", big, "", "0\n")...)
-	if _, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil); err == nil ||
+	if _, err := probeLineupImageNoWait(t.Context(), rt, claudeWriterProbe(t), nil); err == nil ||
 		!strings.Contains(err.Error(), "within the cap") {
 		t.Fatalf("err = %v", err)
 	}
