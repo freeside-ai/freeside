@@ -193,7 +193,7 @@ func recordLaunchOrder(
 	ctx context.Context, st *store.Store, attention attentionService,
 	runID domain.RunID, invocationID domain.InvocationID, refusal error, now time.Time,
 ) error {
-	if refusal == nil || errors.Is(refusal, store.ErrUpdateDrainInForce) {
+	if refusal == nil || store.NewWorkClosed(refusal) {
 		return nil
 	}
 	join := errors.Is(refusal, domain.ErrMachineCapacity)

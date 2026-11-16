@@ -416,16 +416,16 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 }
 
 // beginPublicationPass counts one publication pass as running and reports
-// whether it may start. While an update drain is in force a pass starts only
+// whether it may start. While an update drain or an execution pause is in
+// force a pass starts only
 // while a launched review still holds its slot: the pass's cleanup is what
 // marks that review's outcome ready and frees the slot, so pausing every pass
 // would hold readiness at not-ready for good. Such a pass launches nothing
-// new, since every launch inside it checks the drain itself (issue #3104).
+// new, since every launch inside it checks for both itself (issue #3104).
 func (e *Engine) beginPublicationPass(ctx context.Context) (end func(), run bool, err error) {
 	end = e.running.Begin(domain.RestartBlockerPublication)
 	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
-		drain, err := tx.UpdateDrainInForce(ctx)
-		if err != nil || drain == nil {
+		if err := tx.RequireNewWorkOpen(ctx); !store.NewWorkClosed(err) {
 			run = err == nil
 			return err
 		}

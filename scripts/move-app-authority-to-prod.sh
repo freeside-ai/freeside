@@ -37,11 +37,15 @@ set -euo pipefail
 APP_MOVE_SCRIPT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 
 # The state files the daemon's installation authority store owns
-# (daemon/internal/publish/janitor_store.go).
+# (daemon/internal/publish/janitor_store.go), and the App authority writer
+# lock (daemon/internal/publish/authority_lock.go). The lock file holds no
+# state: it is never copied, and a target holding only it holds no authority.
+app_authority_lock_file=app-authority-writer.lock
 app_state_file_recognized() {
   case $1 in
   installation-authority.json | installation-janitor-journal.json | \
-    installation-janitor-journal.lock | installation-recovery-*.json) return 0 ;;
+    installation-janitor-journal.lock | installation-recovery-*.json | \
+    "$app_authority_lock_file") return 0 ;;
   esac
   return 1
 }
@@ -104,6 +108,7 @@ app_move_check_targets() {
   fi
   for entry in "$prod_root/daemon"/*; do
     [[ -e "$entry" || -L "$entry" ]] || continue
+    [[ "$(basename -- "$entry")" != "$app_authority_lock_file" ]] || continue
     if app_state_file_recognized "$(basename -- "$entry")"; then
       app_move_refuse "prod already holds App state \"$entry\"; the move never merges two authorities" || return
     fi
@@ -117,11 +122,16 @@ app_move_check_targets() {
 }
 
 # app_move_with_prod_lock <prod-root> <function> [args...]: runs this script's
-# <function> while holding prod's database lock, or refuses while prod holds
-# it. The lock is the daemon's flock(2) lock; perl takes it and execs bash with
-# the descriptor kept open, so it is held until the move exits.
+# <function> while holding prod's database lock and the App authority writer
+# lock in prod's daemon directory, or refuses while another process holds
+# either. Both are the daemon's flock(2) locks; perl takes them and execs bash
+# with the descriptors kept open, so they are held until the move exits. The
+# writer lock refuses a move while any process holds prod's daemon directory
+# as its App authority. It does not cover the source directory: a deputy run
+# using the source is refused by the rig manifest check instead.
 app_move_with_prod_lock() {
   local lock=$1/daemon/freeside.db.daemon.lock
+  local authority_lock=$1/daemon/$app_authority_lock_file
   shift
   [[ -d "$(dirname -- "$lock")" ]] || app_move_refuse "prod's daemon directory \"$(dirname -- "$lock")\" does not exist" || return
   (
@@ -130,9 +140,13 @@ app_move_with_prod_lock() {
       my $path = shift;
       open(my $fh, ">>", $path) or do { print STDERR "move-app-authority-to-prod: refusing: cannot open prod database lock \"$path\": $!\n"; exit 2 };
       flock($fh, LOCK_EX | LOCK_NB) or do { print STDERR "move-app-authority-to-prod: refusing: prod holds its database lock \"$path\"; stop prod first\n"; exit 2 };
+      my $authority = shift;
+      open(my $ah, ">>", $authority) or do { print STDERR "move-app-authority-to-prod: refusing: cannot open the App authority writer lock \"$authority\": $!\n"; exit 2 };
+      flock($ah, LOCK_EX | LOCK_NB) or do { print STDERR "move-app-authority-to-prod: refusing: another process holds the App authority writer lock \"$authority\"; wait for the deputy run to end\n"; exit 2 };
       fcntl($fh, F_SETFD, 0) or exit 1;
+      fcntl($ah, F_SETFD, 0) or exit 1;
       exec @ARGV or exit 1;
-    ' "$lock" bash -c 'set -euo pipefail; source "$1"; shift; "$@"' _ "$APP_MOVE_SCRIPT" "$@"
+    ' "$lock" "$authority_lock" bash -c 'set -euo pipefail; source "$1"; shift; "$@"' _ "$APP_MOVE_SCRIPT" "$@"
   )
 }
 
@@ -185,6 +199,7 @@ move_app_authority() {
   fi
   for file in "$state"/*; do
     [[ -e "$file" ]] || continue
+    [[ "$(basename -- "$file")" != "$app_authority_lock_file" ]] || continue
     if ! cp -p "$file" "$staging/state/" || ! chmod go-rwx "$staging/state/$(basename -- "$file")"; then
       app_move_rollback
       echo "move-app-authority-to-prod: staging \"$file\" failed; nothing was moved" >&2

@@ -84,6 +84,17 @@ var holdClasses = []holdClass{
 		sentinel: store.ErrUpdateDrainInForce, action: holdActionInvocation,
 		reason: domain.HoldUpdateDrain, clearsOnStart: true,
 	},
+	// An execution pause holds each new launch the same way, for the same
+	// reason: prod waits for running work to end before it releases the App
+	// authority. Its hold reuses blocking_system_health, the reason a
+	// system_health condition holds a launch, so no client vocabulary
+	// changes. The pause's own card is advisory (see
+	// daemoncompose.RequestExecutionPause), so this hold is what shows
+	// that the launch waits on the pause.
+	{
+		sentinel: store.ErrExecutionPauseInForce, action: holdActionInvocation,
+		reason: domain.HoldBlockingSystemHealth, clearsOnStart: true,
+	},
 	// Capacity, memory, image-upkeep, and quota-window holds are current
 	// scheduling state, not history, so starting the invocation clears them.
 	{

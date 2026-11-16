@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -24,7 +25,7 @@ func TestFollowUpFilerCompositionAndBinding(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	st := storetest.Open(t, filepath.Join(root, "store.db"), store.Options{})
-	ks, err := publish.NewKeystore(filepath.Join(root, "credentials"), filepath.Join(root, "state"))
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, filepath.Join(root, "state")), filepath.Join(root, "credentials"))
 	if err != nil {
 		t.Fatal(err)
 	}

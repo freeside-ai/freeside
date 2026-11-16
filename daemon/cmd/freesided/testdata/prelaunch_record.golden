@@ -87,6 +87,12 @@
     },
     {
       "group": "rig",
+      "name": "app_authority_lock",
+      "status": "passed",
+      "evidence": "held; released when the checks end"
+    },
+    {
+      "group": "rig",
       "name": "installed_daemon",
       "status": "passed",
       "evidence": "prod's App authority is usable under the lease"

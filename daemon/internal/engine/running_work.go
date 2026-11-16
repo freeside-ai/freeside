@@ -57,8 +57,8 @@ func (r *RunningWork) Counts() map[domain.RestartBlockerKind]int {
 }
 
 // BeginUnlessDraining starts one unit of in-process work of kind: it counts
-// the work as running, then refuses with store.ErrUpdateDrainInForce while a
-// drain is in force. The count comes first so a readiness read that lands
+// the work as running, then refuses while an update drain or an execution
+// pause is in force (store.RequireNewWorkOpen). The count comes first so a readiness read that lands
 // between the check and the launch still sees the work; a refusal, or a
 // failed read, ends the count before returning.
 func (r *RunningWork) BeginUnlessDraining(
@@ -66,7 +66,7 @@ func (r *RunningWork) BeginUnlessDraining(
 ) (end func(), err error) {
 	end = r.Begin(kind)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		return tx.RequireNoUpdateDrain(ctx)
+		return tx.RequireNewWorkOpen(ctx)
 	}); err != nil {
 		end()
 		return nil, err

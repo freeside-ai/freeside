@@ -3,7 +3,6 @@ package daemoncompose
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -66,8 +65,8 @@ func liftUpdateDrainAtStart(ctx context.Context, drain engine.UpdateDrain, logge
 
 // ProbeUnlessDraining returns the credential-integrity probe one doctor pass
 // may run, and the end of its running-probe count. The scheduled doctor and
-// the operator's doctor command both call it. While an update drain is
-// in force it returns a nil probe, so the pass reports the marks earlier
+// the operator's doctor command both call it. While an update drain or an
+// execution pause is in force it returns a nil probe, so the pass reports the marks earlier
 // passes recorded and starts no observer container; a non-nil probe that
 // observed nothing would read as a pass that found nothing. The caller calls
 // end once the probe has run. A nil logger logs nothing.
@@ -79,9 +78,9 @@ func ProbeUnlessDraining(
 		return nil, func() {}, nil
 	}
 	end, err := running.BeginUnlessDraining(ctx, st, domain.RestartBlockerProbe)
-	if errors.Is(err, store.ErrUpdateDrainInForce) {
+	if store.NewWorkClosed(err) {
 		if logger != nil {
-			logger.Info("credential-integrity probe skipped while an update drain is in force")
+			logger.Info("credential-integrity probe skipped while an update drain or an execution pause is in force")
 		}
 		return nil, func() {}, nil
 	}

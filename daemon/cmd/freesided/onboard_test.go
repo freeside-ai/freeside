@@ -430,6 +430,10 @@ func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	// Setup creates the App state directory onboarding locks.
+	if err := os.Mkdir(filepath.Join(root, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	// From empty on purpose: the store onboard creates is what submit's
 	// topic-key gate must accept.
 	err := runOnboardCommand(t.Context(), []string{

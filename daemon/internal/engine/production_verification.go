@@ -232,8 +232,9 @@ func reentryHostVerificationRefusedReason(
 // recordRetryableHold raises.
 //
 // It also starts the job's count as running verification_job work and
-// refuses the job while an update drain is in force, budget or not, with a
-// retryable error recordRetryableHold records as update_drain (issue #3104).
+// refuses the job while an update drain or an execution pause is in force,
+// budget or not, with a retryable error recordRetryableHold records as
+// update_drain or blocking_system_health (issue #3104).
 // The caller ends the count with the returned end once the job is done; a
 // refusal ends it before returning.
 func (w *productionPublicationWorkflow) reserveVerification(
@@ -243,7 +244,7 @@ func (w *productionPublicationWorkflow) reserveVerification(
 	// began is held apart from the named end, which every refusal below
 	// returns as nil before the deferred call reads it.
 	began, err := w.running.BeginUnlessDraining(ctx, w.store, domain.RestartBlockerVerificationJob)
-	if errors.Is(err, store.ErrUpdateDrainInForce) {
+	if store.NewWorkClosed(err) {
 		return nil, &verificationReservationRefused{invocationID: id, err: productionPublicationRetryableError(
 			fmt.Errorf("start verification: %w", err))}
 	}

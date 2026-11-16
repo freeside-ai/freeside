@@ -2,6 +2,7 @@ package daemoncompose
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,35 @@ func TestProbeUnlessDrainingStartsNoProbeWhileDraining(t *testing.T) {
 	got, end, err = ProbeUnlessDraining(ctx, st, running, probe, nil)
 	if got != nil || err != nil {
 		t.Fatalf("draining: probe = %v, %v; want none", got != nil, err)
+	}
+	end()
+	if counts := running.Counts(); len(counts) != 0 {
+		t.Fatalf("counts = %v, want none", counts)
+	}
+}
+
+// TestProbeUnlessDrainingStartsNoProbeWhilePaused: an execution pause, like
+// a drain, gives the pass a nil probe and counts nothing.
+func TestProbeUnlessDrainingStartsNoProbeWhilePaused(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, _ := newDrainTestStore(t)
+	running := engine.NewRunningWork()
+	var probe CredentialIntegrityProbe = func(context.Context) ([]operations.CredentialIntegrityOutcome, error) {
+		return nil, nil
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.AppendInstanceSettingsRevision(ctx, domain.InstanceSettingsInput{
+			Section: domain.InstanceSectionExecutionPause, Value: json.RawMessage(`{"state":"requested"}`),
+			SetBy: "cli:operator",
+		}, time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, end, err := ProbeUnlessDraining(ctx, st, running, probe, nil)
+	if got != nil || err != nil {
+		t.Fatalf("paused: probe = %v, %v; want none", got != nil, err)
 	}
 	end()
 	if counts := running.Counts(); len(counts) != 0 {

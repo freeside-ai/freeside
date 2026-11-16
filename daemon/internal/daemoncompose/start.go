@@ -88,7 +88,10 @@ type StartOptions struct {
 	MemoryBudgetMiB  int
 	Logger           *slog.Logger
 	Claude           *ClaudeDriverConfig
-	Scenario         *Scenario
+	// AppAuthority is how a Claude-mode daemon holds the App authority
+	// writer lock (AppAuthority).
+	AppAuthority AppAuthority
+	Scenario     *Scenario
 	// ManualProjects are the projects the manual-submission file configures,
 	// and ManualInitiator resolves a client submission's policy from them.
 	ManualProjects  map[domain.ProjectID]engine.ManualInitiator
@@ -149,6 +152,12 @@ type ControlRouteInputs struct {
 	// Running is the daemon's count of in-process work; the operator's
 	// doctor counts its probe there.
 	Running *engine.RunningWork
+	// Execution is whether a driver runs in this process and, when none
+	// does, why: GET /execution reports it, not the configured driver.
+	Execution ExecutionState
+	// ExecutionPause serves freesided execution in a prod started with a
+	// driver, executing or not; nil in any other daemon.
+	ExecutionPause *ExecutionPauseControl
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -268,6 +277,45 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 			_ = st.Close()
 		}
 	}()
+	// Start owns the App authority writer lock from here: a failed start
+	// releases it, and the shell releases it after the workers stop.
+	authorityLock := cfg.AppAuthority.Lock
+	defer func() {
+		if !success {
+			_ = authorityLock.Close()
+		}
+	}()
+	// prod's gated order runs here, once its own database is open and before
+	// anything composes the driver; a decline leaves it driverless with the
+	// reason, holding no lock. A released execution pause declines before
+	// the lock, which the deputy the pause was for is to take.
+	var gated ExecutionState
+	pausable := cfg.AppAuthority.Prod != nil && cfg.Claude != nil
+	if pausable {
+		if authorityLock != nil {
+			return nil, errors.New("app authority: a held lock and prod's gated order are exclusive")
+		}
+		pause, err := ReadExecutionPause(parent, st)
+		if err != nil {
+			return nil, fmt.Errorf("read the execution pause: %w", err)
+		}
+		if pause != nil && pause.State == domain.ExecutionPauseReleased {
+			gated = ExecutionPaused
+		} else {
+			gated, authorityLock, err = gateProdAppAuthority(cfg.Claude.StateRoot, cfg.AppAuthority.Prod.LeaseRoot)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !gated.Runs() {
+			cfg.Claude = nil
+		}
+	}
+	if cfg.Claude != nil {
+		claude := *cfg.Claude
+		claude.AuthorityLock = authorityLock
+		cfg.Claude = &claude
+	}
 	// The budget's checks wait for the store, because a budget recorded there
 	// wins over the declared one.
 	bound, err := cfg.startupLaunchBound(parent, st, cfg.ManualProjects)
@@ -387,7 +435,15 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	if err := ConvergeStoredState(parent, st, workflow != nil, cfg.Now, logger); err != nil {
+	execution := ExecutionNotConfigured
+	switch {
+	case workflow != nil:
+		execution = ExecutionConfigured
+	case gated != "":
+		execution = gated
+		logger.Warn("serving without execution", "reason", string(gated))
+	}
+	if err := ConvergeStoredState(parent, st, execution, cfg.Now, logger); err != nil {
 		return nil, err
 	}
 	// The last stored step before anything that launches starts: model
@@ -417,7 +473,8 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	d := &Daemon{
 		Shell: daemonshell.New(daemonshell.Parts{
 			Lock: lock, Store: st, Listener: listener, LoopbackTwin: loopbackTwin, Server: server,
-			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.Now,
+			Pairing: pairing, SessionCloser: sessions, AppAuthority: authorityLock,
+			Cancel: cancel, Logger: logger, Now: cfg.Now,
 		}),
 		Store: st, Attention: attention, Workflow: workflow, Driver: driver, Usage: usage,
 	}
@@ -425,7 +482,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	routes := ControlRouteInputs{
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
-		UpdateDrain: updateDrain, Running: running,
+		UpdateDrain: updateDrain, Running: running, Execution: execution,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -447,6 +504,12 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	}
 	if workflow != nil {
 		routes.ReleaseVerificationMemory = workflow.ReleaseVerificationMemory
+	}
+	if pausable {
+		routes.ExecutionPause = &ExecutionPauseControl{
+			store: st, readiness: attention.RestartReadiness, restart: d.RequestRestart,
+			now: nowOrWallClock(cfg.Now), executes: gated.Runs(),
+		}
 	}
 	pairing.RegisterRoutes(routes)
 	var fakeSched *scheduler.Scheduler
@@ -494,6 +557,15 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	}
 	if loops != nil {
 		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
+	}
+	if pausable {
+		waiter := executionPauseWaiter{
+			store: st, readiness: attention.RestartReadiness, restart: d.RequestRestart,
+			leaseRoot: cfg.AppAuthority.Prod.LeaseRoot, now: nowOrWallClock(cfg.Now), logger: logger,
+		}
+		d.Go(func() {
+			d.ComponentExited(parent, ctx, daemonshell.ComponentExecutionPause, waiter.run(ctx))
+		})
 	}
 	if scenarioWiring != nil {
 		d.startScenarioLoops(parent, ctx, cfg, scenarioWiring, workflow)
@@ -756,7 +828,8 @@ func trackedConfigurations(backend *ward.Backend) []domain.Digest {
 // mode. The startup pass takes a nil probe, so it reports recorded
 // credential-integrity marks only and starting the daemon starts no
 // observer container; scheduled passes take the live probe, except while an
-// update drain is in force, when they report recorded marks too.
+// update drain or an execution pause is in force, when they report recorded
+// marks too.
 func newDoctorPass(
 	cfg StartOptions, st *store.Store, attention *signet.Service, claudeWiring *ClaudeComposition,
 	doctorConvergenceLock *sync.Mutex, running *engine.RunningWork, probe CredentialIntegrityProbe,

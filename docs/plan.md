@@ -884,7 +884,7 @@ stands for the operator stop and for every system stop (a restart never
 reopens unattended admission). The update drain below is the one state a
 start may lift, and among starts only that of a different build lifts it.
 
-**Execution pause** (revision 125; not built yet, Stage 1 of tracker #3201).
+**Execution pause** (revision 125; Stage 1 of tracker #3201).
 An execution pause is a use of the durable operator stop above, so a deputy
 run (Section [10](#10-operations-and-onboarding), Environments) can hold the
 App authority. `freesided execution pause` applies the stop, lets running
@@ -5064,8 +5064,8 @@ Four machine-enforced rules govern evidence:
    publish the same candidate for one repository to the same head branch
    converge on one PR. Section
    [10](#10-operations-and-onboarding) prevents that: `prod` runs without a
-   driver during a deputy run (paused; revision 125, not built yet, Stage 1
-   of tracker #3201), so it
+   driver during a deputy run (paused; revision 125, Stage 1 of tracker
+   #3201), so it
    never publishes then, and the
    operator never runs one work unit in both while either has it active.
    The publisher waits for 1B because the first repository is deliberately
@@ -6992,7 +6992,7 @@ scopes are not the Workflow settings layers of Section
   App's single authority lives. Until Stage 1 of tracker #3201 lands, `prod`
   never publishes.
   **The App authority never has two holders at once, and the daemon enforces
-  that** (revision 125; not built yet, Stage 1 of tracker #3201). Pausing
+  that** (revision 125; Stage 1 of tracker #3201). Pausing
   `prod` (Section [5.2](#52-the-daemon-and-its-supervisor), Execution pause)
   before a deputy run is the operator's procedure. A paused `prod` keeps
   running for the whole run, but without a driver, and a driverless `prod`
@@ -7001,9 +7001,10 @@ scopes are not the Workflow settings layers of Section
   enables execution only when `prod` reports that it is not executing or is
   not running, and a `prod` that does not answer that read fails the check.
   A `prod` that starts while a production rig lease, live or stale, exists
-  runs no driver. Until Stage 1 lands, these two start-time checks are the whole
-  enforcement, and a `prod` that starts while a lease exists refuses
-  `-driver fake` and `-driver claude` (#2080). The supervised `dev`
+  runs no driver and serves without one. Beneath these start-time checks,
+  every process that opens those directories first takes one single-writer
+  lock, so the two holders are refused even when the checks race (#3204).
+  The supervised `dev`
   label is unaffected. A deputy's build must read and write the authority
   and janitor journal formats that the installed `prod` build accepts. The
   daemon enforces the exception (#1583): its `-prod-app-authority` flag
@@ -7066,7 +7067,7 @@ scopes are not the Workflow settings layers of Section
   third is `freesided execution pause` and `execution resume`, which only
   the operator runs and which make the daemon exit itself to be restarted
   (Section [5.2](#52-the-daemon-and-its-supervisor), Execution pause;
-  revision 125; not built yet, Stage 1 of tracker #3201). Tests, scripts,
+  revision 125; Stage 1 of tracker #3201). Tests, scripts,
   and agents never stop, unload, or re-register `ai.freeside.daemon`.
 - **An update is provisional until the new build reopens** (revision 116; not
   built yet, tracker #3113). A new build is checked against a copy of the

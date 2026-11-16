@@ -186,6 +186,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["InstanceSettingsSection"] = append(valids["InstanceSettingsSection"], v.valid)
 	}
 	invalids["InstanceSettingsSection"] = InstanceSettingsSection("").valid
+	for _, v := range AllExecutionPauseStates {
+		valids["ExecutionPauseState"] = append(valids["ExecutionPauseState"], v.valid)
+	}
+	invalids["ExecutionPauseState"] = ExecutionPauseState("").valid
 	for _, v := range AllProjectSettingsSections {
 		valids["ProjectSettingsSection"] = append(valids["ProjectSettingsSection"], v.valid)
 	}

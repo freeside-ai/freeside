@@ -179,30 +179,35 @@ type compositionManifest struct {
 }
 
 type preflightConfig struct {
-	SubmissionID                string
-	Judgments                   daemoncompose.JudgmentConfig
-	DBPath                      string
-	RigTokenFile                string
-	ServerURL                   string
-	ContainerBin                string
-	AgentImage                  string
-	ExporterImage               string
-	ReviewImage                 string
-	Repo                        string
-	RepositoryCheckout          string
-	RepositoryID                int64
-	BaseRef                     string
-	BaseSHA                     string
-	ApprovedRecipe              domain.Digest
-	AgentTreeCheckout           string
-	AgentTreeCommit             string
-	AuthVolume                  string
-	ReviewInputRoot             string
-	ReviewAuthMode              ward.CodexAuthMode
-	ReviewAuthSnapshot          string
-	ReviewInstructions          string
-	PublicationStateDir         string
-	PublicationCredentialsDir   string
+	SubmissionID              string
+	Judgments                 daemoncompose.JudgmentConfig
+	DBPath                    string
+	RigTokenFile              string
+	ServerURL                 string
+	ContainerBin              string
+	AgentImage                string
+	ExporterImage             string
+	ReviewImage               string
+	Repo                      string
+	RepositoryCheckout        string
+	RepositoryID              int64
+	BaseRef                   string
+	BaseSHA                   string
+	ApprovedRecipe            domain.Digest
+	AgentTreeCheckout         string
+	AgentTreeCommit           string
+	AuthVolume                string
+	ReviewInputRoot           string
+	ReviewAuthMode            ward.CodexAuthMode
+	ReviewAuthSnapshot        string
+	ReviewInstructions        string
+	PublicationStateDir       string
+	PublicationCredentialsDir string
+	// AuthorityLock is the App authority writer lock the calling process
+	// already holds: a deputy's and prelaunch's, taken under the rig lease.
+	// Standalone preflight leaves it nil and takes its own only when it
+	// reaches the authority inspection.
+	AuthorityLock               *publish.AuthorityWriterLock
 	ReviewWorkspaceSizeMB       int64
 	ShadowReviewImage           string
 	ShadowReviewAuthSnapshot    string
@@ -1389,10 +1394,11 @@ func inspectRepositoryAuthority(
 	ctx context.Context, cfg preflightConfig, now time.Time,
 ) (inspection repositoryAuthorityInspection) {
 	localErr := inspectLocalRepositoryBase(ctx, cfg)
-	keystore, authorityStore, selected, err := selectRepositoryAuthority(ctx, cfg, now)
+	keystore, authorityStore, selected, release, err := selectRepositoryAuthority(ctx, cfg, now)
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
 	}
+	defer release()
 	client := &http.Client{Timeout: 30 * time.Second}
 	resolved, err := publish.InspectAppBotIdentity(
 		ctx, selected, client, daemoncompose.DefaultGitHubAPIBase,
@@ -1470,46 +1476,77 @@ func inspectRepositoryAuthority(
 // target repository. Every janitor-free mint for the repository selects its
 // App here, so the composition and prelaunch's issue read cannot pick
 // different registrations.
+//
+// It opens the authority under cfg.AuthorityLock, or, when that is nil, under
+// a lock of its own that release closes; release is a no-op for a borrowed
+// lock, whose holder closes it.
 func selectRepositoryAuthority(
 	ctx context.Context, cfg preflightConfig, now time.Time,
-) (*publish.Keystore, *publish.InstallationAuthorityStore, publish.AppCredentials, error) {
-	authorityStore, err := publish.NewInstallationAuthorityStore(cfg.PublicationStateDir)
-	if err != nil {
-		return nil, nil, publish.AppCredentials{}, err
+) (_ *publish.Keystore, _ *publish.InstallationAuthorityStore, _ publish.AppCredentials, _ func(), err error) {
+	lock := cfg.AuthorityLock
+	release := func() {}
+	if lock == nil {
+		if lock, err = acquireAppAuthority(cfg.PublicationStateDir); err != nil {
+			return nil, nil, publish.AppCredentials{}, nil, err
+		}
+		release = func() { _ = lock.Close() }
+	} else if err := lock.Covers(cfg.PublicationStateDir); err != nil {
+		return nil, nil, publish.AppCredentials{}, nil, err
 	}
-	keystore, err := publish.NewKeystore(cfg.PublicationCredentialsDir, cfg.PublicationStateDir)
+	defer func() {
+		if err != nil {
+			release()
+		}
+	}()
+	authorityStore, err := publish.NewInstallationAuthorityStore(lock)
 	if err != nil {
-		return nil, nil, publish.AppCredentials{}, err
+		return nil, nil, publish.AppCredentials{}, nil, err
+	}
+	keystore, err := publish.NewKeystore(lock, cfg.PublicationCredentialsDir)
+	if err != nil {
+		return nil, nil, publish.AppCredentials{}, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil || len(apps) == 0 {
-		return nil, nil, publish.AppCredentials{}, errors.New("no usable GitHub App credentials")
+		return nil, nil, publish.AppCredentials{}, nil, errors.New("no usable GitHub App credentials")
 	}
 	var selected *publish.AppCredentials
 	for _, app := range apps {
 		authority, err := authorityStore.InstallationAuthority(ctx, app.AppID)
 		if err != nil {
-			return nil, nil, publish.AppCredentials{}, err
+			return nil, nil, publish.AppCredentials{}, nil, err
 		}
 		allows, err := publish.InstallationAuthorityAllowsRepository(
 			app, authority, cfg.RepositoryID, now,
 		)
 		if err != nil {
-			return nil, nil, publish.AppCredentials{}, err
+			return nil, nil, publish.AppCredentials{}, nil, err
 		}
 		if !allows {
 			continue
 		}
 		if selected != nil {
-			return nil, nil, publish.AppCredentials{}, errors.New("multiple GitHub Apps have authority for the target repository")
+			return nil, nil, publish.AppCredentials{}, nil, errors.New("multiple GitHub Apps have authority for the target repository")
 		}
 		candidate := app
 		selected = &candidate
 	}
 	if selected == nil {
-		return nil, nil, publish.AppCredentials{}, errors.New("no registered GitHub App has authority for the target repository")
+		return nil, nil, publish.AppCredentials{}, nil, errors.New("no registered GitHub App has authority for the target repository")
 	}
-	return keystore, authorityStore, *selected, nil
+	return keystore, authorityStore, *selected, release, nil
+}
+
+// acquireAppAuthority takes the App authority writer lock on stateDir for a
+// command that opens the authority. A held lock names who likely holds it:
+// only an executing prod and a deputy run hold it for long.
+func acquireAppAuthority(stateDir string) (*publish.AuthorityWriterLock, error) {
+	lock, err := publish.AcquireAuthorityWriterLock(stateDir)
+	if errors.Is(err, publish.ErrAuthorityWriterLockHeld) {
+		return nil, fmt.Errorf("%w; an executing prod or a deputy run is using the App authority: "+
+			"pause prod with freesided execution pause, or wait for the deputy run to end", err)
+	}
+	return lock, err
 }
 
 func inspectLocalRepositoryBase(ctx context.Context, cfg preflightConfig) error {

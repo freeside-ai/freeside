@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 )
 
 // newAuthorityStore prepares a state directory holding the payload and returns
@@ -24,7 +25,7 @@ func newAuthorityStore(t *testing.T, payload string) (string, *publish.Installat
 	if payload != "" {
 		writeAuthorityFile(t, dir, payload)
 	}
-	store, err := publish.NewInstallationAuthorityStore(dir)
+	store, err := publish.NewInstallationAuthorityStore(publishtest.HoldAuthority(t, dir))
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestInstallationAuthorityStoreDocumentReplacementIsValidatedAndAtomic(t *te
 func TestInstallationAuthorityStoreSerializesSeparateWriters(t *testing.T) {
 	t.Parallel()
 	dir, first := newAuthorityStore(t, validAuthorityJSON)
-	second, err := publish.NewInstallationAuthorityStore(dir)
+	second, err := publish.NewInstallationAuthorityStore(publishtest.HoldAuthority(t, dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,17 +398,30 @@ func TestInstallationAuthorityStoreReadsEveryCall(t *testing.T) {
 	}
 }
 
-func TestNewInstallationAuthorityStoreRejectsUnusableDirectories(t *testing.T) {
+func TestNewInstallationAuthorityStoreRequiresAHeldLock(t *testing.T) {
 	t.Parallel()
-	if _, err := publish.NewInstallationAuthorityStore("   "); err == nil {
-		t.Fatal("empty state directory was accepted")
+	if _, err := publish.NewInstallationAuthorityStore(nil); err == nil {
+		t.Fatal("a nil lock was accepted")
 	}
-	file := filepath.Join(t.TempDir(), "state")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write file: %v", err)
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := publish.NewInstallationAuthorityStore(file); err == nil {
-		t.Fatal("a regular file was accepted as the state directory")
+	lock, err := publish.AcquireAuthorityWriterLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publish.AcquireAuthorityWriterLock(dir); !errors.Is(err, publish.ErrAuthorityWriterLockHeld) {
+		t.Fatalf("second acquisition = %v, want ErrAuthorityWriterLockHeld", err)
+	}
+	if _, err := publish.NewInstallationAuthorityStore(lock); err != nil {
+		t.Fatalf("open under a held lock: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publish.NewInstallationAuthorityStore(lock); err == nil {
+		t.Fatal("a released lock was accepted")
 	}
 }
 

@@ -2308,7 +2308,8 @@ func (w *productionPublicationWorkflow) storedReviewAdmission(
 // nothing and returns ErrUsagePoolExhausted or ErrMachineCapacity, for the
 // caller to wait on, and so does a routed reviewer whose pool's window is
 // marked, with ErrQuotaWindowExhausted, and any admission while an update
-// drain is in force, with store.ErrUpdateDrainInForce; writing the admission
+// drain or an execution pause is in force, with store.ErrUpdateDrainInForce
+// or store.ErrExecutionPauseInForce; writing the admission
 // ends the wait, and with it the hold the wait recorded and that hold's pace.
 //
 // The drain refuses before the row is written, never after: a written
@@ -2349,7 +2350,7 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
 			return err
 		}
-		if err := tx.RequireNoUpdateDrain(ctx); err != nil {
+		if err := tx.RequireNewWorkOpen(ctx); err != nil {
 			return err
 		}
 		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
@@ -2376,7 +2377,7 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		waited = present && reviewCapacityWait(hold.Reason)
 		for _, cause := range []domain.RunHoldReason{
 			domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity, domain.HoldQuotaWindowExhausted,
-			domain.HoldUpdateDrain,
+			domain.HoldUpdateDrain, domain.HoldBlockingSystemHealth,
 		} {
 			if err := tx.ClearRunHoldCause(ctx, runID, cause); err != nil {
 				return err
@@ -2395,17 +2396,19 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 
 // reviewCapacityWait reports whether a hold reason is a review admission's
 // capacity wait: a full pool, memory that does not fit yet, a routed
-// reviewer's marked quota window, or an update drain, which admits nothing.
+// reviewer's marked quota window, or an update drain or execution pause's
+// blocking card, which admit nothing.
 func reviewCapacityWait(reason domain.RunHoldReason) bool {
 	return reason == domain.HoldUsagePoolExhausted || reason == domain.HoldMachineCapacity ||
-		reason == domain.HoldQuotaWindowExhausted || reason == domain.HoldUpdateDrain
+		reason == domain.HoldQuotaWindowExhausted || reason == domain.HoldUpdateDrain ||
+		reason == domain.HoldBlockingSystemHealth
 }
 
 // reviewCapacityRefusal reports whether a review admission refusal is a wait
 // for capacity rather than a failure.
 func reviewCapacityRefusal(err error) bool {
 	return errors.Is(err, domain.ErrUsagePoolExhausted) || errors.Is(err, domain.ErrMachineCapacity) ||
-		errors.Is(err, ErrQuotaWindowExhausted) || errors.Is(err, store.ErrUpdateDrainInForce)
+		errors.Is(err, ErrQuotaWindowExhausted) || store.NewWorkClosed(err)
 }
 
 // holdReviewForCapacity records the wait of a review refused for a full pool,

@@ -26,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonshell"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -168,6 +169,14 @@ func runDeputy(
 	if err := writeDeputyAcquisition(paths.Acquisition, lease); err != nil {
 		return err
 	}
+	// The run is the App authority's one writer from here until it ends. A
+	// held lock means an executing prod or another holder; the deferred
+	// release above frees the lease.
+	authority, err := acquireAppAuthority(settings.Prod.AppStateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = authority.Close() }()
 	if err := checkProdAppAuthority(ctx, deputyEnvironment, homes.home, homes.account, paths.Acquisition,
 		lease.Manifest().Resources.LeaseRoot, settings.Prod.InstalledDaemon); err != nil {
 		return err
@@ -192,7 +201,7 @@ func runDeputy(
 		return err
 	}
 
-	check, launch, err := deputySelfCheck(ctx, host, paths, settings, lease, stderr)
+	check, launch, err := deputySelfCheck(ctx, host, paths, settings, lease, authority, stderr)
 	if err != nil {
 		return err
 	}
@@ -213,7 +222,9 @@ func runDeputy(
 		return err
 	}
 	daemonRan = true
-	h, err := run(ctx, stop, deputyDaemonConfig(settings, paths, launch, logger))
+	daemonConfig := deputyDaemonConfig(settings, paths, launch, logger)
+	daemonConfig.AuthorityLock = authority
+	h, err := run(ctx, stop, daemonConfig)
 	if err != nil {
 		return err
 	}
@@ -525,12 +536,12 @@ func (r deputySelfCheckResult) passed() bool { return len(r.Failed) == 0 }
 // manifest's digest only when the check passed.
 func deputySelfCheck(
 	ctx context.Context, host deputyHost, paths deputyPaths, settings loadedDeputySettings,
-	lease *daemonlock.RigLease, stderr io.Writer,
+	lease *daemonlock.RigLease, authority *publish.AuthorityWriterLock, stderr io.Writer,
 ) (deputySelfCheckResult, deputyLaunch, error) {
 	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); !ok {
 		return result, deputyLaunch{}, nil
 	}
-	manifest, err := composePreflight(ctx, deputyPreflightConfig(settings, paths, lease), host.preflight,
+	manifest, err := composePreflight(ctx, deputyPreflightConfig(settings, paths, lease, authority), host.preflight,
 		host.now(), buildVersion())
 	if err != nil {
 		return deputySelfCheckResult{}, deputyLaunch{}, err
@@ -716,12 +727,14 @@ func agentTreeMatches(ctx context.Context, patch, checkout, commit, scratch stri
 // each submission to this manifest.
 func deputyPreflightConfig(
 	settings loadedDeputySettings, paths deputyPaths, lease *daemonlock.RigLease,
+	authority *publish.AuthorityWriterLock,
 ) preflightConfig {
 	cfg := preflightConfig{
-		RigTokenFile: paths.Acquisition,
-		ServerURL:    "http://" + lease.Manifest().Resources.ListenAddress,
-		ContainerBin: deputyContainerBin,
-		AgentImage:   settings.Images.Agent, ExporterImage: settings.Images.Exporter,
+		AuthorityLock: authority,
+		RigTokenFile:  paths.Acquisition,
+		ServerURL:     "http://" + lease.Manifest().Resources.ListenAddress,
+		ContainerBin:  deputyContainerBin,
+		AgentImage:    settings.Images.Agent, ExporterImage: settings.Images.Exporter,
 		ReviewImage: settings.Images.Review,
 		Repo:        settings.Repository.Repo, RepositoryCheckout: settings.Repository.Checkout,
 		RepositoryID: settings.Repository.RepositoryID,

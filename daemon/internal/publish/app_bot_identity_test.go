@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
@@ -45,9 +46,7 @@ func (s *appBotIdentityTokenSource) callCount() int {
 func appBotIdentityKeystore(t *testing.T) *publish.Keystore {
 	t.Helper()
 	root := t.TempDir()
-	keystore, err := publish.NewKeystore(
-		filepath.Join(root, "credentials"), filepath.Join(root, "state"),
-	)
+	keystore, err := publish.NewKeystore(publishtest.HoldAuthority(t, filepath.Join(root, "state")), filepath.Join(root, "credentials"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -211,14 +211,21 @@ func runOnboardCommand(
 		return err
 	}
 	defer func() { err = errors.Join(err, st.Close()) }()
-	authority, err := publish.NewInstallationAuthorityStore(cfg.StateDir)
+	// One App authority writer lock for every open below: a deputy run or
+	// another holder refuses onboarding before anything opens the authority.
+	authorityLock, err := acquireAppAuthority(cfg.StateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, authorityLock.Close()) }()
+	authority, err := publish.NewInstallationAuthorityStore(authorityLock)
 	if err != nil {
 		return err
 	}
 	if cfg.CredentialsDir == "" {
 		cfg.CredentialsDir = filepath.Join(filepath.Dir(cfg.StateDir), "credentials")
 	}
-	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateDir)
+	keystore, err := publish.NewKeystore(authorityLock, cfg.CredentialsDir)
 	if err != nil {
 		return err
 	}
@@ -271,7 +278,7 @@ func runOnboardCommand(
 		}
 		if !cfg.Resume {
 			installURL, err := installationURLForRegistration(
-				cfg.CredentialsDir, cfg.StateDir, cfg.RegistrationID,
+				authorityLock, cfg.CredentialsDir, cfg.RegistrationID,
 			)
 			if err != nil {
 				return err
@@ -391,7 +398,7 @@ func runOnboardCommand(
 	}
 	if trusted != nil {
 		return withInstallationJanitor(
-			ctx, st, authority, cfg.CredentialsDir, cfg.StateDir, cfg.InstallWait,
+			ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.InstallWait,
 			func(janitor *publish.InstallationJanitor) (bool, error) {
 				return janitor.AllowsRepository(
 					cfg.RegistrationID, trusted.InstallationID, cfg.RepositoryID,
@@ -401,7 +408,7 @@ func runOnboardCommand(
 		)
 	}
 	return withDurableInstallationPoll(
-		ctx, st, authority, cfg.CredentialsDir, cfg.StateDir, cfg.RegistrationID, runOnboard,
+		ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.RegistrationID, runOnboard,
 	)
 }
 
@@ -649,12 +656,12 @@ func withDurableInstallationPoll(
 	ctx context.Context,
 	st *store.Store,
 	authority *publish.InstallationAuthorityStore,
+	authorityLock *publish.AuthorityWriterLock,
 	credentialsDir string,
-	stateDir string,
 	registrationID int64,
 	run func(*publish.InstallationJanitor, *publish.Keystore, *http.Client) error,
 ) error {
-	keystore, err := publish.NewKeystore(credentialsDir, stateDir)
+	keystore, err := publish.NewKeystore(authorityLock, credentialsDir)
 	if err != nil {
 		return err
 	}
@@ -721,10 +728,11 @@ func withDurableInstallationPoll(
 }
 
 func installationURLForRegistration(
-	credentialsDir, stateDir string,
+	authorityLock *publish.AuthorityWriterLock,
+	credentialsDir string,
 	registrationID int64,
 ) (string, error) {
-	keystore, err := publish.NewKeystore(credentialsDir, stateDir)
+	keystore, err := publish.NewKeystore(authorityLock, credentialsDir)
 	if err != nil {
 		return "", err
 	}
@@ -826,8 +834,8 @@ func withInstallationJanitor(
 	ctx context.Context,
 	st *store.Store,
 	authority *publish.InstallationAuthorityStore,
+	authorityLock *publish.AuthorityWriterLock,
 	credentialsDir string,
-	stateDir string,
 	wait time.Duration,
 	ready func(*publish.InstallationJanitor) (bool, error),
 	run func(*publish.InstallationJanitor, *publish.Keystore, *http.Client) error,
@@ -835,7 +843,7 @@ func withInstallationJanitor(
 	if wait <= 0 {
 		return errors.New("-install-wait must be positive")
 	}
-	keystore, err := publish.NewKeystore(credentialsDir, stateDir)
+	keystore, err := publish.NewKeystore(authorityLock, credentialsDir)
 	if err != nil {
 		return err
 	}

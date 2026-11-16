@@ -4766,11 +4766,82 @@ the same project; the refusal names the first task and the commands that
 settle it (`freesided reattempt`, `freesided abandon`, or a replay with
 `--retry-submission-id`).
 
-**`prod` keeps running.** The deputy takes no lock of `prod`'s, so the
-operator neither stops nor restores the `prod` daemon around a start. Its
-composition preflight, run under the lease, fails `prod_execution` unless
-`prod` is not running or reports `disabled` on its control socket, and the
-installed build must serve that read (#2080).
+**`prod` keeps running, without execution.** The operator neither stops
+nor restores the `prod` daemon around a start: an executing `prod` is paused
+before the run and resumed after it (Pause Execution For A Deputy Run). The
+App authority admits one writer at a time. Every process that opens `prod`'s
+App state directory first takes the App authority writer lock,
+`app-authority-writer.lock` in that directory; an executing `prod` holds it
+for its life, and the deputy takes it under the lease, before it opens the
+authority. A held lock refuses the deputy's start and names `freesided
+execution pause`. The deputy's composition preflight, run under the lease,
+also fails `prod_execution` unless `prod` is not running or reports
+`disabled` on its control socket, and the installed build must serve that
+read (#2080).
+
+### Pause Execution For A Deputy Run
+
+`freesided execution pause`, `resume`, and `status` hand the App authority
+between an executing `prod` and a deputy run without stopping `prod`'s
+service, so the board and the phone keep working through the run. Each
+takes `prod`'s database, `<prod-root>/daemon/freeside.db` (the `prod` state
+root is `~/Library/Application Support/Freeside/`):
+
+```sh
+freesided execution pause -db <prod-root>/daemon/freeside.db
+freesided deputy -root <state-root>
+# ... the deputy run ...
+freesided execution resume -db <prod-root>/daemon/freeside.db
+```
+
+- **`pause`** records the pause in the instance settings'
+  `execution_pause` section and raises an advisory `execution_pause` card.
+  `prod` then starts no new work: no writer launch, recorded attempt,
+  publication pass, verification, image upkeep, review admission, or
+  attention discussion. Work already running finishes. Once restart
+  readiness counts nothing, `prod` records the pause released and exits
+  with status 0, and launchd restarts it. The restarted `prod` serves
+  without a driver, never takes the writer lock, and raises the blocking
+  `execution_paused` card. The command prints the status as JSON at each
+  change and returns once the restarted `prod`, which holds no writer lock,
+  reports the pause released, so a deputy started next finds the lock free.
+  It needs a running `prod`
+  started with a driver; one started without a driver answers that it has
+  nothing to pause.
+- **`resume`** clears the pause and concludes its cards. A `prod` running
+  without execution then restarts and runs its start order again; that
+  includes one that came up without execution beside a deputy run. An
+  executing `prod`, whose requested pause has not released yet, keeps
+  running, so resume cancels a pause without interrupting the work it was
+  waiting on. With no daemon running it clears the pause in the database,
+  and the next start reads it. Run it after the deputy run ends: while a rig
+  lease manifest exists it warns that `prod` will come back without
+  execution.
+- **`status`** prints the pause and `prod`'s restart readiness, and changes
+  nothing. It needs a running `prod`.
+
+The pause survives restarts: a `prod` restarted while the pause is requested
+keeps waiting, and one restarted after the release stays driverless. The
+control route is served only by `prod`.
+
+**Why `prod` may run without execution.** A `prod` started with a driver
+runs a fixed order once its database is open: read the pause, take the
+writer lock, then look for a rig lease manifest. The deputy takes the lease,
+then the lock, so however their starts interleave one of them sees the
+other. When `prod` can't execute it releases any lock it took, serves
+without a driver, and raises one blocking `system_health` card naming why
+and how to restart it with execution:
+
+| Code | Why |
+| --- | --- |
+| `execution_paused` | The pause is released. |
+| `app_authority_in_use` | Another process, most likely a deputy run, held the writer lock. |
+| `rig_lease_present` | A rig lease manifest existed, live or stale. A stale one needs `freesided rig recover` first. |
+
+**A forgotten pause.** Once a released pause has gone an hour with no rig
+lease manifest, `prod` raises an advisory `execution_pause_unused` card
+naming `freesided execution resume`. It concludes when a lease appears or
+the pause clears.
 
 ### Probe The Lineup Before A Run
 
@@ -4890,10 +4961,13 @@ is `not_run`, and the rest still run.
   `not_run` on a fresh root, where the policy can't be set yet: `routing
   set` refuses an enrollment the store lacks, and the deputy's start
   adopts them (Set The Routing Policy).
-- **`rig`**: the rig lease is acquirable and the rig idle, and `prod`'s App
-  authority is usable under it (`installed_daemon`). A live holder fails,
-  naming it; a stale lease fails, naming the `rig recover` command for its
-  root, or, for this root, that the deputy's start recovers it.
+- **`rig`**: the rig lease is acquirable and the rig idle, the App
+  authority writer lock is free under it (`app_authority_lock`), and
+  `prod`'s App authority is usable under both (`installed_daemon`). A live
+  holder fails, naming it; a stale lease fails, naming the `rig recover`
+  command for its root, or, for this root, that the deputy's start recovers
+  it. A held writer lock fails, naming `freesided execution pause` (Pause
+  Execution For A Deputy Run).
 - **`composition`**: every check of the deputy's launch composition,
   verbatim, under the lease.
 - **`live`**, unless `-no-live`, under the lease: `target_issue` and the

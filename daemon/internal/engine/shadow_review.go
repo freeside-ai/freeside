@@ -387,6 +387,7 @@ func (w *productionPublicationWorkflow) abandonWaitingShadowReview(
 			}
 			for _, cause := range []domain.RunHoldReason{
 				domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity, domain.HoldUpdateDrain,
+				domain.HoldBlockingSystemHealth,
 			} {
 				if err := tx.ClearRunHoldCause(ctx, task.RunID, cause); err != nil {
 					return err
