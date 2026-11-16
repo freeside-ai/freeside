@@ -313,34 +313,14 @@ func TestHandoffSpecSchemaOnlyOnFileV4Specification(t *testing.T) {
 	}
 }
 
-func TestHandoffSpecFileV5DisablesBuiltinInstructions(t *testing.T) {
+// TestNewLaunchesSelectPromptFileV8 pins the delivery new launches use. The
+// handoff-command goldens pin each delivery's command, including file_v5's
+// plugin-disable setting.
+func TestNewLaunchesSelectPromptFileV8(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
-	// file_v6 keeps file_v5's plugin setting (TestHandoffSpecFileV6AddsOnlyTheUsageDriver),
-	// file_v7 keeps file_v6's (TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource),
-	// and file_v8 keeps it beside the attribution setting
-	// (TestHandoffSpecFileV8TurnsOffAttribution).
 	if provider.PromptDelivery() != stage.PromptFileV8 {
 		t.Fatal("new launches do not select the severed protocol")
-	}
-	const settings = `--settings '{"enabledPlugins":{"agents-md@builtin":false}}' `
-	for _, specification := range []bool{false, true} {
-		for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
-			in := handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare, specification: specification}.input()
-			v4, err := provider.HandoffSpec(t.Context(), in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			in.PromptDelivery = stage.PromptFileV5
-			v5, err := provider.HandoffSpec(t.Context(), in)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := strings.Replace(v4.Agent.Command[2], "--append-system-prompt-file '"+instructionBundlePath+"' ", "--append-system-prompt-file '"+instructionBundlePath+"' "+settings, 1)
-			if want == v4.Agent.Command[2] || v5.Agent.Command[2] != want {
-				t.Fatal("file_v5 must add only the explicit plugin-disable setting to file_v4")
-			}
-		}
 	}
 }
 

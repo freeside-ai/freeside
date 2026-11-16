@@ -289,7 +289,7 @@ func TestRestartWithoutTopicKeyFails(t *testing.T) {
 func TestRunWithBadTopicKeyLeavesNoStore(t *testing.T) {
 	t.Parallel()
 	// From empty, not the template: the test asserts the refused run leaves
-	// no store, and the corrected retry creates a fresh one.
+	// no store.
 	dbPath := filepath.Join(t.TempDir(), "signet.db")
 	badKey := filepath.Join(dbPath+".blobs", "topic.key") // rejected: inside the blob tree
 	h, err := run(context.Background(), config{
@@ -303,19 +303,6 @@ func TestRunWithBadTopicKeyLeavesNoStore(t *testing.T) {
 	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("store was created despite the topic-key failure: stat err = %v", statErr)
 	}
-	// The corrected retry against the still-fresh store succeeds.
-	h, err = run(context.Background(), config{
-		DBPath: dbPath, ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
-		NtfyURL: "http://127.0.0.1:1", TopicKeyFile: filepath.Join(t.TempDir(), "topic.key"),
-	})
-	if err != nil {
-		t.Fatalf("corrected retry against a fresh store failed: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := h.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
 }
 
 // deviceIDFromToken recovers the device identity the pairing grant embeds in

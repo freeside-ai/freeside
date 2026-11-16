@@ -275,31 +275,11 @@ func TestStageDriverScriptedCancellation(t *testing.T) {
 	}
 }
 
-// TestStageDriverGuards covers the contract's identity guards: one committed
-// intent per id, loud unscripted starts, unknown ids.
+// TestStageDriverGuards covers the fake's own guard: an unscripted start
+// fails loudly. The contract suite covers the duplicate and unknown-id guards.
 func TestStageDriverGuards(t *testing.T) {
 	d := fake.NewStageDriver()
-	d.Script("inv-1", fake.StageScript{Outcome: fake.OutcomeComplete})
-
-	if err := d.Start(t.Context(), "inv-1", exec.StartSpec{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Start(t.Context(), "inv-1", exec.StartSpec{}); !errors.Is(err, exec.ErrDuplicateStart) {
-		t.Errorf("second start = %v, want ErrDuplicateStart", err)
-	}
 	if err := d.Start(t.Context(), "inv-unscripted", exec.StartSpec{}); !errors.Is(err, fake.ErrUnscripted) {
 		t.Errorf("unscripted start = %v, want ErrUnscripted", err)
-	}
-	if _, err := d.Inspect(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown inspect = %v, want ErrUnknownInvocation", err)
-	}
-	if _, err := d.Collect(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown collect = %v, want ErrUnknownInvocation", err)
-	}
-	if err := d.Cancel(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown cancel = %v, want ErrUnknownInvocation", err)
-	}
-	if _, err := d.Stream(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown stream = %v, want ErrUnknownInvocation", err)
 	}
 }

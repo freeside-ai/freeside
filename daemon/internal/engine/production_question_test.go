@@ -260,31 +260,30 @@ func (f blockedImplementationFixture) questionID() domain.ItemID {
 	return productionQuestionItemID(f.attempt.InvocationID)
 }
 
+// TestBlockedImplementationTerminalCreatesQuestionWithoutPublication runs one
+// blocked kind: the engine carries the kind into the question without
+// branching on it.
 func TestBlockedImplementationTerminalCreatesQuestionWithoutPublication(t *testing.T) {
 	t.Parallel()
-	for _, kind := range domain.AllBlockedKinds {
-		t.Run(string(kind), func(t *testing.T) {
-			f := newBlockedImplementationFixture(t, kind, decisionsFixture()[0].Question)
-			if _, err := f.engine.Reconcile(t.Context()); err != nil {
-				t.Fatalf("reconcile: %v", err)
-			}
-			f.assertQuestion(t)
+	f := newBlockedImplementationFixture(t, domain.BlockedKindOwnerDecision, decisionsFixture()[0].Question)
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	f.assertQuestion(t)
 
-			// A replayed pass, including one after a restart, converges without
-			// a second item, a changed one, or an implementation restart.
-			_, before := f.item(t, f.questionID())
-			if _, err := f.engine.Reconcile(t.Context()); err != nil {
-				t.Fatalf("replayed reconcile: %v", err)
-			}
-			reopened := f.reopen(t)
-			if _, err := reopened.newEngine(t, reopened.newDriver(t)).Reconcile(t.Context()); err != nil {
-				t.Fatalf("restarted reconcile: %v", err)
-			}
-			f.specificationFixture = reopened
-			if _, after := f.item(t, f.questionID()); after.EntityVersion != before.EntityVersion {
-				t.Fatalf("replay advanced the question item to version %d", after.EntityVersion)
-			}
-		})
+	// A replayed pass, including one after a restart, converges without
+	// a second item, a changed one, or an implementation restart.
+	_, before := f.item(t, f.questionID())
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("replayed reconcile: %v", err)
+	}
+	reopened := f.reopen(t)
+	if _, err := reopened.newEngine(t, reopened.newDriver(t)).Reconcile(t.Context()); err != nil {
+		t.Fatalf("restarted reconcile: %v", err)
+	}
+	f.specificationFixture = reopened
+	if _, after := f.item(t, f.questionID()); after.EntityVersion != before.EntityVersion {
+		t.Fatalf("replay advanced the question item to version %d", after.EntityVersion)
 	}
 }
 

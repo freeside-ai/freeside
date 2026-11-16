@@ -13,9 +13,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
+// TestConfirmedCancellationProjectsTerminalTaskAndReleasesOnlyHeldSlot runs a
+// queued task and a started one: the phase only names the started run's
+// stage, so one started phase covers the rest.
 func TestConfirmedCancellationProjectsTerminalTaskAndReleasesOnlyHeldSlot(t *testing.T) {
 	t.Parallel()
-	for _, phase := range []string{"queued", "no-artifact", "spec-approval", "specification", "implementation", "review", "verification"} {
+	for _, phase := range []string{"queued", "implementation"} {
 		t.Run(phase, func(t *testing.T) {
 			f := newRunFixture(t)
 			var phases []string

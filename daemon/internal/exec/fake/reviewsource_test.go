@@ -307,28 +307,11 @@ func TestReviewSourceCrashAfterResultRecoverable(t *testing.T) {
 	}
 }
 
-// TestReviewSourceGuards covers the identity guards: one committed intent
-// per id, loud unscripted requests, unknown ids.
+// TestReviewSourceGuards covers the fake's own guard: an unscripted request
+// fails loudly. The contract suite covers the duplicate and unknown-id guards.
 func TestReviewSourceGuards(t *testing.T) {
 	s := fake.NewReviewSource()
-	s.Script("inv-1", fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
-
-	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); !errors.Is(err, exec.ErrDuplicateStart) {
-		t.Errorf("second request = %v, want ErrDuplicateStart", err)
-	}
 	if err := s.RequestReview(t.Context(), "inv-unscripted", reviewRequest("cafebabe")); !errors.Is(err, fake.ErrUnscripted) {
 		t.Errorf("unscripted request = %v, want ErrUnscripted", err)
-	}
-	if _, err := s.Inspect(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown inspect = %v, want ErrUnknownInvocation", err)
-	}
-	if _, err := s.Poll(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown poll = %v, want ErrUnknownInvocation", err)
-	}
-	if err := s.Verify(t.Context(), "inv-unknown", "base-sha", "head"); !errors.Is(err, exec.ErrUnknownInvocation) {
-		t.Errorf("unknown verify = %v, want ErrUnknownInvocation", err)
 	}
 }
