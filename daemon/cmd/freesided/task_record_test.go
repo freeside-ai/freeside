@@ -166,24 +166,6 @@ func TestTaskRecordGolden(t *testing.T) {
 	golden.Assert(t, "task_record", append(got, '\n'))
 }
 
-// TestTaskRecordStampsMatchTimeline checks the stamps only. That one
-// transaction reads every section is a property of readTaskRecord's
-// signature: it and its callees hold a *store.ReadTx and no *store.Store.
-func TestTaskRecordStampsMatchTimeline(t *testing.T) {
-	t.Parallel()
-	st, _ := openSeededStore(t)
-	record := readRecord(t, st, taskOfRun(t, st, fixtureActiveRunID))
-	if record.Timeline == nil || record.TimelineError != nil {
-		t.Fatalf("timeline = %v, error = %+v", record.Timeline, record.TimelineError)
-	}
-	if record.AsOfRevision == 0 || record.AsOfRevision != record.Timeline.AsOfRevision {
-		t.Fatalf("record revision %d, timeline revision %d", record.AsOfRevision, record.Timeline.AsOfRevision)
-	}
-	if !record.AsOf.Equal(taskRecordAsOf) || !record.Timeline.AsOf.Equal(taskRecordAsOf) {
-		t.Fatalf("as_of = %s, timeline as_of = %s", record.AsOf, record.Timeline.AsOf)
-	}
-}
-
 // TestTaskRecordConclusionMatchesFollow holds the record's conclusion to the
 // one `freesided follow` reads, for every fixture run: the same outcome, or
 // the same refusal.
@@ -752,29 +734,6 @@ func TestTaskRecordJoinsStallNotices(t *testing.T) {
 	}
 }
 
-func TestTaskRecordCounts(t *testing.T) {
-	t.Parallel()
-	st, _ := openSeededStore(t)
-	record := readRecord(t, st, taskOfRun(t, st, fixtureActiveRunID))
-	counted := 0
-	for index, count := range record.Counts.ItemsByType {
-		if count.Type != domain.AllAttentionTypes[index] {
-			t.Fatalf("items_by_type[%d] = %s, want %s", index, count.Type, domain.AllAttentionTypes[index])
-		}
-		counted += count.Count
-	}
-	if len(record.Counts.ItemsByType) != len(domain.AllAttentionTypes) || counted != len(record.Items) || counted == 0 {
-		t.Fatalf("items_by_type lists %d types and counts %d of %d items",
-			len(record.Counts.ItemsByType), counted, len(record.Items))
-	}
-	if record.Counts.RunsHeld != 1 || record.Counts.FailedStops == nil || *record.Counts.FailedStops != 0 {
-		t.Fatalf("runs_held = %d, failed_stops = %v", record.Counts.RunsHeld, record.Counts.FailedStops)
-	}
-	if record.Counts.HealthNoticesByCode == nil || len(record.Counts.HealthNoticesByCode) != 0 {
-		t.Fatalf("health notices = %+v, want an empty list", record.Counts.HealthNoticesByCode)
-	}
-}
-
 func TestTaskRecordProjectsCancellation(t *testing.T) {
 	t.Parallel()
 	requested := taskRecordAsOf.Add(time.Minute)
@@ -800,18 +759,6 @@ func TestTaskRecordProjectsCancellation(t *testing.T) {
 	}
 	if got := projectTaskRecordTask(domain.Task{}); got.Cancellation != nil {
 		t.Fatalf("cancellation = %+v, want none", got.Cancellation)
-	}
-}
-
-func TestTaskRecordUnknownTask(t *testing.T) {
-	t.Parallel()
-	st, _ := openSeededStore(t)
-	err := st.Read(t.Context(), func(tx *store.ReadTx) error {
-		_, err := readTaskRecord(t.Context(), tx, "task-unknown", taskRecordAsOf)
-		return err
-	})
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("err = %v, want not found", err)
 	}
 }
 

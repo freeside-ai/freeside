@@ -684,7 +684,7 @@ func TestFirstSpecificationTitleRefinesTaskName(t *testing.T) {
 	}
 }
 
-func TestHeadingTaskNamesAreBounded(t *testing.T) {
+func TestTaskHeadingNameBoundsRunes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ label, heading, want string }{
 		{"exact unicode bound", strings.Repeat("界", 60), strings.Repeat("界", 60)},
@@ -692,55 +692,67 @@ func TestHeadingTaskNamesAreBounded(t *testing.T) {
 		{"trim truncated whitespace", strings.Repeat("界", 59) + " next", strings.Repeat("界", 59)},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			body := "# " + tc.heading + "\n\nRequested work."
-			t.Run("operator", func(t *testing.T) {
-				f := newSpecificationFixture(t, true, 3)
-				source := testSpecificationArtifact(t, "bounded-heading-source", domain.ArtifactKindSpecification,
-					domain.Digest(contentaddr.Sum([]byte(body))), domain.ProducerAgent, "submit")
-				if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error { return tx.PutArtifact(t.Context(), source) }); err != nil {
-					t.Fatal(err)
-				}
-				f.source = source
-				spec := f.specWithSource(domain.SpecificationSource{})
-				spec.SourceBytes = []byte(body)
-				if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
-					t.Fatal(err)
-				}
-				want := domain.DisplayName{Text: tc.want, Source: domain.DisplayNameSourceOperator}
-				if got := taskNameForRun(t, f.store, spec.SpecificationRunID); got != want {
-					t.Fatalf("operator name = %+v, want %+v", got, want)
-				}
-			})
-			t.Run("approval", func(t *testing.T) {
-				f := newSpecificationFixture(t, true, 3)
-				f.submit(t)
-				driver := f.newDriver(t)
-				if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0, specify.Output{Specification: &specify.Specification{
-					Summary: "Ready for approval.", Body: body, Addressals: []specify.Addressal{},
-				}}); err != nil {
-					t.Fatal(err)
-				}
-				e := f.newEngine(t, driver)
-				if _, err := e.Reconcile(t.Context()); err != nil {
-					t.Fatal(err)
-				}
-				item, snapshot := f.item(t, "spec-approval-implementation-run-1")
-				if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
-					CommandID: "approve-bounded-name", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
-					Payload: signet.DecisionPayload{ItemID: item.ID, Action: domain.ActionApprove, ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests},
-				}); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := e.Reconcile(t.Context()); err != nil {
-					t.Fatal(err)
-				}
-				want := domain.DisplayName{Text: tc.want, Source: domain.DisplayNameSourceSpecification}
-				if got := taskNameForRun(t, f.store, "specification-run"); got != want {
-					t.Fatalf("approved name = %+v, want %+v", got, want)
-				}
-			})
+			t.Parallel()
+			got, failure := taskHeadingName([]byte("# " + tc.heading + "\n\nRequested work."))
+			if got != tc.want || failure != "" {
+				t.Fatalf("taskHeadingName = %q, %q; want %q", got, failure, tc.want)
+			}
 		})
 	}
+}
+
+// TestHeadingTaskNamesAreBounded checks that both call sites name the task
+// through taskHeadingName; TestTaskHeadingNameBoundsRunes covers the bound.
+func TestHeadingTaskNamesAreBounded(t *testing.T) {
+	t.Parallel()
+	bounded := strings.Repeat("界", 60)
+	body := "# " + strings.Repeat("界", 1000) + "\n\nRequested work."
+	t.Run("operator", func(t *testing.T) {
+		f := newSpecificationFixture(t, true, 3)
+		source := testSpecificationArtifact(t, "bounded-heading-source", domain.ArtifactKindSpecification,
+			domain.Digest(contentaddr.Sum([]byte(body))), domain.ProducerAgent, "submit")
+		if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error { return tx.PutArtifact(t.Context(), source) }); err != nil {
+			t.Fatal(err)
+		}
+		f.source = source
+		spec := f.specWithSource(domain.SpecificationSource{})
+		spec.SourceBytes = []byte(body)
+		if _, err := SubmitSpecificationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatal(err)
+		}
+		want := domain.DisplayName{Text: bounded, Source: domain.DisplayNameSourceOperator}
+		if got := taskNameForRun(t, f.store, spec.SpecificationRunID); got != want {
+			t.Fatalf("operator name = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("approval", func(t *testing.T) {
+		f := newSpecificationFixture(t, true, 3)
+		f.submit(t)
+		driver := f.newDriver(t)
+		if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0, specify.Output{Specification: &specify.Specification{
+			Summary: "Ready for approval.", Body: body, Addressals: []specify.Addressal{},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		e := f.newEngine(t, driver)
+		if _, err := e.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		item, snapshot := f.item(t, "spec-approval-implementation-run-1")
+		if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+			CommandID: "approve-bounded-name", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+			Payload: signet.DecisionPayload{ItemID: item.ID, Action: domain.ActionApprove, ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		want := domain.DisplayName{Text: bounded, Source: domain.DisplayNameSourceSpecification}
+		if got := taskNameForRun(t, f.store, "specification-run"); got != want {
+			t.Fatalf("approved name = %+v, want %+v", got, want)
+		}
+	})
 }
 
 func TestSpecificationRevisionKeepsRefinedTaskName(t *testing.T) {

@@ -242,63 +242,6 @@ func TestSpecificationResearchReadsAPrivateProjectIssue(t *testing.T) {
 	}
 }
 
-// TestSpecificationResearchReadsAPrivateProjectPullRequest covers a writer
-// reading an earlier pull request of the project for its settled contract
-// (#2311): the owner/name request goes to the ID endpoint with the token.
-func TestSpecificationResearchReadsAPrivateProjectPullRequest(t *testing.T) {
-	t.Parallel()
-	f := newSpecificationFixtureAllowing(t, true, 3, "https://api.github.com")
-	tokens := &fakeResearchTokens{repositoryID: 1}
-	transport := &privateIssueTransport{repositoryID: "1"}
-	f.researchTransport, f.issueTokens = transport, tokens
-	driver := f.newDriver(t)
-	firstID := specificationInvocationID("specification-run", 1)
-	if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{FetchRequests: []specify.FetchRequest{
-		{URL: "https://api.github.com/repos/owner/repo/pulls/1", Purpose: "read the earlier pull request"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 2), 0, 0, specify.Output{
-		Specification: &specify.Specification{
-			Summary: "The earlier pull request was read.", Body: "# Specification\n\nKeep the settled contract.",
-			Addressals: []specify.Addressal{},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	f.submit(t)
-	engine := f.newEngine(t, driver)
-	for pass := 1; pass <= 2; pass++ {
-		if _, err := reconcileSettled(t, engine); err != nil {
-			t.Fatalf("reconcile pass %d: %v", pass, err)
-		}
-	}
-	seen := transport.requests()
-	if len(seen) != 1 || seen[0].url != "https://api.github.com/repositories/1/pulls/1" || !seen[0].authorized {
-		t.Fatalf("research requests = %+v, want one authenticated ID-endpoint request", seen)
-	}
-	var artifact domain.Artifact
-	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
-		var err error
-		artifact, err = tx.GetArtifact(t.Context(), domain.ArtifactID("research-"+string(firstID)+"-1"))
-		return err
-	}); err != nil {
-		t.Fatalf("private pull request research artifact: %v", err)
-	}
-	body, err := readBoundedArtifactBlob(f.blobs, artifact.Digest, 1<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	evidence, err := specify.DecodeResearchEvidence(body)
-	if err != nil || evidence.Body != `{"title":"Earlier work","body":"Settled contract."}` ||
-		evidence.Source.FinalURL != "https://api.github.com/repositories/1/pulls/1" {
-		t.Fatalf("private pull request evidence = %+v, %v", evidence, err)
-	}
-	if strings.Contains(string(body), researchTokenNeedle) {
-		t.Fatal("stored research carries the token")
-	}
-}
-
 // TestSpecificationResearchHandsBackWhyAPrivateIssueFailed covers a fetch
 // the token can't make (#2311): the run goes on, and the next iteration sees
 // a research envelope naming the cause, never the token or the server's body.

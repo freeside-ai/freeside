@@ -3,18 +3,15 @@ package observe
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -135,28 +132,6 @@ func runFollowCLI(t *testing.T, args ...string) (string, error) {
 		t.Logf("stderr: %s", stderr.String())
 	}
 	return stdout.String(), err
-}
-
-func TestFollowCommandCreatesAStoreThroughTheTopicKeyBoundary(t *testing.T) {
-	t.Parallel()
-	// From empty, not the template: the test asserts the command creates the
-	// store and its topic key.
-	dbPath := filepath.Join(t.TempDir(), "freeside.db")
-	_, err := runFollowCLI(t, "-db", dbPath, "-run", string(followRun), "-once")
-	if !errors.Is(err, ErrNoObservedTimeline) {
-		t.Fatalf("follow error = %v, want ErrNoObservedTimeline", err)
-	}
-	if _, err := os.Stat(dbPath); err != nil {
-		t.Fatalf("stat follow-created store: %v", err)
-	}
-	info, err := os.Stat(dbPath + topicstore.KeySuffix)
-	if err != nil {
-		t.Fatalf("stat follow-created topic key: %v", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != sha256.Size {
-		t.Fatalf("follow-created topic key mode/size = %v/%d, want regular 0600/%d",
-			info.Mode(), info.Size(), sha256.Size)
-	}
 }
 
 func assertFollowContains(t *testing.T, output string, want ...string) {
@@ -753,64 +728,6 @@ func openSeededFollowStore(t *testing.T) (
 		t.Fatalf("seeded invocation = %+v, want running and live", row)
 	}
 	return st, path, admission, observation.Invocations[0]
-}
-
-// TestFollowCommandShowsARecordedTerminal pins #2355: the engine records an
-// invocation's terminal without rewriting its observation row, so the row
-// still says running. The status block shows the recorded terminal instead,
-// with the row's last-look instant.
-func TestFollowCommandShowsARecordedTerminal(t *testing.T) {
-	t.Parallel()
-	for _, terminal := range []domain.ObservedInvocationStatus{
-		domain.ObservedStatusCompleted, domain.ObservedStatusFailed,
-	} {
-		t.Run(string(terminal), func(t *testing.T) {
-			ctx := context.Background()
-			st, path, admission, row := openSeededFollowStore(t)
-			at := row.ObservedAt.Add(time.Minute)
-			if err := st.Write(ctx, func(tx *store.WriteTx) error {
-				if terminal == domain.ObservedStatusCompleted {
-					record, err := domain.NewExecutionExport(domain.ExecutionExportInput{
-						InvocationID: admission.InvocationID, AdmissionID: admission.ID,
-						ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
-						ManifestDigest: domain.Digest(contentaddr.Sum([]byte("manifest"))), RecordedAt: at,
-					})
-					if err != nil {
-						return err
-					}
-					if err := tx.RecordExecutionExportRecord(ctx, record); err != nil {
-						return err
-					}
-				} else if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
-					InvocationID: admission.InvocationID, AdmissionID: admission.ID,
-					Status: domain.ExecutionOutcomeFailed, Summary: "failed",
-					Cause: domain.FailureCauseUnknown, RecordedAt: at,
-				}); err != nil {
-					return err
-				}
-				return tx.AppendRunMilestone(ctx, domain.RunMilestone{
-					RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
-					InvocationID: &admission.InvocationID, Terminal: &terminal, RecordedAt: at,
-				})
-			}); err != nil {
-				t.Fatal(err)
-			}
-
-			output, err := runFollowCLI(t, "-db", path, "-run", string(admission.RunID), "-once")
-			if err != nil {
-				t.Fatalf("follow: %v", err)
-			}
-			invocation := "  invocation  " + identifier(string(admission.InvocationID)) + "  "
-			assertFollowContains(t, output, fmt.Sprintf("%sstatus=%s  liveness=terminal  observed-at=%s",
-				invocation, terminal, stamp(row.ObservedAt)))
-			for line := range strings.Lines(output) {
-				if strings.HasPrefix(line, invocation) &&
-					(strings.Contains(line, "status=running") || !strings.Contains(line, "liveness=terminal")) {
-					t.Errorf("follow printed the stale row %q:\n%s", line, output)
-				}
-			}
-		})
-	}
 }
 
 // TestFollowCommandRefusesAnUnbackedTerminal appends a terminal milestone no

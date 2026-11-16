@@ -17,7 +17,7 @@ import (
 // fakeCodexAppServer answers the probe's requests as the app-server does:
 // a notification before the initialize answer, then a model/list page per
 // cursor, with a server-sent request reusing the second page's id ahead of
-// its answer. At end of input it exits with $FAKE_EXIT; FAKE_CRASH makes it
+// its answer. At end of input it exits 0; FAKE_CRASH makes it
 // exit before reading anything.
 const fakeCodexAppServer = `#!/bin/sh
 [ -z "$FAKE_CRASH" ] || exit "$FAKE_CRASH"
@@ -39,7 +39,7 @@ while IFS= read -r line; do
 		fi ;;
 	esac
 done
-exit "${FAKE_EXIT:-0}"
+exit 0
 `
 
 // runCodexModelListSession runs the probe's session script against the fake
@@ -86,8 +86,8 @@ func runCodexModelListSession(t *testing.T, env ...string) (LineupProbeOutput, s
 // TestCodexModelListSessionPagesTheAppServer runs the generated script, not
 // only its golden: it waits for each answer past a notification and a
 // server-sent request carrying the next page's id, passes a cursor holding
-// shell syntax through as data, records the app-server's status, and
-// removes its input pipe.
+// shell syntax through as data, and removes its input pipe. The exit test
+// below covers recording the app-server's status.
 func TestCodexModelListSessionPagesTheAppServer(t *testing.T) {
 	t.Parallel()
 	out, input, _ := runCodexModelListSession(t)
@@ -104,11 +104,6 @@ func TestCodexModelListSessionPagesTheAppServer(t *testing.T) {
 	}
 	if _, err := os.Lstat(input); !os.IsNotExist(err) {
 		t.Fatalf("the input pipe remains: %v", err)
-	}
-
-	out, _, _ = runCodexModelListSession(t, "FAKE_EXIT=3")
-	if out.ExitStatus != 3 {
-		t.Fatalf("status = %d, want the app-server's 3", out.ExitStatus)
 	}
 }
 

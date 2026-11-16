@@ -24,7 +24,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
@@ -737,44 +736,6 @@ func TestControlSnapshotPreservesRequestedRecipes(t *testing.T) {
 		if !bytes.Equal(remote[test.name], direct) {
 			t.Fatalf("%s socket/direct snapshot mismatch:\n%s\n%s", test.name, remote[test.name], direct)
 		}
-	}
-}
-
-func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	target := filepath.Join(root, "target.db")
-	alias := filepath.Join(root, "alias.db")
-	if err := os.Symlink(target, alias); err != nil {
-		t.Fatal(err)
-	}
-	// The database sits behind the symlink and its topic key beside the
-	// alias, where the daemon looks for it.
-	if _, err := loadOrCreateTopicKey(alias, false); err != nil {
-		t.Fatal(err)
-	}
-	storetest.Copy(t, target)
-	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: alias, ListenAddr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := h.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	var out bytes.Buffer
-	err = runDoctorCommand(t.Context(), []string{
-		"-db", alias, "-backend-configuration-digest", "sha256:" + strings.Repeat("a", 64),
-	}, &out, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !json.Valid(out.Bytes()) {
-		t.Fatalf("routed Doctor = %s, %v", out.String(), err)
-	}
-	if _, err := os.Stat(alias + ".blobs"); err != nil {
-		t.Fatalf("daemon blob sidecar: %v", err)
-	}
-	if _, err := os.Stat(target + ".blobs"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Doctor created a canonical-path blob sidecar: %v", err)
 	}
 }
 

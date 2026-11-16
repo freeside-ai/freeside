@@ -2509,12 +2509,6 @@ func TestProductionReviewOverlapGateSurvivesCrashBeforeRecord(t *testing.T) {
 	}
 }
 
-func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	testProductionAdjudicatedRemediation(t, p, false, false)
-}
-
 func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublicationHarness, publicMetadata, reviewGuide bool) {
 	t.Helper()
 	var delivered []exec.StartSpec

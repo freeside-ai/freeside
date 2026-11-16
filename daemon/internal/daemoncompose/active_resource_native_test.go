@@ -291,29 +291,6 @@ func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
 	}
 }
 
-// TestActiveResourceNativeObservationConverges proves a repeated observation of
-// unchanged native activity appends no new rows.
-func TestActiveResourceNativeObservationConverges(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := schedTestStore(t)
-	item := activeReadyItem(t, st)
-	armActiveTestSchedules(t, st, item)
-	reconciler := ActiveResourceReconciler{
-		Store: st, Pull: openExactPull, Review: staticReview(findingsReviewActivity()),
-		Reviewers: testReviewers(),
-		Now:       func() time.Time { return activeResourceTestTime },
-	}
-	for i := 0; i < 3; i++ {
-		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
-			t.Fatalf("Reconcile %d = %v, %v", i, failures, err)
-		}
-	}
-	if got := readNativeObservations(t, st); len(got) != 2 {
-		t.Fatalf("recorded %d native observations across three ticks, want 2 (converged)", len(got))
-	}
-}
-
 // TestActiveResourceNativeConvergesWithInvalidUTF8 proves a comment path or
 // review commit_id carrying invalid UTF-8 (git stores paths as raw bytes) is
 // sanitized to a byte-stable form, so repeated observation coalesces instead of

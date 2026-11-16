@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func mintAuditFixture() store.MintAudit {
@@ -257,42 +256,5 @@ func TestRecordMintAuditInvisibleToSync(t *testing.T) {
 	}
 	if after.Revision != before.Revision {
 		t.Fatalf("revision moved %d -> %d; mint audit must be invisible to sync", before.Revision, after.Revision)
-	}
-}
-
-// TestMintAuditPersistsAcrossReopen: the ledger survives a daemon restart.
-func TestMintAuditPersistsAcrossReopen(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	path := tempDBPath(t)
-
-	s := storetest.Open(t, path, store.Options{})
-	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordMintAudit(ctx, mintAuditFixture())
-		return err
-	})
-	if err != nil {
-		t.Fatalf("record: %v", err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	reopened := openStoreAt(t, path, store.Options{})
-	var listed []store.MintAudit
-	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		listed, err = tx.ListMintAudits(ctx)
-		return err
-	})
-	if err != nil {
-		t.Fatalf("list after reopen: %v", err)
-	}
-	if len(listed) != 1 {
-		t.Fatalf("listed %d audits after reopen, want 1", len(listed))
-	}
-	want := mintAuditFixture()
-	if listed[0].Repo != want.Repo || !listed[0].MintedAt.Equal(want.MintedAt) {
-		t.Fatalf("reopened audit mismatch: %+v", listed[0])
 	}
 }

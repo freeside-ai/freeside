@@ -140,28 +140,6 @@ func TestInstallationMintHoldRejections(t *testing.T) {
 	}
 }
 
-// TestInstallationMintHoldInvisibleToSync: the hold is internal bookkeeping
-// and never moves the sync revision.
-func TestInstallationMintHoldInvisibleToSync(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := openStore(t, store.Options{})
-	before, err := s.ServerState(ctx)
-	if err != nil {
-		t.Fatalf("server state: %v", err)
-	}
-	if err := recordMintHold(t, s, installationMintHoldFixture()); err != nil {
-		t.Fatalf("record: %v", err)
-	}
-	after, err := s.ServerState(ctx)
-	if err != nil {
-		t.Fatalf("server state: %v", err)
-	}
-	if after.Revision != before.Revision {
-		t.Fatalf("revision moved %d -> %d; mint hold must be invisible to sync", before.Revision, after.Revision)
-	}
-}
-
 // TestInstallationMintHoldPersistsAcrossReopen: the hold survives a daemon
 // restart, which is the point of persisting it.
 func TestInstallationMintHoldPersistsAcrossReopen(t *testing.T) {

@@ -69,8 +69,8 @@ var storedCorpusCases = map[string]storedCorpusCase{
 		resume: func(t *testing.T, h *daemon, fixture storedCorpusFixture) {
 			t.Helper()
 			// The fixture's window reset passed long ago, so the park may
-			// already have released. A hold still in place is released the
-			// way TestScenarioQuotaParkResumes does, by an allowed reading.
+			// already have released. A hold still in place is released by an
+			// allowed reading.
 			var (
 				hold  domain.RunHoldObservation
 				found bool

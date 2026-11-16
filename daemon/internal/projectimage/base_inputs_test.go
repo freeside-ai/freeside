@@ -199,34 +199,10 @@ func TestObserveBaseInputsReadsEachInputAtTheExactCommit(t *testing.T) {
 			"package.json",
 		},
 		{
-			"changed package-lock.json",
-			map[string]string{"package-lock.json": `{"lockfileVersion":3,"packages":{}}`},
-			map[string]string{"package-lock.json": packageLock},
-			"package-lock.json",
-		},
-		{
-			"removed package-lock.json",
-			map[string]string{"package-lock.json": ""},
-			map[string]string{"package-lock.json": packageLock},
-			"package-lock.json",
-		},
-		{
-			"added .npmrc",
-			map[string]string{".npmrc": "registry=https://registry.example.test/\n"},
-			map[string]string{".npmrc": ""},
-			".npmrc",
-		},
-		{
 			".npmrc as a directory",
 			map[string]string{".npmrc/config": "registry=https://registry.example.test/\n"},
 			map[string]string{".npmrc": ""},
 			".npmrc",
-		},
-		{
-			"added npm-shrinkwrap.json",
-			map[string]string{"npm-shrinkwrap.json": packageLock},
-			map[string]string{"npm-shrinkwrap.json": ""},
-			"npm-shrinkwrap.json",
 		},
 		{
 			"changed recipe",

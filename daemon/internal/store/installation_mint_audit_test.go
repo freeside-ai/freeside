@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
-	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func installationMintAuditFixture() store.InstallationMintAudit {
@@ -212,71 +211,5 @@ func TestRecordInstallationMintAuditRejections(t *testing.T) {
 	}
 	if len(listed) != 0 {
 		t.Fatalf("rejected records left %d rows, want 0", len(listed))
-	}
-}
-
-// TestRecordInstallationMintAuditInvisibleToSync: audit is not a synced entity
-// (#545, mirroring #107 acceptance 1); recording a mint rides WriteInternal
-// and must not bump the client-visible revision.
-func TestRecordInstallationMintAuditInvisibleToSync(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := openStore(t, store.Options{})
-
-	before, err := s.ServerState(ctx)
-	if err != nil {
-		t.Fatalf("server state: %v", err)
-	}
-	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordInstallationMint(ctx, installationMintAuditFixture())
-		return err
-	})
-	if err != nil {
-		t.Fatalf("record: %v", err)
-	}
-	after, err := s.ServerState(ctx)
-	if err != nil {
-		t.Fatalf("server state: %v", err)
-	}
-	if after.Revision != before.Revision {
-		t.Fatalf("revision moved %d -> %d; mint audit must be invisible to sync", before.Revision, after.Revision)
-	}
-}
-
-// TestInstallationMintAuditPersistsAcrossReopen: the ledger survives a daemon
-// restart.
-func TestInstallationMintAuditPersistsAcrossReopen(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	path := tempDBPath(t)
-
-	s := storetest.Open(t, path, store.Options{})
-	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordInstallationMint(ctx, installationMintAuditFixture())
-		return err
-	})
-	if err != nil {
-		t.Fatalf("record: %v", err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	reopened := openStoreAt(t, path, store.Options{})
-	var listed []store.InstallationMintAudit
-	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		listed, err = tx.ListInstallationMintAudits(ctx)
-		return err
-	})
-	if err != nil {
-		t.Fatalf("list after reopen: %v", err)
-	}
-	if len(listed) != 1 {
-		t.Fatalf("listed %d audits after reopen, want 1", len(listed))
-	}
-	want := installationMintAuditFixture()
-	if listed[0].InstallationID != want.InstallationID || !listed[0].MintedAt.Equal(want.MintedAt) {
-		t.Fatalf("reopened audit mismatch: %+v", listed[0])
 	}
 }

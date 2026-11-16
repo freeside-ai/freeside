@@ -136,20 +136,6 @@ func TestDecodeEffectProposalRejectsUntrustedShapes(t *testing.T) {
 }
 
 func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
-	if len(domain.AllEffectKinds) != 5 ||
-		domain.AllEffectKinds[0] != domain.EffectTaskProposal ||
-		domain.AllEffectKinds[1] != domain.EffectSourceIssueClosure ||
-		domain.AllEffectKinds[2] != domain.EffectFollowUpFiling ||
-		domain.AllEffectKinds[3] != domain.EffectImagePolicyAdoption ||
-		domain.AllEffectKinds[4] != domain.EffectIssueComment {
-		t.Fatalf("effect registry = %v", domain.AllEffectKinds)
-	}
-	if len(domain.AllProposalAdmissionSources) != 4 || len(domain.AllTaskProposalIntents) != 1 {
-		t.Fatalf("admission source registry = %v", domain.AllProposalAdmissionSources)
-	}
-	if len(domain.AllClosureProvenances) != 2 || len(domain.AllClosureFlagOrigins) != 3 {
-		t.Fatalf("closure registries = %v / %v", domain.AllClosureProvenances, domain.AllClosureFlagOrigins)
-	}
 	export := domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	valid := []domain.ProposalAdmissionKey{
 		{Source: domain.ProposalSourceUpstreamEvent, UpstreamEventID: "github:event:1"},

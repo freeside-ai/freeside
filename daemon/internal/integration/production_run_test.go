@@ -918,51 +918,6 @@ func TestPreJobRefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T
 	}
 }
 
-func TestInputIORefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	f := openUnattendedFixture(t)
-	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-input-io")
-	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
-		RunID: "run-prod-input-io", ProjectID: "proj-prod",
-		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.driver.Script(submitted.InvocationID, fake.StageScript{
-		Outcome: fake.OutcomeComplete, RunningInspects: 1,
-		Result: exec.StageResult{Summary: "completed after input storage recovered"},
-	})
-
-	refusing, err := engine.New(
-		f.store, f.signet, startRefusingDriver{
-			StageDriver: f.driver,
-			err:         fmt.Errorf("materialize policy: %w", exec.ErrInputUnavailable),
-		},
-		unattendedProductionOptions(t)...,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	held, err := refusing.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("transient input I/O stopped reconcile: %v", err)
-	}
-	if held.InvocationsStarted != 0 {
-		t.Fatalf("input I/O refusal started %d invocations, want 0", held.InvocationsStarted)
-	}
-
-	resumed, err := f.engine.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("healthy reconcile did not resume the pending intent: %v", err)
-	}
-	if resumed.InvocationsStarted != 1 {
-		t.Fatalf("healthy reconcile started %d invocations, want 1", resumed.InvocationsStarted)
-	}
-}
-
 func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

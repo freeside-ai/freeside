@@ -606,6 +606,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["TaskSubmissionOrigin"] = append(valids["TaskSubmissionOrigin"], v.valid)
 	}
 	invalids["TaskSubmissionOrigin"] = TaskSubmissionOrigin("").valid
+	for _, v := range AllEffectKinds {
+		valids["EffectKind"] = append(valids["EffectKind"], v.valid)
+	}
+	invalids["EffectKind"] = EffectKind("").valid
+	for _, v := range AllProposalAdmissionSources {
+		valids["ProposalAdmissionSource"] = append(valids["ProposalAdmissionSource"], v.valid)
+	}
+	invalids["ProposalAdmissionSource"] = ProposalAdmissionSource("").valid
+	for _, v := range AllTaskProposalIntents {
+		valids["TaskProposalIntent"] = append(valids["TaskProposalIntent"], v.valid)
+	}
+	invalids["TaskProposalIntent"] = TaskProposalIntent("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

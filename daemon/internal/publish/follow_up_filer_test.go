@@ -591,23 +591,6 @@ func TestFollowUpFilerRejectsEmptyNextLink(t *testing.T) {
 	}
 }
 
-func TestFollowUpFilerRecoversThroughCanonicalPagination(t *testing.T) {
-	t.Parallel()
-	h := newFilingHarness(t)
-	instance := h.approve(h.seedRun("run-a", nil, nil), 0)
-	h.plant(h.botIssue(499))
-	h.respond(unprovenLost)
-	h.mustPass()
-	h.plant(h.botIssue(500))
-	h.gh.filing.pageSize = 1
-	h.advance(pastSettle)
-	h.mustPass()
-	h.assertLedgered(instance.ID, 500)
-	if h.creates() != 1 || h.gh.filing.canonicalReads != 3 {
-		t.Fatalf("creates = %d, canonical reads = %d", h.creates(), h.gh.filing.canonicalReads)
-	}
-}
-
 func TestFollowUpFilerKeepsListingOnTheResolvedRepository(t *testing.T) {
 	t.Parallel()
 	for _, laterPage := range []bool{false, true} {

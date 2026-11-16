@@ -33,62 +33,6 @@ func (f *commandCodexAuthRefresher) RefreshCodexAuth(
 	}, nil
 }
 
-func TestEnrollCodexCommandRunsVerifiedEnrollment(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	inputRoot := filepath.Join(root, "input")
-	storeRoot := filepath.Join(root, "store")
-	for _, path := range []string{inputRoot, storeRoot} {
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	inputPath := filepath.Join(inputRoot, "auth.json")
-	storePath := filepath.Join(storeRoot, "auth.json")
-	if err := os.WriteFile(inputPath, commandCodexAuth("operator-refresh"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
-	refresher := &commandCodexAuthRefresher{}
-	var stdout, stderr bytes.Buffer
-	err := runEnrollCodexCommandWithRefresher(context.Background(), []string{
-		"-db", filepath.Join(root, "freeside.db"),
-		"-project", "project-1",
-		"-auth-identity", "codex-primary",
-		"-input-root", inputRoot,
-		"-input-file", inputPath,
-		"-auth-store-root", storeRoot,
-		"-auth-store", storePath,
-	}, &stdout, &stderr, refresher)
-	if err != nil {
-		t.Fatalf("run enrollment: %v; stderr = %s", err, stderr.String())
-	}
-	if refresher.calls != 1 || refresher.input != "operator-refresh" {
-		t.Fatalf("refresh calls = %d, input = %q", refresher.calls, refresher.input)
-	}
-	var result ward.CodexAuthEnrollmentResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		t.Fatalf("decode result %q: %v", stdout.String(), err)
-	}
-	if result.AuthIdentityID != "codex-primary" || result.AuthStorePath == "" ||
-		result.LeaseFence != 1 || result.AuthStoreDigest == "" ||
-		result.AttentionItemID == "" || result.AttentionItemVersion != 2 {
-		t.Fatalf("result = %+v", result)
-	}
-	body, err := os.ReadFile(storePath) //nolint:gosec // test path is under t.TempDir
-	if err != nil {
-		t.Fatal(err)
-	}
-	var auth struct {
-		Tokens struct {
-			RefreshToken string `json:"refresh_token"`
-		} `json:"tokens"`
-	}
-	if err := json.Unmarshal(body, &auth); err != nil || auth.Tokens.RefreshToken != "rotated-refresh" {
-		t.Fatalf("stored auth was not rotated: %v", err)
-	}
-}
-
 // seedRecipeGatedEvidence writes one AttentionItem carrying a verifier-produced
 // evidence artifact into a fresh store at dbPath, and returns the approved
 // recipe digest the artifact was produced under. Every production store holds

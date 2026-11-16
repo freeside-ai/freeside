@@ -791,9 +791,10 @@ func TestNewAttentionItemNormalizesExpiresWhen(t *testing.T) {
 }
 
 // TestAttentionItemCommitPlanNotice pins the plan-notice contract surface
-// (plan §5.6; #212 owns emission): nil is absent and renders as an explicit
-// null like decided_at, every registered reason survives a marshal/decode
-// round trip through Validate, and an unregistered reason fails closed.
+// (plan §5.6; #212 owns emission): every registered reason survives a
+// marshal/decode round trip through Validate, and an unregistered reason
+// fails closed. The goldens pin the explicit null an absent notice renders
+// as.
 func TestAttentionItemCommitPlanNotice(t *testing.T) {
 	for _, reason := range domain.AllCommitPlanNoticeReasons {
 		t.Run(string(reason), func(t *testing.T) {
@@ -820,19 +821,6 @@ func TestAttentionItemCommitPlanNotice(t *testing.T) {
 			}
 		})
 	}
-	t.Run("absent renders explicit null", func(t *testing.T) {
-		item, err := domain.NewAttentionItem(validItemInput(domain.AttentionReadyForFinalReview), nil)
-		if err != nil {
-			t.Fatalf("NewAttentionItem: %v", err)
-		}
-		body, err := json.Marshal(item)
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		if !strings.Contains(string(body), `"commit_plan_notice":null`) {
-			t.Fatalf("absent notice not rendered as explicit null: %s", body)
-		}
-	})
 }
 
 func TestNewAttentionItemRejects(t *testing.T) {

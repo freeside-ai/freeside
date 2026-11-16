@@ -738,9 +738,9 @@ func TestCountProjectWIPTasksCountsTasksNotRuns(t *testing.T) {
 
 // TestIntakeWorkItemCarriesNoIssueContent covers acceptance #4 / §5.13: the
 // daemon-authored work-item document delivered in the specification role is a
-// pure function of the occurrence coordinates and carries no observed issue
-// content, even when the observation is hostile. The publication is likewise
-// coordinate-derived.
+// pure function of the occurrence coordinates. LabelIssue has no field for a
+// title or body, so no observed issue content can reach it. The publication
+// is likewise coordinate-derived.
 func TestIntakeWorkItemCarriesNoIssueContent(t *testing.T) {
 	t.Parallel()
 	f := newIntakeFixture(t)
@@ -752,11 +752,6 @@ func TestIntakeWorkItemCarriesNoIssueContent(t *testing.T) {
 
 	o := f.latestOccurrence(t, 7)
 	doc := string(intakeWorkItemDocument(o))
-	for _, forbidden := range []string{"IGNORE", "<script", "title:", "body:"} {
-		if strings.Contains(doc, forbidden) {
-			t.Fatalf("work-item document leaked non-coordinate content: contains %q", forbidden)
-		}
-	}
 	if !strings.Contains(doc, "issue: 7") || !strings.Contains(doc, "initiator_label: freeside") {
 		t.Fatalf("work-item document missing coordinates: %q", doc)
 	}

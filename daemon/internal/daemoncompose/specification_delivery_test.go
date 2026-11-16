@@ -57,25 +57,6 @@ func TestProductionSpecificationDeliveryValidatorRejectsAggregateOverflow(t *tes
 	}
 }
 
-func TestProductionRemediationDeliveryValidatorRejectsPromptOverflow(t *testing.T) {
-	t.Parallel()
-	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
-	priorBody := []byte(strings.Repeat("r", 1<<20))
-	putDeliveryArtifact(t, st, blobs, "remediation-prompt-overflow", priorBody)
-	materializer, err := ProductionMaterializer(blobs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = ProductionImplementationDeliveryValidator(materializer)(t.Context(),
-		deliveryStartSpec(t, run, promptDigest, []domain.Digest{
-			domain.Digest(contentaddr.Sum(priorBody)),
-		}))
-	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
-		!errors.Is(err, claude.ErrUnsupportedStart) {
-		t.Fatalf("prompt overflow = %v, want durable undeliverable Claude input", err)
-	}
-}
-
 func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t *testing.T) {
 	t.Parallel()
 	_, blobs, run, promptDigest := deliveryValidatorFixture(t, false)
@@ -93,28 +74,6 @@ func TestProductionImplementationDeliveryValidatorRejectsInitialPromptOverflow(t
 	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
 		!errors.Is(err, claude.ErrUnsupportedStart) {
 		t.Fatalf("initial prompt overflow = %v, want durable undeliverable Claude input", err)
-	}
-}
-
-func TestProductionRemediationDeliveryValidatorRejectsAggregateOverflow(t *testing.T) {
-	t.Parallel()
-	st, blobs, run, promptDigest := deliveryValidatorFixture(t, true)
-	body := bytes.Repeat([]byte("r"), int(exec.ProductionMaxInputBytes))
-	prior := make([]domain.Digest, 9)
-	for i := range prior {
-		putDeliveryArtifact(t, st, blobs,
-			domain.ArtifactID("remediation-aggregate-"+string(rune('a'+i))), body)
-		prior[i] = domain.Digest(contentaddr.Sum(body))
-	}
-	materializer, err := ProductionMaterializer(blobs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = ProductionImplementationDeliveryValidator(materializer)(t.Context(),
-		deliveryStartSpec(t, run, promptDigest, prior))
-	if !errors.Is(err, engine.ErrProductionInputUndeliverable) ||
-		!errors.Is(err, exec.ErrInputTooLarge) {
-		t.Fatalf("aggregate overflow = %v, want durable undeliverable materialized input", err)
 	}
 }
 

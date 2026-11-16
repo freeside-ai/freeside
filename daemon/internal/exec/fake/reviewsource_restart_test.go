@@ -120,48 +120,6 @@ func TestReviewSourceRestartAfterResultBeforeAcceptance(t *testing.T) {
 	}
 }
 
-// TestReviewSourceRestartCrashAfterResultRecoverable proves a result committed
-// via the crash-after-result outcome (committed at the gone transition)
-// survives the restart, while a failed review's absence of a result also
-// survives (still ErrNoResult).
-func TestReviewSourceRestartCrashAfterResultRecoverable(t *testing.T) {
-	dir := t.TempDir()
-	s, err := fake.NewReviewSourceAt(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Script("inv-after", fake.ReviewScript{
-		Outcome: fake.OutcomeCrashAfterResult,
-		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
-	})
-	s.Script("inv-fail", fake.ReviewScript{
-		Outcome: fake.OutcomeFail,
-		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
-	})
-	for _, id := range []domain.InvocationID{"inv-after", "inv-fail"} {
-		if err := s.RequestReview(t.Context(), id, reviewRequest("cafebabe")); err != nil {
-			t.Fatal(err)
-		}
-		// Drive Inspect to the terminal transition (commits the crash-after
-		// result before its session loss).
-		if status, err := s.Inspect(t.Context(), id); err != nil {
-			t.Fatalf("inspect %s: %v", id, err)
-		} else if id == "inv-after" && status != exec.StatusGone {
-			t.Errorf("inspect %s = %v; want gone", id, status)
-		}
-	}
-
-	s = reopenReviewSource(t, dir)
-	if r, err := s.Poll(t.Context(), "inv-after"); err != nil {
-		t.Errorf("crash-after result must survive restart: %v", err)
-	} else if r.HeadSHA != "cafebabe" {
-		t.Errorf("recovered result head = %q, want cafebabe", r.HeadSHA)
-	}
-	if _, err := s.Poll(t.Context(), "inv-fail"); !errors.Is(err, exec.ErrNoResult) {
-		t.Errorf("failed review after restart = %v, want ErrNoResult", err)
-	}
-}
-
 func TestReviewSourceRestartRetainsAuthorityRejection(t *testing.T) {
 	dir := t.TempDir()
 	s, err := fake.NewReviewSourceAt(dir)

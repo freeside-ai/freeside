@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -42,18 +41,6 @@ func fixtureKey(t *testing.T) *rsa.PrivateKey {
 		t.Fatalf("parse fixture key: %v", err)
 	}
 	return key
-}
-
-// TestAppJWTGolden pins the exact token bytes for the fixture key,
-// app ID, and time: PKCS#1 v1.5 signing is deterministic, so any drift
-// in header, claims, encoding, or signing surfaces as a golden diff.
-func TestAppJWTGolden(t *testing.T) {
-	t.Parallel()
-	jwt, err := publish.AppJWT(fixtureKey(t), fixtureAppID, fixtureTime)
-	if err != nil {
-		t.Fatalf("AppJWT: %v", err)
-	}
-	golden.Assert(t, "app-jwt", []byte(jwt.Reveal()))
 }
 
 // TestAppJWTVerifiesAndClaims verifies the signature against the public

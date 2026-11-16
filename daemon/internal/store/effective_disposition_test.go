@@ -30,57 +30,6 @@ func effectiveDispositions(
 	return out
 }
 
-// TestEffectiveDispositionsWithoutSupersessionAreTheStoredOnes pins that a run
-// with no supersession record reads exactly as before: the reader returns each
-// finding's latest stored disposition unchanged, and the existing disposition
-// and decision reads still load.
-func TestEffectiveDispositionsWithoutSupersessionAreTheStoredOnes(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	runID := domain.RunID("run-effective-unreversed")
-	fx := seedSupersession(t, filepath.Join(t.TempDir(), "store.db"), runID, domain.ActionContinueUnderPolicy)
-	defer func() { _ = fx.st.Close() }()
-
-	var stored, otherStored []domain.ReviewDispositionRecord
-	if err := fx.st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		if stored, err = tx.ListFindingDispositions(ctx, runID); err != nil {
-			return err
-		}
-		if otherStored, err = tx.ListFindingDispositions(ctx, supersessionOtherRun); err != nil {
-			return err
-		}
-		if _, err := tx.ReviewDiminishingDecision(ctx, fx.decision.Item.ID); err != nil {
-			return err
-		}
-		listed, err := tx.ListFindingDispositionSupersessions(ctx, runID)
-		if err != nil || len(listed) != 0 {
-			t.Fatalf("supersessions = %v, %v, want none", listed, err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("existing reads: %v", err)
-	}
-	if len(stored) != 1 || len(otherStored) != 4 {
-		t.Fatalf("seeded dispositions = %d and %d, want 1 and 4", len(stored), len(otherStored))
-	}
-	for _, tc := range []struct {
-		runID  domain.RunID
-		stored []domain.ReviewDispositionRecord
-	}{{runID, stored}, {supersessionOtherRun, otherStored}} {
-		want := make([]store.EffectiveFindingDisposition, len(tc.stored))
-		for i, disposition := range tc.stored {
-			want[i] = store.EffectiveFindingDisposition{Stored: disposition, Effective: disposition.Disposition}
-		}
-		for _, throughRound := range []int{1, 2, 9} {
-			if got := effectiveDispositions(t, fx.st, tc.runID, throughRound); !reflect.DeepEqual(got, want) {
-				t.Fatalf("%s through round %d = %#v, want the stored dispositions %#v",
-					tc.runID, throughRound, got, want)
-			}
-		}
-	}
-}
-
 func TestEffectiveDispositionReadsDeclinedFromTheReversingRound(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

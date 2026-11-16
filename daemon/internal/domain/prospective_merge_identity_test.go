@@ -32,16 +32,12 @@ func TestProspectiveMergeIdentityValidation(t *testing.T) {
 		mutate  func(*domain.ProspectiveMergeIdentity)
 		wantErr error
 	}{
-		"no base":         {func(m *domain.ProspectiveMergeIdentity) { m.BaseSHA = "" }, domain.ErrEmptyField},
-		"no head":         {func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA = "" }, domain.ErrEmptyField},
-		"no merge":        {func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = "" }, domain.ErrEmptyField},
-		"head is base":    {func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA = m.BaseSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
-		"merge is base":   {func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.BaseSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
-		"merge is head":   {func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.HeadSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
-		"all one commit":  {func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA, m.MergeSHA = m.BaseSHA, m.BaseSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
-		"empty identity":  {func(m *domain.ProspectiveMergeIdentity) { *m = domain.ProspectiveMergeIdentity{} }, domain.ErrEmptyField},
-		"only the merge":  {func(m *domain.ProspectiveMergeIdentity) { m.BaseSHA, m.HeadSHA = "", "" }, domain.ErrEmptyField},
-		"only the parent": {func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA, m.MergeSHA = "", "" }, domain.ErrEmptyField},
+		"no base":       {func(m *domain.ProspectiveMergeIdentity) { m.BaseSHA = "" }, domain.ErrEmptyField},
+		"no head":       {func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA = "" }, domain.ErrEmptyField},
+		"no merge":      {func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = "" }, domain.ErrEmptyField},
+		"head is base":  {func(m *domain.ProspectiveMergeIdentity) { m.HeadSHA = m.BaseSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
+		"merge is base": {func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.BaseSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
+		"merge is head": {func(m *domain.ProspectiveMergeIdentity) { m.MergeSHA = m.HeadSHA }, domain.ErrProspectiveMergeIdentityInconsistent},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

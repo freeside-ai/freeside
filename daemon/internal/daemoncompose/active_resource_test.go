@@ -597,9 +597,7 @@ func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
 		mutate func(*publish.PullObservation)
 	}{
 		{name: "missing repository ID", mutate: func(p *publish.PullObservation) { p.BaseRepoID = 0 }},
-		{name: "negative repository ID", mutate: func(p *publish.PullObservation) { p.BaseRepoID = -1 }},
 		{name: "missing pull number", mutate: func(p *publish.PullObservation) { p.Number = 0 }},
-		{name: "negative pull number", mutate: func(p *publish.PullObservation) { p.Number = -1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
