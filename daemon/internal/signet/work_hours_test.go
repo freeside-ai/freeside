@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -235,5 +236,82 @@ func TestWorkHoursRefusesAnUnknownProject(t *testing.T) {
 	_, err := f.service.WorkHours(t.Context(), signet.WorkHoursRequest{Period: lastWeek(f), ProjectID: &project})
 	if !errors.Is(err, signet.ErrWorkHoursProjectNotFound) {
 		t.Fatalf("WorkHours(unknown project) = %v, want ErrWorkHoursProjectNotFound", err)
+	}
+}
+
+// TestHTTPWorkHours pins the route: a paired device reads the service's
+// response, an unknown project is a 404, and each malformed request is a
+// 400 that names its parameter.
+func TestHTTPWorkHours(t *testing.T) {
+	t.Parallel()
+	f := newCorpusFixture(t)
+	f.seedAuthIdentity(t)
+	f.seedWorkHoursRun(t, "proj-1", 1, "run-http", 30*time.Minute)
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+
+	const target = "/work-hours?from=2026-08-12&days=2&time_zone=America/New_York&project_id=proj-1"
+	response := authenticatedRequest(t, handler, http.MethodGet, target, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s status = %d body=%s", target, response.Code, response.Body)
+	}
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := domain.ProjectID("proj-1")
+	want, err := f.service.WorkHours(t.Context(), signet.WorkHoursRequest{
+		Period:    domain.WorkHoursPeriod{From: time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC), Days: 2, Location: newYork},
+		ProjectID: &project,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.TrimSpace(response.Body.Bytes()); !bytes.Equal(got, wantJSON) {
+		t.Fatalf("body = %s, want the service's %s", got, wantJSON)
+	}
+	if want.Totals.ElapsedSeconds != 3600 || want.TimeZone != "America/New_York" {
+		t.Fatalf("response = %+v, want the run's hour in New York days", want)
+	}
+
+	missing := authenticatedRequest(t, handler, http.MethodGet,
+		"/work-hours?from=2026-08-12&days=2&time_zone=UTC&project_id=proj-missing", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("unknown project status = %d body=%s, want 404", missing.Code, missing.Body)
+	}
+
+	for query, wantMessage := range map[string]string{
+		"days=2&time_zone=UTC":                                           "from is required",
+		"from=2026-08-12&from=2026-08-13&days=2&time_zone=UTC":           "from must be given once",
+		"from=2026-8-12&days=2&time_zone=UTC":                            "from must be a calendar date",
+		"from=2026-02-30&days=2&time_zone=UTC":                           "from must be a calendar date",
+		"from=2026-08-12&time_zone=UTC":                                  "days is required",
+		"from=0000-12-31&days=1&time_zone=UTC":                           "from must be a calendar date",
+		"from=9999-12-01&days=31&time_zone=UTC":                          "the period must end by 9999-12-30",
+		"from=2026-08-12&days=two&time_zone=UTC":                         "days must be an integer from 1 to 92",
+		"from=2026-08-12&days=0&time_zone=UTC":                           "days must be an integer from 1 to 92",
+		"from=2026-08-12&days=93&time_zone=UTC":                          "days must be an integer from 1 to 92",
+		"from=2026-08-12&days=2":                                         "time_zone is required",
+		"from=2026-08-12&days=2&time_zone=":                              "time_zone must not be empty",
+		"from=2026-08-12&days=2&time_zone=Local":                         "time_zone \"Local\" is not a known",
+		"from=2026-08-12&days=2&time_zone=Mars/Olympus":                  "time_zone \"Mars/Olympus\" is not a known",
+		"from=2026-08-12&days=2&time_zone=GMT%2B0500":                    "time_zone \"GMT+0500\" is not a known",
+		"from=2026-08-12&days=2&time_zone=../../etc/passwd":              "is not a known IANA time zone",
+		"from=2026-08-12&days=2&time_zone=UTC&project_id=":               "project_id must not be empty",
+		"from=2026-08-12&days=2&time_zone=UTC&project_id=a&project_id=b": "project_id must be given once",
+	} {
+		t.Run(query, func(t *testing.T) {
+			response := authenticatedRequest(t, handler, http.MethodGet, "/work-hours?"+query, nil)
+			var body struct{ Message string }
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusBadRequest || !strings.Contains(body.Message, wantMessage) {
+				t.Fatalf("status = %d message %q, want 400 naming %q", response.Code, body.Message, wantMessage)
+			}
+		})
 	}
 }

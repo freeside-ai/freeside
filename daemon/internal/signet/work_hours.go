@@ -4,7 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
 	"time"
+	// The read bounds days in a zone the client names. LoadLocation reads
+	// the host's zone database first; the embedded copy answers on a host
+	// without one, such as a minimal container.
+	_ "time/tzdata"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -135,4 +142,84 @@ func workHoursRun(
 		RunID: run.ID, TaskID: run.TaskID, Milestones: observation.Milestones,
 		Finished: facts.finished, Holds: facts.holdHistory,
 	}, nil
+}
+
+// getWorkHours serves GET /work-hours. Each query parameter is checked where
+// it enters and grants nothing; a refusal names the parameter.
+func (h httpHandler) getWorkHours(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	request, err := parseWorkHoursRequest(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	hours, err := h.service.WorkHours(r.Context(), request)
+	if errors.Is(err, ErrWorkHoursProjectNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Message: "not found"})
+		return
+	}
+	if err != nil {
+		// Not writeReadError: any other record the read can't find is a
+		// broken reference, never a missing resource, so it is not a 404.
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, hours)
+}
+
+func parseWorkHoursRequest(query url.Values) (WorkHoursRequest, error) {
+	from, err := requiredQueryValue(query, "from")
+	if err != nil {
+		return WorkHoursRequest{}, err
+	}
+	fromDate, err := time.Parse(time.DateOnly, from)
+	if err != nil || fromDate.Year() < 1 {
+		return WorkHoursRequest{}, errors.New("from must be a calendar date, YYYY-MM-DD")
+	}
+	rawDays, err := requiredQueryValue(query, "days")
+	if err != nil {
+		return WorkHoursRequest{}, err
+	}
+	days, err := strconv.Atoi(rawDays)
+	if err != nil || days < 1 || days > domain.MaxWorkHoursDays {
+		return WorkHoursRequest{}, fmt.Errorf("days must be an integer from 1 to %d", domain.MaxWorkHoursDays)
+	}
+	if !domain.WorkHoursPeriodInRange(fromDate, days) {
+		return WorkHoursRequest{}, errors.New("the period must end by 9999-12-30")
+	}
+	zone, err := requiredQueryValue(query, "time_zone")
+	if err != nil {
+		return WorkHoursRequest{}, err
+	}
+	// LoadLocation reads "" as UTC and "Local" as the host's zone; the
+	// reader must name a zone, and the host's never applies.
+	location, err := time.LoadLocation(zone)
+	if zone == "Local" || err != nil {
+		return WorkHoursRequest{}, fmt.Errorf("time_zone %q is not a known IANA time zone", zone)
+	}
+	request := WorkHoursRequest{
+		Period: domain.WorkHoursPeriod{From: fromDate, Days: days, Location: location},
+	}
+	if _, present := query["project_id"]; present {
+		project, err := requiredQueryValue(query, "project_id")
+		if err != nil {
+			return WorkHoursRequest{}, err
+		}
+		request.ProjectID = new(domain.ProjectID(project))
+	}
+	return request, nil
+}
+
+// requiredQueryValue returns the one non-empty value of name, refusing it
+// missing, empty, or repeated.
+func requiredQueryValue(query url.Values, name string) (string, error) {
+	values := query[name]
+	switch {
+	case len(values) == 0:
+		return "", fmt.Errorf("%s is required", name)
+	case len(values) > 1:
+		return "", fmt.Errorf("%s must be given once", name)
+	case values[0] == "":
+		return "", fmt.Errorf("%s must not be empty", name)
+	}
+	return values[0], nil
 }

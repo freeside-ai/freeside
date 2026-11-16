@@ -84,6 +84,7 @@ func (h httpHandler) routes() []httpRoute {
 		{"GET /sync/bootstrap", h.authenticated(h.getBootstrap)},
 		{"GET /sync/revision", h.authenticated(h.getRevision)},
 		{"GET /restart-readiness", h.authenticated(h.getRestartReadiness)},
+		{"GET /work-hours", h.authenticated(h.getWorkHours)},
 		{"GET /attention/items", h.authenticated(h.listAttentionItems)},
 		{"GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem)},
 		{"GET /attention/items/{item_id}/task-proposal", h.authenticated(h.getTaskProposalFacts)},

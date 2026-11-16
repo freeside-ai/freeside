@@ -91,6 +91,47 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /restart-readiness`.
     /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
     func getRestartReadiness(_ input: Operations.getRestartReadiness.Input) async throws -> Operations.getRestartReadiness.Output
+    /// How runs' time divided over the days of a period
+    ///
+    /// Divides every run's elapsed time into four classes and adds it to
+    /// the days of a period, for the work status view (plan §4). The read
+    /// changes no state and is computed when requested.
+    ///
+    /// A run's elapsed time is the one its timeline's `clocks` serve
+    /// (`RunClocks`): from its start to its end, or to `as_of` while it
+    /// isn't finished. Every instant goes to the first class that applies,
+    /// in the order the run time strips use:
+    ///
+    /// 1. Agent working: inside one of the run's active intervals.
+    /// 2. Waiting on you: an attention item whose subject names the run is
+    ///    open, from its `created_at` to its conclusion's `concluded_at`
+    ///    (or its `decided_at` when it has no conclusion), or to the run's
+    ///    end while it is open. An item that names no run, or has no
+    ///    `created_at`, adds nothing.
+    /// 3. Held: inside one of the run's hold spans (`RunHoldSpan`), from
+    ///    `first_observed_at` to `cleared_at`, or to the run's end while
+    ///    the hold is current. Held time keeps its reason; where two holds
+    ///    overlap, the one first observed later wins.
+    /// 4. Other: what remains, such as queueing, verification, and
+    ///    publication.
+    ///
+    /// A day runs from the first instant of its calendar date in
+    /// `time_zone` to the first instant of the next date, so it is 23 or
+    /// 25 hours long across a clock change; where a change skips
+    /// midnight, the day starts at the change. The daemon's own zone never
+    /// applies. Time after `as_of` counts nowhere, so today is partial and
+    /// a later day is all zeros.
+    ///
+    /// Every seconds figure is computed from exact instants and rounded
+    /// down on its own, so a day's classes can sum to a few seconds less
+    /// than its elapsed seconds, and the days to less than the totals.
+    /// A run whose record fails the daemon's integrity check is left out
+    /// and counted in `skipped_run_count`.
+    ///
+    ///
+    /// - Remark: HTTP `GET /work-hours`.
+    /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)`.
+    func getWorkHours(_ input: Operations.getWorkHours.Input) async throws -> Operations.getWorkHours.Output
     /// List attention items
     ///
     /// Lists attention items as individual resource snapshots. A partial fetch: the result updates only the entities it carries and never marks the whole cache current (plan §5.14).
@@ -524,6 +565,55 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
     public func getRestartReadiness(headers: Operations.getRestartReadiness.Input.Headers = .init()) async throws -> Operations.getRestartReadiness.Output {
         try await getRestartReadiness(Operations.getRestartReadiness.Input(headers: headers))
+    }
+    /// How runs' time divided over the days of a period
+    ///
+    /// Divides every run's elapsed time into four classes and adds it to
+    /// the days of a period, for the work status view (plan §4). The read
+    /// changes no state and is computed when requested.
+    ///
+    /// A run's elapsed time is the one its timeline's `clocks` serve
+    /// (`RunClocks`): from its start to its end, or to `as_of` while it
+    /// isn't finished. Every instant goes to the first class that applies,
+    /// in the order the run time strips use:
+    ///
+    /// 1. Agent working: inside one of the run's active intervals.
+    /// 2. Waiting on you: an attention item whose subject names the run is
+    ///    open, from its `created_at` to its conclusion's `concluded_at`
+    ///    (or its `decided_at` when it has no conclusion), or to the run's
+    ///    end while it is open. An item that names no run, or has no
+    ///    `created_at`, adds nothing.
+    /// 3. Held: inside one of the run's hold spans (`RunHoldSpan`), from
+    ///    `first_observed_at` to `cleared_at`, or to the run's end while
+    ///    the hold is current. Held time keeps its reason; where two holds
+    ///    overlap, the one first observed later wins.
+    /// 4. Other: what remains, such as queueing, verification, and
+    ///    publication.
+    ///
+    /// A day runs from the first instant of its calendar date in
+    /// `time_zone` to the first instant of the next date, so it is 23 or
+    /// 25 hours long across a clock change; where a change skips
+    /// midnight, the day starts at the change. The daemon's own zone never
+    /// applies. Time after `as_of` counts nowhere, so today is partial and
+    /// a later day is all zeros.
+    ///
+    /// Every seconds figure is computed from exact instants and rounded
+    /// down on its own, so a day's classes can sum to a few seconds less
+    /// than its elapsed seconds, and the days to less than the totals.
+    /// A run whose record fails the daemon's integrity check is left out
+    /// and counted in `skipped_run_count`.
+    ///
+    ///
+    /// - Remark: HTTP `GET /work-hours`.
+    /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)`.
+    public func getWorkHours(
+        query: Operations.getWorkHours.Input.Query,
+        headers: Operations.getWorkHours.Input.Headers = .init()
+    ) async throws -> Operations.getWorkHours.Output {
+        try await getWorkHours(Operations.getWorkHours.Input(
+            query: query,
+            headers: headers
+        ))
     }
     /// List attention items
     ///
@@ -7436,6 +7526,261 @@ public enum Components {
                 case ended_at
             }
         }
+        /// How runs' time divided into classes over the days of a period (`GET /work-hours` defines every figure).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkHours`.
+        public struct WorkHours: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkHours/as_of`.
+            public var as_of: Foundation.Date
+            /// The time zone the request named.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHours/time_zone`.
+            public var time_zone: Swift.String
+            /// The project the request named; null for every project.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHours/project_id`.
+            public var project_id: Swift.String?
+            /// When the daemon began recording hold history. Held time before it reads as other, so a client marks those days rather than drawing zero held time.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHours/hold_history_since`.
+            public var hold_history_since: Foundation.Date
+            /// Runs left out because their record failed the daemon's integrity check. The figures are incomplete when it isn't zero.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHours/skipped_run_count`.
+            public var skipped_run_count: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/WorkHours/totals`.
+            public var totals: Components.Schemas.WorkHoursTotals
+            /// One entry per calendar date, consecutive from the request's `from`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHours/days`.
+            public var days: [Components.Schemas.WorkHoursDay]
+            /// Creates a new `WorkHours`.
+            ///
+            /// - Parameters:
+            ///   - as_of:
+            ///   - time_zone: The time zone the request named.
+            ///   - project_id: The project the request named; null for every project.
+            ///   - hold_history_since: When the daemon began recording hold history. Held time before it reads as other, so a client marks those days rather than drawing zero held time.
+            ///   - skipped_run_count: Runs left out because their record failed the daemon's integrity check. The figures are incomplete when it isn't zero.
+            ///   - totals:
+            ///   - days: One entry per calendar date, consecutive from the request's `from`.
+            public init(
+                as_of: Foundation.Date,
+                time_zone: Swift.String,
+                project_id: Swift.String? = nil,
+                hold_history_since: Foundation.Date,
+                skipped_run_count: Swift.Int,
+                totals: Components.Schemas.WorkHoursTotals,
+                days: [Components.Schemas.WorkHoursDay]
+            ) {
+                self.as_of = as_of
+                self.time_zone = time_zone
+                self.project_id = project_id
+                self.hold_history_since = hold_history_since
+                self.skipped_run_count = skipped_run_count
+                self.totals = totals
+                self.days = days
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of
+                case time_zone
+                case project_id
+                case hold_history_since
+                case skipped_run_count
+                case totals
+                case days
+            }
+        }
+        /// The period's figures, each computed over the whole period and rounded down on its own, and the number of distinct tasks whose runs had elapsed time in it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkHoursTotals`.
+        public struct WorkHoursTotals: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/elapsed_seconds`.
+            public var elapsed_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/agent_working_seconds`.
+            public var agent_working_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/waiting_on_you_seconds`.
+            public var waiting_on_you_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/held_seconds`.
+            public var held_seconds: Swift.Int64
+            /// Only reasons with held time, largest first, then by reason.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/held_by_reason`.
+            public var held_by_reason: [Components.Schemas.WorkHoursHeld]
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/other_seconds`.
+            public var other_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTotals/task_count`.
+            public var task_count: Swift.Int
+            /// Creates a new `WorkHoursTotals`.
+            ///
+            /// - Parameters:
+            ///   - elapsed_seconds:
+            ///   - agent_working_seconds:
+            ///   - waiting_on_you_seconds:
+            ///   - held_seconds:
+            ///   - held_by_reason: Only reasons with held time, largest first, then by reason.
+            ///   - other_seconds:
+            ///   - task_count:
+            public init(
+                elapsed_seconds: Swift.Int64,
+                agent_working_seconds: Swift.Int64,
+                waiting_on_you_seconds: Swift.Int64,
+                held_seconds: Swift.Int64,
+                held_by_reason: [Components.Schemas.WorkHoursHeld],
+                other_seconds: Swift.Int64,
+                task_count: Swift.Int
+            ) {
+                self.elapsed_seconds = elapsed_seconds
+                self.agent_working_seconds = agent_working_seconds
+                self.waiting_on_you_seconds = waiting_on_you_seconds
+                self.held_seconds = held_seconds
+                self.held_by_reason = held_by_reason
+                self.other_seconds = other_seconds
+                self.task_count = task_count
+            }
+            public enum CodingKeys: String, CodingKey {
+                case elapsed_seconds
+                case agent_working_seconds
+                case waiting_on_you_seconds
+                case held_seconds
+                case held_by_reason
+                case other_seconds
+                case task_count
+            }
+        }
+        /// One calendar date's figures. The day runs from `starts_at` to `ends_at`, the first instants of the date and the next in the request's time zone.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkHoursDay`.
+        public struct WorkHoursDay: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/date`.
+            public var date: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/starts_at`.
+            public var starts_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/ends_at`.
+            public var ends_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/elapsed_seconds`.
+            public var elapsed_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/agent_working_seconds`.
+            public var agent_working_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/waiting_on_you_seconds`.
+            public var waiting_on_you_seconds: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/held_seconds`.
+            public var held_seconds: Swift.Int64
+            /// The day's held time by reason, as the totals list it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/held_by_reason`.
+            public var held_by_reason: [Components.Schemas.WorkHoursHeld]
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/other_seconds`.
+            public var other_seconds: Swift.Int64
+            /// The tasks whose runs had elapsed time that day, largest first, then by id. A run with no task adds hours but no entry.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkHoursDay/tasks`.
+            public var tasks: [Components.Schemas.WorkHoursTask]
+            /// Creates a new `WorkHoursDay`.
+            ///
+            /// - Parameters:
+            ///   - date:
+            ///   - starts_at:
+            ///   - ends_at:
+            ///   - elapsed_seconds:
+            ///   - agent_working_seconds:
+            ///   - waiting_on_you_seconds:
+            ///   - held_seconds:
+            ///   - held_by_reason: The day's held time by reason, as the totals list it.
+            ///   - other_seconds:
+            ///   - tasks: The tasks whose runs had elapsed time that day, largest first, then by id. A run with no task adds hours but no entry.
+            public init(
+                date: Swift.String,
+                starts_at: Foundation.Date,
+                ends_at: Foundation.Date,
+                elapsed_seconds: Swift.Int64,
+                agent_working_seconds: Swift.Int64,
+                waiting_on_you_seconds: Swift.Int64,
+                held_seconds: Swift.Int64,
+                held_by_reason: [Components.Schemas.WorkHoursHeld],
+                other_seconds: Swift.Int64,
+                tasks: [Components.Schemas.WorkHoursTask]
+            ) {
+                self.date = date
+                self.starts_at = starts_at
+                self.ends_at = ends_at
+                self.elapsed_seconds = elapsed_seconds
+                self.agent_working_seconds = agent_working_seconds
+                self.waiting_on_you_seconds = waiting_on_you_seconds
+                self.held_seconds = held_seconds
+                self.held_by_reason = held_by_reason
+                self.other_seconds = other_seconds
+                self.tasks = tasks
+            }
+            public enum CodingKeys: String, CodingKey {
+                case date
+                case starts_at
+                case ends_at
+                case elapsed_seconds
+                case agent_working_seconds
+                case waiting_on_you_seconds
+                case held_seconds
+                case held_by_reason
+                case other_seconds
+                case tasks
+            }
+        }
+        /// The held time one hold reason accounts for.
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkHoursHeld`.
+        public struct WorkHoursHeld: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkHoursHeld/reason`.
+            public var reason: Components.Schemas.RunHoldReason
+            /// - Remark: Generated from `#/components/schemas/WorkHoursHeld/seconds`.
+            public var seconds: Swift.Int64
+            /// Creates a new `WorkHoursHeld`.
+            ///
+            /// - Parameters:
+            ///   - reason:
+            ///   - seconds:
+            public init(
+                reason: Components.Schemas.RunHoldReason,
+                seconds: Swift.Int64
+            ) {
+                self.reason = reason
+                self.seconds = seconds
+            }
+            public enum CodingKeys: String, CodingKey {
+                case reason
+                case seconds
+            }
+        }
+        /// The elapsed time one task's runs had in a day.
+        ///
+        /// - Remark: Generated from `#/components/schemas/WorkHoursTask`.
+        public struct WorkHoursTask: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTask/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/WorkHoursTask/elapsed_seconds`.
+            public var elapsed_seconds: Swift.Int64
+            /// Creates a new `WorkHoursTask`.
+            ///
+            /// - Parameters:
+            ///   - task_id:
+            ///   - elapsed_seconds:
+            public init(
+                task_id: Swift.String,
+                elapsed_seconds: Swift.Int64
+            ) {
+                self.task_id = task_id
+                self.elapsed_seconds = elapsed_seconds
+            }
+            public enum CodingKeys: String, CodingKey {
+                case task_id
+                case elapsed_seconds
+            }
+        }
         /// The daemon's latest observation of one run invocation.
         ///
         /// - Remark: Generated from `#/components/schemas/InvocationObservation`.
@@ -10652,12 +10997,13 @@ public enum Components {
                 case started_at
             }
         }
-        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park).
+        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/DaemonFeature`.
         @frozen public enum DaemonFeature: String, Codable, Hashable, Sendable, CaseIterable {
             case parked_task_move = "parked_task_move"
+            case work_hours = "work_hours"
             case unknown = "unknown"
         }
         /// The pairing exchange's input: the short-lived code read off the daemon host and the human label the new device will carry.
@@ -18249,6 +18595,271 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// How runs' time divided over the days of a period
+    ///
+    /// Divides every run's elapsed time into four classes and adds it to
+    /// the days of a period, for the work status view (plan §4). The read
+    /// changes no state and is computed when requested.
+    ///
+    /// A run's elapsed time is the one its timeline's `clocks` serve
+    /// (`RunClocks`): from its start to its end, or to `as_of` while it
+    /// isn't finished. Every instant goes to the first class that applies,
+    /// in the order the run time strips use:
+    ///
+    /// 1. Agent working: inside one of the run's active intervals.
+    /// 2. Waiting on you: an attention item whose subject names the run is
+    ///    open, from its `created_at` to its conclusion's `concluded_at`
+    ///    (or its `decided_at` when it has no conclusion), or to the run's
+    ///    end while it is open. An item that names no run, or has no
+    ///    `created_at`, adds nothing.
+    /// 3. Held: inside one of the run's hold spans (`RunHoldSpan`), from
+    ///    `first_observed_at` to `cleared_at`, or to the run's end while
+    ///    the hold is current. Held time keeps its reason; where two holds
+    ///    overlap, the one first observed later wins.
+    /// 4. Other: what remains, such as queueing, verification, and
+    ///    publication.
+    ///
+    /// A day runs from the first instant of its calendar date in
+    /// `time_zone` to the first instant of the next date, so it is 23 or
+    /// 25 hours long across a clock change; where a change skips
+    /// midnight, the day starts at the change. The daemon's own zone never
+    /// applies. Time after `as_of` counts nowhere, so today is partial and
+    /// a later day is all zeros.
+    ///
+    /// Every seconds figure is computed from exact instants and rounded
+    /// down on its own, so a day's classes can sum to a few seconds less
+    /// than its elapsed seconds, and the days to less than the totals.
+    /// A run whose record fails the daemon's integrity check is left out
+    /// and counted in `skipped_run_count`.
+    ///
+    ///
+    /// - Remark: HTTP `GET /work-hours`.
+    /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)`.
+    public enum getWorkHours {
+        public static let id: Swift.String = "getWorkHours"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/work-hours/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// The period's first calendar date, as YYYY-MM-DD.
+                ///
+                /// - Remark: Generated from `#/paths/work-hours/GET/query/from`.
+                public var from: Swift.String
+                /// How many calendar dates the period covers, from `from` on.
+                ///
+                /// - Remark: Generated from `#/paths/work-hours/GET/query/days`.
+                public var days: Swift.Int
+                /// The IANA time zone name, such as `Europe/Berlin`, that bounds each day. `Local` is refused: the reader names the zone, never the daemon's host.
+                ///
+                ///
+                /// - Remark: Generated from `#/paths/work-hours/GET/query/time_zone`.
+                public var time_zone: Swift.String
+                /// Limits the read to one project's runs; absent, every project's.
+                ///
+                /// - Remark: Generated from `#/paths/work-hours/GET/query/project_id`.
+                public var project_id: Swift.String?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - from: The period's first calendar date, as YYYY-MM-DD.
+                ///   - days: How many calendar dates the period covers, from `from` on.
+                ///   - time_zone: The IANA time zone name, such as `Europe/Berlin`, that bounds each day. `Local` is refused: the reader names the zone, never the daemon's host.
+                ///   - project_id: Limits the read to one project's runs; absent, every project's.
+                public init(
+                    from: Swift.String,
+                    days: Swift.Int,
+                    time_zone: Swift.String,
+                    project_id: Swift.String? = nil
+                ) {
+                    self.from = from
+                    self.days = days
+                    self.time_zone = time_zone
+                    self.project_id = project_id
+                }
+            }
+            public var query: Operations.getWorkHours.Input.Query
+            /// - Remark: Generated from `#/paths/work-hours/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getWorkHours.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getWorkHours.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.getWorkHours.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            public init(
+                query: Operations.getWorkHours.Input.Query,
+                headers: Operations.getWorkHours.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/work-hours/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/work-hours/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.WorkHours)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.WorkHours {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getWorkHours.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getWorkHours.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The period's hours by class, per day and in total.
+            ///
+            /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.getWorkHours.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.getWorkHours.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct BadRequest: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/work-hours/GET/responses/400/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/work-hours/GET/responses/400/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getWorkHours.Output.BadRequest.Body
+                /// Creates a new `BadRequest`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getWorkHours.Output.BadRequest.Body) {
+                    self.body = body
+                }
+            }
+            /// A parameter is missing, repeated, or malformed; `days` is outside 1 to 92; the period ends after 9999-12-30; or `time_zone` names a zone the daemon doesn't know.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Operations.getWorkHours.Output.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Operations.getWorkHours.Output.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
                             response: self
                         )
                     }

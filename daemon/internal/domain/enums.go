@@ -2936,17 +2936,20 @@ type DaemonFeature string
 const (
 	// DaemonFeatureParkedTaskMove is the move_parked_task command.
 	DaemonFeatureParkedTaskMove DaemonFeature = "parked_task_move"
+	// DaemonFeatureWorkHours is the GET /work-hours read.
+	DaemonFeatureWorkHours DaemonFeature = "work_hours"
 )
 
 // AllDaemonFeatures lists every feature this build serves; it is the single
 // registration point and the list GET /health advertises.
 var AllDaemonFeatures = []DaemonFeature{
 	DaemonFeatureParkedTaskMove,
+	DaemonFeatureWorkHours,
 }
 
 func (f DaemonFeature) valid() bool {
 	switch f {
-	case DaemonFeatureParkedTaskMove:
+	case DaemonFeatureParkedTaskMove, DaemonFeatureWorkHours:
 		return true
 	default:
 		return false
