@@ -16,7 +16,9 @@ import (
 // counted. The counts are advisory (Tier C) and grant nothing, so a row that
 // can't be decoded is skipped and reported, never a reason to fail the read.
 // Every query filters by project when one is given: through the row's run, or
-// on attention_items.project_id.
+// on attention_items.project_id. Hold rows (issue #3239) are read here too,
+// with their own lenient decode: ListRunHoldSpansBetween fails the read on a
+// bad row and can't filter by project.
 
 const (
 	listFailureCauseRowsSQL = `
@@ -51,6 +53,25 @@ SELECT id, subject_run_id, body
 FROM attention_items
 WHERE (? = '' OR project_id = ?)
 ORDER BY id`
+	// Neither hold table has a foreign key to runs, so both joins are outer,
+	// as the milestone joins are.
+	listClosedHoldRowsSQL = `
+SELECT CAST(s.id AS TEXT), s.reason, s.run_id, s.first_observed_at, s.cleared_at
+FROM run_hold_spans s
+LEFT JOIN runs r ON r.id = s.run_id
+WHERE (? = '' OR r.project_id = ?)
+ORDER BY s.id`
+	listOpenHoldRowsSQL = `
+SELECT h.run_id, h.reason, h.run_id, h.first_observed_at, NULL
+FROM run_hold_observations h
+LEFT JOIN runs r ON r.id = h.run_id
+WHERE (? = '' OR r.project_id = ?)
+ORDER BY h.run_id`
+	// holdHistoryMigration is the migration that created run_hold_spans
+	// (0145_run_hold_spans.sql). Holds that ended before it was applied left
+	// no record, so its applied_at is when the hold history begins.
+	holdHistoryMigration        = 145
+	selectHoldsRecordedSinceSQL = `SELECT applied_at FROM schema_migrations WHERE version = ?`
 )
 
 // CauseRow is one stored cause. Key identifies the row in its table, and an
@@ -62,8 +83,20 @@ type CauseRow struct {
 	At    time.Time
 }
 
+// HoldRow is one hold: a cleared hold from run_hold_spans, keyed by its id,
+// or a run's current hold from run_hold_observations, keyed by its run, with
+// a nil End. Start is when its cause was first observed.
+type HoldRow struct {
+	Key    string
+	Reason string
+	RunID  domain.RunID
+	Start  time.Time
+	End    *time.Time
+}
+
 // SkippedCauseRow is a row ReadCauseRows couldn't decode: an unparseable
-// time, an empty value, or an attention body that isn't valid JSON.
+// time, an empty value, an attention body that isn't valid JSON, or a hold
+// that ends before it starts.
 type SkippedCauseRow struct {
 	Table string
 	Key   string
@@ -86,7 +119,12 @@ type CauseRows struct {
 	// with no conclusion is open, or closed before conclusions existed, and
 	// isn't listed.
 	AttentionConclusions []CauseRow
-	Skipped              []SkippedCauseRow
+	// Holds are the cleared holds, then the current ones.
+	Holds []HoldRow
+	// HoldsRecordedSince is when the hold history began: the time migration
+	// 0145 was applied.
+	HoldsRecordedSince time.Time
+	Skipped            []SkippedCauseRow
 }
 
 // ReadCauseRows reads every stored cause in one read-only transaction,
@@ -135,6 +173,34 @@ func (s *Store) ReadCauseRows(ctx context.Context, project domain.ProjectID) (Ca
 		case concluded:
 			rows.AttentionConclusions = append(rows.AttentionConclusions, row)
 		}
+	}
+
+	for _, source := range []struct{ table, query string }{
+		{"run_hold_spans", listClosedHoldRowsSQL},
+		{"run_hold_observations", listOpenHoldRowsSQL},
+	} {
+		raw, err := queryAll(ctx, tx, scanRawHoldRow, source.query, project, project)
+		if err != nil {
+			return CauseRows{}, fmt.Errorf("read %s holds: %w", source.table, err)
+		}
+		for _, r := range raw {
+			row, err := r.decode()
+			if err != nil {
+				rows.Skipped = append(rows.Skipped, SkippedCauseRow{Table: source.table, Key: r.key, Error: err.Error()})
+				continue
+			}
+			rows.Holds = append(rows.Holds, row)
+		}
+	}
+
+	// The store migrates before it opens, so the row is always there; a
+	// missing or bad one fails the read rather than guessing the history.
+	var appliedAt string
+	if err := tx.QueryRowContext(ctx, selectHoldsRecordedSinceSQL, holdHistoryMigration).Scan(&appliedAt); err != nil {
+		return CauseRows{}, fmt.Errorf("read hold history start (migration %04d): %w", holdHistoryMigration, err)
+	}
+	if rows.HoldsRecordedSince, err = parseTime(appliedAt); err != nil {
+		return CauseRows{}, fmt.Errorf("read hold history start (migration %04d): applied_at: %w", holdHistoryMigration, err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -202,4 +268,38 @@ func (r rawAttentionConclusion) decode() (row CauseRow, concluded bool, err erro
 	return CauseRow{
 		Key: r.id, Value: conclusion.Cause, RunID: domain.RunID(r.runID.String), At: conclusion.ConcludedAt.UTC(),
 	}, true, nil
+}
+
+type rawHoldRow struct {
+	key, reason, runID, start string
+	end                       sql.NullString
+}
+
+func scanRawHoldRow(row scanner) (rawHoldRow, error) {
+	var r rawHoldRow
+	err := row.Scan(&r.key, &r.reason, &r.runID, &r.start, &r.end)
+	return r, err
+}
+
+func (r rawHoldRow) decode() (HoldRow, error) {
+	if r.reason == "" {
+		return HoldRow{}, errors.New("empty reason")
+	}
+	start, err := parseTime(r.start)
+	if err != nil {
+		return HoldRow{}, fmt.Errorf("first_observed_at: %w", err)
+	}
+	row := HoldRow{Key: r.key, Reason: r.reason, RunID: domain.RunID(r.runID), Start: start}
+	if !r.end.Valid {
+		return row, nil
+	}
+	end, err := parseTime(r.end.String)
+	if err != nil {
+		return HoldRow{}, fmt.Errorf("cleared_at: %w", err)
+	}
+	if end.Before(start) {
+		return HoldRow{}, errors.New("cleared_at is before first_observed_at")
+	}
+	row.End = &end
+	return row, nil
 }
