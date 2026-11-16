@@ -427,6 +427,10 @@ public struct FreesideRootView: View {
             tasks: coordinator.tasks,
             onSelectTask: { navigation.route(to: coordinator.unifiedList.destination(forTask: $0)) },
             usagePools: coordinator.usagePools,
+            runTimelines: .init(
+                timelines: coordinator.timelinesByRunID, runs: coordinator.runs,
+                cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration,
+                load: coordinator.refreshTimeline),
             onConclusion: { conclusion in
                 handleConclusion(conclusion, coordinator: coordinator)
             })

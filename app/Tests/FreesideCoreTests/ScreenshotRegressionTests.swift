@@ -2110,6 +2110,46 @@
                                 readyFoot.screenshotCard(
                                     snapshot.item,
                                     at: dynamicTypeSize))))
+                    // The run's outcome list (#3264) in an open Recorded
+                    // Context, after the review yield: a filed issue, a
+                    // posted comment, a capped filing with its notice, and a
+                    // declined finding under its unverified keyword, on the
+                    // Mac and on the phone; then a list the daemon could not
+                    // read in full. The item is the one joined to the ready
+                    // run, whose timeline carries the list.
+                    let joined = AttentionFixtures.publishedTaskReady().item
+                    guard
+                        let readyTimeline = RunFixtures.defaultTimelines().first(where: {
+                            $0.run_id == RunFixtures.readyRunID
+                        })
+                    else { throw ScreenshotError.missingReadyTimeline }
+                    var incompleteTimeline = readyTimeline
+                    incompleteTimeline.outcomes?.complete = false
+                    func outcomesCard(_ timeline: Components.Schemas.RunTimeline) -> DecisionDetailView {
+                        DecisionDetailView(
+                            store: store,
+                            itemID: snapshot.item.id,
+                            expandedDisclosures: [.recordedContext],
+                            graphics: graphics,
+                            loadsAttachments: false,
+                            showsValidationProgress: false,
+                            now: screenshotNow,
+                            runTimelines: .init(timelines: [RunFixtures.readyRunID: timeline]))
+                    }
+                    for (suffix, width) in [("", CGFloat?.none), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-ready_for_final_review-outcomes\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    outcomesCard(readyTimeline).screenshotCard(
+                                        joined, at: dynamicTypeSize, compactLayout: width != nil))))
+                    }
+                    surfaces.append(
+                        Surface(
+                            name: "decision-ready_for_final_review-outcomes_incomplete",
+                            view: AnyView(
+                                outcomesCard(incompleteTimeline).screenshotCard(joined, at: dynamicTypeSize))))
                     // A verdict the daemon invalidated (issue #982), rendered
                     // stale beside the bound and observed heads (frame 7.3).
                     // The degraded verdict is the 4b surfaces'.
@@ -5658,6 +5698,7 @@
         case invalidShardSelection(String)
         case missingActiveRun
         case missingActiveTimeline
+        case missingReadyTimeline
         case missingDigestFile(String)
         case missingRetryTask
         case missingGMT

@@ -63,7 +63,7 @@ import Testing
             Set(DecisionCardComposition.sharedModuleSet) == [
                 .facts, .foldedFacts, .agentQuestion, .specRevision, .specification, .factBlock,
                 .findingFacts, .recommendation, .stopCause, .checklist, .stageRail, .comparison,
-                .yieldChart, .summary, .reviewGuide, .claims, .evidence, .details,
+                .yieldChart, .outcomes, .summary, .reviewGuide, .claims, .evidence, .details,
             ])
     }
 
@@ -125,12 +125,12 @@ import Testing
     @Test func fourSpecializedCardsAreOnlyModuleOrderings() throws {
         // Plan §9 and survey card 4b (R10): the labeled change summary,
         // then the agent's reading order (revision 112), then the diff and
-        // the verdict reached on it, and the review yield follows the
-        // actions.
+        // the verdict reached on it, and the review yield and the run's
+        // outcome list follow the actions (revision 128).
         #expect(
             DecisionCardComposition.forType(.ready_for_final_review).modules == [
                 .recommendation, .summary, .reviewGuide, .facts, .checklist, .factBlock, .yieldChart,
-                .claims, .evidence, .details,
+                .outcomes, .claims, .evidence, .details,
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
@@ -1073,8 +1073,8 @@ import Testing
         #expect(modules.dropLast(2).allSatisfy { $0 != .evidence && $0 != .details })
     }
 
-    /// Survey card 4b: the review yield is the final review's one folded
-    /// module. The question card folds its run and binding details the same
+    /// Survey card 4b: the review yield and the run's outcome list are the
+    /// final review's folded modules. The question card folds its run and binding details the same
     /// way, and no other type folds a module yet.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
     func onlyTheComposedCardsFoldAModuleUnderTheirActions(type: Components.Schemas.AttentionType) {
@@ -1083,7 +1083,7 @@ import Testing
             .prefix(composition.foldedModuleCount)
         let expected: [DecisionCardModule] =
             switch type {
-            case .ready_for_final_review: [.yieldChart]
+            case .ready_for_final_review: [.yieldChart, .outcomes]
             case .agent_question: [.foldedFacts]
             default: []
             }
@@ -2226,5 +2226,150 @@ import Testing
         #expect(DecisionReviewGuideView.lines("\n") == [""])
         // A CRLF file: Swift reads "\r\n" as one character.
         #expect(DecisionReviewGuideView.lines("a\r\nb\r\n") == ["a", "b"])
+    }
+}
+
+/// The ready card's outcome list (#3264): what the run filed, posted, or set
+/// aside, read from its run timeline.
+extension DecisionCardCompositionTests {
+    /// The ready item joined to the ready run, whose timeline lists one of
+    /// each kind of outcome.
+    private static let readyItem = AttentionFixtures.publishedTaskReady().item
+
+    private static func readyTimeline() throws -> Components.Schemas.RunTimeline {
+        try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.readyRunID })
+    }
+
+    private static func post(
+        _ state: Components.Schemas.RunOutcomePostState,
+        refusal: Components.Schemas.RunOutcomePost.refusal_reasonPayload? = nil,
+        notice: String? = nil
+    ) -> Components.Schemas.RunOutcomePost {
+        .init(
+            effect_kind: .issue_comment, finding_id: "finding-1", state: state,
+            repository: .init(value1: .init(repo: "freeside-ai/freeside", repository_id: 1)),
+            issue_number: 12, refusal_reason: refusal,
+            notice: notice.map { .init(value1: .init(code: "issue_comment_refused", reason: $0)) })
+    }
+
+    @Test func theOutcomeListNamesEachPostAndFindingTheReadyRunLists() throws {
+        let presentation = try #require(DecisionOutcomesPresentation(RunFixtures.readyOutcomes))
+        #expect(
+            presentation.posts == [
+                .init(
+                    kind: "Follow-up issue filing", value: "Completed · freeside-ai/freeside#3201",
+                    reason: nil),
+                .init(
+                    kind: "Issue comment",
+                    value: "Completed · freeside-ai/freeside#3188 · comment 6866052816", reason: nil),
+                .init(
+                    kind: "Follow-up issue filing", value: "Capped · freeside-ai/freeside",
+                    reason: "This run already filed its limit of follow-up issues."),
+            ])
+        #expect(
+            presentation.findings == [
+                .init(
+                    heading: "Declined in round 1 · finding-654-1",
+                    message: "The retry loop has no upper bound.",
+                    reason: "The caller bounds it at three attempts.")
+            ])
+        #expect(presentation.complete)
+    }
+
+    /// No list, an empty complete one, and a timeline from a daemon that
+    /// serves no `outcomes` all draw nothing.
+    @Test func anAbsentOrEmptyOutcomeListDrawsNoModule() throws {
+        #expect(DecisionOutcomesPresentation(nil) == nil)
+        #expect(DecisionOutcomesPresentation(RunFixtures.noOutcomes) == nil)
+
+        var older = try Self.readyTimeline()
+        older.outcomes = nil
+        let timelines = DecisionDetailView.RunTimelines(timelines: [RunFixtures.readyRunID: older])
+        #expect(timelines.outcomes(for: Self.readyItem) == nil)
+        #expect(DecisionDetailView.RunTimelines().outcomes(for: Self.readyItem) == nil)
+        let loaded = DecisionDetailView.RunTimelines(
+            timelines: [RunFixtures.readyRunID: try Self.readyTimeline()])
+        #expect(loaded.outcomes(for: Self.readyItem) == RunFixtures.readyOutcomes)
+    }
+
+    @Test func anIncompleteListSaysItMayBeMissingEntries() throws {
+        var outcomes = RunFixtures.readyOutcomes
+        outcomes.complete = false
+        let presentation = try #require(DecisionOutcomesPresentation(outcomes))
+        #expect(!presentation.complete)
+        // An empty list the daemon could not read in full still draws its
+        // notice, so it doesn't read as a run that posted nothing.
+        let unread = try #require(
+            DecisionOutcomesPresentation(.init(posts: [], findings: [], complete: false)))
+        #expect(unread.posts.isEmpty && unread.findings.isEmpty && !unread.complete)
+    }
+
+    /// A refused or capped post shows its notice's reason, and the
+    /// ledger's reason when no notice was raised; an ambiguous post shows
+    /// only a notice's.
+    @Test func aRefusedPostShowsWhyItEndedThere() throws {
+        func reason(_ post: Components.Schemas.RunOutcomePost) throws -> String? {
+            try #require(DecisionOutcomesPresentation(.init(posts: [post], findings: [], complete: true)))
+                .posts[0].reason
+        }
+        #expect(try reason(Self.post(.refused, refusal: .definite_rejection, notice: "Blocked.")) == "Blocked.")
+        #expect(try reason(Self.post(.refused, refusal: .definite_rejection)) == "GitHub rejected the request.")
+        #expect(try reason(Self.post(.capped, refusal: .precondition_failed)) == "A precondition for the post failed.")
+        #expect(try reason(Self.post(.capped, refusal: .retry_bound_spent, notice: "")) == "The retries ran out.")
+        #expect(try reason(Self.post(.ambiguous, notice: "Unconfirmed.")) == "Unconfirmed.")
+        #expect(try reason(Self.post(.ambiguous)) == nil)
+        #expect(try reason(Self.post(.completed, notice: "Ignored.")) == nil)
+    }
+
+    /// An unreadable post has no repository, so it shows no reference; an
+    /// external finding says so.
+    @Test func anUnreadablePostHasNoReferenceAndAnExternalFindingSaysSo() throws {
+        let presentation = try #require(
+            DecisionOutcomesPresentation(
+                .init(
+                    posts: [.init(effect_kind: .follow_up_filing, state: .unreadable)],
+                    findings: [
+                        .init(
+                            finding_id: "ext-1", disposition: .deferred, round: 2, external: true,
+                            message: "m", reason: "r")
+                    ],
+                    complete: false)))
+        #expect(presentation.posts[0].value == "Unreadable")
+        #expect(presentation.findings[0].heading == "Deferred in round 2 · external · ext-1")
+    }
+
+    /// Only a final review whose run is listed loads a timeline; every
+    /// other card loads nothing.
+    @Test func onlyAListedFinalReviewLoadsItsRunTimeline() throws {
+        let runs = RunFixtures.defaultRuns()
+        let timelines = DecisionDetailView.RunTimelines(runs: runs, cacheGeneration: 3)
+        let key = try #require(timelines.requestKey(for: Self.readyItem))
+        #expect(key.runID == RunFixtures.readyRunID)
+        // A replaced cache keys a reload, as the run timeline page's does.
+        #expect(
+            key != DecisionDetailView.RunTimelines(runs: runs, cacheGeneration: 4).requestKey(for: Self.readyItem))
+
+        #expect(DecisionDetailView.RunTimelines().requestKey(for: Self.readyItem) == nil)
+        for type in AttentionFixtures.fixtureTypes where type != .ready_for_final_review {
+            var item = AttentionFixtures.fixture(type: type).item
+            // The ready run's id, so only the type keeps it from loading.
+            item.subject = Self.readyItem.subject
+            #expect(timelines.requestKey(for: item) == nil, "\(type)")
+        }
+        var unsubjected = Self.readyItem
+        unsubjected.subject = .system(.init(subject_type: .system, subject_id: "system"))
+        #expect(timelines.requestKey(for: unsubjected) == nil)
+    }
+
+    /// The findings draw under an unverified keyword, but inside Recorded
+    /// Context, so they never take the card's explanation control.
+    @Test func outcomeFindingsNeverTakeTheExplanationControl() throws {
+        let composition = DecisionCardComposition.forType(.ready_for_final_review)
+        let outcomes = try #require(composition.modules.firstIndex(of: .outcomes))
+        for platform in DecisionCardComposition.UnverifiedContext.Platform.allCases {
+            let slots = composition.unverifiedSlots(
+                for: Self.readyItem, in: .init(platform: platform, hasOutcomeFindings: true))
+            #expect(!slots.contains(.module(outcomes)))
+        }
     }
 }

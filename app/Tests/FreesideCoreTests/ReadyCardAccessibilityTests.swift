@@ -51,15 +51,70 @@
             #expect(walk.labels > 0, "the walk read no labels on \(snapshot.item.id)")
         }
 
-        private func host(_ snapshot: Components.Schemas.AttentionItemSnapshot) -> NSWindow {
+        /// The ready card joined to the ready run, with that run's outcome
+        /// list (#3264) loaded and Recorded Context open, so the walk covers
+        /// the module and its findings' unverified keyword. Opening the card
+        /// loads the run's timeline once.
+        @Test func walkingTheOutcomeListCompletes() throws {
+            let snapshot = AttentionFixtures.publishedTaskReady()
+            let timeline = try #require(
+                RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.readyRunID })
+            var loads: [String] = []
+            let window = host(
+                snapshot, expandedDisclosures: [.recordedContext],
+                runTimelines: .init(
+                    timelines: [RunFixtures.readyRunID: timeline], runs: RunFixtures.defaultRuns(),
+                    load: { loads.append($0) }))
+            defer {
+                window.close()
+                setAssistiveClientAttributes(false)
+            }
+            let root = try #require(window.contentView)
+
+            var walk = Walk()
+            try walk.visit(root, depth: 0)
+
+            // The closed fold's summary names the list after the review
+            // yield.
+            #expect(
+                walk.descriptions.contains {
+                    $0.hasPrefix("Recorded Context") && $0.contains("review yield · outcomes")
+                })
+            #expect(loads == [RunFixtures.readyRunID])
+        }
+
+        /// A card that draws no outcome list loads no timeline, even with
+        /// its run listed.
+        @Test func aCardThatDrawsNoOutcomeListLoadsNothing() throws {
+            var snapshot = AttentionFixtures.fixture(type: .execution_failure)
+            snapshot.item.subject = AttentionFixtures.publishedTaskReady().item.subject
+            var loads: [String] = []
+            let window = host(
+                snapshot,
+                runTimelines: .init(runs: RunFixtures.defaultRuns(), load: { loads.append($0) }))
+            defer {
+                window.close()
+                setAssistiveClientAttributes(false)
+            }
+            #expect(loads.isEmpty)
+        }
+
+        private func host(
+            _ snapshot: Components.Schemas.AttentionItemSnapshot,
+            expandedDisclosures: Set<DecisionDisclosure> = [],
+            runTimelines: DecisionDetailView.RunTimelines = .init()
+        ) -> NSWindow {
             _ = FreesideFont.registration
             setAssistiveClientAttributes(true)
             let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
             store.replaceAll(with: [snapshot])
-            let detail = DecisionDetailView(store: store, itemID: snapshot.item.id)
-                .frame(width: 560, height: 900)
-                // The default `FreesideRootView` sets for every window.
-                .textSelection(.enabled)
+            let detail = DecisionDetailView(
+                store: store, itemID: snapshot.item.id, expandedDisclosures: expandedDisclosures,
+                runTimelines: runTimelines
+            )
+            .frame(width: 560, height: 900)
+            // The default `FreesideRootView` sets for every window.
+            .textSelection(.enabled)
 
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 560, height: 900),
@@ -86,6 +141,7 @@
         private struct Walk {
             var seen = Set<ObjectIdentifier>()
             var labels = 0
+            var descriptions: [String] = []
 
             mutating func visit(_ object: AnyObject, depth: Int) throws {
                 guard seen.insert(ObjectIdentifier(object)).inserted else { return }
@@ -113,7 +169,10 @@
 
                 // The description is the element's label, the read the crash
                 // recursed in.
-                if let label = value(.description) as? String, !label.isEmpty { labels += 1 }
+                if let label = value(.description) as? String, !label.isEmpty {
+                    labels += 1
+                    descriptions.append(label)
+                }
                 for attribute: NSAccessibility.Attribute in [.title, .value, .help, .role] {
                     _ = value(attribute)
                 }

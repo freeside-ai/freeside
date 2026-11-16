@@ -892,7 +892,7 @@ package enum AttentionDisplay {
     /// approving closes the issue, so this row must not assert the closing
     /// action, or a resolve-false proposal (every daemon_fallback, and any
     /// resolve-false inference-site one) would contradict it.
-    static func effectKindLabel(_ kind: Components.Schemas.EffectKind) -> String {
+    package static func effectKindLabel(_ kind: Components.Schemas.EffectKind) -> String {
         switch kind {
         case .run_proposal: return "Run proposal"
         case .source_issue_closure: return "Source issue closure"

@@ -94,7 +94,7 @@ import Testing
     /// The closed Recorded Context names what it holds in drawing order.
     @Test func recordedContextNamesItsPartsInDrawingOrder() {
         let full = DecisionRecordedContext(
-            hasReason: true, hasRunDetails: true, hasReviewYield: true,
+            hasReason: true, hasRunDetails: true, hasReviewYield: true, hasOutcomes: true,
             readingRows: [
                 .init(label: "Requested, Not Available Here", value: "Convert to Policy"),
                 .init(label: "Review Round 1", value: "2 blockers"),
@@ -106,7 +106,7 @@ import Testing
 
         #expect(
             full.summary
-                == "reason · run details · review yield · posture · readiness · review rounds"
+                == "reason · run details · review yield · outcomes · posture · readiness · review rounds"
                 + " · not offered here · facts · agent summary · report")
         #expect(DecisionRecordedContext().parts.isEmpty)
         #expect(DecisionRecordedContext(hasReason: true).summary == "reason")

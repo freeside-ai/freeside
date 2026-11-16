@@ -58,6 +58,40 @@ struct DecisionDetailView: View {
         var revealIdentifiers: () -> Void = {}
     }
 
+    /// The synced run timelines a ready card reads its run's outcome list
+    /// from, and what keys its reload. The card is built from an
+    /// `InboxStore`, not the sync coordinator, so these come in as values
+    /// with the coordinator's load call. The default holds no timeline and
+    /// loads nothing.
+    struct RunTimelines {
+        var timelines: [String: Components.Schemas.RunTimeline] = [:]
+        var runs: [Components.Schemas.RunSnapshot] = []
+        var cursors: SyncCursors?
+        var cacheGeneration = 0
+        var load: @MainActor (String) async -> Void = { _ in }
+
+        /// What keys the card's timeline load, as the run timeline page keys
+        /// its own, so the card refetches on every canonical replacement.
+        /// Nil, so nothing loads, unless the card is a final review whose
+        /// run is listed: no other card draws the outcome list, and the
+        /// coordinator prunes the timeline of a run it doesn't list.
+        func requestKey(
+            for item: Components.Schemas.AttentionItem
+        ) -> RunTimelineView.TimelineRequestKey? {
+            guard item._type == .ready_for_final_review,
+                let runID = DecisionModel.runID(of: item.subject),
+                let run = runs.first(where: { $0.run.id == runID })
+            else { return nil }
+            return .init(snapshot: run, cursors: cursors, cacheGeneration: cacheGeneration)
+        }
+
+        /// The item's run's outcome list, when its timeline is loaded and
+        /// the daemon serves one.
+        func outcomes(for item: Components.Schemas.AttentionItem) -> Components.Schemas.RunOutcomes? {
+            DecisionModel.runID(of: item.subject).flatMap { timelines[$0]?.outcomes }
+        }
+    }
+
     /// The scroll view the recommendation's visibility is measured against:
     /// the card's own, or the task page's when the card is seated there.
     static let scrollSpace = "decision-card-scroll"
@@ -153,6 +187,7 @@ struct DecisionDetailView: View {
     /// offer's reading from. The card is built from an `InboxStore`, not
     /// the sync coordinator, so the pools come in as a value.
     private let usagePools: [Components.Schemas.UsagePoolSnapshot]
+    private let runTimelines: RunTimelines
 
     @MainActor
     init(
@@ -180,6 +215,7 @@ struct DecisionDetailView: View {
         tasks: [Components.Schemas.TaskSnapshot] = [],
         onSelectTask: @escaping (String) -> Void = { _ in },
         usagePools: [Components.Schemas.UsagePoolSnapshot] = [],
+        runTimelines: RunTimelines = .init(),
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in },
         model: DecisionModel? = nil
     ) {
@@ -218,10 +254,21 @@ struct DecisionDetailView: View {
         self.tasks = tasks
         self.onSelectTask = onSelectTask
         self.usagePools = usagePools
+        self.runTimelines = runTimelines
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
         self.now = now
+    }
+
+    private var outcomesRequestKey: RunTimelineView.TimelineRequestKey? {
+        model.snapshot.flatMap { runTimelines.requestKey(for: $0.item) }
+    }
+
+    /// The outcome list the card's `.outcomes` module draws, when its run's
+    /// timeline is loaded and holds entries.
+    private func outcomes(_ item: Components.Schemas.AttentionItem) -> DecisionOutcomesPresentation? {
+        DecisionOutcomesPresentation(runTimelines.outcomes(for: item))
     }
 
     var body: some View {
@@ -292,6 +339,13 @@ struct DecisionDetailView: View {
                 // Fetch the device's action surface separately, after the open
                 // is recorded (plan §8).
                 await model.refreshActionSurface()
+            }
+            // A final review reads its run's outcome list from the run's
+            // timeline: loaded on open and again on every canonical
+            // replacement, as the run timeline page loads it.
+            .task(id: outcomesRequestKey) {
+                guard let outcomesRequestKey else { return }
+                await runTimelines.load(outcomesRequestKey.runID)
             }
             // Not from `init`: the sheet would open before validation, a
             // state a click can't reach.
@@ -936,6 +990,7 @@ struct DecisionDetailView: View {
                 ).folded.isEmpty,
             hasReviewYield: places(.yieldChart, in: composition.foldedModules)
                 && (graphics.diminishingYield != nil || DecisionYieldPresentation(item) != nil),
+            hasOutcomes: places(.outcomes, in: composition.foldedModules) && outcomes(item) != nil,
             readingRows: Self.readingRows(item, unavailable: actionRanking(item).unavailable),
             hasFactBlock: places(.factBlock, in: composition.supportingModules) && drawsFactBlock,
             hasAgentSummary: summaryFolds
@@ -966,6 +1021,7 @@ struct DecisionDetailView: View {
             DecisionCardComposition.reason(for: item)?.isAgentWritten == true
             || content.hasAgentSummary
             || (content.hasFactBlock && graphics.changeSummary != nil)
+            || (content.hasOutcomes && outcomes(item)?.findings.isEmpty == false)
         return footFold(
             "Recorded Context",
             summary: content.summary,
@@ -1175,6 +1231,13 @@ struct DecisionDetailView: View {
                 DecisionYieldChartModuleView(
                     presentation: presentation,
                     showsBars: graphics.diminishingYield != nil)
+            }
+        case .outcomes:
+            if let presentation = outcomes(item) {
+                DecisionOutcomesModuleView(
+                    presentation: presentation,
+                    carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: rendersInteractiveControls)
             }
         case .stopCause:
             if let presentation = DecisionStopCausePresentation(item) {
@@ -3191,6 +3254,7 @@ struct DecisionDetailView: View {
             hasComparison: graphics.comparison != nil,
             hasProposedIssueText: effectProposalFacts.flatMap(AttentionDisplay.proposedIssueText)
                 != nil,
+            hasOutcomeFindings: outcomes(item)?.findings.isEmpty == false,
             prominentClaimIndex: graphics.prominentClaimIndex)
         return UnverifiedRegister(
             rendersInteractiveControls: rendersInteractiveControls,
