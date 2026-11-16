@@ -4,13 +4,17 @@ import SwiftUI
 /// Where a run's time went, to scale (#3233): one bar cut into agent
 /// working, waiting on you, held (#3237), and everything else, with the
 /// elapsed time and each kind's total under it. The bar keeps true scale,
-/// so a short segment can be thin; the totals and each segment's own
-/// accessible button carry what the eye can't.
+/// so a short segment can be thin; the totals, each segment's own
+/// accessible button, and the caption a selected segment shows carry what
+/// the eye can't.
 struct RunTimeStripView: View {
     let strip: RunTimeStrip.Strip
     /// Brings the milestones rail to a segment. Nil (a screenshot) leaves
-    /// each segment a button that does nothing.
-    var onSelect: ((RunTimeStrip.Segment) -> Void)? = nil
+    /// each segment a button that only selects it.
+    var onSelect: ((RunTimeStrip.Segment) -> Void)?
+    /// The selected segment, by its start, which stays put while a live
+    /// run's strip grows at its end.
+    @State private var selectedStart: Date?
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @Environment(\.pinnedNow) private var pinnedNow
@@ -21,6 +25,16 @@ struct RunTimeStripView: View {
     /// Taller than the bar, so a thin segment's button still takes a press
     /// above and below it.
     private static let hitPadding: CGFloat = 8
+
+    /// `selectedStart` selects the segment starting there, so a screenshot
+    /// can show its caption.
+    init(
+        strip: RunTimeStrip.Strip, onSelect: ((RunTimeStrip.Segment) -> Void)? = nil, selectedStart: Date? = nil
+    ) {
+        self.strip = strip
+        self.onSelect = onSelect
+        _selectedStart = State(initialValue: selectedStart)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -35,6 +49,15 @@ struct RunTimeStripView: View {
             .accessibilityLabel(Self.summary(strip, locale: locale))
             .accessibilityAddTraits(.isHeader)
             bar
+            if let selected = strip.segments.first(where: { $0.start == selectedStart }) {
+                // The segment's button already says this to assistive
+                // technology.
+                Text(segmentLabel(selected))
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHidden(true)
+            }
             WrappingHStack(horizontalSpacing: 14, verticalSpacing: 4) {
                 ForEach(RunTimeStrip.Kind.allCases, id: \.self) { kind in
                     legendEntry(kind)
@@ -51,6 +74,7 @@ struct RunTimeStripView: View {
                     let label = segmentLabel(segment)
                     let width = proxy.size.width * CGFloat(segment.duration / strip.elapsed)
                     Button {
+                        selectedStart = segment.start
                         onSelect?(segment)
                     } label: {
                         // A clear hairline opens each later segment, so
@@ -66,6 +90,9 @@ struct RunTimeStripView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(label)
+                    // The caption is hidden from assistive technology, so
+                    // the trait says which segment it shows.
+                    .accessibilityAddTraits(segment.start == selectedStart ? .isSelected : [])
                     .help(label)
                 }
             }
@@ -95,8 +122,8 @@ struct RunTimeStripView: View {
     }
 
     /// A segment's kind, a held segment's reason in the hold callout's
-    /// words, its length, and its span: the segment's tooltip and
-    /// accessible label.
+    /// words, its length, and its span: the segment's tooltip, accessible
+    /// label, and caption.
     static func segmentLabel(
         _ segment: RunTimeStrip.Segment, now: Date, locale: Locale, timeZone: TimeZone
     ) -> String {
