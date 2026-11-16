@@ -120,7 +120,7 @@ type daemonWorkRunner struct {
 	containerPath string
 }
 
-// run begins blocker, refused while an update drain is in force, and runs
+// run begins blocker, refused while an update drain or an execution pause is in force, and runs
 // fn under work's reservation (reserved).
 func (d daemonWorkRunner) run(
 	ctx context.Context, blocker domain.RestartBlockerKind, work engine.DaemonWork, wait bool,

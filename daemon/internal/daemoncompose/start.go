@@ -800,7 +800,8 @@ func trackedConfigurations(backend *ward.Backend) []domain.Digest {
 // mode. The startup pass takes a nil probe, so it reports recorded
 // credential-integrity marks only and starting the daemon starts no
 // observer container; scheduled passes take the live probe, except while an
-// update drain is in force, when they report recorded marks too.
+// update drain or an execution pause is in force, when they report recorded
+// marks too.
 func newDoctorPass(
 	cfg StartOptions, st *store.Store, attention *signet.Service, claudeWiring *ClaudeComposition,
 	doctorConvergenceLock *sync.Mutex, running *engine.RunningWork, probe CredentialIntegrityProbe,

@@ -731,7 +731,7 @@ func (e *Engine) dispatchAdmittedIntent(
 		// attempt keeps the hold that names its window. recordAttempt checks
 		// again in the transaction that appends the attempt.
 		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-			return tx.RequireNoUpdateDrain(ctx)
+			return tx.RequireNewWorkOpen(ctx)
 		}); err != nil {
 			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
@@ -1359,7 +1359,7 @@ func (e *Engine) recordAttempt(
 		}
 		// The race-free half of dispatchAdmittedIntent's drain check: a drain
 		// requested since that read appends no new attempt.
-		if err := tx.RequireNoUpdateDrain(ctx); err != nil {
+		if err := tx.RequireNewWorkOpen(ctx); err != nil {
 			return err
 		}
 		if fresh != nil {

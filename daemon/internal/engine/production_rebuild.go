@@ -646,12 +646,12 @@ func (w *productionPublicationWorkflow) rebuildUnderGate(
 			verifiedSHA, productionPublicationRetryableError(errProjectImageBuilderBusy))
 	}
 	defer w.rebuild.gate.release()
-	// An update drain holds the build like a busy builder, as a retryable
-	// wait the task records as update_drain (issue #3104).
+	// An update drain or an execution pause holds the build like a busy
+	// builder, as a retryable wait the task records as a hold (issue #3104).
 	end, err := w.running.BeginUnlessDraining(ctx, w.store, domain.RestartBlockerImageBuild)
-	if errors.Is(err, store.ErrUpdateDrainInForce) {
+	if store.NewWorkClosed(err) {
 		if w.logger != nil {
-			w.logger.Info("publication rebuild held while an update drain is in force", "verified_sha", verifiedSHA)
+			w.logger.Info("publication rebuild held while an update drain or an execution pause is in force", "verified_sha", verifiedSHA)
 		}
 		return domain.ProjectImage{}, nil, fmt.Errorf("rebuild project image at %s: %w",
 			verifiedSHA, productionPublicationRetryableError(err))

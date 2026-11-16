@@ -138,10 +138,13 @@ func (w *productionPublicationWorkflow) recordRetryableHold(
 	if errors.As(err, &reservation) {
 		invocationID = reservation.invocationID
 	}
-	if errors.Is(err, store.ErrUpdateDrainInForce) {
+	if store.NewWorkClosed(err) {
+		reason := domain.HoldUpdateDrain
+		if errors.Is(err, store.ErrExecutionPauseInForce) {
+			reason = domain.HoldBlockingSystemHealth
+		}
 		return w.store.Write(ctx, func(tx *store.WriteTx) error {
-			return recordRunHold(ctx, tx, task.RunID, invocationID,
-				domain.HoldUpdateDrain, holdDetail{}, w.now().UTC())
+			return recordRunHold(ctx, tx, task.RunID, invocationID, reason, holdDetail{}, w.now().UTC())
 		})
 	}
 	if launchMemoryRefusal(err) {

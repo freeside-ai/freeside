@@ -173,11 +173,12 @@ func (r modelCatalogRefresh) reserveProbe(ctx context.Context, fn func(context.C
 }
 
 // beginProbe counts one discovery container as a running probe and reports
-// whether it may start. While an update drain is in force it waits, rather
-// than skip, because discovery runs once per start: a skipped enrollment
-// would keep a stale catalog until the next start. It checks again at each
-// sync revision change, which a cancel or lift makes, and gives up when ctx
-// ends or the drain can't be read (issue #3104).
+// whether it may start. While an update drain or an execution pause is in
+// force it waits, rather than skip, because discovery runs once per start: a
+// skipped enrollment would keep a stale catalog until the next start. It
+// checks again at each sync revision change, which a drain's cancel or lift
+// makes, and gives up when ctx ends, as the restart that ends a pause ends
+// it, or when neither can be read (issue #3104).
 func (r modelCatalogRefresh) beginProbe(ctx context.Context, target modelCatalogTarget) (end func(), ok bool) {
 	waiting := false
 	for {
@@ -191,12 +192,12 @@ func (r modelCatalogRefresh) beginProbe(ctx context.Context, target modelCatalog
 		if err == nil {
 			return end, true
 		}
-		if !errors.Is(err, store.ErrUpdateDrainInForce) {
-			r.logger.Warn("model discovery stopped: the update drain was not read", "error", err)
+		if !store.NewWorkClosed(err) {
+			r.logger.Warn("model discovery stopped: the update drain or execution pause was not read", "error", err)
 			return nil, false
 		}
 		if !waiting {
-			r.logger.Info("model discovery waits while an update drain is in force",
+			r.logger.Info("model discovery waits while an update drain or an execution pause is in force",
 				"enrollment", target.enrollment, "generation", target.generation)
 			waiting = true
 		}

@@ -456,8 +456,8 @@ func (u *ImageUpkeep) rebuild(
 	// next trigger after the lift, the new build's start among them,
 	// measures the tip again (issue #3104).
 	end, err := u.Running.BeginUnlessDraining(ctx, u.Store, domain.RestartBlockerImageBuild)
-	if errors.Is(err, store.ErrUpdateDrainInForce) {
-		u.Logger.Info("image upkeep: skipped the rebuild while an update drain is in force", "tip", tipSHA)
+	if store.NewWorkClosed(err) {
+		u.Logger.Info("image upkeep: skipped the rebuild while an update drain or an execution pause is in force", "tip", tipSHA)
 		return nil, imageUpkeepOutcome{}, nil
 	}
 	if err != nil {
