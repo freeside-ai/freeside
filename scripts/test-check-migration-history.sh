@@ -119,6 +119,96 @@ commit Restore
 run_check "$REPO" "$BASE" HEAD
 assert_rc 0
 
+sha256_of() { # <file>; prints sha256:<hex> of the file, as the store records it
+  local hex
+  if command -v sha256sum >/dev/null 2>&1; then
+    hex=$(sha256sum "$1")
+  else
+    hex=$(shasum -a 256 "$1")
+  fi
+  printf 'sha256:%s' "${hex%% *}"
+}
+
+# squash_first <list line>: remove 0001_first.sql and record the given line
+# for it in the head's squashed-history list.
+squash_first() {
+  git -C "$REPO" rm -q daemon/migrations/0001_first.sql
+  printf '%s\n' "$1" >"$REPO/daemon/migrations/squashed_history.txt"
+  commit Squash
+}
+
+new_repo squash-listed
+FIRST_DIGEST=$(sha256_of "$REPO/daemon/migrations/0001_first.sql")
+squash_first "1 0001_first.sql $FIRST_DIGEST"
+run_check "$REPO" "$BASE" HEAD
+assert_rc 0
+assert_contains PASS:
+
+new_repo squash-unlisted
+squash_first "1 0001_first.sql $FIRST_DIGEST"
+git -C "$REPO" rm -q daemon/migrations/0002_head.sql
+commit Delete
+run_check "$REPO" "$BASE" HEAD
+assert_rc 1
+assert_contains daemon/migrations/0002_head.sql
+
+new_repo squash-wrong-digest
+squash_first "1 0001_first.sql sha256:$(printf '0%.0s' {1..64})"
+run_check "$REPO" "$BASE" HEAD
+assert_rc 1
+assert_contains daemon/migrations/0001_first.sql
+
+# The digest is of the content at the merge base, not of a rewrite the
+# branch made before removing the file.
+new_repo squash-rewritten-digest
+printf 'Rewritten\n' >"$REPO/daemon/migrations/0001_first.sql"
+commit Rewrite
+squash_first "1 0001_first.sql $(sha256_of "$REPO/daemon/migrations/0001_first.sql")"
+run_check "$REPO" "$BASE" HEAD
+assert_rc 1
+assert_contains daemon/migrations/0001_first.sql
+
+new_repo squash-wrong-version
+squash_first "2 0001_first.sql $FIRST_DIGEST"
+run_check "$REPO" "$BASE" HEAD
+assert_rc 1
+assert_contains daemon/migrations/0001_first.sql
+
+for change in removed changed; do
+  new_repo "squash-list-line-$change"
+  squash_first "1 0001_first.sql $FIRST_DIGEST"
+  BASE=$(git -C "$REPO" rev-parse HEAD)
+  if [ "$change" = removed ]; then
+    : >"$REPO/daemon/migrations/squashed_history.txt"
+  else
+    printf '1 0001_other.sql %s\n' "$FIRST_DIGEST" \
+      >"$REPO/daemon/migrations/squashed_history.txt"
+  fi
+  commit "List-$change"
+  run_check "$REPO" "$BASE" HEAD
+  assert_rc 1
+  assert_contains "removed or changed squashed-history line: 1 0001_first.sql"
+done
+
+new_repo squash-list-removed-whole
+squash_first "1 0001_first.sql $FIRST_DIGEST"
+BASE=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" rm -q daemon/migrations/squashed_history.txt
+commit List-deleted
+run_check "$REPO" "$BASE" HEAD
+assert_rc 1
+assert_contains "removed or changed squashed-history line: 1 0001_first.sql"
+
+new_repo squash-list-appended
+squash_first "1 0001_first.sql $FIRST_DIGEST"
+BASE=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" rm -q daemon/migrations/0002_head.sql
+printf '2 0002_head.sql %s\n' "$(git -C "$REPO" show "$BASE:daemon/migrations/0002_head.sql" >"$TMP/blob" && sha256_of "$TMP/blob")" \
+  >>"$REPO/daemon/migrations/squashed_history.txt"
+commit Second-squash
+run_check "$REPO" "$BASE" HEAD
+assert_rc 0
+
 new_repo unusual-paths
 for name in 'space name.sql' $'tab\tname.sql' $'line\nname.sql'; do
   printf 'SELECT 3;\n' >"$REPO/daemon/migrations/$name"
