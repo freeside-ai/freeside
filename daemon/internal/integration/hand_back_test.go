@@ -62,9 +62,11 @@ func (p *productionPublicationHarness) handBack(
 	var started bool
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		var err error
-		_, started, err = engine.StartHandBackReentry(p.ctx, tx, p.runID, head, base)
+		_, started, err = engine.StartHandBackReentry(p.ctx, tx, p.runID, head, base, p.reentryGate)
 		return err
-	}); err != nil {
+	}); errors.Is(err, domain.ErrProjectNotReady) {
+		return finding, false
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	if !started {

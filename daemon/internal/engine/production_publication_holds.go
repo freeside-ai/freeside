@@ -121,7 +121,8 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 
 // recordRetryableHold records the hold behind a retryable reconcile failure:
 // update_drain for a verification job or image build an update drain held;
-// machine_capacity, or the can-never-fit notice, for a verification job the
+// blocking_system_health for a re-entry cycle refused because its project
+// is not ready; machine_capacity, or the can-never-fit notice, for a verification job the
 // memory budget refused, under the invocation that reserved;
 // image_upkeep_pending for a task waiting on an image (a re-entry whose base
 // waits on upkeep, or a rebuild the busy builder could not start), and
@@ -145,6 +146,15 @@ func (w *productionPublicationWorkflow) recordRetryableHold(
 		}
 		return w.store.Write(ctx, func(tx *store.WriteTx) error {
 			return recordRunHold(ctx, tx, task.RunID, invocationID, reason, holdDetail{}, w.now().UTC())
+		})
+	}
+	if errors.Is(err, domain.ErrProjectNotReady) {
+		// A re-entry cycle refused because the project is not ready waits
+		// behind the project_not_ready card, which is a blocking
+		// system_health item (#3205).
+		return w.store.Write(ctx, func(tx *store.WriteTx) error {
+			return recordRunHold(ctx, tx, task.RunID, invocationID,
+				domain.HoldBlockingSystemHealth, holdDetail{}, w.now().UTC())
 		})
 	}
 	if launchMemoryRefusal(err) {

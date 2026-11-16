@@ -31,7 +31,8 @@ func deputySettingsFixtureWithEveryOption(t *testing.T) map[string]any {
 
 // TestDeputyClaudeDriverConfigForTheFixture pins the configuration the
 // deputy composes from its settings file, so composing it through the
-// shared run settings (#2082) changes nothing the deputy runs with.
+// shared run settings (#2082) changes nothing the deputy runs with beyond
+// the project fields readiness reads (#3205).
 func TestDeputyClaudeDriverConfigForTheFixture(t *testing.T) {
 	t.Parallel()
 	image := func(name string) string { return "registry.local/" + name + "@sha256:" + strings.Repeat("a", 64) }
@@ -48,7 +49,11 @@ func TestDeputyClaudeDriverConfigForTheFixture(t *testing.T) {
 		VendorInstructions:             "/prompts/CLAUDE.md",
 		Repo:                           "acme/widgets", RepositoryID: 42, BaseRef: "main",
 		AgentTreeCheckout: "/src/freeside", AgentTreeCommit: strings.Repeat("d", 40),
-		AllowedPaths:   []string{"src/**"},
+		AllowedPaths: []string{"src/**"},
+		// The project and approved recipe name what the readiness
+		// evaluator checks (#3205).
+		ProjectID:      "project-widgets",
+		ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("b", 64)),
 		RunConformance: true,
 		StateRoot:      "/prod/daemon", CredentialsDir: "/prod/credentials",
 		OperatingMode: domain.ModeUnattended,

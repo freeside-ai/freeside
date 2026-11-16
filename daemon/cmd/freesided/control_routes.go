@@ -156,7 +156,8 @@ func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs
 	s.pairing.registerControlRoutes(
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
 		in.IntegrityProbe, in.Usage, s.environment, effectiveExecution(s.execution, in.Execution), in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop,
-		in.ReleaseVerificationMemory, in.UpdateDrain, in.CancelRootImplementations, in.Running)
+		in.ReleaseVerificationMemory, in.UpdateDrain, in.CancelRootImplementations, in.Running,
+		in.ProjectReadinessGate)
 	// Only prod's gated order takes the App authority writer lock, so only
 	// prod serves the pause that releases it.
 	if s.environment == environmentProd {
@@ -185,7 +186,7 @@ func (p *pairingControl) registerControlRoutes(
 	commitWorkflowClosure, commitTaskStop func(context.Context, domain.TaskID, func() error) error,
 	releaseVerificationMemory func(context.Context, domain.TaskID, bool) (engine.VerificationMemoryRelease, error),
 	updateDrain engine.UpdateDrain, cancelRootImplementations func(context.Context) error,
-	running *engine.RunningWork,
+	running *engine.RunningWork, readinessGate engine.ProjectReadinessGate,
 ) {
 	p.registerNotifyTest(mux, st, attention)
 	p.handleGet(mux, "/execution", func(context.Context, *http.Request) (any, error) {
@@ -330,6 +331,6 @@ func (p *pairingControl) registerControlRoutes(
 		if err != nil {
 			return nil, err
 		}
-		return applyLaunchSubmission(ctx, st, blobs, req, launch)
+		return applyLaunchSubmission(ctx, st, blobs, req, launch, readinessGate)
 	})
 }

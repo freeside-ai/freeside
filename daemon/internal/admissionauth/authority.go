@@ -38,7 +38,8 @@ import (
 //     durable record still authorizes it.
 //   - The resolved policy's digest against the admission and, under current
 //     policy, its path allowlist against this daemon's configured
-//     AllowedPaths (ResolvedPathAllowlist).
+//     AllowedPaths (AdmittedPathAllowlist): every recorded pattern must
+//     still be configured, and the run keeps its recorded paths.
 //   - The start spec against the admission.
 //
 // AuthenticateStart and AuthenticateImport then re-check the invocation's
@@ -62,8 +63,12 @@ type Authority struct {
 	// Blobs serves the approved specification the fallback commit message
 	// derives from; import refuses without it.
 	Blobs *signet.BlobStore
-	// AllowedPaths is this daemon's configured path allowlist, which a run's
-	// resolved paths policy must equal exactly.
+	// AllowedPaths is this daemon's configured path allowlist. At start and
+	// import, every pattern a run's resolved paths policy recorded must
+	// appear in it exactly (AdmittedPathAllowlist): a wider edit lets an
+	// in-flight run continue under its own recorded paths, and a narrower
+	// edit that removes a recorded pattern refuses the run until the pattern
+	// is restored. Intake keeps exact equality (ResolvedPathAllowlist).
 	AllowedPaths []string
 	// CommitAuthors resolves the live GitHub App identity; without it a
 	// production commit-author claim is refused.
@@ -212,7 +217,7 @@ func (a Authority) admission(
 			return err
 		}
 		if requireCurrent {
-			allowedPaths, err = ResolvedPathAllowlist(
+			allowedPaths, err = AdmittedPathAllowlist(
 				policy, admission.PolicyDigest, a.AllowedPaths,
 			)
 		} else {
@@ -259,10 +264,10 @@ func (a Authority) requireRunnableConfiguration(admission domain.ExecutionAdmiss
 	return nil
 }
 
-// ResolvedPathAllowlist binds the submitted, digest-addressed policy to the
-// manually configured Phase 1A.2 containment boundary. Until per-run ward
-// configuration exists, accepting a different path set would make the
-// durable run policy an audit label rather than the policy import enforces.
+// ResolvedPathAllowlist is the intake half of the path gate: it binds the
+// submitted, digest-addressed policy to the configured containment
+// boundary exactly, so new work always records the current allowlist.
+// Start and import apply AdmittedPathAllowlist instead.
 func ResolvedPathAllowlist(
 	policy domain.ResolvedPolicy, admittedDigest domain.Digest, configured []string,
 ) ([]string, error) {
@@ -300,6 +305,37 @@ func ResolvedPathAllowlist(
 	return nil, fmt.Errorf(
 		"resolved policy has no paths key: %w", domain.ErrPathBoundaryMismatch,
 	)
+}
+
+// AdmittedPathAllowlist is the start and import half of the path gate. It
+// lets a run admitted under an older allowlist continue when the operator
+// has since widened it: every pattern the run recorded must appear,
+// pattern for pattern, in this daemon's configured allowlist, and it
+// returns the recorded patterns, so the run imports under its own paths,
+// never the wider configured ones. A narrower edit that removes a recorded
+// pattern refuses the run with ErrPathBoundaryMismatch, a configuration
+// verdict that holds the attempt until the pattern is restored
+// (engine.MutableAdmissionPolicyRefusal). The match is by exact pattern
+// with no glob reasoning: a configured "daemon/**" does not cover a
+// recorded "daemon/internal/**", since proving one glob contains another
+// is a containment question this gate doesn't answer. A digest
+// disagreement stays record corruption, as in ResolvedPathAllowlist.
+func AdmittedPathAllowlist(
+	policy domain.ResolvedPolicy, admittedDigest domain.Digest, configured []string,
+) ([]string, error) {
+	paths, err := recordedPathAllowlist(policy, admittedDigest)
+	if err != nil {
+		return nil, err
+	}
+	for _, pattern := range paths {
+		if !slices.Contains(configured, pattern) {
+			return nil, fmt.Errorf(
+				"resolved path %q is not in configured %q: %w",
+				pattern, configured, domain.ErrPathBoundaryMismatch,
+			)
+		}
+	}
+	return paths, nil
 }
 
 func recordedPathAllowlist(

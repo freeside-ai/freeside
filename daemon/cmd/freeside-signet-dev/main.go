@@ -214,7 +214,7 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 		return nil, fmt.Errorf("open blob store: %w", err)
 	}
 	options := []signet.Option{
-		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, convergenceManualInitiator)),
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, convergenceManualInitiator, nil)),
 		signet.WithPairingKey(pairingKey),
 		signet.WithBlobStore(blobs),
 		// Fixed dev facts: the harness always listens on loopback

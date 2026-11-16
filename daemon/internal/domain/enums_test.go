@@ -104,6 +104,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["WorkspaceHydration"] = append(valids["WorkspaceHydration"], v.valid)
 	}
 	invalids["WorkspaceHydration"] = WorkspaceHydration("").valid
+	for _, v := range AllProjectReadinessChecks {
+		valids["ProjectReadinessCheck"] = append(valids["ProjectReadinessCheck"], v.valid)
+	}
+	invalids["ProjectReadinessCheck"] = ProjectReadinessCheck("").valid
+	for _, v := range AllProjectReadinessStatuses {
+		valids["ProjectReadinessStatus"] = append(valids["ProjectReadinessStatus"], v.valid)
+	}
+	invalids["ProjectReadinessStatus"] = ProjectReadinessStatus("").valid
 	for _, v := range AllArtifactKinds {
 		valids["ArtifactKind"] = append(valids["ArtifactKind"], v.valid)
 	}

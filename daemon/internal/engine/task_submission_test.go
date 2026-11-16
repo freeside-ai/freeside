@@ -142,7 +142,7 @@ func TestSubmitTaskReplaysRecordedV1Command(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	current := engine.NewTaskSubmitter(blobs, holder.lookup)
+	current := engine.NewTaskSubmitter(blobs, holder.lookup, nil)
 	before := signet.NewService(s, signet.WithBlobStore(blobs),
 		signet.WithTaskSubmitter(engine.V1TaskSubmitter{TaskSubmitter: current}))
 	after := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(current))
@@ -224,6 +224,15 @@ func submissionInitiator(pathsValue string) engine.ManualInitiator {
 
 func newSubmitTaskHarness(t *testing.T) (*signet.Service, *store.Store, *initiatorHolder) {
 	t.Helper()
+	return newGatedSubmitTaskHarness(t, nil)
+}
+
+// newGatedSubmitTaskHarness is newSubmitTaskHarness with a project
+// readiness gate on the submitter.
+func newGatedSubmitTaskHarness(
+	t *testing.T, gate engine.ProjectReadinessGate,
+) (*signet.Service, *store.Store, *initiatorHolder) {
+	t.Helper()
 	ctx := context.Background()
 	s := storetest.Open(t, t.TempDir()+"/engine.db", store.Options{})
 	t.Cleanup(func() { _ = s.Close() })
@@ -235,7 +244,7 @@ func newSubmitTaskHarness(t *testing.T) (*signet.Service, *store.Store, *initiat
 		"project-1": submissionInitiator("daemon/**"),
 		"project-2": submissionInitiator("daemon/**"),
 	}}
-	submitter := engine.NewTaskSubmitter(blobs, holder.lookup)
+	submitter := engine.NewTaskSubmitter(blobs, holder.lookup, gate)
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutDevice(ctx, domain.Device{
 			ID: "device-1", DisplayName: "Mac", Status: domain.DeviceActive,

@@ -100,6 +100,10 @@ type AdmissionEnvironment struct {
 	// BackupEncryptionWaiver records the §5.7 Phase 1A.2 exception when the
 	// operator has one; the store re-gates it against their configuration.
 	BackupEncryptionWaiver *domain.BackupEncryptionWaiver
+	// SettingsRevisions names the stored settings revisions the daemon was
+	// composed from, recorded on every admission; nil for a composition from
+	// a settings file.
+	SettingsRevisions *domain.SettingsRevisions
 }
 
 // clone detaches the environment from the caller's pointers.
@@ -117,6 +121,10 @@ func (e AdmissionEnvironment) clone() AdmissionEnvironment {
 	if e.BackupEncryptionWaiver != nil {
 		waiver := *e.BackupEncryptionWaiver
 		e.BackupEncryptionWaiver = &waiver
+	}
+	if e.SettingsRevisions != nil {
+		revisions := *e.SettingsRevisions
+		e.SettingsRevisions = &revisions
 	}
 	return e
 }
@@ -816,6 +824,7 @@ func (e *Engine) admitAttemptIn(
 		BackupEncryptionWaiver:     env.BackupEncryptionWaiver,
 		AgentBinding:               agentBinding,
 		WorkspaceHydration:         hydration,
+		SettingsRevisions:          env.SettingsRevisions,
 		AdmittedAt:                 admittedAt,
 	})
 	if err != nil {

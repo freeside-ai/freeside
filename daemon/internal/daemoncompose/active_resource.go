@@ -49,6 +49,10 @@ type ActiveResourceReconciler struct {
 	// mergeBase reads a head's merge base with the target branch, the base a
 	// hand-back cycle reviews against. Required when handBackLabel is set.
 	mergeBase func(ctx context.Context, repo, baseRef, head string) (string, error)
+	// readinessGate is the project readiness gate the three re-entry cycles
+	// apply before they start (#3205); nil checks nothing. A refused start
+	// writes nothing, so the next pass offers it again.
+	readinessGate engine.ProjectReadinessGate
 	// reviewInvalidate drops the observer's cached validators for a PR when the
 	// durable append of its native observations fails, so the next tick
 	// re-fetches unconditionally instead of riding a 304 and permanently
@@ -563,10 +567,17 @@ func (r *ActiveResourceReconciler) Reconcile(
 		r.noteReactionsRefusal(item.ID, observation, &result)
 		if observation.material || observation.conclude ||
 			observation.completion != nil || observation.invalidation != nil {
-			if err := r.commit(ctx, observation); err != nil {
+			if err := r.commit(ctx, observation); errors.Is(err, domain.ErrProjectNotReady) {
+				// The head-change re-entry this commit starts was refused
+				// because the project is not ready (#3205). The commit wrote
+				// nothing, so the next pass observes the same change and
+				// tries again; like a refused hand-back or external review,
+				// it is isolated and the pass goes on to the next resource.
+				result.Failures = append(result.Failures,
+					fmt.Errorf("commit ready resource %s: %w", item.ID, err))
+			} else if err != nil {
 				return result, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
-			}
-			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
+			} else if err := r.evictConcludedResource(ctx, item.ID); err != nil {
 				result.Failures = append(result.Failures,
 					fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
 			}
@@ -717,7 +728,7 @@ func (r ActiveResourceReconciler) startExternalReview(
 		return err
 	}
 	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
-		started, err := engine.StartExternalReviewReentry(ctx, tx, itemID)
+		started, err := engine.StartExternalReviewReentry(ctx, tx, itemID, r.readinessGate)
 		if err != nil || !started {
 			return err
 		}
@@ -772,7 +783,7 @@ func (r ActiveResourceReconciler) startHandBack(
 		return fmt.Errorf("read merge base: %w", err)
 	}
 	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
-		superseded, started, err := engine.StartHandBackReentry(ctx, tx, runID, pull.HeadSHA, base)
+		superseded, started, err := engine.StartHandBackReentry(ctx, tx, runID, pull.HeadSHA, base, r.readinessGate)
 		if err != nil || !started || superseded == "" {
 			return err
 		}
@@ -1579,7 +1590,7 @@ func (r ActiveResourceReconciler) commit(ctx context.Context, observation active
 				if observation.handBack {
 					break
 				}
-				if _, err := engine.StartReadinessReentry(ctx, tx, item); err != nil {
+				if _, err := engine.StartReadinessReentry(ctx, tx, item, r.readinessGate); err != nil {
 					return err
 				}
 			case observation.conclude:

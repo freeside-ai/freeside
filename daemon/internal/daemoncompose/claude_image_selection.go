@@ -582,6 +582,63 @@ func SelectAmongRecordedImages(
 	return selected, found, nil
 }
 
+// WriterImageCheck is what the writer-image rule reads: the record for the
+// configured agent image (the pointer's seed), the pointer, the repository's
+// recorded images, the base, and the approved recipe.
+type WriterImageCheck struct {
+	Seed           domain.ProjectImage
+	SeedFound      bool
+	AgentImage     domain.ImageRef
+	Pointer        domain.ProjectImage
+	PointerFound   bool
+	Images         []domain.ProjectImage
+	Repo           string
+	RepositoryID   int64
+	BaseSHA        string
+	ApprovedRecipe domain.Digest
+	BaseInputs     func(domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error)
+}
+
+// CheckWriterImage is the writer-image rule the offline preflight and the
+// daemon's project readiness check share. It first runs the record-only
+// refusals the daemon's start runs on the seed
+// (projectimage.ResolvePreparation), which are projectimage.ErrComposition.
+// With no pointer recorded the seed stands in for it, as an unattended start
+// seeds the pointer with it (seedAdmittedImagePointer). It returns the image
+// a run at BaseSHA starts on: the selected image when one serves the base
+// (serves true), else the pointed-to image ward starts on while writer
+// attempts hold (startClaudeConformance). An image built from a recipe other
+// than the approved one is projectimage.ErrComposition. A base no image
+// serves is not an error, since attempts already hold on it; a base the rule
+// cannot read is exec.ErrInputUnavailable.
+//
+// Selection runs with no proved image. A restored proof can change which
+// serving image the daemon picks, never whether one serves: every image the
+// proved-image rule can pick, the pointer or record-order rule can pick too.
+func CheckWriterImage(in WriterImageCheck) (image domain.ProjectImage, serves bool, err error) {
+	if _, err := projectimage.ResolvePreparation(in.Seed, in.SeedFound, in.AgentImage,
+		in.Repo, in.RepositoryID); err != nil {
+		return domain.ProjectImage{}, false, err
+	}
+	pointed := in.Seed
+	if in.PointerFound {
+		pointed = in.Pointer
+	}
+	selected, serves, err := SelectAmongRecordedImages(pointed, in.Images, in.Repo, in.BaseSHA, nil, in.BaseInputs)
+	if err != nil {
+		return domain.ProjectImage{}, false, err
+	}
+	image = pointed
+	if serves {
+		image = selected
+	}
+	if image.RecipeDigest != in.ApprovedRecipe {
+		return domain.ProjectImage{}, false, fmt.Errorf("project-image recipe %s disagrees with approved recipe %s: %w",
+			image.RecipeDigest, in.ApprovedRecipe, projectimage.ErrComposition)
+	}
+	return image, serves, nil
+}
+
 // proofRestorer is the part of ward's backend a start restores proofs into.
 type proofRestorer interface {
 	ConfigurationDigestFor(image string) domain.Digest

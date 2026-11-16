@@ -9,6 +9,7 @@
 // The package holds no configuration of its own. Its caller supplies the
 // store, the blob store, the daemon's configured path allowlist, and the
 // GitHub App identity resolver in an Authority value; preflight and submit
-// call ResolvedPathAllowlist to refuse a policy the daemon would refuse at
-// start.
+// call ResolvedPathAllowlist, which holds new work to the exact configured
+// allowlist. Start and import accept a run whose recorded paths are all
+// still configured (AdmittedPathAllowlist).
 package admissionauth

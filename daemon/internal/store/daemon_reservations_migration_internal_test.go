@@ -16,6 +16,7 @@ import (
 // launch kinds, keeping their rows.
 func rewindDaemonReservations(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindProjectReadiness(t, ctx, db)
 	rewindRunHoldSpans(t, ctx, db)
 	for _, statement := range []string{
 		`CREATE TABLE launch_reservations_0143 (

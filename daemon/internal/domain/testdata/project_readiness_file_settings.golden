@@ -1,0 +1,37 @@
+{
+  "project_id": "proj-1",
+  "settings": null,
+  "results": [
+    {
+      "check": "trust_profile",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "review_configuration",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "repository_base",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "publication_authority",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "writer_image",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "evaluated_at": "2026-01-02T03:04:05Z"
+}

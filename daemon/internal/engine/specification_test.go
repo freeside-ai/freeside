@@ -545,7 +545,7 @@ func TestCLISubmissionBindsProjectAtSpecificationAdmission(t *testing.T) {
 				Title: "Implement approved work item", Body: "Implements the operator-approved specification.",
 				CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 			},
-		})
+		}, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

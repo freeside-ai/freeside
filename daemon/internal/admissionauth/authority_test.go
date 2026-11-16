@@ -82,6 +82,64 @@ func TestResolvedPathAllowlistBindsTheAdmittedPolicy(t *testing.T) {
 	}
 }
 
+// TestAdmittedPathAllowlistAcceptsAWiderConfiguration pins the start and
+// import rule: a run continues while every pattern it recorded is still
+// configured, by exact pattern, and keeps its recorded paths.
+func TestAdmittedPathAllowlistAcceptsAWiderConfiguration(t *testing.T) {
+	t.Parallel()
+	newPolicy := func(t *testing.T, key, value string) domain.ResolvedPolicy {
+		t.Helper()
+		policy, err := domain.NewResolvedPolicy("run-policy", []domain.PolicyKey{{
+			Key: key, Value: value,
+			Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride,
+				Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+			},
+		}})
+		if err != nil {
+			t.Fatalf("NewResolvedPolicy: %v", err)
+		}
+		return policy
+	}
+	recorded := newPolicy(t, "paths", "daemon/**, docs/**")
+	nested := newPolicy(t, "paths", "daemon/internal/**")
+	missingPaths := newPolicy(t, "egress", "provider_only")
+	matchEverything := newPolicy(t, "paths", "**/*")
+
+	for _, tc := range []struct {
+		name       string
+		policy     domain.ResolvedPolicy
+		digest     domain.Digest
+		configured []string
+		want       error
+		holds      bool
+	}{
+		{"equal", recorded, recorded.Digest, []string{"daemon/**", "docs/**"}, nil, false},
+		{"reordered", recorded, recorded.Digest, []string{"docs/**", "daemon/**"}, nil, false},
+		{"wider", recorded, recorded.Digest, []string{"daemon/**", "scripts/**", "docs/**"}, nil, false},
+		{"narrower", recorded, recorded.Digest, []string{"daemon/**"}, domain.ErrPathBoundaryMismatch, true},
+		// No glob reasoning: a broader pattern doesn't stand in for a
+		// recorded narrower one.
+		{"covering glob", nested, nested.Digest, []string{"daemon/**"}, domain.ErrPathBoundaryMismatch, true},
+		{"digest substitution", recorded, domain.Digest("sha256:" + strings.Repeat("cd", 32)), []string{"daemon/**", "docs/**"}, domain.ErrParentKeyMismatch, false},
+		{"missing paths", missingPaths, missingPaths.Digest, []string{"daemon/**"}, domain.ErrPathBoundaryMismatch, true},
+		{"match everything", matchEverything, matchEverything.Digest, []string{"**/*"}, domain.ErrPathBoundaryMismatch, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := admissionauth.AdmittedPathAllowlist(tc.policy, tc.digest, tc.configured)
+			if !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
+				t.Fatalf("AdmittedPathAllowlist error = %v, want %v", err, tc.want)
+			}
+			if got := engine.MutableAdmissionPolicyRefusal(err); err != nil && got != tc.holds {
+				t.Errorf("engine holds dispatch = %v, want %v", got, tc.holds)
+			}
+			if err == nil && !slices.Equal(got, []string{"daemon/**", "docs/**"}) {
+				t.Fatalf("AdmittedPathAllowlist = %q, want the recorded paths", got)
+			}
+		})
+	}
+}
+
 func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -203,6 +261,28 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	spec := exec.StartSpecFromAdmission(admission)
 	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
 		t.Fatalf("original start authority: %v", err)
+	}
+	// A wider allowlist edit lets the run start and import under its own
+	// recorded paths. A narrower edit that drops its pattern refuses both
+	// until the pattern is restored.
+	authority.AllowedPaths = []string{"docs/**", "daemon/**"}
+	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
+		t.Fatalf("start after a wider edit: %v", err)
+	}
+	if opts, err := authority.ImportOptions(ctx, production.InvocationID, spec, importer.Options{}); err != nil ||
+		!slices.Equal(opts.Policy.Allowlist, []string{"daemon/**"}) {
+		t.Fatalf("import after a wider edit = %q, %v; want the recorded daemon/**", opts.Policy.Allowlist, err)
+	}
+	authority.AllowedPaths = []string{"docs/**"}
+	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); !errors.Is(err, domain.ErrPathBoundaryMismatch) {
+		t.Fatalf("start after a narrower edit = %v, want ErrPathBoundaryMismatch", err)
+	}
+	if _, err := authority.ImportOptions(ctx, production.InvocationID, spec, importer.Options{}); !errors.Is(err, domain.ErrPathBoundaryMismatch) {
+		t.Fatalf("import after a narrower edit = %v, want ErrPathBoundaryMismatch", err)
+	}
+	authority.AllowedPaths = []string{"daemon/**"}
+	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
+		t.Fatalf("start after the pattern is restored: %v", err)
 	}
 	// The writer's list comes from the profile import applies: the widened
 	// recipe path is listed and no reviewer-instruction pattern is.

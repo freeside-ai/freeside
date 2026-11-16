@@ -23,7 +23,7 @@ import (
 // none of them. Required fields always become their option, nil or not, so
 // the engine's own checks still fail startup on a missing part. Optional
 // fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink,
-// HostVerification, Running) become their option only when non-nil, because each of
+// HostVerification, Running, ReadinessGate) become their option only when non-nil, because each of
 // those engine options rejects nil; a nil optional field means the part is
 // not installed.
 type ProductionEngine struct {
@@ -54,6 +54,9 @@ type ProductionEngine struct {
 	// Running is the daemon's count of in-process work, which the restart
 	// readiness read reports.
 	Running *engine.RunningWork
+	// ReadinessGate is the project readiness gate, set when the daemon
+	// evaluates a project's readiness (#3205).
+	ReadinessGate engine.ProjectReadinessGate
 }
 
 // Options returns the engine Options in the order the Claude workflow has
@@ -95,6 +98,9 @@ func (p ProductionEngine) Options() []engine.Option {
 				}
 				return room, nil
 			}))
+	}
+	if p.ReadinessGate != nil {
+		options = append(options, engine.WithProjectReadinessGate(p.ReadinessGate))
 	}
 	if p.Running != nil {
 		options = append(options, engine.WithRunningWork(p.Running))

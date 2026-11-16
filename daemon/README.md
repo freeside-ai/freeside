@@ -4158,6 +4158,50 @@ same effective review image, model, auth, instruction, and workspace inputs
 that unattended admission enforces. The default mode is `attended_dev`, where
 the review-configuration flag is not required.
 
+An unattended daemon composed for a project (the deputy, whose settings name
+the project) also keeps a project readiness record for it (#3205), keyed by
+the project and the settings revisions it composed from. It records five
+checks: `repository_base` (the base ref resolves and its fetched commit
+belongs to the pinned repository ID), `publication_authority` (exactly one App
+resolves on the publication token), `writer_image` (the approved recipe's
+preparation resolves, and no image chosen for the base tip was built from
+another recipe; a base no image serves yet passes, since attempts hold on that
+under `image_upkeep_pending`), `trust_profile`, and `review_configuration`.
+Each reads `passed`, `failed`, or `unavailable`; a GitHub check that cannot
+reach GitHub reads `unavailable` and keeps an earlier pass under the same
+settings. Readiness is evaluated at start and on every doctor pass. The
+store-local checks rerun in the health refresh before each invocation
+dispatch, and a GitHub check that did not pass is retried there at most once a
+minute, so a repair made outside the daemon clears the item without waiting
+for the daily doctor pass. A record that is not wholly `passed` converges on
+one blocking `system_health` item for the project (diagnostic code
+`project_not_ready`) whose detail names each check that did not pass. Like
+every blocking `system_health` item, it holds all unattended admission (hold
+reason `blocking_system_health`). Clear it by repairing the named check; the
+next refresh or pass that sees every check pass resolves the item. A
+flag-composed unattended daemon names no project and keeps no readiness
+record. Each doctor pass concludes a `project_not_ready` item for any project
+the daemon does not evaluate, so one left by a composition for another project
+does not hold admission.
+
+While the project is not ready, that daemon also takes no new work for it. A
+paired client's `submit_task` is refused with a 400, and a `freesided submit`
+through the daemon's control socket with an error; both messages name each
+check that did not pass. A refusal records nothing, so the same command
+succeeds once the project is ready, and a replay of a submission already
+recorded is answered as before. Label intake leaves a new occurrence
+unadmitted and logs the refusal; the first pass after the project is ready
+admits it. A hand-back, external-review, or readiness re-entry cycle that
+comes due waits the same way and starts on the first pass after; a cycle whose
+head moved while it ran holds its run under `blocking_system_health` until
+then. The image-repair task alone is still opened when `writer_image` is the
+only check that did not pass, since repairing the image is what clears it.
+Each of these checks reruns the store-local checks against the record, so a
+trust profile or review configuration changed since the last pass is caught. A
+`freesided submit` with no running daemon writes to the database directly and
+is not refused; the next daemon's blocking item holds the task at admission
+instead.
+
 Doctor also reports a `credential_integrity` finding, which is unhealthy when
 any enrollment's current generation carries a credential-integrity mark. On a
 scheduled pass, and on a one-shot `freesided doctor` that reaches a running
@@ -4530,8 +4574,11 @@ onboard from a `main` that already carries `.freeside/verify.json`.
 
   The `paths` key of the policy file `freesided submit -policy` reads holds
   the same list in the same order: `admissionauth.ResolvedPathAllowlist`
-  refuses any difference, so change both together while no task is in
-  flight.
+  refuses any difference at submission, so change both together. A task
+  already in flight keeps running after a wider edit and imports under the
+  paths it was admitted with; an edit that removes one of those patterns
+  holds it with a path-boundary mismatch until the pattern is restored
+  (`admissionauth.AdmittedPathAllowlist`).
 
   Allowed doesn't lift the importer's built-in classes. An edit to
   `AGENTS.md`, `CLAUDE.md`, `.claude/**`, or `.agents/skills/**` draws an

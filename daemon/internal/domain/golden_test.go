@@ -1289,6 +1289,43 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	admission := domaintest.ExecutionAdmission()
+	// The project readiness record: a project whose trust profile is
+	// missing and whose GitHub base could not be read on a first
+	// evaluation, under stored settings, and the same project ready under
+	// file settings, whose revisions render as an explicit null.
+	notReady := domain.ProjectReadiness{
+		ProjectID: "proj-1", Settings: &domain.SettingsRevisions{Instance: 3, Project: 2}, EvaluatedAt: ts,
+		Results: []domain.ProjectReadinessResult{
+			{
+				Check: domain.ProjectReadinessTrustProfile, Status: domain.ProjectReadinessFailed,
+				Detail: "no active trust profile for owner/repo", CheckedAt: ts,
+			},
+			{Check: domain.ProjectReadinessReviewConfiguration, Status: domain.ProjectReadinessPassed, CheckedAt: ts},
+			{
+				Check: domain.ProjectReadinessRepositoryBase, Status: domain.ProjectReadinessUnavailable,
+				Detail: "read the tip of owner/repo@main: connection refused", CheckedAt: ts,
+			},
+			{Check: domain.ProjectReadinessPublicationAuthority, Status: domain.ProjectReadinessPassed, CheckedAt: ts},
+			{Check: domain.ProjectReadinessWriterImage, Status: domain.ProjectReadinessPassed, CheckedAt: ts},
+		},
+	}
+	if err := notReady.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ready := domain.ProjectReadiness{ProjectID: "proj-1", EvaluatedAt: ts}
+	for _, check := range domain.AllProjectReadinessChecks {
+		ready.Results = append(ready.Results, domain.ProjectReadinessResult{
+			Check: check, Status: domain.ProjectReadinessPassed, CheckedAt: ts,
+		})
+	}
+	if err := ready.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// The settings-bound (v7) variant: the base admission composed from
+	// stored settings, naming the revisions it was admitted under.
+	settingsAdmission := domaintest.ExecutionAdmission(func(in *domain.ExecutionAdmissionInput) {
+		in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+	})
 
 	// The provider_registry variant: the profile is the only field that
 	// differs from the base admission. The declared registry set is not a
@@ -2795,6 +2832,9 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", selectedAgentAdmission},
 		{"execution_admission_no_hydration", noHydrationAdmission},
+		{"execution_admission_settings_revisions", settingsAdmission},
+		{"project_readiness_not_ready", notReady},
+		{"project_readiness_file_settings", ready},
 		{"execution_admission_agent_explicit_model", selectedClaudeAdmission},
 		{"review_admission", selectedReviewAdmission},
 		{"execution_admission_task_line", selectedTaskLineAdmission},

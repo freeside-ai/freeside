@@ -122,9 +122,11 @@ func (p *productionPublicationHarness) startExternalReview(t *testing.T) bool {
 	var started bool
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		var err error
-		started, err = engine.StartExternalReviewReentry(p.ctx, tx, itemID)
+		started, err = engine.StartExternalReviewReentry(p.ctx, tx, itemID, p.reentryGate)
 		return err
-	}); err != nil {
+	}); errors.Is(err, domain.ErrProjectNotReady) {
+		return false
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	if !started {

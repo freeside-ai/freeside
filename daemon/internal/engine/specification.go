@@ -528,7 +528,11 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 	var sr SpecificationRun
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		var e error
-		sr, e = submitSpecArtifactRunTx(ctx, tx, spec)
+		// No readiness gate: this arm has no production caller. Operator and
+		// client submissions use SubmitSpecificationRunTx with the daemon's
+		// gate, and label intake (the issue-subject arm above) is gated
+		// before it admits an occurrence.
+		sr, e = submitSpecArtifactRunTx(ctx, tx, spec, nil)
 		return e
 	}); err != nil {
 		return SpecificationRun{}, err
@@ -542,7 +546,11 @@ func SubmitSpecificationRun(ctx context.Context, st *store.Store, spec Specifica
 // inside a caller-owned transaction so the whole submit_task command (device
 // gate, task record, and this run) commits atomically. The issue-subject arm
 // keeps its own store handling in SubmitSpecificationRun and is refused here.
-func SubmitSpecificationRunTx(ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec) (SpecificationRun, error) {
+// gate is the daemon's project readiness gate, applied to new work only; a
+// replay of a recorded submission is never refused by it.
+func SubmitSpecificationRunTx(
+	ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec, gate ProjectReadinessGate,
+) (SpecificationRun, error) {
 	if err := validateSpecificationRunSpec(spec); err != nil {
 		return SpecificationRun{}, err
 	}
@@ -551,7 +559,7 @@ func SubmitSpecificationRunTx(ctx context.Context, tx *store.WriteTx, spec Speci
 			"submit specification run: issue-subject source requires SubmitSpecificationRun: %w",
 			domain.ErrParentKeyMismatch)
 	}
-	return submitSpecArtifactRunTx(ctx, tx, spec)
+	return submitSpecArtifactRunTx(ctx, tx, spec, gate)
 }
 
 // validateSpecificationRunSpec runs the shared, store-independent validation
@@ -619,7 +627,21 @@ func validateSpecificationRunSpec(spec SpecificationRunSpec) error {
 // performs the create-or-converge write inside the caller's transaction, then
 // wraps the resulting run in the SpecificationRun the callers return. The
 // shared validation has already run.
-func submitSpecArtifactRunTx(ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec) (SpecificationRun, error) {
+//
+// It is where operator and client submissions create new work, so it runs
+// the readiness gate first when the specification run does not exist yet.
+// A run that exists is a replay, which converges on what was recorded and
+// is never refused for readiness.
+func submitSpecArtifactRunTx(
+	ctx context.Context, tx *store.WriteTx, spec SpecificationRunSpec, gate ProjectReadinessGate,
+) (SpecificationRun, error) {
+	if _, err := tx.GetRun(ctx, spec.SpecificationRunID); errors.Is(err, store.ErrNotFound) {
+		if err := requireProjectReady(ctx, gate, &tx.ReadTx, spec.ProjectID); err != nil {
+			return SpecificationRun{}, fmt.Errorf("submit specification run: %w", err)
+		}
+	} else if err != nil {
+		return SpecificationRun{}, err
+	}
 	request, invocationID := specificationFirstRequest(spec, nil)
 	payload, err := encodeSpecificationRequest(request)
 	if err != nil {

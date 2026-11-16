@@ -80,6 +80,15 @@ func newImageRepairHarness(
 	t *testing.T, configured []domain.ProjectID, refusals ...domain.ImageUpkeepRefusal,
 ) (*signet.Service, *store.Store) {
 	t.Helper()
+	return newGatedImageRepairHarness(t, nil, configured, refusals...)
+}
+
+// newGatedImageRepairHarness is newImageRepairHarness with a project
+// readiness gate on the submitter.
+func newGatedImageRepairHarness(
+	t *testing.T, gate ProjectReadinessGate, configured []domain.ProjectID, refusals ...domain.ImageUpkeepRefusal,
+) (*signet.Service, *store.Store) {
+	t.Helper()
 	ctx := context.Background()
 	st := storetest.Open(t, t.TempDir()+"/engine.db", store.Options{})
 	t.Cleanup(func() { _ = st.Close() })
@@ -111,7 +120,7 @@ func newImageRepairHarness(
 			}
 		}
 		return ManualInitiator{}, false
-	})
+	}, gate)
 	return signet.NewService(st, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter)), st
 }
 

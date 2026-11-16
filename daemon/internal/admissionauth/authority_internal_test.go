@@ -201,7 +201,7 @@ func newSubmissionFixture(t *testing.T, opts store.Options) submissionFixture {
 			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
 			PublicationDigest: digest(publicationBody),
 			WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
-		})
+		}, nil)
 		return err
 	}); err != nil {
 		t.Fatalf("seed submission: %v", err)

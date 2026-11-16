@@ -412,7 +412,7 @@ func submitCLIForPublication(t *testing.T, h *publicationHarness, project domain
 			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
 			PublicationDigest: productionDigest(publicationBytes),
 			WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
-		})
+		}, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

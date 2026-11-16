@@ -1370,3 +1370,34 @@ func TestIntakeReleaseLeavesAnotherOccurrencesStart(t *testing.T) {
 		t.Fatal("releasing the second occurrence must not end the first occurrence's episode")
 	}
 }
+
+// TestIntakeDefersOccurrenceWhileProjectNotReady: a labeled issue for a
+// project that is not ready is not admitted; the occurrence stays
+// unadmitted, and the first pass after the project is ready admits it.
+func TestIntakeDefersOccurrenceWhileProjectNotReady(t *testing.T) {
+	t.Parallel()
+	f := newIntakeFixture(t)
+	init := intakeInitiatorFor(t, domain.InitiatorModePropose, domain.ProvenanceOverride, 5)
+	r := f.reconciler([]IntakeInitiator{init}, labeledOpen(7), nil)
+	r.gate = func(_ context.Context, _ *store.ReadTx, project domain.ProjectID) error {
+		return &domain.ProjectNotReadyError{ProjectID: project, NotPassed: []domain.ProjectReadinessResult{{
+			Check: domain.ProjectReadinessRepositoryBase, Status: domain.ProjectReadinessFailed, Detail: "no default branch",
+		}}}
+	}
+
+	if err := r.reconcilePresent(t.Context(), init, 7); !errors.Is(err, domain.ErrProjectNotReady) {
+		t.Fatalf("reconcile = %v, want ErrProjectNotReady", err)
+	}
+	if o := f.latestOccurrence(t, 7); o.Admission != nil {
+		t.Fatalf("occurrence admitted while the project was not ready: %+v", o.Admission)
+	}
+
+	r.gate = nil
+	if err := r.reconcilePresent(t.Context(), init, 7); err != nil {
+		t.Fatalf("reconcile once ready: %v", err)
+	}
+	o := f.latestOccurrence(t, 7)
+	if o.Ordinal != 1 || o.Admission == nil {
+		t.Fatalf("occurrence = ordinal %d admission %+v, want the first occurrence admitted", o.Ordinal, o.Admission)
+	}
+}

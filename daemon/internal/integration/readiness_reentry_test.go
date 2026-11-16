@@ -105,9 +105,11 @@ func (p *productionPublicationHarness) invalidateReady(
 			return err
 		}
 		var err error
-		started, err = engine.StartReadinessReentry(p.ctx, tx, item)
+		started, err = engine.StartReadinessReentry(p.ctx, tx, item, p.reentryGate)
 		return err
-	}); err != nil {
+	}); errors.Is(err, domain.ErrProjectNotReady) {
+		return item, false
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	return item, started
@@ -1248,7 +1250,7 @@ func TestReadinessReentryStartsOnlyFromTheCurrentInvalidation(t *testing.T) {
 			t.Fatal("a head change started no re-entry")
 		}
 		if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
-			again, err := engine.StartReadinessReentry(p.ctx, tx, superseded)
+			again, err := engine.StartReadinessReentry(p.ctx, tx, superseded, nil)
 			if again {
 				t.Error("one invalidation started two cycles")
 			}

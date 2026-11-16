@@ -49,7 +49,7 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 	}
 	service := signet.NewService(h.store, signet.WithBlobStore(h.blobs), signet.WithTaskSubmitter(engine.NewTaskSubmitter(h.blobs, func(domain.ProjectID) (engine.ManualInitiator, bool) {
 		return engine.ManualInitiator{PolicyKeys: keys, CommitAuthor: productionPublicationMetadata().CommitAuthor}, true
-	})))
+	}, nil)))
 	if err := h.store.Write(h.ctx, func(tx *store.WriteTx) error {
 		return tx.PutDevice(h.ctx, domain.Device{ID: "client-device", DisplayName: "Client", Status: domain.DeviceActive, PairedAt: h.now})
 	}); err != nil {

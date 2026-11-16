@@ -158,6 +158,10 @@ type ControlRouteInputs struct {
 	// ExecutionPause serves freesided execution in a prod started with a
 	// driver, executing or not; nil in any other daemon.
 	ExecutionPause *ExecutionPauseControl
+	// ProjectReadinessGate refuses an operator submission of new work for
+	// a project that is not ready (#3205). It checks nothing when the
+	// daemon evaluates no project's readiness.
+	ProjectReadinessGate engine.ProjectReadinessGate
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -483,6 +487,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
 		UpdateDrain: updateDrain, Running: running, Execution: execution,
+		ProjectReadinessGate: late.ProjectReadinessGate,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -690,8 +695,10 @@ func newAttentionService(
 		signet.WithBlobStore(blobs),
 		// Client task submission (plan §5.11) resolves each project's policy from
 		// its operator-configured startup snapshot, independently of label intake.
-		// An omitted manual-submission file disables new client tasks.
-		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator)),
+		// An omitted manual-submission file disables new client tasks. The
+		// readiness gate is read through late, since the composition that
+		// evaluates readiness is built after this service.
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator, late.ProjectReadinessGate)),
 		// A client line change runs the engine's rule inside the command's
 		// transaction, so the receipt commits with the line.
 		signet.WithTaskLineChanger(func(
@@ -847,9 +854,18 @@ func newDoctorPass(
 		// this lock before every dispatch.
 		replay := reserveIntegrityProbe(runCtx, claudeWiring.work, passProbe, cfg.Logger)
 		endProbe()
+		// Project readiness reads GitHub before the lock too, for the same
+		// reason; only its store-local checks and its writes run under it.
+		readiness := claudeWiring.readiness
+		var observation projectReadinessObservation
+		if readiness != nil {
+			if observation, err = readiness.observe(runCtx); err != nil {
+				return err
+			}
+		}
 		doctorConvergenceLock.Lock()
 		defer doctorConvergenceLock.Unlock()
-		_, err = (operations.Doctor{
+		doctor := operations.Doctor{
 			Store: st, Attention: attention,
 			ProjectID:                 domain.ProjectID("project-system"),
 			Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
@@ -859,7 +875,23 @@ func newDoctorPass(
 			Now:                       cfg.Now,
 			CredentialIntegrityProbe:  replay,
 			IdentityLabel:             cfg.IdentityLabel,
-		}).Run(runCtx)
+		}
+		_, err = doctor.Run(runCtx)
+		// A readiness card this daemon does not evaluate was left by a
+		// composition for another project, or by one that kept a record
+		// when this one keeps none; nothing else would conclude it.
+		var evaluated domain.ProjectID
+		if readiness != nil {
+			evaluated = readiness.project
+		}
+		err = errors.Join(err, doctor.ConcludeProjectReadinessExcept(runCtx, evaluated))
+		if readiness != nil {
+			// A failed doctor check does not keep readiness from being
+			// recorded, so a start or pass that reports one still leaves
+			// the record the gate reads.
+			_, readinessErr := readiness.commit(runCtx, observation, doctor)
+			err = errors.Join(err, readinessErr)
+		}
 		return err
 	}
 }

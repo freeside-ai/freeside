@@ -128,6 +128,21 @@ type StartupBindings struct {
 	ScenarioWiring *ScenarioComposition
 }
 
+// ProjectReadinessGate is the Claude composition's project readiness gate,
+// read at call time, so parts built before the composition (client task
+// submission, the control socket) apply it. It checks nothing when no
+// Claude composition evaluates a project's readiness.
+func (b *StartupBindings) ProjectReadinessGate(ctx context.Context, tx *store.ReadTx, project domain.ProjectID) error {
+	if b.ClaudeWiring == nil {
+		return nil
+	}
+	gate := b.ClaudeWiring.ReadinessGate()
+	if gate == nil {
+		return nil
+	}
+	return gate(ctx, tx, project)
+}
+
 // Agents is the lineup the composed engine admits through: the Claude
 // composition's, else the scenario composition's, else nil, which the
 // operator hooks answer with signet.ErrOperatorSettingUnavailable.
@@ -416,17 +431,41 @@ func ComposeClaudeWorkflow(
 	}
 	if cfg.Claude.OperatingMode == domain.ModeUnattended {
 		production.HealthRefresh = func(refreshCtx context.Context) error {
+			// A retry reads GitHub before the lock is taken, as the doctor
+			// pass does.
+			var (
+				observation projectReadinessObservation
+				observed    bool
+			)
+			if claudeWiring.readiness != nil {
+				var err error
+				if observation, observed, err = claudeWiring.readiness.retryRemote(refreshCtx); err != nil {
+					return err
+				}
+			}
 			doctorConvergenceLock.Lock()
 			defer doctorConvergenceLock.Unlock()
-			return (operations.Doctor{
+			doctor := operations.Doctor{
 				Store: st, Attention: attention,
 				ProjectID:                 domain.ProjectID("project-system"),
 				ReviewConfigurationDigest: claudeWiring.ReviewConfigurationDigest,
 				Mode:                      domain.ModeUnattended,
 				Now:                       cfg.Now,
-			}).ConvergeReviewConfiguration(refreshCtx)
+			}
+			if err := doctor.ConvergeReviewConfiguration(refreshCtx); err != nil {
+				return err
+			}
+			if claudeWiring.readiness == nil {
+				return nil
+			}
+			if observed {
+				_, err := claudeWiring.readiness.commit(refreshCtx, observation, doctor)
+				return err
+			}
+			return claudeWiring.readiness.refresh(refreshCtx, doctor)
 		}
 	}
+	production.ReadinessGate = claudeWiring.ReadinessGate()
 	workflow, err = engine.New(st, attention, stageDriver, production.Options()...)
 	if err != nil {
 		return nil, err
@@ -522,6 +561,7 @@ func ComposeClaudeLoops(
 		},
 		observeTip:       claudeWiring.observeRepositoryTip,
 		upkeepTipAdvance: upkeepTrigger.tipAdvanced,
+		readinessGate:    claudeWiring.ReadinessGate(),
 		Now:              func() time.Time { return time.Now().UTC() },
 	}
 	intakeReconcilerLoop = &intakeReconciler{
@@ -530,6 +570,7 @@ func ComposeClaudeLoops(
 		observeIssue: claudeWiring.observeIssue,
 		evictLabel:   claudeWiring.evictLabelIssues,
 		initiators:   cfg.IntakeInitiators,
+		gate:         claudeWiring.ReadinessGate(),
 		now:          func() time.Time { return time.Now().UTC() },
 	}
 	return &ClaudeLoops{

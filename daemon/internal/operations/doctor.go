@@ -111,6 +111,82 @@ func (d Doctor) ConvergeImageUpkeep(ctx context.Context, fault string) error {
 	return nil
 }
 
+// ProjectNotReadyCode names the finding a project's readiness converges.
+const ProjectNotReadyCode = "project_not_ready"
+
+// ConvergeProjectReadiness converges one project's readiness card: one
+// Blocking system_health item, filed under the project itself rather than
+// d.ProjectID, while any check has not passed, naming the project and each
+// such check; concluded once every check passes. The item is blocking
+// because the operating gate (store.RequireUnattendedOperationOpen) then
+// holds every unattended admission, which is the hold readiness exists for.
+func (d Doctor) ConvergeProjectReadiness(ctx context.Context, readiness domain.ProjectReadiness) error {
+	if d.Store == nil || d.Attention == nil {
+		return fmt.Errorf("doctor project readiness: nil dependency")
+	}
+	if err := readiness.Validate(); err != nil {
+		return fmt.Errorf("doctor project readiness: %w", err)
+	}
+	d.ProjectID = readiness.ProjectID
+	finding := DoctorFinding{
+		Code: ProjectNotReadyCode, Healthy: readiness.Ready(), Detail: projectReadinessDetail(readiness),
+	}
+	if err := d.converge(ctx, []DoctorFinding{finding}, domain.HealthPostureBlocking); err != nil {
+		return fmt.Errorf("doctor project readiness: %w", err)
+	}
+	return nil
+}
+
+// ConcludeProjectReadinessExcept concludes every open project readiness
+// card filed under a project other than keep, or every one when keep is
+// empty. A card is converged only by the daemon composed for its project,
+// so a daemon that no longer evaluates that project (its settings now name
+// another, or a composition that keeps no readiness record) would otherwise
+// hold all unattended admission behind it forever. A daemon serves one
+// project (#3212 revisits this when several share one), so a start that
+// evaluates keep, or none, owns every readiness card.
+func (d Doctor) ConcludeProjectReadinessExcept(ctx context.Context, keep domain.ProjectID) error {
+	if d.Attention == nil {
+		return fmt.Errorf("doctor project readiness: nil dependency")
+	}
+	snapshots, err := d.Attention.ListAttentionItems(ctx)
+	if err != nil {
+		return fmt.Errorf("doctor project readiness: list items: %w", err)
+	}
+	prefix := doctorItemPrefix + ProjectNotReadyCode + "-"
+	for _, snapshot := range snapshots {
+		item := snapshot.Item
+		if item.Type != domain.AttentionSystemHealth || item.Status != domain.StatusOpen ||
+			item.ProjectID == keep || !strings.HasPrefix(string(item.ID), prefix) {
+			continue
+		}
+		item.ItemVersion++
+		item, err = item.ConcludeByDaemon(domain.ConcludedByDaemon, d.now(),
+			"Resolved when the daemon started without evaluating this project's readiness.", nil)
+		if err != nil {
+			return fmt.Errorf("doctor project readiness: clear item %s: %w", item.ID, err)
+		}
+		if err := d.Attention.PutItem(ctx, item); err != nil {
+			return fmt.Errorf("doctor project readiness: clear item %s: %w", item.ID, err)
+		}
+	}
+	return nil
+}
+
+// projectReadinessDetail names the project and each check that did not
+// pass, with its status and why.
+func projectReadinessDetail(readiness domain.ProjectReadiness) string {
+	failed := readiness.NotPassed()
+	if len(failed) == 0 {
+		return fmt.Sprintf("project %s is ready", readiness.ProjectID)
+	}
+	parts := make([]string, 0, len(failed))
+	for _, result := range failed {
+		parts = append(parts, fmt.Sprintf("%s %s (%s)", result.Check, result.Status, result.Detail))
+	}
+	return fmt.Sprintf("project %s is not ready: %s", readiness.ProjectID, strings.Join(parts, "; "))
+}
+
 // now is the doctor's clock: Now when injected, else the wall clock, in UTC.
 func (d Doctor) now() time.Time {
 	if d.Now != nil {

@@ -93,6 +93,18 @@ type ClaudeDriverConfig struct {
 	// Every identity the daemon runs under comes from that tree's lineup.
 	AgentTreeCheckout, AgentTreeCommit string
 	AllowedPaths                       []string
+	// SettingsRevisions names the stored settings revisions this
+	// configuration was composed from, which every admission records. It is
+	// nil for a configuration from a settings file (the deputy).
+	SettingsRevisions *domain.SettingsRevisions
+	// ProjectID and ApprovedRecipe come from the project's settings, stored
+	// or from a settings file. An unattended daemon evaluates the project's
+	// readiness only when ProjectID is set; a configuration composed from
+	// flags names no project, so it evaluates none and gates nothing on it.
+	// ApprovedRecipe is the recipe the readiness check's writer image must be
+	// built from, and is required when ProjectID is set.
+	ProjectID      domain.ProjectID
+	ApprovedRecipe domain.Digest
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -211,6 +223,14 @@ func (c ClaudeDriverConfig) Validate() error {
 		return fmt.Errorf("complete shadow review configuration is required when enabled")
 	case c.ShadowReviewImage != "" && domain.ImageRef(c.ShadowReviewImage).Validate() != nil:
 		return fmt.Errorf("-shadow-review-image must be digest-pinned")
+	}
+	if c.SettingsRevisions != nil {
+		if err := c.SettingsRevisions.Validate(); err != nil {
+			return fmt.Errorf("stored settings: %w", err)
+		}
+	}
+	if c.ProjectID != "" && !contentaddr.Valid(string(c.ApprovedRecipe)) {
+		return fmt.Errorf("project %q: approved recipe %q is not a digest", c.ProjectID, c.ApprovedRecipe)
 	}
 	return nil
 }
@@ -734,6 +754,10 @@ type ClaudeComposition struct {
 	// evictConcluded drops the four conditional-request cache entries owned by
 	// a ready resource after its attention item leaves the open state.
 	evictConcluded func(domain.ReadyItemPRBinding, *int)
+	// readiness evaluates the project's readiness to run unattended work;
+	// nil unless the composition is unattended and names a project
+	// (ClaudeDriverConfig.ProjectID).
+	readiness *projectReadinessEvaluator
 	// issueReadTokens authenticates research fetches of the managed
 	// repository's issues; nil when no App transport is composed.
 	issueReadTokens publish.TokenSource
@@ -1207,7 +1231,8 @@ func composeClaudeDriver(
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second task
 		// is submitted.
-		Agents: agents,
+		Agents:            agents,
+		SettingsRevisions: cfg.SettingsRevisions,
 	}
 	follower = newConformanceFollower(followerConfig{
 		Ledger: backend,
@@ -1304,6 +1329,19 @@ func composeClaudeDriver(
 		// janitor its fetches ride on closes.
 		Closer:  sessionGroup{follower, driver, janitor},
 		janitor: janitor,
+	}
+	if cfg.OperatingMode == domain.ModeUnattended && cfg.ProjectID != "" {
+		composition.readiness = &projectReadinessEvaluator{
+			store: st, project: cfg.ProjectID, settings: cfg.SettingsRevisions,
+			repo: cfg.Repo, repositoryID: cfg.RepositoryID, baseRef: cfg.BaseRef,
+			agentImage: cfg.AgentImage, approvedRecipe: cfg.ApprovedRecipe,
+			reviewConfigurationDigest: reviewConfigurationDigest,
+			github: projectReadinessGitHub{
+				observeTip: observeRefTip, fetchTip: composition.fetchTip,
+				appBotIdentity: commitAuthors, baseInputs: baseInputs.read,
+			},
+			now: utcNow,
+		}
 	}
 	return composition, nil
 }
@@ -2119,6 +2157,16 @@ func (g sessionGroup) Close(ctx context.Context) error {
 
 // stageDriver wraps the Claude driver in the production materializing seam,
 // so digest verification always completes before an intent is committed.
+// ReadinessGate is the composition's project readiness gate
+// (projectReadinessEvaluator.gate), nil when it evaluates no project's
+// readiness.
+func (c *ClaudeComposition) ReadinessGate() engine.ProjectReadinessGate {
+	if c.readiness == nil {
+		return nil
+	}
+	return c.readiness.gate
+}
+
 func (c *ClaudeComposition) stageDriver(blobs *signet.BlobStore) (exec.StageDriver, error) {
 	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {

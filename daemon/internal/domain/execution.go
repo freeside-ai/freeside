@@ -21,7 +21,33 @@ const (
 	admissionAgentEncodingVersion              = "freeside.execution.admission/v4"
 	admissionCapabilityManifestEncodingVersion = "freeside.execution.admission/v5"
 	admissionHydrationEncodingVersion          = "freeside.execution.admission/v6"
+	admissionSettingsEncodingVersion           = "freeside.execution.admission/v7"
 )
+
+// SettingsRevisions names the stored instance and project settings revisions
+// a daemon was composed from. An admission records them so each attempt says
+// which settings it was admitted under: the record is per admission, not a
+// pin set once per task, because a task's attempts after a restart are
+// admitted under whatever revisions the new process loaded. A daemon
+// composed from a settings file (the deputy) has no revisions and records
+// none.
+type SettingsRevisions struct {
+	Instance int `json:"instance"`
+	Project  int `json:"project"`
+}
+
+// Validate reports whether both revisions are set. A half-set pair names
+// settings no store ever held together, so it is refused, not read as file
+// settings.
+func (r SettingsRevisions) Validate() error {
+	if r.Instance < 1 {
+		return fmt.Errorf("settings revisions instance %d: %w", r.Instance, ErrNonPositive)
+	}
+	if r.Project < 1 {
+		return fmt.Errorf("settings revisions project %d: %w", r.Project, ErrNonPositive)
+	}
+	return nil
+}
 
 // AgentSelectionSource is which selection chose an admission's agent (plan
 // §5.4, admission step 5): the standing lineup, a task line, or the
@@ -230,7 +256,13 @@ type ExecutionAdmission struct {
 	// skip the driver's hydration; a set value selects the v6 encoding. Only
 	// #2336's repair path is meant to set it.
 	WorkspaceHydration WorkspaceHydration `json:"workspace_hydration,omitempty"`
-	AdmittedAt         time.Time          `json:"admitted_at"`
+	// SettingsRevisions names the stored settings revisions the admitting
+	// daemon was composed from; a set value selects the v7 encoding. It is
+	// nil on an admission composed from a settings file and on every
+	// admission written before it existed, which keep their bytes and id.
+	// An edit to either record after admission doesn't change it.
+	SettingsRevisions *SettingsRevisions `json:"settings_revisions,omitempty"`
+	AdmittedAt        time.Time          `json:"admitted_at"`
 }
 
 // AdmissionAgentBinding is what §5.4 admission step 5 snapshots beyond the
@@ -491,6 +523,7 @@ type ExecutionAdmissionInput struct {
 	BackupEncryptionWaiver     *BackupEncryptionWaiver
 	AgentBinding               *AdmissionAgentBinding
 	WorkspaceHydration         WorkspaceHydration
+	SettingsRevisions          *SettingsRevisions
 	AdmittedAt                 time.Time
 }
 
@@ -531,6 +564,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		BackupEncryptionWaiver:     clonePtr(in.BackupEncryptionWaiver),
 		AgentBinding:               canonicalAgentBinding(in.AgentBinding),
 		WorkspaceHydration:         in.WorkspaceHydration,
+		SettingsRevisions:          clonePtr(in.SettingsRevisions),
 		AdmittedAt:                 in.AdmittedAt.UTC(),
 	}
 	id, err := a.ComputeID()
@@ -573,6 +607,7 @@ type canonicalAdmission struct {
 	BackupEncryptionWaiver     *BackupEncryptionWaiver `json:"backup_encryption_waiver"`
 	AgentBinding               *AdmissionAgentBinding  `json:"agent_binding,omitempty"`
 	WorkspaceHydration         WorkspaceHydration      `json:"workspace_hydration,omitempty"`
+	SettingsRevisions          *SettingsRevisions      `json:"settings_revisions,omitempty"`
 	AdmittedAt                 time.Time               `json:"admitted_at"`
 }
 
@@ -597,10 +632,15 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	if a.CapabilityManifestDigest != nil {
 		version = admissionCapabilityManifestEncodingVersion
 	}
-	// Checked last so a skipping start always carries the v6 label, whatever
-	// else it binds.
+	// A skipping start carries the v6 label over every earlier one.
 	if a.WorkspaceHydration != "" {
 		version = admissionHydrationEncodingVersion
+	}
+	// Checked last so an admission that names its settings revisions always
+	// carries the v7 label, whatever else it binds, including a skipping
+	// start.
+	if a.SettingsRevisions != nil {
+		version = admissionSettingsEncodingVersion
 	}
 	body, err := json.Marshal(canonicalAdmission{
 		Version:                    version,
@@ -627,6 +667,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		BackupEncryptionWaiver:     a.BackupEncryptionWaiver,
 		AgentBinding:               canonicalAgentBinding(a.AgentBinding),
 		WorkspaceHydration:         a.WorkspaceHydration,
+		SettingsRevisions:          a.SettingsRevisions,
 		AdmittedAt:                 a.AdmittedAt,
 	})
 	if err != nil {
@@ -747,6 +788,11 @@ func (a ExecutionAdmission) Validate() error {
 	if a.WorkspaceHydration != "" && !a.WorkspaceHydration.valid() {
 		return fmt.Errorf("execution admission %s workspace_hydration %q: %w",
 			a.InvocationID, a.WorkspaceHydration, ErrInvalidWorkspaceHydration)
+	}
+	if a.SettingsRevisions != nil {
+		if err := a.SettingsRevisions.Validate(); err != nil {
+			return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+		}
 	}
 	if a.AdmittedAt.IsZero() {
 		return fmt.Errorf("execution admission %s admitted_at: %w", a.InvocationID, ErrMissingTimestamp)

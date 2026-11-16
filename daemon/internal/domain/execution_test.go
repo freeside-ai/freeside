@@ -348,6 +348,73 @@ func TestAdmissionWorkspaceHydrationEncoding(t *testing.T) {
 	}
 }
 
+// Settings revisions are a bound fact: they move the identity, survive the
+// store's JSON round trip, and leave every admission without them encoded
+// exactly as before. A half-set or non-positive pair is refused.
+func TestAdmissionSettingsRevisionsEncoding(t *testing.T) {
+	t.Parallel()
+	unset := mustAdmission(t, admissionInput())
+	in := admissionInput()
+	in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+	bound := mustAdmission(t, in)
+	if bound.ID == unset.ID {
+		t.Fatal("settings revisions did not change the admission identity")
+	}
+	unsetBody, err := json.Marshal(unset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unsetBody), "settings_revisions") {
+		t.Fatalf("unset settings revisions reached the body: %s", unsetBody)
+	}
+
+	// The caller's pointer is detached: editing it after admission changes
+	// nothing the admission recorded.
+	in.SettingsRevisions.Instance = 9
+	if bound.SettingsRevisions.Instance != 3 {
+		t.Fatalf("admission followed the caller's pointer: %+v", *bound.SettingsRevisions)
+	}
+
+	body, err := json.Marshal(bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded domain.ExecutionAdmission
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded admission: %v", err)
+	}
+	if *decoded.SettingsRevisions != (domain.SettingsRevisions{Instance: 3, Project: 2}) || decoded.ID != bound.ID {
+		t.Fatalf("round trip = %+v/%s, want {3 2}/%s", *decoded.SettingsRevisions, decoded.ID, bound.ID)
+	}
+
+	// A row edited to name other revisions resolves to a different address.
+	edited := decoded
+	edited.SettingsRevisions = &domain.SettingsRevisions{Instance: 4, Project: 2}
+	if err := edited.Validate(); !errors.Is(err, domain.ErrAdmissionInconsistent) {
+		t.Fatalf("edited revisions Validate() = %v, want ErrAdmissionInconsistent", err)
+	}
+
+	// A hydration-skipping start that also names its revisions takes the
+	// v7 label, so the two facts don't share an encoding with either alone.
+	skipping := admissionInput()
+	skipping.WorkspaceHydration = domain.WorkspaceHydrationNone
+	skipping.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+	if both := mustAdmission(t, skipping); both.ID == bound.ID {
+		t.Fatal("hydration skip did not change a settings-bound admission identity")
+	}
+
+	for _, pair := range []domain.SettingsRevisions{{Instance: 0, Project: 2}, {Instance: 3, Project: 0}, {Instance: -1, Project: 2}} {
+		bad := admissionInput()
+		bad.SettingsRevisions = &pair
+		if _, err := domain.NewExecutionAdmission(bad); !errors.Is(err, domain.ErrNonPositive) {
+			t.Errorf("revisions %+v: NewExecutionAdmission() = %v, want ErrNonPositive", pair, err)
+		}
+	}
+}
+
 func TestLegacyUnboundUnattendedAdmissionRemainsReconstructable(t *testing.T) {
 	t.Parallel()
 	in := admissionInput()

@@ -66,6 +66,21 @@ func openAdmittingFixture(
 	storeFloor domain.CapabilitySnapshot,
 ) *workflowFixture {
 	t.Helper()
+	return openAdmittingFixtureWith(t, declared, engineFloor, storeFloor,
+		func(*store.Store) engine.AdmissionEnvironment { return admissionEnvironment() })
+}
+
+// openAdmittingFixtureWith is openAdmittingFixture with the admission
+// environment built from the opened store, for a test that composes it from
+// stored state.
+func openAdmittingFixtureWith(
+	t *testing.T,
+	declared []exec.Capability,
+	engineFloor []exec.Capability,
+	storeFloor domain.CapabilitySnapshot,
+	environment func(*store.Store) engine.AdmissionEnvironment,
+) *workflowFixture {
+	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
 	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{
@@ -91,7 +106,7 @@ func openAdmittingFixture(
 		BackendName: "fake_runner", Caps: exec.NewCapabilitySet(declared...),
 	}
 	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(backend, engineFloor, admissionEnvironment(), func() time.Time { return admittedAt }))
+		engine.WithAdmission(backend, engineFloor, environment(st), func() time.Time { return admittedAt }))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

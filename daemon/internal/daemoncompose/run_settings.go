@@ -67,6 +67,16 @@ func LoadRunSettings(ctx context.Context, st *store.Store, project domain.Projec
 	return settings, nil
 }
 
+// revisions is nil for settings from a file, whose revisions are both 0.
+// Any other pair is returned as it is, so a half-set one reaches
+// ClaudeDriverConfig.Validate and is refused there.
+func (s RunSettings) revisions() *domain.SettingsRevisions {
+	if s.InstanceRevision == 0 && s.ProjectRevision == 0 {
+		return nil
+	}
+	return &domain.SettingsRevisions{Instance: s.InstanceRevision, Project: s.ProjectRevision}
+}
+
 func checkRunSettings(instanceRecord domain.InstanceSettingsRecord, projectRecord domain.ProjectSettingsRecord) (RunSettings, error) {
 	instance, err := instanceRecord.Settings()
 	if err != nil {
@@ -112,7 +122,8 @@ type RunLaunch struct {
 
 // NewClaudeDriverConfig composes the Claude driver's configuration from run
 // settings and one launch's inputs. It checks nothing itself:
-// ClaudeDriverConfig.Validate does at start.
+// ClaudeDriverConfig.Validate does at start, and refuses a half-set pair of
+// revisions.
 func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverConfig {
 	instance, project := settings.Instance, settings.Project
 	var handBackLabel string
@@ -144,6 +155,9 @@ func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverC
 		ReviewAuthSnapshot: instance.Review.AuthSnapshot, ReviewInstructions: instance.Review.Instructions,
 		ReviewWorkspaceSizeMB: launch.ReviewWorkspaceSizeMB,
 		HostVerification:      NewMacverifyExecutorConfig(instance.MacosVerification, launch.ListenPort),
+		SettingsRevisions:     settings.revisions(),
+		ProjectID:             settings.ProjectID,
+		ApprovedRecipe:        project.ApprovedRecipe,
 	}
 }
 

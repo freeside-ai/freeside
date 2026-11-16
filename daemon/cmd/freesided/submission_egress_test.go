@@ -60,7 +60,7 @@ func seedHistoricalManualSubmission(t *testing.T, st *store.Store, blobs *signet
 		if err := engine.RegisterSubmissionArtifact(t.Context(), tx, policyArtifact); err != nil {
 			return err
 		}
-		_, err := engine.SubmitSpecificationRunTx(t.Context(), tx, engine.SpecificationRunSpec{ManualSubmission: manual, SpecificationRunID: req.SpecificationRunID, ImplementationRunID: req.ImplementationRunID, ProjectID: req.ProjectID, SourceArtifactID: specArtifact.ID, SourceBytes: req.SpecBody, PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: req.ResolvedPolicy, Publication: req.Publication, PublicationDigest: req.PublicationDigest, CampaignID: req.CampaignID, AttemptNumber: 1})
+		_, err := engine.SubmitSpecificationRunTx(t.Context(), tx, engine.SpecificationRunSpec{ManualSubmission: manual, SpecificationRunID: req.SpecificationRunID, ImplementationRunID: req.ImplementationRunID, ProjectID: req.ProjectID, SourceArtifactID: specArtifact.ID, SourceBytes: req.SpecBody, PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: req.ResolvedPolicy, Publication: req.Publication, PublicationDigest: req.PublicationDigest, CampaignID: req.CampaignID, AttemptNumber: 1}, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)
