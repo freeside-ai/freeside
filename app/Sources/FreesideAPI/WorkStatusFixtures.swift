@@ -50,6 +50,41 @@ public enum WorkStatusFixtures {
         ]
     }
 
+    /// Two days of the project's work hours before the capture day, for
+    /// `MockServer.setWorkHours`: a day with every class, two hold reasons,
+    /// and two tasks, then a day of agent work alone. The bounds are UTC; the
+    /// mock replaces them with the request's.
+    public static func workHoursDays() -> [Components.Schemas.WorkHoursDay] {
+        [
+            workHoursDay(
+                "2026-08-10", working: 7_200, waiting: 1_800,
+                held: [
+                    .init(reason: .usage_pool_exhausted, seconds: 900), .init(reason: .base_advanced, seconds: 300),
+                ],
+                other: 600,
+                tasks: [
+                    .init(task_id: "task-implement", elapsed_seconds: 7_800),
+                    .init(task_id: "task-review", elapsed_seconds: 3_000),
+                ]),
+            workHoursDay(
+                "2026-08-11", working: 3_600, waiting: 0, held: [], other: 0,
+                tasks: [.init(task_id: "task-implement", elapsed_seconds: 3_600)]),
+        ]
+    }
+
+    private static func workHoursDay(
+        _ date: String, working: Int64, waiting: Int64, held: [Components.Schemas.WorkHoursHeld], other: Int64,
+        tasks: [Components.Schemas.WorkHoursTask]
+    ) -> Components.Schemas.WorkHoursDay {
+        let heldSeconds = held.map(\.seconds).reduce(0, +)
+        let start = ISO8601DateFormatter().date(from: date + "T00:00:00Z") ?? RunFixtures.screenshotInstant
+        return .init(
+            date: date, starts_at: start, ends_at: start.addingTimeInterval(86_400),
+            elapsed_seconds: working + waiting + heldSeconds + other, agent_working_seconds: working,
+            waiting_on_you_seconds: waiting, held_seconds: heldSeconds, held_by_reason: held, other_seconds: other,
+            tasks: tasks)
+    }
+
     private static func task(
         _ id: String, _ name: String, project: String = project,
         lifecycle: Components.Schemas.Task.lifecyclePayload? = .active, position: Bool = true,

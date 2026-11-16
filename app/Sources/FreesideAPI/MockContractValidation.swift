@@ -184,6 +184,44 @@ enum MockContractValidation {
         return nil
     }
 
+    /// Validate a work-hours response (#3241) against the rules
+    /// `GET /work-hours` states: one day per date, consecutive from the
+    /// request's `from`; and in each day and the totals, classes that sum to
+    /// no more than the elapsed time, and held reasons that sum to no more
+    /// than the held time. Each figure is rounded down on its own, so the
+    /// sums may fall short but never exceed.
+    static func workHoursBreach(_ hours: Components.Schemas.WorkHours, from: String, days: Int) -> String? {
+        if hours.days.map(\.date) != MockWorkHours.dates(from: from, days: days) {
+            return "work hours dates don't run consecutively from from"
+        }
+        func breach(
+            elapsed: Int64, classes: [Int64], held: Int64, heldByReason: [Components.Schemas.WorkHoursHeld]
+        ) -> String? {
+            if classes.reduce(0, +) > elapsed { return "work hours classes exceed elapsed time" }
+            if heldByReason.map(\.seconds).reduce(0, +) > held { return "held reasons exceed held time" }
+            return nil
+        }
+        for day in hours.days {
+            let classes = [
+                day.agent_working_seconds, day.waiting_on_you_seconds, day.held_seconds, day.other_seconds,
+            ]
+            if let found = breach(
+                elapsed: day.elapsed_seconds, classes: classes, held: day.held_seconds,
+                heldByReason: day.held_by_reason)
+            {
+                return found
+            }
+        }
+        let totals = hours.totals
+        return breach(
+            elapsed: totals.elapsed_seconds,
+            classes: [
+                totals.agent_working_seconds, totals.waiting_on_you_seconds, totals.held_seconds,
+                totals.other_seconds,
+            ],
+            held: totals.held_seconds, heldByReason: totals.held_by_reason)
+    }
+
     /// Validate a run timeline's outcome list, mirroring what
     /// signet.ReadRunOutcomes can serve: an unreadable post carries only its
     /// kind; a readable one names its finding and repository; a comment
