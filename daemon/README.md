@@ -4530,8 +4530,11 @@ onboard from a `main` that already carries `.freeside/verify.json`.
 
   The `paths` key of the policy file `freesided submit -policy` reads holds
   the same list in the same order: `admissionauth.ResolvedPathAllowlist`
-  refuses any difference, so change both together while no task is in
-  flight.
+  refuses any difference at submission, so change both together. A task
+  already in flight keeps running after a wider edit and imports under the
+  paths it was admitted with; an edit that removes one of those patterns
+  holds it with a path-boundary mismatch until the pattern is restored
+  (`admissionauth.AdmittedPathAllowlist`).
 
   Allowed doesn't lift the importer's built-in classes. An edit to
   `AGENTS.md`, `CLAUDE.md`, `.claude/**`, or `.agents/skills/**` draws an
