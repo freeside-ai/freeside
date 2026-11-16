@@ -20,6 +20,11 @@ public struct MintedPairingCode: Equatable, Sendable, CustomStringConvertible,
         self.apiURL = apiURL
     }
 
+    /// The code in the four-character groups the pairing screen shows.
+    public var formattedCode: String {
+        PairingModel.groupPairingCode(PairingModel.canonicalPairingCode(code))
+    }
+
     public var description: String {
         "MintedPairingCode(expiresAt: \(expiresAt.formatted(.iso8601)), apiURL: \(apiURL.absoluteString))"
     }

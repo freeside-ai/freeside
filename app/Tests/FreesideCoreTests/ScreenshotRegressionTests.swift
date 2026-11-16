@@ -4138,7 +4138,7 @@
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
                 compatibilityLevel: 1_000, compatibilityFloor: 1_000)
             let panelActions = DaemonMenuPanel.Actions(
-                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, start: {}, stop: {},
+                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
                 openApprovalSettings: {}, quit: {})
             surfaces.append(
                 Surface(
@@ -4227,6 +4227,35 @@
                             actionError: "The daemon could not be stopped: launchctl exited 3.",
                             needsYou: .init(rows: 6),
                             actions: panelActions))))
+
+            // The Pair a Device window (#3286): a code with the phone's
+            // address forwarded from loopback, the same by dusk on a daemon
+            // already on the tailnet, a Mac with no Tailscale address, an
+            // expired code, and a failed request.
+            let pairCode = MintedPairingCode(
+                code: "7KQ4M2XP", expiresAt: screenshotNow.addingTimeInterval(9 * 60 + 41),
+                apiURL: URL(string: "http://127.0.0.1:7331")!)
+            let pairTailnet = URL(string: "http://100.101.102.103:7331")!
+            for (name, colorScheme, state, now) in [
+                (
+                    "pair-device-forwarded", ColorScheme.light,
+                    PairDeviceModel.State.minted(pairCode, .forwarded(pairTailnet)), screenshotNow
+                ),
+                ("pair-device-tailnet-dark", .dark, .minted(pairCode, .tailnet(pairTailnet)), screenshotNow),
+                ("pair-device-this-mac-only", .light, .minted(pairCode, .thisMacOnly(pairCode.apiURL)), screenshotNow),
+                (
+                    "pair-device-expired", .light, .minted(pairCode, .forwarded(pairTailnet)),
+                    pairCode.expiresAt.addingTimeInterval(1)
+                ),
+                ("pair-device-failed", .light, .failed(.refused(exitStatus: 1)), screenshotNow),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: 420,
+                        colorScheme: colorScheme,
+                        view: AnyView(PairDeviceView(state: state, newCode: {}, now: now))))
+            }
 
             var due = AttentionFixtures.degradedReady().item
             due.expires_when = screenshotNow.addingTimeInterval(2 * 3_600)

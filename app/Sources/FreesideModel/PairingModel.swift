@@ -190,7 +190,7 @@ public final class PairingModel {
         }
     }
 
-    static func canonicalPairingCode(_ typed: String) -> String {
+    nonisolated static func canonicalPairingCode(_ typed: String) -> String {
         let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         return String(
             trimmed.uppercased().compactMap { character in
@@ -203,7 +203,7 @@ public final class PairingModel {
             })
     }
 
-    static func groupPairingCode(_ canonical: String) -> String {
+    nonisolated static func groupPairingCode(_ canonical: String) -> String {
         guard !canonical.isEmpty else { return "" }
         var groups: [String] = []
         var start = canonical.startIndex
