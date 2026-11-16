@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -28,19 +30,20 @@ import (
 //     and, having confirmed the old CLI is gone, run it without the joined
 //     condition.
 //
-// Every proof runs under the lane's reconcileMu, so no verification pass of
-// the lane runs beside it: a proof never races a job about to launch under
-// the same invocation, and releasing memory a pass is about to use cannot
-// happen.
+// Every proof holds its run in the lane (productionPublicationWorkflow.runs),
+// so no task of that run runs beside it: a proof never races a job about to
+// launch under the same invocation, and releasing memory a task is about to
+// use cannot happen. Tasks of other runs, which launch under their own
+// invocations, run on (#3214).
 
 const (
 	verificationMemoryHeldItemPrefix = "verification-memory-held-"
 	verificationMemoryHeldCode       = "verification_memory_held"
 )
 
-// ErrPublicationLaneBusy refuses an operator release while a lane pass holds
-// the lane; the operator retries once the pass returns.
-var ErrPublicationLaneBusy = errors.New("the publication lane is running a pass; retry when it finishes")
+// ErrPublicationLaneBusy refuses an operator release while the lane runs work
+// of one of the task's runs; the operator retries once it returns.
+var ErrPublicationLaneBusy = errors.New("the publication lane is running work of this task; retry when it finishes")
 
 func verificationMemoryHeldPrefix(id domain.InvocationID) string {
 	return verificationMemoryHeldItemPrefix + string(id) + "-"
@@ -65,8 +68,8 @@ func verificationMemoryHeldInvocation(itemID domain.ItemID) (domain.InvocationID
 	return domain.InvocationID(rest[:cut]), true
 }
 
-// reproveEndedVerificationReservations is the end-of-task proof. reconcile
-// calls it after its pending loop, still under reconcileMu, with the run of
+// reproveEndedVerificationReservations is the end-of-task proof. A pass
+// calls it after starting its tasks, still under passMu, with the run of
 // every pending task the pass read. pendingKnown is false when a pending task
 // could not be read: that task's run is then unknown, so nothing counts as
 // ended and no proof runs, though alerts whose reservation something else
@@ -75,16 +78,21 @@ func verificationMemoryHeldInvocation(itemID domain.ItemID) (domain.InvocationID
 // proof. Each such reservation is re-proved once per process, so a held one
 // costs at most one proof timeout per start; a restart or the operator
 // command retries.
+//
+// Each run's proofs run in a goroutine that holds the run, which it skips
+// while the run's task goroutine from an earlier pass still runs; it returns
+// the channels of the goroutines it started, and they record a proof's error
+// in the lane's outcomes.
 func (w *productionPublicationWorkflow) reproveEndedVerificationReservations(
 	ctx context.Context, pendingRuns map[domain.RunID]bool, pendingKnown bool,
-) error {
+) ([]<-chan struct{}, error) {
 	if w.proveVerificationAbsent == nil {
 		// Unbound rooms write no ownership records, so no later proof exists.
-		return nil
+		return nil, nil
 	}
 	bound, err := currentLaunchBound(ctx, w.store, w.launchBound)
 	if err != nil || !bound.Budgeted() {
-		return err
+		return nil, err
 	}
 	var open []domain.LaunchReservation
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -92,50 +100,101 @@ func (w *productionPublicationWorkflow) reproveEndedVerificationReservations(
 		open, err = tx.ListOpenVerificationReservations(ctx)
 		return err
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	if err := w.concludeReleasedVerificationAlerts(ctx, open); err != nil {
-		return err
+		return nil, err
 	}
 	if !pendingKnown {
+		return nil, nil
+	}
+	ended := make([]domain.LaunchReservation, 0, len(open))
+	w.verificationMu.Lock()
+	for _, reservation := range open {
+		if !pendingRuns[reservation.RunID] && !w.verificationReproved[reservation.InvocationID] {
+			ended = append(ended, reservation)
+		}
+	}
+	w.verificationMu.Unlock()
+	var started []<-chan struct{}
+	for _, part := range keyedrun.Partition(ended, func(r domain.LaunchReservation) domain.RunID { return r.RunID }) {
+		endRunning := w.running.Begin(domain.RestartBlockerPublication)
+		done := w.runs.Go(part.Key, func() {
+			defer endRunning()
+			for _, reservation := range part.Items {
+				if err := w.reproveEndedVerification(ctx, reservation); err != nil {
+					w.outcomes.record(productionPublicationResult{},
+						fmt.Errorf("re-prove ended verification reservations: %w", err))
+					return
+				}
+			}
+		})
+		if done == nil {
+			endRunning()
+			continue
+		}
+		started = append(started, done)
+	}
+	return started, nil
+}
+
+// reproveEndedVerification runs one ended reservation's proof, once per
+// process, in a goroutine that holds its run.
+func (w *productionPublicationWorkflow) reproveEndedVerification(
+	ctx context.Context, reservation domain.LaunchReservation,
+) error {
+	if ctx.Err() != nil {
+		// Shutting down: a proof cut short would read as held.
 		return nil
 	}
+	w.verificationMu.Lock()
 	if w.verificationReproved == nil {
 		w.verificationReproved = make(map[domain.InvocationID]bool)
 	}
-	for _, reservation := range open {
-		if pendingRuns[reservation.RunID] || w.verificationReproved[reservation.InvocationID] {
-			continue
-		}
-		if ctx.Err() != nil {
-			// Shutting down: a proof cut short would read as held.
-			return nil
-		}
-		w.verificationReproved[reservation.InvocationID] = true
-		run, err := w.verificationRun(ctx, reservation.RunID)
-		if err != nil {
-			return err
-		}
-		proof := w.proveHeldVerification(ctx, run, reservation.InvocationID, false)
-		switch {
-		case proof == nil:
-			if err := w.releaseHeldVerification(ctx, reservation.InvocationID,
-				"Resolved when the end-of-task proof showed every container gone and every command joined."); err != nil {
-				return err
-			}
-		case errors.Is(proof, errProjectImageBuilderBusy):
-			// Another build holds the builder: no proof either way, so the
-			// next pass tries again.
-			delete(w.verificationReproved, reservation.InvocationID)
-		case errors.Is(proof, ward.ErrVerificationAbsenceUnproven):
-			if err := w.fileVerificationMemoryHeld(ctx, run, reservation, proof); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("prove verification %s absent: %w", reservation.InvocationID, proof)
-		}
+	reproved := w.verificationReproved[reservation.InvocationID]
+	w.verificationReproved[reservation.InvocationID] = true
+	w.verificationMu.Unlock()
+	if reproved {
+		return nil
 	}
-	return nil
+	// The pass read the reservation before this goroutine held the run, so
+	// an operator release may have freed it since; proving it again would
+	// at best repeat that proof and at worst file an alert for memory
+	// nothing holds.
+	var stillOpen bool
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		open, err := tx.ListOpenVerificationReservations(ctx)
+		stillOpen = slices.ContainsFunc(open, func(r domain.LaunchReservation) bool {
+			return r.InvocationID == reservation.InvocationID
+		})
+		return err
+	}); err != nil {
+		return err
+	}
+	if !stillOpen {
+		return nil
+	}
+	run, err := w.verificationRun(ctx, reservation.RunID)
+	if err != nil {
+		return err
+	}
+	proof := w.proveHeldVerification(ctx, run, reservation.InvocationID, false)
+	switch {
+	case proof == nil:
+		return w.releaseHeldVerification(ctx, reservation.InvocationID,
+			"Resolved when the end-of-task proof showed every container gone and every command joined.")
+	case errors.Is(proof, errProjectImageBuilderBusy):
+		// Another build holds the builder: no proof either way, so the
+		// next pass tries again.
+		w.verificationMu.Lock()
+		delete(w.verificationReproved, reservation.InvocationID)
+		w.verificationMu.Unlock()
+		return nil
+	case errors.Is(proof, ward.ErrVerificationAbsenceUnproven):
+		return w.fileVerificationMemoryHeld(ctx, run, reservation, proof)
+	default:
+		return fmt.Errorf("prove verification %s absent: %w", reservation.InvocationID, proof)
+	}
 }
 
 // concludeReleasedVerificationAlerts concludes the open alert of every
@@ -147,31 +206,21 @@ func (w *productionPublicationWorkflow) reproveEndedVerificationReservations(
 func (w *productionPublicationWorkflow) concludeReleasedVerificationAlerts(
 	ctx context.Context, open []domain.LaunchReservation,
 ) error {
-	if w.verificationHeldAlerts == nil {
-		tracked := make(map[domain.InvocationID]bool)
-		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-			items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
-			for _, item := range items {
-				if id, ok := verificationMemoryHeldInvocation(item.ID); ok {
-					tracked[id] = true
-				}
-			}
-			return err
-		}); err != nil {
-			return err
-		}
-		w.verificationHeldAlerts = tracked
+	if err := w.loadVerificationHeldAlerts(ctx); err != nil {
+		return err
 	}
 	held := make(map[domain.InvocationID]bool, len(open))
 	for _, reservation := range open {
 		held[reservation.InvocationID] = true
 	}
 	var released []domain.InvocationID
+	w.verificationMu.Lock()
 	for id := range w.verificationHeldAlerts {
 		if !held[id] {
 			released = append(released, id)
 		}
 	}
+	w.verificationMu.Unlock()
 	if len(released) == 0 {
 		return nil
 	}
@@ -187,9 +236,35 @@ func (w *productionPublicationWorkflow) concludeReleasedVerificationAlerts(
 	}); err != nil {
 		return err
 	}
+	w.verificationMu.Lock()
+	defer w.verificationMu.Unlock()
 	for _, id := range released {
 		delete(w.verificationHeldAlerts, id)
 	}
+	return nil
+}
+
+// loadVerificationHeldAlerts loads, on the first pass of a process, the
+// alerts an earlier process left open.
+func (w *productionPublicationWorkflow) loadVerificationHeldAlerts(ctx context.Context) error {
+	w.verificationMu.Lock()
+	defer w.verificationMu.Unlock()
+	if w.verificationHeldAlerts != nil {
+		return nil
+	}
+	tracked := make(map[domain.InvocationID]bool)
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
+		for _, item := range items {
+			if id, ok := verificationMemoryHeldInvocation(item.ID); ok {
+				tracked[id] = true
+			}
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	w.verificationHeldAlerts = tracked
 	return nil
 }
 
@@ -249,6 +324,8 @@ func (w *productionPublicationWorkflow) releaseHeldVerification(
 	}); err != nil {
 		return err
 	}
+	w.verificationMu.Lock()
+	defer w.verificationMu.Unlock()
 	delete(w.verificationHeldAlerts, invocation)
 	return nil
 }
@@ -303,6 +380,8 @@ func (w *productionPublicationWorkflow) fileVerificationMemoryHeld(
 	}); err != nil {
 		return err
 	}
+	w.verificationMu.Lock()
+	defer w.verificationMu.Unlock()
 	if w.verificationHeldAlerts != nil {
 		w.verificationHeldAlerts[reservation.InvocationID] = true
 	}
@@ -386,9 +465,12 @@ type VerificationMemoryInvocation struct {
 // only the joined-command condition: it still refuses a live call, retries
 // owned cleanup, and proves every owned container absent.
 //
-// It refuses while a lane pass runs instead of waiting for it, and refuses a
-// task with a pending publication task, or when a pending task cannot be
-// read: that task's next pass runs its own proof, and its run is unknown.
+// It holds every run of the task that owns an open reservation in the lane
+// (holdRuns), so no task or proof of those runs runs beside it, and refuses
+// with ErrPublicationLaneBusy instead of waiting when one does. Tasks of
+// other runs run on (#3214). It also refuses a task with a pending
+// publication task, or when a pending task cannot be read: that task's next
+// pass runs its own proof, and its run is unknown.
 func (e *Engine) ReleaseVerificationMemory(
 	ctx context.Context, taskID domain.TaskID, commandGone bool,
 ) (VerificationMemoryRelease, error) {
@@ -400,75 +482,107 @@ func (e *Engine) ReleaseVerificationMemory(
 	if w == nil {
 		return report, errors.New("this daemon runs no publication lane")
 	}
-	if !w.reconcileMu.TryLock() {
-		return report, ErrPublicationLaneBusy
-	}
-	defer w.reconcileMu.Unlock()
-	pending, _, _, err := w.readPendingTasks(ctx)
+	owned, err := ownedHeldVerifications(ctx, w.store, taskID, nil)
 	if err != nil {
 		return report, err
 	}
-	pendingRuns := make(map[domain.RunID]bool, len(pending))
-	for _, entry := range pending {
-		task, err := w.decodePendingTask(ctx, entry)
-		if err != nil {
-			return report, fmt.Errorf("pending publication task %q cannot be read, so whether this task has ended is unknown: %w",
-				entry.IdempotencyKey, err)
-		}
-		pendingRuns[task.RunID] = true
+	runIDs := make([]domain.RunID, 0, len(owned))
+	for _, h := range owned {
+		runIDs = append(runIDs, h.run.ID)
 	}
-	type held struct {
-		run         domain.Run
-		reservation domain.LaunchReservation
+	if !w.holdRuns(runIDs, func() { err = e.releaseHeldVerifications(ctx, w, &report, runIDs) }) {
+		return report, ErrPublicationLaneBusy
 	}
-	var owned []held
-	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+	return report, err
+}
+
+// ownedHeldVerifications reads the open verification reservations of
+// taskID's runs, only those of runs in among when it is not nil.
+func ownedHeldVerifications(
+	ctx context.Context, st *store.Store, taskID domain.TaskID, among []domain.RunID,
+) ([]heldVerification, error) {
+	var owned []heldVerification
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		open, err := tx.ListOpenVerificationReservations(ctx)
 		if err != nil {
 			return err
 		}
 		for _, reservation := range open {
+			if among != nil && !slices.Contains(among, reservation.RunID) {
+				continue
+			}
 			run, err := tx.GetRun(ctx, reservation.RunID)
 			if err != nil {
 				return err
 			}
 			if run.TaskID == taskID {
-				owned = append(owned, held{run, reservation})
+				owned = append(owned, heldVerification{run, reservation})
 			}
 		}
 		return nil
-	}); err != nil {
-		return report, err
+	})
+	return owned, err
+}
+
+type heldVerification struct {
+	run         domain.Run
+	reservation domain.LaunchReservation
+}
+
+// releaseHeldVerifications is ReleaseVerificationMemory's part that holds
+// the task's runs. It reads the reservations and the pending tasks there, so
+// a task or proof the lane started before the hold has ended, and none
+// starts until the release returns: a reservation a proof released before
+// the hold is not released again.
+func (e *Engine) releaseHeldVerifications(
+	ctx context.Context, w *productionPublicationWorkflow, report *VerificationMemoryRelease, runIDs []domain.RunID,
+) error {
+	owned, err := ownedHeldVerifications(ctx, w.store, report.TaskID, runIDs)
+	if err != nil {
+		return err
+	}
+	pending, _, _, err := w.readPendingTasks(ctx)
+	if err != nil {
+		return err
+	}
+	pendingRuns := make(map[domain.RunID]bool, len(pending))
+	for _, entry := range pending {
+		task, err := w.decodePendingTask(ctx, entry)
+		if err != nil {
+			return fmt.Errorf("pending publication task %q cannot be read, so whether this task has ended is unknown: %w",
+				entry.IdempotencyKey, err)
+		}
+		pendingRuns[task.RunID] = true
 	}
 	for _, h := range owned {
 		if pendingRuns[h.run.ID] {
-			return report, fmt.Errorf("task %s run %s still has a pending publication task; its next pass proves its own containers",
-				taskID, h.run.ID)
+			return fmt.Errorf("task %s run %s still has a pending publication task; its next pass proves its own containers",
+				report.TaskID, h.run.ID)
 		}
 	}
 	for _, h := range owned {
 		row := VerificationMemoryInvocation{
 			InvocationID: h.reservation.InvocationID, RunID: h.run.ID, MemoryMiB: h.reservation.TotalMiB(),
 		}
-		proof := w.proveHeldVerification(ctx, h.run, h.reservation.InvocationID, commandGone)
+		proof := w.proveHeldVerification(ctx, h.run, h.reservation.InvocationID, report.CommandGone)
 		if proof != nil {
 			row.Reason = strings.ReplaceAll(proof.Error(), "\n", "; ")
 			report.Invocations = append(report.Invocations, row)
 			continue
 		}
 		reason := "Resolved when the operator's release proved every container gone and every command joined."
-		if commandGone {
+		if report.CommandGone {
 			reason = "Resolved when the operator confirmed the command gone and the release proved every container gone."
 		}
 		if err := w.releaseHeldVerification(ctx, h.reservation.InvocationID, reason); err != nil {
-			return report, err
+			return err
 		}
-		if commandGone && e.logger != nil {
+		if report.CommandGone && e.logger != nil {
 			e.logger.Warn("released verification memory on the operator's word that its command is gone",
-				"task", taskID, "run", h.run.ID, "invocation", h.reservation.InvocationID)
+				"task", report.TaskID, "run", h.run.ID, "invocation", h.reservation.InvocationID)
 		}
 		row.Released = true
 		report.Invocations = append(report.Invocations, row)
 	}
-	return report, nil
+	return nil
 }

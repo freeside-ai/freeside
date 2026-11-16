@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,11 +51,17 @@ func openIntegrationObservation(ctx context.Context, path string, recipes ...dom
 }
 
 type productionRoom struct {
+	// mu guards the counters and records, which tasks of different runs
+	// update at once now that the lane runs them concurrently (#3214).
+	mu     sync.Mutex
 	recipe []byte
 	read   func(context.Context) ([]byte, error)
 	reads  int
 	runs   int
 	fail   bool
+	// gate, when set, runs before every command outside mu, so a test can
+	// hold a verification in the room or meet two verifications there.
+	gate func(context.Context) error
 	// runErr, when set, is the room's own failure for every command, as a
 	// verification container killed at its memory limit returns it.
 	runErr error
@@ -65,7 +72,9 @@ type productionRoom struct {
 }
 
 func (r *productionRoom) ReadRecipe(ctx context.Context) ([]byte, error) {
+	r.mu.Lock()
 	r.reads++
+	r.mu.Unlock()
 	if r.read != nil {
 		return r.read(ctx)
 	}
@@ -73,9 +82,16 @@ func (r *productionRoom) ReadRecipe(ctx context.Context) ([]byte, error) {
 }
 
 func (r *productionRoom) Run(
-	_ context.Context, _ string, _ []string,
+	ctx context.Context, _ string, _ []string,
 ) (verify.StepResult, error) {
+	r.mu.Lock()
 	r.runs++
+	r.mu.Unlock()
+	if r.gate != nil {
+		if err := r.gate(ctx); err != nil {
+			return verify.StepResult{}, err
+		}
+	}
 	if r.runErr != nil {
 		return verify.StepResult{}, r.runErr
 	}
@@ -997,6 +1013,8 @@ func (p *productionPublicationHarness) newEngineForMode(
 				if image.ID != p.image.ID && !p.rebuiltImages[image.ID] {
 					return nil, domain.ErrParentKeyMismatch
 				}
+				p.room.mu.Lock()
+				defer p.room.mu.Unlock()
 				p.room.sizes = append(p.room.sizes, size)
 				p.room.images = append(p.room.images, image.ID)
 				return p.room, nil

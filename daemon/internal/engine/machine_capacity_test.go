@@ -263,15 +263,22 @@ func (f *keptWaitFixture) reserveNewer(t *testing.T) error {
 	})
 }
 
-// pass runs a publication pass that works on another task for busy.
+// pass starts a publication pass whose task goroutine works on another task
+// for busy.
 func (f *keptWaitFixture) pass(t *testing.T, busy time.Duration, during func()) {
 	t.Helper()
-	f.keeper.keepDuring(t.Context(), f.store, time.Now, slog.New(slog.DiscardHandler), func() {
-		time.Sleep(busy)
-		if during != nil {
-			during()
-		}
-	})
+	end := f.startTask(t, f.keeper.startPass(time.Now()))
+	defer end()
+	time.Sleep(busy)
+	if during != nil {
+		during()
+	}
+}
+
+// startTask counts a task goroutine a pass started with since as running.
+func (f *keptWaitFixture) startTask(t *testing.T, since time.Time) (end func()) {
+	t.Helper()
+	return f.keeper.keep(t.Context(), f.store, time.Now, slog.New(slog.DiscardHandler), since)
 }
 
 func wantBehindOne(t *testing.T, err error, what string) {
@@ -283,7 +290,7 @@ func wantBehindOne(t *testing.T, err error, what string) {
 }
 
 // TestPublicationPassKeepsAnOlderVerificationAhead: an older task's
-// verification waits for memory while the serial publication lane spends 45
+// verification waits for memory while a publication task goroutine spends 45
 // minutes, far past the wait's lease, on another task's verification. A newer
 // task's writer that asks meanwhile, and again once memory frees after the
 // pass, still waits behind it, and the older launch reserves first (#2953).
@@ -381,5 +388,52 @@ func TestKeptWaitLapsesOnceNothingKeepsIt(t *testing.T) {
 				t.Fatal("the lapsed wait was not dropped")
 			}
 		})
+	})
+}
+
+// TestATaskThatOutlivesItsPassKeepsAnOlderVerificationAhead: the lane's
+// passes no longer wait for their tasks (#3214), so while one task goroutine
+// spends 50 minutes on a verification, passes keep starting every 30 seconds
+// and another task goroutine starts 35 minutes in. The waits the first
+// goroutine's run pursues stay kept for as long as it runs, from the earliest
+// pass a running goroutine came from, so a newer writer near the end still
+// waits behind the older verification.
+func TestATaskThatOutlivesItsPassKeepsAnOlderVerificationAhead(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newKeptWaitFixture(t)
+		if err := f.reserveOlder(t); !errors.Is(err, domain.ErrMachineCapacity) {
+			t.Fatalf("older verification = %v, want it waiting for memory", err)
+		}
+		endLong := f.startTask(t, f.keeper.startPass(time.Now()))
+		defer endLong()
+		var endLate func()
+		for elapsed := time.Duration(0); elapsed < 49*time.Minute; elapsed += 30 * time.Second {
+			time.Sleep(30 * time.Second)
+			since := f.keeper.startPass(time.Now())
+			if endLate == nil && elapsed >= 35*time.Minute {
+				endLate = f.startTask(t, since)
+				defer endLate()
+			}
+		}
+		wantBehindOne(t, f.reserveNewer(t), "newer writer while the first task still runs")
+	})
+}
+
+// TestTheKeepaliveStopsWithTheLastTask: once no task goroutine runs, nothing
+// keeps the older verification's wait, which lapses with its lease, so a
+// newer writer that asks then is no longer behind it.
+func TestTheKeepaliveStopsWithTheLastTask(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newKeptWaitFixture(t)
+		if err := f.reserveOlder(t); !errors.Is(err, domain.ErrMachineCapacity) {
+			t.Fatalf("older verification = %v, want it waiting for memory", err)
+		}
+		f.pass(t, 3*time.Minute, nil)
+		time.Sleep(10 * time.Minute)
+		if err := f.reserveNewer(t); err != nil {
+			t.Fatalf("newer writer after the keepalive stopped = %v, want it reserved", err)
+		}
 	})
 }

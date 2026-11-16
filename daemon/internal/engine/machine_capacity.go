@@ -226,38 +226,102 @@ func recordLaunchOrder(
 }
 
 // launchWaitKeeper keeps the production publication lane's memory waits alive
-// while one of its passes runs (store.KeepLaunchWaits). The lane is serial, so
-// it refuses a launch it waits on again only when a pass reaches that launch's
-// task; one long verification of another task would otherwise outlast the
-// wait's lease and let a newer launch take memory ahead of it (#2953). A
-// daemon that is gone runs no pass, so its waits still lapse.
+// while any of its task goroutines runs (store.KeepLaunchWaits). The lane
+// refuses a launch it waits on again only when a pass starts that launch's
+// task, and a run's tasks wait for that run's goroutine: one long
+// verification of another task of the run would otherwise outlast the wait's
+// lease and let a newer launch take memory ahead of it (#2953). A daemon
+// that is gone runs no task, so its waits still lapse.
+//
+// Each holder keeps the waits refused since the start of the pass before
+// the one that started it, as one serial pass did before the lane ran tasks
+// at once (#3214). The keeper keeps from the earliest such start among the
+// running holders, so a task goroutine that outlives many short passes still
+// keeps the waits its own run pursues.
 type launchWaitKeeper struct {
-	// mu holds for a whole pass, so lastStart is the start of the pass
-	// before this one even when two callers reconcile the lane at once.
 	mu        sync.Mutex
 	lastStart time.Time
+	// holders counts the running holders by the since each keeps from.
+	holders map[time.Time]int
+	// stop ends the ticker goroutine and waits for it; nil while no holder
+	// runs.
+	stop func()
 }
 
-// keepDuring runs pass and, until it returns, writes a keepalive about every
-// store.LaunchWaitRefresh for the waits refused since the previous pass's
-// start minus the lease, or this pass's on the first pass after a start. Each
-// tick reads the waits afresh, so a wait first refused earlier in this pass
-// is kept from the next tick on. A failed keepalive is logged, not returned:
-// it costs a wait at most its place in the order, and the pass itself
-// surfaces a broken store. The ticker goroutine is joined before return.
-func (k *launchWaitKeeper) keepDuring(
-	ctx context.Context, st *store.Store, now func() time.Time, logger *slog.Logger, pass func(),
-) {
+// startPass records a pass's start and returns the since the holders it
+// starts keep from: the start of the pass before it, or its own start on
+// the first pass of the process. Passes are serialized, so lastStart is
+// always the previous pass's.
+func (k *launchWaitKeeper) startPass(start time.Time) (since time.Time) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	start := now()
-	since := k.lastStart
+	since = k.lastStart
 	if since.IsZero() {
 		since = start
 	}
 	k.lastStart = start
+	return since
+}
 
-	keepCtx, stop := context.WithCancel(ctx)
+// keep counts one holder that keeps the waits refused since since minus the
+// lease, until the returned end is called. The first holder starts a ticker
+// that writes a keepalive about every store.LaunchWaitRefresh and the last
+// one's end stops and joins it. Each tick reads the waits afresh, so a wait
+// first refused while a holder runs is kept from the next tick on. A failed
+// keepalive is logged, not returned: it costs a wait at most its place in the
+// order, and the task itself surfaces a broken store. The ticker writes under
+// a context detached from ctx, since a holder that started it may end before
+// later ones; end is what stops it.
+func (k *launchWaitKeeper) keep(
+	ctx context.Context, st *store.Store, now func() time.Time, logger *slog.Logger, since time.Time,
+) (end func()) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.holders == nil {
+		k.holders = map[time.Time]int{}
+	}
+	k.holders[since]++
+	if k.stop == nil {
+		k.stop = k.startTicker(context.WithoutCancel(ctx), st, now, logger)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			k.mu.Lock()
+			k.holders[since]--
+			if k.holders[since] == 0 {
+				delete(k.holders, since)
+			}
+			var stop func()
+			if len(k.holders) == 0 {
+				stop, k.stop = k.stop, nil
+			}
+			k.mu.Unlock()
+			if stop != nil {
+				stop()
+			}
+		})
+	}
+}
+
+// earliestSince is the since the keepalive keeps from, and false when no
+// holder runs.
+func (k *launchWaitKeeper) earliestSince() (time.Time, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var earliest time.Time
+	for since := range k.holders {
+		if earliest.IsZero() || since.Before(earliest) {
+			earliest = since
+		}
+	}
+	return earliest, !earliest.IsZero()
+}
+
+func (k *launchWaitKeeper) startTicker(
+	ctx context.Context, st *store.Store, now func() time.Time, logger *slog.Logger,
+) (stop func()) {
+	keepCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -269,6 +333,10 @@ func (k *launchWaitKeeper) keepDuring(
 				return
 			case <-ticker.C:
 			}
+			since, held := k.earliestSince()
+			if !held {
+				continue
+			}
 			err := st.WriteInternal(keepCtx, func(tx *store.InternalTx) error {
 				return tx.KeepLaunchWaits(keepCtx, since, now())
 			})
@@ -277,9 +345,8 @@ func (k *launchWaitKeeper) keepDuring(
 			}
 		}
 	}()
-	defer func() {
-		stop()
+	return func() {
+		cancel()
 		<-done
-	}()
-	pass()
+	}
 }

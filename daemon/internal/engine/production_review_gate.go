@@ -706,7 +706,7 @@ func (w *productionPublicationWorkflow) passCurrentReviewRecord(
 	}); err != nil {
 		return productionReviewPending, err
 	}
-	delete(w.reviewRetryAfter, task.RunID)
+	w.clearReviewRetryDeadline(task.RunID)
 	return productionReviewPassed, nil
 }
 
@@ -770,7 +770,7 @@ func (w *productionPublicationWorkflow) chooseReviewRound(
 		if latestFailure.Class == domain.ReviewFailureTransient {
 			retryAt := latestFailure.ObservedAt.Add(reviewRetryDelay(latestFailure.Round))
 			if w.now().Before(retryAt) {
-				w.reviewRetryAfter[task.RunID] = retryAt
+				w.setReviewRetryDeadline(task.RunID, retryAt)
 			}
 		}
 	}
@@ -803,7 +803,7 @@ func (w *productionPublicationWorkflow) chooseReviewRound(
 		}
 		return 0, productionReviewEscalated, true, nil
 	}
-	if retryAt, ok := w.reviewRetryAfter[task.RunID]; ok {
+	if retryAt, ok := w.reviewRetryDeadline(task.RunID); ok {
 		if w.now().Before(retryAt) {
 			return 0, productionReviewPending, true, nil
 		}
@@ -1448,7 +1448,7 @@ func (w *productionPublicationWorkflow) scheduleReviewInvocationRetry(
 		return false, nil
 	}
 	observedAt := w.now().UTC()
-	w.reviewRetryAfter[runID] = observedAt.Add(reviewRetryDelay(round))
+	w.setReviewRetryDeadline(runID, observedAt.Add(reviewRetryDelay(round)))
 	retry := domain.ReviewRetry{
 		RunID: runID, InvocationID: id, Round: round,
 		BaseSHA: baseSHA, HeadSHA: headSHA, ObservedAt: observedAt, Reason: cause.Error(),
@@ -1520,7 +1520,7 @@ func (w *productionPublicationWorkflow) reconstructReviewRetryDeadline(
 	}
 	retryAt := retry.ObservedAt.Add(reviewRetryDelay(retry.Round))
 	if w.now().Before(retryAt) {
-		w.reviewRetryAfter[task.RunID] = retryAt
+		w.setReviewRetryDeadline(task.RunID, retryAt)
 		return true, nil
 	}
 	// Deadline already passed: proceed now; the next transient overwrites the
@@ -1602,7 +1602,7 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 		// A terminal transient advances the round; its deadline reconstructs
 		// from the persisted ReviewFailure.ObservedAt, not the same-invocation
 		// row (which the write above cleared).
-		w.reviewRetryAfter[task.RunID] = w.now().Add(reviewRetryDelay(round))
+		w.setReviewRetryDeadline(task.RunID, w.now().Add(reviewRetryDelay(round)))
 		return productionReviewPending, nil
 	case domain.ReviewFailureQuota:
 		record := domain.ReviewRecord{

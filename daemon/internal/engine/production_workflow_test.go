@@ -2161,7 +2161,7 @@ func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := workflow.reconcile(ctx); err == nil {
+				if _, err := workflow.reconcile(ctx, true); err == nil {
 					t.Fatal("reconcile accepted mismatched reevaluation intent")
 				}
 				afterReconcile, err := st.ServerState(ctx)
@@ -2177,7 +2177,7 @@ func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := workflow.reconcile(ctx); err == nil {
+				if _, err := workflow.reconcile(ctx, true); err == nil {
 					t.Fatal("hold-only reconcile accepted mismatched reevaluation intent")
 				}
 				afterHoldOnly, err := st.ServerState(ctx)

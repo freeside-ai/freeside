@@ -55,10 +55,11 @@ WHERE launch_waits.run_id IS NULL`
 
 // A launch still pursued is refused, and so refreshes its wait, each time its
 // lane retries it, at most once every LaunchWaitRefresh. The production
-// publication lane is serial, so while one long pass works on another task it
-// retries none of its waits; the engine keeps alive the waits refused recently
-// enough that the lane may still pursue them, about every LaunchWaitRefresh,
-// until the pass returns (KeepLaunchWaits). The gate drops a wait whose latest refusal
+// publication lane runs a run's tasks one after another, so while one long
+// task works it retries none of its run's other waits; the engine keeps alive
+// the waits refused recently enough that the lane may still pursue them,
+// about every LaunchWaitRefresh, until no task of the lane runs
+// (KeepLaunchWaits). The gate drops a wait whose latest refusal
 // and latest keepalive are both older than launchWaitLease, because nothing
 // pursues that launch any more: its review failed for good, its task was
 // blocked, its shadow arm was abandoned, or its daemon is gone and writes
@@ -537,13 +538,15 @@ func (tx *WriteTx) ClearDaemonLaunchWaits(ctx context.Context) error {
 }
 
 // KeepLaunchWaits keeps alive, at at, the waits a running production
-// publication pass may still be pursuing: those last refused at or after since
-// minus launchWaitLease, where since is the start of the previous pass, or of
-// this one when it is the first. The set does not tell lanes apart, so it also
+// publication task may still be pursuing: those last refused at or after since
+// minus launchWaitLease, where since is the start of the pass before the one
+// that started the earliest running task, or of that pass when it is the
+// first. The set does not tell lanes apart, so it also
 // holds dispatch-loop waits, but never a daemon wait, which its own waiter
 // refreshes. A wait the lane pursues is refused again in every pass that
 // reaches its task, so it stays in that set; one nothing pursues
-// drops out after two passes at most and then lapses. A wait already lapsed at
+// drops out once every running task started at least two passes after its
+// last refusal, and then lapses. A wait already lapsed at
 // at stays lapsed: a keepalive extends a live wait, never revives one. The
 // keepalive moves only kept_at, never refused_at, so it cannot carry itself
 // forward from one pass to the next. Waits are not synchronized state, so this writes no

@@ -39,11 +39,13 @@ func (w *productionPublicationWorkflow) reconcileClosedRunPublication(ctx contex
 // Closed runs keep their real provider and forge outcomes. This sweep is
 // independent of publication tasks: a ready task can already have left the
 // queue while its shadow review or an external acknowledgement is outstanding.
-// It holds the lane's mutex for the publication pacing state; the lane runs
-// it before reconcile, which takes the same mutex, so the two never nest.
+// closedObservationMu serializes the sweep for the publication pacing state.
+// Each run's observation holds that run in the lane (holdRuns), so it never
+// runs beside a task goroutine of the run that closed while it ran; such a
+// run is observed on a later pass, once its goroutine has returned.
 func (w *productionPublicationWorkflow) observeClosedWorkflows(ctx context.Context) error {
-	w.reconcileMu.Lock()
-	defer w.reconcileMu.Unlock()
+	w.closedObservationMu.Lock()
+	defer w.closedObservationMu.Unlock()
 	if w.closedPublicationRetry == nil {
 		w.closedPublicationRetry = make(map[domain.RunID]closedPublicationPace)
 	}
@@ -57,33 +59,43 @@ func (w *productionPublicationWorkflow) observeClosedWorkflows(ctx context.Conte
 	}
 	for _, closure := range closures {
 		for _, runID := range closure.RunIDs {
-			var reviews []domain.ReviewRequestRecord
-			if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-				var err error
-				reviews, err = tx.ListReviewRequests(ctx, runID)
-				return err
-			}); err != nil {
+			var err error
+			w.holdRuns([]domain.RunID{runID}, func() { err = w.observeClosedRun(ctx, runID) })
+			if err != nil {
 				return err
 			}
-			for _, review := range reviews {
-				for _, arm := range []struct {
-					id     domain.InvocationID
-					source exec.ReviewSource
-				}{
-					{review.InvocationID, w.reviewSource},
-					{ProductionShadowReviewInvocationID(runID, review.Round), w.shadowReviewSource},
-				} {
-					if arm.source == nil {
-						continue
-					}
-					if err := w.observeClosedReview(ctx, review, arm.id, arm.source); err != nil {
-						w.logger.Warn("closed workflow review observation remains unresolved", "run", runID, "invocation", arm.id, "error", err)
-					}
-				}
-			}
-			w.observeClosedPublication(ctx, runID)
 		}
 	}
+	return nil
+}
+
+// observeClosedRun observes one closed run's reviews and publication.
+func (w *productionPublicationWorkflow) observeClosedRun(ctx context.Context, runID domain.RunID) error {
+	var reviews []domain.ReviewRequestRecord
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		reviews, err = tx.ListReviewRequests(ctx, runID)
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, review := range reviews {
+		for _, arm := range []struct {
+			id     domain.InvocationID
+			source exec.ReviewSource
+		}{
+			{review.InvocationID, w.reviewSource},
+			{ProductionShadowReviewInvocationID(runID, review.Round), w.shadowReviewSource},
+		} {
+			if arm.source == nil {
+				continue
+			}
+			if err := w.observeClosedReview(ctx, review, arm.id, arm.source); err != nil {
+				w.logger.Warn("closed workflow review observation remains unresolved", "run", runID, "invocation", arm.id, "error", err)
+			}
+		}
+	}
+	w.observeClosedPublication(ctx, runID)
 	return nil
 }
 

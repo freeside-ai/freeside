@@ -2432,6 +2432,16 @@ one. A launch waiting for its pool slot joins that order only once the slot
 is free, and a launch nothing retries any more, such as a review that failed
 for good, leaves it five minutes after its last refusal.
 
+The publication lane advances independent runs at once (#3214). Each pass
+starts each run's pending tasks in that run's own goroutine and doesn't wait
+for them, so one long verification delays only its own run, and a task
+queued meanwhile starts on the next pass. A run's tasks still run one after
+another, in the order the pass read them. The lane adds no cap of its own:
+the memory budget, the macOS verification executor's slots, the review
+pools, the judgment sites' call limits, and the one image builder bound how
+much runs at once. While any of its tasks runs, the lane keeps its waiting
+launches in the order, even one whose run is busy with another task.
+
 The daemon's own containers reserve too: an image upkeep build with its
 recipe read and probes, the builder VM, a loopback registry a build starts,
 each ward proof pass (two VMs at the conformance size), each model discovery
@@ -2518,8 +2528,10 @@ reservation is released.
 releases each reservation it proves. It runs inside the daemon, so it refuses
 when the daemon isn't running. It also refuses a task with a pending
 publication task, whose next pass proves its own containers, and reports the
-lane busy instead of waiting while a pass runs; retry then. It prints one row
-per held invocation: `released`, or held with the proof's reason.
+lane busy instead of waiting while the lane runs work of one of the task's
+runs, or while the daemon shuts down; retry then. Work of other runs
+doesn't stop it. It prints one row per held invocation: `released`, or held
+with the proof's reason.
 
 ```sh
 freesided release-verification-memory \
@@ -5485,11 +5497,12 @@ restart during a build converges on the image the build recorded and does not
 build a second one.
 
 One build, with its proofs, is bounded at one hour. The proofs run the
-candidate's verification commands, and the lane handles one task at a time, so
-a build that does not finish is a verdict (`build_or_proof_failed`) and not a
-retry. The bound covers the build and its proofs, not the builder's cleanup
-afterwards: a container runtime that stalls while images are removed holds
-the lane until the daemon restarts (#1806).
+candidate's verification commands, and a build holds the daemon's one image
+builder, so an unbounded build would stop every other rebuild and image
+upkeep; a build that does not finish is a verdict (`build_or_proof_failed`)
+and not a retry. The bound covers the build and its proofs, not the builder's
+cleanup afterwards: a container runtime that stalls while images are removed
+holds the builder, and its task's run, until the daemon restarts (#1806).
 
 A refusal is the task's recorded verification result, so it does not clear
 when the daemon is later given `-base-build-ref` or the policy changes. It
@@ -6346,10 +6359,11 @@ current lineup pins.
 - **The triager is off without an escalated line.** It is off, not unbound,
   while the specifier's lineup line names no escalated counterpart, so a tree
   adopted before triage raises no `judgment_role_unbound` item.
-- **One judgment at a time.** Triage calls run one at a time. A triage call
-  that overlaps a classifier, adjudicator, or drift-auditor call fails at
-  once on the shared slot and is recorded as `call_failed`, so that task
-  escalates.
+- **A busy site waits its turn.** Calls at one site on one usage pool run
+  up to the pool's `-max-calls-per-site` at once. A triage call past that
+  limit waits for a place, first come first served, and the wait doesn't
+  count against its timeout; it never fails because another task is calling
+  (#3225).
 - **A failure is final.** A task whose source fetch or call failed stays
   escalated; triage never runs for it again.
 - **Admission waits for the call.** The call runs inside the specifier's

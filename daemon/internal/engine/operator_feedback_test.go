@@ -1372,7 +1372,7 @@ func TestProductionPublicationContinuesAfterReturnedFeedbackFailure(t *testing.T
 		artifacts: f.blobs, workDir: t.TempDir(), now: func() time.Time { return *f.now },
 		holdRetryAfter: make(map[string]time.Time),
 	}
-	result, err := workflow.reconcile(t.Context())
+	result, err := workflow.reconcile(t.Context(), true)
 	if err == nil || !strings.Contains(err.Error(), `operator feedback command "return-isolation"`) ||
 		!strings.Contains(err.Error(), `task "unattributable-task" cannot be reconstructed`) {
 		t.Fatalf("isolated feedback and publication errors = %#v, %v", result, err)

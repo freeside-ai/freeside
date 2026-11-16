@@ -127,9 +127,6 @@ type Engine struct {
 	// WithMachineCapacity); each launch reads the budget in force through
 	// launchBoundAt.
 	launchBound ward.LaunchBound
-	// launchWaits keeps the publication lane's memory waits alive while a
-	// pass runs; process state only.
-	launchWaits launchWaitKeeper
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
 	pace observationPace
@@ -399,20 +396,39 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	return result, nil
 }
 
-// ReconcileProductionPublications advances only the production publication
-// lane: it clones the exact base, replays the export, verifies in a container,
-// and calls GitHub, so one pass can block for minutes at an external boundary.
-// Keeping it off Reconcile is what lets the rest of the engine keep its
-// cadence while a publication is stuck (issue #425). Per-task serialization is
-// unchanged: the lane holds its own mutex, and each task still takes its
-// on-disk lock.
+// ReconcileProductionPublications runs one pass of the production publication
+// lane and waits for the task work it started: the lane clones the exact
+// base, replays the export, verifies in a container, and calls GitHub, so
+// one pass can block for minutes at an external boundary. Keeping it off
+// Reconcile is what lets the rest of the engine keep its cadence while a
+// publication is stuck (issue #425). The pass starts each run's tasks in
+// that run's own goroutine, so independent runs advance at once (#3214),
+// and it returns once they have finished, with their counts and errors, as
+// a test or a one-shot caller expects. Each task still takes its on-disk
+// lock.
 func (e *Engine) ReconcileProductionPublications(ctx context.Context) (ReconcileResult, error) {
+	return e.reconcileProductionPublications(ctx, true)
+}
+
+// reconcileProductionPublications runs one lane pass. With wait false the
+// pass returns once it has started its tasks, and reports what tasks
+// finished since the previous pass instead of what it started.
+func (e *Engine) reconcileProductionPublications(ctx context.Context, wait bool) (ReconcileResult, error) {
 	if e.productionPublication == nil {
 		return ReconcileResult{}, errors.New("production publication workflow is not configured")
 	}
 	end, run, err := e.beginPublicationPass(ctx)
-	if err != nil || !run {
+	if err != nil {
 		return ReconcileResult{}, err
+	}
+	if !run {
+		// A drain refuses the pass, but task goroutines started before it
+		// still finish, and an error one finished with stops the lane as it
+		// would after any pass. A refused pass reports no counts.
+		if _, err := e.productionPublication.outcomes.collect(); err != nil {
+			return ReconcileResult{}, fmt.Errorf("reconcile production publications: %w", err)
+		}
+		return ReconcileResult{}, nil
 	}
 	defer end()
 	if e.inference != nil {
@@ -424,10 +440,7 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	if err := e.productionPublication.observeClosedWorkflows(ctx); err != nil {
 		return ReconcileResult{}, err
 	}
-	var publication productionPublicationResult
-	e.launchWaits.keepDuring(ctx, e.store, e.productionPublication.now, e.logger, func() {
-		publication, err = e.productionPublication.reconcile(ctx)
-	})
+	publication, err := e.productionPublication.reconcile(ctx, wait)
 	result := ReconcileResult{
 		RunTransitions:            publication.feedbackTransitions,
 		ResultsAccepted:           publication.accepted,
@@ -451,6 +464,8 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 // marks that review's outcome ready and frees the slot, so pausing every pass
 // would hold readiness at not-ready for good. Such a pass launches nothing
 // new, since every launch inside it checks for both itself (issue #3104).
+// The count covers the pass alone: each task goroutine it starts counts as
+// running publication work on its own until it returns (startRuns).
 func (e *Engine) beginPublicationPass(ctx context.Context) (end func(), run bool, err error) {
 	end = e.running.Begin(domain.RestartBlockerPublication)
 	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -512,16 +527,24 @@ func (e *Engine) waitOffPass() {
 // GitHub) for minutes, and inside Run that would stall every unrelated run,
 // invocation, and attention item for the same span (issue #425).
 //
-// Cancellation stops the loop where Run's does: the in-flight task's own
-// context is canceled with it, so the caller's wait ends once the boundary
-// returns and the durable task stays pending for the next process.
+// Its passes do not wait for the tasks they start, so a task queued while
+// another runs starts on the next pass (#3214). A task error that would have
+// stopped a pass stops the next one instead, and so the loop. On return,
+// whether by cancellation or by that error, it cancels every task goroutine
+// and waits for each: a canceled task's boundary returns and its durable task
+// stays pending for the next process.
 func (e *Engine) RunProductionPublications(ctx context.Context, interval time.Duration) error {
 	if e.productionPublication == nil {
 		return errors.New("production publication workflow is not configured")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		cancel()
+		e.productionPublication.runs.Wait()
+	}()
 	return runReconcileLoop(ctx, e.logger, "run production publications", interval,
 		func(ctx context.Context) error {
-			_, err := e.ReconcileProductionPublications(ctx)
+			_, err := e.reconcileProductionPublications(ctx, false)
 			return err
 		})
 }

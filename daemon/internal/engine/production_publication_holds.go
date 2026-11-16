@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -15,6 +16,8 @@ func (w *productionPublicationWorkflow) pruneHeldTaskRetries(pending []store.Que
 	for _, entry := range pending {
 		pendingKeys[entry.IdempotencyKey] = struct{}{}
 	}
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
 	for key := range w.holdRetryAfter {
 		if _, found := pendingKeys[key]; !found {
 			delete(w.holdRetryAfter, key)
@@ -25,6 +28,64 @@ func (w *productionPublicationWorkflow) pruneHeldTaskRetries(pending []store.Que
 			delete(w.successorObservationPending, key)
 		}
 	}
+}
+
+// heldTaskDue reports whether a task's retry window has passed, forgetting
+// a window that has.
+func (w *productionPublicationWorkflow) heldTaskDue(task productionPublicationTask) bool {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	retryAfter, held := w.holdRetryAfter[task.intentKey()]
+	if !held {
+		return true
+	}
+	if w.now().Before(retryAfter) {
+		return false
+	}
+	delete(w.holdRetryAfter, task.intentKey())
+	return true
+}
+
+// countLaggingSuccessorObservation counts one more successor attempt of the
+// task that saw GitHub's PR view lagging, and returns the count.
+func (w *productionPublicationWorkflow) countLaggingSuccessorObservation(task productionPublicationTask) int {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	if w.successorObservationPending == nil {
+		w.successorObservationPending = make(map[string]int)
+	}
+	w.successorObservationPending[task.intentKey()]++
+	return w.successorObservationPending[task.intentKey()]
+}
+
+// endLaggingSuccessorObservation ends the task's lagging window.
+func (w *productionPublicationWorkflow) endLaggingSuccessorObservation(task productionPublicationTask) {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	delete(w.successorObservationPending, task.intentKey())
+}
+
+// reviewRetryDeadline returns the run's process-local review retry deadline.
+func (w *productionPublicationWorkflow) reviewRetryDeadline(runID domain.RunID) (time.Time, bool) {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	at, ok := w.reviewRetryAfter[runID]
+	return at, ok
+}
+
+func (w *productionPublicationWorkflow) setReviewRetryDeadline(runID domain.RunID, at time.Time) {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	if w.reviewRetryAfter == nil {
+		w.reviewRetryAfter = make(map[domain.RunID]time.Time)
+	}
+	w.reviewRetryAfter[runID] = at
+}
+
+func (w *productionPublicationWorkflow) clearReviewRetryDeadline(runID domain.RunID) {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	delete(w.reviewRetryAfter, runID)
 }
 
 // recordAttendedPublicationHolds records the attended_mode_active hold for
@@ -98,6 +159,11 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 }
 
 func (w *productionPublicationWorkflow) deferHeldTask(task productionPublicationTask) {
+	w.pacingMu.Lock()
+	defer w.pacingMu.Unlock()
+	if w.holdRetryAfter == nil {
+		w.holdRetryAfter = make(map[string]time.Time)
+	}
 	w.holdRetryAfter[task.intentKey()] = w.now().Add(w.holdRetryInterval)
 }
 
