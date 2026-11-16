@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -17,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // The policy-gated rebuild (plan §5.7) keeps two engine-private, write-once
@@ -46,8 +48,93 @@ type ProjectImageRebuild struct {
 	// Timeout bounds one build with its proofs. Zero means
 	// defaultProjectImageRebuildTimeout.
 	Timeout time.Duration
+	// Memory reserves image upkeep's builds (plan §5.4). The lane's build
+	// runs under its task's verification reservation instead. Nil reserves
+	// nothing.
+	Memory *DaemonMemory
+	// RecoverBuild proves gone what a build under the reservation left when
+	// its process ended (projectimage.RecoverBuild). A build reservation an
+	// earlier process left open is released only on its proof. Nil proves
+	// nothing, so such a reservation stays held.
+	RecoverBuild func(context.Context, domain.InvocationID) error
 
 	gate projectImageBuildGate
+	// laneUnproven names the verification reservations a lane build kept
+	// because it could not prove a container it started gone. Ward's
+	// verification proof covers neither the builder VM nor the build's
+	// probes, so a later release of one proves them gone first
+	// (proveLaneBuildGone).
+	laneMu       sync.Mutex
+	laneUnproven map[domain.InvocationID]bool
+}
+
+func (r *ProjectImageRebuild) markLaneUnproven(id domain.InvocationID) {
+	r.laneMu.Lock()
+	defer r.laneMu.Unlock()
+	if r.laneUnproven == nil {
+		r.laneUnproven = make(map[domain.InvocationID]bool)
+	}
+	r.laneUnproven[id] = true
+}
+
+// MarkLeftLaneBuilds marks every verification reservation st holds open at a
+// start as one a lane build may have run under. A build an earlier process
+// ran there left no mark when the process ended, and ward's proof covers
+// neither the builder VM nor the build's probes, so the release of such a
+// reservation proves them gone first. A start calls it before the lane runs.
+func (r *ProjectImageRebuild) MarkLeftLaneBuilds(ctx context.Context, st *store.Store) error {
+	if r == nil {
+		return nil
+	}
+	var open []domain.LaunchReservation
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		open, err = tx.ListOpenVerificationReservations(ctx)
+		return err
+	}); err != nil {
+		return fmt.Errorf("list verification reservations a lane build may have left: %w", err)
+	}
+	for _, reservation := range open {
+		r.markLaneUnproven(reservation.InvocationID)
+	}
+	return nil
+}
+
+func (r *ProjectImageRebuild) laneBuildUnproven(id domain.InvocationID) bool {
+	r.laneMu.Lock()
+	defer r.laneMu.Unlock()
+	return r.laneUnproven[id]
+}
+
+// proveLaneBuildGone proves gone what a lane build under the verification
+// reservation id may have left: it stops the builder VM and proves it
+// stopped, and deletes the build's probes, which carry id's label
+// (RecoverBuild). The caller holds the build gate, so the stop never ends
+// another daemon build. An error wraps
+// projectimage.ErrContainerAbsenceUnproven.
+func (r *ProjectImageRebuild) proveLaneBuildGone(ctx context.Context, id domain.InvocationID) error {
+	if r.RecoverBuild == nil {
+		return fmt.Errorf("%w: no build recovery is composed", projectimage.ErrContainerAbsenceUnproven)
+	}
+	if err := r.RecoverBuild(ctx, id); err != nil {
+		return err
+	}
+	r.laneMu.Lock()
+	defer r.laneMu.Unlock()
+	delete(r.laneUnproven, id)
+	return nil
+}
+
+// proveLaneBuildGoneOutsideGate is proveLaneBuildGone for a caller that does
+// not hold the build gate. A gate another build holds is no proof: it
+// returns errProjectImageBuilderBusy, and the reservation stays held for a
+// later try.
+func (r *ProjectImageRebuild) proveLaneBuildGoneOutsideGate(ctx context.Context, id domain.InvocationID) error {
+	if !r.gate.tryAcquire() {
+		return errProjectImageBuilderBusy
+	}
+	defer r.gate.release()
+	return r.proveLaneBuildGone(ctx, id)
 }
 
 // defaultProjectImageRebuildTimeout is far above an install and three proof
@@ -80,14 +167,86 @@ func (r *ProjectImageRebuild) build(
 	}
 	// A cancelled pass fails whatever the build was doing, a proof included,
 	// so nothing the builder reports about it is a verdict on the candidate.
+	// Either way the error keeps an unproven cleanup's mark, so the
+	// reservation the build ran under stays held.
 	if cause := ctx.Err(); cause != nil {
-		return domain.ProjectImage{}, false, cause
+		return domain.ProjectImage{}, false, errors.Join(cause, containersUnproven(err))
 	}
 	if errors.Is(bounded.Err(), context.DeadlineExceeded) {
-		return domain.ProjectImage{}, true, fmt.Errorf(
-			"the build and its proofs did not finish within %s", timeout)
+		return domain.ProjectImage{}, true, errors.Join(fmt.Errorf(
+			"the build and its proofs did not finish within %s", timeout), containersUnproven(err))
 	}
 	return domain.ProjectImage{}, false, err
+}
+
+// containersUnproven returns err when it says a container the work started
+// may still run, and nil otherwise: the proof a reservation's release takes.
+func containersUnproven(err error) error {
+	if errors.Is(err, projectimage.ErrContainerAbsenceUnproven) ||
+		errors.Is(err, ward.ErrVerificationAbsenceUnproven) {
+		return err
+	}
+	return nil
+}
+
+// reserveBuild reserves memory for one image upkeep build, waiting in the
+// memory order (DaemonMemory.Wait). Upkeep holds only the build gate, which
+// no release waits on: the lane only tries it. The build runs one VM at a
+// time, the recipe-read room at the verification size, then the builder VM,
+// then each probe, so it reserves the larger size once.
+func (r *ProjectImageRebuild) reserveBuild(ctx context.Context, keys []domain.PolicyKey) (DaemonReservation, error) {
+	if r.Memory == nil {
+		return DaemonReservation{}, nil
+	}
+	size, err := BuildReservationSize(keys)
+	if err != nil {
+		return DaemonReservation{}, err
+	}
+	id, err := NewDaemonWorkID("image-build")
+	if err != nil {
+		return DaemonReservation{}, err
+	}
+	return r.Memory.Wait(ctx, DaemonWork{Kind: domain.ReservationImageBuild, ID: id, Size: size, VMs: 1})
+}
+
+// BuildReservationSize is the one VM an upkeep build under a project's
+// policy keys reserves: the larger of the verification size its recipe read
+// runs at and the builder's.
+func BuildReservationSize(keys []domain.PolicyKey) (ward.ContainerSize, error) {
+	sizes, err := ward.ResolveLaunchSizes(keys, ward.LaunchBound{})
+	if err != nil {
+		return ward.ContainerSize{}, fmt.Errorf("resolve verification size: %w", err)
+	}
+	if projectimage.BuilderSize.MemoryMiB > sizes.Verification.MemoryMiB {
+		return projectimage.BuilderSize, nil
+	}
+	return sizes.Verification, nil
+}
+
+// RecoverLeftBuilds releases each build reservation left open
+// (DaemonMemory.ListLeft), by an earlier process or by a build that could not
+// prove its containers gone, once RecoverBuild proves them gone, and keeps
+// one it cannot prove, logged. A start runs it before upkeep can build, and
+// upkeep runs it under the build gate before it reserves. A reservation the lane's builds run under is a verification
+// reservation and never one of these.
+func (r *ProjectImageRebuild) RecoverLeftBuilds(ctx context.Context) error {
+	open, err := r.Memory.ListLeft(ctx)
+	if err != nil {
+		return err
+	}
+	for _, left := range open {
+		if left.Kind != domain.ReservationImageBuild {
+			continue
+		}
+		proof := errors.New("no build recovery is composed")
+		if r.RecoverBuild != nil {
+			proof = r.RecoverBuild(ctx, left.InvocationID)
+		}
+		if err := r.Memory.Recovered(left.InvocationID).Release(ctx, proof); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type productionRebuildIntent struct {
@@ -518,33 +677,49 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 	binding productionBinding,
 	checkoutDir, verifiedSHA string,
 	head domain.ProjectImageBaseInputs,
-) (domain.ProjectImage, *rebuildRefusal, error) {
+) (_ domain.ProjectImage, _ *rebuildRefusal, err error) {
 	refuse := func(err error) (domain.ProjectImage, *rebuildRefusal, error) {
 		return domain.ProjectImage{}, &rebuildRefusal{
 			clause: projectimage.RebuildRefusalProofFailed, detail: boundedRebuildText(err.Error()),
 		}, nil
 	}
-	// Reading the recipe runs a container at the verification size, so it
-	// reserves as the verification room does, under the same invocation, and
-	// releases once the read proves its container gone.
+	// The recipe read, the build, and its probes run one VM at a time, none
+	// larger than the verification size, so they run under the task's
+	// verification reservation, under the same invocation, and release it
+	// once every container they started is proved gone. A build refused for
+	// memory waits under the task's machine_capacity hold as its
+	// verification job does, in the task's place in the order.
 	end, err := w.reserveVerification(ctx, task, binding)
 	if err != nil {
 		return domain.ProjectImage{}, nil, err
 	}
-	_, recipe, err := w.roomAndRecipe(ctx, task, binding, binding.image)
-	releaseErr := w.releaseVerification(ctx, task, binding.run, err)
-	end()
-	if releaseErr != nil {
-		return domain.ProjectImage{}, nil, errors.Join(err, releaseErr)
-	}
+	reserved := ward.WithLaunchReservation(ctx, task.verificationInvocationID())
+	var roomErr error
+	defer func() {
+		// A build an earlier pass of this task could not prove gone left its
+		// mark; this pass holds the gate, so it proves those containers gone
+		// here before the release.
+		if !errors.Is(roomErr, projectimage.ErrContainerAbsenceUnproven) &&
+			w.rebuild.laneBuildUnproven(task.verificationInvocationID()) {
+			roomErr = errors.Join(roomErr,
+				w.rebuild.proveLaneBuildGone(context.WithoutCancel(ctx), task.verificationInvocationID()))
+		}
+		if releaseErr := w.releaseVerification(ctx, task, binding.run, roomErr); releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
+		end()
+	}()
+	_, recipe, err := w.roomAndRecipe(reserved, task, binding, binding.image)
 	if err != nil {
+		roomErr = err
 		return domain.ProjectImage{}, nil, err
 	}
 	request, err := projectimage.RebuildRequest(binding.image, verifiedSHA, checkoutDir, recipe, w.rebuild.Inputs)
 	if err != nil {
 		return refuse(err)
 	}
-	built, timedOut, err := w.rebuild.build(ctx, request)
+	built, timedOut, err := w.rebuild.build(reserved, request)
+	roomErr = err
 	if timedOut || errors.Is(err, projectimage.ErrProofFailed) ||
 		errors.Is(err, projectimage.ErrInstallFailed) || errors.Is(err, projectimage.ErrInvalidRequest) {
 		return refuse(err)

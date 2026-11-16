@@ -65,7 +65,15 @@ type modelCatalogRefresh struct {
 	// running counts each discovery container as a running probe for the
 	// restart readiness read; nil counts nothing.
 	running *engine.RunningWork
+	// work reserves each target's memory (plan §5.4); its zero value
+	// reserves nothing.
+	work daemonWorkRunner
 }
+
+// probeSize is the size of each probe container: the token reader and the
+// discovery container run at the review and conformance default, one at a
+// time.
+var probeSize = ward.DefaultLaunchSize(ward.LaunchConformance)
 
 // newModelCatalogRefresh binds the refresh to the Claude driver's runtime,
 // images, and rig: tokens are read through the pinned exporter image under
@@ -134,7 +142,12 @@ func (r modelCatalogRefresh) run(ctx context.Context) {
 		if !ok {
 			return
 		}
-		catalog, err := r.discoverOne(ctx, target)
+		var catalog domain.DiscoveredModelCatalog
+		err := r.reserveProbe(ctx, func(ctx context.Context) error {
+			var err error
+			catalog, err = r.discoverOne(ctx, target)
+			return err
+		})
 		end()
 		if err != nil {
 			r.logger.Warn("model discovery failed; the last catalog stands",
@@ -144,6 +157,19 @@ func (r modelCatalogRefresh) run(ctx context.Context) {
 		r.logger.Info("model catalog discovered",
 			"enrollment", target.enrollment, "harness_build", catalog.HarnessBuild, "models", len(catalog.Models))
 	}
+}
+
+// reserveProbe runs one target's discovery under a probe reservation,
+// waiting in the memory order: discovery runs in its own goroutine and holds
+// nothing a release needs.
+func (r modelCatalogRefresh) reserveProbe(ctx context.Context, fn func(context.Context) error) error {
+	id, err := engine.NewDaemonWorkID("model-discovery")
+	if err != nil {
+		return err
+	}
+	return r.work.reserved(ctx, engine.DaemonWork{
+		Kind: domain.ReservationProbe, ID: id, Size: probeSize, VMs: 1,
+	}, true, fn)
 }
 
 // beginProbe counts one discovery container as a running probe and reports

@@ -137,6 +137,15 @@ type Options struct {
 	// already-recorded digest cannot destroy the prior row's artifact; nil
 	// skips the guard (no store implies no rows to protect).
 	LookupRecordedRef func(context.Context, string) (bool, error)
+	// Registry reserves memory for a loopback registry a build starts. The
+	// daemon sets it; nil reserves nothing, for an operator's build.
+	Registry RegistryMemory
+	// ManageBuilder starts the builder VM at BuilderSize before each build
+	// and stops it, proved stopped, after, so a daemon build's reservation
+	// names the builder's memory and no VM outlives the build. The daemon
+	// sets it; an operator's build leaves the builder to `container build`,
+	// so it never stops a builder a daemon build is using.
+	ManageBuilder bool
 }
 
 // Builder owns source materialization and image-runtime orchestration. The
@@ -264,9 +273,11 @@ func New(opts Options) (*Builder, error) {
 		return nil, fmt.Errorf("project image recorder is required: %w", ErrInvalidRequest)
 	}
 	return &Builder{
-		source:            gitSource{gitPath: git, runner: runner, tokens: opts.Tokens},
-		resolver:          defaultRepositoryResolver(opts.Tokens),
-		backend:           appleBackend{containerPath: container, runner: runner},
+		source:   gitSource{gitPath: git, runner: runner, tokens: opts.Tokens},
+		resolver: defaultRepositoryResolver(opts.Tokens),
+		backend: appleBackend{
+			containerPath: container, runner: runner, registryMemory: opts.Registry, manageBuilder: opts.ManageBuilder,
+		},
 		record:            opts.Record,
 		lookupRecordedRef: opts.LookupRecordedRef,
 		tempDir:           opts.TempDir,

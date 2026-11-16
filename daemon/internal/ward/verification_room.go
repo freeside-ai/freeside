@@ -211,6 +211,7 @@ func (r *ProjectImageRoom) runImageCommand(
 		"--label", owner.Key + "=" + owner.Value,
 		"--network", "none",
 	}
+	args = append(args, ReservationLabelArgs(ctx)...)
 	args = append(args, SizeArgs(r.size)...)
 	if workspace != "" {
 		args = append(args,

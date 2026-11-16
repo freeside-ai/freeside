@@ -2270,6 +2270,34 @@ one. A launch waiting for its pool slot joins that order only once the slot
 is free, and a launch nothing retries any more, such as a review that failed
 for good, leaves it five minutes after its last refusal.
 
+The daemon's own containers reserve too: an image upkeep build with its
+recipe read and probes, the builder VM, a loopback registry a build starts,
+each ward proof pass (two VMs at the conformance size), each model discovery
+target, the scheduled credential-integrity probe, and the judgment
+credential read. Operator commands, such as `freesided onboard` and a
+hand-run image build, reserve nothing. The daemon's waiting work starts ahead
+of every task launch, oldest first, and a task launch never passes it. Work
+that may run inside the engine's pass, the publication lane, or another
+reservation is refused at once instead of waiting: the registry, the
+judgment read, and a start's `-run-conformance` pass, whose refusal fails the
+start. Each container carries its reservation's id in the
+`ai.freeside.reservation` label, and a reservation is released only once no
+container with that label still runs; one whose proof fails stays held,
+logged, until a later pass of the same kind or a restart proves it. The
+lane's build runs under its task's verification reservation.
+
+A daemon build starts the builder (`container builder start`) at 4 CPUs and
+2048 MiB when it is not running, and stops it and proves it stopped after the
+build, before the probes run. The builder is one VM per host user, so that
+stop can end a build someone else is running in it, which then retries. An
+operator's build leaves the builder to `container build` and never stops it. A
+registry the daemon starts runs at 4 CPUs and 1024 MiB under the standing
+reservation `image-registry-<port>`, held while it runs and released once
+none runs for that port. The start refuses a budget too small for a proof
+pass, or for a build beside its registry. A scheduled proof pass the budget
+can never grant, after a lowered budget or on a runtime with no recorded
+overhead, is skipped and logged.
+
 A launch whose reservation exceeds the whole budget never waits: its run gets
 an `execution_failure` item naming the declared size, the overhead, and the
 budget, and the launch stays pending until a budget that fits it, recorded

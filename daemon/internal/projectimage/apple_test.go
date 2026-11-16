@@ -25,10 +25,48 @@ import (
 type recordingRunner struct {
 	specs []commandSpec
 	run   func(commandSpec) (commandOutput, error)
+	// builder answers the builder VM's inspection and the builder verbs
+	// apart from specs, so a test of what a build runs reads only that.
+	builder builderVM
+}
+
+// builderVM imitates Apple container's builder VM: absent until started.
+type builderVM struct {
+	state string
+	calls [][]string
+}
+
+// answer handles a builder inspection or verb, and reports false for any
+// other command.
+func (b *builderVM) answer(args []string) (commandOutput, error, bool) {
+	switch {
+	case slices.Equal(args, []string{"inspect", builderContainerID}):
+		b.calls = append(b.calls, args)
+		if b.state == "" {
+			return commandOutput{bytes: []byte("Error: container not found: " + builderContainerID)},
+				errors.New("not found"), true
+		}
+		report := tidyContainer(builderContainerID, "")
+		report.Status.State = b.state
+		return containerInspectOutput(report), nil, true
+	case len(args) >= 2 && args[0] == "builder":
+		b.calls = append(b.calls, args)
+		switch args[1] {
+		case "start":
+			b.state = "running"
+		case "stop":
+			b.state = "stopped"
+		}
+		return commandOutput{}, nil, true
+	}
+	return commandOutput{}, nil, false
 }
 
 func (r *recordingRunner) Run(_ context.Context, spec commandSpec) (commandOutput, error) {
 	spec.Args = append([]string{}, spec.Args...)
+	if output, err, ok := r.builder.answer(spec.Args); ok {
+		return output, err
+	}
 	r.specs = append(r.specs, spec)
 	if r.run == nil {
 		return commandOutput{}, nil
@@ -1577,8 +1615,9 @@ func TestApplePublishReusesRetainedLocalRegistry(t *testing.T) {
 		}
 	}}
 	var manifestDeletes []string
+	memory := &fakeRegistryMemory{}
 	backend := appleBackend{
-		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+		containerPath: "container", runner: runner, registryLockDir: t.TempDir(), registryMemory: memory,
 		probeRegistry: func(_ context.Context, url string) error {
 			if url != "http://127.0.0.1:5101/v2/" {
 				return fmt.Errorf("unexpected readiness URL %q", url)
@@ -1599,6 +1638,11 @@ func TestApplePublishReusesRetainedLocalRegistry(t *testing.T) {
 	}
 	if published.cleanup != nil {
 		t.Fatal("Publish created or claimed cleanup ownership of the retained registry")
+	}
+	// A running registry is reserved too, so one an earlier binary started
+	// unreserved is counted; reserving one already held is a no-op.
+	if want := []string{"reserve 5101"}; !slices.Equal(memory.calls, want) {
+		t.Fatalf("registry memory calls = %q, want %q", memory.calls, want)
 	}
 	if published.release == nil {
 		t.Fatal("Publish did not transfer the local-registry lease")

@@ -655,6 +655,9 @@ func isPermanentSeedCredentialError(err error) bool {
 // matching prior pass is restored. The daemon keeps the same conformance
 // closure for every scheduled doctor pass.
 type ClaudeComposition struct {
+	// work runs the daemon's own proof passes and probes under memory
+	// reservations.
+	work                   daemonWorkRunner
 	driver                 *claude.Driver
 	Backend                *ward.Backend
 	authority              *publish.InstallationAuthorityStore
@@ -829,7 +832,7 @@ func wardEnforceableEgressProfiles() []domain.EgressProfile {
 // drops it with a warning.
 func composeClaudeDriver(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg ClaudeDriverConfig,
-	usage engine.ClaudeUsageSink, logger *slog.Logger,
+	work daemonWorkRunner, usage engine.ClaudeUsageSink, logger *slog.Logger,
 ) (_ *ClaudeComposition, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -1111,8 +1114,11 @@ func composeClaudeDriver(
 		}
 	}
 	if cfg.RunConformance {
+		// The start never waits for memory: nothing frees any until the
+		// engine runs. A refusal fails the start, which the operator asked
+		// to prove ward now.
 		if err := runClaudeConformance(
-			ctx, st, transport, backend, cfg, conformanceLeaser,
+			ctx, st, transport, backend, cfg, conformanceLeaser, work, false,
 		); err != nil {
 			return nil, fmt.Errorf("run ward conformance: %w", err)
 		}
@@ -1205,7 +1211,9 @@ func composeClaudeDriver(
 		Agents: agents,
 	}
 	follower := newConformanceFollower(backend, func(runCtx context.Context) error {
-		return runClaudeConformance(runCtx, st, transport, backend, cfg, conformanceLeaser)
+		// A follower or scheduled pass waits for memory: it holds nothing a
+		// release needs.
+		return runClaudeConformance(runCtx, st, transport, backend, cfg, conformanceLeaser, work, true)
 	}, time.Now, logger.With("subsystem", "writer_image_conformance"))
 	var (
 		selectImage     engine.ImageSelection
@@ -1220,6 +1228,7 @@ func composeClaudeDriver(
 	}
 	observeRefTip := refTipObserver(reconciler)
 	composition := &ClaudeComposition{
+		work:   work,
 		driver: driver, Backend: backend, authority: authority,
 		hostVerification:       hostVerification,
 		selectionFailure:       selectionFailure,
@@ -1619,6 +1628,8 @@ func runClaudeConformance(
 	backend *ward.Backend,
 	cfg ClaudeDriverConfig,
 	leaser *AdapterConformanceLeaser,
+	work daemonWorkRunner,
+	wait bool,
 ) error {
 	if backend != nil {
 		if err := recoverAdapterConformance(ctx, st, backend, cfg, leaser); err != nil {
@@ -1671,6 +1682,27 @@ func runClaudeConformance(
 	); err != nil {
 		return fmt.Errorf("fetch exact conformance base: %w", err)
 	}
+	id, err := engine.NewDaemonWorkID("proof-pass")
+	if err != nil {
+		return err
+	}
+	// The suite and the adapter proof run under one reservation, taken
+	// before either records anything, so a pass that waits for memory leaves
+	// the standing proof in place.
+	return work.run(ctx, domain.RestartBlockerProofPass, engine.DaemonWork{
+		Kind: domain.ReservationProofPass, ID: id, Size: proofPassSize, VMs: proofPassVMs,
+	}, wait, func(ctx context.Context) error {
+		return runReservedConformance(ctx, st, backend, cfg, leaser, base, runID, registryRunID, nonce, seedDir)
+	})
+}
+
+// runReservedConformance runs the full ward suite and then the adapter
+// proof, under the proof pass's reservation.
+func runReservedConformance(
+	ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig,
+	leaser *AdapterConformanceLeaser, base domain.BaseRevision, runID, registryRunID string, nonce [8]byte,
+	seedDir string,
+) error {
 	// The suite proves the image ward currently names, which follows writer
 	// selection, not the seed's base.
 	agentImage, _ := backend.ConformanceIdentity()

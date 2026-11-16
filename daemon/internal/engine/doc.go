@@ -45,6 +45,8 @@
 //   - specifier_triage.go the triager's one call per task, before the
 //     specifier's first admission, and the line an escalation writes (§5.13)
 //   - machine_capacity.go launch bounds under the instance's memory budget
+//   - daemon_memory.go the daemon's own work's reservations, which wait ahead
+//     of task launches and release only on proof (#3206)
 //   - quota_park.go   the refused window's hold on a parked attempt
 //   - daemon_rerun.go the next attempt of a root implementation invocation
 //     the daemon's own restart, shutdown, or forced drain ended (#3105)

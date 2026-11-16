@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -136,9 +137,12 @@ func ProductionSetupTokenReader(
 
 // productionJudgmentCredentials is the running daemon's source: each read
 // holds the identity's shared read hold, so no refresh or enrollment changes
-// the store under it.
+// the store under it. Each read's container runs under a probe reservation
+// (plan §5.4) that is refused at once rather than waited for: a read can run
+// inside the engine's pass or the publication lane, whose work is what frees
+// memory. A refusal is a failed read, which the next call tries again.
 func productionJudgmentCredentials(
-	st *store.Store, cfg ClaudeDriverConfig, runtime ward.Runtime, logger *slog.Logger,
+	st *store.Store, cfg ClaudeDriverConfig, runtime ward.Runtime, work daemonWorkRunner, logger *slog.Logger,
 ) *JudgmentCredentials {
 	reader := wardstore.CredentialReader{
 		Store: st,
@@ -146,5 +150,20 @@ func productionJudgmentCredentials(
 			runtime, cfg.ExporterImage, ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)),
 		Now: func() time.Time { return time.Now().UTC() },
 	}
-	return NewJudgmentCredentials(reader.Read, logger)
+	read := func(ctx context.Context, enrollment domain.ClientEnrollmentID, ordinal int) (ward.SetupToken, error) {
+		id, err := engine.NewDaemonWorkID("judgment-credential")
+		if err != nil {
+			return ward.SetupToken{}, err
+		}
+		var token ward.SetupToken
+		err = work.reserved(ctx, engine.DaemonWork{
+			Kind: domain.ReservationProbe, ID: id, Size: probeSize, VMs: 1,
+		}, false, func(ctx context.Context) error {
+			var err error
+			token, err = reader.Read(ctx, enrollment, ordinal)
+			return err
+		})
+		return token, err
+	}
+	return NewJudgmentCredentials(read, logger)
 }

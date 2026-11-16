@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/macverify"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -366,6 +367,9 @@ func (w *productionPublicationWorkflow) releaseVerification(
 		return err
 	}
 	invocation := task.verificationInvocationID()
+	if errors.Is(roomErr, projectimage.ErrContainerAbsenceUnproven) && w.rebuild != nil {
+		w.rebuild.markLaneUnproven(invocation)
+	}
 	if w.proveVerificationAbsent != nil {
 		// Bounded like the room's own cleanup.
 		proofCtx, cancel := context.WithTimeout(ctx, ward.VerificationCleanupTimeout)
@@ -380,8 +384,21 @@ func (w *productionPublicationWorkflow) releaseVerification(
 	} else if errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
 		return nil
 	}
-	if errors.Is(roomErr, macverify.ErrAbsenceUnproven) {
+	if errors.Is(roomErr, macverify.ErrAbsenceUnproven) ||
+		errors.Is(roomErr, projectimage.ErrContainerAbsenceUnproven) {
+		// A rebuild's builder VM or probe the build could not prove gone.
 		return nil
+	}
+	if w.rebuild != nil && w.rebuild.laneBuildUnproven(invocation) {
+		// A pass after a lane build that kept this reservation: ward's proof
+		// covers none of that build's containers.
+		if err := w.rebuild.proveLaneBuildGoneOutsideGate(ctx, invocation); err != nil {
+			if w.logger != nil {
+				w.logger.Warn("verification memory kept: a lane build's containers are not proved gone",
+					"invocation", invocation, "error", err)
+			}
+			return nil
+		}
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.ReleaseVerificationReservation(ctx, invocation, w.now().UTC())

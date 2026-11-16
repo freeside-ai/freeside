@@ -123,6 +123,10 @@ func (w *productionPublicationWorkflow) reproveEndedVerificationReservations(
 				"Resolved when the end-of-task proof showed every container gone and every command joined."); err != nil {
 				return err
 			}
+		case errors.Is(proof, errProjectImageBuilderBusy):
+			// Another build holds the builder: no proof either way, so the
+			// next pass tries again.
+			delete(w.verificationReproved, reservation.InvocationID)
 		case errors.Is(proof, ward.ErrVerificationAbsenceUnproven):
 			if err := w.fileVerificationMemoryHeld(ctx, run, reservation, proof); err != nil {
 				return err
@@ -215,7 +219,20 @@ func (w *productionPublicationWorkflow) proveHeldVerification(
 	}
 	proofCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ward.VerificationCleanupTimeout)
 	defer cancel()
-	return prove(proofCtx, run, invocation)
+	if err := prove(proofCtx, run, invocation); err != nil {
+		return err
+	}
+	if w.rebuild == nil || !w.rebuild.laneBuildUnproven(invocation) {
+		return nil
+	}
+	// Ward's records cover neither the builder VM nor a lane build's probes:
+	// a reservation a lane build kept, or one an earlier process left
+	// (MarkLeftLaneBuilds), proves them gone too.
+	err := w.rebuild.proveLaneBuildGoneOutsideGate(proofCtx, invocation)
+	if err == nil || errors.Is(err, errProjectImageBuilderBusy) {
+		return err
+	}
+	return errors.Join(ward.ErrVerificationAbsenceUnproven, err)
 }
 
 // releaseHeldVerification releases a proved reservation and concludes its

@@ -246,11 +246,17 @@ func (f *conformanceFollower) pendingFor(image domain.ImageRef) bool {
 // runScheduled is the doctor's scheduled pass, serialized with the
 // follower's. It proves ward's current image. A success clears the follower's
 // failure; a failure is not remembered, so it arms no retry and waits for the
-// next scheduled pass.
+// next scheduled pass. A pass whose memory the budget refuses for good runs
+// nothing and leaves the standing proof as it was, so it is skipped, logged,
+// rather than failing the doctor pass, which would stop the daemon.
 func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	f.passMu.Lock()
 	defer f.passMu.Unlock()
 	if err := f.prove(ctx); err != nil {
+		if reservationRefusedForGood(err) {
+			f.logger.Warn("scheduled conformance pass skipped: the memory budget can never grant it", "error", err)
+			return nil
+		}
 		return err
 	}
 	f.clearFailure()

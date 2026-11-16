@@ -421,6 +421,32 @@ func (u *ImageUpkeep) rebuild(
 	tip domain.ProjectImageBaseInputs,
 	adopted *domain.Digest,
 ) (*domain.ProjectImage, imageUpkeepOutcome, error) {
+	// A reservation an earlier process or pass left goes first, so its
+	// memory is not counted twice; its proof stops the builder, so it runs
+	// under the gate.
+	if err := u.Rebuild.gate.acquire(ctx); err != nil {
+		return nil, imageUpkeepOutcome{}, err
+	}
+	err := u.Rebuild.RecoverLeftBuilds(ctx)
+	u.Rebuild.gate.release()
+	if err != nil {
+		return nil, imageUpkeepOutcome{}, err
+	}
+	// The recipe read, the build, and its probes run under one reservation,
+	// released once every container they started is proved gone (plan
+	// §5.4). It waits holding no gate: the proof that releases a lane
+	// build's kept verification reservation takes the gate, so waiting
+	// under it could wait on memory only that proof frees.
+	reservation, err := u.Rebuild.reserveBuild(ctx, u.Policy.Keys)
+	if err != nil {
+		return nil, imageUpkeepOutcome{}, err
+	}
+	var absence error
+	defer func() {
+		if err := reservation.Release(ctx, absence); err != nil {
+			u.Logger.Error("image upkeep: release the build's memory reservation", "reservation", reservation.ID(), "error", err)
+		}
+	}()
 	if err := u.Rebuild.gate.acquire(ctx); err != nil {
 		return nil, imageUpkeepOutcome{}, err
 	}
@@ -448,6 +474,7 @@ func (u *ImageUpkeep) rebuild(
 	if recorded, found, err := u.recordedServing(ctx, dir, want, tip); err != nil || found {
 		return &recorded, imageUpkeepOutcome{}, err
 	}
+	ctx = reservation.Context(ctx)
 	refuse := func(class domain.ImageUpkeepRefusalClass, cause error) (*domain.ProjectImage, imageUpkeepOutcome, error) {
 		var findings []domain.ImageUpkeepClauseFinding
 		fault := ""
@@ -468,6 +495,7 @@ func (u *ImageUpkeep) rebuild(
 	} else {
 		var recipe []byte
 		recipe, err = u.readRecipe(ctx, image)
+		absence = containersUnproven(err)
 		if errors.Is(err, errImageUpkeepHostFault) {
 			return refuse(domain.ImageUpkeepRefusalHostFault, err)
 		}
@@ -483,6 +511,7 @@ func (u *ImageUpkeep) rebuild(
 		return refuse(projectimage.ClassifyUpkeepBuildFailure(err), err)
 	}
 	built, timedOut, err := u.Rebuild.build(ctx, request)
+	absence = containersUnproven(err)
 	if timedOut {
 		return refuse(domain.ImageUpkeepRefusalHostFault, err)
 	}
@@ -490,6 +519,12 @@ func (u *ImageUpkeep) rebuild(
 		// A cancelled pass is no verdict on the tip (build returns the cause).
 		if ctx.Err() != nil {
 			return nil, imageUpkeepOutcome{}, err
+		}
+		// Memory refused the registry the build would start. That is no
+		// verdict either: the next trigger builds again.
+		if errors.Is(err, domain.ErrMachineCapacity) {
+			u.Logger.Info("image upkeep: skipped the rebuild until memory frees", "tip", tipSHA, "error", err)
+			return nil, imageUpkeepOutcome{}, nil
 		}
 		return refuse(projectimage.ClassifyUpkeepBuildFailure(err), err)
 	}
@@ -566,8 +601,8 @@ var errImageUpkeepHostFault = errors.New("the image-upkeep host failed")
 // never what verification runs. A recipe the record does not name means
 // the record disagrees with its image, a host fault.
 func (u *ImageUpkeep) readRecipe(ctx context.Context, image domain.ProjectImage) ([]byte, error) {
-	// Image upkeep is operator-attended onboarding, outside the memory
-	// budget (#1598 non-goals), so its recipe read reserves nothing.
+	// The read runs under the build's reservation, which rebuild takes at
+	// the larger of this size and the builder's.
 	sizes, err := ward.ResolveLaunchSizes(u.Policy.Keys, ward.LaunchBound{})
 	if err != nil {
 		return nil, fmt.Errorf("resolve verification size: %w", err)
@@ -586,7 +621,8 @@ func (u *ImageUpkeep) readRecipe(ctx context.Context, image domain.ProjectImage)
 	cancel()
 	if err != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
+			// Keep an unproven cleanup's mark, so the reservation stays held.
+			return nil, errors.Join(cause, containersUnproven(err))
 		}
 		return nil, fmt.Errorf("load project-image verification recipe: %w",
 			errors.Join(errImageUpkeepHostFault, err))
