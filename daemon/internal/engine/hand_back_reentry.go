@@ -223,12 +223,19 @@ func HandBackReentryDue(ctx context.Context, tx *store.ReadTx, runID domain.RunI
 // change the pull request makes, and the cycle proves it before reviewing:
 // the base must be reachable from the target branch and the head must
 // descend from it.
+//
+// gate is the project readiness gate. A project that is not ready returns
+// its refusal before any write; the hand-back stays due and the caller
+// offers it again on its next pass (#3205).
 func StartHandBackReentry(
-	ctx context.Context, tx *store.WriteTx, runID domain.RunID, head, base string,
+	ctx context.Context, tx *store.WriteTx, runID domain.RunID, head, base string, gate ProjectReadinessGate,
 ) (domain.ItemID, bool, error) {
 	plan, err := planHandBackReentry(ctx, &tx.ReadTx, runID, head)
 	if err != nil || plan == nil {
 		return "", false, err
+	}
+	if err := requireProjectReady(ctx, gate, &tx.ReadTx, plan.projectID); err != nil {
+		return "", false, fmt.Errorf("hand-back re-entry: %w", err)
 	}
 	plan.successor.Reentry.BaseSHA = base
 	task := newReentryTask(plan.projectID, plan.successor)

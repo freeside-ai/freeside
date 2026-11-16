@@ -1484,6 +1484,11 @@ func (w *productionPublicationWorkflow) recordReentryReadyBinding(
 // (its only version; it is never open), records its binding, starts the next
 // cycle, and retires this task, so no later pass re-runs this cycle beside
 // the next one.
+//
+// While the project is not ready the next cycle is refused, so the
+// transaction writes nothing and the refusal is retryable: the task is held
+// under blocking_system_health and the first pass after the project is
+// ready supersedes the item and starts the cycle (#3205).
 func (w *productionPublicationWorkflow) supersedeMovedReentry(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -1494,7 +1499,7 @@ func (w *productionPublicationWorkflow) supersedeMovedReentry(
 	if err := signet.ValidateItemIntake(ready); err != nil {
 		return err
 	}
-	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+	err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		now := w.now().UTC()
 		superseded, err := ready.ConcludeByDaemon(domain.ConcludedBySupersession, now,
 			"Superseded because the pull request head moved while the re-entry cycle ran.", nil)
@@ -1512,7 +1517,7 @@ func (w *productionPublicationWorkflow) supersedeMovedReentry(
 		if err := w.recordReentryReadyBinding(ctx, tx, task, cycle); err != nil {
 			return err
 		}
-		if _, err := StartReadinessReentry(ctx, tx, superseded); err != nil {
+		if _, err := StartReadinessReentry(ctx, tx, superseded, w.readinessGate); err != nil {
 			return err
 		}
 		if err := supersedeOpenBlockedHold(ctx, tx, task, now); err != nil {
@@ -1525,6 +1530,10 @@ func (w *productionPublicationWorkflow) supersedeMovedReentry(
 		}
 		return tx.MarkOutboxDispatched(ctx, task.intentKey())
 	})
+	if errors.Is(err, domain.ErrProjectNotReady) {
+		return productionPublicationRetryableError(err)
+	}
+	return err
 }
 
 // supersedeOpenBlockedHold is supersedeBlockedHold inside the caller's

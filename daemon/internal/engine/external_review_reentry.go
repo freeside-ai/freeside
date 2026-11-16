@@ -217,12 +217,19 @@ func ExternalReviewReentryDue(
 // before its first write, so a pass with nothing to start leaves the item
 // untouched. Any failure after the first write is returned and must fail the
 // caller's transaction.
+//
+// gate is the project readiness gate. A project that is not ready returns
+// its refusal before any write; the item stays open and the caller offers
+// the cycle again on its next pass (#3205).
 func StartExternalReviewReentry(
-	ctx context.Context, tx *store.WriteTx, itemID domain.ItemID,
+	ctx context.Context, tx *store.WriteTx, itemID domain.ItemID, gate ProjectReadinessGate,
 ) (bool, error) {
 	plan, err := planExternalReviewReentry(ctx, &tx.ReadTx, itemID)
 	if err != nil || plan == nil {
 		return false, err
+	}
+	if err := requireProjectReady(ctx, gate, &tx.ReadTx, plan.item.ProjectID); err != nil {
+		return false, fmt.Errorf("external review re-entry: %w", err)
 	}
 	item := plan.item
 	item.ItemVersion++

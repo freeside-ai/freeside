@@ -2,6 +2,7 @@ package daemoncompose
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -202,4 +203,45 @@ func TestActiveResourceReconcileStartsReadinessReentry(t *testing.T) {
 			assertNoReentry(t, st, *item.Subject.RunID)
 		})
 	}
+}
+
+// TestActiveResourceReconcileDefersReentryWhileProjectNotReady: a pushed
+// head on a project that is not ready starts no cycle and is reported as a
+// pass failure, not a pass error, so the reconciler goes on to its other
+// resources. Nothing is written, and the first pass after the project is
+// ready supersedes the item and starts the cycle (#3205).
+func TestActiveResourceReconcileDefersReentryWhileProjectNotReady(t *testing.T) {
+	t.Parallel()
+	st := schedTestStore(t)
+	item := reentryReadyItem(t, st, "run-reentry-not-ready")
+	reconciler := ActiveResourceReconciler{
+		Store: st,
+		Pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			observed := exactPull("open", false)
+			observed.HeadSHA = reentryTestNewHead
+			return observed, nil
+		},
+		Now: func() time.Time { return activeResourceTestTime },
+		readinessGate: func(_ context.Context, _ *store.ReadTx, project domain.ProjectID) error {
+			return &domain.ProjectNotReadyError{ProjectID: project, NotPassed: []domain.ProjectReadinessResult{{
+				Check: domain.ProjectReadinessTrustProfile, Status: domain.ProjectReadinessFailed, Detail: "revoked",
+			}}}
+		},
+	}
+
+	failures, err := reconcileActiveResource(&reconciler, context.Background())
+	if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrProjectNotReady) {
+		t.Fatalf("Reconcile = %v, %v; want one ErrProjectNotReady failure and no error", failures, err)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen {
+		t.Fatalf("ready item = %s, want open: the refused pass wrote nothing", got.Status)
+	}
+	assertNoReentry(t, st, *item.Subject.RunID)
+
+	reconciler.readinessGate = nil
+	if failures, err := reconcileActiveResource(&reconciler, context.Background()); err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile once ready = %v, %v", failures, err)
+	}
+	assertReentryStarted(t, st, item,
+		domain.ReadinessInvalidationHeadChanged, reentryTestBase, reentryTestNewHead)
 }

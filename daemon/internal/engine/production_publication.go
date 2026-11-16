@@ -312,6 +312,10 @@ type productionPublicationWorkflow struct {
 	verificationReproved   map[domain.InvocationID]bool
 	verificationHeldAlerts map[domain.InvocationID]bool
 	rebuild                *ProjectImageRebuild
+	// readinessGate is the engine's project readiness gate, which the
+	// readiness re-entry a moved head starts applies. engine.New sets it;
+	// nil checks nothing.
+	readinessGate ProjectReadinessGate
 	// hostVerificationRoom admits a verification job onto the host executor
 	// and builds its room (Engine.admitHostVerificationRoom). engine.New sets
 	// it; nil admits nothing.

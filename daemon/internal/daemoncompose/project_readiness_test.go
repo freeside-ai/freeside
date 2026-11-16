@@ -456,3 +456,64 @@ func TestProjectReadinessRetriesRemote(t *testing.T) {
 		})
 	}
 }
+
+// gateErr runs the evaluator's readiness gate for project in a read.
+func (f *readinessFixture) gateErr(e *projectReadinessEvaluator, project domain.ProjectID) error {
+	f.t.Helper()
+	var gateErr error
+	if err := f.store.Read(f.t.Context(), func(tx *store.ReadTx) error {
+		gateErr = e.gate(f.t.Context(), tx, project)
+		return nil
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return gateErr
+}
+
+// TestProjectReadinessGate: the gate fails closed on a missing record and
+// on another project's, refuses a record that is not ready by naming its
+// checks, re-runs the store-local checks against the current store even
+// when the record passed them, and passes a ready project.
+func TestProjectReadinessGate(t *testing.T) {
+	t.Parallel()
+	f := newReadinessFixture(t)
+	e := f.evaluator(nil)
+	refusal := func(err error) *domain.ProjectNotReadyError {
+		t.Helper()
+		var notReady *domain.ProjectNotReadyError
+		if !errors.As(err, &notReady) || !errors.Is(err, domain.ErrProjectNotReady) {
+			t.Fatalf("gate = %v, want a project-not-ready refusal", err)
+		}
+		return notReady
+	}
+
+	if missing := refusal(f.gateErr(e, readinessProject)); missing.Reason == "" {
+		t.Fatalf("missing record refusal names no reason: %+v", missing)
+	}
+	f.evaluate(e)
+	if err := f.gateErr(e, readinessProject); err != nil {
+		t.Fatalf("ready project refused: %v", err)
+	}
+	if other := refusal(f.gateErr(e, "project-other")); other.Reason == "" {
+		t.Fatalf("another project's refusal names no reason: %+v", other)
+	}
+	revised := f.evaluator(&domain.SettingsRevisions{Instance: 1, Project: 1})
+	if refusal(f.gateErr(revised, readinessProject)).Reason == "" {
+		t.Fatal("a record under other settings was read as this daemon's")
+	}
+
+	// The record still says trust_profile passed; the gate reads the store.
+	f.trust(readinessReviewDigest, selectorRepositoryID+1, "broken/**")
+	broken := refusal(f.gateErr(e, readinessProject))
+	if broken.Reason != "" || len(broken.NotPassed) == 0 ||
+		broken.NotPassed[0].Check != domain.ProjectReadinessTrustProfile {
+		t.Fatalf("broken profile refusal = %+v, want trust_profile named", broken)
+	}
+	f.trust(readinessReviewDigest, selectorRepositoryID, "repaired/**")
+
+	f.tipErr = &publish.APIError{Status: 404, RequestPath: "/repos/owner/repo/git/ref/heads/main"}
+	f.evaluate(e)
+	if failed := refusal(f.gateErr(e, readinessProject)); !failed.OnlyNotPassed(domain.ProjectReadinessRepositoryBase) {
+		t.Fatalf("missing base refusal = %+v, want repository_base alone", failed)
+	}
+}

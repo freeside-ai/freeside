@@ -4184,6 +4184,24 @@ record. Each doctor pass concludes a `project_not_ready` item for any project
 the daemon does not evaluate, so one left by a composition for another project
 does not hold admission.
 
+While the project is not ready, that daemon also takes no new work for it. A
+paired client's `submit_task` is refused with a 400, and a `freesided submit`
+through the daemon's control socket with an error; both messages name each
+check that did not pass. A refusal records nothing, so the same command
+succeeds once the project is ready, and a replay of a submission already
+recorded is answered as before. Label intake leaves a new occurrence
+unadmitted and logs the refusal; the first pass after the project is ready
+admits it. A hand-back, external-review, or readiness re-entry cycle that
+comes due waits the same way and starts on the first pass after; a cycle whose
+head moved while it ran holds its run under `blocking_system_health` until
+then. The image-repair task alone is still opened when `writer_image` is the
+only check that did not pass, since repairing the image is what clears it.
+Each of these checks reruns the store-local checks against the record, so a
+trust profile or review configuration changed since the last pass is caught. A
+`freesided submit` with no running daemon writes to the database directly and
+is not refused; the next daemon's blocking item holds the task at admission
+instead.
+
 Doctor also reports a `credential_integrity` finding, which is unhealthy when
 any enrollment's current generation carries a credential-integrity mark. On a
 scheduled pass, and on a one-shot `freesided doctor` that reaches a running

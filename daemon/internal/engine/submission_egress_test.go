@@ -97,7 +97,7 @@ func TestSubmitTaskEgressPolicyBeforePersistence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, holder.lookup)))
+			service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, holder.lookup, nil)))
 			init := submissionInitiator("daemon/**")
 			init.PolicyKeys = submittedEgressKeys(values)
 			holder.set("project-1", init)

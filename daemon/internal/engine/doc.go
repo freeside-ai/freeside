@@ -31,6 +31,9 @@
 //   - admission.go, agent_admission.go
 //     the per-stage admission environment and runner capability floor, and
 //     the agent admission refusal
+//   - project_readiness_gate.go the gate that refuses new work for a project
+//     that is not ready, applied where submissions and re-entries write it
+//     (#3205)
 //   - review_admission.go review roles and the snapshot a review is admitted
 //     under
 //   - host_verification_admission.go the gate that admits a run's

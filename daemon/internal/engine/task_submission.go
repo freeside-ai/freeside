@@ -34,13 +34,19 @@ type ManualInitiator struct {
 type TaskSubmitter struct {
 	blobs     *signet.BlobStore
 	initiator func(domain.ProjectID) (ManualInitiator, bool)
+	gate      ProjectReadinessGate
 }
 
 // NewTaskSubmitter builds the injected submitter. A nil initiator refuses every
 // project (client submission unavailable); the daemon composition supplies one
-// over the configured initiators.
-func NewTaskSubmitter(blobs *signet.BlobStore, initiator func(domain.ProjectID) (ManualInitiator, bool)) *TaskSubmitter {
-	return &TaskSubmitter{blobs: blobs, initiator: initiator}
+// over the configured initiators. gate is the daemon's project readiness
+// gate, nil to check nothing; a daemon-origin submission, the image-repair
+// task, passes it when writer_image is the only failed check
+// (waiveWriterImage).
+func NewTaskSubmitter(
+	blobs *signet.BlobStore, initiator func(domain.ProjectID) (ManualInitiator, bool), gate ProjectReadinessGate,
+) *TaskSubmitter {
+	return &TaskSubmitter{blobs: blobs, initiator: initiator, gate: gate}
 }
 
 // SubmitTask creates a task for the command identity inside the caller's
@@ -160,6 +166,10 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 		CompletionCriterion: domain.CompletionBoundPRMerged,
 		DeclaredPaths:       domain.CanonicalDeclaredPaths(resolvedPolicy),
 	}
+	gate := t.gate
+	if in.Origin == domain.TaskSubmissionOriginDaemon {
+		gate = waiveWriterImage(gate)
+	}
 	submitted, err := SubmitSpecificationRunTx(ctx, tx, SpecificationRunSpec{
 		ManualSubmission: &domain.ManualSubmission{
 			Identity: identity, ProjectID: in.ProjectID, SourceArtifactID: sourceArtifact.ID,
@@ -180,7 +190,7 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 		AttemptNumber:       1,
 		OperatorName:        operatorName,
 		Source:              domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: sourceArtifact.ID},
-	})
+	}, gate)
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}

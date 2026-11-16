@@ -35,7 +35,7 @@ import (
 // The GitHub reads go through the daemon's own App authority: the ref read
 // and base fetch use the publication token, so they send an installation
 // token to GitHub. That is why this file is on the Tier A path list. The
-// record it writes grants nothing; see projectReadinessGate.
+// record it writes grants nothing; see gate.
 type projectReadinessEvaluator struct {
 	store                     *store.Store
 	project                   domain.ProjectID
@@ -316,6 +316,62 @@ func (e *projectReadinessEvaluator) write(ctx context.Context, readiness domain.
 		return tx.RecordProjectReadiness(ctx, readiness)
 	}); err != nil {
 		return fmt.Errorf("record project %s readiness: %w", e.project, err)
+	}
+	return nil
+}
+
+// gate is this daemon's engine.ProjectReadinessGate (#3205). It decides
+// whether new work for project may start, in the caller's transaction, and
+// re-checks there:
+//
+//   - that project is the one this daemon was composed for, so a record a
+//     daemon composed for another project left behind is never read as
+//     this one's;
+//   - that a record for the project under the composed settings revisions
+//     exists and decodes, the store validating it, and is keyed to that
+//     project and those revisions;
+//   - that every GitHub-side check in it passed; and
+//   - the two store-local checks, trust_profile and review_configuration,
+//     re-run against the current store in place of the record's, so a
+//     profile change since the last refresh decides at once.
+//
+// It fails closed: a missing, unreadable, or mis-keyed record refuses. A
+// refusal is a *domain.ProjectNotReadyError naming what did not pass; a
+// store failure in the local checks is returned as is. The record grants
+// nothing on its own: admission, import, verification, and publication keep
+// every check they run.
+func (e *projectReadinessEvaluator) gate(ctx context.Context, tx *store.ReadTx, project domain.ProjectID) error {
+	refuse := func(format string, args ...any) error {
+		return &domain.ProjectNotReadyError{ProjectID: project, Reason: fmt.Sprintf(format, args...)}
+	}
+	if project != e.project {
+		return refuse("this daemon evaluates readiness only for project %s", e.project)
+	}
+	readiness, err := tx.ProjectReadiness(ctx, project, e.settings)
+	if errors.Is(err, store.ErrNotFound) {
+		return refuse("readiness is not yet evaluated under these settings")
+	}
+	if err != nil {
+		return refuse("readiness record is unreadable: %v", err)
+	}
+	if readiness.ProjectID != project || !domain.SameSettings(readiness.Settings, e.settings) {
+		return refuse("readiness record is keyed to another project or settings")
+	}
+	local, err := projectReadinessLocalResults(
+		ctx, tx, e.repo, e.repositoryID, e.reviewConfigurationDigest, e.now().UTC())
+	if err != nil {
+		return fmt.Errorf("project %s readiness: %w", project, err)
+	}
+	current := domain.ProjectReadiness{ProjectID: project, Settings: e.settings}
+	for _, result := range readiness.Results {
+		if result.Check.StoreLocal() {
+			continue
+		}
+		current.Results = append(current.Results, result)
+	}
+	current.Results = append(current.Results, local...)
+	if notPassed := current.NotPassed(); len(notPassed) > 0 {
+		return &domain.ProjectNotReadyError{ProjectID: project, NotPassed: notPassed}
 	}
 	return nil
 }

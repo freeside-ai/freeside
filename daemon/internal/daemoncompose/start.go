@@ -158,6 +158,10 @@ type ControlRouteInputs struct {
 	// ExecutionPause serves freesided execution in a prod started with a
 	// driver, executing or not; nil in any other daemon.
 	ExecutionPause *ExecutionPauseControl
+	// ProjectReadinessGate refuses an operator submission of new work for
+	// a project that is not ready (#3205). It checks nothing when the
+	// daemon evaluates no project's readiness.
+	ProjectReadinessGate engine.ProjectReadinessGate
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -483,6 +487,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
 		UpdateDrain: updateDrain, Running: running, Execution: execution,
+		ProjectReadinessGate: late.ProjectReadinessGate,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -690,8 +695,10 @@ func newAttentionService(
 		signet.WithBlobStore(blobs),
 		// Client task submission (plan §5.11) resolves each project's policy from
 		// its operator-configured startup snapshot, independently of label intake.
-		// An omitted manual-submission file disables new client tasks.
-		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator)),
+		// An omitted manual-submission file disables new client tasks. The
+		// readiness gate is read through late, since the composition that
+		// evaluates readiness is built after this service.
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator, late.ProjectReadinessGate)),
 		// A client line change runs the engine's rule inside the command's
 		// transaction, so the receipt commits with the line.
 		signet.WithTaskLineChanger(func(

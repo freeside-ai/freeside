@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/credentialpattern"
@@ -208,4 +209,33 @@ func SameSettings(a, b *SettingsRevisions) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// ProjectNotReadyError is the readiness gate's refusal of new work. It
+// unwraps to ErrProjectNotReady. NotPassed holds the checks that did not
+// pass when a record was read; Reason says why no record could be used,
+// and is empty when NotPassed is set.
+type ProjectNotReadyError struct {
+	ProjectID ProjectID
+	Reason    string
+	NotPassed []ProjectReadinessResult
+}
+
+func (e *ProjectNotReadyError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("project %s is not ready for new work: %s", e.ProjectID, e.Reason)
+	}
+	parts := make([]string, 0, len(e.NotPassed))
+	for _, result := range e.NotPassed {
+		parts = append(parts, fmt.Sprintf("%s %s (%s)", result.Check, result.Status, result.Detail))
+	}
+	return fmt.Sprintf("project %s is not ready for new work: %s", e.ProjectID, strings.Join(parts, "; "))
+}
+
+func (e *ProjectNotReadyError) Unwrap() error { return ErrProjectNotReady }
+
+// OnlyNotPassed reports whether a record was read and check is the one
+// check in it that did not pass.
+func (e *ProjectNotReadyError) OnlyNotPassed(check ProjectReadinessCheck) bool {
+	return e.Reason == "" && len(e.NotPassed) == 1 && e.NotPassed[0].Check == check
 }

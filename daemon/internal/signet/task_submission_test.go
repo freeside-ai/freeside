@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -393,7 +394,7 @@ func newRealSubmitTaskHandlerAndStore(t *testing.T) (http.Handler, *store.Store)
 	}
 	submitter := engine.NewTaskSubmitter(blobs, func(domain.ProjectID) (engine.ManualInitiator, bool) {
 		return initiator, true
-	})
+	}, nil)
 	seedLineEnrollments(t, s)
 	service := signet.NewService(s, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(submitter))
 	return signet.NewHTTPHandler(service, testAuthorizer), s
@@ -479,5 +480,25 @@ func TestSubmitTaskCommandHTTPRejectsInvalidUTF8Name(t *testing.T) {
 	// become under tolerant decoding.
 	if bytes.Contains(resp.Body.Bytes(), []byte{0xff}) || strings.ContainsRune(resp.Body.String(), '�') {
 		t.Fatalf("400 body leaks the submitted name bytes: %s", resp.Body.String())
+	}
+}
+
+// TestSubmitTaskCommandHTTPReportsProjectNotReady: a readiness refusal
+// reaches the paired client as a 400 whose message names the check that
+// did not pass, so the client can show why the project takes no work.
+func TestSubmitTaskCommandHTTPReportsProjectNotReady(t *testing.T) {
+	t.Parallel()
+	submitter := &fakeTaskSubmitter{err: fmt.Errorf("submit specification run: %w", &domain.ProjectNotReadyError{
+		ProjectID: "project-1",
+		NotPassed: []domain.ProjectReadinessResult{{
+			Check: domain.ProjectReadinessTrustProfile, Status: domain.ProjectReadinessFailed, Detail: "no approved trust profile",
+		}},
+	})}
+	service, _ := newSubmitTaskService(t, submitter, domain.DeviceActive)
+	handler := signet.NewHTTPHandler(service, testAuthorizer)
+	got := authenticatedRequest(t, handler, http.MethodPost, "/commands", bytes.NewReader([]byte(
+		`{"command_id":"cmd-1","device_id":"device-1","payload":{"kind":"submit_task","project_id":"project-1","source":"Add a health endpoint."}}`)))
+	if got.Code != http.StatusBadRequest || !strings.Contains(got.Body.String(), "trust_profile failed") {
+		t.Fatalf("status = %d body=%s, want 400 naming trust_profile", got.Code, got.Body.String())
 	}
 }

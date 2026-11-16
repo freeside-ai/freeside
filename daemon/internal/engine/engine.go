@@ -114,6 +114,9 @@ type Engine struct {
 	// race-free authority; this refresh keeps a repaired blocker from waiting
 	// for the scheduled doctor cadence.
 	refreshUnattendedHealth func(context.Context) error
+	// readinessGate refuses new work for a project that is not ready
+	// (WithProjectReadinessGate); nil checks nothing.
+	readinessGate ProjectReadinessGate
 	// launchBound is the instance's startup memory budget and runtime (see
 	// WithMachineCapacity); each launch reads the budget in force through
 	// launchBoundAt.
@@ -257,6 +260,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		e.productionPublication.validateDelivery = e.productionDeliveryValidator
 		e.productionPublication.feedbackAdmission = e.admission
 		e.productionPublication.hostVerificationRoom = e.admitHostVerificationRoom
+		e.productionPublication.readinessGate = e.readinessGate
 		if e.inference.SupportsSite(inference.AdjudicatorSiteID) {
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,

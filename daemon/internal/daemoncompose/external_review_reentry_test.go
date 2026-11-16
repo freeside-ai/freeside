@@ -555,7 +555,7 @@ func TestExternalReviewReentryRefusesEndedWork(t *testing.T) {
 			var started bool
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
 				var err error
-				started, err = engine.StartExternalReviewReentry(ctx, tx, item.ID)
+				started, err = engine.StartExternalReviewReentry(ctx, tx, item.ID, nil)
 				return err
 			}); err != nil {
 				t.Fatal(err)

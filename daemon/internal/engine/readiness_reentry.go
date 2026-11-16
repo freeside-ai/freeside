@@ -29,8 +29,13 @@ import (
 //
 // Any other failure is returned and must fail the caller's transaction. The
 // supersession is then retried with the re-entry, never committed without it.
+//
+// gate is the project readiness gate. A project that is not ready returns
+// its refusal before the first write, which fails the caller's
+// transaction, so the supersession is retried with the re-entry once the
+// project is ready again (#3205).
 func StartReadinessReentry(
-	ctx context.Context, tx *store.WriteTx, item domain.AttentionItem,
+	ctx context.Context, tx *store.WriteTx, item domain.AttentionItem, gate ProjectReadinessGate,
 ) (bool, error) {
 	fact := item.ReadinessInvalidation
 	if item.Type != domain.AttentionReadyForFinalReview ||
@@ -117,6 +122,9 @@ func StartReadinessReentry(
 		// Coordinates the lane could not decode again start nothing: a task
 		// row it would quarantine on every pass is worse than no cycle.
 		return false, nil
+	}
+	if err := requireProjectReady(ctx, gate, &tx.ReadTx, item.ProjectID); err != nil {
+		return false, fmt.Errorf("readiness re-entry: %w", err)
 	}
 	if err := tx.RecordPublicationSuccessor(ctx, successor); err != nil {
 		return false, fmt.Errorf("record readiness re-entry authority: %w", err)

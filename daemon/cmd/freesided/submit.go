@@ -696,17 +696,23 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 }
 
 // applySubmission runs the same store transaction for offline and daemon-routed
-// submissions. The caller owns the store and blob store.
+// submissions. The caller owns the store and blob store. An offline
+// submission applies no readiness gate: no daemon serves the database, so
+// none has composed settings to read readiness under, and the next
+// daemon's admission holds the task while its project is not ready.
 func applySubmission(ctx context.Context, st *store.Store, blobs *signet.BlobStore, req submitApplyRequest) (submitResult, error) {
-	return applyLaunchSubmission(ctx, st, blobs, req, nil)
+	return applyLaunchSubmission(ctx, st, blobs, req, nil, nil)
 }
 
 // applyLaunchSubmission is applySubmission for a daemon that may be a
 // deputy. A non-nil launch is the deputy's own composition, and new work it
 // accepts must bind to it (deputyLaunch.admit); a nil launch admits as
-// before.
+// before. gate is the daemon's project readiness gate, which refuses new
+// work, never a replay, while the project is not ready (#3205); nil checks
+// nothing.
 func applyLaunchSubmission(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, req submitApplyRequest, launch *deputyLaunch,
+	gate engine.ProjectReadinessGate,
 ) (submitResult, error) {
 	if err := validateSubmitApply(req); err != nil {
 		return submitResult{}, fmt.Errorf("submit: invalid prepared request: %w", err)
@@ -904,7 +910,7 @@ func applyLaunchSubmission(
 			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
 			PublicationDigest: publicationDigest,
 			WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
-		})
+		}, gate)
 		if submitErr == nil && replay {
 			return lookupComplete // A replay never commits a write.
 		}

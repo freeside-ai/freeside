@@ -2157,6 +2157,16 @@ func (g sessionGroup) Close(ctx context.Context) error {
 
 // stageDriver wraps the Claude driver in the production materializing seam,
 // so digest verification always completes before an intent is committed.
+// ReadinessGate is the composition's project readiness gate
+// (projectReadinessEvaluator.gate), nil when it evaluates no project's
+// readiness.
+func (c *ClaudeComposition) ReadinessGate() engine.ProjectReadinessGate {
+	if c.readiness == nil {
+		return nil
+	}
+	return c.readiness.gate
+}
+
 func (c *ClaudeComposition) stageDriver(blobs *signet.BlobStore) (exec.StageDriver, error) {
 	materializer, err := ProductionMaterializer(blobs)
 	if err != nil {

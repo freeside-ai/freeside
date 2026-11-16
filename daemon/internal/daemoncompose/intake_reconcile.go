@@ -116,7 +116,10 @@ type intakeReconciler struct {
 	// re-observes unconditionally instead of riding a 304. Optional.
 	evictLabel func(repo, label string)
 	initiators []IntakeInitiator
-	now        func() time.Time
+	// gate is the project readiness gate admit applies before it admits an
+	// occurrence (#3205); nil checks nothing.
+	gate engine.ProjectReadinessGate
+	now  func() time.Time
 	// repos runs each repository's initiators apart, so one repository's
 	// stalled GitHub call holds up only its own intake (#3215).
 	repos keyedrun.Group[string]
@@ -230,6 +233,13 @@ func (r *intakeReconciler) reconcileInitiator(ctx context.Context, init IntakeIn
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if errors.Is(err, domain.ErrProjectNotReady) {
+				// Deferred, not failed: the project_not_ready card already
+				// says why, and the next pass offers the issue again.
+				logger.Info("label-intake occurrence deferred",
+					"repo", init.Repo, "label", init.Label, "issue", number, "error", err)
+				continue
+			}
 			logger.Error("label-intake occurrence pass failed",
 				"repo", init.Repo, "label", init.Label, "issue", number, "error", err)
 		}
@@ -265,9 +275,20 @@ func (r *intakeReconciler) reconcilePresent(ctx context.Context, init IntakeInit
 // persist the reserved specification run, register the project authority, mint the
 // declaration, admit the task proposal under the occurrence's derived key, and
 // bind the admission. See the decision note for the reserved-run adoption model.
+//
+// It first applies the project readiness gate. A project that is not ready
+// is deferred: nothing is admitted, the occurrence stays unadmitted, and
+// reconcilePresent offers it again on the next pass.
 func (r *intakeReconciler) admit(
 	ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence,
 ) (domain.IntakeOccurrence, error) {
+	if r.gate != nil {
+		if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+			return r.gate(ctx, tx, init.ProjectID)
+		}); err != nil {
+			return domain.IntakeOccurrence{}, fmt.Errorf("defer occurrence: %w", err)
+		}
+	}
 	implementationRunID := intakeImplementationRunID(occurrence)
 	specificationRunID, err := engine.ResolveSpecificationRunID(ctx, r.store, implementationRunID)
 	if err != nil {

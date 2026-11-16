@@ -1131,6 +1131,9 @@ func isCommandAuthorityRejection(err error) bool {
 		store.ErrCodexReenrollmentOutcomeConflict,
 		domain.ErrTransitionCommandMismatch,
 		domain.ErrTransitionUnbacked,
+		// The project's readiness gate refused new work; the message names
+		// the checks that did not pass (#3205).
+		domain.ErrProjectNotReady,
 	} {
 		if errors.Is(err, target) {
 			return true
