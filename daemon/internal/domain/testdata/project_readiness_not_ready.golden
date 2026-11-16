@@ -1,0 +1,40 @@
+{
+  "project_id": "proj-1",
+  "settings": {
+    "instance": 3,
+    "project": 2
+  },
+  "results": [
+    {
+      "check": "trust_profile",
+      "status": "failed",
+      "detail": "no active trust profile for owner/repo",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "review_configuration",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "repository_base",
+      "status": "unavailable",
+      "detail": "read the tip of owner/repo@main: connection refused",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "publication_authority",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "check": "writer_image",
+      "status": "passed",
+      "detail": "",
+      "checked_at": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "evaluated_at": "2026-01-02T03:04:05Z"
+}

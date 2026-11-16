@@ -659,4 +659,9 @@ var (
 	ErrSettingsSectionMissing         = errors.New("required settings section is not set")
 	ErrSettingsKeyMissing             = errors.New("required settings key is absent")
 	ErrSettingsRevisionOrder          = errors.New("settings revisions are not numbered 1, 2, 3 in order")
+	// ErrProjectNotReady refuses or defers work for a project whose
+	// readiness record is missing, unreadable, keyed to other settings
+	// revisions, or holds a check that has not passed.
+	ErrProjectNotReady              = errors.New("project is not ready to run unattended work")
+	ErrProjectReadinessInconsistent = errors.New("project readiness record is inconsistent")
 )
