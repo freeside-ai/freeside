@@ -1515,7 +1515,7 @@ func seedSpecificationQuestion(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	admission, admitted, err := engine.admitAttempt(
+	admission, _, admitted, err := engine.admitAttempt(
 		t.Context(), invocationBinding{run: run, invocation: invocation}, stage, invocationID,
 	)
 	if err != nil || !admitted {

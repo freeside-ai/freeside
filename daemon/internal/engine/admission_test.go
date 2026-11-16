@@ -305,7 +305,7 @@ func TestWriterAdmissionTakesTheEgressProfileFromPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			admission, admitted, err := f.engine.admitAttempt(
+			admission, _, admitted, err := f.engine.admitAttempt(
 				t.Context(), invocationBinding{run: run, invocation: invocation}, stage, invocation.ID)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) || admitted {
@@ -347,7 +347,7 @@ func TestWriterAdmissionRefusesAnUnreadablePolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, admitted, err := f.engine.admitAttempt(
+		_, _, admitted, err := f.engine.admitAttempt(
 			t.Context(), invocationBinding{run: run, invocation: invocation}, stage, invocation.ID)
 		if admitted {
 			t.Fatal("admitAttempt admitted a run whose policy cannot be read")
@@ -399,8 +399,9 @@ func TestEgressPolicyGovernsEveryWriterStageAndNoOther(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return f.engine.admitAttempt(
+		admission, _, admitted, err := f.engine.admitAttempt(
 			t.Context(), invocationBinding{run: run, invocation: invocation}, stage, id)
+		return admission, admitted, err
 	}
 	feedbackID := operatorFeedbackInvocationID("command-1")
 	for name, tc := range map[string]struct {
@@ -650,7 +651,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		}, nil),
 		invocation: invocation, conversation: conversation,
 	}
-	admission, admitted, err := e.admitAttempt(
+	admission, _, admitted, err := e.admitAttempt(
 		ctx, binding, domain.Stage{ID: "stage-1"}, invocation.ID,
 	)
 	if err != nil {
@@ -680,7 +681,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	specificationBinding := binding
 	specificationBinding.run.ID = "specification-run"
 	specificationBinding.invocation = specificationInvocation
-	specificationAdmission, admitted, err := e.admitAttempt(ctx, specificationBinding, domain.Stage{
+	specificationAdmission, _, admitted, err := e.admitAttempt(ctx, specificationBinding, domain.Stage{
 		ID: specificationStageID(specificationBinding.run.ID), Name: specificationStageName,
 	}, specificationInvocation.ID)
 	if err != nil {
@@ -723,7 +724,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 			spec.StageInputs.PromptPackageDigest == digest("8")
 		return errors.Join(ErrProductionInputUndeliverable, deliveryRefusal)
 	}
-	if _, admitted, err := e.admitAttempt(ctx, remediationBinding, domain.Stage{
+	if _, _, admitted, err := e.admitAttempt(ctx, remediationBinding, domain.Stage{
 		ID: remediationStageID(remediationBinding.run.ID, 1), Name: productionStageName,
 	}, remediationID); admitted || !validated ||
 		!errors.Is(err, ErrRemediationInputUndeliverable) ||
@@ -733,7 +734,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	e.productionDeliveryValidator = func(context.Context, exec.StartSpec) error {
 		return exec.ErrInputUnavailable
 	}
-	if _, admitted, err := e.admitAttempt(ctx, remediationBinding, domain.Stage{
+	if _, _, admitted, err := e.admitAttempt(ctx, remediationBinding, domain.Stage{
 		ID: remediationStageID(remediationBinding.run.ID, 1), Name: productionStageName,
 	}, remediationID); admitted || !errors.Is(err, exec.ErrInputUnavailable) ||
 		errors.Is(err, ErrProductionInputUndeliverable) ||
@@ -755,13 +756,13 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 			spec.StageInputs.PromptPackageDigest == digest("8")
 		return errors.Join(ErrProductionInputUndeliverable, deliveryRefusal)
 	}
-	if _, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
+	if _, _, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
 		ID: operatorFeedbackStageID(operatorFeedbackID), Name: productionStageName,
 	}, operatorFeedbackID); admitted || !validated || !errors.Is(err, ErrProductionInputUndeliverable) {
 		t.Fatalf("operator-feedback delivery refusal = admitted %t, validated %t, err %v", admitted, validated, err)
 	}
 	e.productionDeliveryValidator = func(context.Context, exec.StartSpec) error { return nil }
-	operatorFeedbackAdmission, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
+	operatorFeedbackAdmission, _, admitted, err := e.admitAttempt(ctx, operatorFeedbackBinding, domain.Stage{
 		ID: operatorFeedbackStageID(operatorFeedbackID), Name: productionStageName,
 	}, operatorFeedbackID)
 	if err != nil {
@@ -844,7 +845,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	badBinding := binding
 	badBinding.invocation = badInvocation
 	badBinding.conversation = domain.Conversation{}
-	if _, _, err := e.admitAttempt(
+	if _, _, _, err := e.admitAttempt(
 		ctx, badBinding, domain.Stage{ID: "stage-1"}, badInvocation.ID,
 	); !errors.Is(err, domain.ErrStageInputsNotCanonical) {
 		t.Fatalf("malformed artifact admission = %v, want %v",

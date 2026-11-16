@@ -142,7 +142,7 @@ func TestSpecificationRetryDispatchesToApproval(t *testing.T) {
 	// A replayed dispatch of a recorded invocation leaves its attempt, purpose
 	// included, as it was.
 	if _, _, _, err := e.recordAttempt(t.Context(), "specification-run", specificationStageID("specification-run"),
-		second, new(domain.AttemptPurposeDiscussionReply), "dispatched", nil); err != nil {
+		second, new(domain.AttemptPurposeDiscussionReply), "dispatched", nil, domain.BaseRevision{}); err != nil {
 		t.Fatalf("replayed recordAttempt: %v", err)
 	}
 	requireAttemptPurposes(t, f.store, "specification-run", domain.AttemptPurposeFirstDraft, domain.AttemptPurposeRetry)

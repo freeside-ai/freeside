@@ -28,7 +28,7 @@ var ErrComposition = errors.New("configured agent image has no matching project-
 // mismatch.
 //
 // These are the checks the record alone decides, so they run before anything
-// reaches the network. Whether an image may serve the configured base is
+// reaches the network. Whether an image may serve a run's base is
 // writer selection's question (freesided's claudeImageSelector), which can
 // need the base tree; a base no image serves holds attempts instead of
 // refusing the start.

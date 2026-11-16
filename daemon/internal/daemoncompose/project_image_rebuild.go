@@ -112,7 +112,7 @@ func composeImageUpkeep(
 	}
 	// A maintenance task runs at its refusal's tip only through per-attempt
 	// image selection, which only the unattended composition has. Without it
-	// the task would be admitted at -base-sha with hydration, so none is
+	// the task would be admitted at its run's base with hydration, so none is
 	// submitted.
 	if wiring.selectImage != nil {
 		upkeep.SubmitMaintenance = func(ctx context.Context, refusal domain.ImageUpkeepRefusal) error {

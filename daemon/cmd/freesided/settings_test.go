@@ -207,7 +207,7 @@ func TestSettingsImportYieldsTheFileSettings(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("loaded settings\n%+v\nfile settings\n%+v", got, want)
 			}
-			launch := daemoncompose.RunLaunch{BaseSHA: strings.Repeat("c", 40), StateDir: "/rig/daemon", ListenPort: 7340}
+			launch := daemoncompose.RunLaunch{StateDir: "/rig/daemon", ListenPort: 7340}
 			if !reflect.DeepEqual(daemoncompose.NewClaudeDriverConfig(got, launch),
 				daemoncompose.NewClaudeDriverConfig(want, launch)) {
 				t.Fatal("the loaded and file settings compose different driver configurations")

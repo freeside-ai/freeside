@@ -116,7 +116,7 @@ func (f *agentAdmissionFixture) admitSpecifier(
 		t.Fatal(err)
 	}
 	stage := domain.Stage{ID: specificationStageID(f.run.ID), RunID: f.run.ID, Name: specificationStageName}
-	admission, admitted, err := f.engine.admitAttempt(t.Context(), binding, stage, invocation)
+	admission, _, admitted, err := f.engine.admitAttempt(t.Context(), binding, stage, invocation)
 	if err == nil && !admitted {
 		t.Fatalf("admitAttempt(%s) admitted nothing", invocation)
 	}

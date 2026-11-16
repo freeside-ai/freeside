@@ -146,7 +146,7 @@ func TestDeviceTaskWithARefusalSourceGetsTheOrdinaryAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if admission.Base.BaseSHA != "deadbeef" || admission.WorkspaceHydration != "" {
-		t.Fatalf("admission base %+v hydration %q, want the configured base and no hydration fact",
+		t.Fatalf("admission base %+v hydration %q, want the derived tip and no hydration fact",
 			admission.Base, admission.WorkspaceHydration)
 	}
 }

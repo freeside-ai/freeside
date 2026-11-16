@@ -815,7 +815,6 @@ func deputyClaudeDriverConfig(
 	settings loadedDeputySettings, paths deputyPaths, judgmentDigest string,
 ) daemoncompose.ClaudeDriverConfig {
 	return daemoncompose.NewClaudeDriverConfig(settings.runSettings(deputyContainerBin), daemoncompose.RunLaunch{
-		BaseSHA:  settings.Repository.BaseSHA,
 		StateDir: paths.StateRoot, RigTokenFile: paths.Acquisition,
 		AppStateDir: settings.Prod.AppStateDir, AppCredentialsDir: settings.Prod.AppCredentialsDir,
 		ListenPort: listenPort(settings.Listen), JudgmentDigest: judgmentDigest,

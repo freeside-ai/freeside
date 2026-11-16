@@ -301,20 +301,23 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 }
 
 // AdmissionDerivation derives the per-attempt half of the admission
-// environment: the workspace reference and the exact base revision this
-// attempt runs against. The static AdmissionEnvironment cannot carry either
-// once more than one run flows through a daemon (each handoff owns its
-// workspace volume, and the trusted base tip moves between submissions), and
-// the composition, not the engine, knows the ward's workspace naming scheme
-// and how the operator resolves a base (#237). The engine replaces the
-// derived base commit in three cases: a maintenance task runs at its
+// environment: the workspace reference, and the base a run with none
+// recorded would start at. The static AdmissionEnvironment cannot carry
+// either once more than one run flows through a daemon (each handoff owns its
+// workspace volume, and the trusted base tip moves while the daemon runs),
+// and the composition, not the engine, knows the ward's workspace naming
+// scheme and where the project's observed tip is stored (#237, #3203).
+//
+// The derived base is only a starting point. A run records its base with its
+// first admission (domain.Run.Base), and every later admission of the run
+// starts there, not at the tip derived for it (runBase). The engine then
+// replaces the base commit in three cases: a maintenance task runs at its
 // refusal's tip (repairTaskRefusal), a handoff conflict's or hand-back
 // cycle's remediation at the base its sealed authority names
 // (handoffConflictAdmission), and a later return to the agent or remediation
 // at that base when its candidate was written there
-// (handoffConflictTipAdmission). Each tip is read from an
-// immutable record, so every attempt derives the same base without the Run
-// carrying one.
+// (handoffConflictTipAdmission). Each of those tips is read from an
+// immutable record too, so every attempt derives the same base.
 type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
 
 // WithAdmissionDerivation configures per-attempt workspace and base
@@ -336,12 +339,14 @@ func WithAdmissionDerivation(derive AdmissionDerivation) Option {
 // while upkeep may still make an image serve the base, or
 // ErrProjectImageUnserved when nothing pending would.
 //
-// repair is the refusal a maintenance task's run repairs, nil for every
-// other run. A repair run takes the image the refusal was measured from
-// while the admitted-image pointer still names it, instead of an image that
-// serves the daemon's base, and holds as unserved once the pointer moves.
+// base is the run's base (runBase), which the image must serve. repair is
+// the refusal a maintenance task's run repairs, nil for every other run. A
+// repair run takes the image the refusal was measured from while the
+// admitted-image pointer still names it, instead of an image that serves
+// base, and holds as unserved once the pointer moves.
 type ImageSelection func(
-	ctx context.Context, invocationID domain.InvocationID, repair *domain.ImageUpkeepRefusal,
+	ctx context.Context, invocationID domain.InvocationID, base domain.BaseRevision,
+	repair *domain.ImageUpkeepRefusal,
 ) (domain.ImageRef, error)
 
 // WithAdmissionImageSelection makes every admission name the image
@@ -437,13 +442,96 @@ func writerEgressRefusal(
 // attempt, or reports that no admitter is configured. The input digest is the
 // content address of the invocation's own binding, so the record names the
 // inputs the stage ran against rather than a second notion of them.
+//
+// It also returns the run's base (runBase) the admission started from,
+// before any of the three exceptions replaced its commit. recordAttempt
+// records it on a run that has none, and refuses the admission if the run
+// recorded a different one in the meantime.
 func (e *Engine) admitAttempt(
 	ctx context.Context, binding invocationBinding, stage domain.Stage, invocationID domain.InvocationID,
-) (domain.ExecutionAdmission, bool, error) {
+) (domain.ExecutionAdmission, domain.BaseRevision, bool, error) {
 	if e.admission == nil {
-		return domain.ExecutionAdmission{}, false, nil
+		return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, nil
 	}
 	env := e.admission.environment
+	// The run's base comes first: the image is selected for it, so a run
+	// admitted before the tip moved keeps an image that serves its own base.
+	if e.derive != nil {
+		workspace, tip, err := e.derive(ctx, invocationID)
+		if err != nil {
+			return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, fmt.Errorf(
+				"admit invocation %q: derive environment: %w", invocationID, err)
+		}
+		env.Workspace, env.Base = workspace, tip
+	}
+	base, err := runBase(ctx, e.store, binding.run, env.Base)
+	if err != nil {
+		return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, fmt.Errorf(
+			"admit invocation %q: %w", invocationID, err)
+	}
+	env.Base = base
+	admission, admitted, err := e.admitAttemptIn(ctx, env, binding, stage, invocationID)
+	return admission, base, admitted, err
+}
+
+// runBase returns the base run's admissions start from. A run's base is
+// recorded with its first admission (recordAttempt), so a retry, a
+// remediation round, an operator-feedback turn, or a re-entry starts where
+// the run did, however far the tip has moved. A run stored before #3203 that
+// was admitted without recording one adopts the base of its earliest recorded
+// admission. A run never admitted takes tip, the base derived for this
+// attempt, so a run held before its first admission follows the tip.
+//
+// The run's repository and ref must be tip's: a run recorded under another
+// repository would otherwise be seeded and published through this
+// composition's.
+func runBase(ctx context.Context, st *store.Store, run domain.Run, tip domain.BaseRevision) (domain.BaseRevision, error) {
+	base := tip
+	switch {
+	case run.Base != nil:
+		base = *run.Base
+	case runHasAttempt(run):
+		var admissions []domain.ExecutionAdmission
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			admissions, err = tx.ListRunExecutionAdmissionRecords(ctx, run.ID)
+			return err
+		}); err != nil {
+			return domain.BaseRevision{}, fmt.Errorf("read run %s admissions: %w", run.ID, err)
+		}
+		if len(admissions) > 0 {
+			base = admissions[0].Base
+		}
+	}
+	if base.Repo != tip.Repo || base.RepositoryID != tip.RepositoryID || base.BaseRef != tip.BaseRef {
+		return domain.BaseRevision{}, fmt.Errorf("run %s base %s#%d@%s, this daemon admits at %s#%d@%s: %w",
+			run.ID, base.Repo, base.RepositoryID, base.BaseRef, tip.Repo, tip.RepositoryID, tip.BaseRef,
+			domain.ErrRepositoryIdentityMismatch)
+	}
+	return base, nil
+}
+
+func runHasAttempt(run domain.Run) bool {
+	for _, stage := range run.Stages {
+		if len(stage.Attempts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// errRunBaseRecorded refuses a first admission whose run recorded a
+// different base after this pass read it. It is joined with
+// exec.ErrInputUnavailable, so the attempt holds and the next pass admits it
+// at the recorded base.
+var errRunBaseRecorded = errors.New("run recorded another base since this admission read it")
+
+// admitAttemptIn admits one attempt under env, whose Workspace and Base are
+// already the attempt's own.
+func (e *Engine) admitAttemptIn(
+	ctx context.Context, env AdmissionEnvironment, binding invocationBinding, stage domain.Stage,
+	invocationID domain.InvocationID,
+) (domain.ExecutionAdmission, bool, error) {
 	// The image is decided before the capability gate, so an attempt waiting
 	// on upkeep, or on a proof of its image, holds under that cause rather
 	// than under the capabilities a repoint cleared. A maintenance task's
@@ -457,7 +545,7 @@ func (e *Engine) admitAttempt(
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: read repair refusal: %w", invocationID, err)
 		}
-		image, err := e.selectImage(ctx, invocationID, repair)
+		image, err := e.selectImage(ctx, invocationID, env.Base, repair)
 		if err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: select image: %w", invocationID, err)
@@ -487,14 +575,6 @@ func (e *Engine) admitAttempt(
 	inputDigest, err := binding.invocation.ComputeInputDigest()
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
-	}
-	if e.derive != nil {
-		workspace, base, err := e.derive(ctx, invocationID)
-		if err != nil {
-			return domain.ExecutionAdmission{}, false, fmt.Errorf(
-				"admit invocation %q: derive environment: %w", invocationID, err)
-		}
-		env.Workspace, env.Base = workspace, base
 	}
 	// A maintenance task runs at its refusal's tip and starts without
 	// hydration: the image's baked manifests disagree with that tip's, so the

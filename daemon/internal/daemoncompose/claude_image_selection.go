@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -32,35 +34,61 @@ const (
 	followerRetryBackoffCap = time.Hour
 )
 
-// baseInputsMemo reads what the daemon's base holds for each input layout
-// once. The base is fixed per daemon (-base-sha) and its tree cannot change,
-// so an observation stays true for the process's life; a failed read is not
-// kept and the next selection tries again.
+// baseInputsMemoBases is how many base commits baseInputsMemo keeps. Runs
+// admitted at different tips select at their own bases, but nearly all
+// selections are for the latest tip or a few older runs, so a handful of
+// bases keeps the fetches rare without growing as the tip advances.
+const baseInputsMemoBases = 8
+
+// baseInputsMemo reads what a base commit holds for each input layout once.
+// A commit's tree cannot change, so an observation stays true for the
+// process's life; a failed read is not kept and the next selection tries
+// again. It keeps the baseInputsMemoBases most recently first-read commits
+// and forgets the oldest past that, so a long-running daemon whose tip keeps
+// advancing holds a bounded set.
 type baseInputsMemo struct {
 	mu      sync.Mutex
-	observe func(context.Context, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error)
-	inputs  map[domain.ProjectImageInputLayout]domain.ProjectImageBaseInputs
+	observe func(context.Context, string, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error)
+	inputs  map[baseInputsKey]domain.ProjectImageBaseInputs
+	// bases lists the commits inputs holds, oldest first.
+	bases []string
+}
+
+type baseInputsKey struct {
+	baseSHA string
+	layout  domain.ProjectImageInputLayout
 }
 
 func newBaseInputsMemo(
-	observe func(context.Context, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
+	observe func(context.Context, string, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
 ) *baseInputsMemo {
-	return &baseInputsMemo{observe: observe, inputs: map[domain.ProjectImageInputLayout]domain.ProjectImageBaseInputs{}}
+	return &baseInputsMemo{observe: observe, inputs: map[baseInputsKey]domain.ProjectImageBaseInputs{}}
 }
 
 func (m *baseInputsMemo) read(
-	ctx context.Context, layout domain.ProjectImageInputLayout,
+	ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if inputs, ok := m.inputs[layout]; ok {
+	key := baseInputsKey{baseSHA: baseSHA, layout: layout}
+	if inputs, ok := m.inputs[key]; ok {
 		return inputs, nil
 	}
-	inputs, err := m.observe(ctx, layout)
+	inputs, err := m.observe(ctx, baseSHA, layout)
 	if err != nil {
 		return domain.ProjectImageBaseInputs{}, err
 	}
-	m.inputs[layout] = inputs
+	if !slices.Contains(m.bases, baseSHA) {
+		if len(m.bases) == baseInputsMemoBases {
+			oldest := m.bases[0]
+			m.bases = m.bases[1:]
+			maps.DeleteFunc(m.inputs, func(k baseInputsKey, _ domain.ProjectImageBaseInputs) bool {
+				return k.baseSHA == oldest
+			})
+		}
+		m.bases = append(m.bases, baseSHA)
+	}
+	m.inputs[key] = inputs
 	return inputs, nil
 }
 
@@ -258,7 +286,6 @@ type claudeImageSelector struct {
 	store        *store.Store
 	repo         string
 	repositoryID int64
-	baseSHA      string
 	backend      wardConformance
 	base         *baseInputsMemo
 	follower     *conformanceFollower
@@ -278,7 +305,7 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 
 // selectImage is the engine's ImageSelection. It returns the image to admit,
 // or the error that holds the attempt: image_upkeep_pending or the unserved
-// admission_policy_refused hold when no image serves the base,
+// admission_policy_refused hold when no image serves base, the run's base,
 // backend_not_conformant while ward does not yet prove the selected image,
 // and input_unavailable when the base could not be read.
 //
@@ -294,7 +321,7 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 // holds as unserved once the pointer has moved on, never in another image.
 // It never takes upkeep's hold, which names the task itself.
 func (s *claudeImageSelector) selectImage(
-	ctx context.Context, _ domain.InvocationID, repair *domain.ImageUpkeepRefusal,
+	ctx context.Context, _ domain.InvocationID, base domain.BaseRevision, repair *domain.ImageUpkeepRefusal,
 ) (domain.ImageRef, error) {
 	proved, _ := s.backend.ConformanceIdentity()
 	var (
@@ -312,7 +339,7 @@ func (s *claudeImageSelector) selectImage(
 				repair.MeasuredFromImageID, repair.ID, engine.ErrProjectImageUnserved)
 		}
 	} else {
-		selected, found, err = selectRecordedImage(ctx, s.store, s.repo, s.repositoryID, s.baseSHA,
+		selected, found, err = selectRecordedImage(ctx, s.store, s.repo, s.repositoryID, base.BaseSHA,
 			domain.ImageRef(proved), s.base)
 		if err != nil {
 			return "", err
@@ -409,7 +436,7 @@ func selectRecordedImage(
 	}
 	return SelectAmongRecordedImages(pointed, images, repo, baseSHA, proved,
 		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
-			return base.read(ctx, layout)
+			return base.read(ctx, baseSHA, layout)
 		})
 }
 

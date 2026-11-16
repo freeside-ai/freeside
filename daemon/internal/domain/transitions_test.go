@@ -126,6 +126,50 @@ func TestRunTransitionComparesAttemptPurposeByValue(t *testing.T) {
 	}
 }
 
+// TestRunTransitionRecordsBaseOnce pins #3203: a run gains its base once,
+// with its first admission, and a later write may neither change nor clear it.
+func TestRunTransitionRecordsBaseOnce(t *testing.T) {
+	base := domain.BaseRevision{Repo: "o/r", RepositoryID: 1, BaseRef: "main", BaseSHA: "aaaa"}
+	unrecorded := validRun()
+	recorded := appendedRun()
+	recorded.Base = new(base)
+	if err := domain.ValidateRunTransition(unrecorded, recorded); err != nil {
+		t.Fatalf("recording the first base: %v", err)
+	}
+	same := appendedRun()
+	same.Base = new(base)
+	if err := domain.ValidateRunTransition(recorded, same); err != nil {
+		t.Fatalf("an equal copy of the recorded base: %v", err)
+	}
+
+	moved := base
+	moved.BaseSHA = "bbbb"
+	tests := map[string]*domain.BaseRevision{"changed": &moved, "cleared": nil}
+	for name, next := range tests {
+		t.Run(name, func(t *testing.T) {
+			updated := appendedRun()
+			updated.Base = next
+			if err := domain.ValidateRunTransition(recorded, updated); !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("ValidateRunTransition() = %v, want ErrImmutableTransition", err)
+			}
+		})
+	}
+
+	// A body written before #3203 has no base key and decodes as unrecorded.
+	legacy := []byte(`{"id":"run-1","project_id":"proj-1","spec_digest":"sha256:spec",` +
+		`"policy_digest":"sha256:policy","stages":[]}`)
+	var old domain.Run
+	if err := json.Unmarshal(legacy, &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Base != nil {
+		t.Fatalf("legacy run base = %+v, want none", *old.Base)
+	}
+	if err := old.Validate(); err != nil {
+		t.Fatalf("legacy run: %v", err)
+	}
+}
+
 // appendedRun is validRun with one appended attempt on its stage: a legal
 // forward step that preserves all recorded history.
 func appendedRun() domain.Run {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,11 @@ const (
 )
 
 var selectorBase = strings.Repeat("b", 40)
+
+// selectorRevision is the run base the selector tests admit at.
+var selectorRevision = domain.BaseRevision{
+	Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseRef: "main", BaseSHA: selectorBase,
+}
 
 // selectorImage is a project image built at commit that bakes the npm
 // manifests whose hashes repeat manifest, under image reference fill.
@@ -71,12 +77,12 @@ func selectorStore(t *testing.T, images ...domain.ProjectImage) *store.Store {
 // selectorBaseInputs is a base holding the manifests selectorImage bakes for
 // manifest; a non-nil failure is returned instead.
 func selectorBaseInputs(manifest string, failure error) *baseInputsMemo {
-	return newBaseInputsMemo(func(context.Context, domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
+	return newBaseInputsMemo(func(_ context.Context, baseSHA string, _ domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
 		if failure != nil {
 			return domain.ProjectImageBaseInputs{}, failure
 		}
 		return domain.ProjectImageBaseInputs{
-			CommitSHA:         selectorBase,
+			CommitSHA:         baseSHA,
 			PackageJSONSHA256: strings.Repeat(manifest, 64), PackageLockSHA256: strings.Repeat(manifest, 64),
 		}, nil
 	})
@@ -265,9 +271,8 @@ func TestStartWardOnSelectedImage(t *testing.T) {
 				conformance = *tc.conformance
 			}
 			if err := startWardOnSelectedImage(t.Context(), st, backend, ClaudeDriverConfig{
-				Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase,
-				RunConformance: tc.runConformance,
-			}, selectorBaseInputs(tc.manifest, nil), tc.images[0].ImageRef, conformance, tc.conformance != nil,
+				Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: tc.runConformance,
+			}, selectorBase, selectorBaseInputs(tc.manifest, nil), tc.images[0].ImageRef, conformance, tc.conformance != nil,
 				slog.New(slog.DiscardHandler)); err != nil {
 				t.Fatalf("start = %v, want it to succeed", err)
 			}
@@ -282,8 +287,8 @@ func TestStartWardOnSelectedImage(t *testing.T) {
 		st := selectorStore(t, pointed)
 		failure := errors.New("fetch failed")
 		err := startWardOnSelectedImage(t.Context(), st, &fakeWard{}, ClaudeDriverConfig{
-			Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase, RunConformance: true,
-		}, selectorBaseInputs("2", failure), pointed.ImageRef, domain.BackendConformance{}, false,
+			Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: true,
+		}, selectorBase, selectorBaseInputs("2", failure), pointed.ImageRef, domain.BackendConformance{}, false,
 			slog.New(slog.DiscardHandler))
 		if !errors.Is(err, failure) || !errors.Is(err, exec.ErrInputUnavailable) {
 			t.Fatalf("start = %v, want the read failure as input_unavailable", err)
@@ -302,8 +307,8 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	// The start itself repoints ward from no image to the pointed-to one;
 	// only later repoints would follow an attempt.
 	if err := startWardOnSelectedImage(t.Context(), st, backend, ClaudeDriverConfig{
-		Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseSHA: selectorBase, RunConformance: true,
-	}, base, pointed.ImageRef, domain.BackendConformance{}, false, slog.New(slog.DiscardHandler)); err != nil {
+		Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: true,
+	}, selectorBase, base, pointed.ImageRef, domain.BackendConformance{}, false, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatalf("start = %v, want an unserved base to start", err)
 	}
 	follower := newConformanceFollower(backend, func(context.Context) error {
@@ -312,11 +317,11 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	}, time.Now, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { _ = follower.Close(context.Background()) })
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
 		backend: backend, base: base, follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
 		t.Fatalf("select before upkeep is bound = %v, want unserved", err)
 	}
 	var pending *domain.ImageUpkeepHold
@@ -325,16 +330,16 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 
 	pending = &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
 	var upkeep *engine.ImageUpkeepPendingError
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.As(err, &upkeep) ||
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.As(err, &upkeep) ||
 		upkeep.Hold.Pending != domain.ImageUpkeepPendingRebuild {
 		t.Fatalf("select with a rebuild pending = %v, want an image_upkeep_pending rebuild", err)
 	}
 	pending = nil
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
 		t.Fatalf("select with nothing pending = %v, want unserved", err)
 	}
 	lookupErr = errors.New("tip read failed")
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, lookupErr) ||
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, lookupErr) ||
 		errors.Is(err, engine.ErrProjectImageUnserved) || errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("select with a failed lookup = %v, want the failure itself", err)
 	}
@@ -362,16 +367,16 @@ func TestClaudeImageSelectorFollowsTheSelectedImage(t *testing.T) {
 		return nil
 	}, time.Now, slog.New(slog.DiscardHandler))
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select under the stale proof = %v, want the image held as unproved", err)
 	}
 	<-started
 	// Ward already names the selected image, but its pass has not ended.
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select during the pass = %v, want the image held as unproved", err)
 	}
 	if follower.passMu.TryLock() {
@@ -381,7 +386,7 @@ func TestClaudeImageSelectorFollowsTheSelectedImage(t *testing.T) {
 	if err := follower.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := selector.selectImage(t.Context(), "", nil)
+	got, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("select after the pass = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
@@ -408,33 +413,33 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 	}, time.Now, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { _ = follower.Close(context.Background()) })
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
 		backend: backend, base: selectorBaseInputs("5", nil), follower: follower,
 	}
 	task := domain.TaskID("task-repair")
 	selector.bindImageUpkeep(func(context.Context) (*domain.ImageUpkeepHold, error) {
 		return &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingMaintenanceTask, MaintenanceTaskID: &task}, nil
 	})
-	if _, err := selector.selectImage(t.Context(), "", nil); !errors.Is(err, engine.ErrImageUpkeepPending) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("an ordinary attempt = %v, want it held on the maintenance task", err)
 	}
 	refusal := &domain.ImageUpkeepRefusal{ID: domain.Digest("sha256:" + strings.Repeat("7", 64)), MeasuredFromImageID: pointed.ID}
 
-	if _, err := selector.selectImage(t.Context(), "", refusal); !errors.Is(err, engine.ErrImageNotProved) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, refusal); !errors.Is(err, engine.ErrImageNotProved) {
 		t.Fatalf("repair under another image's proof = %v, want it held as unproved", err)
 	}
 	<-passed
 	if err := follower.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := selector.selectImage(t.Context(), "", refusal)
+	got, err := selector.selectImage(t.Context(), "", selectorRevision, refusal)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("repair = (%s, %v), want the pointed-to image %s", got, err, pointed.ImageRef)
 	}
 
 	moved := *refusal
 	moved.MeasuredFromImageID = other.ID
-	if _, err := selector.selectImage(t.Context(), "", &moved); !errors.Is(err, engine.ErrProjectImageUnserved) ||
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, &moved); !errors.Is(err, engine.ErrProjectImageUnserved) ||
 		errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("repair after the pointer moved = %v, want unserved", err)
 	}
@@ -454,18 +459,18 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 	follower := newConformanceFollower(backend, suite.prove, clock.Now, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { _ = follower.Close(context.Background()) })
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select under the stale proof = %v, want the image held as unproved", err)
 	}
 	suite.end(errors.New("the VM did not start"))
 	follower.wg.Wait()
 
 	clock.advance(followerRetryBackoff - time.Nanosecond)
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) ||
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) ||
 		!strings.Contains(err.Error(), "no published conformance proof") {
 		t.Fatalf("select after the failed pass = %v, want the image held as having no published proof", err)
 	}
@@ -473,7 +478,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 		t.Fatal("the failed pass was retried before its backoff")
 	}
 	clock.advance(time.Nanosecond)
-	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select after the backoff = %v, want the image held as unproved", err)
 	}
 	if !follower.pendingFor(pointed.ImageRef) {
@@ -482,7 +487,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 	suite.end(nil)
 	follower.wg.Wait()
 
-	got, err := selector.selectImage(t.Context(), "", nil)
+	got, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("select after the retry = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
@@ -597,11 +602,11 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 	follower := newConformanceFollower(backend, suite.prove, clock.Now, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { _ = follower.Close(context.Background()) })
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if got, err := selector.selectImage(t.Context(), "", nil); err != nil || got != pointed.ImageRef {
+	if got, err := selector.selectImage(t.Context(), "", selectorRevision, nil); err != nil || got != pointed.ImageRef {
 		t.Fatalf("select under the proof = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
 	scheduled := make(chan error, 1)
@@ -612,7 +617,7 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 	}
 	for _, wait := range []time.Duration{0, 24 * time.Hour} {
 		clock.advance(wait)
-		if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+		if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
 			t.Fatalf("select %s after the failed scheduled pass = %v, want the image held as unproved", wait, err)
 		}
 		if follower.pendingFor(pointed.ImageRef) {
@@ -649,5 +654,133 @@ func TestConformanceFollowerStopsOnClose(t *testing.T) {
 	}
 	if follower.pendingFor("ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("e", 64))) {
 		t.Fatal("a closed follower reports a pass")
+	}
+}
+
+// countedBaseInputs observes manifests[baseSHA] at each base and counts the
+// reads per base, so a test sees which commit each selection read.
+type countedBaseInputs struct {
+	mu        sync.Mutex
+	manifests map[string]string
+	reads     map[string]int
+}
+
+func (c *countedBaseInputs) observe(
+	_ context.Context, baseSHA string, _ domain.ProjectImageInputLayout,
+) (domain.ProjectImageBaseInputs, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reads[baseSHA]++
+	manifest, ok := c.manifests[baseSHA]
+	if !ok {
+		return domain.ProjectImageBaseInputs{}, fmt.Errorf("base %s absent: %w", baseSHA, exec.ErrInputUnavailable)
+	}
+	return domain.ProjectImageBaseInputs{
+		CommitSHA:         baseSHA,
+		PackageJSONSHA256: strings.Repeat(manifest, 64), PackageLockSHA256: strings.Repeat(manifest, 64),
+	}, nil
+}
+
+func (c *countedBaseInputs) readsOf(baseSHA string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads[baseSHA]
+}
+
+// After a tip advance that changes the image inputs, an attempt selects the
+// image that serves its own run's base: a new run's base selects the rebuilt
+// image and an older run's base still selects the image built for it, each
+// base read once however often it is selected at.
+func TestClaudeImageSelectorSelectsAtEachRunsBase(t *testing.T) {
+	t.Parallel()
+	olderBase, newerBase := strings.Repeat("a", 40), strings.Repeat("e", 40)
+	older := selectorImage(t, olderBase, "2", "d")
+	rebuilt := selectorImage(t, newerBase, "7", "8")
+	st := selectorStore(t, older, rebuilt)
+	inputs := &countedBaseInputs{
+		manifests: map[string]string{olderBase: "2", newerBase: "7"},
+		reads:     map[string]int{},
+	}
+	backend := &fakeWard{image: string(rebuilt.ImageRef), proved: true}
+	follower := newConformanceFollower(backend, func(context.Context) error { return nil },
+		time.Now, slog.New(slog.DiscardHandler))
+	selector := &claudeImageSelector{
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		backend: backend, base: newBaseInputsMemo(inputs.observe), follower: follower,
+	}
+	at := func(sha string) domain.BaseRevision {
+		base := selectorRevision
+		base.BaseSHA = sha
+		return base
+	}
+
+	for range 2 {
+		got, err := selector.selectImage(t.Context(), "", at(newerBase), nil)
+		if err != nil || got != rebuilt.ImageRef {
+			t.Fatalf("select at the new run's base = (%s, %v), want %s", got, err, rebuilt.ImageRef)
+		}
+	}
+	// The older run's image is not the one ward proves, so its attempt holds
+	// while ward is repointed at the image its base selects.
+	if _, err := selector.selectImage(t.Context(), "", at(olderBase), nil); !unproved(err) {
+		t.Fatalf("select at the older run's base = %v, want its own image held as unproved", err)
+	}
+	if err := follower.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if repoints := backend.repointed(); len(repoints) != 1 || repoints[0] != string(older.ImageRef) {
+		t.Fatalf("ward repointed %v, want the older run's image %s", repoints, older.ImageRef)
+	}
+	if inputs.readsOf(newerBase) != 1 || inputs.readsOf(olderBase) != 1 {
+		t.Fatalf("reads = %v, want each base read once", inputs.reads)
+	}
+}
+
+// The memo reads each base once, keeps baseInputsMemoBases commits, forgets
+// the oldest first-read commit past that, and keeps no failed read.
+func TestBaseInputsMemoIsBounded(t *testing.T) {
+	t.Parallel()
+	layout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}
+	inputs := &countedBaseInputs{manifests: map[string]string{}, reads: map[string]int{}}
+	commit := func(i int) string { return fmt.Sprintf("%040x", i+1) }
+	for i := range baseInputsMemoBases + 1 {
+		inputs.manifests[commit(i)] = "2"
+	}
+	memo := newBaseInputsMemo(inputs.observe)
+	read := func(sha string) {
+		t.Helper()
+		got, err := memo.read(t.Context(), sha, layout)
+		if err != nil || got.CommitSHA != sha {
+			t.Fatalf("read %s = (%+v, %v), want its inputs", sha, got, err)
+		}
+	}
+
+	for i := range baseInputsMemoBases {
+		read(commit(i))
+		read(commit(i))
+	}
+	read(commit(0))
+	if len(memo.bases) != baseInputsMemoBases || inputs.readsOf(commit(0)) != 1 {
+		t.Fatalf("memo holds %d bases after %d first reads of the oldest, want %d bases and one read",
+			len(memo.bases), inputs.readsOf(commit(0)), baseInputsMemoBases)
+	}
+	read(commit(baseInputsMemoBases))
+	if len(memo.bases) != baseInputsMemoBases || len(memo.inputs) != baseInputsMemoBases {
+		t.Fatalf("memo holds %d bases and %d entries, want %d of each",
+			len(memo.bases), len(memo.inputs), baseInputsMemoBases)
+	}
+	read(commit(0))
+	if inputs.readsOf(commit(0)) != 2 || inputs.readsOf(commit(1)) != 1 {
+		t.Fatalf("reads = %v, want the forgotten oldest base read again and no other", inputs.reads)
+	}
+
+	absent := strings.Repeat("f", 40)
+	for range 2 {
+		if _, err := memo.read(t.Context(), absent, layout); !errors.Is(err, exec.ErrInputUnavailable) {
+			t.Fatalf("read of an absent base = %v, want ErrInputUnavailable", err)
+		}
+	}
+	if inputs.readsOf(absent) != 2 {
+		t.Fatalf("absent base read %d times, want a failed read retried", inputs.readsOf(absent))
 	}
 }

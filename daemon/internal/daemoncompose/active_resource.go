@@ -641,21 +641,8 @@ func (r *ActiveResourceReconciler) observeRepositoryTip(ctx context.Context) err
 	}
 	var pending domain.RepositoryTipObservation
 	if err := r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		stored, found, err := tx.GetRepositoryTipObservation(ctx, watch.RepositoryID)
-		if err != nil {
-			return err
-		}
-		if !found || stored.TipSHA != tip || stored.Branch != watch.Branch || stored.Repository != watch.Repo {
-			stored = domain.RepositoryTipObservation{
-				RepositoryID: watch.RepositoryID, Repository: watch.Repo, Branch: watch.Branch,
-				TipSHA: tip, ObservedAt: r.Now().UTC(), UpkeepTipSHA: stored.UpkeepTipSHA,
-			}
-			if err := tx.RecordRepositoryTipObservation(ctx, stored); err != nil {
-				return err
-			}
-		}
-		pending = stored
-		return nil
+		pending, err = recordRepositoryTip(ctx, tx, watch, tip, r.Now().UTC())
+		return err
 	}); err != nil {
 		return fmt.Errorf("record tip: %w", err)
 	}
@@ -685,6 +672,30 @@ func (r *ActiveResourceReconciler) observeRepositoryTip(ctx context.Context) err
 		return fmt.Errorf("record upkeep tip %s: %w", pending.TipSHA, err)
 	}
 	return nil
+}
+
+// recordRepositoryTip stores tip as watch's observed tip unless the stored
+// row already names it, and returns the row. It keeps UpkeepTipSHA, so a tip
+// upkeep has not handled stays pending. The tip watch and the driver's start
+// both write through it.
+func recordRepositoryTip(
+	ctx context.Context, tx *store.InternalTx, watch repositoryTipWatch, tip string, now time.Time,
+) (domain.RepositoryTipObservation, error) {
+	stored, found, err := tx.GetRepositoryTipObservation(ctx, watch.RepositoryID)
+	if err != nil {
+		return domain.RepositoryTipObservation{}, err
+	}
+	if found && stored.TipSHA == tip && stored.Branch == watch.Branch && stored.Repository == watch.Repo {
+		return stored, nil
+	}
+	stored = domain.RepositoryTipObservation{
+		RepositoryID: watch.RepositoryID, Repository: watch.Repo, Branch: watch.Branch,
+		TipSHA: tip, ObservedAt: now, UpkeepTipSHA: stored.UpkeepTipSHA,
+	}
+	if err := tx.RecordRepositoryTipObservation(ctx, stored); err != nil {
+		return domain.RepositoryTipObservation{}, err
+	}
+	return stored, nil
 }
 
 // startExternalReview starts an external review cycle for a ready item when

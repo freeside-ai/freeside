@@ -2586,7 +2586,8 @@ launchd `PATH` need not resolve it, so the import stores an absolute path:
 when the instance or the file's project already has a revision; change
 sections with `set` after that. It prints both head revisions, the
 project, `takes_effect`, and `not_imported`: the file's keys a run takes
-from its launch instead of the records (`version`, `listen`,
+from its launch instead of the records, except `repository.base_sha`,
+which only preflight reads (`version`, `listen`,
 `repository.base_sha`, `repository.checkout`, the `agent_tree` adoption
 inputs, `writers`, the review and judgment models and efforts, `prod`, and
 `memory_budget_mib`).
@@ -4832,14 +4833,30 @@ existing pointer and logs when the two differ. The image-upkeep job
 advances the pointer (Keep Project Images Current).
 
 Each unattended writer attempt runs in the image selected from the
-pointer and the repository's recorded images at the daemon's base
-(`-base-sha`), in this order: the image ward proves, while it serves the
-base and keeps what the pointed-to image binds; the pointed-to image;
-then the first recorded image that serves the base and keeps what the
-pointed-to image binds. Every record is re-gated before it is chosen.
-A rebuilt image of the same repository serves a later base the pointed-to
-image cannot, and the write-once records let an older base keep the image
-built for it.
+pointer and the repository's recorded images at its run's base, in this
+order: the image ward proves, while it serves the base and keeps what the
+pointed-to image binds; the pointed-to image; then the first recorded
+image that serves the base and keeps what the pointed-to image binds.
+Every record is re-gated before it is chosen. A rebuilt image of the same
+repository serves a later base the pointed-to image cannot, and the
+write-once records let an older base keep the image built for it.
+
+**A run's base.** A run starts at the observed tip of `-base-ref`: the tip
+the active-resource reconciler's tip watch last stored, which admission
+rereads on every attempt. The run's first admission records that tip on
+the run, and every later attempt of the run (a retry, a remediation round,
+an operator-feedback turn) starts and selects its image at the recorded
+base, however far the tip has moved. A run held before its first
+admission follows the tip until it is admitted. A run stored before runs
+recorded a base takes the base of its earliest admission. An attempt with
+no stored tip holds under `input_unavailable`. The start selects ward's
+first image at the stored tip, and each conformance and adapter proof
+seeds its workspace at the tip stored when the pass starts. Every start
+reads the tip and stores it before anything is admitted, so a branch that
+moved or was reset while the daemon was down is not recorded as a new
+run's base. A start that cannot read the tip starts at the stored one,
+which the tip watch then corrects, and fails when none is stored, as on a
+fresh root. The daemon takes no `-base-sha`.
 
 Ward proves one writer image at a time, so its conformance follows the
 selection. A start points ward at the selected image before it restores
@@ -4865,7 +4882,11 @@ that serves both that base and the commit it verifies, holds under
 `image_upkeep_pending` while upkeep has a resolution pending, and stops
 as before otherwise. A publication rebuild that finds the builder busy
 also holds under `image_upkeep_pending` (`rebuild`). `freesided preflight`
-still checks the configured image against the base.
+still checks the configured image against its own `-base-sha`, and the
+deputy passes it `repository.base_sha`. The daemon's runs start at the
+observed tip, so that check predicts them only when `base_sha` is the tip,
+as it is at the start of a fixture pass, which resets `main` to
+`fixture-baseline`.
 
 **What it writes.** `<state-root>/daemon/prelaunch.json`
 (`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same

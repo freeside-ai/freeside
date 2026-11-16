@@ -33,7 +33,7 @@ func TestProductionEngineOptionsInstallOptionalPartsOnlyWhenSet(t *testing.T) {
 	}
 	for name, set := range map[string]func(*ProductionEngine){
 		"image selection": func(p *ProductionEngine) {
-			p.SelectImage = func(context.Context, domain.InvocationID, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {
+			p.SelectImage = func(context.Context, domain.InvocationID, domain.BaseRevision, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {
 				return "", nil
 			}
 		},

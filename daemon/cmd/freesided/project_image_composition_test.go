@@ -336,7 +336,6 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 	t.Parallel()
 	fixture := newCompositionImageFixture(t)
 	base := compositionCommit(t, fixture.root, map[string]string{"README.md": "docs\n"})
-	cfg := daemoncompose.ClaudeDriverConfig{RepositoryID: 42, BaseSHA: base}
 	var fetched string
 	fetch := func(repositoryID int64) daemoncompose.ExactBaseFetcher {
 		return func(_ context.Context, dir string) (int64, error) {
@@ -346,7 +345,7 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 		}
 	}
 
-	inputs, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(), fetch(42), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
+	inputs, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(), fetch(42), 42, base, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,13 +356,13 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 		t.Fatalf("fetched checkout %s survived the observation: %v", fetched, statErr)
 	}
 
-	if _, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(), fetch(7), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}); !errors.Is(
+	if _, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(), fetch(7), 42, base, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}); !errors.Is(
 		err, domain.ErrRepositoryIdentityMismatch) {
 		t.Fatalf("foreign repository = %v, want ErrRepositoryIdentityMismatch", err)
 	}
 	missing := errors.New("base absent from branch")
 	if _, err := daemoncompose.ObserveCompositionBaseInputs(t.Context(),
-		func(context.Context, string) (int64, error) { return 0, missing }, cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM},
+		func(context.Context, string) (int64, error) { return 0, missing }, 42, base, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM},
 	); !errors.Is(err, missing) {
 		t.Fatalf("failed fetch = %v, want the fetch error", err)
 	}

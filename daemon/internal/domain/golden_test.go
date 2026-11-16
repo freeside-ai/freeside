@@ -2719,6 +2719,7 @@ func TestGolden(t *testing.T) {
 		{"candidate_authorization_blocked", blockedAuthorization},
 		{"candidate_authorization_advisory", advisoryAuthorization},
 		{"run", run},
+		{"run_unadmitted", domaintest.Run(func(r *domain.Run) { r.Base, r.Stages[0].Attempts = nil, nil })},
 		{"task", domain.Task{
 			ID: "task-1", ProjectID: "proj-1", Source: &intakeSpecSource,
 			Name:      domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceSpecification},

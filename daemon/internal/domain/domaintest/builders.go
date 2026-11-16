@@ -21,14 +21,19 @@ import (
 // goldenTime is the instant the golden fixtures are stamped with.
 var goldenTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-// Run returns the golden run, a production retry with one implementation
-// stage, after applying opts.
+// Run returns the golden run, a production retry with one admitted
+// implementation stage and the base its first admission recorded, after
+// applying opts.
 func Run(opts ...func(*domain.Run)) domain.Run {
 	run := domain.Run{
 		TaskID: "task-1", ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec",
 		PolicyDigest: goldenPolicy().Digest,
 		CampaignID:   "campaign-1", AttemptNumber: 2,
 		AttemptReason: "Retry after repairing the acceptance rig", ParentRunID: "run-0",
+		Base: &domain.BaseRevision{
+			Repo: "freeside-ai/freeside", RepositoryID: 42, BaseRef: "main",
+			BaseSHA: "0123456789abcdef0123456789abcdef01234567",
+		},
 		Stages: []domain.Stage{{
 			ID: "stage-1", RunID: "run-1", Name: "implementation",
 			Attempts: []domain.Attempt{{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}},

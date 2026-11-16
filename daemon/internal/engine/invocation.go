@@ -717,7 +717,10 @@ func (e *Engine) dispatchAdmittedIntent(
 	// let a backend that no longer clears the floor strand work that was
 	// already admitted, which is the same mistake as letting the current
 	// configuration decide whether to read the record at all.
-	var fresh *domain.ExecutionAdmission
+	var (
+		fresh        *domain.ExecutionAdmission
+		admittedBase domain.BaseRevision
+	)
 	if !attemptRecorded(binding.run, invocationID) {
 		if err := e.requireQuotaWindowReset(ctx, binding.run, invocationID); err != nil {
 			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
@@ -732,7 +735,7 @@ func (e *Engine) dispatchAdmittedIntent(
 		}); err != nil {
 			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
-		admission, admitted, err := e.admitAttempt(ctx, binding, stage, invocationID)
+		admission, base, admitted, err := e.admitAttempt(ctx, binding, stage, invocationID)
 		if err != nil {
 			// A backend below the floor is a typed refusal (§5.7): nothing
 			// is appended and nothing is started, so the intent stays
@@ -740,7 +743,7 @@ func (e *Engine) dispatchAdmittedIntent(
 			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
 		if admitted {
-			fresh = &admission
+			fresh, admittedBase = &admission, base
 		}
 	}
 	// recordAttempt reports the admission that is actually durable: on a
@@ -749,7 +752,7 @@ func (e *Engine) dispatchAdmittedIntent(
 	// under a fresh id would hand the driver an admission no reader can
 	// reconstruct.
 	_, effective, bound, err := e.recordAttempt(
-		ctx, binding.run.ID, stage.ID, invocationID, binding.purpose, entry.Status, fresh,
+		ctx, binding.run.ID, stage.ID, invocationID, binding.purpose, entry.Status, fresh, admittedBase,
 	)
 	if err != nil {
 		// The admitting transaction's operating-state refusal (a stop or a
@@ -1253,11 +1256,13 @@ func decodeInvocationRequest(payload []byte) (invocationRequest, error) {
 // with no audited class or an admission for an attempt that was never
 // appended, and a crash between them is exactly when the record matters.
 // purpose is written only on a new attempt; a replay leaves the recorded
-// attempt, purpose included, as it is.
+// attempt, purpose included, as it is. admittedBase is the run's base fresh
+// was admitted from (admitAttempt), which the write records on a run that
+// has none; it is unused without fresh.
 func (e *Engine) recordAttempt(
 	ctx context.Context, runID domain.RunID, stageID domain.StageID,
 	invocationID domain.InvocationID, purpose *domain.AttemptPurpose,
-	outboxStatus string, fresh *domain.ExecutionAdmission,
+	outboxStatus string, fresh *domain.ExecutionAdmission, admittedBase domain.BaseRevision,
 ) (bool, domain.ExecutionAdmission, bool, error) {
 	added := false
 	var effective domain.ExecutionAdmission
@@ -1360,6 +1365,17 @@ func (e *Engine) recordAttempt(
 		if fresh != nil {
 			if err := e.requireReviewConfigurationApproved(ctx, tx, *fresh); err != nil {
 				return err
+			}
+			// The run's first admission records the base every later one
+			// starts from (runBase). A run that recorded another base since
+			// this admission read it would put this attempt on a commit
+			// the run no longer starts at.
+			switch {
+			case run.Base == nil:
+				run.Base = &admittedBase
+			case *run.Base != admittedBase:
+				return fmt.Errorf("run base %s, admission resolved %s: %w", run.Base.BaseSHA, admittedBase.BaseSHA,
+					errors.Join(errRunBaseRecorded, exec.ErrInputUnavailable))
 			}
 		}
 		stage := run.Stages[stageIndex]

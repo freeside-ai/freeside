@@ -84,7 +84,6 @@ type ClaudeDriverConfig struct {
 	Repo                           string
 	RepositoryID                   int64
 	BaseRef                        string
-	BaseSHA                        string
 	// HandBackLabel is the label the landing batch puts on a pull request
 	// it hands back for rework (issue #3160). Empty turns hand-back rework
 	// off: no pull request's labels start a cycle and none is removed.
@@ -161,14 +160,12 @@ func (c ClaudeDriverConfig) Validate() error {
 		return fmt.Errorf("-remediation-prompt-package is required in claude driver mode")
 	case c.VendorInstructions == "":
 		return fmt.Errorf("-vendor-instructions is required in claude driver mode")
-	case c.Repo == "" || c.RepositoryID <= 0 || c.BaseRef == "" || c.BaseSHA == "":
-		return fmt.Errorf("-repo, -repository-id, -base-ref, and -base-sha are required in claude driver mode")
+	case c.Repo == "" || c.RepositoryID <= 0 || c.BaseRef == "":
+		return fmt.Errorf("-repo, -repository-id, and -base-ref are required in claude driver mode")
 	case publish.ValidateRepository(c.Repo) != nil:
 		return fmt.Errorf("-repo is not a valid transport repository")
 	case strings.HasPrefix(c.BaseRef, "refs/") || publish.ValidateBranchName(c.BaseRef) != nil:
 		return fmt.Errorf("-base-ref is not a valid transport branch")
-	case publish.ValidateCommitSHA(c.BaseSHA) != nil:
-		return fmt.Errorf("-base-sha must be a full lowercase commit SHA")
 	case c.AgentTreeCheckout == "" || c.AgentTreeCommit == "":
 		return fmt.Errorf("-agent-tree and -agent-tree-commit are required in claude driver mode")
 	case !filepath.IsAbs(c.AgentTreeCheckout) || filepath.Clean(c.AgentTreeCheckout) != c.AgentTreeCheckout:
@@ -742,7 +739,7 @@ type ClaudeComposition struct {
 // seedAdmittedImagePointer makes the configured agent image the pointer's
 // seed (plan §5.7, Project-image upkeep): a repository with no pointer for
 // the Claude agent base gets one naming the configured image, whether or not
-// it serves the configured base, since a base no image serves holds attempts
+// it serves the observed tip, since a base no image serves holds attempts
 // rather than refusing the start. An existing pointer is never overwritten,
 // because once the upkeep job owns it the configured flag may be the older
 // image; a disagreement is logged and the pointer kept. Writer selection
@@ -776,18 +773,19 @@ func seedAdmittedImagePointer(
 	return nil
 }
 
-// ExactBaseFetcher materializes the configured base at dir, which does not
+// ExactBaseFetcher materializes a base commit at dir, which does not
 // exist yet, and reports the numeric identity of the repository it fetched
 // from. Production binds it to the publication transport's FetchBase.
 type ExactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64, err error)
 
-// ObserveCompositionBaseInputs fetches the configured base once into private
-// scratch and reads the project-image inputs from it. Startup has no checkout
-// of the managed repository, and the transport's exact-base fetch is the same
-// proof every later boundary uses: the checkout holds cfg.BaseSHA only when
-// the remote's base branch does.
+// ObserveCompositionBaseInputs fetches baseSHA once into private scratch and
+// reads the project-image inputs from it. The daemon has no checkout of the
+// managed repository, and the transport's exact-base fetch is the same proof
+// every later boundary uses: the checkout holds baseSHA only when the
+// remote's base branch does. repositoryID is the configured repository the
+// fetch must have reached.
 func ObserveCompositionBaseInputs(
-	ctx context.Context, fetch ExactBaseFetcher, cfg ClaudeDriverConfig,
+	ctx context.Context, fetch ExactBaseFetcher, repositoryID int64, baseSHA string,
 	layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
 	scratch, err := os.MkdirTemp("", "freesided-project-image-base-")
@@ -796,18 +794,18 @@ func ObserveCompositionBaseInputs(
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort cleanup of startup-owned observation state
 	dir := filepath.Join(scratch, "checkout")
-	repositoryID, err := fetch(ctx, dir)
+	fetchedID, err := fetch(ctx, dir)
 	if err != nil {
 		return domain.ProjectImageBaseInputs{}, fmt.Errorf("fetch exact base: %w", err)
 	}
-	if repositoryID != cfg.RepositoryID {
+	if fetchedID != repositoryID {
 		return domain.ProjectImageBaseInputs{}, fmt.Errorf(
 			"fetched base carries repository id %d, not the configured %d: %w",
-			repositoryID, cfg.RepositoryID, domain.ErrRepositoryIdentityMismatch)
+			fetchedID, repositoryID, domain.ErrRepositoryIdentityMismatch)
 	}
 	// "git" from PATH is the binary the transport that fetched dir runs
 	// (claudeTransport leaves TransportOptions.GitPath at its default).
-	return projectimage.ObserveBaseInputs(ctx, "git", dir, cfg.BaseSHA, layout)
+	return projectimage.ObserveBaseInputs(ctx, "git", dir, baseSHA, layout)
 }
 
 // wardEnforceableEgressProfiles is the closed set of writer egress profiles
@@ -821,10 +819,11 @@ func wardEnforceableEgressProfiles() []domain.EgressProfile {
 
 // composeClaudeDriver builds the production ward gate and Claude driver. Its
 // network work is the publication transport's: the janitor's startup pass,
-// and one exact-base fetch when the project image was built at a commit other
-// than the configured base. It starts no runtime work unless cfg.RunConformance
-// asks for the suite; the caller runs the driver's restart reconciliation
-// before the engine loop starts.
+// one read of the base branch's tip (startupRepositoryTip), and one
+// exact-base fetch when the project image was built at a commit other than
+// that tip. It starts no runtime work unless cfg.RunConformance asks for the
+// suite; the caller runs the driver's restart reconciliation before the
+// engine loop starts.
 // usage receives an unattended writer turn's Claude usage capture when its
 // export is recorded; nil, as for a daemon without the Claude collector,
 // drops it with a warning.
@@ -908,21 +907,21 @@ func composeClaudeDriver(
 			err = errors.Join(err, janitor.Close(context.Background()))
 		}
 	}()
-	// The base tree exists only on the remote, so reading it waits for the
+	// A base tree exists only on the remote, so reading it waits for the
 	// transport. Stable coverage keeps the fetch's installation token from
 	// failing under a concurrent pass.
 	baseInputs := newBaseInputsMemo(func(
-		ctx context.Context, layout domain.ProjectImageInputLayout,
+		ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
 	) (inputs domain.ProjectImageBaseInputs, err error) {
 		err = janitor.WithStableCoverage(func() error {
 			inputs, err = ObserveCompositionBaseInputs(ctx,
 				func(ctx context.Context, dir string) (int64, error) {
-					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, dir)
+					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, baseSHA, dir)
 					if err != nil {
 						return 0, err
 					}
 					return checkout.RepositoryID(), nil
-				}, cfg, layout)
+				}, cfg.RepositoryID, baseSHA, layout)
 			return err
 		})
 		return inputs, err
@@ -1102,9 +1101,15 @@ func composeClaudeDriver(
 	}); err != nil {
 		return nil, fmt.Errorf("restore ward backend conformance: %w", err)
 	}
+	// Every start refreshes the stored tip before anything reads it: start
+	// selection, the start's conformance pass, and the first admissions.
+	tip, err := startupRepositoryTip(ctx, st, cfg, refTipObserver(reconciler), utcNow(), logger)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.OperatingMode == domain.ModeUnattended {
 		if err := startWardOnSelectedImage(
-			ctx, st, backend, cfg, baseInputs, image.ImageRef, conformance, haveConformance, logger,
+			ctx, st, backend, cfg, tip.BaseSHA, baseInputs, image.ImageRef, conformance, haveConformance, logger,
 		); err != nil {
 			return nil, err
 		}
@@ -1212,7 +1217,7 @@ func composeClaudeDriver(
 	)
 	if cfg.OperatingMode == domain.ModeUnattended {
 		selector := &claudeImageSelector{
-			store: st, repo: cfg.Repo, repositoryID: cfg.RepositoryID, baseSHA: cfg.BaseSHA,
+			store: st, repo: cfg.Repo, repositoryID: cfg.RepositoryID,
 			backend: backend, base: baseInputs, follower: follower,
 		}
 		selectImage, bindImageUpkeep = selector.selectImage, selector.bindImageUpkeep
@@ -1284,7 +1289,7 @@ func composeClaudeDriver(
 		env:                             env,
 		specificationPromptPackage:      specificationPromptPackage,
 		remediationPromptPackage:        remediationPromptPackage,
-		derive:                          claudeAdmissionDerivation(cfg),
+		derive:                          claudeAdmissionDerivation(st, cfg),
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
 		runConformance:                  follower.runScheduled,
@@ -1296,21 +1301,22 @@ func composeClaudeDriver(
 	return composition, nil
 }
 
-// startWardOnSelectedImage points ward at the image this start selects
-// before any proof is restored or run (startupWriterImage). A base the start
+// startWardOnSelectedImage points ward at the image this start selects at
+// tipSHA, the observed tip (startupRepositoryTip), before any proof is
+// restored or run (startupWriterImage). A base the start
 // cannot read fails the start, as reading it always has; a base no image
 // serves does not.
 func startWardOnSelectedImage(
 	ctx context.Context, st *store.Store, backend startupWardBackend, cfg ClaudeDriverConfig,
-	base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance, haveConformance bool,
-	logger *slog.Logger,
+	tipSHA string, base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance,
+	haveConformance bool, logger *slog.Logger,
 ) error {
 	proved, err := startupProvedImage(ctx, st, cfg.RepositoryID, backend.ConfigurationDigestFor,
 		conformance, haveConformance)
 	if err != nil {
 		return fmt.Errorf("find the proved writer image: %w", err)
 	}
-	selected, found, err := selectRecordedImage(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseSHA, proved, base)
+	selected, found, err := selectRecordedImage(ctx, st, cfg.Repo, cfg.RepositoryID, tipSHA, proved, base)
 	if err != nil {
 		return err
 	}
@@ -1326,8 +1332,8 @@ func startWardOnSelectedImage(
 		}); err != nil {
 			return fmt.Errorf("read admitted image pointer: %w", err)
 		}
-		logger.Warn("no admitted project image serves the configured base; writer attempts hold until one does",
-			"base_sha", cfg.BaseSHA, "pointer_image_ref", pointed)
+		logger.Warn("no admitted project image serves the observed tip; writer attempts hold until one does",
+			"tip_sha", tipSHA, "pointer_image_ref", pointed)
 	}
 	initial := startupWriterImage(selected, found, pointed, proved, cfg.RunConformance)
 	if err := backend.RepointAgentImage(string(initial)); err != nil {
@@ -1667,15 +1673,22 @@ func runClaudeConformance(
 	if withStableCoverage == nil {
 		return errors.New("conformance: nil janitor coverage coordinator")
 	}
+	// Each pass seeds at the tip the tip watch last stored, the base a new
+	// run would start at now, so a pass proves a workspace like the next
+	// one admission seeds.
+	base, err := storedRepositoryTip(ctx, st, cfg)
+	if err != nil {
+		return fmt.Errorf("conformance base: %w", err)
+	}
 	if err := withStableCoverage(func() error {
 		return (transportSeeder{transport: transport}).FetchBaseWorktree(
-			ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, seedDir,
+			ctx, base.Repo, base.BaseRef, base.BaseSHA, seedDir,
 		)
 	}); err != nil {
 		return fmt.Errorf("fetch exact conformance base: %w", err)
 	}
 	// The suite proves the image ward currently names, which follows writer
-	// selection, not the configured seed.
+	// selection, not the seed's base.
 	agentImage, _ := backend.ConformanceIdentity()
 	suite, err := ward.NewSuite(backend, ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
 		AgentImage:       agentImage,
@@ -1686,10 +1699,7 @@ func runClaudeConformance(
 		Seed: ward.WorkspaceSeed{
 			Mode:      ward.SeedBaseCheckout,
 			SourceDir: seedDir,
-			Base: domain.BaseRevision{
-				Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
-				BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
-			},
+			Base:      base,
 		},
 	}, ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st}))
 	if err != nil {
@@ -1704,36 +1714,88 @@ func runClaudeConformance(
 	// its line is marked or expiring) records nothing, and the adapter's last
 	// record stands across an image change: that record is scoped to the
 	// harness build its digest names, not the image.
-	return proveClaudeAdapter(ctx, st, backend, cfg, leaser)
+	return proveClaudeAdapter(ctx, st, backend, cfg, base, leaser)
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the
-// operator-configured base beside it.
+// project's latest observed tip beside it.
 //
 // The workspace must be derived per attempt (each ward handoff owns its own
 // volume) and is derived exactly as the driver derives it, so the gate
-// creates the volume the admission recorded. The base is the operator's
-// -base-sha: Phase 1A.2 runs under manually configured unattended
-// preconditions, and resolving a branch tip at admission time would need a
-// publish-lane transport capability that does not exist yet. Deferred
-// deliberately: pinning the base per run, rather than per daemon, is a
-// shared-contract change (the Run carries no base).
-//
-// Three exceptions need no such change, and the engine applies them after
-// this derivation. It admits a maintenance task at its refusal's tip, a
-// handoff conflict's remediation at the tip its handoff check sealed (issue
-// #2646), and a later return to the agent or remediation at that tip when
-// its candidate was written there (issue #2699), instead of this base. Each
-// tip comes from an immutable record, the refusal or the sealed
-// handoff_conflict authority, so every attempt derives the same one.
-func claudeAdmissionDerivation(cfg ClaudeDriverConfig) engine.AdmissionDerivation {
-	base := domain.BaseRevision{
-		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
-		BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
+// creates the volume the admission recorded. The base is the tip the tip
+// watch last stored for the configured repository and branch
+// (observeRepositoryTip), which a start stores when none is. It is where a
+// run that has not been admitted starts: the engine records it on the run
+// with the run's first admission and admits every later attempt of the run
+// at that recorded base instead, then applies its three exceptions (see
+// engine.AdmissionDerivation). With no stored tip for this repository and
+// branch the attempt holds as input_unavailable rather than starting
+// anywhere.
+func claudeAdmissionDerivation(st *store.Store, cfg ClaudeDriverConfig) engine.AdmissionDerivation {
+	return func(ctx context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
+		tip, err := storedRepositoryTip(ctx, st, cfg)
+		if err != nil {
+			return "", domain.BaseRevision{}, err
+		}
+		return claude.WorkspaceFor(id), tip, nil
 	}
-	return func(_ context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
-		return claude.WorkspaceFor(id), base, nil
+}
+
+// startupRepositoryTip reads the tip through observe and stores it through
+// the tip watch's own write, before the engine loop can admit anything, and
+// returns it for the start to select ward's image at. A stored tip can be
+// stale: the branch may have moved, or been reset, while the daemon was
+// down, and a first admission before the watch's first pass would record
+// it as the run's base. A failed read falls back to a stored tip, which the
+// watch then corrects, and fails the start only when none is stored, since
+// the daemon then has no base to start at.
+func startupRepositoryTip(
+	ctx context.Context, st *store.Store, cfg ClaudeDriverConfig,
+	observe func(ctx context.Context, repo, branch string) (string, error), now time.Time, logger *slog.Logger,
+) (domain.BaseRevision, error) {
+	sha, err := observe(ctx, cfg.Repo, cfg.BaseRef)
+	if err != nil {
+		stored, storedErr := storedRepositoryTip(ctx, st, cfg)
+		if storedErr != nil {
+			return domain.BaseRevision{}, errors.Join(
+				fmt.Errorf("read the tip of %s@%s: %w", cfg.Repo, cfg.BaseRef, err), storedErr)
+		}
+		logger.Warn("could not read the tip at start; starting at the stored tip until the tip watch reads it",
+			"repo", cfg.Repo, "branch", cfg.BaseRef, "tip_sha", stored.BaseSHA, "error", err)
+		return stored, nil
 	}
+	watch := repositoryTipWatch{Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, Branch: cfg.BaseRef}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := recordRepositoryTip(ctx, tx, watch, sha, now)
+		return err
+	}); err != nil {
+		return domain.BaseRevision{}, fmt.Errorf("record the tip of %s@%s: %w", cfg.Repo, cfg.BaseRef, err)
+	}
+	return domain.BaseRevision{Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: sha}, nil
+}
+
+// storedRepositoryTip reads the tip observation stored for cfg's repository
+// and branch. A missing observation, or one for another repository or
+// branch, is exec.ErrInputUnavailable.
+func storedRepositoryTip(ctx context.Context, st *store.Store, cfg ClaudeDriverConfig) (domain.BaseRevision, error) {
+	var (
+		observation domain.RepositoryTipObservation
+		found       bool
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		observation, found, err = tx.GetRepositoryTipObservation(ctx, cfg.RepositoryID)
+		return err
+	}); err != nil {
+		return domain.BaseRevision{}, fmt.Errorf("read the observed tip: %w", err)
+	}
+	if !found || observation.Repository != cfg.Repo || observation.Branch != cfg.BaseRef {
+		return domain.BaseRevision{}, fmt.Errorf("no observed tip of %s@%s: %w",
+			cfg.Repo, cfg.BaseRef, exec.ErrInputUnavailable)
+	}
+	return domain.BaseRevision{
+		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: observation.TipSHA,
+	}, nil
 }
 
 // claudeTransport builds the authenticated exact-base transport the driver

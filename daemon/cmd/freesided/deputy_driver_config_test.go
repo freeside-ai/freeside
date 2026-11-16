@@ -46,7 +46,7 @@ func TestDeputyClaudeDriverConfigForTheFixture(t *testing.T) {
 		SpecificationPromptPackageFile: "/prompts/spec.json",
 		RemediationPromptPackageFile:   "/prompts/rem.json",
 		VendorInstructions:             "/prompts/CLAUDE.md",
-		Repo:                           "acme/widgets", RepositoryID: 42, BaseRef: "main", BaseSHA: strings.Repeat("c", 40),
+		Repo:                           "acme/widgets", RepositoryID: 42, BaseRef: "main",
 		AgentTreeCheckout: "/src/freeside", AgentTreeCommit: strings.Repeat("d", 40),
 		AllowedPaths:   []string{"src/**"},
 		RunConformance: true,

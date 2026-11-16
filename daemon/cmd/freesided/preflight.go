@@ -890,8 +890,8 @@ func evaluateComposition(
 			switch {
 			case errors.Is(err, exec.ErrInputUnavailable):
 				failCheck(manifest, image.check, fmt.Sprintf(
-					"configured base %s could not be read from the repository checkout to select the writer image", cfg.BaseSHA,
-				), "fetch the configured base commit into -repository-checkout")
+					"base %s could not be read from the repository checkout to select the writer image", cfg.BaseSHA,
+				), "fetch the -base-sha commit into -repository-checkout")
 				continue
 			case errors.Is(err, domain.ErrRepositoryIdentityMismatch):
 				failCheck(manifest, image.check, "admitted image pointer names an image recorded for another repository than -repo",
@@ -907,11 +907,12 @@ func evaluateComposition(
 			}
 			switch {
 			case !serves:
-				selection = fmt.Sprintf("; no recorded image serves base %s, so ward starts on the admitted image and "+
-					"writer attempts will hold under image_upkeep_pending until image upkeep records an image for the base", cfg.BaseSHA)
+				selection = fmt.Sprintf("; no recorded image serves base %s, so a daemon whose observed tip is that base "+
+					"starts ward on the admitted image, and writer attempts will hold under image_upkeep_pending until "+
+					"image upkeep records an image for the base", cfg.BaseSHA)
 			case image.ref != cfg.AgentImage:
-				selection = fmt.Sprintf("; the daemon selects recorded image %s at base %s over the configured seed",
-					image.ref, cfg.BaseSHA)
+				selection = fmt.Sprintf("; a run at base %s selects recorded image %s over the configured seed",
+					cfg.BaseSHA, image.ref)
 			default:
 				selection = fmt.Sprintf("; it serves base %s", cfg.BaseSHA)
 			}
@@ -1081,9 +1082,13 @@ func validateCompositionRepositoryBase(cfg preflightConfig) error {
 
 // selectPreflightWriterImage is the composition gate's image check run from
 // the operator's checkout. It returns the image the implementer probes run
-// on: the writer image the daemon's start selects at cfg.BaseSHA, or, when
-// no recorded image serves that base (serves false), the pointed-to image
-// ward starts on while writer attempts hold (startupWriterImage).
+// on: the writer image the daemon selects for a run at cfg.BaseSHA. The
+// daemon starts runs at the observed tip of -base-ref, so this predicts its
+// start and its new runs only when -base-sha is that tip, as in a fixture
+// pass, which resets the branch to its baseline first (#3205 moves the check
+// into the daemon). When no recorded image serves that base (serves false),
+// it is the pointed-to image ward starts on while writer attempts hold
+// (startupWriterImage).
 //
 // It first runs the record-only refusals the daemon's start runs on the
 // -agent-image seed (projectimage.ResolvePreparation). With no pointer

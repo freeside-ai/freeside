@@ -3,6 +3,7 @@ package daemoncompose
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,10 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -80,8 +84,10 @@ func TestBindRigInvocationResourcesAddsLaterIteration(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
-func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
+// conformanceRigToken holds the production rig for a conformance test and
+// returns its roots and the token file a pass binds through.
+func conformanceRigToken(t *testing.T) (stateRoot, seedRoot, tokenFile string) {
+	t.Helper()
 	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
 	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
 		Owner:     daemonlock.RigOwner{User: "operator", Host: "host", PID: os.Getpid()},
@@ -93,7 +99,7 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lease.Close() })
-	tokenFile := filepath.Join(t.TempDir(), "rig.json")
+	tokenFile = filepath.Join(t.TempDir(), "rig.json")
 	body, err := json.Marshal(RigHoldOutput{Token: lease.Token(), Manifest: lease.Manifest()})
 	if err != nil {
 		t.Fatal(err)
@@ -101,11 +107,17 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	if err := os.WriteFile(tokenFile, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return stateRoot, seedRoot, tokenFile
+}
+
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
+func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
+	stateRoot, _, tokenFile := conformanceRigToken(t)
 	blockedSeedRoot := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(blockedSeedRoot, []byte("block mkdir"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = runClaudeConformance(t.Context(), nil, nil, nil, ClaudeDriverConfig{
+	err := runClaudeConformance(t.Context(), nil, nil, nil, ClaudeDriverConfig{
 		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: blockedSeedRoot,
 	}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "create conformance seed root") {
@@ -335,5 +347,25 @@ func TestReleasePreJobContainerReleasesOnlyAnAbsentPreJobName(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A conformance pass seeds at the stored tip, so with none stored it fails as
+// input_unavailable before it fetches anything.
+//
+//nolint:paralleltest // Serial: rigCommandRoots sets HOME with t.Setenv.
+func TestRunClaudeConformanceNeedsAnObservedTip(t *testing.T) {
+	stateRoot, seedRoot, tokenFile := conformanceRigToken(t)
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freesided.db"), store.Options{})
+	t.Cleanup(func() { _ = st.Close() })
+	err := runClaudeConformance(t.Context(), st, nil, nil, ClaudeDriverConfig{
+		Repo: "owner/repo", RepositoryID: 7, BaseRef: "main",
+		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: seedRoot,
+	}, func(func() error) error {
+		t.Fatal("the pass fetched a seed with no observed tip")
+		return nil
+	}, nil)
+	if !errors.Is(err, exec.ErrInputUnavailable) {
+		t.Fatalf("conformance with no stored tip = %v, want ErrInputUnavailable", err)
 	}
 }

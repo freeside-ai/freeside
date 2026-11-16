@@ -138,15 +138,19 @@ func runAdapterConformance(ctx context.Context, gate adapterConformanceGate, inp
 }
 
 // proveClaudeAdapter proves the Claude ward adapter on the lineup
-// implementer's subscription or a substitute for it. A selection that cannot
-// load records failed; ProveSelectedClaudeAdapter decides the rest.
-func proveClaudeAdapter(ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig, leaser *AdapterConformanceLeaser) error {
+// implementer's subscription or a substitute for it, with a task at base,
+// the observed tip the conformance pass read. A selection that cannot load
+// records failed; ProveSelectedClaudeAdapter decides the rest.
+func proveClaudeAdapter(
+	ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig, base domain.BaseRevision,
+	leaser *AdapterConformanceLeaser,
+) error {
 	selection, err := LoadAgentSelection(ctx, cfg)
 	if err != nil {
 		return RecordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
 	return ProveSelectedClaudeAdapter(ctx, st, *selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
-		return observeClaudeAdapter(ctx, backend, cfg, leaser, agent)
+		return observeClaudeAdapter(ctx, backend, cfg, base, leaser, agent)
 	})
 }
 
@@ -345,7 +349,10 @@ func proveAdapterOnCandidates(
 	return nil
 }
 
-func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg ClaudeDriverConfig, leaser *AdapterConformanceLeaser, agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+func observeClaudeAdapter(
+	ctx context.Context, backend *ward.Backend, cfg ClaudeDriverConfig, base domain.BaseRevision,
+	leaser *AdapterConformanceLeaser, agent engine.RoleAgent,
+) (domain.LaunchCapabilitySet, error) {
 	model, nativeEffort := agent.Selection.LaunchValues(agent.Adapter.ClientKind)
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -367,9 +374,7 @@ func observeClaudeAdapter(ctx context.Context, backend *ward.Backend, cfg Claude
 			_ = os.RemoveAll(seed)
 		}
 	}()
-	task, err := claude.NewConformanceTask(ctx, seed, domain.BaseRevision{
-		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
-	})
+	task, err := claude.NewConformanceTask(ctx, seed, base)
 	if err != nil {
 		return nil, err
 	}

@@ -48,7 +48,7 @@ func newSelectionHoldFixtureSubmitting(
 	submit(f, t)
 	h := &selectionHoldFixture{fixture: f, engine: f.newEngine(t, driver), invocationID: invocationID}
 	h.engine.selectImage = func(
-		_ context.Context, _ domain.InvocationID, repair *domain.ImageUpkeepRefusal,
+		_ context.Context, _ domain.InvocationID, _ domain.BaseRevision, repair *domain.ImageUpkeepRefusal,
 	) (domain.ImageRef, error) {
 		h.repairs = append(h.repairs, repair)
 		return h.selected, h.selectErr

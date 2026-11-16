@@ -522,6 +522,58 @@ func TestRunFixedBindingsAndHistory(t *testing.T) {
 	}
 }
 
+// TestRunBaseRecordedOnce pins #3203 at the store: a run stored with no base
+// decodes, a later write may record one, and a write after that may neither
+// change nor clear it.
+func TestRunBaseRecordedOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newFixtures(t)
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	if f.run.Base != nil {
+		t.Fatal("fixture run already has a base")
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, f.run) }); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	getRun := func() domain.Run {
+		t.Helper()
+		var run domain.Run
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			run, err = tx.GetRun(ctx, f.run.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("GetRun: %v", err)
+		}
+		return run
+	}
+	if got := getRun(); got.Base != nil {
+		t.Fatalf("stored run base = %+v, want none", *got.Base)
+	}
+
+	base := domain.BaseRevision{Repo: "o/r", RepositoryID: 1, BaseRef: "main", BaseSHA: "aaaa"}
+	recorded := f.run
+	recorded.Base = &base
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, recorded) }); err != nil {
+		t.Fatalf("recording the base: %v", err)
+	}
+	if got := getRun(); got.Base == nil || *got.Base != base {
+		t.Fatalf("stored run base = %+v, want %+v", got.Base, base)
+	}
+
+	moved := base
+	moved.BaseSHA = "bbbb"
+	for name, next := range map[string]*domain.BaseRevision{"changed": &moved, "cleared": nil} {
+		updated := f.run
+		updated.Base = next
+		err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, updated) })
+		if !errors.Is(err, store.ErrImmutableConflict) {
+			t.Fatalf("%s base: error = %v, want ErrImmutableConflict", name, err)
+		}
+	}
+}
+
 // TestConversationAppendOnly: stored messages are immutable (§5.14); an
 // update must carry them unchanged and may only append.
 func TestConversationAppendOnly(t *testing.T) {

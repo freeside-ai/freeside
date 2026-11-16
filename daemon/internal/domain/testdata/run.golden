@@ -8,6 +8,12 @@
   "attempt_number": 2,
   "attempt_reason": "Retry after repairing the acceptance rig",
   "parent_run_id": "run-0",
+  "base": {
+    "repo": "freeside-ai/freeside",
+    "repository_id": 42,
+    "base_ref": "main",
+    "base_sha": "0123456789abcdef0123456789abcdef01234567"
+  },
   "stages": [
     {
       "id": "stage-1",
