@@ -161,8 +161,8 @@ func copyStoredCorpusFixture(t *testing.T, dir, dbPath string) {
 }
 
 // assertStoredCorpusCopy checks, before any start touches the copy, that it
-// holds no pairing code or device credential and that its applied
-// migrations match the manifest.
+// holds no pairing code or device credential and that its schema version
+// matches the manifest.
 func assertStoredCorpusCopy(t *testing.T, dbPath string, fixture storedCorpusFixture) {
 	t.Helper()
 	db, err := sql.Open("sqlite", dbPath)
@@ -179,12 +179,12 @@ func assertStoredCorpusCopy(t *testing.T, dbPath string, fixture storedCorpusFix
 			t.Fatalf("fixture holds %d %s rows, want none", n, table)
 		}
 	}
-	var applied int
-	if err := db.QueryRowContext(t.Context(), "SELECT count(*) FROM schema_migrations").Scan(&applied); err != nil {
-		t.Fatalf("count schema_migrations: %v", err)
+	var version int
+	if err := db.QueryRowContext(t.Context(), "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version); err != nil {
+		t.Fatalf("read schema version: %v", err)
 	}
-	if applied != fixture.SchemaVersion {
-		t.Fatalf("fixture has %d migrations applied, manifest says %d", applied, fixture.SchemaVersion)
+	if version != fixture.SchemaVersion {
+		t.Fatalf("fixture is at schema version %d, manifest says %d", version, fixture.SchemaVersion)
 	}
 }
 

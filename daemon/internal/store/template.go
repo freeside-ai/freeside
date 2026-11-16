@@ -20,7 +20,9 @@ func TemplateDatabase(ctx context.Context) ([]byte, error) {
 
 // TemplateDatabaseAt is TemplateDatabase at an older schema version, for
 // fixtures that stand in for a database an older build left. Version must
-// be between 1 and head.
+// be between the migration baseline and head: no history below the
+// baseline exists to build from. The database records the baseline's own
+// row, as one created after the squash does.
 func TemplateDatabaseAt(ctx context.Context, version int) ([]byte, error) {
 	prefix, err := migrationsThrough(version)
 	if err != nil {
@@ -56,19 +58,24 @@ func templateDatabase(ctx context.Context, fsys fs.FS) ([]byte, error) {
 	return root.ReadFile("store.db")
 }
 
-// migrationsThrough returns the embedded migrations up to and including
-// version. migrationFiles has pinned the versions as contiguous from 1, so
-// the first version files are exactly that history.
+// migrationsThrough returns the embedded migrations from the baseline up to
+// and including version, with the squashed history the baseline needs.
+// loadMigrationHistory has pinned the versions as contiguous from the
+// baseline, so the first version-baseline+1 files are exactly that history.
 func migrationsThrough(version int) (fs.FS, error) {
-	names, err := migrationFiles(migrations.FS)
+	history, err := loadMigrationHistory(migrations.FS)
 	if err != nil {
 		return nil, err
 	}
-	if version < 1 || version > len(names) {
-		return nil, fmt.Errorf("schema version %d is outside 1 through head %d", version, len(names))
+	if version < history.baseline || version > history.head() {
+		return nil, fmt.Errorf("schema version %d is outside baseline %d through head %d", version, history.baseline, history.head())
 	}
 	prefix := fstest.MapFS{}
-	for _, name := range names[:version] {
+	names := history.files[:version-history.baseline+1]
+	if history.baseline > 1 {
+		names = append([]string{squashedHistoryFile}, names...)
+	}
+	for _, name := range names {
 		body, err := fs.ReadFile(migrations.FS, name)
 		if err != nil {
 			return nil, fmt.Errorf("read migration %q: %w", name, err)

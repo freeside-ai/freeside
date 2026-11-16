@@ -14,21 +14,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
-// frozenDropsThrough is the last migration merged before the -- drop:
-// convention. Applied migration files are pinned by digest and can never gain
-// a -- drop: line, so frozenDrops records their removals instead; every later
-// migration declares its own.
-const frozenDropsThrough = "0099_publish_installation_mint_holds.sql"
-
-// frozenDrops lists the names each pre-convention migration removed. Every
-// other drop in 0001 to 0099 is part of a table rebuild that recreates the
-// same names within the migration.
-var frozenDrops = map[string][]schemaName{
-	"0064_specification_vocabulary.sql": {
-		{kind: "column", name: "production_attempts.elaboration_run_id"}, // RENAME COLUMN
-	},
-}
-
 // TestMigrationsDeclareDrops applies every embedded migration in order and
 // fails when one removes a table, column, index, trigger, or view it does not
 // declare on a -- drop: line, or declares one it does not remove. A renumbered
@@ -36,7 +21,7 @@ var frozenDrops = map[string][]schemaName{
 func TestMigrationsDeclareDrops(t *testing.T) {
 	t.Parallel()
 	db := openRaw(t)
-	if err := checkDeclaredDrops(context.Background(), db, migrations.FS, frozenDrops, frozenDropsThrough); err != nil {
+	if err := checkDeclaredDrops(context.Background(), db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -45,65 +30,44 @@ func TestDeclaredDropFixture(t *testing.T) {
 	t.Parallel()
 	const create = "CREATE TABLE t (id INTEGER PRIMARY KEY, b TEXT, g INTEGER GENERATED ALWAYS AS (id + 1) VIRTUAL) STRICT;"
 	cases := []struct {
-		name          string
-		drop          string
-		frozen        map[string][]schemaName
-		frozenThrough string
-		wantErr       string
+		name    string
+		drop    string
+		wantErr string
 	}{
 		{
-			name:          "undeclared drop",
-			drop:          "ALTER TABLE t DROP COLUMN b;",
-			frozenThrough: "0001_t.sql",
-			wantErr:       "removes undeclared column t.b",
+			name:    "undeclared drop",
+			drop:    "ALTER TABLE t DROP COLUMN b;",
+			wantErr: "removes undeclared column t.b",
 		},
 		{
-			name:          "undeclared generated column drop",
-			drop:          "ALTER TABLE t DROP COLUMN g;",
-			frozenThrough: "0001_t.sql",
-			wantErr:       "removes undeclared column t.g",
+			name:    "undeclared generated column drop",
+			drop:    "ALTER TABLE t DROP COLUMN g;",
+			wantErr: "removes undeclared column t.g",
 		},
 		{
-			name:          "declared drop",
-			drop:          "-- drop: column t.b\nALTER TABLE t DROP COLUMN b;",
-			frozenThrough: "0001_t.sql",
+			name: "declared drop",
+			drop: "-- drop: column t.b\nALTER TABLE t DROP COLUMN b;",
 		},
 		{
-			name:          "declared drop still present",
-			drop:          "-- drop: column t.b\nSELECT 1;",
-			frozenThrough: "0001_t.sql",
-			wantErr:       "declares column t.b dropped but it was not removed",
+			name:    "declared drop still present",
+			drop:    "-- drop: column t.b\nSELECT 1;",
+			wantErr: "declares column t.b dropped but it was not removed",
 		},
 		{
-			name:          "table drop covers its columns",
-			drop:          "-- drop: table t\nDROP TABLE t;",
-			frozenThrough: "0001_t.sql",
+			name: "table drop covers its columns",
+			drop: "-- drop: table t\nDROP TABLE t;",
 		},
 		{
-			name:          "malformed declaration",
-			drop:          "-- drop: col t.b\nALTER TABLE t DROP COLUMN b;",
-			frozenThrough: "0001_t.sql",
-			wantErr:       `unknown kind "col"`,
-		},
-		{
-			name:          "frozen entry covers the drop",
-			drop:          "ALTER TABLE t DROP COLUMN b;",
-			frozen:        map[string][]schemaName{"0002_drop.sql": {{kind: "column", name: "t.b"}}},
-			frozenThrough: "0002_drop.sql",
-		},
-		{
-			name:          "frozen entry after the frozen boundary",
-			drop:          "ALTER TABLE t DROP COLUMN b;",
-			frozen:        map[string][]schemaName{"0002_drop.sql": {{kind: "column", name: "t.b"}}},
-			frozenThrough: "0001_t.sql",
-			wantErr:       "frozen drops for 0002_drop.sql come after 0001_t.sql",
+			name:    "malformed declaration",
+			drop:    "-- drop: col t.b\nALTER TABLE t DROP COLUMN b;",
+			wantErr: `unknown kind "col"`,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fsys := mapFS(map[string]string{"0001_t.sql": create, "0002_drop.sql": tc.drop})
-			err := checkDeclaredDrops(context.Background(), openRaw(t), fsys, tc.frozen, tc.frozenThrough)
+			err := checkDeclaredDrops(context.Background(), openRaw(t), fsys)
 			switch {
 			case tc.wantErr == "" && err != nil:
 				t.Fatalf("checkDeclaredDrops: %v", err)
@@ -153,29 +117,14 @@ func declaredDrops(body string) ([]schemaName, error) {
 
 // checkDeclaredDrops applies the migrations in fsys to an empty database one
 // file at a time and compares the names each one removes against its -- drop:
-// lines plus frozen[file]. It reports every mismatch rather than the first.
-func checkDeclaredDrops(
-	ctx context.Context,
-	db *sql.DB,
-	fsys fs.FS,
-	frozen map[string][]schemaName,
-	frozenThrough string,
-) error {
-	names, err := migrationFiles(fsys)
+// lines. It reports every mismatch rather than the first. The baseline
+// creates every name it holds and removes none.
+func checkDeclaredDrops(ctx context.Context, db *sql.DB, fsys fs.FS) error {
+	history, err := loadMigrationHistory(fsys)
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(names, frozenThrough) {
-		return fmt.Errorf("frozen drops end at %s, which is not a migration file", frozenThrough)
-	}
 	var problems []error
-	for file := range frozen {
-		if file > frozenThrough {
-			problems = append(problems, fmt.Errorf("frozen drops for %s come after %s: declare them in the file", file, frozenThrough))
-		} else if !slices.Contains(names, file) {
-			problems = append(problems, fmt.Errorf("frozen drops for %s, which is not a migration file", file))
-		}
-	}
 	if _, err := db.ExecContext(ctx, createSchemaMigrations); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
@@ -183,7 +132,7 @@ func checkDeclaredDrops(
 	if err != nil {
 		return err
 	}
-	for i, file := range names {
+	for i, file := range history.files {
 		body, err := fs.ReadFile(fsys, file)
 		if err != nil {
 			return fmt.Errorf("read migration %q: %w", file, err)
@@ -192,7 +141,7 @@ func checkDeclaredDrops(
 		if err != nil {
 			problems = append(problems, fmt.Errorf("%s: %w", file, err))
 		}
-		if err := applyMigration(ctx, db, fsys, i+1, file); err != nil {
+		if err := applyMigration(ctx, db, fsys, history.baseline+i, file); err != nil {
 			return err
 		}
 		after, err := schemaNames(ctx, db)
@@ -200,7 +149,7 @@ func checkDeclaredDrops(
 			return err
 		}
 		expected := make(map[schemaName]bool)
-		for _, n := range append(declared, frozen[file]...) {
+		for _, n := range declared {
 			expected[n] = true
 		}
 		lost := make(map[schemaName]bool)

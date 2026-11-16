@@ -178,23 +178,9 @@ func OpenReadOnly(ctx context.Context, path string, opts Options) (*Store, error
 	if err != nil {
 		return nil, err
 	}
-	names, err := migrationFiles(migrations.FS)
-	if err != nil {
+	if err := requireHead(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
-	}
-	applied, err := appliedMigrations(ctx, db)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := validateAppliedMigrations(migrations.FS, names, applied); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if len(applied) != len(names) {
-		_ = db.Close()
-		return nil, &SchemaMismatchError{Database: len(applied), Binary: len(names)}
 	}
 	return newStore(db, opts, verificationGeneration, requirementSets), nil
 }
@@ -220,23 +206,9 @@ func OpenExisting(ctx context.Context, path string, opts Options) (*Store, error
 	if err != nil {
 		return nil, err
 	}
-	names, err := migrationFiles(migrations.FS)
-	if err != nil {
+	if err := requireHead(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
-	}
-	applied, err := appliedMigrations(ctx, db)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if err := validateAppliedMigrations(migrations.FS, names, applied); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if len(applied) != len(names) {
-		_ = db.Close()
-		return nil, &SchemaMismatchError{Database: len(applied), Binary: len(names)}
 	}
 	return newStore(db, opts, verificationGeneration, requirementSets), nil
 }
@@ -275,8 +247,10 @@ func MigrateExisting(ctx context.Context, path string, opts Options) (*Store, er
 
 // SchemaMismatchError is OpenReadOnly's and OpenExisting's refusal of a
 // database whose applied history is a strict prefix of this binary's: an
-// older build left it. A database newer than the binary fails earlier with
-// a different error, so Database is always below Binary here.
+// older build left it. Database and Binary are schema versions, not counts
+// of migrations. A database newer than the binary, or below its migration
+// baseline, fails earlier with a different error, so Database is always
+// below Binary here.
 type SchemaMismatchError struct {
 	Database, Binary int
 }
@@ -497,10 +471,11 @@ func openReadOnlyDB(path string, opts Options) (*sql.DB, error) {
 }
 
 // CurrentSchemaVersion reports the embedded schema version this binary
-// requires. Migration filenames are the single registration point.
+// requires: the version of the last migration file. Migration filenames are
+// the single registration point.
 func CurrentSchemaVersion() (int, error) {
-	names, err := migrationFiles(migrations.FS)
-	return len(names), err
+	history, err := loadMigrationHistory(migrations.FS)
+	return history.head(), err
 }
 
 // Close closes the underlying database.

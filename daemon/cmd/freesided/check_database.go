@@ -164,6 +164,11 @@ func runCheckDatabaseCommand(
 		if errors.As(err, &migration) {
 			return fmt.Errorf("migration %s failed on the copy; the live database is unchanged", migration.Name)
 		}
+		// The refusal carries versions and a commit, never a stored value.
+		var below *store.BelowBaselineError
+		if errors.As(err, &below) {
+			return fmt.Errorf("%w; the live database is unchanged", below)
+		}
 		return errors.New("this build could not open the copy; its migration history does not match this build's")
 	}
 	defer func() { err = errors.Join(err, st.Close()) }()
