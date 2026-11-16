@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	osexec "os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -255,6 +256,10 @@ func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) er
 	if err != nil {
 		return err
 	}
+	// After "create --name <name>", before the image: a container created
+	// under a daemon reservation carries its label, so a later start can
+	// prove the work's containers gone.
+	args = slices.Insert(args, 3, ReservationLabelArgs(ctx)...)
 	return c.runDiscard(ctx, false, args...)
 }
 

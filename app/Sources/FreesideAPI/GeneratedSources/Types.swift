@@ -7715,7 +7715,7 @@ public enum Components {
                 case count
             }
         }
-        /// A kind of running work a daemon restart would cut short (mirrors domain.RestartBlockerKind). execution_launch and review_launch are admissions that still hold their slot; verification_job, image_build, probe, and publication are work in progress in the running daemon; credential_lease is a held auth-store mutation lease, such as an enrollment or a token refresh, that no counted launch holds. Widening it is a contract change.
+        /// A kind of running work a daemon restart would cut short (mirrors domain.RestartBlockerKind). execution_launch and review_launch are admissions that still hold their slot; verification_job, image_build, probe, proof_pass (a ward proof pass), and publication are work in progress in the running daemon; credential_lease is a held auth-store mutation lease, such as an enrollment or a token refresh, that no counted launch holds. Widening it is a contract change.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RestartBlockerKind`.
@@ -7725,6 +7725,7 @@ public enum Components {
             case verification_job = "verification_job"
             case image_build = "image_build"
             case probe = "probe"
+            case proof_pass = "proof_pass"
             case publication = "publication"
             case credential_lease = "credential_lease"
             case unknown = "unknown"

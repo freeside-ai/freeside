@@ -495,8 +495,10 @@ directory named before it in the same bullet. All under `daemon/`:
 - **Runner containment, egress, and credential volumes:**
   `internal/ward/`, `internal/wardstore/`, `internal/buildproxy/`,
   `internal/projectimage/apple.go` (the host-side image provenance and
-  allowlist gates), and `internal/projectimage/oci_evidence.go` (decodes
-  and verifies the untrusted image archive).
+  allowlist gates), `internal/projectimage/oci_evidence.go` (decodes
+  and verifies the untrusted image archive), and
+  `internal/projectimage/builder_vm.go` (stops the image builder and
+  force-deletes the containers a build's reservation label marks).
 - **Rig cleanup namespace:** `internal/wardname/` (the one definition of
   the runtime names rig cleanup and stale recovery may act on) and
   `internal/daemonlock/rig.go` (admits a bound name only through those

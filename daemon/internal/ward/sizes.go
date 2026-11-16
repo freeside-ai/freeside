@@ -3,6 +3,7 @@ package ward
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -250,5 +251,30 @@ func (b LaunchBound) LaunchReservation(
 	return domain.LaunchReservation{
 		InvocationID: invocation, RunID: run, Kind: kind,
 		MemoryMiB: size.MemoryMiB, OverheadMiB: overhead,
+	}, true, nil
+}
+
+// DaemonReservation builds the reservation record for the daemon's own work
+// that runs at most vms VMs of size at once, such as a proof pass whose
+// writer-exclusion probe runs two: each VM's declared memory and its per-VM
+// overhead. ok is false with no budget, when nothing is reserved. Like
+// LaunchReservation, it refuses a runtime version with no recorded overhead
+// and leaves whether the reservation fits the budget to the gate.
+func (b LaunchBound) DaemonReservation(
+	id domain.InvocationID, kind domain.LaunchReservationKind, size ContainerSize, vms int,
+) (domain.LaunchReservation, bool, error) {
+	if !slices.Contains(domain.AllLaunchReservationKinds, kind) || kind.ForRun() || vms < 1 {
+		return domain.LaunchReservation{}, false, fmt.Errorf(
+			"daemon reservation %s of kind %s for %d VMs: %w", id, kind, vms, domain.ErrInvalidLaunchReservationKind)
+	}
+	if !b.Budgeted() {
+		return domain.LaunchReservation{}, false, nil
+	}
+	overhead, ok := VMOverheadMiB(b.RuntimeVersion)
+	if !ok {
+		return domain.LaunchReservation{}, false, &domain.RuntimeOverheadUnknownError{RuntimeVersion: b.RuntimeVersion}
+	}
+	return domain.LaunchReservation{
+		InvocationID: id, Kind: kind, MemoryMiB: size.MemoryMiB * vms, OverheadMiB: overhead * vms,
 	}, true, nil
 }

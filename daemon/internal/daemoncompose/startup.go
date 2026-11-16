@@ -182,7 +182,19 @@ func ComposeClaudeWorkflow(
 		workflow     *engine.Engine
 		imageUpkeep  *engine.ImageUpkeep
 	)
-	claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, claudeUsageCaptures, cfg.Logger)
+	// The daemon's own containers reserve from the same budget as launches
+	// (plan §5.4). What an earlier process left is recovered before any
+	// site here reserves.
+	memory := &engine.DaemonMemory{Store: st, Bound: bound, Now: cfg.Now, Logger: cfg.Logger}
+	rebuild, err := newProjectImageRebuild(*cfg.Claude, st, memory)
+	if err != nil {
+		return nil, err
+	}
+	if err := recoverDaemonReservations(ctx, memory, rebuild, cfg.Claude.ContainerBin); err != nil {
+		return nil, err
+	}
+	work := daemonWorkRunner{store: st, running: running, memory: memory, containerPath: cfg.Claude.ContainerBin}
+	claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, work, claudeUsageCaptures, cfg.Logger)
 	if err != nil {
 		// A review role the lineup cannot fill stops startup: the review
 		// sources cannot be composed without its identity. Leave the
@@ -264,7 +276,7 @@ func ComposeClaudeWorkflow(
 			Store: st, Tree: claudeWiring.env.Agents.Tree, Revision: claudeWiring.env.Agents.LineupRevision,
 			Runtime: judgmentRuntime,
 			Credentials: productionJudgmentCredentials(
-				st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin), cfg.Logger),
+				st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.ContainerBin), claudeWiring.work, cfg.Logger),
 		},
 		Health:   judgmentHealth,
 		Sites:    sites,
@@ -350,10 +362,6 @@ func ComposeClaudeWorkflow(
 		Unprovable: func(ctx context.Context, task domain.TaskID) (string, error) {
 			return UnprovableTaskStop(ctx, st, coverage, task)
 		},
-	}
-	rebuild, err := newProjectImageRebuild(*cfg.Claude, st)
-	if err != nil {
-		return nil, err
 	}
 	// Upkeep shares the lane's rebuild, and with it the one build gate.
 	imageUpkeep, err = composeImageUpkeep(st, attention, blobs, cfg, claudeWiring, rebuild, manualProjects,

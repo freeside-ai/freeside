@@ -14,9 +14,9 @@ import (
 // store records (issue #3103). It writes nothing.
 //
 // The store records three of the blocker kinds. Verification jobs, image
-// builds, probes, and publications exist only in the running process, so the
-// caller passes their counts in running (#3104), and they are added to the
-// kinds the store counts.
+// builds, probes, proof passes, and publications exist only in the running
+// process, so the caller passes their counts in running (#3104), and they are
+// added to the kinds the store counts.
 //
 //   - execution_launch: an execution admission holding its slot, by the
 //     rule pool admission applies (executionSlotsHeld).

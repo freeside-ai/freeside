@@ -15,6 +15,7 @@ import (
 // it takes the call limit back out of every pool body and forgets 0143.
 func rewindUsagePoolCallLimit(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindDaemonReservations(t, ctx, db)
 	for _, statement := range []string{
 		`UPDATE usage_pools SET body = json_remove(body, '$.pool.max_calls_per_site')`,
 		`DELETE FROM schema_migrations WHERE name = '0143_usage_pool_call_limit.sql'`,

@@ -761,7 +761,7 @@ func newDoctorPass(
 		// The probe runs before the lock is taken. It lasts as long as
 		// its observer containers do, and the unattended engine waits on
 		// this lock before every dispatch.
-		replay := passProbe.runOnce(runCtx)
+		replay := reserveIntegrityProbe(runCtx, claudeWiring.work, passProbe, cfg.Logger)
 		endProbe()
 		doctorConvergenceLock.Lock()
 		defer doctorConvergenceLock.Unlock()
@@ -778,6 +778,41 @@ func newDoctorPass(
 		}).Run(runCtx)
 		return err
 	}
+}
+
+// reserveIntegrityProbe runs a doctor pass's credential-integrity probe once
+// under one probe reservation (plan §5.4): its observer containers run one at
+// a time. It waits in the memory order, because the pass takes no lock until
+// the probe is done. A reservation that fails is the probe's failure, which
+// the doctor reports as nothing checked.
+func reserveIntegrityProbe(
+	ctx context.Context, work daemonWorkRunner, probe CredentialIntegrityProbe, logger *slog.Logger,
+) CredentialIntegrityProbe {
+	if probe == nil {
+		return nil
+	}
+	var replay CredentialIntegrityProbe
+	err := func() error {
+		id, err := engine.NewDaemonWorkID("integrity-probe")
+		if err != nil {
+			return err
+		}
+		return work.reserved(ctx, engine.DaemonWork{
+			Kind: domain.ReservationProbe, ID: id, Size: probeSize, VMs: 1,
+		}, true, func(ctx context.Context) error {
+			replay = probe.runOnce(ctx)
+			return nil
+		})
+	}()
+	if replay == nil {
+		return func(context.Context) ([]operations.CredentialIntegrityOutcome, error) {
+			return nil, fmt.Errorf("reserve memory for the credential-integrity probe: %w", err)
+		}
+	}
+	if err != nil && logger != nil {
+		logger.Error("credential-integrity probe: release its memory reservation", "error", err)
+	}
+	return replay
 }
 
 // startServing starts usage collection, model discovery, the API and
@@ -805,6 +840,7 @@ func (d *Daemon) startServing(
 		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.ContainerBin,
 			cfg.ClaudeModelDiscoverer, cfg.CodexModelDiscoverer, logger)
 		refresh.running = running
+		refresh.work = claudeWiring.work
 		d.Go(func() {
 			refresh.run(ctx)
 		})

@@ -1361,8 +1361,8 @@ far more than one machine holds.
   launch's reservation (revision 105). Every other container the daemon
   starts on its own, such as an image upkeep build and its probes, a ward
   proof pass, or a model discovery probe, reserves the same way (revision
-  125; not built yet, Stage 1 of tracker #3201); until then only stage
-  launches and verification jobs reserve. The full declared size stays reserved,
+  125). Such work may run two VMs at once, as a proof pass does, and
+  reserves one overhead for each. The full declared size stays reserved,
   never a recorded peak, because a container's VM keeps the memory a build
   touched until the container is deleted, and one overhead per launch covers
   it because its containers run one at a time. CPU caps are not reserved and
@@ -1383,7 +1383,11 @@ far more than one machine holds.
   behind a stream of smaller ones. The memory this leaves idle is at most one
   launch's reservation. A launch still waiting on its pool slot joins the
   order only once the slot is free, so one full pool never holds up another
-  pool's work.
+  pool's work. The daemon's own work waits ahead of every task launch, and
+  among itself in the order it first asked, so a task launch never passes it
+  even when the launch would fit: it has no task to order it by, and it is
+  often what a waiting launch needs, such as the proof pass for the launch's
+  image (revision 125).
 - **A launch that can never fit fails at once.** Every such check compares
   the declared size plus the per-VM overhead with the budget. Project policy
   that declares a size whose reservation is larger than the instance's whole

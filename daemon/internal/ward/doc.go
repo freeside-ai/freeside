@@ -218,6 +218,8 @@
 //     credential mounts and manifest policy, launch-state policy, and the
 //     observer tool registry
 //   - sizes.go         launch classes and the CPU and memory each declares
+//   - launch_guard.go  the reservation a start runs under, carried in its
+//     context and in its containers' ai.freeside.reservation label
 //   - backend.go       the exec.RunnerBackend implementation and its frozen
 //     capability declaration
 //   - conformance.go   pure verifiers for checks 1, 2, 4, and 5, the seeding

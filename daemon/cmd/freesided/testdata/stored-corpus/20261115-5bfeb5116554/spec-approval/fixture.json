@@ -1,0 +1,9 @@
+{
+  "build_commit": "5bfeb5116554357f8789f6655ea660ad871c60b7",
+  "schema_version": 143,
+  "case": "spec-approval",
+  "produced_at": "2026-11-16T04:25:26Z",
+  "produced_by": "FREESIDE_STORED_CORPUS_OUT=<corpus> go test ./cmd/freesided -run '^TestWriteStoredCorpus$' -count=1",
+  "task_id": "task-DES2MHD5GRUPTG362DO4NEDFEK",
+  "run_id": "run-d1ba9de14190f9a355b72f807c8480092d23ba674cb25bc561538483f933e232"
+}

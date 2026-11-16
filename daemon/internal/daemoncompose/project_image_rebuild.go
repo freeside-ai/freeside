@@ -27,7 +27,9 @@ import (
 // The builder holds no token source. A rebuild reads the candidate from the
 // lane's own checkout and never reaches the forge, so it carries no GitHub
 // authority at all.
-func newProjectImageRebuild(cfg ClaudeDriverConfig, st *store.Store) (*engine.ProjectImageRebuild, error) {
+func newProjectImageRebuild(
+	cfg ClaudeDriverConfig, st *store.Store, memory *engine.DaemonMemory,
+) (*engine.ProjectImageRebuild, error) {
 	if cfg.Rebuild.BaseBuildRef == "" {
 		return nil, nil
 	}
@@ -51,11 +53,18 @@ func newProjectImageRebuild(cfg ClaudeDriverConfig, st *store.Store) (*engine.Pr
 			})
 			return recorded, err
 		},
+		Registry:      registryMemory{memory: memory},
+		ManageBuilder: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("compose project-image rebuild: %w", err)
 	}
-	return &engine.ProjectImageRebuild{Builder: builder, Inputs: cfg.Rebuild}, nil
+	return &engine.ProjectImageRebuild{
+		Builder: builder, Inputs: cfg.Rebuild, Memory: memory,
+		RecoverBuild: func(ctx context.Context, id domain.InvocationID) error {
+			return projectimage.RecoverBuild(ctx, cfg.ContainerBin, id)
+		},
+	}, nil
 }
 
 // composeImageUpkeep composes the image-upkeep job (plan §5.7, Project-image

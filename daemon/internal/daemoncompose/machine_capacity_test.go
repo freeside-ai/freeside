@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -107,5 +108,25 @@ func TestStartupLaunchBoundPrefersTheRecordedBudget(t *testing.T) {
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "freesided set-memory-budget") ||
 		!strings.Contains(err.Error(), "project-big") {
 		t.Fatalf("recorded 4096 MiB start with an 8192 MiB project = %v", err)
+	}
+}
+
+// TestDaemonWorkFitsRefusesABudgetTooSmallForTheDaemonsOwnWork: a budget
+// that fits a default launch but not a proof pass's two VMs, or not a build
+// beside its loopback registry, refuses the start; unbudgeted, nothing is
+// checked.
+func TestDaemonWorkFitsRefusesABudgetTooSmallForTheDaemonsOwnWork(t *testing.T) {
+	t.Parallel()
+	pass := proofPassSize.MemoryMiB * proofPassVMs
+	build, err := engine.BuildReservationSize(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	need := max(pass, build.MemoryMiB+projectimage.RegistrySize.MemoryMiB)
+	for budget, fits := range map[int]bool{0: true, need - 1: false, need: true} {
+		err := daemonWorkFits(ward.LaunchBound{BudgetMiB: budget, RuntimeVersion: ward.RuntimeNone})
+		if fits != (err == nil) || (!fits && !errors.Is(err, domain.ErrLaunchNeverFits)) {
+			t.Fatalf("budget %d MiB: %v, want fits %t", budget, err, fits)
+		}
 	}
 }

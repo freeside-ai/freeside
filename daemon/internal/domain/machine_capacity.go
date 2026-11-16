@@ -2,11 +2,13 @@ package domain
 
 import "fmt"
 
-// LaunchReservationKind names the record whose end releases a launch's memory
-// reservation (plan §5.4): an execution or review admission releases with the
-// usage-pool slot it holds, and a verification job, which takes no slot,
-// releases explicitly once its containers are proved absent. The zero value ""
-// is invalid by design.
+// LaunchReservationKind names the work a memory reservation covers and the
+// record whose end releases it (plan §5.4). An execution or review admission
+// releases with the usage-pool slot it holds, and a verification job, which
+// takes no slot, releases explicitly once its containers are proved absent.
+// The daemon's own work, which no run asks for, releases explicitly too: an
+// image build, a registry the daemon started, a ward proof pass, or a probe.
+// The zero value "" is invalid by design.
 type LaunchReservationKind string
 
 const (
@@ -16,25 +18,56 @@ const (
 	ReservationReview LaunchReservationKind = "review"
 	// ReservationVerification is a verification job's room.
 	ReservationVerification LaunchReservationKind = "verification"
+	// ReservationImageBuild is an image upkeep build: its recipe read, the
+	// builder VM, and the image's probes.
+	ReservationImageBuild LaunchReservationKind = "image_build"
+	// ReservationImageRegistry is a loopback registry the daemon started for
+	// its builds. It stands until the registry is proved gone, because later
+	// builds reuse it.
+	ReservationImageRegistry LaunchReservationKind = "image_registry"
+	// ReservationProofPass is a ward proof pass: the conformance suite and the
+	// adapter proof after it.
+	ReservationProofPass LaunchReservationKind = "proof_pass"
+	// ReservationProbe is a model discovery probe or a credential-volume read.
+	ReservationProbe LaunchReservationKind = "probe"
 )
 
 // AllLaunchReservationKinds is the single registration point for kinds.
 var AllLaunchReservationKinds = []LaunchReservationKind{
 	ReservationExecution, ReservationReview, ReservationVerification,
+	ReservationImageBuild, ReservationImageRegistry, ReservationProofPass, ReservationProbe,
 }
 
 func (k LaunchReservationKind) valid() bool {
 	switch k {
-	case ReservationExecution, ReservationReview, ReservationVerification:
+	case ReservationExecution, ReservationReview, ReservationVerification,
+		ReservationImageBuild, ReservationImageRegistry, ReservationProofPass, ReservationProbe:
 		return true
 	default:
 		return false
 	}
 }
 
-// LaunchReservation is the memory one launch or job reserves against the
-// instance budget: its declared memory plus one per-VM overhead, because its
-// containers run one at a time.
+// ForRun reports whether a reservation of this kind belongs to a run's
+// launch. The daemon's own kinds belong to no run, so the memory order places
+// them by when they first asked rather than by a task's submission.
+func (k LaunchReservationKind) ForRun() bool {
+	switch k {
+	case ReservationExecution, ReservationReview, ReservationVerification:
+		return true
+	case ReservationImageBuild, ReservationImageRegistry, ReservationProofPass, ReservationProbe:
+		return false
+	}
+	return false
+}
+
+// LaunchReservation is the memory one launch, job, or piece of the daemon's
+// own work reserves against the instance budget: its declared memory plus one
+// per-VM overhead for each VM it runs at once. A launch runs its containers
+// one at a time, so it carries one overhead; work that runs two VMs at once,
+// such as a proof pass's writer-exclusion probe, declares both VMs' memory and
+// two overheads. RunID names the run of a launch kind and is empty for the
+// daemon's own kinds.
 type LaunchReservation struct {
 	InvocationID InvocationID          `json:"invocation_id"`
 	RunID        RunID                 `json:"run_id"`
@@ -46,17 +79,22 @@ type LaunchReservation struct {
 // TotalMiB is what the reservation counts against the budget.
 func (r LaunchReservation) TotalMiB() int { return r.MemoryMiB + r.OverheadMiB }
 
-// Validate reports whether the reservation names its launch and a positive
-// memory size; the overhead is zero only for a composition that starts no VM.
+// Validate reports whether the reservation names its work, a known kind, a
+// run exactly when its kind belongs to one, and a positive memory size; the
+// overhead is zero only for a composition that starts no VM.
 func (r LaunchReservation) Validate() error {
 	if r.InvocationID == "" {
 		return fmt.Errorf("launch reservation invocation_id: %w", ErrEmptyID)
 	}
-	if r.RunID == "" {
-		return fmt.Errorf("launch reservation %s run_id: %w", r.InvocationID, ErrEmptyID)
-	}
 	if !r.Kind.valid() {
 		return fmt.Errorf("launch reservation %s kind %q: %w", r.InvocationID, r.Kind, ErrInvalidLaunchReservationKind)
+	}
+	if r.Kind.ForRun() && r.RunID == "" {
+		return fmt.Errorf("launch reservation %s run_id: %w", r.InvocationID, ErrEmptyID)
+	}
+	if !r.Kind.ForRun() && r.RunID != "" {
+		return fmt.Errorf("launch reservation %s of kind %s names run %s: %w",
+			r.InvocationID, r.Kind, r.RunID, ErrDaemonReservationRun)
 	}
 	if r.MemoryMiB < 1 {
 		return fmt.Errorf("launch reservation %s memory_mib %d: %w", r.InvocationID, r.MemoryMiB, ErrNonPositive)

@@ -70,6 +70,8 @@ type appleBackend struct {
 	waitRegistry     func(context.Context, string) error
 	deleteManifest   func(context.Context, string) error
 	readEvidence     func(context.Context, string, string, map[string]int64) (ociEvidence, error)
+	registryMemory   RegistryMemory
+	manageBuilder    bool
 }
 
 // InspectImageDigest resolves one image through the production Apple runtime
@@ -188,6 +190,19 @@ func (a appleBackend) Build(ctx context.Context, spec buildSpec) (err error) {
 		"--tag", spec.LocalRef,
 		spec.ContextDir,
 	)
+	// A daemon build runs in the builder VM, started here at a declared size
+	// and stopped once the build returns, so no VM outlives the build and its
+	// probes boot theirs only after the builder's is gone.
+	if a.manageBuilder {
+		if err := a.startBuilder(ctx); err != nil {
+			return err
+		}
+		defer func() {
+			if stopErr := a.stopBuilder(context.WithoutCancel(ctx)); stopErr != nil {
+				err = errors.Join(err, stopErr)
+			}
+		}()
+	}
 	output, err := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args})
 	if err == nil {
 		return nil
@@ -352,11 +367,11 @@ func (a appleBackend) CheckAllowlist(ctx context.Context, ref string) (err error
 	}()
 	output, runErr := a.runner.Run(ctx, commandSpec{
 		Path: a.containerPath,
-		Args: []string{
-			"create", "--cidfile", cidPath,
-			"--label", ownershipLabel + "=" + token,
-			"--", ref, "sh", "-c", "true",
-		},
+		Args: slices.Concat(
+			[]string{"create", "--cidfile", cidPath, "--label", ownershipLabel + "=" + token},
+			ward.ReservationLabelArgs(ctx),
+			[]string{"--", ref, "sh", "-c", "true"},
+		),
 	})
 	containerID, identityErr := readContainerID(cidPath)
 	var recoverErr error
@@ -443,6 +458,7 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 		"--label", ownershipLabel + "=" + token,
 		"--network", "none",
 	}
+	args = append(args, ward.ReservationLabelArgs(ctx)...)
 	args = append(args, ward.SizeArgs(proofSize)...)
 	if spec.MaskedCache != "" {
 		args = append(args, "--tmpfs", spec.MaskedCache)
@@ -464,16 +480,16 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 	var recoverErr error
 	if identityErr == nil {
 		defer func() {
-			cleanupErr := a.deleteOwnedContainer(
+			cleanupErr := absenceUnproven(a.deleteOwnedContainer(
 				context.WithoutCancel(ctx), containerID, token,
-			)
+			))
 			if cleanupErr != nil {
 				result = runResult{}
 				err = errors.Join(err, cleanupErr)
 			}
 		}()
 	} else {
-		recoverErr = a.recoverOwnedContainer(context.WithoutCancel(ctx), token)
+		recoverErr = absenceUnproven(a.recoverOwnedContainer(context.WithoutCancel(ctx), token))
 		if runErr == nil {
 			return runResult{}, runtimeFault{errors.Join(identityErr, recoverErr)}
 		}
@@ -532,7 +548,7 @@ func (a appleBackend) Publish(
 		}
 		registryContainer = ""
 		registryToken = ""
-		return nil
+		return a.releaseRegistry(context.WithoutCancel(ctx), spec.LocalRegistryPort)
 	}
 	defer func() {
 		if cleanupErr := cleanup(); cleanupErr != nil {
@@ -598,6 +614,10 @@ func (a appleBackend) Publish(
 			registryContainer = ""
 			registryToken = ""
 			reusedRegistry = true
+		} else if err := a.releaseRegistry(ctx, spec.LocalRegistryPort); err != nil {
+			// The listing found no registry for the port, which proves one an
+			// earlier build started gone.
+			return publication{}, err
 		} else if probeErr == nil {
 			return publication{}, fmt.Errorf(
 				"loopback registry port %d is occupied by an unmanaged service",
@@ -609,6 +629,9 @@ func (a appleBackend) Publish(
 			if err := a.ensureRegistryImage(ctx); err != nil {
 				return publication{}, err
 			}
+			if err := a.reserveRegistry(ctx, spec.LocalRegistryPort); err != nil {
+				return publication{}, err
+			}
 			token, err := randomToken()
 			if err != nil {
 				return publication{}, err
@@ -618,9 +641,11 @@ func (a appleBackend) Publish(
 				return publication{}, err
 			}
 			defer os.Remove(cidPath) //nolint:errcheck // private one-shot runtime identity
-			output, runErr := a.runner.Run(ctx, commandSpec{
+			// The registry outlives this build, so it runs under its own
+			// reservation (reserveRegistry), not the build's.
+			output, runErr := a.runner.Run(registryContext(ctx, spec.LocalRegistryPort), commandSpec{
 				Path: a.containerPath,
-				Args: []string{
+				Args: slices.Concat([]string{
 					"run", "--detach", "--cidfile", cidPath,
 					"--label", ownershipLabel + "=" + token,
 					"--label", registryPortLabel + "=" +
@@ -629,8 +654,8 @@ func (a appleBackend) Publish(
 					// build reusing this retained registry can remove the
 					// residue of its own failed publication (#352).
 					"--env", "REGISTRY_STORAGE_DELETE_ENABLED=true",
-					"--publish", registry + ":5000", registryImage,
-				},
+					"--publish", registry + ":5000",
+				}, ward.SizeArgs(RegistrySize), []string{registryImage}),
 			})
 			containerID, identityErr := readContainerID(cidPath)
 			var recoverErr error
@@ -744,8 +769,12 @@ func (a appleBackend) Publish(
 	published.Ref = digestRef
 	if registryContainer != "" {
 		name, token := registryContainer, registryToken
+		port := spec.LocalRegistryPort
 		published.cleanup = func(cleanupCtx context.Context) error {
-			return a.deleteOwnedContainer(cleanupCtx, name, token)
+			if err := a.deleteOwnedContainer(cleanupCtx, name, token); err != nil {
+				return err
+			}
+			return a.releaseRegistry(cleanupCtx, port)
 		}
 		// Transfer cleanup ownership to the returned publication lease. The
 		// builder retains it only after its recorder succeeds.
@@ -1070,8 +1099,14 @@ func (a appleBackend) findRetainedRegistry(
 			"retained project-image registry on loopback port %d changed during inspection",
 			port)
 	}
+	// A registry found running holds its memory already; reserving it again
+	// is a no-op when its reservation is open, and counts one an earlier
+	// binary started unreserved. A stopped one is reserved before its start.
+	if err := a.reserveRegistry(ctx, port); err != nil {
+		return "", "", false, err
+	}
 	if state == "stopped" {
-		output, startErr := a.runner.Run(ctx, commandSpec{
+		output, startErr := a.runner.Run(registryContext(ctx, port), commandSpec{
 			Path: a.containerPath, Args: []string{"start", inspected.ID},
 		})
 		if startErr != nil {

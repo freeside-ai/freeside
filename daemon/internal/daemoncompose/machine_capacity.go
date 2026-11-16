@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -81,7 +82,54 @@ func (cfg StartOptions) launchBound(ctx context.Context) (ward.LaunchBound, erro
 			return ward.LaunchBound{}, fmt.Errorf("a default %s launch: %w", class, err)
 		}
 	}
+	if cfg.Claude != nil {
+		if err := daemonWorkFits(policySizeBound(bound)); err != nil {
+			return ward.LaunchBound{}, err
+		}
+	}
 	return bound, nil
+}
+
+// daemonWorkFits refuses a budget too small for the daemon's own work at its
+// default sizes, a proof pass or an image build beside its loopback registry,
+// as the start refuses one too
+// small for a default launch: ward would stay unproved, or images unbuilt,
+// for good.
+func daemonWorkFits(bound ward.LaunchBound) error {
+	build, err := engine.BuildReservationSize(nil)
+	if err != nil {
+		return err
+	}
+	// A build that pushes through a loopback registry holds the registry's
+	// reservation beside its own, so the two must fit together.
+	for _, together := range []struct {
+		name string
+		work []engine.DaemonWork
+	}{
+		{"proof pass", []engine.DaemonWork{
+			{Kind: domain.ReservationProofPass, ID: "start-check", Size: proofPassSize, VMs: proofPassVMs},
+		}},
+		{"image build beside its loopback registry", []engine.DaemonWork{
+			{Kind: domain.ReservationImageBuild, ID: "start-check", Size: build, VMs: 1},
+			{Kind: domain.ReservationImageRegistry, ID: "start-check-registry", Size: projectimage.RegistrySize, VMs: 1},
+		}},
+	} {
+		var sizeMiB, overheadMiB int
+		for _, work := range together.work {
+			reservation, ok, err := bound.DaemonReservation(work.ID, work.Kind, work.Size, work.VMs)
+			if err != nil || !ok {
+				return err
+			}
+			sizeMiB += reservation.MemoryMiB
+			overheadMiB += reservation.OverheadMiB
+		}
+		if sizeMiB+overheadMiB > bound.BudgetMiB {
+			return fmt.Errorf("a default %s: %w", together.name, &domain.LaunchNeverFitsError{
+				SizeMiB: sizeMiB, OverheadMiB: overheadMiB, BudgetMiB: bound.BudgetMiB,
+			})
+		}
+	}
+	return nil
 }
 
 // logLaunchBound reports the budget beside the environment tier, so the
