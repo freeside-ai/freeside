@@ -9,6 +9,7 @@ public enum RunFixtures {
     public static let completedRunID = "run-freeside-640"
     public static let refreshedRunID = "run-freeside-refreshed"
     public static let specificationHistoryRunID = "run-freeside-specification-history"
+    public static let timeStripRunID = "run-freeside-time-strip"
     public static let retryCampaignID =
         "campaign-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -30,6 +31,8 @@ public enum RunFixtures {
         text: "Drain failed startups on launch", source: ._operator)
     public static let refreshedTaskName = Components.Schemas.DisplayName(
         text: "Order invocation history by attempt", source: ._operator)
+    public static let timeStripTaskName = Components.Schemas.DisplayName(
+        text: "Retry the migration in batches", source: ._operator)
 
     /// A fixed capture clock: five minutes past the newest fixture
     /// observation, so run cards render their relative last-active text
@@ -121,6 +124,58 @@ public enum RunFixtures {
                         number: 1, invocation_id: "inv-\(refreshedRunID)-remediation-1")
                 ]))
         return projectingObservationTimes(snapshot, from: refreshedHistoryTimeline())
+    }
+
+    /// A run whose time splits three ways, for the run timeline's strip
+    /// (#3233): an attempt that stopped on a question, the hours the answer
+    /// took, the attempt that answer started, which exported, and the open
+    /// final review since. Kept out of `defaultRuns()` and
+    /// `defaultTimelines()` so the runs-list digests do not churn; its cards
+    /// are `AttentionFixtures.timeStripItems()`.
+    public static func timeStripRun() -> Components.Schemas.RunSnapshot {
+        projectingObservationTimes(
+            snapshot(
+                id: timeStripRunID, projectID: "freeside", stage: "implementation",
+                attempt: 2, milestone: .execution_export_recorded, outcome: .pending,
+                lifecycle: .active, taskName: timeStripTaskName),
+            from: timeStripTimeline())
+    }
+
+    /// The strip run's capture clock: the final review has waited 55
+    /// minutes.
+    public static let timeStripNow = timeStripInstant(minute: 230)
+
+    /// `minute` minutes after the strip run's submission.
+    public static func timeStripInstant(minute: Int) -> Date {
+        date(TimeInterval(minute * 60))
+    }
+
+    public static func timeStripTimeline() -> Components.Schemas.RunTimeline {
+        var question = milestone(.execution_outcome_recorded, runID: timeStripRunID, minute: 41)
+        question.outcome = .init(value1: .blocked)
+        return .init(
+            as_of_revision: 12, as_of: date(172 * 60), run_id: timeStripRunID,
+            milestones: [
+                milestone(.run_submitted, runID: timeStripRunID, minute: 0),
+                milestone(.invocation_admitted, runID: timeStripRunID, minute: 1),
+                milestone(.invocation_started, runID: timeStripRunID, minute: 3),
+                question,
+                milestone(.invocation_admitted, runID: timeStripRunID, attempt: 2, minute: 132),
+                milestone(.invocation_started, runID: timeStripRunID, attempt: 2, minute: 135),
+                milestone(.execution_export_recorded, runID: timeStripRunID, attempt: 2, minute: 172),
+            ],
+            invocations: [
+                .init(
+                    invocation_id: "inv-\(timeStripRunID)-2", run_id: timeStripRunID,
+                    status: .completed, live: false, observed_at: date(172 * 60))
+            ],
+            completion: nil,
+            billable_cost_so_far: nil,
+            admissions: [
+                writerAdmission("inv-\(timeStripRunID)-1", at: date(60)),
+                writerAdmission("inv-\(timeStripRunID)-2", at: date(132 * 60)),
+            ],
+            outcomes: noOutcomes)
     }
 
     public static func refreshedHistoryTimeline() -> Components.Schemas.RunTimeline {
