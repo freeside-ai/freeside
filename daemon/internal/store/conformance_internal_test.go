@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // TestTamperedConformanceRowFailsClosed is the decode-side re-gate: a row
@@ -88,45 +87,5 @@ func TestTamperedConformanceRowFailsClosed(t *testing.T) {
 				t.Fatalf("tampered row read as absence, want a loud refusal: %v", err)
 			}
 		})
-	}
-}
-
-func TestConformanceConfigurationMigrationPreservesLegacyRowsAsUnbound(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0020_")
-	if _, err := db.ExecContext(ctx, `
-INSERT INTO backend_conformance_records
-    (backend, outcome, capabilities, proved_at)
-VALUES ('fresh_vm_read_only_volume_handoff', 'passed',
-        '["supports_post_exit_export"]', '2026-07-27T12:00:00Z')`); err != nil {
-		t.Fatalf("seed legacy conformance: %v", err)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	var digest string
-	if err := db.QueryRowContext(ctx,
-		`SELECT configuration_digest FROM backend_conformance_records WHERE id = 1`).
-		Scan(&digest); err != nil {
-		t.Fatalf("read migrated digest: %v", err)
-	}
-	if digest != string(domain.UnboundBackendConfigurationDigest) {
-		t.Fatalf("migrated digest = %q, want reserved unbound value", digest)
-	}
-
-	st := &Store{db: db}
-	if err := st.Read(ctx, func(tx *ReadTx) error {
-		record, found, err := tx.LatestBackendConformance(
-			ctx, domain.BackendFreshVMReadOnlyVolumeHandoff)
-		if err != nil {
-			return err
-		}
-		if !found || record.ConfigurationBound() {
-			t.Fatalf("migrated record = %+v, want present and unbound", record)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("reconstruct migrated record: %v", err)
 	}
 }

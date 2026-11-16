@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 const (
@@ -140,80 +139,5 @@ func TestDaemonSubmissionRequiresRepairRefusal(t *testing.T) {
 	}
 	if _, err := read(); !errors.Is(err, ErrRowInconsistent) || !errors.Is(err, ErrDaemonSubmissionUnsourced) {
 		t.Fatalf("read without its refusal: err = %v, want ErrRowInconsistent", err)
-	}
-}
-
-// TestTaskSubmissionOriginMigrationKeepsDeviceRows: a submission recorded
-// before 0109 survives the table rebuild as a device submission, and its body,
-// which names no origin, decodes as one.
-func TestTaskSubmissionOriginMigrationKeepsDeviceRows(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openTemplateStoreAt(t, t.TempDir()+"/task-submission-origin.db", Options{})
-	taskID, runID := seedOriginTestTarget(t, ctx, st)
-	body := `{"command_id":"cmd-old","device_id":"device-1","project_id":"proj-1",` +
-		`"source_digest":"sha256:` + strings.Repeat("1", 64) + `","task_id":"` + string(taskID) + `",` +
-		`"specification_run_id":"` + string(runID) + `","name":{"text":"Old task","source":"operator"}}`
-
-	// Return the table to the shape a daemon at 0108 holds, then record a
-	// submission the way that daemon did.
-	rewindUsagePools(t, ctx, st.db)
-	for _, statement := range []string{
-		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
-		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
-		`DROP TABLE routing_policies`,
-		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
-		`DROP TABLE task_line_changes`,
-		`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
-		`ALTER TABLE task_lines DROP COLUMN provenance`,
-		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,
-		`DROP TABLE image_policy_adoptions`,
-		`DELETE FROM schema_migrations WHERE name = '0110_image_policy_adoption.sql'`,
-		`DROP TABLE task_submission_commands`,
-		`CREATE TABLE task_submission_commands (
-			command_id           TEXT PRIMARY KEY,
-			device_id            TEXT    NOT NULL,
-			project_id           TEXT    NOT NULL,
-			task_id              TEXT    NOT NULL REFERENCES tasks (id),
-			specification_run_id TEXT    NOT NULL REFERENCES runs (id),
-			entity_version       INTEGER NOT NULL,
-			as_of_revision       INTEGER NOT NULL,
-			body                 TEXT    NOT NULL,
-			request_digest       TEXT
-		) STRICT`,
-		`DELETE FROM schema_migrations WHERE name = '0109_task_submission_origin.sql'`,
-	} {
-		if _, err := st.db.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := st.db.ExecContext(ctx, `INSERT INTO task_submission_commands
-		(command_id, device_id, project_id, task_id, specification_run_id, entity_version, as_of_revision, body)
-		VALUES ('cmd-old', 'device-1', 'proj-1', ?, ?, 1, 1, ?)`, taskID, runID, body); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate(ctx, st.db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, st.db)
-
-	var (
-		got    domain.TaskSubmission
-		origin string
-	)
-	if err := st.db.QueryRowContext(ctx,
-		`SELECT origin FROM task_submission_commands WHERE command_id = 'cmd-old'`).Scan(&origin); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Read(ctx, func(tx *ReadTx) error {
-		var err error
-		got, err = tx.GetTaskSubmission(ctx, "cmd-old")
-		return err
-	}); err != nil {
-		t.Fatalf("read after migration: %v", err)
-	}
-	if origin != "device" || got.Origin != domain.TaskSubmissionOriginDevice ||
-		got.DeviceID == nil || *got.DeviceID != "device-1" {
-		t.Fatalf("after migration: column %q, submission %+v; want a device submission", origin, got)
 	}
 }

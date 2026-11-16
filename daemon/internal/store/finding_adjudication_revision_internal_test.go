@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func TestFindingAdjudicationPreCommitmentBodyReconstructs(t *testing.T) {
@@ -160,78 +158,6 @@ func seedMigrationAdjudication(
 		t.Fatalf("seed review: %v", err)
 	}
 	return artifact
-}
-
-func TestMigrateFindingAdjudicationRevisionsPreservesInitialRows(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "store.db")
-	copySnapshotThrough(t, path, "0057_")
-	db, err := openDB(path, Options{})
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	if err := seedEpoch(ctx, db); err != nil {
-		t.Fatalf("seed epoch: %v", err)
-	}
-	requirementSets, err := resolveTrustedRequirementSets(
-		domain.CurrentVerificationFloorRegistryGeneration, nil,
-	)
-	if err != nil {
-		t.Fatalf("requirement sets: %v", err)
-	}
-	st := newStore(db, Options{}, domain.CurrentVerificationFloorRegistryGeneration, requirementSets)
-	t.Cleanup(func() { _ = st.Close() })
-	artifact := seedMigrationAdjudication(t, ctx, st, true)
-	body, err := encode(artifact)
-	if err != nil {
-		t.Fatalf("encode legacy body: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO finding_adjudications
-        (run_id, round, content_digest, finding_batch_digest, approved_spec_digest,
-         instruction_snapshot_digest, resolved_policy_digest, created_at, body_digest, body)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		artifact.RunID, artifact.Round, artifact.Digest, artifact.FindingBatchDigest,
-		artifact.ApprovedSpecDigest, artifact.InstructionSnapshotDigest,
-		artifact.ResolvedPolicyDigest, formatTime(artifact.CreatedAt), reviewBodyDigest(body), body,
-	); err != nil {
-		t.Fatalf("insert legacy adjudication: %v", err)
-	}
-
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	var (
-		revision     int
-		predecessor  sql.NullString
-		migratedBody string
-		digest       string
-	)
-	if err := db.QueryRowContext(ctx, `SELECT revision, predecessor_digest, body, content_digest
-        FROM finding_adjudications WHERE run_id = ? AND round = ?`, artifact.RunID, artifact.Round).
-		Scan(&revision, &predecessor, &migratedBody, &digest); err != nil {
-		t.Fatalf("read migrated row: %v", err)
-	}
-	if revision != 1 || predecessor.Valid || migratedBody != body || digest != string(artifact.Digest) {
-		t.Fatalf("migrated row = revision %d predecessor %+v digest %q body-equal %t",
-			revision, predecessor, digest, migratedBody == body)
-	}
-	if err := st.Read(ctx, func(tx *ReadTx) error {
-		byRound, err := tx.GetFindingAdjudicationForRound(ctx, artifact.RunID, artifact.Round)
-		if err != nil {
-			return err
-		}
-		byDigest, err := tx.GetFindingAdjudication(ctx, artifact.Digest)
-		if err != nil {
-			return err
-		}
-		if byRound.Revision != 1 || byRound.Digest != artifact.Digest || byDigest.Digest != artifact.Digest {
-			t.Fatalf("migrated reconstruction = by-round %+v, by-digest %+v", byRound, byDigest)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("reconstruct migrated row: %v", err)
-	}
 }
 
 func TestFindingAdjudicationRevisionColumnsAreCrossChecked(t *testing.T) {

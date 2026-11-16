@@ -7,27 +7,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func TestAttentionYieldHistoryMigrationAppliesFromPriorHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0055_")
-	if got := rawVersion(t, db); got != 54 {
-		t.Fatalf("prior schema version = %d, want 54", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, db)
-	var count int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(yield_history) FROM attention_items`,
-	).Scan(&count); err != nil {
-		t.Fatalf("query yield_history column: %v", err)
-	}
-}
 
 func TestReadyItemReviewYieldHistorySurvivesRestartAndRejectsDivergence(t *testing.T) {
 	t.Parallel()

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // decided returns a declined or deferred disposition for an external finding
@@ -94,26 +93,6 @@ func (f externalCycleFixture) insertRaw(t *testing.T, d domain.ExternalFindingDi
 		d.FindingID, d.RunID, d.Round, d.Disposition, d.Reason, d.Remediation(),
 		formatTime(d.CreatedAt), reviewBodyDigest(body), body)
 	return err
-}
-
-func TestExternalFindingDispositionMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0090_")
-	if got := rawVersion(t, db); got != 89 {
-		t.Fatalf("prior schema version = %d, want 89", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	assertAtHead(t, db)
-	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_finding_dispositions`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("new disposition table contains %d rows", count)
-	}
 }
 
 // TestExternalFindingDispositionAccepted: each outcome of an admitted

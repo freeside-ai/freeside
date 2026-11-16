@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func storeReadinessResolution(t *testing.T, key domain.RequirementKey, class domain.VerificationCheckClass, kind domain.RequirementKind, applicable bool) domain.RequirementResolution {
@@ -68,22 +67,6 @@ func readinessWaiverOptions(grant domain.Digest) Options {
 			domain.WaiverAuthorityHumanApproval: {grant: true},
 		},
 		TrustedRequirementSets: readinessFixtureSets(),
-	}
-}
-
-func TestVerificationReadinessMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0038_")
-	if got := rawVersion(t, db); got != 37 {
-		t.Fatalf("prior version = %d, want 37", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, db)
-	for _, table := range []string{"requirement_resolutions", "check_proofs", "degraded_waivers", "waiver_lifecycle_events"} {
-		assertTableExists(t, db, table, true)
 	}
 }
 

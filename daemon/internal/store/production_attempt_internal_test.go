@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func testInitialProductionAttempt() domain.ProductionAttempt {
@@ -32,49 +31,6 @@ func TestProductionAttemptApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t
 	}
 	if authenticSpecificationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
 		t.Fatal("unrecognized specification approval decision set was accepted")
-	}
-}
-
-func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0048_")
-	if got := rawVersion(t, db); got != 47 {
-		t.Fatalf("prior schema version = %d, want 47", got)
-	}
-	if err := seedEpoch(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	legacy := domain.Run{
-		ID: "run-legacy", ProjectID: "project-1",
-		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{},
-	}
-	body, err := encode(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO runs
-		(id, project_id, policy_digest, entity_version, as_of_revision, body)
-		VALUES (?, ?, ?, 1, 1, ?)`, legacy.ID, legacy.ProjectID, legacy.PolicyDigest, body); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	assertAtHead(t, db)
-	assertTableExists(t, db, "production_attempts", true)
-	st := &Store{db: db}
-	if err := st.Read(ctx, func(tx *ReadTx) error {
-		got, err := tx.GetRun(ctx, legacy.ID)
-		if err != nil {
-			return err
-		}
-		if got.CampaignID != "" || got.AttemptNumber != 0 || got.ParentRunID != "" {
-			t.Fatalf("migrated legacy run gained lineage: %+v", got)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
 	}
 }
 

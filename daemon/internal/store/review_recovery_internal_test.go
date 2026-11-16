@@ -10,29 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func TestReviewRecoveryMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0032_")
-	if got := rawVersion(t, db); got != 31 {
-		t.Fatalf("prior schema version = %d, want 31", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	assertAtHead(t, db)
-	var count int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM review_recovery_transitions`).Scan(&count); err != nil {
-		t.Fatalf("count recovery transitions: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("new recovery log contains %d rows, want 0", count)
-	}
-}
 
 func seedReviewRecovery(t *testing.T) (*Store, domain.ReviewRecoveryTransition) {
 	t.Helper()

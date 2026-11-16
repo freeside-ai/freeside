@@ -657,8 +657,8 @@ migrations, `Open` behavior, or refusal of an existing file keep the raw
 A migration test that starts from an empty database gets the head before the
 migration under test from a cached snapshot with `openRawThrough(t, before)`,
 or `copySnapshotThrough(t, path, before)` when it opens and reopens the path
-itself, and still calls `migrateThrough` to move a database it has seeded
-forward, so the migrations under test run for real.
+itself, and still calls `migrate` to move a database it has seeded forward,
+so the migrations under test run for real.
 
 **Package parallelism caps.** A package whose tests contend on a
 process-wide lock may cap its own `test.parallel` in a `TestMain`. The cap

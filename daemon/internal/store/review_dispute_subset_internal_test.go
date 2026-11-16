@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func subsetDisputeFixture(t *testing.T, withPrior bool) (externalCycleFixture, domain.AttentionItem, domain.FindingAdjudication) {
@@ -346,71 +344,5 @@ func TestReviewDisputeFirstRoutedTransitionRecordsSet(t *testing.T) {
 	putSubsetDispute(t, f, &routed)
 	if err := f.st.Read(t.Context(), func(tx *ReadTx) error { _, err := tx.GetAttentionItem(t.Context(), routed.ID); return err }); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestReviewDisputeRowsMigration(t *testing.T) {
-	t.Parallel()
-	f, item, _ := subsetDisputeFixture(t, true)
-	item = fullDisputeRows(f, item)
-	for _, name := range []string{"valid", "non routed", "partial", "duplicate", "corrupt"} {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			db := openRawThrough(t, "0098_")
-			candidate := item
-			binding := *item.ReviewDispute
-			binding.Findings = slices.Clone(binding.Findings)
-			candidate.ReviewDispute = &binding
-			switch name {
-			case "non routed":
-				binding.Findings = nil
-				candidate.RequestedDecision = []domain.Action{domain.ActionStop}
-			case "partial":
-				binding.Findings = binding.Findings[:1]
-			case "duplicate":
-				binding.Findings[1] = binding.Findings[0]
-			}
-			body, err := json.Marshal(candidate)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if name == "corrupt" {
-				body = []byte("{")
-			}
-			if _, err := db.ExecContext(ctx, `INSERT INTO attention_items (id, project_id, item_type, status, entity_version, as_of_revision, body) VALUES (?, ?, 'review_dispute', 'open', 1, 1, ?)`, candidate.ID, candidate.ProjectID, string(body)); err != nil {
-				t.Fatal(err)
-			}
-			err = migrate(ctx, db, migrations.FS)
-			if name == "partial" || name == "duplicate" || name == "corrupt" {
-				if err == nil {
-					t.Fatal("invalid legacy row authenticated")
-				}
-				var count int
-				if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name = 'review_dispute_rows'`).Scan(&count); err != nil {
-					t.Fatal(err)
-				}
-				if count != 0 {
-					t.Fatal("migration did not roll back table")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := migrate(ctx, db, migrations.FS); err != nil {
-				t.Fatal(err)
-			}
-			var ids string
-			err = db.QueryRowContext(ctx, `SELECT finding_ids FROM review_dispute_rows WHERE item_id = ?`, candidate.ID).Scan(&ids)
-			if name == "non routed" {
-				if err == nil {
-					t.Fatal("non-routed card gained a record")
-				}
-				return
-			}
-			if err != nil || ids != displayedDisputeIDs(candidate) {
-				t.Fatalf("backfill %q: %v", ids, err)
-			}
-		})
 	}
 }

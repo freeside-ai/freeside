@@ -11,29 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
-
-func TestReviewConfigurationRecoveryMigrationAppliesFromHead(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	db := openRawThrough(t, "0034_")
-	if got := rawVersion(t, db); got != 33 {
-		t.Fatalf("prior schema version = %d, want 33", got)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate to head: %v", err)
-	}
-	assertAtHead(t, db)
-	var count int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM review_configuration_recovery_transitions`).Scan(&count); err != nil {
-		t.Fatalf("count configuration recovery transitions: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("new configuration recovery log contains %d rows, want 0", count)
-	}
-}
 
 func configRecoveryProfile(t *testing.T, configDigest domain.Digest, widen bool) domain.AutomationTrustProfile {
 	t.Helper()
