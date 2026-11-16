@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v16",
+  "version": "freeside-task-record-v17",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -353,7 +353,24 @@
               "first_observed_at": "2026-09-01T14:10:00Z",
               "last_observed_at": "2026-09-01T14:20:00Z"
             },
-            "events": []
+            "events": [],
+            "hold_history": [
+              {
+                "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "reason": "verification_findings",
+                "first_observed_at": "2026-09-01T14:10:00Z",
+                "last_observed_at": "2026-09-01T14:20:00Z",
+                "cleared_at": null
+              }
+            ],
+            "clocks": {
+              "started_at": "2026-09-01T13:55:00Z",
+              "ended_at": null,
+              "elapsed_seconds": 2574300,
+              "active_seconds": 0,
+              "active_intervals": []
+            }
           },
           {
             "run_id": "run-freeside-656",
@@ -401,7 +418,15 @@
               }
             ],
             "hold": null,
-            "events": []
+            "events": [],
+            "hold_history": [],
+            "clocks": {
+              "started_at": "2026-09-01T13:31:00Z",
+              "ended_at": "2026-09-01T13:51:00Z",
+              "elapsed_seconds": 1200,
+              "active_seconds": 0,
+              "active_intervals": []
+            }
           },
           {
             "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
@@ -440,7 +465,15 @@
               }
             ],
             "hold": null,
-            "events": []
+            "events": [],
+            "hold_history": [],
+            "clocks": {
+              "started_at": "2026-09-01T13:00:00Z",
+              "ended_at": "2026-09-01T13:10:00Z",
+              "elapsed_seconds": 600,
+              "active_seconds": 0,
+              "active_intervals": []
+            }
           }
         ]
       }

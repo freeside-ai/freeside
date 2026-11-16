@@ -1,0 +1,59 @@
+{
+  "as_of_revision": 7,
+  "as_of": "2026-11-16T10:00:00Z",
+  "run_id": "run-3236",
+  "milestones": [
+    {
+      "run_id": "run-3236",
+      "kind": "run_submitted",
+      "invocation_id": "inv-submit",
+      "terminal": null,
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-11-16T09:00:00Z"
+    },
+    {
+      "run_id": "run-3236",
+      "kind": "invocation_started",
+      "invocation_id": "inv-implement",
+      "terminal": null,
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-11-16T09:10:00Z"
+    },
+    {
+      "run_id": "run-3236",
+      "kind": "execution_export_recorded",
+      "invocation_id": "inv-implement",
+      "terminal": null,
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-11-16T09:40:00Z"
+    }
+  ],
+  "hold": null,
+  "invocations": [],
+  "completion": null,
+  "review": null,
+  "billable_cost_so_far": null,
+  "admissions": [],
+  "outcomes": {
+    "posts": [],
+    "findings": [],
+    "complete": true
+  },
+  "hold_history": [],
+  "clocks": {
+    "started_at": "2026-11-16T09:00:00Z",
+    "ended_at": null,
+    "elapsed_seconds": 3600,
+    "active_seconds": 1800,
+    "active_intervals": [
+      {
+        "invocation_id": "inv-implement",
+        "started_at": "2026-11-16T09:10:00Z",
+        "ended_at": "2026-11-16T09:40:00Z"
+      }
+    ]
+  }
+}

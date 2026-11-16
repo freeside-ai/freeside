@@ -83,5 +83,7 @@
     "posts": [],
     "findings": [],
     "complete": true
-  }
+  },
+  "hold_history": [],
+  "clocks": null
 }

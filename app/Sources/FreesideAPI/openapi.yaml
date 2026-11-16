@@ -3279,6 +3279,20 @@ components:
           description: Run-level events, newest first.
           items:
             $ref: "#/components/schemas/TaskEvent"
+        hold_history:
+          type: array
+          description: >
+            The run timeline's hold_history, oldest first, unlike milestones
+            here. Optional for the reason RunTimeline gives.
+          items:
+            $ref: "#/components/schemas/RunHoldSpan"
+        clocks:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunClocks"
+          description: >
+            The run timeline's clocks, computed at this timeline's as_of.
+            Optional for the reason RunTimeline gives.
       example:
         run_id: run-1
         role: null
@@ -3289,6 +3303,8 @@ components:
         milestones: []
         hold: null
         events: []
+        hold_history: []
+        clocks: null
 
     TaskEvent:
       type: object
@@ -3568,10 +3584,11 @@ components:
         are separate from retained reviewer output, which has its own
         authenticated route. Stage labels come from the Run aggregate.
         outcomes is what the run posted or tried to post and the findings it
-        set aside; every daemon that has the list serves it, empty or not.
-        It is optional so an app still reads the timeline from a daemon
-        built before the list existed, where an absent list is unknown, not
-        empty.
+        set aside; hold_history is every hold the run has been under; clocks
+        is where the run's time went. Every daemon that has a field serves
+        it. Each is optional so an app still reads the timeline from a
+        daemon built before the field existed, where an absent field is
+        unknown, not empty.
       required:
         [as_of_revision, as_of, run_id, milestones, hold, invocations,
          completion, review, billable_cost_so_far, admissions]
@@ -3625,6 +3642,26 @@ components:
             $ref: "#/components/schemas/InvocationAdmissionFacts"
         outcomes:
           $ref: "#/components/schemas/RunOutcomes"
+        hold_history:
+          type: array
+          description: >
+            Every hold the run has been under, oldest first. The current hold,
+            when there is one, is the last entry, with a null cleared_at and
+            the same reason, invocation, and instants as hold, which keeps
+            the hold's detail. An empty list on a run older than the daemon
+            that began keeping hold history is not proof the run was never
+            held. A finished run's last span can extend past its clocks'
+            ended_at; that time belongs to no clock.
+          items:
+            $ref: "#/components/schemas/RunHoldSpan"
+        clocks:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunClocks"
+          description: >
+            Where the run's time went, computed at as_of from the milestones;
+            null for a run with no milestone, because there is nothing to
+            measure from.
       example:
         as_of_revision: 42
         as_of: "2026-01-02T03:14:06Z"
@@ -3637,6 +3674,13 @@ components:
             outcome: null
             reason: null
             recorded_at: "2026-01-02T03:04:05Z"
+          - run_id: "run-1"
+            kind: "invocation_started"
+            invocation_id: "inv-1"
+            terminal: null
+            outcome: null
+            reason: null
+            recorded_at: "2026-01-02T03:05:05Z"
           - run_id: "run-1"
             kind: "terminal_recorded"
             invocation_id: "inv-1"
@@ -3691,6 +3735,22 @@ components:
               message: "The retry loop has no upper bound."
               reason: "The caller already bounds retries."
           complete: true
+        hold_history:
+          - run_id: "run-1"
+            invocation_id: "inv-1"
+            reason: "operation_stopped"
+            first_observed_at: "2026-01-02T03:05:05Z"
+            last_observed_at: "2026-01-02T03:06:05Z"
+            cleared_at: "2026-01-02T03:06:35Z"
+        clocks:
+          started_at: "2026-01-02T03:04:05Z"
+          ended_at: "2026-01-02T03:14:05Z"
+          elapsed_seconds: 600
+          active_seconds: 540
+          active_intervals:
+            - invocation_id: "inv-1"
+              started_at: "2026-01-02T03:05:05Z"
+              ended_at: "2026-01-02T03:14:05Z"
 
     RunOutcomes:
       type: object
@@ -4506,6 +4566,122 @@ components:
         last_observed_at:
           type: string
           format: date-time
+
+    RunHoldSpan:
+      type: object
+      description: >
+        One hold a run was under: its cause and its instants, without the
+        hold's detail. A closed span records when the hold ended; the run's
+        current hold is an open span, with a null cleared_at.
+      required: [run_id, invocation_id, reason, first_observed_at, last_observed_at, cleared_at]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        invocation_id:
+          type: string
+          minLength: 1
+          nullable: true
+        reason:
+          $ref: "#/components/schemas/RunHoldReason"
+        first_observed_at:
+          type: string
+          format: date-time
+        last_observed_at:
+          type: string
+          format: date-time
+        cleared_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the hold ended, never before last_observed_at; null while the
+            hold is current.
+      example:
+        run_id: "run-1"
+        invocation_id: null
+        reason: "machine_capacity"
+        first_observed_at: "2026-01-02T03:05:05Z"
+        last_observed_at: "2026-01-02T03:06:05Z"
+        cleared_at: "2026-01-02T03:06:35Z"
+
+    RunClocks:
+      type: object
+      description: >
+        A run's elapsed and active time. The run starts at its run_submitted
+        milestone, or at its earliest milestone when it has none. A finished
+        run (lifecycle finished) ends at its newest milestone; any other has
+        no end and counts to the timeline's as_of, never to before its newest
+        milestone. Elapsed time runs from the start to the end. Active time
+        is the part of it during which at least one invocation is working
+        (RunActiveInterval). A hold doesn't reduce active time: it records
+        that the daemon refused or put off the run's next step, not that a
+        started invocation stopped. Totals are computed from the exact
+        instants and rounded down to whole seconds.
+      required: [started_at, ended_at, elapsed_seconds, active_seconds, active_intervals]
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The run's end; null while the run isn't finished.
+        elapsed_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        active_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The union of active_intervals within the elapsed time, so
+            intervals that overlap count once; never more than
+            elapsed_seconds.
+        active_intervals:
+          type: array
+          description: >
+            One entry per invocation_started milestone, in the order the
+            daemon recorded them. Entries can overlap.
+          items:
+            $ref: "#/components/schemas/RunActiveInterval"
+      example:
+        started_at: "2026-01-02T03:04:05Z"
+        ended_at: null
+        elapsed_seconds: 600
+        active_seconds: 510
+        active_intervals:
+          - invocation_id: "inv-1"
+            started_at: "2026-01-02T03:05:35Z"
+            ended_at: null
+
+    RunActiveInterval:
+      type: object
+      description: >
+        The span one invocation was working: from its invocation_started
+        milestone to its first later execution_export_recorded,
+        execution_outcome_recorded, or terminal_recorded milestone. An
+        invocation with none of the three works until the next
+        invocation_started, or until the run's end when there is none.
+      required: [invocation_id, started_at, ended_at]
+      properties:
+        invocation_id:
+          type: string
+          minLength: 1
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null while the invocation is still working at as_of.
+      example:
+        invocation_id: "inv-1"
+        started_at: "2026-01-02T03:05:35Z"
+        ended_at: "2026-01-02T03:09:05.5Z"
 
     InvocationObservation:
       type: object

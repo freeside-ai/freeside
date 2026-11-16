@@ -2197,6 +2197,16 @@ func TestGolden(t *testing.T) {
 	openHoldSpan := holdSpan
 	openHoldSpan.InvocationID = nil
 	openHoldSpan.ClearedAt = nil
+	// Clocks derive from milestones, so the fixtures pin what RunClocksOf
+	// serves: a finished run, and one still working at the read.
+	clockInvocation := domain.InvocationID("inv-clock")
+	clockMilestones := []domain.RunMilestone{
+		{RunID: "run-1", Kind: domain.MilestoneRunSubmitted, InvocationID: &clockInvocation, RecordedAt: ts},
+		{RunID: "run-1", Kind: domain.MilestoneInvocationStarted, InvocationID: &clockInvocation, RecordedAt: ts.Add(90 * time.Second)},
+		{RunID: "run-1", Kind: domain.MilestoneExecutionExportRecorded, InvocationID: &clockInvocation, RecordedAt: ts.Add(5*time.Minute + 500*time.Millisecond)},
+	}
+	runClocks := *domain.RunClocksOf(clockMilestones, true, ts.Add(time.Hour))
+	runClocksOpen := *domain.RunClocksOf(clockMilestones[:2], false, ts.Add(10*time.Minute))
 	exhaustedPool := domain.UsagePoolID("claude-owner-subscription")
 	usagePoolHold := holdObservation
 	usagePoolHold.Reason = domain.HoldUsagePoolExhausted
@@ -2891,6 +2901,8 @@ func TestGolden(t *testing.T) {
 		{"run_hold_observation_machine_capacity", machineCapacityHold},
 		{"run_hold_span", holdSpan},
 		{"run_hold_span_open", openHoldSpan},
+		{"run_clocks", runClocks},
+		{"run_clocks_open", runClocksOpen},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},

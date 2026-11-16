@@ -1,0 +1,13 @@
+{
+  "started_at": "2026-01-02T03:04:05Z",
+  "ended_at": "2026-01-02T03:09:05.5Z",
+  "elapsed_seconds": 300,
+  "active_seconds": 210,
+  "active_intervals": [
+    {
+      "invocation_id": "inv-clock",
+      "started_at": "2026-01-02T03:05:35Z",
+      "ended_at": "2026-01-02T03:09:05.5Z"
+    }
+  ]
+}

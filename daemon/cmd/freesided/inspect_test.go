@@ -331,6 +331,20 @@ func comparableRecord(t *testing.T, record taskRecord) []byte {
 	if record.Timeline != nil {
 		timeline := *record.Timeline
 		timeline.AsOf, timeline.AsOfRevision = time.Time{}, 0
+		// An unfinished run's totals count to as_of, so they move with it;
+		// its instants don't.
+		timeline.Sections = slices.Clone(timeline.Sections)
+		for i := range timeline.Sections {
+			runs := slices.Clone(timeline.Sections[i].Runs)
+			for j := range runs {
+				if clocks := runs[j].Clocks; clocks != nil && clocks.EndedAt == nil {
+					open := *clocks
+					open.ElapsedSeconds, open.ActiveSeconds = 0, 0
+					runs[j].Clocks = &open
+				}
+			}
+			timeline.Sections[i].Runs = runs
+		}
 		record.Timeline = &timeline
 	}
 	out, err := json.Marshal(record)

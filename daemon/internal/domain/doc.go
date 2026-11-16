@@ -77,6 +77,8 @@
 //   - run.go          run/stage/attempt and invocation identities (§5.3)
 //   - observation.go  run observations: milestones, holds, invocation
 //     liveness, and outcomes
+//   - run_clocks.go   a run's elapsed and active time, derived from its
+//     milestones at each read
 //   - invocation_intent.go, remediation_intent.go, operator_feedback_intent.go
 //     durable dispatch intents and the retained remediation and operator
 //     feedback contracts

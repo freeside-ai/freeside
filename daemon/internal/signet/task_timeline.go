@@ -40,6 +40,10 @@ type TaskTimelineRun struct {
 	Milestones    []domain.RunMilestone      `json:"milestones"`
 	Hold          *domain.RunHoldObservation `json:"hold"`
 	Events        []domain.TaskEvent         `json:"events"`
+	// HoldHistory and Clocks are the run timeline's fields, at this
+	// timeline's AsOf. The history stays oldest first, unlike Milestones.
+	HoldHistory []domain.RunHoldSpan `json:"hold_history"`
+	Clocks      *domain.RunClocks    `json:"clocks"`
 }
 
 type taskTimelineInput struct {
@@ -183,6 +187,9 @@ func loadedTaskTimeline(
 		facts.review, err = runReviewFacts(ctx, tx, runID, observation.Invocations)
 		if err != nil {
 			return TaskTimeline{}, asRunObservationIntegrityError(err)
+		}
+		if err := readTimelineTimeFacts(ctx, tx, run.Value, observation, &facts); err != nil {
+			return TaskTimeline{}, err
 		}
 		input := taskTimelineInput{run: run.Value, observation: observation, facts: facts}
 		for _, storedItem := range items {
@@ -382,6 +389,10 @@ func taskTimeline(
 		entry := TaskTimelineRun{
 			RunID: run.ID, SupersededBy: input.facts.supersededBy, Hold: input.observation.Hold,
 			Milestones: append([]domain.RunMilestone{}, input.observation.Milestones...), Events: []domain.TaskEvent{},
+			HoldHistory: nonNilSlice(input.facts.holdHistory),
+			// Computed before the milestones re-sort newest first: the
+			// clocks read record order.
+			Clocks: domain.RunClocksOf(input.observation.Milestones, input.facts.finished, asOf),
 		}
 		if run.CampaignID != "" {
 			if !observed || input.attempt == nil {

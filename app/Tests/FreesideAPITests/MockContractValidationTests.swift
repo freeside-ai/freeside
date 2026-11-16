@@ -177,6 +177,125 @@ import Testing
         #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "completion milestone has no fact")
     }
 
+    /// The mock serves the hold history on every run timeline and task
+    /// timeline run, and clocks on each one with a milestone, as this daemon
+    /// does (#3236); one fixture run has both a cleared hold and a current
+    /// one.
+    @Test func servedRunTimeMatchesDaemonValidation() async throws {
+        let server = MockServer()
+        for source in RunFixtures.defaultTimelines() {
+            let timeline = try #require(await server.runTimeline(id: source.run_id))
+            #expect(timeline.hold_history != nil)
+            #expect(timeline.clocks != nil || timeline.milestones.isEmpty)
+            #expect(MockContractValidation.runTimeBreach(timeline) == nil)
+        }
+        for task in TaskFixtures.defaultTasks() {
+            let timeline = try #require(try await server.taskTimeline(id: task.task.id))
+            for run in timeline.sections.flatMap(\.runs) {
+                #expect(run.hold_history != nil)
+                #expect(run.clocks != nil || run.milestones.isEmpty)
+            }
+        }
+        let held = try #require(await server.runTimeline(id: RunFixtures.activeRunID))
+        let history = try #require(held.hold_history)
+        #expect(history.count == 2 && history[0].cleared_at != nil && history[1].cleared_at == nil)
+
+        var invalid = held
+        invalid.hold_history?[0].run_id = "another-run"
+        #expect(MockContractValidation.runTimeBreach(invalid) == "hold history names another run")
+        invalid = held
+        invalid.hold_history?[1].reason = .machine_capacity
+        #expect(MockContractValidation.runTimeBreach(invalid) == "current hold disagrees with the last hold span")
+        invalid = held
+        invalid.hold_history?[1].cleared_at = held.hold?.value1.last_observed_at
+        #expect(MockContractValidation.runTimeBreach(invalid) == "current hold disagrees with the last hold span")
+        invalid = held
+        invalid.hold = nil
+        #expect(MockContractValidation.runTimeBreach(invalid) == "current hold disagrees with the last hold span")
+        invalid = held
+        invalid.hold_history?[0].cleared_at = nil
+        #expect(MockContractValidation.runTimeBreach(invalid) == "open hold span is not the last")
+        invalid = held
+        invalid.hold_history?[0].cleared_at = held.hold_history?[0].first_observed_at
+        #expect(MockContractValidation.runTimeBreach(invalid) == "hold span reads backwards")
+        invalid = held
+        invalid.clocks?.value1.active_seconds = (held.clocks?.value1.elapsed_seconds ?? 0) + 1
+        #expect(MockContractValidation.runTimeBreach(invalid) == "active time exceeds elapsed time")
+        invalid = held
+        invalid.hold_history = nil
+        #expect(MockContractValidation.runTimeBreach(invalid) == "missing hold history")
+        invalid = held
+        invalid.clocks = nil
+        #expect(MockContractValidation.runTimeBreach(invalid) == "missing clocks")
+    }
+
+    /// The mock's clocks follow the daemon's definition: the active run's
+    /// two attempts work from minute 2 to its export at 18, and from 21 to
+    /// the timeline's as_of at 35, with the second still working.
+    @Test func servedClocksFollowTheDaemonDefinition() async throws {
+        let timeline = try #require(await MockServer().runTimeline(id: RunFixtures.activeRunID))
+        let clocks = try #require(timeline.clocks?.value1)
+        #expect(clocks.ended_at == nil)
+        #expect(clocks.elapsed_seconds == 35 * 60)
+        #expect(clocks.active_seconds == 16 * 60 + 14 * 60)
+        #expect(clocks.active_intervals.map(\.ended_at) == [clocks.started_at.addingTimeInterval(18 * 60), nil])
+    }
+
+    /// The port matches `TestRunClocksOf` in the daemon on the cases that
+    /// order milestones unusually: overlap and nesting, an ending recorded
+    /// after another start, an invocation ended by the next start, a finished
+    /// run's unended invocation, and an ending at an earlier instant.
+    @Test func clocksMatchTheDaemonCases() {
+        let t0 = Date(timeIntervalSince1970: 1_786_502_400)
+        func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
+        func milestone(
+            _ kind: Components.Schemas.RunMilestoneKind, _ invocation: String, _ seconds: TimeInterval
+        ) -> Components.Schemas.RunMilestone {
+            .init(
+                run_id: "run-1", kind: kind, invocation_id: invocation,
+                terminal: kind == .terminal_recorded ? .init(value1: .completed) : nil, recorded_at: at(seconds))
+        }
+        func submitted(_ seconds: TimeInterval) -> Components.Schemas.RunMilestone {
+            milestone(.run_submitted, "submit", seconds)
+        }
+        func started(_ invocation: String, _ seconds: TimeInterval) -> Components.Schemas.RunMilestone {
+            milestone(.invocation_started, invocation, seconds)
+        }
+        func exported(_ invocation: String, _ seconds: TimeInterval) -> Components.Schemas.RunMilestone {
+            milestone(.execution_export_recorded, invocation, seconds)
+        }
+        struct Case {
+            let milestones: [Components.Schemas.RunMilestone]
+            let finished: Bool
+            let elapsed: Int64
+            let active: Int64
+            let ends: [Date?]
+        }
+        let cases = [
+            Case(
+                milestones: [
+                    submitted(0), started("inv-1", 10), started("inv-2", 12), exported("inv-1", 30),
+                    started("inv-3", 14), exported("inv-3", 20), exported("inv-2", 35),
+                ],
+                finished: false, elapsed: 60, active: 25, ends: [at(30), at(35), at(20)]),
+            Case(
+                milestones: [submitted(0), started("inv-1", 10), started("inv-2", 30), exported("inv-2", 40)],
+                finished: false, elapsed: 60, active: 30, ends: [at(30), at(40)]),
+            Case(
+                milestones: [submitted(0), started("inv-1", 10), milestone(.publication_ready, "inv-pub", 50)],
+                finished: true, elapsed: 50, active: 40, ends: [at(50)]),
+            Case(
+                milestones: [submitted(0), started("inv-1", 20), exported("inv-1", 15)],
+                finished: false, elapsed: 60, active: 0, ends: [at(20)]),
+        ]
+        for testCase in cases {
+            let clocks = MockRunTime.clocks(testCase.milestones, finished: testCase.finished, asOf: at(60))
+            #expect(clocks?.elapsed_seconds == testCase.elapsed)
+            #expect(clocks?.active_seconds == testCase.active)
+            #expect(clocks?.active_intervals.map(\.ended_at) == testCase.ends)
+        }
+    }
+
     @Test func runOutcomesMatchDaemonValidation() throws {
         for timeline in RunFixtures.defaultTimelines() {
             #expect(MockContractValidation.runOutcomesBreach(timeline.outcomes) == nil)

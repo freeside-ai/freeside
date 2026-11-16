@@ -149,6 +149,41 @@ enum MockContractValidation {
         return nil
     }
 
+    /// Validate a served timeline's run time fields, mirroring what the
+    /// daemon serves (#3236): every span names the run and reads forward,
+    /// only the last span is open, the last span is open exactly when the run
+    /// is held and then carries the hold's cause and instants, and the active
+    /// time never exceeds the elapsed time. The schema leaves both fields
+    /// optional for daemons built before them, but this daemon always serves
+    /// them.
+    static func runTimeBreach(_ timeline: Components.Schemas.RunTimeline) -> String? {
+        guard let history = timeline.hold_history else { return "missing hold history" }
+        for (index, span) in history.enumerated() {
+            if span.run_id != timeline.run_id { return "hold history names another run" }
+            if span.last_observed_at < span.first_observed_at
+                || span.cleared_at.map({ $0 < span.last_observed_at }) == true
+            {
+                return "hold span reads backwards"
+            }
+            if span.cleared_at == nil && index != history.count - 1 { return "open hold span is not the last" }
+        }
+        let open = history.last.flatMap { $0.cleared_at == nil ? $0 : nil }
+        if let hold = timeline.hold?.value1 {
+            guard let open, open.run_id == hold.run_id, open.invocation_id == hold.invocation_id,
+                open.reason == hold.reason, open.first_observed_at == hold.first_observed_at,
+                open.last_observed_at == hold.last_observed_at
+            else { return "current hold disagrees with the last hold span" }
+        } else if open != nil {
+            return "current hold disagrees with the last hold span"
+        }
+        guard let clocks = timeline.clocks?.value1 else {
+            return timeline.milestones.isEmpty ? nil : "missing clocks"
+        }
+        if clocks.elapsed_seconds < 0 || clocks.active_seconds < 0 { return "negative clock" }
+        if clocks.active_seconds > clocks.elapsed_seconds { return "active time exceeds elapsed time" }
+        return nil
+    }
+
     /// Validate a run timeline's outcome list, mirroring what
     /// signet.ReadRunOutcomes can serve: an unreadable post carries only its
     /// kind; a readable one names its finding and repository; a comment

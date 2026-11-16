@@ -128,7 +128,11 @@ public enum TaskFixtures {
                         attempt_number: run.attempt_number, attempt_reason: run.attempt_reason,
                         parent_run_id: run.parent_run_id, superseded_by: run.superseded_by,
                         milestones: (timeline?.milestones ?? []).sorted { $0.recorded_at > $1.recorded_at },
-                        hold: timeline?.hold.map { .init(value1: $0.value1) }, events: events)
+                        hold: timeline?.hold.map { .init(value1: $0.value1) }, events: events,
+                        hold_history: timeline.map(MockRunTime.holdHistory) ?? [],
+                        clocks: MockRunTime.clocks(
+                            timeline?.milestones ?? [], finished: run.lifecycle == .finished, asOf: asOf
+                        ).map { .init(value1: $0) })
                 })
         }
         var events: [Components.Schemas.TaskEvent] = [.init(kind: .task_created, recorded_at: task.created_at)]
