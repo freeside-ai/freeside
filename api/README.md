@@ -90,6 +90,9 @@ daemon and the app beside the digest, and `GET /health` reports them as
   unless `OASDIFF` names another command; CI installs a checksum-verified
   binary of the same version (`.github/workflows/api-ci.yml`). Keep the
   version in step across the script, the workflow, and this line.
+  Freeside's verification recipe doesn't run it: the recipe names the
+  other api steps, because the offline project image has no `oasdiff`
+  and no merge base (#3262).
 - **`oasdiff-severity.txt` sets the project's breaking set.** oasdiff
   reads it with `--severity-levels`; the file allows only `<check-id>
   <level>` lines, so its reasons live here. A new `oneOf` arm in a
