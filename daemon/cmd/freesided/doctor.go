@@ -148,7 +148,7 @@ func runDoctorCommand(
 		Store: st, Attention: attention, BackupHealthSource: backupHealth,
 		ProjectID:                 domain.ProjectID(*projectID),
 		Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
-		ConfigurationDigest:       domain.Digest(*configurationDigest),
+		ConfigurationDigests:      []domain.Digest{domain.Digest(*configurationDigest)},
 		ReviewConfigurationDigest: domain.Digest(*reviewConfigurationDigest),
 		Mode:                      mode,
 		CredentialIntegrityProbe:  integrityProbe,

@@ -51,10 +51,11 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	if err != nil {
 		t.Fatalf("NewSuite = %v", err)
 	}
-	// PreJob cases model a backend whose startup Full already passed. Full
-	// itself clears this state on entry and earns it again only on success.
-	b.networkless.Store(true)
-	b.providerEgress.Store(true)
+	// PreJob cases model a backend whose startup Full already passed on the
+	// fixture's image. Full itself clears this state on entry and earns it
+	// again only on success.
+	generation, _ := b.beginConformanceProof(s.fx.AgentImage, nil)
+	b.finishConformanceProof(s.fx.AgentImage, generation, true)
 	// The default writer emits this run's sentinel; a passing-path export must
 	// carry it (and not the credential marker) for Full's non-vacuousness check.
 	// Tests that assert a containment failure override this.
@@ -369,7 +370,7 @@ func TestSuiteFullSuccess(t *testing.T) {
 	// earlier recorded pass left behind. Declaration-with-recorder is pinned
 	// in TestSuiteFullRecordsPassedConformance.
 	for _, c := range conformancePendingCapabilities {
-		if s.b.Capabilities().Has(c) {
+		if capabilitiesFor(s.b, s.fx.AgentImage).Has(c) {
 			t.Errorf("recorderless Full declared %q", c)
 		}
 	}
@@ -424,7 +425,7 @@ func TestSuiteFullPropagatesCheckFailure(t *testing.T) {
 	}
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckExporterAllowlist)
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("failed Full retained supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -443,7 +444,7 @@ func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
 	}
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckNetworklessExport)
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("failed networkless probe declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -526,7 +527,7 @@ func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {
 	}
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckNetworklessExport)
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("stale networkless proof declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -615,7 +616,7 @@ func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
 	}
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckNetworklessExport)
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("attached exporter probe declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -676,7 +677,7 @@ func TestSuiteFullNetworklessProbeRejectsEagerCreate(t *testing.T) {
 	if !strings.Contains(err.Error(), "executed it before inspection") {
 		t.Errorf("error = %q, want networkless eager-create failure", err)
 	}
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("eager networkless create declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -692,7 +693,7 @@ func TestSuiteFullCleanupFailureWithholdsNetworklessCapability(t *testing.T) {
 	}
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckTeardown)
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("cleanup-failed Full declared supports_networkless_export")
 	}
 }
@@ -716,7 +717,7 @@ func TestSuiteFullPanicWithholdsNetworklessCapability(t *testing.T) {
 	if recovered == nil {
 		t.Fatal("Full did not propagate the fixture panic")
 	}
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("panicked Full declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -742,7 +743,7 @@ func TestSuiteFullCleanupPanicWithholdsNetworklessCapability(t *testing.T) {
 	if recovered == nil {
 		t.Fatal("Full did not propagate the late cleanup panic")
 	}
-	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Error("cleanup-panicked Full declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
@@ -805,7 +806,7 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 	if olderErr != nil {
 		t.Fatalf("older Full = %v, want success", olderErr)
 	}
-	if b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(b, older.fx.AgentImage).Has(exec.CapNetworklessExport) {
 		t.Fatal("older successful Full overrode the newer failed generation")
 	}
 	// The durable log follows the same discipline: the superseded pass left
@@ -821,20 +822,16 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 	fx.assertReaped(t)
 }
 
-func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {
+// TestSuitePreJobRequiresThePublishedProof: a pre-job probe refuses an
+// image whose proof is not published (a pass running or failed), before it
+// touches the runtime. Both suite-earned capabilities share one proof, so
+// one case covers each.
+func TestSuitePreJobRequiresThePublishedProof(t *testing.T) {
 	t.Parallel()
 	s, rt := newSuiteTest(t)
-	s.b.networkless.Store(false)
-	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
-	if rt.callIndex("list-volumes") >= 0 {
-		t.Error("PreJob touched the runtime before refusing the missing capability")
+	if _, err := s.b.beginConformanceProof(s.fx.AgentImage, nil); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestSuitePreJobRequiresEgressProof(t *testing.T) {
-	t.Parallel()
-	s, rt := newSuiteTest(t)
-	s.b.providerEgress.Store(false)
 	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
 	if rt.callIndex("list-volumes") >= 0 {
 		t.Error("PreJob touched the runtime before refusing the missing capability")
@@ -1870,78 +1867,69 @@ func TestSuitePreJobSuccess(t *testing.T) {
 	}
 }
 
-func TestBackendPreJobUsesConfiguredAgentImage(t *testing.T) {
-	t.Parallel()
-	s, _ := newSuiteTest(t)
-	s.b.agentImage = s.fx.AgentImage
-	if err := s.b.PreJob(context.Background(), "job-1"); err != nil {
-		t.Fatalf("Backend.PreJob = %v, want nil", err)
-	}
-	s.b.agentImage = ""
-	wantCheckFailure(t, s.b.PreJob(context.Background(), "job-2"), CheckPreJobProbe)
-}
-
-// TestBackendPreJobProbesTheRepointedImage pins that PreJob follows the
-// image the backend currently proves, not the one it was configured with.
-func TestBackendPreJobProbesTheRepointedImage(t *testing.T) {
+// TestBackendPreJobProbesTheAttemptsImage pins that PreJob probes, and
+// checks the proof of, the image it is handed: the attempt's own, never the
+// image the backend was configured with.
+func TestBackendPreJobProbesTheAttemptsImage(t *testing.T) {
 	t.Parallel()
 	s, rt := newSuiteTest(t)
-	s.b.agentImage = s.fx.AgentImage
-	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
-	if err := s.b.RepointAgentImage(repointed); err != nil {
-		t.Fatalf("RepointAgentImage = %v", err)
+	other := testImageB
+	if other == s.fx.AgentImage {
+		t.Fatal("test images collide")
 	}
-	// The repoint cleared the declaration; model the Full pass that would
-	// have earned it again for the new image.
-	s.b.networkless.Store(true)
-	s.b.providerEgress.Store(true)
 	var probed []string
 	rt.onCreateContainer = func(spec ContainerSpec) error {
 		probed = append(probed, spec.Image)
 		return nil
 	}
-	if err := s.b.PreJob(context.Background(), "job-1"); err != nil {
-		t.Fatalf("Backend.PreJob = %v, want nil", err)
+	// The other image has no published proof yet.
+	wantCheckFailure(t, s.b.PreJob(context.Background(), other, "job-1"), CheckPreJobProbe)
+	generation, _ := s.b.beginConformanceProof(other, nil)
+	s.b.finishConformanceProof(other, generation, true)
+	if err := s.b.PreJob(context.Background(), other, "job-2"); err != nil {
+		t.Fatalf("Backend.PreJob(other) = %v, want nil", err)
 	}
-	if !slices.Equal(probed, []string{repointed}) {
-		t.Fatalf("PreJob probed %q, want only the repointed image %q", probed, repointed)
+	if !slices.Equal(probed, []string{other}) {
+		t.Fatalf("PreJob probed %q, want only the attempt's image %q", probed, other)
 	}
+	wantCheckFailure(t, s.b.PreJob(context.Background(), "", "job-3"), CheckPreJobProbe)
 }
 
-// TestNewSuiteRefusesAFixtureForAnyButTheCurrentImage pins that a suite
-// can only prove the image the backend currently names, so a pass never
-// records one image's outcome under another image's configuration digest.
-func TestNewSuiteRefusesAFixtureForAnyButTheCurrentImage(t *testing.T) {
+// TestSuiteProvesItsFixturesImage pins that a suite proves and records the
+// image its fixture names, whatever image the backend was configured with,
+// and leaves another image's published proof standing.
+func TestSuiteProvesItsFixturesImage(t *testing.T) {
 	t.Parallel()
 	fx := newHandoffFixture(t)
-	cfg := fx.cfg
-	initial := "example.test/agent@sha256:" + strings.Repeat("1", 64)
-	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
-	cfg.AgentImage = initial
-	b, err := New(fx.rt, cfg)
+	seed := suiteSeed(t, fx)
+	fx.cfg.AgentImage = testImageA
+	b := fx.backend(t)
+	generation, _ := b.beginConformanceProof(testImageA, nil)
+	b.finishConformanceProof(testImageA, generation, true)
+	rec := &recordingConformance{}
+	s, err := NewSuite(b, SuiteFixture{
+		AgentImage:       testImageB,
+		CredentialMarker: suiteMarker,
+		RunID:            "conf-run",
+		RegistryRunID:    "conf-run-registry",
+		Seed:             seed,
+	}, WithConformanceRecorder(rec))
 	if err != nil {
-		t.Fatalf("New = %v", err)
+		t.Fatalf("NewSuite(another image) = %v, want nil", err)
 	}
-	fixture := func(image string) SuiteFixture {
-		return SuiteFixture{
-			AgentImage:       image,
-			CredentialMarker: suiteMarker,
-			RunID:            "conf-run",
-			RegistryRunID:    "conf-run-registry",
-			Seed:             suiteSeed(t, fx),
+	fx.rt.exportTarPath = buildTar(t, writerArchive(t, s.fx.RunID))
+	scriptRegistryExport(t, s, fx.rt)
+	scriptHappyProbes(s, fx.rt)
+	if err := s.Full(context.Background()); err != nil {
+		t.Fatalf("Full(image B) = %v, want nil", err)
+	}
+	for _, record := range rec.records {
+		if record.ConfigurationDigest != b.ConfigurationDigestFor(testImageB) {
+			t.Fatalf("record %+v, want image B's configuration digest", record)
 		}
 	}
-	if _, err := NewSuite(b, fixture(repointed)); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("NewSuite(other image) = %v, want ErrInvalidConfig", err)
-	}
-	if err := b.RepointAgentImage(repointed); err != nil {
-		t.Fatalf("RepointAgentImage = %v", err)
-	}
-	if _, err := NewSuite(b, fixture(initial)); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("NewSuite(previous image) = %v, want ErrInvalidConfig", err)
-	}
-	if _, err := NewSuite(b, fixture(repointed)); err != nil {
-		t.Fatalf("NewSuite(current image) = %v, want nil", err)
+	if got := b.ProvenImages(); !slices.Equal(got, []string{testImageA, testImageB}) {
+		t.Fatalf("ProvenImages = %q, want both images", got)
 	}
 }
 

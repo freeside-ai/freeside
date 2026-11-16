@@ -137,20 +137,21 @@ func runAdapterConformance(ctx context.Context, gate adapterConformanceGate, inp
 	return claude.JudgeConformance(result, input.Task, input.InvocationID, authorities)
 }
 
-// proveClaudeAdapter proves the Claude ward adapter on the lineup
-// implementer's subscription or a substitute for it, with a task at base,
-// the observed tip the conformance pass read. A selection that cannot load
-// records failed; ProveSelectedClaudeAdapter decides the rest.
+// proveClaudeAdapter proves the Claude ward adapter in image, the image the
+// pass's suite proved, on the lineup implementer's subscription or a
+// substitute for it, with a task at base, the observed tip the conformance
+// pass read. A selection that cannot load records failed;
+// ProveSelectedClaudeAdapter decides the rest.
 func proveClaudeAdapter(
-	ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig, base domain.BaseRevision,
-	leaser *AdapterConformanceLeaser,
+	ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig, image domain.ImageRef,
+	base domain.BaseRevision, leaser *AdapterConformanceLeaser,
 ) error {
 	selection, err := LoadAgentSelection(ctx, cfg)
 	if err != nil {
 		return RecordObservedAdapterConformance(ctx, st, nil, err, time.Now().UTC())
 	}
 	return ProveSelectedClaudeAdapter(ctx, st, *selection, func(agent engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
-		return observeClaudeAdapter(ctx, backend, cfg, base, leaser, agent)
+		return observeClaudeAdapter(ctx, backend, cfg, image, base, leaser, agent)
 	})
 }
 
@@ -350,8 +351,8 @@ func proveAdapterOnCandidates(
 }
 
 func observeClaudeAdapter(
-	ctx context.Context, backend *ward.Backend, cfg ClaudeDriverConfig, base domain.BaseRevision,
-	leaser *AdapterConformanceLeaser, agent engine.RoleAgent,
+	ctx context.Context, backend *ward.Backend, cfg ClaudeDriverConfig, image domain.ImageRef,
+	base domain.BaseRevision, leaser *AdapterConformanceLeaser, agent engine.RoleAgent,
 ) (domain.LaunchCapabilitySet, error) {
 	model, nativeEffort := agent.Selection.LaunchValues(agent.Adapter.ClientKind)
 	var nonce [16]byte
@@ -378,9 +379,8 @@ func observeClaudeAdapter(
 	if err != nil {
 		return nil, err
 	}
-	image, _ := backend.ConformanceIdentity()
 	input := claude.ConformanceInput{
-		Task: task, InvocationID: id, Image: domain.ImageRef(image), Identity: agent.Identity.ID,
+		Task: task, InvocationID: id, Image: image, Identity: agent.Identity.ID,
 		RouteModelID: model, NativeEffort: nativeEffort, Volumes: leaser,
 	}
 	spec, err := claude.ConformanceHandoff(ctx, input)

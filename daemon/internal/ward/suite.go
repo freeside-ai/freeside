@@ -91,11 +91,19 @@ func (s *Suite) recordStep(ctx context.Context, outcome domain.ConformanceOutcom
 	if s.recorder == nil {
 		return nil
 	}
+	return conformanceRecordStep(ctx, s.recorder, outcome, s.b.ConfigurationDigestFor(s.fx.AgentImage))
+}
+
+// conformanceRecordStep returns the durable record step that appends a row
+// with outcome for configuration digest through recorder.
+func conformanceRecordStep(
+	ctx context.Context, recorder ConformanceRecorder, outcome domain.ConformanceOutcome, digest domain.Digest,
+) func() error {
 	return func() error {
 		in := domain.BackendConformanceInput{
 			Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
 			Outcome:             outcome,
-			ConfigurationDigest: s.b.ConfigurationDigest(),
+			ConfigurationDigest: digest,
 			ProvedAt:            time.Now().UTC(),
 		}
 		if outcome == domain.ConformancePassed {
@@ -105,7 +113,7 @@ func (s *Suite) recordStep(ctx context.Context, outcome domain.ConformanceOutcom
 		if err != nil {
 			return err
 		}
-		return s.recorder.RecordBackendConformance(ctx, record)
+		return recorder.RecordBackendConformance(ctx, record)
 	}
 }
 
@@ -580,11 +588,6 @@ func NewSuite(b *Backend, fx SuiteFixture, opts ...SuiteOption) (*Suite, error) 
 	if err := fx.validate(); err != nil {
 		return nil, err
 	}
-	if current := b.currentAgentImage(); current != "" && fx.AgentImage != current {
-		return nil, fmt.Errorf(
-			"%w: SuiteFixture.AgentImage %q disagrees with the backend's AgentImage %q",
-			ErrInvalidConfig, fx.AgentImage, current)
-	}
 	// The credential mounts alongside the workspace in the writer; a target
 	// equal to or nested under the workspace (or the reverse) collides with
 	// the workspace mount, and the handoff's own agent-spec validation would
@@ -942,7 +945,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// pass's row admitting while this recheck is pending, exactly as the
 	// cleared flags stop new spawn-time freezes. A recheck whose supersession
 	// cannot be made durable does not run.
-	proofGeneration, beginErr := s.b.beginConformanceProof(
+	proofGeneration, beginErr := s.b.beginConformanceProof(s.fx.AgentImage,
 		s.recordStep(ctx, domain.ConformanceSuperseded))
 	if beginErr != nil {
 		return fmt.Errorf("record superseding conformance marker: %w", beginErr)
@@ -962,7 +965,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 			// Best-effort record: the panic is the primary failure and is
 			// re-raised regardless; an unrecorded failure is safe because
 			// absence and failure both close admission.
-			_, _ = s.b.concludeConformanceProof(proofGeneration, false,
+			_, _ = s.b.concludeConformanceProof(s.fx.AgentImage, proofGeneration, false,
 				s.recordStep(callerCtx, domain.ConformanceFailed))
 			panic(recovered)
 		}
@@ -982,7 +985,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 			result = domain.ConformancePassed
 		}
 		published, recordErr := s.b.concludeConformanceProof(
-			proofGeneration, declare, s.recordStep(callerCtx, result))
+			s.fx.AgentImage, proofGeneration, declare, s.recordStep(callerCtx, result))
 		if published && recordErr != nil {
 			err = errors.Join(err, fmt.Errorf("record backend conformance: %w", recordErr))
 		}
@@ -1303,16 +1306,15 @@ func (s *Suite) PreJob(ctx context.Context) error {
 	return s.preJob(ctx)
 }
 
-// PreJob runs the lightweight production probe against the writer image
-// currently bound into this backend's conformance identity. runID is a
-// caller-derived, collision-resistant runtime-object namespace.
-func (b *Backend) PreJob(ctx context.Context, runID string) error {
+// PreJob runs the lightweight production probe against image, the writer
+// image of the attempt about to run, so it checks that image's own proof.
+// runID is a caller-derived, collision-resistant runtime-object namespace.
+func (b *Backend) PreJob(ctx context.Context, image, runID string) error {
 	if b == nil || !b.initialized {
 		return fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
 	}
-	image := b.currentAgentImage()
 	if image == "" {
-		return failf(CheckPreJobProbe, "configured agent image is missing")
+		return failf(CheckPreJobProbe, "agent image is missing")
 	}
 	if !runIDPattern.MatchString(runID) {
 		return failf(CheckPreJobProbe, "run id does not match %s", runIDPattern)
@@ -1337,8 +1339,8 @@ func (s *Suite) preJob(ctx context.Context) (err error) {
 		return err
 	}
 	// Capability declaration intact (in-memory, free): the floor the gate
-	// admits against must still be declared.
-	caps := s.b.Capabilities()
+	// admits against must still be declared for this image.
+	_, caps, _ := s.b.ConformanceFor(s.fx.AgentImage)
 	for _, c := range unattendedCapabilities {
 		if !caps.Has(c) {
 			return failf(CheckPreJobProbe, "capability declaration missing a required capability")

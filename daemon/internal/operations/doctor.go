@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,10 +37,15 @@ type Doctor struct {
 	// BackupHealthSource optionally narrows a one-shot caller's checkpoint
 	// policy. The store validates its result against a coherent live snapshot;
 	// nil uses the store's ordinary source.
-	BackupHealthSource  store.BackupHealthSource
-	ProjectID           domain.ProjectID
-	Backend             domain.RunnerBackendClass
-	ConfigurationDigest domain.Digest
+	BackupHealthSource store.BackupHealthSource
+	ProjectID          domain.ProjectID
+	Backend            domain.RunnerBackendClass
+	// ConfigurationDigests are the backend configurations whose conformance
+	// the doctor judges: for the ward backend, which holds a proof per
+	// writer image (#3211), the configuration of every image it tracks.
+	// conformance and workspace_handoff are healthy when at least one's
+	// newest row is a covering pass.
+	ConfigurationDigests []domain.Digest
 	// ReviewConfigurationDigest is the effective Freeside-invoked reviewer
 	// configuration. It is required only in unattended mode, where activated
 	// trust profiles bind it.
@@ -143,7 +149,7 @@ func (d Doctor) resolveReviewConfigurationItemsAcrossProjects(ctx context.Contex
 // Operational source failures are errors, not clean findings.
 func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	if d.Store == nil || d.Attention == nil || d.ProjectID == "" ||
-		d.Backend == "" || d.ConfigurationDigest == "" {
+		d.Backend == "" || slices.Contains(d.ConfigurationDigests, "") {
 		return DoctorReport{}, fmt.Errorf("doctor: nil or invalid dependency")
 	}
 	switch d.Mode {
@@ -154,20 +160,6 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	if d.Mode == domain.ModeUnattended && d.ReviewConfigurationDigest == "" {
 		return DoctorReport{}, fmt.Errorf("doctor: empty unattended review configuration digest")
 	}
-	var (
-		conformance domain.BackendConformance
-		found       bool
-	)
-	if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		conformance, found, err = tx.LatestBackendConformance(ctx, d.Backend)
-		return err
-	}); err != nil {
-		return DoctorReport{}, fmt.Errorf("doctor: read conformance: %w", err)
-	}
-	baseConformant := found && conformance.Outcome == domain.ConformancePassed &&
-		conformance.ConfigurationBound() &&
-		conformance.ConfigurationDigest == d.ConfigurationDigest
 	requiredCapabilities, err := domain.RequiredCapabilities(
 		d.Mode,
 		d.Backend,
@@ -180,28 +172,11 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 	if err != nil {
 		return DoctorReport{}, fmt.Errorf("doctor: %w", err)
 	}
-	var missingCapabilities []domain.RunnerCapability
-	if baseConformant {
-		missingCapabilities = domain.MissingCapabilities(
-			conformance.Capabilities, requiredCapabilities,
-		)
+	conformance, handoff, err := d.conformanceFindings(ctx, requiredCapabilities)
+	if err != nil {
+		return DoctorReport{}, err
 	}
-	conformant := baseConformant && len(missingCapabilities) == 0
-	handoff := conformant
-	findings := []DoctorFinding{
-		{
-			Code: "conformance", Healthy: conformant,
-			Detail: conformanceDetail(
-				found, conformance, d.ConfigurationDigest, missingCapabilities,
-			),
-		},
-		{
-			Code: "workspace_handoff", Healthy: handoff,
-			Detail: workspaceHandoffDetail(
-				found, conformance, d.ConfigurationDigest, requiredCapabilities,
-			),
-		},
-	}
+	findings := []DoctorFinding{conformance, handoff}
 	reviewConfiguration, err := d.reviewConfigurationFinding(ctx)
 	if err != nil {
 		return DoctorReport{}, err
@@ -297,15 +272,61 @@ func (d Doctor) reviewConfigurationFinding(ctx context.Context) (DoctorFinding, 
 	}, nil
 }
 
+// conformanceFindings judges each of d.ConfigurationDigests by its newest
+// conformance row. Each finding is healthy when at least one configuration
+// passes it, and its detail names every configuration with its own verdict.
+// Converge files an unhealthy finding as a blocking item that holds every
+// unattended attempt, so one configuration's failed or running pass must
+// not make it unhealthy: the store gate already holds that configuration's
+// attempts, and only a backend with no passing configuration has nothing
+// left to admit.
+func (d Doctor) conformanceFindings(
+	ctx context.Context, requiredCapabilities []domain.RunnerCapability,
+) (conformance, handoff DoctorFinding, err error) {
+	conformance = DoctorFinding{Code: "conformance"}
+	handoff = DoctorFinding{Code: "workspace_handoff"}
+	if len(d.ConfigurationDigests) == 0 {
+		conformance.Detail = "the backend tracks no configuration"
+		handoff.Detail = conformance.Detail
+		return conformance, handoff, nil
+	}
+	var details [2][]string
+	for _, digest := range d.ConfigurationDigests {
+		var (
+			record domain.BackendConformance
+			found  bool
+		)
+		if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			record, found, err = tx.LatestConfigurationConformance(ctx, d.Backend, digest)
+			return err
+		}); err != nil {
+			return DoctorFinding{}, DoctorFinding{}, fmt.Errorf("doctor: read conformance: %w", err)
+		}
+		passed := found && record.Outcome == domain.ConformancePassed && record.ConfigurationBound()
+		var missing []domain.RunnerCapability
+		if passed {
+			missing = domain.MissingCapabilities(record.Capabilities, requiredCapabilities)
+		}
+		ok := passed && len(missing) == 0
+		details[0] = append(details[0], conformanceDetail(found, record, digest, missing))
+		details[1] = append(details[1], workspaceHandoffDetail(found, record, digest, requiredCapabilities))
+		conformance.Healthy = conformance.Healthy || ok
+		handoff.Healthy = handoff.Healthy || ok
+	}
+	conformance.Detail = strings.Join(details[0], "; ")
+	handoff.Detail = strings.Join(details[1], "; ")
+	return conformance, handoff, nil
+}
+
 func workspaceHandoffDetail(
 	found bool, c domain.BackendConformance, configurationDigest domain.Digest,
 	requiredCapabilities []domain.RunnerCapability,
 ) string {
 	if !found {
-		return "no durable conformance result"
+		return fmt.Sprintf("no durable conformance result for configuration %s", configurationDigest)
 	}
-	if c.Outcome != domain.ConformancePassed || !c.ConfigurationBound() ||
-		c.ConfigurationDigest != configurationDigest {
+	if c.Outcome != domain.ConformancePassed || !c.ConfigurationBound() {
 		return conformanceDetail(true, c, configurationDigest, nil)
 	}
 	missing := domain.MissingCapabilities(c.Capabilities, requiredCapabilities)
@@ -320,13 +341,8 @@ func conformanceDetail(
 	missingCapabilities []domain.RunnerCapability,
 ) string {
 	if !found {
-		return fmt.Sprintf("no durable conformance result for active configuration %s",
+		return fmt.Sprintf("no durable conformance result for configuration %s",
 			configurationDigest)
-	}
-	if c.ConfigurationDigest != configurationDigest {
-		return fmt.Sprintf(
-			"generation %d is %s for stale configuration %s; active configuration is %s",
-			c.Generation, c.Outcome, c.ConfigurationDigest, configurationDigest)
 	}
 	if len(missingCapabilities) != 0 {
 		return fmt.Sprintf(

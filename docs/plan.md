@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 126
+revision: 127
 status: active
 updated: 2026-11-16
 ---
@@ -3087,12 +3087,21 @@ the pass fails and the capabilities are never declared, because publication
 follows the durable append. A recorded declaration can never exceed its class's
 registered provable ceiling.
 
+A declaration is per configuration. The ward backend yields one configuration
+per writer image, holds a proof for each image in use, and judges each by its
+own newest record, so proving, failing, or retiring one image's configuration
+never admits or refuses another's. A failed pass therefore closes only its own
+configuration; the others close at their next scheduled re-proof or at a failed
+pre-job probe. A configuration no attempt used since the previous scheduled
+pass is retired by a superseding record and proved again on its next use.
+
 An unattended admission is refused at the write boundary unless its capability
-snapshot sits within the named backend's current durable conformance record; a
-conformance lapse closes new admission without making recorded history
-unreadable. So the declaration that gates a new unattended admission is
-reconstructed from persisted conformance evidence, never from transient process
-state.
+snapshot sits within the current durable conformance record for the
+configuration it names; a conformance lapse closes new admission without making
+recorded history unreadable. An admitted attempt starts only while the daemon
+yields the configuration its admission names. So the declaration that gates a
+new unattended admission is reconstructed from persisted conformance evidence,
+never from transient process state.
 
 Phase 1A.2 exception (owner decision, 2026-07-26; retired, kept here as its
 record): until the encrypted checkpoint landed, unattended admission could
@@ -7863,37 +7872,33 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 126 ("The Work Status View Comes Forward"):
+Revision 127 ("Ward Holds a Proof per Configuration"):
 
-1. **The plan commits to a work status view now, not in Phase 3**
-   (Section [8](#8-observability-and-optimization-telemetry), which
-   states what the view shows and that it decides nothing). Phase 3 had
-   listed it as "WIP views" since revision 25, with no decisions-log entry
-   of its own.
-2. **Tracker #3231 delivers three outcomes, and its units start by fiat**
-   (Section [11](#11-roadmap-build-order-and-coordination),
-   [Timeline Strips, Work Status, and Cause Counts](#timeline-strips-work-status-and-cause-counts)):
-   a time-scaled strip on the run timeline and the task page, the work
-   status view, and a command that counts repeated causes on demand. All
-   three read stored records and decide nothing.
-3. **The daemon computes and serves each run's clocks** (Sections
-   [5.1](#51-overview) and [8](#8-observability-and-optimization-telemetry)).
-   It works out each run's active and elapsed clocks from the run's
-   recorded history and serves them with the intervals behind them, each
-   hold with its reason, so a client does no clock arithmetic. This
-   replaces "the engine records" the clocks; nothing was built under the
-   old wording, and the engine still records the rein-policy digest.
+1. **A conformance declaration is per configuration** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). The ward
+   backend yields one configuration per writer image and holds a proof for
+   each image in use. Admission and its later re-checks judge an attempt
+   by the newest record for the configuration its admission names, so
+   proving, failing, or retiring one image's configuration never admits or
+   refuses another's, and an attempt admitted on one image can start while
+   ward proves another. An admitted attempt starts only while the daemon
+   yields its admission's configuration. A configuration no attempt used
+   since the previous scheduled pass is retired by a superseding record,
+   which bounds how many proofs the scheduled pass renews.
 
-Rejected: a standalone long-waits view, because most long waits follow the
-owner's workday, so the view would mostly show that; recurrence analysis
-run by a model, because cause counts are a plain query over typed causes;
-and compaction as a strip class, because the daemon records no compaction.
-The initiative view and its dependency graph stay Phase 1B.2 work (#885).
+This narrows "a failed pass records the failure and invalidates the
+declaration": a failed pass now invalidates only its own configuration's
+declaration. A fault the pass found that every image shares, such as a
+broken egress path, closes the other configurations only at their next
+scheduled re-proof or at a failed pre-job probe, not at once. Rejected:
+keeping one proof per backend, which makes every project wait while ward
+re-proves for another project's image and lets a writer image change hold
+every in-flight attempt; and closing every configuration on any failed
+pass, which turns one project's broken image into a stop for all of them.
 
-Nothing in this revision is built yet: tracker #3231 builds it.
-
-(Owner decision of 2026-11-16 on #3231;
-[decision note](../devlog/2026-11-16-0951-work-status-view-forward.md).)
+(Planned in #3211's contract on tracker #3201 and handed to implementation
+by the owner on 2026-11-16;
+[decision note](../devlog/2026-11-16-0920-ward-proof-per-configuration.md).)
 
 ## 14. Risks
 

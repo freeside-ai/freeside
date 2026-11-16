@@ -33,7 +33,7 @@ func TestDoctorConvergesAndClearsSystemHealthItems(t *testing.T) {
 	doctor := operations.Doctor{
 		Store: st, Attention: attention, ProjectID: "project-system",
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Mode: domain.ModeAttendedDev,
-		ConfigurationDigest:       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ConfigurationDigests:      []domain.Digest{"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		ReviewConfigurationDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	}
 	first, err := doctor.Run(ctx)
@@ -120,15 +120,51 @@ func TestDoctorConvergesAndClearsSystemHealthItems(t *testing.T) {
 		t.Fatalf("unattended report with full capability floor = %+v", unattended)
 	}
 	assertOpenHealthItems(t, ctx, attention, 0)
-	doctor.ConfigurationDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	stale, err := doctor.Run(ctx)
+	// A second tracked configuration with no proof of its own, as one whose
+	// first pass is running or failed, leaves both findings healthy while
+	// the first passes: the store gate holds that configuration's attempts,
+	// and a blocking item would hold every other's. The detail names it.
+	unproved := domain.Digest("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	doctor.ConfigurationDigests = append(doctor.ConfigurationDigests, unproved)
+	partial, err := doctor.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stale.Healthy {
-		t.Fatal("doctor accepted conformance for a stale backend configuration")
+	if !partial.Healthy {
+		t.Fatalf("doctor blocked on one configuration while another passes: %+v", partial)
+	}
+	for _, finding := range partial.Findings {
+		if (finding.Code == "conformance" || finding.Code == "workspace_handoff") &&
+			!strings.Contains(finding.Detail, string(unproved)) {
+			t.Fatalf("finding %+v, want it to name %s", finding, unproved)
+		}
+	}
+	assertOpenHealthItems(t, ctx, attention, 0)
+	// With only the unproved configuration tracked, nothing passes, so both
+	// findings fail and name it.
+	doctor.ConfigurationDigests = []domain.Digest{unproved}
+	unprovedOnly, err := doctor.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unprovedOnly.Healthy {
+		t.Fatal("doctor accepted one configuration's conformance for another")
+	}
+	for _, finding := range unprovedOnly.Findings {
+		if (finding.Code == "conformance" || finding.Code == "workspace_handoff") &&
+			(finding.Healthy || !strings.Contains(finding.Detail, string(unproved))) {
+			t.Fatalf("finding %+v, want it unhealthy and naming %s", finding, unproved)
+		}
 	}
 	assertOpenHealthItems(t, ctx, attention, 2)
+	doctor.ConfigurationDigests = nil
+	untracked, err := doctor.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untracked.Healthy {
+		t.Fatal("doctor accepted a backend that tracks no configuration")
+	}
 }
 
 func TestDoctorReportsActivatedReviewConfigurationDrift(t *testing.T) {
@@ -173,8 +209,8 @@ func TestDoctorReportsActivatedReviewConfigurationDrift(t *testing.T) {
 	}
 	doctor := operations.Doctor{
 		Store: st, Attention: attention, ProjectID: "project-system",
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		ConfigurationDigest: backendDigest, ReviewConfigurationDigest: effective,
+		Backend:              domain.BackendFreshVMReadOnlyVolumeHandoff,
+		ConfigurationDigests: []domain.Digest{backendDigest}, ReviewConfigurationDigest: effective,
 		Mode: domain.ModeUnattended,
 	}
 	report, err := doctor.Run(ctx)

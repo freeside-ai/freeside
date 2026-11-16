@@ -59,6 +59,30 @@ func conformanceAt(t *testing.T, outcome domain.ConformanceOutcome,
 	return record
 }
 
+// configurationB is a second ward configuration: another writer image's
+// digest beside conformanceAt's.
+const configurationB domain.Digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+
+// conformanceFor is conformanceAt for configuration digest.
+func conformanceFor(t *testing.T, outcome domain.ConformanceOutcome,
+	caps domain.CapabilitySnapshot, digest domain.Digest, at time.Time,
+) domain.BackendConformance {
+	t.Helper()
+	record := conformanceAt(t, outcome, caps, at)
+	record.ConfigurationDigest = digest
+	if err := record.Validate(); err != nil {
+		t.Fatalf("conformance for %s: %v", digest, err)
+	}
+	return record
+}
+
+// underConfiguration is admission rebound to configuration digest, as an
+// attempt on another writer image is admitted.
+func underConfiguration(admission domain.ExecutionAdmission, digest domain.Digest) domain.ExecutionAdmission {
+	admission.BackendConfigurationDigest = digest
+	return admission
+}
+
 // TestUnattendedAdmissionRequiresBackendConformance is #320's write-boundary
 // gate end to end: no record fails closed, a failed record fails closed, a
 // passed record admits, a failed append supersedes the pass and refuses even
@@ -147,7 +171,7 @@ func TestUnattendedAdmissionExceedingConformanceRefused(t *testing.T) {
 // TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration closes the
 // cross-daemon race: a still-running daemon configured for A may not combine
 // its in-memory capability declaration with the newest durable proof for B.
-func TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration(t *testing.T) {
+func TestUnattendedAdmissionIgnoresAnotherConfigurationsProof(t *testing.T) {
 	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 	recordConformance(t, s, conformanceAt(
@@ -155,31 +179,79 @@ func TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration(t *testing.T)
 	if err := recordAdmission(t, s, f.admission); err != nil {
 		t.Fatalf("record admission under configuration A: %v", err)
 	}
-
-	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:             domain.ConformancePassed,
-		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-		Capabilities:        conformantCapabilities(t),
-		ProvedAt:            admissionEpoch,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordConformance(t, s, record)
-
-	if err := s.Read(context.Background(), func(tx *store.ReadTx) error {
-		admission, err := tx.GetExecutionAdmission(context.Background(), f.admission.InvocationID)
-		if err != nil {
-			return err
+	// A newer row for configuration B, passed or failed, is not A's
+	// declaration: the admission under A replays against A's own newest row.
+	for _, outcome := range []domain.ConformanceOutcome{domain.ConformancePassed, domain.ConformanceFailed} {
+		var caps domain.CapabilitySnapshot
+		if outcome == domain.ConformancePassed {
+			caps = conformantCapabilities(t)
 		}
-		return tx.RequireBackendConformant(context.Background(), admission)
-	}); !errors.Is(
-		err, domain.ErrAdmissionConfigurationMismatch,
-	) {
-		t.Fatalf("replayed admission for configuration A under proof B = %v, want %v",
-			err, domain.ErrAdmissionConfigurationMismatch)
+		recordConformance(t, s, conformanceFor(t, outcome, caps, configurationB, admissionEpoch))
+		if err := s.Read(context.Background(), func(tx *store.ReadTx) error {
+			admission, err := tx.GetExecutionAdmission(context.Background(), f.admission.InvocationID)
+			if err != nil {
+				return err
+			}
+			return tx.RequireBackendConformant(context.Background(), admission)
+		}); err != nil {
+			t.Fatalf("replayed admission for configuration A under a newer %s row for B = %v, want nil", outcome, err)
+		}
 	}
+}
+
+// TestUnattendedAdmissionAdmitsEitherProvenConfiguration is #3211's core
+// store rule: with passed rows for configurations A and B, an admission
+// under either admits, whichever row is newer.
+func TestUnattendedAdmissionAdmitsEitherProvenConfiguration(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	underA := f.admission
+	underB := underConfiguration(f.admission, configurationB)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	recordConformance(t, s, conformanceFor(t, domain.ConformancePassed, conformantCapabilities(t),
+		configurationB, admissionEpoch.Add(time.Minute)))
+	for _, newer := range []string{"B", "A"} {
+		if newer == "A" {
+			recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t),
+				admissionEpoch.Add(2*time.Minute)))
+		}
+		if err := requireConformance(t, s, underA); err != nil {
+			t.Fatalf("admit under A with %s newer = %v, want nil", newer, err)
+		}
+		if err := requireConformance(t, s, underB); err != nil {
+			t.Fatalf("admit under B with %s newer = %v, want nil", newer, err)
+		}
+	}
+}
+
+// TestConfigurationRefusalLeavesOthersAdmitting keeps every refusal scoped to
+// its own configuration: no row, a failed row, or a superseding marker for A
+// refuses A, and B's passed row keeps B admitting throughout.
+func TestConfigurationRefusalLeavesOthersAdmitting(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	underA := f.admission
+	underB := underConfiguration(f.admission, configurationB)
+	recordConformance(t, s, conformanceFor(t, domain.ConformancePassed, conformantCapabilities(t),
+		configurationB, admissionEpoch))
+	check := func(state string) {
+		t.Helper()
+		if err := requireConformance(t, s, underA); !errors.Is(err, store.ErrBackendNotConformant) {
+			t.Fatalf("admit under A with %s = %v, want %v", state, err, store.ErrBackendNotConformant)
+		}
+		if err := requireConformance(t, s, underB); err != nil {
+			t.Fatalf("admit under B with A %s = %v, want nil", state, err)
+		}
+	}
+	check("no row")
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t),
+		admissionEpoch.Add(time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceFailed, nil, admissionEpoch.Add(2*time.Minute)))
+	check("a failed row")
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t),
+		admissionEpoch.Add(3*time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(4*time.Minute)))
+	check("a superseding marker")
 }
 
 // authenticateConformance re-gates an already-recorded admission through the
@@ -237,28 +309,22 @@ func TestAuthenticateSupersessionPreservesCeiling(t *testing.T) {
 	}
 }
 
-// TestAuthenticateRefusesDifferentConfigurationSupersession keeps a
-// reconfiguration fatal: a marker for a different configuration means the
-// admission's configuration is no longer current, so tolerance never applies
-// and the admission cannot start or recover.
-func TestAuthenticateRefusesDifferentConfigurationSupersession(t *testing.T) {
+// TestAuthenticateIgnoresAnotherConfigurationsMarker: a recheck of another
+// configuration is not a change to this one, so passed(A), superseded(B)
+// leaves an admission under A authenticated (and A still mints). Whether
+// this process could still run A is the admission authority's check.
+func TestAuthenticateIgnoresAnotherConfigurationsMarker(t *testing.T) {
 	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
-	reconfigured, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:             domain.ConformanceSuperseded,
-		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-		ProvedAt:            admissionEpoch.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordConformance(t, s, reconfigured)
+	recordConformance(t, s, conformanceFor(t, domain.ConformanceSuperseded, nil,
+		configurationB, admissionEpoch.Add(time.Minute)))
 
-	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
-		t.Fatalf("authenticate under a different-configuration recheck = %v, want %v",
-			err, store.ErrBackendNotConformant)
+	if err := authenticateConformance(t, s, f.admission); err != nil {
+		t.Fatalf("authenticate A under a recheck of B = %v, want nil", err)
+	}
+	if err := requireConformance(t, s, f.admission); err != nil {
+		t.Fatalf("mint A under a recheck of B = %v, want nil", err)
 	}
 }
 
@@ -310,32 +376,24 @@ func TestAuthenticateRefusesInterveningFailedProof(t *testing.T) {
 	}
 }
 
-// TestAuthenticateRefusesInterveningOtherConfigurationPass keeps a rollback
-// window fatal: passed(A), passed(B), superseded(A). The marker superseded the
-// B declaration, not the older A pass, so an A-bound admission must not
-// resurrect that A pass while no completed proof currently authorizes A. The
-// recovery must find the actual superseded declaration (B) regardless of
-// digest and refuse because it does not match the admission.
-func TestAuthenticateRefusesInterveningOtherConfigurationPass(t *testing.T) {
+// TestAuthenticateToleratesRecheckAcrossAnotherConfigurationsPass:
+// passed(A), passed(B), superseded(A). The A marker superseded A's own
+// newest row, the A pass, and B's row in between is not in A's history, so
+// the admission under A stays authenticated through the recheck while the
+// mint gate holds out new work on A.
+func TestAuthenticateToleratesRecheckAcrossAnotherConfigurationsPass(t *testing.T) {
 	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
-	otherConfig, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:             domain.ConformancePassed,
-		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-		Capabilities:        conformantCapabilities(t),
-		ProvedAt:            admissionEpoch.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordConformance(t, s, otherConfig)
+	recordConformance(t, s, conformanceFor(t, domain.ConformancePassed, conformantCapabilities(t),
+		configurationB, admissionEpoch.Add(time.Minute)))
 	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(2*time.Minute)))
 
-	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
-		t.Fatalf("authenticate over an intervening other-configuration pass = %v, want %v",
-			err, store.ErrBackendNotConformant)
+	if err := authenticateConformance(t, s, f.admission); err != nil {
+		t.Fatalf("authenticate A's recheck across B's pass = %v, want nil", err)
+	}
+	if err := requireConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("mint during A's recheck = %v, want %v", err, store.ErrBackendNotConformant)
 	}
 }
 
@@ -358,29 +416,26 @@ func TestAuthenticateRefusesRestartStackedSupersession(t *testing.T) {
 	}
 }
 
-// TestAuthenticateRefusesStackedCrossConfigurationMarkers is the fail-open the
-// digest-agnostic recovery closes: passed(A), superseded(B), superseded(A). The
-// reconfiguration to B cleared A at the B marker and B never completed, so no
-// pass currently authorizes A. Because the row the A marker superseded is the B
-// marker, not the old A pass, tolerance must refuse rather than resurrect A.
-func TestAuthenticateRefusesStackedCrossConfigurationMarkers(t *testing.T) {
+// TestAuthenticateRefusesStackedMarkersAcrossAnotherConfiguration keeps a
+// stacked marker fatal when another configuration's rows sit between the two:
+// passed(A), superseded(A), passed(B), superseded(B), superseded(A). The row
+// the newest A marker superseded is A's earlier marker, so A's pass was
+// already cleared and no completed pass authorizes A. B's rows neither
+// rescue nor hide that. A lone B marker after an A pass, by contrast, leaves
+// A authenticated (TestAuthenticateIgnoresAnotherConfigurationsMarker).
+func TestAuthenticateRefusesStackedMarkersAcrossAnotherConfiguration(t *testing.T) {
 	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
-	reconfigured, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:             domain.ConformanceSuperseded,
-		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-		ProvedAt:            admissionEpoch.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordConformance(t, s, reconfigured)
-	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(2*time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(time.Minute)))
+	recordConformance(t, s, conformanceFor(t, domain.ConformancePassed, conformantCapabilities(t),
+		configurationB, admissionEpoch.Add(2*time.Minute)))
+	recordConformance(t, s, conformanceFor(t, domain.ConformanceSuperseded, nil,
+		configurationB, admissionEpoch.Add(3*time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(4*time.Minute)))
 
 	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
-		t.Fatalf("authenticate across stacked cross-configuration markers = %v, want %v",
+		t.Fatalf("authenticate across A's stacked markers = %v, want %v",
 			err, store.ErrBackendNotConformant)
 	}
 }

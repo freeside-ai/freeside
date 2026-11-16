@@ -361,18 +361,11 @@ func WithAdmissionImageSelection(selectImage ImageSelection) Option {
 	}
 }
 
-// ErrImageNotProved refuses an unattended attempt whose image is not the one
-// the runner backend's conformance identity proves. It is joined with
-// domain.ErrAdmissionConfigurationMismatch, so it holds under
+// ErrImageNotProved holds an unattended attempt whose selected image the
+// runner backend holds no published proof for yet. Image selection returns
+// it joined with domain.ErrAdmissionConfigurationMismatch, so it holds under
 // backend_not_conformant until the backend proves the image.
-var ErrImageNotProved = errors.New("selected image is not the image the runner backend proves")
-
-// conformanceIdentityBackend is a runner backend whose proved image can
-// change while the daemon runs. Its identity is read per attempt so an
-// admission records the digest of the image it names, never another's.
-type conformanceIdentityBackend interface {
-	ConformanceIdentity() (image string, digest domain.Digest)
-}
+var ErrImageNotProved = errors.New("the runner backend holds no published proof of the selected image")
 
 // ErrEgressProfileNotEnforceable refuses an attempt whose requested egress
 // profile is outside the composition's EnforceableEgressProfiles.
@@ -534,7 +527,7 @@ func (e *Engine) admitAttemptIn(
 ) (domain.ExecutionAdmission, bool, error) {
 	// The image is decided before the capability gate, so an attempt waiting
 	// on upkeep, or on a proof of its image, holds under that cause rather
-	// than under the capabilities a repoint cleared. A maintenance task's
+	// than under the capabilities its image has not earned yet. A maintenance task's
 	// exception applies only where images are selected per attempt: with a
 	// static image there is no pointer for its refusal to name.
 	var repair *domain.ImageUpkeepRefusal
@@ -552,23 +545,36 @@ func (e *Engine) admitAttemptIn(
 		}
 		env.ImageRef = image
 	}
+	// A backend that holds a proof per writer image (#3211) is read for the
+	// attempt's own image: the digest the admission binds to and the
+	// capabilities checked against the floor come from one read of that
+	// image's proof, never another image's. An unattended attempt on an image
+	// with no published proof holds under backend_not_conformant, as image
+	// selection holds it, rather than as a capability refusal.
 	backendConfigurationDigest := e.admission.backendConfigurationDigest
-	if identity, ok := e.admission.backend.(conformanceIdentityBackend); ok &&
-		env.OperatingMode == domain.ModeUnattended {
-		image, digest := identity.ConformanceIdentity()
-		if image != string(env.ImageRef) {
-			return domain.ExecutionAdmission{}, false, fmt.Errorf(
-				"admit invocation %q: image %s, backend proves %q: %w", invocationID, env.ImageRef, image,
-				errors.Join(ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch))
+	var (
+		snapshot exec.Admission
+		err      error
+	)
+	if bound, ok := e.admission.backend.(exec.ImageBoundBackend); ok {
+		digest, declared, proved := bound.ConformanceFor(string(env.ImageRef))
+		if env.OperatingMode == domain.ModeUnattended {
+			if !proved {
+				return domain.ExecutionAdmission{}, false, fmt.Errorf(
+					"admit invocation %q: image %s: %w", invocationID, env.ImageRef,
+					errors.Join(ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch))
+			}
+			if !contentaddr.Valid(string(digest)) || digest == domain.UnboundBackendConfigurationDigest {
+				return domain.ExecutionAdmission{}, false, fmt.Errorf(
+					"admit invocation %q: backend configuration digest %q: %w",
+					invocationID, digest, domain.ErrConformanceConfigurationUnbound)
+			}
+			backendConfigurationDigest = digest
 		}
-		if !contentaddr.Valid(string(digest)) || digest == domain.UnboundBackendConfigurationDigest {
-			return domain.ExecutionAdmission{}, false, fmt.Errorf(
-				"admit invocation %q: backend configuration digest %q: %w",
-				invocationID, digest, domain.ErrConformanceConfigurationUnbound)
-		}
-		backendConfigurationDigest = digest
+		snapshot, err = exec.CheckDeclaredCapabilities(e.admission.backend.Name(), declared, e.admission.floor)
+	} else {
+		snapshot, err = exec.CheckCapabilities(e.admission.backend, e.admission.floor)
 	}
-	snapshot, err := exec.CheckCapabilities(e.admission.backend, e.admission.floor)
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}

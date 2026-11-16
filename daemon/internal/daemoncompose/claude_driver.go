@@ -1088,43 +1088,23 @@ func composeClaudeDriver(
 			return nil, fmt.Errorf("compose %s review source: %w", cfg.ReviewProvider.HarnessClient, err)
 		}
 	}
-	var (
-		conformance     domain.BackendConformance
-		haveConformance bool
-	)
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		conformance, haveConformance, err = tx.LatestBackendConformance(
-			ctx, domain.BackendFreshVMReadOnlyVolumeHandoff)
-		return err
-	}); err != nil {
-		return nil, fmt.Errorf("restore ward backend conformance: %w", err)
-	}
 	// Every start refreshes the stored tip before anything reads it: start
 	// selection, the start's conformance pass, and the first admissions.
 	tip, err := startupRepositoryTip(ctx, st, cfg, refTipObserver(reconciler), utcNow(), logger)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.OperatingMode == domain.ModeUnattended {
-		if err := startWardOnSelectedImage(
-			ctx, st, backend, cfg, tip.BaseSHA, baseInputs, image.ImageRef, conformance, haveConformance, logger,
-		); err != nil {
-			return nil, err
-		}
+	proveImage := func(runCtx context.Context, image domain.ImageRef, wait bool) error {
+		return runClaudeConformance(runCtx, st, transport, backend, cfg, conformanceLeaser, work, image, wait)
 	}
-	if cfg.RunConformance {
-		// The start never waits for memory: nothing frees any until the
-		// engine runs. A refusal fails the start, which the operator asked
-		// to prove ward now.
-		if err := runClaudeConformance(
-			ctx, st, transport, backend, cfg, conformanceLeaser, work, false,
-		); err != nil {
-			return nil, fmt.Errorf("run ward conformance: %w", err)
-		}
-	} else if err := restoreClaudeBackendConformance(
-		backend, conformance, haveConformance, cfg.OperatingMode == domain.ModeUnattended,
-	); err != nil {
+	startImage, err := startClaudeConformance(ctx, st, backend, cfg, tip.BaseSHA, baseInputs, image.ImageRef,
+		func(runCtx context.Context, image domain.ImageRef) error {
+			// The start never waits for memory: nothing frees any until the
+			// engine runs. A refusal fails the start, which the operator
+			// asked to prove ward now.
+			return proveImage(runCtx, image, false)
+		}, logger)
+	if err != nil {
 		return nil, err
 	}
 	hostVerification, err := ComposeHostVerificationExecutor(
@@ -1133,6 +1113,9 @@ func composeClaudeDriver(
 		return nil, err
 	}
 
+	// The follower is composed after the driver, whose pre-job hook reports
+	// each unattended start's image to it (conformanceFollower.use).
+	var follower *conformanceFollower
 	driver, driverErr := claude.New(claude.Config{
 		Lifetime:     ctx,
 		Dir:          filepath.Join(cfg.StateDir, "claude-driver"),
@@ -1147,14 +1130,23 @@ func composeClaudeDriver(
 			Store: st, Blobs: blobs, AllowedPaths: slices.Clone(cfg.AllowedPaths),
 			CommitAuthors: commitAuthors,
 			StartAuthors:  admissionauth.NewCommitAuthorCache(),
+			// An attempt admitted under configuration A starts only while
+			// this process yields A for its image (#3211).
+			BackendConfigurationDigestFor: backend.ConfigurationDigestFor,
 		},
 		Artifacts: artifactStore{blobs: blobs, store: st},
 		Volumes:   adapters.Leaser,
-		PreJob: func(ctx context.Context, id domain.InvocationID) error {
+		PreJob: func(ctx context.Context, id domain.InvocationID, image domain.ImageRef) error {
 			if err := bindRigInvocationResources(cfg.StateDir, cfg.RigTokenFile, id); err != nil {
 				return err
 			}
-			if err := backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id)); err != nil {
+			if cfg.OperatingMode == domain.ModeUnattended {
+				// Composed below; no start runs before composition ends.
+				if err := follower.use(image); err != nil {
+					return err
+				}
+			}
+			if err := backend.PreJob(ctx, string(image), ward.PreJobRunIDForInvocation(id)); err != nil {
 				return err
 			}
 			releasePreJobContainer(ctx, runtime, wardConfig.ReleaseRuntimeResources, id, logger)
@@ -1210,11 +1202,20 @@ func composeClaudeDriver(
 		// is submitted.
 		Agents: agents,
 	}
-	follower := newConformanceFollower(backend, func(runCtx context.Context) error {
-		// A follower or scheduled pass waits for memory: it holds nothing a
-		// release needs.
-		return runClaudeConformance(runCtx, st, transport, backend, cfg, conformanceLeaser, work, true)
-	}, time.Now, logger.With("subsystem", "writer_image_conformance"))
+	follower = newConformanceFollower(followerConfig{
+		Ledger: backend,
+		Prove: func(runCtx context.Context, image domain.ImageRef) error {
+			// A follower or scheduled pass waits for memory: it holds
+			// nothing a release needs.
+			return proveImage(runCtx, image, true)
+		},
+		Retire: func(runCtx context.Context, image domain.ImageRef) error {
+			return backend.RetireConformance(runCtx, string(image), StoreConformanceRecorder{Store: st})
+		},
+		Start:  startImage,
+		Now:    time.Now,
+		Logger: logger.With("subsystem", "writer_image_conformance"),
+	})
 	var (
 		selectImage     engine.ImageSelection
 		bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
@@ -1300,66 +1301,88 @@ func composeClaudeDriver(
 	return composition, nil
 }
 
-// startWardOnSelectedImage points ward at the image this start selects at
-// tipSHA, the observed tip (startupRepositoryTip), before any proof is
-// restored or run (startupWriterImage). A base the start
-// cannot read fails the start, as reading it always has; a base no image
-// serves does not.
-func startWardOnSelectedImage(
-	ctx context.Context, st *store.Store, backend startupWardBackend, cfg ClaudeDriverConfig,
-	tipSHA string, base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance,
-	haveConformance bool, logger *slog.Logger,
-) error {
-	proved, err := startupProvedImage(ctx, st, cfg.RepositoryID, backend.ConfigurationDigestFor,
-		conformance, haveConformance)
-	if err != nil {
-		return fmt.Errorf("find the proved writer image: %w", err)
-	}
-	selected, found, err := selectRecordedImage(ctx, st, cfg.Repo, cfg.RepositoryID, tipSHA, proved, base)
-	if err != nil {
-		return err
-	}
-	if !found {
-		// The pointer may have moved since the seed was read; ward starts on
-		// whatever it names now.
+// startupProofs is the part of ward's backend a start drives.
+type startupProofs interface {
+	proofRestorer
+	ProvenImages() []string
+}
+
+// startClaudeConformance restores ward's proofs and, with -run-conformance,
+// proves the start's image, which it returns. Ward restores the proof of
+// every image it could run whose configuration's newest row passed: in
+// unattended mode each recorded image and the pointed-to one, in attended
+// mode cfg.AgentImage. The start's image is, unattended, the image selection
+// picks at tipSHA among the restored proofs, or the pointed-to image when
+// none serves the tip, so attempts hold until upkeep acts; attended, it is
+// cfg.AgentImage. seed is the image the start seeded the pointer from, used
+// when no pointer exists. A base the start cannot read fails the start, as
+// reading it always has; a base no image serves does not. An unattended
+// start that neither proves nor restores any proof fails with
+// errBackendConformanceUnavailable.
+func startClaudeConformance(
+	ctx context.Context, st *store.Store, backend startupProofs, cfg ClaudeDriverConfig,
+	tipSHA string, base *baseInputsMemo, seed domain.ImageRef,
+	prove func(context.Context, domain.ImageRef) error, logger *slog.Logger,
+) (domain.ImageRef, error) {
+	startImage := cfg.AgentImage
+	if cfg.OperatingMode == domain.ModeUnattended {
+		var (
+			pointed     domain.ProjectImage
+			images      []domain.ProjectImage
+			havePointer bool
+		)
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
-			_, image, ok, err := tx.GetAdmittedImagePointer(ctx, cfg.RepositoryID, domain.HarnessClientClaudeCode)
-			if ok {
-				pointed = image.ImageRef
+			var err error
+			_, pointed, havePointer, err = tx.GetAdmittedImagePointer(ctx, cfg.RepositoryID, domain.HarnessClientClaudeCode)
+			if err != nil {
+				return err
 			}
+			images, err = tx.ListProjectImages(ctx, cfg.RepositoryID)
 			return err
 		}); err != nil {
-			return fmt.Errorf("read admitted image pointer: %w", err)
+			return "", fmt.Errorf("read admitted images: %w", err)
 		}
-		logger.Warn("no admitted project image serves the observed tip; writer attempts hold until one does",
-			"tip_sha", tipSHA, "pointer_image_ref", pointed)
-	}
-	initial := startupWriterImage(selected, found, pointed, proved, cfg.RunConformance)
-	if err := backend.RepointAgentImage(string(initial)); err != nil {
-		return fmt.Errorf("start ward on writer image %s: %w", initial, err)
-	}
-	logger.Info("ward starts on writer image", "image", initial, "selected", selected.ImageRef, "proved", proved)
-	return nil
-}
-
-type backendConformanceRestorer interface {
-	ConfigurationDigest() domain.Digest
-	RestoreConformance(domain.BackendConformance) error
-}
-
-func restoreClaudeBackendConformance(
-	backend backendConformanceRestorer, conformance domain.BackendConformance,
-	found, required bool,
-) error {
-	if !found || conformance.Outcome != domain.ConformancePassed ||
-		conformance.ConfigurationDigest != backend.ConfigurationDigest() {
-		if required {
-			return fmt.Errorf("restore production backend conformance: %w",
-				errBackendConformanceUnavailable)
+		candidates := make([]domain.ImageRef, 0, len(images)+1)
+		if havePointer {
+			candidates = append(candidates, pointed.ImageRef)
 		}
-		return nil
+		for _, image := range images {
+			candidates = append(candidates, image.ImageRef)
+		}
+		restored, err := restoreRecordedProofs(ctx, st, backend, candidates)
+		if err != nil {
+			return "", fmt.Errorf("restore ward backend conformance: %w", err)
+		}
+		startImage = seed
+		if havePointer {
+			startImage = pointed.ImageRef
+			selected, found, err := SelectAmongRecordedImages(pointed, images, cfg.Repo, tipSHA, restored,
+				func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
+					return base.read(ctx, tipSHA, layout)
+				})
+			if err != nil {
+				return "", err
+			}
+			if found {
+				startImage = selected.ImageRef
+			}
+			if !found {
+				logger.Warn("no admitted project image serves the observed tip; writer attempts hold until one does",
+					"tip_sha", tipSHA, "pointer_image_ref", pointed.ImageRef)
+			}
+		}
+		logger.Info("ward writer start image", "image", startImage, "restored", restored)
+	} else if _, err := restoreRecordedProofs(ctx, st, backend, []domain.ImageRef{startImage}); err != nil {
+		return "", fmt.Errorf("restore ward backend conformance: %w", err)
 	}
-	return backend.RestoreConformance(conformance)
+	if cfg.RunConformance {
+		if err := prove(ctx, startImage); err != nil {
+			return "", fmt.Errorf("run ward conformance: %w", err)
+		}
+	} else if cfg.OperatingMode == domain.ModeUnattended && len(backend.ProvenImages()) == 0 {
+		return "", fmt.Errorf("restore production backend conformance: %w", errBackendConformanceUnavailable)
+	}
+	return startImage, nil
 }
 
 // newRoutedReviewSource builds the routed review source on the provider the
@@ -1629,6 +1652,7 @@ func runClaudeConformance(
 	cfg ClaudeDriverConfig,
 	leaser *AdapterConformanceLeaser,
 	work daemonWorkRunner,
+	image domain.ImageRef,
 	wait bool,
 ) error {
 	if backend != nil {
@@ -1692,22 +1716,19 @@ func runClaudeConformance(
 	return work.run(ctx, domain.RestartBlockerProofPass, engine.DaemonWork{
 		Kind: domain.ReservationProofPass, ID: id, Size: proofPassSize, VMs: proofPassVMs,
 	}, wait, func(ctx context.Context) error {
-		return runReservedConformance(ctx, st, backend, cfg, leaser, base, runID, registryRunID, nonce, seedDir)
+		return runReservedConformance(ctx, st, backend, cfg, leaser, image, base, runID, registryRunID, nonce, seedDir)
 	})
 }
 
-// runReservedConformance runs the full ward suite and then the adapter
-// proof, under the proof pass's reservation.
+// runReservedConformance runs the full ward suite on image and then the
+// adapter proof in it, under the proof pass's reservation.
 func runReservedConformance(
 	ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig,
-	leaser *AdapterConformanceLeaser, base domain.BaseRevision, runID, registryRunID string, nonce [8]byte,
-	seedDir string,
+	leaser *AdapterConformanceLeaser, image domain.ImageRef, base domain.BaseRevision,
+	runID, registryRunID string, nonce [8]byte, seedDir string,
 ) error {
-	// The suite proves the image ward currently names, which follows writer
-	// selection, not the seed's base.
-	agentImage, _ := backend.ConformanceIdentity()
 	suite, err := ward.NewSuite(backend, ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
-		AgentImage:       agentImage,
+		AgentImage:       string(image),
 		CredentialTarget: "/var/lib/freeside/conformance-token",
 		CredentialMarker: "FREESIDE_CONF_" + strings.ToUpper(hex.EncodeToString(nonce[:])),
 		RunID:            runID,
@@ -1730,7 +1751,7 @@ func runReservedConformance(
 	// its line is marked or expiring) records nothing, and the adapter's last
 	// record stands across an image change: that record is scoped to the
 	// harness build its digest names, not the image.
-	return proveClaudeAdapter(ctx, st, backend, cfg, base, leaser)
+	return proveClaudeAdapter(ctx, st, backend, cfg, image, base, leaser)
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the

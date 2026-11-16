@@ -20,9 +20,9 @@ var ErrProjectImageUnserved = errors.New("no admitted project image serves the r
 // image here is decoded store state, so SelectProjectImage trusts none of
 // it: each candidate is re-gated before it is chosen.
 type ProjectImageSelection struct {
-	// Proved is the image the runner backend currently proves; empty when
-	// it proves none.
-	Proved domain.ImageRef
+	// Proved lists the images the runner backend holds a published proof
+	// for; empty when it holds none.
+	Proved []domain.ImageRef
 	// Pointed is the image the admitted-image pointer names.
 	Pointed domain.ProjectImage
 	// Images are the repository's recorded images in record order.
@@ -40,10 +40,12 @@ type ProjectImageSelection struct {
 // SelectProjectImage picks the image a writer attempt runs in (plan §5.7,
 // Project-image upkeep), in this order:
 //
-//  1. The proved image, when it serves the base and keeps what the
-//     pointed-to image binds, or when it is the pointed-to image and that
-//     image is admissible under rule 2. Preferring it means the backend is
-//     repointed only when the image it proves stops serving.
+//  1. A proved image: the pointed-to image when it is proved and
+//     admissible under rule 2, else the first recorded proved image that
+//     serves the base and keeps what the pointed-to image binds. Preferring
+//     a proved image means a new pointer, or a run at an older base, needs
+//     no conformance pass while an image the backend already proves still
+//     serves.
 //  2. The pointed-to image, when it is admissible at the base and was
 //     prepared with this binary's preparation sources (the rule
 //     ImageUpkeep.current uses).
@@ -100,23 +102,28 @@ func SelectProjectImage(in ProjectImageSelection) (image domain.ProjectImage, fo
 		return rebuiltImageServes(candidate, in.Pointed, observed, in.Preparation) == nil, nil
 	}
 
-	if in.Proved != "" {
-		if in.Proved == in.Pointed.ImageRef {
-			serves, err := pointedServes()
-			if err != nil || serves {
-				return in.Pointed, serves, err
-			}
-		} else if index := slices.IndexFunc(in.Images, func(candidate domain.ProjectImage) bool {
-			return candidate.ImageRef == in.Proved
-		}); index >= 0 {
-			serves, err := rebuiltServes(in.Images[index])
-			if err != nil || serves {
-				return in.Images[index], serves, err
-			}
+	pointedProved := slices.Contains(in.Proved, in.Pointed.ImageRef)
+	if pointedProved {
+		if serves, err := pointedServes(); err != nil || serves {
+			return in.Pointed, serves, err
 		}
 	}
-	if serves, err := pointedServes(); err != nil || serves {
-		return in.Pointed, serves, err
+	for _, candidate := range in.Images {
+		if candidate.ImageRef == in.Pointed.ImageRef || !slices.Contains(in.Proved, candidate.ImageRef) {
+			continue
+		}
+		serves, err := rebuiltServes(candidate)
+		if err != nil {
+			return domain.ProjectImage{}, false, err
+		}
+		if serves {
+			return candidate, true, nil
+		}
+	}
+	if !pointedProved {
+		if serves, err := pointedServes(); err != nil || serves {
+			return in.Pointed, serves, err
+		}
 	}
 	for _, candidate := range in.Images {
 		serves, err := rebuiltServes(candidate)
