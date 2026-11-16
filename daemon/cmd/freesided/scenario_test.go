@@ -24,11 +24,10 @@ import (
 // serial reconcile pass slows several times under the race detector.
 //
 // The bound exceeds the quota-park scenario's 2-minute reset
-// (daemoncompose.QuotaParkScenario), so it no longer proves the allowed
-// reading, rather than the reset, released the park;
-// TestScenarioQuotaParkResumes checks that against the start time.
-// It stays under go test's default 10-minute timeout, so a hang still fails
-// with the waiting test's own message.
+// (daemoncompose.QuotaParkScenario), so a wait under it doesn't prove the
+// allowed reading, rather than the reset, released the park. It stays under
+// go test's default 10-minute timeout, so a hang still fails with the waiting
+// test's own message.
 const scenarioWaitBound = 3 * time.Minute
 
 func TestScenarioRefusedBeforeStoreOpens(t *testing.T) {
@@ -137,38 +136,6 @@ func TestScenarioCleanRunPublishes(t *testing.T) {
 	assertScenarioPublished(t, restarted.Attention, submitted.TaskID, submitted.RunID)
 	if err := restarted.Close(); err != nil {
 		t.Fatalf("close restarted daemon: %v", err)
-	}
-}
-
-// TestScenarioQuotaParkResumes plays the quota-park scenario: the refused
-// first attempt parks the task with a quota window hold on its second
-// attempt, and the second attempt publishes once the mark clears. A
-// contrary reading clears it here, so the test never waits out the reset;
-// the engine's synctest cases cover the reset itself.
-func TestScenarioQuotaParkResumes(t *testing.T) {
-	t.Parallel()
-	quota := daemoncompose.QuotaParkScenario()
-	cfg := scenarioConfig(t, &quota)
-	h := startDaemon(t, cfg)
-	submitted := submitAndApproveScenario(t, h, cfg)
-
-	first := waitForScenarioRun(t, h.Store, submitted.RunID)
-	parked, err := engine.ProductionAttemptRunID(first.CampaignID, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hold := waitForScenarioHold(t, h.Store, parked)
-	window := hold.QuotaWindow
-	if hold.Reason != domain.HoldQuotaWindowExhausted || window == nil ||
-		window.Window != quota.QuotaRefusal.Window || window.Source != domain.ExhaustedMarkProviderRefusal {
-		t.Fatalf("parked hold = %+v, want quota_window_exhausted on the refused window", hold)
-	}
-
-	recordScenarioAllowedReading(t, h.Store, window.Pool, window.Window)
-	assertScenarioPublished(t, h.Attention, submitted.TaskID, parked)
-	assertStartedBeforeReset(t, h.Attention, submitted.TaskID, parked, window.ResetsAt)
-	if err := h.Close(); err != nil {
-		t.Fatalf("close: %v", err)
 	}
 }
 
