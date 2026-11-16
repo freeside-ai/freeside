@@ -51,6 +51,12 @@
       "version": null
     },
     {
+      "name": "cause-counts",
+      "command": "freesided cause-counts -db PATH",
+      "ids": [],
+      "version": null
+    },
+    {
       "name": "auth list",
       "command": "freesided auth list -db PATH",
       "ids": [],

@@ -1862,6 +1862,53 @@ holds every row, including device credentials and pairing codes, so delete it
 when you are done. While the copy is written, the daemon's other database work
 waits for it.
 
+### Count How Often Each Cause Occurred
+
+`freesided cause-counts` prints how often each typed cause occurred over a
+period, and how often in the period before it, so a cause that keeps coming
+back shows without an analysis. No model runs and nothing is written.
+
+```sh
+freesided cause-counts -db <db> [-period 168h] [-end 2026-11-16T00:00:00Z] [-project <project-id>]
+```
+
+- **`-period`** is a Go duration, default `168h`. **`-end`** is RFC 3339,
+  default now. The period is `[end - period, end)`, and the previous period
+  is the same length and ends where this one starts.
+- **`-project`** counts only that project's rows; without it every project
+  counts. A project the store doesn't know is an error.
+
+With a daemon running, the command reads through the control socket, and a
+default `-end` is the daemon's now; without one, it opens the database
+directly.
+
+It counts five sources, each keyed by the stored value:
+
+| Source | Counts | Run |
+|---|---|---|
+| `failure_cause` | A failed execution outcome's cause (`domain.FailureCause`). | The admission's run |
+| `terminal` | The terminal recorded for one of a run's invocations, `completed` included (`domain.ObservedInvocationStatus`). | The milestone's run |
+| `publication_blocked` | Why publication was blocked for one of a run's invocations (`domain.RunHoldReason`). | The milestone's run |
+| `review_failure` | A failed review invocation's class (`domain.ReviewFailureClass`). | The review's run |
+| `attention_conclusion` | How an attention item closed (`domain.ConclusionCause`), at its conclusion time. | The item's subject run, when set |
+
+The output is one JSON object. Each entry in `causes` gives `occurrences`
+and distinct `runs` in the period, `first_seen` and `last_seen` (`null` when
+the cause occurred only in the previous period), and `previous_occurrences`.
+A run counts once in `runs` however often the cause recurs in it; a run
+whose terminal a later invocation clears records another terminal, so
+`terminal` occurrences can exceed runs.
+`known` is `false` for a stored value this build doesn't know; it is counted
+under its stored string rather than dropped. `skipped` lists each row that
+couldn't be decoded (an unparseable time, an empty value, or an attention
+body that isn't valid JSON) with its table, row key, and error, whatever its
+time; the rest still count. Open attention items, and items closed before
+conclusions were recorded, aren't counted.
+
+Failed outcomes recorded before causes existed read as `unknown` (migration
+0104), so `unknown` is inflated in an older database. Hold reasons aren't
+counted yet, because a cleared hold leaves no record (#3239).
+
 ### Check A New Build Against The Live Database
 
 Before an update replaces a supervised daemon, `freesided check-database`

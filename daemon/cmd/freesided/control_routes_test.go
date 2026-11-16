@@ -218,6 +218,13 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	if !json.Valid(measures.Bytes()) {
 		t.Fatal("comprehension measures are not JSON")
 	}
+	var causeCounts bytes.Buffer
+	if err := runCauseCountsCommand(ctx, []string{"-db", dbPath}, &causeCounts, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(causeCounts.Bytes()) {
+		t.Fatal("cause counts are not JSON")
+	}
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	submitted, err := runSubmitCommand(ctx, submitCommandConfig{
 		SubmissionID: "control-submit", DBPath: dbPath, TaskPath: taskPath,
@@ -397,6 +404,7 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 			return err
 		},
 		"comprehension measures": func() error { return runComprehensionCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
+		"cause counts":           func() error { return runCauseCountsCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
 		"comprehension defect": func() error {
 			return runComprehensionCommand(ctx, []string{"record-defect", "-db", dbPath, "-item", "item-1", "-claim", digest, "-reason", "reason"}, io.Discard, io.Discard)
 		},
