@@ -503,7 +503,7 @@ func TestLoadDeputySettingsMapsTheMacOSVerificationExecutor(t *testing.T) {
 func TestDeputyMacverifyExecutorConfigCopiesTheSlots(t *testing.T) {
 	t.Parallel()
 	section := &deputyMacverify{Root: "/r", Slots: []string{"fvslot1"}, XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2"}
-	cfg := deputyMacverifyExecutorConfig(section, "127.0.0.1:0")
+	cfg := daemoncompose.NewMacverifyExecutorConfig(section, listenPort("127.0.0.1:0"))
 	section.Slots[0] = "changed"
 	if cfg.Slots[0] != "fvslot1" {
 		t.Fatalf("slots alias the settings: %v", cfg.Slots)

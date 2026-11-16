@@ -687,6 +687,19 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/projectimage/rebuild_gate.go` (repository manifests gate image
   rebuilds), and `internal/projectimage/preparation_gate.go` (re-gates a
   decoded preparation command before it reaches the root launch argv).
+- **Stored run settings:** the instance and project settings records,
+  which hold the approved recipe, the allowed paths, and the publication
+  repository a run uses: `internal/domain/instance_settings.go` and
+  `internal/domain/project_settings.go` (each section's rules and the
+  fold that names a missing section), and
+  `internal/store/instance_settings.go` and
+  `internal/store/project_settings.go` (the append-only revisions and the
+  check of a project's repository against its `projects` binding), and
+  `internal/daemoncompose/settings_gate.go` and
+  `internal/daemoncompose/run_settings.go` (the settings gate and the
+  loader that re-checks stored settings against current policy before a
+  run composes from them), and `cmd/freesided/settings.go` (the operator
+  commands that write the records, each set through that gate).
 - **Client authority:** `internal/signet/device.go` (the paired-device
   bearer check), `internal/signet/http.go` (where requests meet it),
   `internal/signet/pairing.go`, `internal/signet/secret.go`,

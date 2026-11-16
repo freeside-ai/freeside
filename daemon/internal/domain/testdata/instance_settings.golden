@@ -1,0 +1,50 @@
+{
+  "host_tools": {
+    "container": "/usr/local/bin/container"
+  },
+  "images": {
+    "exporter": "registry.local/exporter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "review": "registry.local/review@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "seed_root": "/rig/seed",
+  "prompts": {
+    "prompt_package": "/prompts/impl.json",
+    "specification_prompt_package": "/prompts/spec.json",
+    "remediation_prompt_package": "/prompts/rem.json",
+    "vendor_instructions": "/prompts/CLAUDE.md"
+  },
+  "agent_tree": {
+    "checkout": "/src/freeside",
+    "commit": "dddddddddddddddddddddddddddddddddddddddd"
+  },
+  "review": {
+    "input_root": "/review",
+    "auth_mode": "subscription",
+    "auth_snapshot": "/review/auth.json",
+    "instructions": "/review/AGENTS.md"
+  },
+  "judgment": {
+    "claude_bin": "/opt/claude/bin/claude",
+    "claude_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "publication_author_prompt": "/prompts/author.md"
+  },
+  "timeouts": {
+    "writer_stop": "20m",
+    "writer_stall": "0s"
+  },
+  "manual_submission_config": "/rig/manual.json",
+  "build": {
+    "proxy": "",
+    "base_build_ref": "",
+    "dns": []
+  },
+  "macos_verification": {
+    "root": "/opt/macverify",
+    "slots": [
+      "fvslot1",
+      "fvslot2"
+    ],
+    "xcode_build": "17A100",
+    "swift": "swiftlang-6.2"
+  }
+}

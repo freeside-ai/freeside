@@ -814,32 +814,16 @@ func deputyDaemonConfig(
 func deputyClaudeDriverConfig(
 	settings loadedDeputySettings, paths deputyPaths, judgmentDigest string,
 ) daemoncompose.ClaudeDriverConfig {
-	return daemoncompose.ClaudeDriverConfig{
-		AgentImage: domain.ImageRef(settings.Images.Agent), ExporterImage: settings.Images.Exporter,
-		ContainerBin: deputyContainerBin, SeedRoot: settings.SeedRoot,
-		WriterStopTimeout: settings.stopTime, WriterStallInterval: settings.stallFor,
-		Rebuild:  settings.rebuildInputs(),
+	return daemoncompose.NewClaudeDriverConfig(settings.runSettings(deputyContainerBin), daemoncompose.RunLaunch{
+		BaseSHA:  settings.Repository.BaseSHA,
 		StateDir: paths.StateRoot, RigTokenFile: paths.Acquisition,
-		Judgments:                      deputyJudgments(settings, judgmentDigest),
-		ProviderEndpoints:              []string{deputyProviderEndpoints},
-		PromptPackageFile:              settings.Prompts.PromptPackage,
-		SpecificationPromptPackageFile: settings.Prompts.SpecificationPromptPackage,
-		RemediationPromptPackageFile:   settings.Prompts.RemediationPromptPackage,
-		VendorInstructions:             settings.Prompts.VendorInstructions,
-		Repo:                           settings.Repository.Repo, RepositoryID: settings.Repository.RepositoryID,
-		BaseRef: settings.Repository.BaseRef, BaseSHA: settings.Repository.BaseSHA,
-		HandBackLabel:     settings.Repository.HandBackLabel,
-		AgentTreeCheckout: settings.AgentTree.Checkout, AgentTreeCommit: settings.AgentTree.Commit,
-		AllowedPaths:   settings.Repository.AllowedPaths,
-		RunConformance: true,
-		StateRoot:      settings.Prod.AppStateDir, CredentialsDir: settings.Prod.AppCredentialsDir,
-		OperatingMode: domain.ModeUnattended,
-		ReviewImage:   settings.Images.Review, ReviewInputRoot: settings.Review.InputRoot,
-		ReviewAuthMode:     settings.Review.AuthMode,
-		ReviewAuthSnapshot: settings.Review.AuthSnapshot, ReviewInstructions: settings.Review.Instructions,
+		AppStateDir: settings.Prod.AppStateDir, AppCredentialsDir: settings.Prod.AppCredentialsDir,
+		ListenPort: listenPort(settings.Listen), JudgmentDigest: judgmentDigest,
+		ProviderEndpoints:     []string{deputyProviderEndpoints},
 		ReviewWorkspaceSizeMB: deputyReviewWorkspaceSizeMB,
-		HostVerification:      deputyMacverifyExecutorConfig(settings.MacosVerification, settings.Listen),
-	}
+		RunConformance:        true,
+		OperatingMode:         domain.ModeUnattended,
+	})
 }
 
 // checkDeputyDaemonSettings refuses known startup failures before any lease,

@@ -182,6 +182,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["WorkflowPolicyOrigin"] = append(valids["WorkflowPolicyOrigin"], v.valid)
 	}
 	invalids["WorkflowPolicyOrigin"] = WorkflowPolicyOrigin("").valid
+	for _, v := range AllInstanceSettingsSections {
+		valids["InstanceSettingsSection"] = append(valids["InstanceSettingsSection"], v.valid)
+	}
+	invalids["InstanceSettingsSection"] = InstanceSettingsSection("").valid
+	for _, v := range AllProjectSettingsSections {
+		valids["ProjectSettingsSection"] = append(valids["ProjectSettingsSection"], v.valid)
+	}
+	invalids["ProjectSettingsSection"] = ProjectSettingsSection("").valid
 	for _, v := range AllPRExecutionModes {
 		valids["PRExecutionMode"] = append(valids["PRExecutionMode"], v.valid)
 	}

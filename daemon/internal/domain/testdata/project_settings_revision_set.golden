@@ -1,0 +1,11 @@
+{
+  "project_id": "project-widgets",
+  "revision": 1,
+  "section": "allowed_paths",
+  "value": [
+    "src/**",
+    "docs/**"
+  ],
+  "set_by": "cli:operator",
+  "set_at": "2026-11-15T12:00:00Z"
+}

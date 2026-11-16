@@ -65,6 +65,9 @@
 //   - routing_policy.go routing policy revisions and their source (§5.4)
 //   - workflow_policy.go the Workflow pane's gate and cap layers, their
 //     revisions, and the overlay a new task resolves (§3.2)
+//   - instance_settings.go, project_settings.go
+//     the run settings an instance and each project store as section
+//     revisions, and the fold that names a missing section
 //   - unattended.go   the unattended-operation state an operator moves
 //   - update_drain.go the update drain that holds new launches for a restart
 //   - restart_readiness.go what a restart waits on, by blocker kind

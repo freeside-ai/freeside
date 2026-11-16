@@ -2520,6 +2520,77 @@ either all of `-enrollment`, `-model`, and `-effort`, or `-clear`.
   its own path retries; a review refused at admission requested nothing, so
   its line can change straight away.
 
+### Store Instance And Project Settings
+
+`freesided settings` stores the settings a run takes from configuration
+(#2082): the instance settings every project shares, and each project's
+own. A deputy root still runs from its `settings.json`; these records are
+what the installed daemon will run every project from (#2083). Every
+command works with the daemon running or stopped: on a running daemon it
+goes through that daemon, which holds the store. Every command prints
+JSON.
+
+```sh
+freesided settings show -db "$DB"
+freesided settings show -db "$DB" -project project-widgets
+freesided settings set -db "$DB" -section host_tools \
+  -value '{"container":"/usr/local/bin/container"}'
+freesided settings set -db "$DB" -project project-widgets \
+  -section allowed_paths -value '["src/**","docs/**"]'
+freesided settings set -db "$DB" -section judgment -clear
+freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
+  -container-bin /usr/local/bin/container
+```
+
+- **Each section is its own revision.** `set` appends the scope's next
+  revision for one section and leaves earlier ones alone, so `show` prints
+  the head revision and, for each set section, the revision that set it,
+  its value, `set_by` (`cli:<username>`), and `set_at`. `-project` picks a
+  project's scope; without it the command works on the instance scope.
+- **The sections.** The instance scope holds `host_tools`, `images`,
+  `seed_root`, `prompts`, `agent_tree`, `review`, `judgment`, `timeouts`,
+  `manual_submission_config`, `build`, and `macos_verification`; a
+  project holds `repository` (`repo`, `repository_id`, `base_ref`),
+  `allowed_paths`, `approved_recipe`, `agent_image`, and
+  `hand_back_label`. A value takes the fields its `settings.json` key
+  has, less the launch-only ones `import` lists below; `agent_image` is
+  the file's `images.agent`, and `host_tools.container` is new, because
+  `settings.json` doesn't hold it.
+- **A set checks the value first.** `set` decodes the value strictly into
+  the section's shape and checks it against current policy: absolute,
+  clean paths, digest-pinned images, a sha256 recipe, explicit allowed
+  paths (no `**`), a branch-name base ref, a label name, a known review
+  auth mode, and valid build inputs. A refusal names the field, exits
+  non-zero, and records nothing. A `repository` whose `repository_id`
+  differs from the project's `projects` row is refused.
+- **Only an optional section clears.** `-clear` records a revision that
+  clears `judgment`, `manual_submission_config`, `macos_verification`, or a
+  project's `hand_back_label`; clearing any other section is refused.
+- **A change takes effect at the next start.** Every `set` prints
+  `takes_effect`. Runs will load the records when the daemon starts, until
+  the project gates read them while it runs (#3209).
+- **A run re-checks what's stored.** The loader a run composes from folds
+  both scopes, refuses a scope that lacks a required section and names it,
+  and re-runs every check above against current policy, with the
+  repository against the project's `projects` row, so a value stored under
+  an older policy fails closed rather than reaching a run.
+
+**Import a deputy settings file once.** `settings import` turns a deputy
+`settings.json` into both scopes' records, one revision per set section,
+in one transaction. `-settings` must be absolute, because a running daemon
+reads the file, and the file must pass the deputy's own checks. The file
+names the container tool by its bare name and the installed daemon's
+launchd `PATH` need not resolve it, so the import stores an absolute path:
+`-container-bin`, or the lookup of `container` on the command's own
+`PATH`, which a running daemon receives, and it refuses a relative one. It refuses
+when the instance or the file's project already has a revision; change
+sections with `set` after that. It prints both head revisions, the
+project, `takes_effect`, and `not_imported`: the file's keys a run takes
+from its launch instead of the records (`version`, `listen`,
+`repository.base_sha`, `repository.checkout`, the `agent_tree` adoption
+inputs, `writers`, the review and judgment models and efforts, `prod`, and
+`memory_budget_mib`).
+
 ### Set The Routing Policy
 
 `freesided routing` sets and shows the deployment's routing policy: for each

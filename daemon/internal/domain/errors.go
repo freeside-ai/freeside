@@ -650,3 +650,12 @@ var (
 // ErrProspectiveMergeIdentityInconsistent marks a prospective-merge identity
 // whose base, head, and merge are not three distinct commits.
 var ErrProspectiveMergeIdentityInconsistent = errors.New("prospective merge identity does not name three distinct commits")
+
+// Settings record errors (issue #2082).
+var (
+	ErrUnknownSettingsSection         = errors.New("unknown settings section")
+	ErrRequiredSettingsSectionCleared = errors.New("a required settings section cannot be cleared")
+	ErrSettingsSectionMissing         = errors.New("required settings section is not set")
+	ErrSettingsKeyMissing             = errors.New("required settings key is absent")
+	ErrSettingsRevisionOrder          = errors.New("settings revisions are not numbered 1, 2, 3 in order")
+)

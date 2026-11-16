@@ -1,15 +1,12 @@
 package main
 
 import (
-	"errors"
 	"flag"
-	"fmt"
 	"net"
-	"path/filepath"
-	"slices"
 	"strconv"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 )
@@ -52,72 +49,17 @@ func listenPort(addr string) int {
 }
 
 // deputyMacverify is the deputy settings file's optional macos_verification
-// object: the same values as the -macverify-* flags, for the deputy, which
-// takes its configuration from settings rather than flags. It feeds the
-// configuration the executor's conformance pass proves and a later restore
-// re-checks, so it names the executor that macos_host recipe commands run
-// on. A present object must set the first four keys; the slots have no
-// default, because the settings file has none. port_base alone may be
-// omitted, for macverify.DefaultPortBase: no port base disables anything,
-// and slot-run refuses a job whose ports.conf disagrees with it.
-type deputyMacverify struct {
-	Root       string   `json:"root"`
-	Slots      []string `json:"slots"`
-	XcodeBuild string   `json:"xcode_build"`
-	Swift      string   `json:"swift"`
-	PortBase   int      `json:"port_base,omitempty"`
-}
+// object, the instance settings' section of the same name, so the file and
+// the store hold one definition. A present object must set every key but
+// port_base; see domain.MacosVerificationSettings.
+type deputyMacverify = domain.MacosVerificationSettings
 
 // validateDeputyMacverify refuses a present object that cannot name an
 // executor, one line naming the field, before the deputy takes its lease. An
-// absent object (nil) passes and configures none. It refuses an empty value
-// rather than reading it as "none", so a half-written object cannot quietly
-// disable the executor. The toolchain tokens' formats stay with
-// macverify.New, which enforces them at daemon start for the flags too.
+// absent object (nil) passes and configures none.
 func validateDeputyMacverify(section *deputyMacverify) error {
 	if section == nil {
 		return nil
 	}
-	if !filepath.IsAbs(section.Root) {
-		return errors.New("macos_verification.root must be an absolute path")
-	}
-	if filepath.Clean(section.Root) != section.Root {
-		return errors.New("macos_verification.root must be a clean path")
-	}
-	if len(section.Slots) == 0 {
-		return errors.New("macos_verification.slots is empty")
-	}
-	for i, slot := range section.Slots {
-		if slot == "" {
-			return errors.New("macos_verification.slots holds an empty name")
-		}
-		if slices.Contains(section.Slots[:i], slot) {
-			return fmt.Errorf("macos_verification.slots names %q twice", slot)
-		}
-	}
-	if section.XcodeBuild == "" {
-		return errors.New("macos_verification.xcode_build is required")
-	}
-	if section.Swift == "" {
-		return errors.New("macos_verification.swift is required")
-	}
-	return nil
-}
-
-// deputyMacverifyExecutorConfig maps the settings section and the deputy's
-// listen address to the executor configuration. An absent section maps to
-// the zero value, whose empty Root configures no executor, as an empty
-// -macverify-root does.
-func deputyMacverifyExecutorConfig(section *deputyMacverify, listen string) daemoncompose.MacverifyExecutorConfig {
-	if section == nil {
-		return daemoncompose.MacverifyExecutorConfig{}
-	}
-	portBase := section.PortBase
-	if portBase == 0 {
-		portBase = macverify.DefaultPortBase
-	}
-	return daemoncompose.MacverifyExecutorConfig{
-		Root: section.Root, Slots: slices.Clone(section.Slots), XcodeBuild: section.XcodeBuild, Swift: section.Swift,
-		PortBase: portBase, ListenPort: listenPort(listen),
-	}
+	return section.Validate()
 }

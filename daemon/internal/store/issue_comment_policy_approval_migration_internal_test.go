@@ -12,6 +12,7 @@ import (
 // 0140 leaves: it drops the table 0141 creates and forgets 0141.
 func rewindIssueCommentPolicyApprovals(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindSettingsRevisions(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE issue_comment_policy_approvals`,
 		`DELETE FROM schema_migrations WHERE name = '0141_issue_comment_policy_approvals.sql'`,

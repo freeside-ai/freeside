@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
@@ -451,6 +453,89 @@ func (s *loadedDeputySettings) validate() error {
 		return fmt.Errorf("build: %w", err)
 	}
 	return nil
+}
+
+// runSettings maps the file to the run settings the store holds, so the
+// deputy composes the Claude driver through the function the installed
+// daemon uses. containerBin is the container tool the launcher names; the
+// file names none. The keys only a deputy launch uses (listen, the
+// checkout, the adoption inputs, writers, the review and judgment models,
+// prod, the memory budget, and the base commit) have no stored section and
+// are left out. It checks nothing: loadDeputySettings has.
+func (s *loadedDeputySettings) runSettings(containerBin string) daemoncompose.RunSettings {
+	instance := domain.InstanceSettings{
+		HostTools: domain.HostToolsSettings{Container: containerBin},
+		Images: domain.InstanceImageSettings{
+			Exporter: domain.ImageRef(s.Images.Exporter), Review: domain.ImageRef(s.Images.Review),
+		},
+		SeedRoot: s.SeedRoot,
+		Prompts: domain.PromptSettings{
+			PromptPackage:              s.Prompts.PromptPackage,
+			SpecificationPromptPackage: s.Prompts.SpecificationPromptPackage,
+			RemediationPromptPackage:   s.Prompts.RemediationPromptPackage,
+			VendorInstructions:         s.Prompts.VendorInstructions,
+		},
+		AgentTree: domain.AgentTreeSettings{Checkout: s.AgentTree.Checkout, Commit: s.AgentTree.Commit},
+		Review: domain.InstanceReviewSettings{
+			InputRoot: s.Review.InputRoot, AuthMode: string(s.Review.AuthMode),
+			AuthSnapshot: s.Review.AuthSnapshot, Instructions: s.Review.Instructions,
+		},
+		Timeouts: domain.TimeoutSettings{WriterStop: s.Timeouts.WriterStop, WriterStall: s.Timeouts.WriterStall},
+		Build: domain.BuildSettings{
+			Proxy: s.Build.Proxy, BaseBuildRef: s.Build.BaseBuildRef, DNS: slices.Clone(s.Build.DNS),
+		},
+	}
+	// The file's judgment is all empty or all set; all empty is no section.
+	if s.Judgment.ClaudeBin != "" {
+		instance.Judgment = &domain.JudgmentSettings{
+			ClaudeBin: s.Judgment.ClaudeBin, ClaudeSHA256: s.Judgment.ClaudeSHA256,
+			PublicationAuthorPrompt: s.Judgment.PublicationAuthorPrompt,
+		}
+	}
+	if s.ManualSubmissionConfig != "" {
+		instance.ManualSubmissionConfig = new(s.ManualSubmissionConfig)
+	}
+	if s.MacosVerification != nil {
+		section := *s.MacosVerification
+		section.Slots = slices.Clone(section.Slots)
+		instance.MacosVerification = &section
+	}
+	project := domain.ProjectSettings{
+		Repository: domain.ProjectRepositorySettings{
+			Repo: s.Repository.Repo, RepositoryID: s.Repository.RepositoryID, BaseRef: s.Repository.BaseRef,
+		},
+		AllowedPaths:   slices.Clone(s.Repository.AllowedPaths),
+		ApprovedRecipe: s.ApprovedRecipe,
+		AgentImage:     domain.ImageRef(s.Images.Agent),
+	}
+	if s.Repository.HandBackLabel != "" {
+		project.HandBackLabel = new(s.Repository.HandBackLabel)
+	}
+	return daemoncompose.RunSettings{
+		Instance: instance, ProjectID: s.Repository.Project, Project: project,
+		WriterStopTimeout: s.stopTime, WriterStallInterval: s.stallFor,
+	}
+}
+
+// keysNotImported are the file's keys that runSettings leaves out, so
+// settings import can name what the records will not hold. Optional keys
+// are named only when the file sets them.
+func (s *loadedDeputySettings) keysNotImported() []string {
+	keys := []string{
+		"version", "listen", "repository.base_sha", "repository.checkout",
+		"agent_tree.auth_identity", "agent_tree.review_auth_identity", "agent_tree.cost_owner",
+		"agent_tree.review_cost_owner", "agent_tree.claude_account", "agent_tree.terms_basis_date",
+		"agent_tree.pricing_revision", "agent_tree.offer_not_after", "agent_tree.auth_volume",
+	}
+	if s.AgentTree.ReviewHarness != "" {
+		keys = append(keys, "agent_tree.review_harness")
+	}
+	if s.AgentTree.SecondWriter != nil {
+		keys = append(keys, "agent_tree.second_writer")
+	}
+	keys = append(keys, "writers", "review.model", "review.effort", "judgment.model", "judgment.effort",
+		"prod", "memory_budget_mib")
+	return keys
 }
 
 // rebuildInputs are the daemon's rebuild flags, which it takes only with a

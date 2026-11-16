@@ -197,6 +197,9 @@ func main() {
 		case "routing":
 			runRoutingMain(os.Args[2:])
 			return
+		case "settings":
+			runSettingsMain(os.Args[2:])
+			return
 		case "rig":
 			runRigMain(os.Args[2:])
 			return
