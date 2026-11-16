@@ -156,6 +156,8 @@ func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverC
 		ReviewWorkspaceSizeMB: launch.ReviewWorkspaceSizeMB,
 		HostVerification:      NewMacverifyExecutorConfig(instance.MacosVerification, launch.ListenPort),
 		SettingsRevisions:     settings.revisions(),
+		ProjectID:             settings.ProjectID,
+		ApprovedRecipe:        project.ApprovedRecipe,
 	}
 }
 

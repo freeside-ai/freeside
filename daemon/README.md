@@ -4158,6 +4158,32 @@ same effective review image, model, auth, instruction, and workspace inputs
 that unattended admission enforces. The default mode is `attended_dev`, where
 the review-configuration flag is not required.
 
+An unattended daemon composed for a project (the deputy, whose settings name
+the project) also keeps a project readiness record for it (#3205), keyed by
+the project and the settings revisions it composed from. It records five
+checks: `repository_base` (the base ref resolves and its fetched commit
+belongs to the pinned repository ID), `publication_authority` (exactly one App
+resolves on the publication token), `writer_image` (the approved recipe's
+preparation resolves, and no image chosen for the base tip was built from
+another recipe; a base no image serves yet passes, since attempts hold on that
+under `image_upkeep_pending`), `trust_profile`, and `review_configuration`.
+Each reads `passed`, `failed`, or `unavailable`; a GitHub check that cannot
+reach GitHub reads `unavailable` and keeps an earlier pass under the same
+settings. Readiness is evaluated at start and on every doctor pass. The
+store-local checks rerun in the health refresh before each invocation
+dispatch, and a GitHub check that did not pass is retried there at most once a
+minute, so a repair made outside the daemon clears the item without waiting
+for the daily doctor pass. A record that is not wholly `passed` converges on
+one blocking `system_health` item for the project (diagnostic code
+`project_not_ready`) whose detail names each check that did not pass. Like
+every blocking `system_health` item, it holds all unattended admission (hold
+reason `blocking_system_health`). Clear it by repairing the named check; the
+next refresh or pass that sees every check pass resolves the item. A
+flag-composed unattended daemon names no project and keeps no readiness
+record. Each doctor pass concludes a `project_not_ready` item for any project
+the daemon does not evaluate, so one left by a composition for another project
+does not hold admission.
+
 Doctor also reports a `credential_integrity` finding, which is unhealthy when
 any enrollment's current generation carries a credential-integrity mark. On a
 scheduled pass, and on a one-shot `freesided doctor` that reaches a running

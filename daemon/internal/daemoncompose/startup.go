@@ -416,15 +416,38 @@ func ComposeClaudeWorkflow(
 	}
 	if cfg.Claude.OperatingMode == domain.ModeUnattended {
 		production.HealthRefresh = func(refreshCtx context.Context) error {
+			// A retry reads GitHub before the lock is taken, as the doctor
+			// pass does.
+			var (
+				observation projectReadinessObservation
+				observed    bool
+			)
+			if claudeWiring.readiness != nil {
+				var err error
+				if observation, observed, err = claudeWiring.readiness.retryRemote(refreshCtx); err != nil {
+					return err
+				}
+			}
 			doctorConvergenceLock.Lock()
 			defer doctorConvergenceLock.Unlock()
-			return (operations.Doctor{
+			doctor := operations.Doctor{
 				Store: st, Attention: attention,
 				ProjectID:                 domain.ProjectID("project-system"),
 				ReviewConfigurationDigest: claudeWiring.ReviewConfigurationDigest,
 				Mode:                      domain.ModeUnattended,
 				Now:                       cfg.Now,
-			}).ConvergeReviewConfiguration(refreshCtx)
+			}
+			if err := doctor.ConvergeReviewConfiguration(refreshCtx); err != nil {
+				return err
+			}
+			if claudeWiring.readiness == nil {
+				return nil
+			}
+			if observed {
+				_, err := claudeWiring.readiness.commit(refreshCtx, observation, doctor)
+				return err
+			}
+			return claudeWiring.readiness.refresh(refreshCtx, doctor)
 		}
 	}
 	workflow, err = engine.New(st, attention, stageDriver, production.Options()...)

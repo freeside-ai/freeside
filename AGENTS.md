@@ -581,7 +581,10 @@ directory named before it in the same bullet. All under `daemon/`:
   without a driver when it can't), `internal/daemoncompose/execution_pause.go`
   (releases a pause, after which `prod` never takes the lock), and
   `cmd/freesided/execution_pause.go` (the operator commands and the
-  control route that request and clear the pause).
+  control route that request and clear the pause). The project readiness
+  evaluator joins them: `internal/daemoncompose/project_readiness.go`
+  (reads the base ref, fetches the base, and resolves the App bot on the
+  publication token).
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
