@@ -2998,6 +2998,19 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 			`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":5,"end_line":2},"explanation":"x"}]}`,
 			"invalid finding location",
 		},
+		{
+			// RejectDuplicateJSONKeys refuses anything after the top-level value
+			// before the strict decode runs, so trailing bytes never reach the
+			// decode's "trailing structured output" branch.
+			"trailing bytes",
+			`{"findings":[]}extra`,
+			"malformed structured output",
+		},
+		{
+			"unknown top-level key",
+			`{"findings":[],"nope":1}`,
+			"malformed structured output",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			outcome := source.normalizeCollection("review-run-1-1", request, CodexReviewCollection{
