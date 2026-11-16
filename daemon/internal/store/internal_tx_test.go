@@ -14,7 +14,8 @@ import (
 // WriteInternal callback cannot commit synchronized state without a revision
 // bump. A synchronized Put through the internal path does not even compile;
 // this test guards the type boundary that makes that true and fails loudly if
-// a future Put ever lands on the internal surface.
+// a future Put, or one of the named synchronized Record* writers, ever lands
+// on the internal surface.
 func TestInternalTxCannotWriteSynchronizedState(t *testing.T) {
 	t.Parallel()
 	writeTx := reflect.TypeOf(&store.WriteTx{})
@@ -35,6 +36,24 @@ func TestInternalTxCannotWriteSynchronizedState(t *testing.T) {
 	for _, name := range puts {
 		if _, ok := internalTx.MethodByName(name); ok {
 			t.Errorf("*store.InternalTx exposes %s: an internal (non-revision-bumping) transaction can write synchronized state (#38 regression)", name)
+		}
+	}
+
+	// Record* methods sit on both handles by design (RecordInbox,
+	// RecordDeviceCredential, and many more are intentional internal
+	// writers), so no prefix rule can find the synchronized ones. These three
+	// wrote synchronized state through *InternalTx without a bump until #2487
+	// moved them to *WriteTx; they are named here instead. A new synchronized
+	// Record* writer is guarded only once it is added to this list. Requiring
+	// each name on *WriteTx keeps a rename from leaving the list stale.
+	for _, name := range []string{
+		"RecordUsagePool", "RecordAuthIdentity", "RecordClientEnrollment",
+	} {
+		if _, ok := writeTx.MethodByName(name); !ok {
+			t.Errorf("*store.WriteTx lacks %s; update this list to the synchronized writer's current name", name)
+		}
+		if _, ok := internalTx.MethodByName(name); ok {
+			t.Errorf("*store.InternalTx exposes %s: an internal (non-revision-bumping) transaction can write synchronized state (#2487 regression)", name)
 		}
 	}
 
