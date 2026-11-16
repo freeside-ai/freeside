@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -87,7 +88,26 @@ func selectorBaseInputs(manifest string, failure error) *baseInputsMemo {
 			CommitSHA:         baseSHA,
 			PackageJSONSHA256: strings.Repeat(manifest, 64), PackageLockSHA256: strings.Repeat(manifest, 64),
 		}, nil
-	})
+	}, slog.New(slog.DiscardHandler))
+}
+
+// selectAfterFetch is selectImage as the engine's passes see it once the
+// base is fetched: a selection the memo answers as pending waits for its
+// fetch and selects again, once per layout the selection reads.
+func selectAfterFetch(
+	t *testing.T, selector *claudeImageSelector, invocationID domain.InvocationID, base domain.BaseRevision,
+	repair *domain.ImageUpkeepRefusal,
+) (domain.ImageRef, error) {
+	t.Helper()
+	for range 4 {
+		image, err := selector.selectImage(t.Context(), invocationID, base, repair)
+		if !errors.Is(err, engine.ErrBaseInputsPending) {
+			return image, err
+		}
+		selector.base.fetches.Wait()
+	}
+	t.Fatal("selection still pending after its fetches finished")
+	return "", nil
 }
 
 // fakeWard holds a proof per writer image, as ward's backend does: proving
@@ -433,7 +453,7 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 		backend: ward, base: selectorBaseInputs("5", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
 		t.Fatalf("select before upkeep is bound = %v, want unserved", err)
 	}
 	var pending *domain.ImageUpkeepHold
@@ -442,16 +462,16 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 
 	pending = &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
 	var upkeep *engine.ImageUpkeepPendingError
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.As(err, &upkeep) ||
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.As(err, &upkeep) ||
 		upkeep.Hold.Pending != domain.ImageUpkeepPendingRebuild {
 		t.Fatalf("select with a rebuild pending = %v, want an image_upkeep_pending rebuild", err)
 	}
 	pending = nil
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
 		t.Fatalf("select with nothing pending = %v, want unserved", err)
 	}
 	lookupErr = errors.New("tip read failed")
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, lookupErr) ||
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.Is(err, lookupErr) ||
 		errors.Is(err, engine.ErrProjectImageUnserved) || errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("select with a failed lookup = %v, want the failure itself", err)
 	}
@@ -474,14 +494,14 @@ func TestClaudeImageSelectorProvesTheSelectedImage(t *testing.T) {
 		backend: ward, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select with only another image proved = %v, want the image held as unproved", err)
 	}
 	image := <-suite.started
 	if image != pointed.ImageRef {
 		t.Fatalf("the follower proved %s, want the selected %s", image, pointed.ImageRef)
 	}
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select during the pass = %v, want the image held as unproved", err)
 	}
 	if follower.passMu.TryLock() {
@@ -489,7 +509,7 @@ func TestClaudeImageSelectorProvesTheSelectedImage(t *testing.T) {
 	}
 	suite.results <- nil
 	follower.wg.Wait()
-	got, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
+	got, err := selectAfterFetch(t, selector, "", selectorRevision, nil)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("select after the pass = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
@@ -525,26 +545,26 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 	selector.bindImageUpkeep(func(context.Context) (*domain.ImageUpkeepHold, error) {
 		return &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingMaintenanceTask, MaintenanceTaskID: &task}, nil
 	})
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrImageUpkeepPending) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("an ordinary attempt = %v, want it held on the maintenance task", err)
 	}
 	refusal := &domain.ImageUpkeepRefusal{ID: domain.Digest("sha256:" + strings.Repeat("7", 64)), MeasuredFromImageID: pointed.ID}
 
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, refusal); !errors.Is(err, engine.ErrImageNotProved) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, refusal); !errors.Is(err, engine.ErrImageNotProved) {
 		t.Fatalf("repair with only another image proved = %v, want it held as unproved", err)
 	}
 	<-passed
 	if err := follower.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := selector.selectImage(t.Context(), "", selectorRevision, refusal)
+	got, err := selectAfterFetch(t, selector, "", selectorRevision, refusal)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("repair = (%s, %v), want the pointed-to image %s", got, err, pointed.ImageRef)
 	}
 
 	moved := *refusal
 	moved.MeasuredFromImageID = other.ID
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, &moved); !errors.Is(err, engine.ErrProjectImageUnserved) ||
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, &moved); !errors.Is(err, engine.ErrProjectImageUnserved) ||
 		errors.Is(err, engine.ErrImageUpkeepPending) {
 		t.Fatalf("repair after the pointer moved = %v, want unserved", err)
 	}
@@ -567,14 +587,14 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 		backend: ward, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select with only another image proved = %v, want the image held as unproved", err)
 	}
 	suite.end(errors.New("the VM did not start"))
 	follower.wg.Wait()
 
 	clock.advance(followerRetryBackoff - time.Nanosecond)
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) ||
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) ||
 		!strings.Contains(err.Error(), "no published conformance proof") {
 		t.Fatalf("select after the failed pass = %v, want the image held as having no published proof", err)
 	}
@@ -582,7 +602,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 		t.Fatal("the failed pass was retried before its backoff")
 	}
 	clock.advance(time.Nanosecond)
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select after the backoff = %v, want the image held as unproved", err)
 	}
 	if !follower.pendingFor(pointed.ImageRef) {
@@ -591,7 +611,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 	suite.end(nil)
 	follower.wg.Wait()
 
-	got, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
+	got, err := selectAfterFetch(t, selector, "", selectorRevision, nil)
 	if err != nil || got != pointed.ImageRef {
 		t.Fatalf("select after the retry = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
@@ -711,7 +731,7 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 		backend: ward, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
-	if got, err := selector.selectImage(t.Context(), "", selectorRevision, nil); err != nil || got != pointed.ImageRef {
+	if got, err := selectAfterFetch(t, selector, "", selectorRevision, nil); err != nil || got != pointed.ImageRef {
 		t.Fatalf("select under the proof = (%s, %v), want %s", got, err, pointed.ImageRef)
 	}
 	scheduled := make(chan error, 1)
@@ -720,14 +740,14 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 	if err := <-scheduled; err == nil {
 		t.Fatal("scheduled pass succeeded, want it to fail")
 	}
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select after the failed scheduled pass = %v, want the image held as unproved", err)
 	}
 	if follower.pendingFor(pointed.ImageRef) {
 		t.Fatal("a follower pass started before the failed image's backoff")
 	}
 	clock.advance(followerRetryBackoff)
-	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !unproved(err) {
 		t.Fatalf("select after the backoff = %v, want the image held as unproved", err)
 	}
 	if image := suite.end(nil); image != pointed.ImageRef {
@@ -795,15 +815,15 @@ func TestClaudeImageSelectorAdmitsAProvenImageWhileAnotherProves(t *testing.T) {
 		follower := testFollower(t, ward, suite.prove, time.Now, rebuilt.ImageRef)
 		selector := &claudeImageSelector{
 			store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
-			backend: ward, base: newBaseInputsMemo(inputs.observe), follower: follower,
+			backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 		}
-		if _, err := selector.selectImage(t.Context(), "", at(olderBase), nil); !unproved(err) {
+		if _, err := selectAfterFetch(t, selector, "", at(olderBase), nil); !unproved(err) {
 			t.Fatalf("select the unproved image = %v, want it held", err)
 		}
 		if image := <-suite.started; image != older.ImageRef {
 			t.Fatalf("pass on %s, want %s", image, older.ImageRef)
 		}
-		got, err := selector.selectImage(t.Context(), "", at(newerBase), nil)
+		got, err := selectAfterFetch(t, selector, "", at(newerBase), nil)
 		if err != nil || got != rebuilt.ImageRef {
 			t.Fatalf("select the proven image while another's pass is blocked = (%s, %v), want %s",
 				got, err, rebuilt.ImageRef)
@@ -817,11 +837,11 @@ func TestClaudeImageSelectorAdmitsAProvenImageWhileAnotherProves(t *testing.T) {
 		follower := testFollower(t, ward, refuseProof(t), time.Now, rebuilt.ImageRef)
 		selector := &claudeImageSelector{
 			store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
-			backend: ward, base: newBaseInputsMemo(inputs.observe), follower: follower,
+			backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 		}
 		for range 3 {
 			for _, want := range []domain.ProjectImage{older, rebuilt} {
-				got, err := selector.selectImage(t.Context(), "", at(want.CommitSHA), nil)
+				got, err := selectAfterFetch(t, selector, "", at(want.CommitSHA), nil)
 				if err != nil || got != want.ImageRef {
 					t.Fatalf("select = (%s, %v), want %s", got, err, want.ImageRef)
 				}
@@ -1025,9 +1045,9 @@ func TestClaudeImageSelectorProvesARetiredImageAgain(t *testing.T) {
 	follower := testFollower(t, ward, suite.prove, time.Now, rebuilt.ImageRef)
 	selector := &claudeImageSelector{
 		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
-		backend: ward, base: newBaseInputsMemo(inputs.observe), follower: follower,
+		backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 	}
-	if _, err := selector.selectImage(t.Context(), "", at(newerBase), nil); err != nil {
+	if _, err := selectAfterFetch(t, selector, "", at(newerBase), nil); err != nil {
 		t.Fatal(err)
 	}
 	scheduled := make(chan error, 1)
@@ -1039,14 +1059,14 @@ func TestClaudeImageSelectorProvesARetiredImageAgain(t *testing.T) {
 	if retired := ward.retiredImages(); !slices.Equal(retired, []domain.ImageRef{older.ImageRef}) {
 		t.Fatalf("retired %v, want the unselected image", retired)
 	}
-	if _, err := selector.selectImage(t.Context(), "", at(olderBase), nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", at(olderBase), nil); !unproved(err) {
 		t.Fatalf("select the retired image = %v, want it held as unproved", err)
 	}
 	if image := suite.end(nil); image != older.ImageRef {
 		t.Fatalf("proved %s, want the retired image %s", image, older.ImageRef)
 	}
 	follower.wg.Wait()
-	if got, err := selector.selectImage(t.Context(), "", at(olderBase), nil); err != nil || got != older.ImageRef {
+	if got, err := selectAfterFetch(t, selector, "", at(olderBase), nil); err != nil || got != older.ImageRef {
 		t.Fatalf("select after the new proof = (%s, %v), want %s", got, err, older.ImageRef)
 	}
 }
@@ -1108,7 +1128,7 @@ func TestClaudeImageSelectorSelectsAtEachRunsBase(t *testing.T) {
 	}, time.Now, rebuilt.ImageRef)
 	selector := &claudeImageSelector{
 		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
-		backend: ward, base: newBaseInputsMemo(inputs.observe), follower: follower,
+		backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 	}
 	at := func(sha string) domain.BaseRevision {
 		base := selectorRevision
@@ -1117,14 +1137,14 @@ func TestClaudeImageSelectorSelectsAtEachRunsBase(t *testing.T) {
 	}
 
 	for range 2 {
-		got, err := selector.selectImage(t.Context(), "", at(newerBase), nil)
+		got, err := selectAfterFetch(t, selector, "", at(newerBase), nil)
 		if err != nil || got != rebuilt.ImageRef {
 			t.Fatalf("select at the new run's base = (%s, %v), want %s", got, err, rebuilt.ImageRef)
 		}
 	}
 	// The older run's image has no proof, so its attempt holds while the
 	// follower proves the image its base selects.
-	if _, err := selector.selectImage(t.Context(), "", at(olderBase), nil); !unproved(err) {
+	if _, err := selectAfterFetch(t, selector, "", at(olderBase), nil); !unproved(err) {
 		t.Fatalf("select at the older run's base = %v, want its own image held as unproved", err)
 	}
 	if err := follower.Close(t.Context()); err != nil {
@@ -1148,7 +1168,7 @@ func TestBaseInputsMemoIsBounded(t *testing.T) {
 	for i := range baseInputsMemoBases + 1 {
 		inputs.manifests[commit(i)] = "2"
 	}
-	memo := newBaseInputsMemo(inputs.observe)
+	memo := newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler))
 	read := func(sha string) {
 		t.Helper()
 		got, err := memo.read(t.Context(), sha, layout)
@@ -1184,5 +1204,263 @@ func TestBaseInputsMemoIsBounded(t *testing.T) {
 	}
 	if inputs.readsOf(absent) != 2 {
 		t.Fatalf("absent base read %d times, want a failed read retried", inputs.readsOf(absent))
+	}
+}
+
+// stallingBaseInputs counts each fetch as it starts, signals started, and
+// holds the fetch until release closes or its context ends; ended receives
+// the error each fetch returned.
+type stallingBaseInputs struct {
+	inputs  *countedBaseInputs
+	started chan struct{}
+	release chan struct{}
+	ended   chan error
+}
+
+func newStallingBaseInputs(manifests map[string]string) *stallingBaseInputs {
+	return &stallingBaseInputs{
+		inputs:  &countedBaseInputs{manifests: manifests, reads: map[string]int{}},
+		started: make(chan struct{}, 4), release: make(chan struct{}), ended: make(chan error, 4),
+	}
+}
+
+func (s *stallingBaseInputs) observe(
+	ctx context.Context, baseSHA string, layout domain.ProjectImageInputLayout,
+) (domain.ProjectImageBaseInputs, error) {
+	inputs, err := s.inputs.observe(ctx, baseSHA, layout)
+	s.started <- struct{}{}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		inputs, err = domain.ProjectImageBaseInputs{}, fmt.Errorf("fetch base %s: %w", baseSHA, ctx.Err())
+	}
+	s.ended <- err
+	return inputs, err
+}
+
+// closeAtCleanup closes memo when the test ends, so no fetch outlives it.
+func closeAtCleanup(t *testing.T, memo *baseInputsMemo) *baseInputsMemo {
+	t.Helper()
+	t.Cleanup(func() { _ = memo.Close(context.Background()) })
+	return memo
+}
+
+// While a base's fetch stalls, a selection answers pending at once and a
+// second selection starts no second fetch. Once the fetch lands, later
+// selections select from the memo without fetching again. A selection that
+// ran the fetch itself would wait on the stall and fail the deadline.
+func TestClaudeImageSelectorFetchesTheBaseOutsideTheSelection(t *testing.T) {
+	t.Parallel()
+	pointed := selectorImage(t, strings.Repeat("a", 40), "2", "d")
+	st := selectorStore(t, pointed)
+	ward := newFakeWard(pointed.ImageRef)
+	follower := testFollower(t, ward, refuseProof(t), time.Now, pointed.ImageRef)
+	stall := newStallingBaseInputs(map[string]string{selectorBase: "2"})
+	selector := &claudeImageSelector{
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, backend: ward, follower: follower,
+		base: closeAtCleanup(t, newBaseInputsMemo(stall.observe, slog.New(slog.DiscardHandler))),
+	}
+	selectWithin := func() (domain.ImageRef, error) {
+		t.Helper()
+		type result struct {
+			image domain.ImageRef
+			err   error
+		}
+		done := make(chan result, 1)
+		go func() {
+			image, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
+			done <- result{image, err}
+		}()
+		select {
+		case got := <-done:
+			return got.image, got.err
+		case <-time.After(10 * time.Second):
+			t.Fatal("the selection waited on the stalled fetch")
+			return "", nil
+		}
+	}
+	pending := func(err error) bool {
+		return errors.Is(err, engine.ErrBaseInputsPending) && !errors.Is(err, exec.ErrInputUnavailable)
+	}
+
+	if _, err := selectWithin(); !pending(err) {
+		t.Fatalf("select while the base is unread = %v, want pending and not input_unavailable", err)
+	}
+	<-stall.started
+	if _, err := selectWithin(); !pending(err) {
+		t.Fatalf("select while the fetch stalls = %v, want pending", err)
+	}
+	if reads := stall.inputs.readsOf(selectorBase); reads != 1 {
+		t.Fatalf("base fetched %d times while stalled, want one fetch", reads)
+	}
+	close(stall.release)
+	selector.base.fetches.Wait()
+	for range 2 {
+		if got, err := selectWithin(); err != nil || got != pointed.ImageRef {
+			t.Fatalf("select after the fetch = (%s, %v), want %s", got, err, pointed.ImageRef)
+		}
+	}
+	if reads := stall.inputs.readsOf(selectorBase); reads != 1 {
+		t.Fatalf("base fetched %d times, want later selections served from the memo", reads)
+	}
+}
+
+// A failed fetch holds the selection with its own error, joined with
+// input_unavailable as a failed read always was, and is served without a new
+// fetch until baseFetchRetryBackoff has passed. The fetch after that reports
+// its own error, so a repository identity mismatch still reaches the caller.
+func TestClaudeImageSelectorBacksOffAFailedFetch(t *testing.T) {
+	t.Parallel()
+	pointed := selectorImage(t, strings.Repeat("a", 40), "2", "d")
+	st := selectorStore(t, pointed)
+	ward := newFakeWard(pointed.ImageRef)
+	follower := testFollower(t, ward, refuseProof(t), time.Now, pointed.ImageRef)
+	var (
+		mu       sync.Mutex
+		fetches  int
+		fetchErr = errors.New("fetch refused")
+	)
+	memo := closeAtCleanup(t, newBaseInputsMemo(func(
+		context.Context, string, domain.ProjectImageInputLayout,
+	) (domain.ProjectImageBaseInputs, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		fetches++
+		return domain.ProjectImageBaseInputs{}, fetchErr
+	}, slog.New(slog.DiscardHandler)))
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	memo.now = func() time.Time { return now }
+	selector := &claudeImageSelector{
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, backend: ward, follower: follower,
+		base: memo,
+	}
+	selectAt := func() error {
+		t.Helper()
+		_, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
+		return err
+	}
+	fetchCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return fetches
+	}
+
+	if err := selectAt(); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("first select = %v, want pending", err)
+	}
+	memo.fetches.Wait()
+	for _, elapsed := range []time.Duration{0, baseFetchRetryBackoff - time.Nanosecond} {
+		now = now.Add(elapsed)
+		err := selectAt()
+		if !errors.Is(err, fetchErr) || !errors.Is(err, exec.ErrInputUnavailable) || errors.Is(err, engine.ErrBaseInputsPending) {
+			t.Fatalf("select %s after the failure = %v, want the failure as input_unavailable", elapsed, err)
+		}
+	}
+	if got := fetchCount(); got != 1 {
+		t.Fatalf("fetched %d times within the backoff, want 1", got)
+	}
+
+	fetchErr = fmt.Errorf("checkout names another repository: %w", domain.ErrRepositoryIdentityMismatch)
+	now = now.Add(time.Nanosecond)
+	if err := selectAt(); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("select once the backoff passed = %v, want a new fetch pending", err)
+	}
+	memo.fetches.Wait()
+	if err := selectAt(); !errors.Is(err, domain.ErrRepositoryIdentityMismatch) {
+		t.Fatalf("select after a mismatched fetch = %v, want the identity mismatch", err)
+	}
+	if got := fetchCount(); got != 2 {
+		t.Fatalf("fetched %d times, want one retry after the backoff", got)
+	}
+
+	// A failure recorded after another's backoff has passed drops that one,
+	// so failures of bases no run looks up again don't accumulate.
+	now = now.Add(baseFetchRetryBackoff)
+	other := selectorRevision
+	other.BaseSHA = strings.Repeat("c", 40)
+	if _, err := selector.selectImage(t.Context(), "", other, nil); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("select at another base = %v, want pending", err)
+	}
+	memo.fetches.Wait()
+	memo.mu.Lock()
+	failed := slices.Collect(maps.Keys(memo.failures))
+	memo.mu.Unlock()
+	if len(failed) != 1 || failed[0].baseSHA != other.BaseSHA {
+		t.Fatalf("failures = %v, want only the newest base's", failed)
+	}
+}
+
+// A fetch that outlasts baseFetchTimeout fails with its deadline and is
+// served like any failed fetch, so a hung fetch becomes an input_unavailable
+// hold rather than a pending one that never ends.
+func TestBaseInputsMemoFetchDeadline(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		layout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}
+		stall := newStallingBaseInputs(map[string]string{selectorBase: "2"})
+		memo := newBaseInputsMemo(stall.observe, slog.New(slog.DiscardHandler))
+		defer func() { _ = memo.Close(context.Background()) }()
+		start := time.Now()
+
+		if _, err := memo.lookup(selectorBase, layout); !errors.Is(err, engine.ErrBaseInputsPending) {
+			t.Fatalf("lookup = %v, want pending", err)
+		}
+		memo.fetches.Wait()
+		if elapsed := time.Since(start); elapsed != baseFetchTimeout {
+			t.Fatalf("the fetch ended after %s, want its %s deadline", elapsed, baseFetchTimeout)
+		}
+		if _, err := memo.lookup(selectorBase, layout); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("lookup after the deadline = %v, want the deadline served", err)
+		}
+		if reads := stall.inputs.readsOf(selectorBase); reads != 1 {
+			t.Fatalf("base fetched %d times, want the failure served without a new fetch", reads)
+		}
+	})
+}
+
+// Close cancels a fetch in flight and returns only once the fetch has, and a
+// canceled fetch stores nothing. A new memo, as after a restart, fetches the
+// base again.
+func TestBaseInputsMemoCloseJoinsItsFetch(t *testing.T) {
+	t.Parallel()
+	layout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}
+	stall := newStallingBaseInputs(map[string]string{selectorBase: "2"})
+	memo := newBaseInputsMemo(stall.observe, slog.New(slog.DiscardHandler))
+	if _, err := memo.lookup(selectorBase, layout); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("lookup = %v, want pending", err)
+	}
+	<-stall.started
+	if err := memo.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-stall.ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the fetch ended with %v, want it canceled", err)
+		}
+	default:
+		t.Fatal("Close returned before the fetch did")
+	}
+	memo.mu.Lock()
+	stored, failed := len(memo.inputs), len(memo.failures)
+	memo.mu.Unlock()
+	if stored != 0 || failed != 0 {
+		t.Fatalf("memo holds %d inputs and %d failures after Close, want a canceled fetch to store nothing", stored, failed)
+	}
+	if _, err := memo.lookup(selectorBase, layout); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("lookup after Close = %v, want pending", err)
+	}
+	memo.fetches.Wait()
+	if reads := stall.inputs.readsOf(selectorBase); reads != 1 {
+		t.Fatalf("base fetched %d times, want no fetch started after Close", reads)
+	}
+
+	restarted := closeAtCleanup(t, newBaseInputsMemo(stall.observe, slog.New(slog.DiscardHandler)))
+	if _, err := restarted.lookup(selectorBase, layout); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("lookup after a restart = %v, want a new fetch pending", err)
+	}
+	<-stall.started
+	if reads := stall.inputs.readsOf(selectorBase); reads != 2 {
+		t.Fatalf("base fetched %d times, want it fetched again after the restart", reads)
 	}
 }
