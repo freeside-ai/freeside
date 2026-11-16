@@ -101,12 +101,12 @@ func TestAttentionSubjectRunBindingWriteAndRead(t *testing.T) {
 		if len(all) != 1 || all[0].Value.ID != item.ID {
 			t.Fatalf("ListAttentionItems = %+v, want %q", all, item.ID)
 		}
-		scoped, err := tx.ListOpenAttentionItemsForRun(ctx, "run-selected")
+		scoped, err := tx.ListOpenAttentionItemRecordsForRun(ctx, "run-selected")
 		if err != nil {
 			return err
 		}
 		if len(scoped) != 1 || scoped[0].ID != item.ID {
-			t.Fatalf("ListOpenAttentionItemsForRun = %+v, want %q", scoped, item.ID)
+			t.Fatalf("ListOpenAttentionItemRecordsForRun = %+v, want %q", scoped, item.ID)
 		}
 		return nil
 	}); err != nil {
@@ -114,7 +114,7 @@ func TestAttentionSubjectRunBindingWriteAndRead(t *testing.T) {
 	}
 }
 
-func TestListOpenAttentionItemsForRunIsolatesUnrelatedRows(t *testing.T) {
+func TestListOpenAttentionItemRecordsForRunIsolatesUnrelatedRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
@@ -143,7 +143,7 @@ func TestListOpenAttentionItemsForRunIsolatesUnrelatedRows(t *testing.T) {
 		t.Fatalf("malform unrelated body: %v", err)
 	}
 	if err := closed.Read(ctx, func(tx *ReadTx) error {
-		items, err := tx.ListOpenAttentionItemsForRun(ctx, "run-selected")
+		items, err := tx.ListOpenAttentionItemRecordsForRun(ctx, "run-selected")
 		if err != nil {
 			return err
 		}
@@ -152,11 +152,11 @@ func TestListOpenAttentionItemsForRunIsolatesUnrelatedRows(t *testing.T) {
 		}
 		return nil
 	}); err != nil {
-		t.Fatalf("ListOpenAttentionItemsForRun: %v", err)
+		t.Fatalf("ListOpenAttentionItemRecordsForRun: %v", err)
 	}
 }
 
-func TestListOpenAttentionItemsForRunRejectsSelectedCorruption(t *testing.T) {
+func TestListOpenAttentionItemRecordsForRunRejectsSelectedCorruption(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -220,17 +220,17 @@ func TestListOpenAttentionItemsForRunRejectsSelectedCorruption(t *testing.T) {
 			}
 			tc.mutate(t, ctx, st, item)
 			err := st.Read(ctx, func(tx *ReadTx) error {
-				_, err := tx.ListOpenAttentionItemsForRun(ctx, "run-selected")
+				_, err := tx.ListOpenAttentionItemRecordsForRun(ctx, "run-selected")
 				return err
 			})
 			if !errors.Is(err, errRowInconsistent) {
-				t.Fatalf("ListOpenAttentionItemsForRun error = %v, want %v", err, errRowInconsistent)
+				t.Fatalf("ListOpenAttentionItemRecordsForRun error = %v, want %v", err, errRowInconsistent)
 			}
 		})
 	}
 }
 
-func TestListOpenAttentionItemsForRunRejectsAmbiguousSelectedBody(t *testing.T) {
+func TestListOpenAttentionItemRecordsForRunRejectsAmbiguousSelectedBody(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -321,18 +321,18 @@ WHERE id = ?`, body, tc.column, tc.status, item.ID); err != nil {
 				t.Fatalf("mutate lookup views: %v", err)
 			}
 			err = st.Read(ctx, func(tx *ReadTx) error {
-				_, err := tx.ListOpenAttentionItemsForRun(ctx, "run-selected")
+				_, err := tx.ListOpenAttentionItemRecordsForRun(ctx, "run-selected")
 				return err
 			})
 			if !errors.Is(err, errRowInconsistent) {
-				t.Fatalf("ListOpenAttentionItemsForRun error = %v, want %v",
+				t.Fatalf("ListOpenAttentionItemRecordsForRun error = %v, want %v",
 					err, errRowInconsistent)
 			}
 		})
 	}
 }
 
-func TestListOpenAttentionItemsForRunRejectsSQLiteInvalidBodyRetargetedFromRun(t *testing.T) {
+func TestListOpenAttentionItemRecordsForRunRejectsSQLiteInvalidBodyRetargetedFromRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
@@ -353,11 +353,11 @@ UPDATE attention_items SET body = ?, subject_run_id = 'run-other' WHERE id = ?`,
 		t.Fatalf("retarget SQLite-invalid body: %v", err)
 	}
 	err = st.Read(ctx, func(tx *ReadTx) error {
-		_, err := tx.ListOpenAttentionItemsForRun(ctx, "run-selected")
+		_, err := tx.ListOpenAttentionItemRecordsForRun(ctx, "run-selected")
 		return err
 	})
 	if !errors.Is(err, errRowInconsistent) {
-		t.Fatalf("ListOpenAttentionItemsForRun error = %v, want %v", err, errRowInconsistent)
+		t.Fatalf("ListOpenAttentionItemRecordsForRun error = %v, want %v", err, errRowInconsistent)
 	}
 }
 

@@ -339,16 +339,12 @@ func TestHeldWorkNoticeHasNoSideEffects(t *testing.T) {
 		if err := tx.RequireUnattendedOperationOpen(t.Context()); err != nil {
 			t.Errorf("unattended operation with the notice open: %v", err)
 		}
-		forRun, err := tx.ListOpenAttentionItemsForRun(t.Context(), s.runID)
-		if err != nil {
-			return err
-		}
-		// Run supervision reads the records variant of the same list.
+		// Run supervision reads this run-scoped list.
 		records, err := tx.ListOpenAttentionItemRecordsForRun(t.Context(), s.runID)
 		if err != nil {
 			return err
 		}
-		for _, item := range append(forRun, records...) {
+		for _, item := range records {
 			if item.ID == open[0].ID {
 				t.Errorf("notice %s is in the run-scoped open-item list", item.ID)
 			}
