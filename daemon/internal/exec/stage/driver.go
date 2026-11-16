@@ -611,6 +611,20 @@ func cliSafeMountField(value string) bool {
 	return true
 }
 
+// AuthenticateStart runs, on its own, the current-authority check that
+// StartWithInputs runs before it takes the driver's lock. It takes no lock
+// and commits nothing. A caller that must not wait on GitHub, the engine's
+// dispatch pass, runs it ahead of Start so the network call happens outside
+// that pass and its success warms the authority's cache (#3224). It is not
+// the gate: Start runs the same check again, and the full re-check under
+// the lock, whatever this call returned.
+func (d *Driver) AuthenticateStart(ctx context.Context, id domain.InvocationID, spec exec.StartSpec) error {
+	if err := d.authority.AuthenticateStart(ctx, id, spec); err != nil {
+		return fmt.Errorf("authenticate current intent %s: %w", id, err)
+	}
+	return nil
+}
+
 // StartWithInputs commits one durable intent and runs the handoff pipeline
 // asynchronously. The intent lands before any runtime object exists, so a
 // crash immediately after leaves recovery a record to adopt from; ward's own
@@ -622,9 +636,12 @@ func (d *Driver) StartWithInputs(
 	// through its commit-author authentication, so it runs before mu, which
 	// every session's commit and every Inspect also takes (#3215). Its
 	// success leaves the invocation authenticated in the authority's cache,
-	// so the full re-check under mu below makes no network call.
-	if err := d.authority.AuthenticateStart(ctx, id, spec); err != nil {
-		return fmt.Errorf("authenticate current intent %s: %w", id, err)
+	// so the full re-check under mu below makes no network call. The
+	// production engine has normally run this check outside its pass
+	// already (#3224), so here the cache answers it; it still runs because
+	// a start can reach the driver without the engine's check.
+	if err := d.AuthenticateStart(ctx, id, spec); err != nil {
+		return err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()

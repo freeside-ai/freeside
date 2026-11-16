@@ -118,3 +118,37 @@ func TestInspectRecoversOutsideTheCaller(t *testing.T) {
 		t.Fatalf("Inspect after recovery = %+v, %v; want gone", status, err)
 	}
 }
+
+// TestAuthenticateStartRunsTheStartCheckAlone: the driver's exported start
+// check returns the authority's refusal wrapped as Start reports it, and a
+// check that hangs takes no driver lock, so another invocation's Inspect
+// still answers while it runs (#3224).
+func TestAuthenticateStartRunsTheStartCheckAlone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	refusal := errors.New("commit author is not the App bot")
+	refused := newTestDriver(t, &stubGate{}, newStubExports())
+	refused.authority = stubAuthority{startErr: refusal}
+	if err := refused.AuthenticateStart(ctx, testInvoke, testStartSpec()); !errors.Is(err, refusal) {
+		t.Fatalf("AuthenticateStart = %v, want the authority's refusal", err)
+	}
+
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	authority := &stallingStartAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+	d.authority = authority
+	checked := make(chan error, 1)
+	go func() { checked <- d.AuthenticateStart(ctx, testInvoke, testStartSpec()) }()
+	<-authority.reached
+	returnsWithin(t, "another invocation's Inspect", func() {
+		if _, err := d.Inspect(ctx, "inv-implement-run-2"); !errors.Is(err, exec.ErrUnknownInvocation) {
+			t.Errorf("Inspect of an unstarted invocation = %v, want ErrUnknownInvocation", err)
+		}
+	})
+	close(authority.release)
+	if err := <-checked; err != nil {
+		t.Fatalf("AuthenticateStart: %v", err)
+	}
+	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, exec.ErrUnknownInvocation) {
+		t.Fatalf("Inspect after the check = %v, want ErrUnknownInvocation: the check commits nothing", err)
+	}
+}
