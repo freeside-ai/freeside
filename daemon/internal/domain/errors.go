@@ -326,6 +326,7 @@ var (
 	ErrLaunchNeverFits                   = errors.New("launch memory reservation exceeds the whole instance budget")
 	ErrRuntimeOverheadUnknown            = errors.New("container runtime version has no recorded per-VM overhead")
 	ErrInvalidLaunchReservationKind      = errors.New("invalid launch reservation kind")
+	ErrDaemonReservationRun              = errors.New("a reservation for the daemon's own work names a run")
 	ErrUnknownAdmissionFloor             = errors.New("no capability floor is configured for the admission's operating mode")
 	ErrCapabilityBelowFloor              = errors.New("admitted capability class is below the current policy floor")
 	ErrCredentialModeNotApproved         = errors.New("unattended admission runs under a credential mode policy has not approved")

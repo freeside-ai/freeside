@@ -23,6 +23,9 @@ const (
 	RestartBlockerImageBuild RestartBlockerKind = "image_build"
 	// RestartBlockerProbe: a model-discovery or credential probe is running.
 	RestartBlockerProbe RestartBlockerKind = "probe"
+	// RestartBlockerProofPass: a ward proof pass is running, from before its
+	// first container until its last is gone.
+	RestartBlockerProofPass RestartBlockerKind = "proof_pass"
 	// RestartBlockerPublication: a publication is in progress.
 	RestartBlockerPublication RestartBlockerKind = "publication"
 	// RestartBlockerCredentialLease: an auth-store mutation lease is held,
@@ -38,6 +41,7 @@ var AllRestartBlockerKinds = []RestartBlockerKind{
 	RestartBlockerVerificationJob,
 	RestartBlockerImageBuild,
 	RestartBlockerProbe,
+	RestartBlockerProofPass,
 	RestartBlockerPublication,
 	RestartBlockerCredentialLease,
 }
@@ -45,7 +49,7 @@ var AllRestartBlockerKinds = []RestartBlockerKind{
 func (k RestartBlockerKind) valid() bool {
 	switch k {
 	case RestartBlockerExecutionLaunch, RestartBlockerReviewLaunch, RestartBlockerVerificationJob,
-		RestartBlockerImageBuild, RestartBlockerProbe, RestartBlockerPublication,
+		RestartBlockerImageBuild, RestartBlockerProbe, RestartBlockerProofPass, RestartBlockerPublication,
 		RestartBlockerCredentialLease:
 		return true
 	default:

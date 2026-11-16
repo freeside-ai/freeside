@@ -43,7 +43,8 @@ func TestMachineCapacityHoldFactMatchesItsReason(t *testing.T) {
 }
 
 // TestLaunchReservationValidate: a reservation names its launch, a known
-// kind, a positive declared size, and a non-negative overhead.
+// kind, a run exactly when its kind belongs to one, a positive declared size,
+// and a non-negative overhead.
 func TestLaunchReservationValidate(t *testing.T) {
 	t.Parallel()
 	valid := LaunchReservation{
@@ -59,6 +60,8 @@ func TestLaunchReservationValidate(t *testing.T) {
 		"no invocation":     {func(r *LaunchReservation) { r.InvocationID = "" }, ErrEmptyID},
 		"no run":            {func(r *LaunchReservation) { r.RunID = "" }, ErrEmptyID},
 		"unknown kind":      {func(r *LaunchReservation) { r.Kind = "" }, ErrInvalidLaunchReservationKind},
+		"made-up kind":      {func(r *LaunchReservation) { r.Kind = "upkeep" }, ErrInvalidLaunchReservationKind},
+		"daemon with a run": {func(r *LaunchReservation) { r.Kind = ReservationProofPass }, ErrDaemonReservationRun},
 		"no memory":         {func(r *LaunchReservation) { r.MemoryMiB = 0 }, ErrNonPositive},
 		"negative overhead": {func(r *LaunchReservation) { r.OverheadMiB = -1 }, ErrNegativeSize},
 	} {
@@ -70,5 +73,32 @@ func TestLaunchReservationValidate(t *testing.T) {
 				t.Fatalf("Validate = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestLaunchReservationKindsSplitByRun: every kind either belongs to a run or
+// to the daemon, and a valid reservation of each kind names a run exactly
+// when its kind belongs to one.
+func TestLaunchReservationKindsSplitByRun(t *testing.T) {
+	t.Parallel()
+	forRun := map[LaunchReservationKind]bool{
+		ReservationExecution: true, ReservationReview: true, ReservationVerification: true,
+		ReservationImageBuild: false, ReservationImageRegistry: false, ReservationProofPass: false, ReservationProbe: false,
+	}
+	if len(forRun) != len(AllLaunchReservationKinds) {
+		t.Fatalf("test covers %d kinds, %d registered", len(forRun), len(AllLaunchReservationKinds))
+	}
+	for _, kind := range AllLaunchReservationKinds {
+		want, ok := forRun[kind]
+		if !ok || kind.ForRun() != want {
+			t.Fatalf("%s.ForRun() = %t, want %t (listed %t)", kind, kind.ForRun(), want, ok)
+		}
+		r := LaunchReservation{InvocationID: "inv-1", Kind: kind, MemoryMiB: 2048, OverheadMiB: 512}
+		if want {
+			r.RunID = "run-1"
+		}
+		if err := r.Validate(); err != nil {
+			t.Fatalf("%s reservation: %v", kind, err)
+		}
 	}
 }

@@ -4846,8 +4846,9 @@ components:
         A kind of running work a daemon restart would cut short (mirrors
         domain.RestartBlockerKind). execution_launch and review_launch are
         admissions that still hold their slot; verification_job,
-        image_build, probe, and publication are work in progress in the
-        running daemon; credential_lease is a held auth-store mutation
+        image_build, probe, proof_pass (a ward proof pass), and publication
+        are work in progress in the running daemon; credential_lease is a
+        held auth-store mutation
         lease, such as an enrollment or a token refresh, that no counted
         launch holds. Widening it is a contract change.
       enum:
@@ -4856,6 +4857,7 @@ components:
         - verification_job
         - image_build
         - probe
+        - proof_pass
         - publication
         - credential_lease
         - unknown

@@ -244,9 +244,10 @@ read, so an empty blocker list alone proves nothing. The read changes no
 state.
 
 The daemon reports `execution_launch`, `review_launch`, and
-`credential_lease` today, the kinds its store records. The other four kinds
-(`verification_job`, `image_build`, `probe`, `publication`) exist only in the
-running daemon, and #3104 adds them when it lets an update request a drain.
+`credential_lease` today, the kinds its store records. The other five kinds
+(`verification_job`, `image_build`, `probe`, `proof_pass`, `publication`)
+exist only in the running daemon, and #3104 adds them when it lets an update
+request a drain.
 Until then no drain can be in force, so `ready` is never true.
 
 A drain in force also shows on the sync surface as an `update_drain` entry in

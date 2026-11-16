@@ -1383,7 +1383,11 @@ far more than one machine holds.
   behind a stream of smaller ones. The memory this leaves idle is at most one
   launch's reservation. A launch still waiting on its pool slot joins the
   order only once the slot is free, so one full pool never holds up another
-  pool's work.
+  pool's work. The daemon's own work waits ahead of every task launch, and
+  among itself in the order it first asked, so a task launch never passes it
+  even when the launch would fit: it has no task to order it by, and it is
+  often what a waiting launch needs, such as the proof pass for the launch's
+  image (revision 125).
 - **A launch that can never fit fails at once.** Every such check compares
   the declared size plus the per-VM overhead with the budget. Project policy
   that declares a size whose reservation is larger than the instance's whole

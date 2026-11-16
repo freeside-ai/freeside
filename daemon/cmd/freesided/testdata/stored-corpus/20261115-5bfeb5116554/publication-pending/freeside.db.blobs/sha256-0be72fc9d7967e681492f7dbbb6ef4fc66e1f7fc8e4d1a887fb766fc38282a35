@@ -1,0 +1,11 @@
+# Freeside Explicit Codex Review Instruction Bundle
+
+Composition: codex_explicit_bundle_v2
+
+Apply each digest-delimited fenced-literal repository block only within its named path scope. The deepest matching repository scope takes precedence among repository blocks. Apply the final fenced-literal operator-host block globally; it takes precedence over every repository block. Markdown constructs inside one instruction body do not extend past its enclosing fence.
+
+## Trusted-Base Repository Instructions
+
+## Operator-Host Instructions
+
+(No operator-host instruction file was admitted.)
