@@ -1086,55 +1086,29 @@ func validateCompositionRepositoryBase(cfg preflightConfig) error {
 }
 
 // selectPreflightWriterImage is the composition gate's image check run from
-// the operator's checkout. It returns the image the implementer probes run
-// on: the writer image the daemon selects for a run at cfg.BaseSHA. The
-// daemon starts runs at the observed tip of -base-ref, so this predicts its
-// start and its new runs only when -base-sha is that tip, as in a fixture
-// pass, which resets the branch to its baseline first (#3205 moves the check
-// into the daemon). When no recorded image serves that base (serves false),
-// it is the pointed-to image ward starts on while writer attempts hold
-// (startClaudeConformance).
-//
-// It first runs the record-only refusals the daemon's start runs on the
-// -agent-image seed (projectimage.ResolvePreparation). With no pointer
-// recorded the seed stands in for it, as an unattended start seeds the
-// pointer with it (seedAdmittedImagePointer). The base tree is read from
-// cfg.RepositoryCheckout; a base it cannot read is exec.ErrInputUnavailable,
-// which fails the daemon's start too.
-//
-// Selection runs with no proved image. A restored proof can change which
-// serving image the daemon picks, never whether one serves: every image the
-// proved-image rule can pick, the pointer or record-order rule can pick too.
+// the operator's checkout, the rule the daemon's project readiness check
+// also runs (daemoncompose.CheckWriterImage). It returns the image the
+// implementer probes run on: the writer image the daemon selects for a run at
+// cfg.BaseSHA. The daemon starts runs at the observed tip of -base-ref, so
+// this predicts its start and its new runs only when -base-sha is that tip,
+// as in a fixture pass, which resets the branch to its baseline first; the
+// daemon re-runs the rule at its observed tip with each doctor pass. The
+// base tree is read from cfg.RepositoryCheckout; a base it cannot read is
+// exec.ErrInputUnavailable, which fails the daemon's start too.
 func selectPreflightWriterImage(
 	ctx context.Context, database databaseInspection, cfg preflightConfig,
 ) (image domain.ProjectImage, serves bool, err error) {
 	if database.ProjectImageError != nil {
 		return domain.ProjectImage{}, false, errors.Join(projectimage.ErrComposition, database.ProjectImageError)
 	}
-	if _, err := projectimage.ResolvePreparation(database.ProjectImage, database.ProjectImageFound,
-		domain.ImageRef(cfg.AgentImage), cfg.Repo, cfg.RepositoryID); err != nil {
-		return domain.ProjectImage{}, false, err
-	}
-	pointed := database.ProjectImage
-	if database.AdmittedImageFound {
-		pointed = database.AdmittedImage
-	}
-	selected, serves, err := daemoncompose.SelectAmongRecordedImages(pointed, database.ProjectImages, cfg.Repo, cfg.BaseSHA, nil,
-		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
+	return daemoncompose.CheckWriterImage(daemoncompose.WriterImageCheck{
+		Seed: database.ProjectImage, SeedFound: database.ProjectImageFound, AgentImage: domain.ImageRef(cfg.AgentImage),
+		Pointer: database.AdmittedImage, PointerFound: database.AdmittedImageFound, Images: database.ProjectImages,
+		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseSHA: cfg.BaseSHA, ApprovedRecipe: cfg.ApprovedRecipe,
+		BaseInputs: func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
 			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA, layout)
-		})
-	if err != nil {
-		return domain.ProjectImage{}, false, err
-	}
-	image = pointed
-	if serves {
-		image = selected
-	}
-	if image.RecipeDigest != cfg.ApprovedRecipe {
-		return domain.ProjectImage{}, false, fmt.Errorf("project-image recipe %s disagrees with approved recipe %s: %w",
-			image.RecipeDigest, cfg.ApprovedRecipe, projectimage.ErrComposition)
-	}
-	return image, serves, nil
+		},
+	})
 }
 
 func evaluateDaemonConflict(

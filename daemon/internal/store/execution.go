@@ -652,6 +652,32 @@ func (tx *ReadTx) gateCardSelection(
 	return record, nil
 }
 
+// TrustedProfile returns the trust profile active for repo under the rule
+// every unattended admission is gated by: a human-approved profile must be
+// active for repo, and it must name repositoryID. The admission gate and the
+// project readiness check both read it, so the two cannot disagree. No
+// approved profile is ErrRepositoryUntrusted, deliberately not ErrNotFound:
+// a caller asking "is there a record?" must not read the refusal as "there
+// is none". A profile for another repository is
+// domain.ErrRepositoryIdentityMismatch.
+func (tx *ReadTx) TrustedProfile(
+	ctx context.Context, repo string, repositoryID int64,
+) (domain.AutomationTrustProfile, error) {
+	profile, err := tx.LatestTrustProfile(ctx, repo)
+	if errors.Is(err, ErrNotFound) {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("no approved trust profile for %q: %w",
+			repo, ErrRepositoryUntrusted)
+	}
+	if err != nil {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("trusted profile for %q: %w", repo, err)
+	}
+	if profile.RepositoryID != repositoryID {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("repository %d: trusted profile for %q names %d: %w",
+			repositoryID, repo, profile.RepositoryID, domain.ErrRepositoryIdentityMismatch)
+	}
+	return profile, nil
+}
+
 func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 	ctx context.Context, admission domain.ExecutionAdmission, allowReviewConfigurationRecovery bool,
 ) error {
@@ -774,22 +800,9 @@ func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 	if !admission.RequiresTrustProfile() {
 		return nil
 	}
-	profile, err := tx.LatestTrustProfile(ctx, admission.Base.Repo)
+	profile, err := tx.TrustedProfile(ctx, admission.Base.Repo, admission.Base.RepositoryID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			// Deliberately not reported as ErrNotFound: the admission row is
-			// present and was refused. A caller asking "is there a record?"
-			// must not read this refusal as "there is none".
-			return fmt.Errorf("admission %q: no approved trust profile for %q: %w",
-				admission.InvocationID, admission.Base.Repo, ErrRepositoryUntrusted)
-		}
-		return fmt.Errorf("admission %q: trusted profile for %q: %w",
-			admission.InvocationID, admission.Base.Repo, err)
-	}
-	if profile.RepositoryID != admission.Base.RepositoryID {
-		return fmt.Errorf("admission %q names repository %d, trusted profile for %q names %d: %w",
-			admission.InvocationID, admission.Base.RepositoryID,
-			admission.Base.Repo, profile.RepositoryID, domain.ErrRepositoryIdentityMismatch)
+		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
 	}
 	// The repository id survives a revision, so it cannot answer "was this
 	// admitted under the profile that is approved now". The digest can: an
