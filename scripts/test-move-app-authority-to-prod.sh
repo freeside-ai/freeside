@@ -11,8 +11,10 @@
 # credentials rename, or a hangup there, removes every copy it placed,
 # restores an empty prod credentials directory, and leaves the sources; that a
 # hangup after that rename keeps the complete move; that a prod holding its
-# database lock refuses; and
-# that the script refuses a HOME whose prod root differs from the passwd home's.
+# database lock, or a process holding the App authority writer lock, refuses;
+# that the writer lock file is never copied and a prod holding only it is
+# accepted; and that the script refuses a HOME whose prod root differs from the
+# passwd home's.
 # Nothing touches the real prod root.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
@@ -43,7 +45,7 @@ ok() {
 }
 
 # begin_case <name>: a fresh case with valid sources, an idle prod root that
-# already holds its own daemon files, and an empty lease root.
+# already holds its own daemon files and lock files, and an empty lease root.
 begin_case() {
   CASE=$1
   CASE_DIR=$(mktemp -d "$TMP/case.XXXXXX")
@@ -63,6 +65,7 @@ begin_case() {
   chmod 600 "$STATE"/* "$CREDS/github-app/42"/*
   printf 'db\n' >"$PROD/daemon/freeside.db"
   : >"$PROD/daemon/freeside.db.daemon.lock"
+  : >"$PROD/daemon/app-authority-writer.lock"
 }
 
 # run_move [PATH prefix]: runs move_app_authority on the case's roots under
@@ -109,6 +112,15 @@ if [ "$(cat "$PROD/daemon/freeside.db")" = db ]; then ok; else report_failure "p
 if [ ! -e "$STATE" ] && [ ! -e "$CREDS" ]; then ok; else report_failure "a source was left under its old name"; fi
 if [ -z "$(find "$PROD" -maxdepth 1 -name ".app-authority-move.*")" ]; then ok; else report_failure "a staging directory was left behind"; fi
 if [[ "$OUT" == *"prod.app_state_dir=\"$PROD/daemon\""* ]]; then ok; else report_failure "the output does not name the new App state directory"; fi
+if [ -f "$PROD/daemon/app-authority-writer.lock" ] && [ ! -s "$PROD/daemon/app-authority-writer.lock" ]; then ok; else report_failure "prod's writer lock file changed"; fi
+
+begin_case "a source holding the writer lock file moves without copying it"
+printf 'source\n' >"$STATE/app-authority-writer.lock"
+chmod 600 "$STATE/app-authority-writer.lock"
+run_move
+if [ "$RC" -eq 0 ]; then ok; else report_failure "expected rc=0, got rc=$RC"; fi
+if [ ! -s "$PROD/daemon/app-authority-writer.lock" ]; then ok; else report_failure "the source's writer lock file was copied"; fi
+if [ -f "$STATE.moved-to-prod-20260928T120000Z/app-authority-writer.lock" ]; then ok; else report_failure "the source's writer lock file was not kept aside"; fi
 
 begin_case "an empty prod credentials directory is replaced"
 mkdir -m 700 "$PROD/credentials"
@@ -255,6 +267,19 @@ run_move
 kill "$holder" 2>/dev/null || true
 wait "$holder" 2>/dev/null || true
 assert_unchanged_refusal "$before" "prod holds its database lock"
+
+begin_case "a deputy run holding the App authority writer lock refuses"
+held=$CASE_DIR/lock-held
+perl -MFcntl=:flock -e 'open(my $f, ">>", $ARGV[0]) or die; flock($f, LOCK_EX) or die; open(my $m, ">", $ARGV[1]) or die; close $m; sleep 60' \
+  "$PROD/daemon/app-authority-writer.lock" "$held" &
+holder=$!
+for _ in $(seq 1 100); do [ -e "$held" ] && break; sleep 0.1; done
+rm -f "$held"
+before=$(tree_snapshot)
+run_move
+kill "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
+assert_unchanged_refusal "$before" "another process holds the App authority writer lock"
 
 begin_case "a hangup right after a state file's rename removes it"
 placed_stub=$CASE_DIR/placed-bin
