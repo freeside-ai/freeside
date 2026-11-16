@@ -3209,6 +3209,31 @@
                     }
                 }
             }
+            // Where the run's time went (#3233): the strip's three kinds,
+            // from a question answered hours later and an open final review,
+            // on their own coordinator so the inbox digests don't move.
+            let stripCache = InMemoryCacheStore()
+            try stripCache.save(
+                .init(
+                    cursors: .init(
+                        syncEpoch: "screenshot-epoch", lastFullSnapshotRevision: 12,
+                        highestObservedServerRevision: 12),
+                    attentionItems: AttentionFixtures.timeStripItems(),
+                    runs: [RunFixtures.timeStripRun()],
+                    runTimelines: [RunFixtures.timeStripTimeline()]))
+            let stripCoordinator = SyncCoordinator(client: client, cache: stripCache)
+            for width in [CGFloat(390), CGFloat(820)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    surfaces.append(
+                        Surface(
+                            name: "run-timeline-strip-\(Int(width))-\(scheme)", width: width,
+                            colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(
+                                RunTimelineView(coordinator: stripCoordinator, snapshot: RunFixtures.timeStripRun())
+                                    .screenshotContent(RunFixtures.timeStripTimeline())
+                                    .environment(\.pinnedNow, RunFixtures.timeStripNow))))
+                }
+            }
             // Attempt-ordered history (#1263): two early attempts re-observed
             // after a later completed attempt, plus a review round, so the
             // ordering does not follow observation time.

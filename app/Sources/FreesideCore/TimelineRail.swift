@@ -63,6 +63,10 @@ struct TimelineRail: View {
     /// Drawn behind each row's top, by the row's `holdKeys` key: the task
     /// page's mark for holding the reader's place. Nil draws nothing.
     var rowMarker: ((String) -> AnyView)? = nil
+    /// Gives each row its `holdKeys` key as its view id, so a scroll reader
+    /// can bring a row into view: the run page's time strip does. Off by
+    /// default, which leaves every row's identity as it was.
+    var identifiesRows = false
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
     @Environment(\.pinnedNow) private var pinnedNow
@@ -93,7 +97,7 @@ struct TimelineRail: View {
     }
 
     var body: some View {
-        let keys = rowMarker == nil ? [] : Self.holdKeys(rows)
+        let keys = rowMarker == nil && !identifiesRows ? [] : Self.holdKeys(rows)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 let isLast = index == rows.count - 1
@@ -121,6 +125,7 @@ struct TimelineRail: View {
                     if let rowMarker, index < keys.count { rowMarker(keys[index]) }
                 }
                 .accessibilityElement(children: .combine)
+                .rowID(identifiesRows && index < keys.count ? keys[index] : nil)
             }
         }
     }
@@ -209,5 +214,14 @@ struct TimelineRail: View {
             .foregroundStyle(Color.inkDim)
             .exactInstant(recordedAt)
         }
+    }
+}
+
+extension View {
+    /// The row's view id when it has one; with none the row keeps the
+    /// identity its `ForEach` gives it.
+    @ViewBuilder
+    fileprivate func rowID(_ id: String?) -> some View {
+        if let id { self.id(id) } else { self }
     }
 }
