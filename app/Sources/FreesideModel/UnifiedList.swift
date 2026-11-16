@@ -114,12 +114,17 @@ package struct UnifiedList {
     /// its items from reading as scoped rows. System health findings never
     /// reach the list, open or closed: the inbox holds decisions about work,
     /// and findings about the daemon have Settings' System Health pane
-    /// (`SystemHealthFindings`).
+    /// (`SystemHealthFindings`). A `positionFilter` keeps only the task rows
+    /// a work status count holds (`WorkStatus`): no scoped item and no
+    /// Finished row, except `keptTaskID`'s row, which it keeps wherever the
+    /// task now sits (`Filters`).
     package init(
         open allOpen: [Components.Schemas.AttentionItemSnapshot],
         closed allClosed: [Components.Schemas.AttentionItemSnapshot],
         tasks: [Components.Schemas.TaskSnapshot],
-        projectFilter: String?
+        projectFilter: String?,
+        positionFilter: WorkStatus.Position? = nil,
+        keeping keptTaskID: String? = nil
     ) {
         // Before the project filter's options are read, so a project whose
         // only items were findings isn't offered.
@@ -131,6 +136,9 @@ package struct UnifiedList {
         }
         let keepsTask = { (task: Components.Schemas.Task) in
             projectFilter == nil || task.project_id == projectFilter
+        }
+        let passesPosition = { (task: Components.Schemas.Task, position: WorkStatus.Position?) in
+            positionFilter == nil || task.id == keptTaskID || (position != nil && position == positionFilter)
         }
 
         var itemsByTaskID: [String: [Components.Schemas.AttentionItemSnapshot]] = [:]
@@ -148,23 +156,26 @@ package struct UnifiedList {
         needsYou = needsYouOrder.compactMap { content in
             switch content {
             case .task(let task, _):
-                keepsTask(task.task)
+                keepsTask(task.task) && passesPosition(task.task, .waitingOnYou)
                     ? UnifiedRow(content: .task(task, openItems: itemsByTaskID[task.task.id] ?? [])) : nil
             case .item(let snapshot):
-                Self.keeps(snapshot.item, projectFilter: projectFilter) ? UnifiedRow(content: content) : nil
+                positionFilter == nil && Self.keeps(snapshot.item, projectFilter: projectFilter)
+                    ? UnifiedRow(content: content) : nil
             }
         }
 
         let quietTasks = TaskDisplay.sortedTasks(tasks).filter {
             itemsByTaskID[$0.task.id] == nil && keepsTask($0.task)
         }
-        working = quietTasks.filter { TaskDisplay.isActive($0.task) }
-            .map { UnifiedRow(content: .task($0, openItems: [])) }
+        working = quietTasks.filter {
+            TaskDisplay.isActive($0.task) && passesPosition($0.task, WorkStatus.position(ofQuiet: $0.task))
+        }
+        .map { UnifiedRow(content: .task($0, openItems: [])) }
 
-        let finishedTasks = quietTasks.filter { !TaskDisplay.isActive($0.task) }
+        let finishedTasks = quietTasks.filter { !TaskDisplay.isActive($0.task) && passesPosition($0.task, nil) }
             .map { (instant: $0.task.last_activity_at, row: UnifiedRow(content: .task($0, openItems: []))) }
         let closedScoped = closed.filter {
-            heldTaskID($0.item) == nil && Self.keeps($0.item, projectFilter: projectFilter)
+            positionFilter == nil && heldTaskID($0.item) == nil && Self.keeps($0.item, projectFilter: projectFilter)
         }.map {
             (
                 instant: $0.item.decided_at ?? $0.item.created_at ?? .distantPast,
@@ -209,6 +220,55 @@ package struct UnifiedList {
         guard let projectFilter else { return true }
         if case .system = item.subject { return true }
         return item.project_id == projectFilter
+    }
+
+    /// The list's filters. `keptTaskID` is the selected task the position
+    /// filter showed, whose row stays while it's selected even after the
+    /// task moves to another position, so a stage change or a new card
+    /// never drops the filter or closes the page the operator is reading.
+    package struct Filters: Equatable, Sendable {
+        package var projectID: String?
+        package var position: WorkStatus.Position?
+        package var keptTaskID: String?
+
+        package init(projectID: String?, position: WorkStatus.Position?, keptTaskID: String? = nil) {
+            self.projectID = projectID
+            self.position = position
+            self.keptTaskID = keptTaskID
+        }
+    }
+
+    /// The filters after the selection moves to `selection`. A row the list
+    /// shows keeps them, and under a position filter becomes the kept task.
+    /// A route to a row they hide drops them so the operator sees what they
+    /// opened: the position filter alone when that shows the row, else both.
+    /// A row no filter shows yet (a link ahead of its row) leaves them be.
+    package static func filters(
+        _ current: Filters, showing selection: UnifiedSelection?,
+        open: [Components.Schemas.AttentionItemSnapshot],
+        closed: [Components.Schemas.AttentionItemSnapshot],
+        tasks: [Components.Schemas.TaskSnapshot]
+    ) -> Filters {
+        let list = { (projectID: String?, position: WorkStatus.Position?, kept: String?) in
+            UnifiedList(
+                open: open, closed: closed, tasks: tasks, projectFilter: projectID, positionFilter: position,
+                keeping: kept)
+        }
+        guard let selection else {
+            return Filters(projectID: current.projectID, position: current.position)
+        }
+        if list(current.projectID, current.position, current.keptTaskID).holds(selection) {
+            var kept: String? = nil
+            if current.position != nil, case .task(let taskID) = selection { kept = taskID }
+            return Filters(projectID: current.projectID, position: current.position, keptTaskID: kept)
+        }
+        if current.position != nil, list(current.projectID, nil, nil).holds(selection) {
+            return Filters(projectID: current.projectID, position: nil)
+        }
+        if list(nil, nil, nil).holds(selection) {
+            return Filters(projectID: nil, position: nil)
+        }
+        return current
     }
 
     /// The row a selection draws on: an item with a held task selects that
@@ -266,7 +326,13 @@ extension SyncCoordinator {
     package var unifiedList: UnifiedList {
         UnifiedList(
             open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks,
-            projectFilter: store.projectID)
+            projectFilter: store.projectID, positionFilter: store.positionFilter, keeping: store.keptTaskID)
+    }
+
+    /// The work status counts under the project filter, whatever the
+    /// position filter.
+    package var workStatus: WorkStatus {
+        WorkStatus(open: store.openSnapshots, tasks: tasks, projectFilter: store.projectID)
     }
 
     /// Whether Next Item and Previous Item have anywhere to go.

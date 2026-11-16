@@ -45,6 +45,18 @@ import Testing
         #expect(store.conversationsByID.isEmpty)
     }
 
+    /// An epoch change drops the position filter with the project filter:
+    /// the counts it came from no longer hold.
+    @Test func discardingSnapshotsClearsBothListFilters() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.applyListFilters(.init(projectID: "freeside", position: .stage("review"), keptTaskID: "task-review"))
+        #expect(store.keptTaskID == "task-review")
+        store.discardSnapshots()
+        #expect(store.projectID == nil)
+        #expect(store.positionFilter == nil)
+        #expect(store.keptTaskID == nil)
+    }
+
     /// The local clear of the unviewed mark (#2930) holds while sync keeps
     /// serving the same surface unviewed, and retires once sync serves the
     /// surface viewed or moves to a new one.

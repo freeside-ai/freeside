@@ -88,7 +88,7 @@ struct UnifiedListView: View {
     private var list: UnifiedList {
         UnifiedList(
             open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks,
-            projectFilter: store.projectID)
+            projectFilter: store.projectID, positionFilter: store.positionFilter, keeping: store.keptTaskID)
     }
 
     private var selection: UnifiedSelection? {
@@ -133,6 +133,7 @@ struct UnifiedListView: View {
             finishedLimit = max(finishedLimit, finishedPage(list).rows.count)
         }
         .onChange(of: store.projectID) { repairSelection() }
+        .onChange(of: store.positionFilter) { repairSelection() }
         .onChange(of: preferences.finishedExpanded) { _, expanded in
             if !expanded { finishedLimit = FinishedPage.initialLimit }
         }
@@ -173,15 +174,13 @@ struct UnifiedListView: View {
         FinishedPage(list.finished, limit: finishedLimit, holding: selection)
     }
 
-    /// A route to a row the filter hides drops the filter, so the operator
-    /// sees what they opened.
+    /// Keeps the selected row under the position filter, and drops the
+    /// filters that hide a routed row (`UnifiedList.filters`).
     private func revealSelection() {
-        guard store.projectID != nil, let selection, !list.holds(selection) else { return }
-        let unfiltered = UnifiedList(
-            open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks, projectFilter: nil)
-        if unfiltered.holds(selection) {
-            store.selectProjectFilter(nil)
-        }
+        store.applyListFilters(
+            UnifiedList.filters(
+                .init(projectID: store.projectID, position: store.positionFilter, keptTaskID: store.keptTaskID),
+                showing: selection, open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks))
     }
 
     /// One line: the filter's state, the filter, and on the Mac New Task (the
