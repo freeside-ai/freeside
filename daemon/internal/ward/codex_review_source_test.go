@@ -4332,6 +4332,18 @@ func reviewSourceFailureClass(err error) domain.ReviewFailureClass {
 	return ""
 }
 
+// newFixedReviewSource builds a Codex source shell sufficient to drive
+// normalizeCollection deterministically. It goes through the accessor default,
+// so cfg.provider is the Codex provider.
+func newFixedReviewSource() *CodexReviewSource {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	return &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Review:              CodexReviewConfig{Model: "gpt-codex", ReasoningEffort: "high"},
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "subscription:owner", Now: func() time.Time { return now },
+	}}
+}
+
 // codexGoldenReviewCollection is the fixed, valid raw collection the outcome
 // goldens and the evidence tests share. The events line carries the
 // caller-chosen usage shape; every other input is stable so the digests pin.
@@ -4344,7 +4356,7 @@ func codexGoldenReviewCollection(events string) CodexReviewCollection {
 			`{"path":"main.go","start_line":10,"end_line":12},` +
 			`"explanation":"re-derive the approval instead of trusting the stored bit"}]}`),
 		Events:              []byte(events + "\n"),
-		ConfigurationDigest: newEquivalenceReviewSource().cfg.ConfigurationDigest,
+		ConfigurationDigest: newFixedReviewSource().cfg.ConfigurationDigest,
 	}
 }
 
@@ -4352,7 +4364,7 @@ func codexGoldenReviewCollection(events string) CodexReviewCollection {
 // through the real write path, so its retained collection and both evidence
 // digests are self-consistent.
 func codexGoldenReviewOutcome(events string) CodexReviewSourceOutcome {
-	source := newEquivalenceReviewSource()
+	source := newFixedReviewSource()
 	req := exec.ReviewRequest{
 		Admission:    testRecordedReviewAdmission("run-golden"),
 		RunID:        "run-golden",

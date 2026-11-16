@@ -163,7 +163,7 @@ func TestCodexReviewTerminalFailureOverridesEmptyFindings(t *testing.T) {
 		{"workspace preflight failure", "fatal: cannot change to bound workspace: Permission denied\n", codexReviewAccessFailureExitStatus, domain.ReviewFailureConfiguration},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			source := newEquivalenceReviewSource()
+			source := newFixedReviewSource()
 			req := exec.ReviewRequest{
 				Admission: testReviewAdmission("run-terminal"), RunID: "run-terminal",
 				BaseSHA: testCodexReviewHead, HeadSHA: testCodexReviewHead, Instructions: testReviewInstructionBinding(),
