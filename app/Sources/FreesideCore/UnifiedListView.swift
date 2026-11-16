@@ -183,9 +183,11 @@ struct UnifiedListView: View {
                 showing: selection, open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks))
     }
 
-    /// One line: the filter's state, the filter, and on the Mac New Task (the
-    /// iPhone's is in its bottom bar). A disabled New Task says why on a line
-    /// of its own.
+    /// One line: the filter's state, Work Status, the filter, and on the Mac
+    /// New Task (the iPhone's is in its bottom bar); the state takes a line
+    /// of its own when they don't fit. A disabled New Task says why on a
+    /// line of its own, and a position filter names itself and its Clear on
+    /// another.
     private func tools(_ list: UnifiedList) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let newTaskBlockedReason {
@@ -193,60 +195,118 @@ struct UnifiedListView: View {
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             }
-            HStack(spacing: 8) {
-                Text(Self.filterState(projectID: store.projectID))
-                    .font(FreesideFont.trailingSummary)
-                    .foregroundStyle(store.projectID == nil ? Color.inkDim : Color.ink)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityHidden(true)
-                Spacer(minLength: 8)
-                Button {
-                    projectFilterPresented = true
-                } label: {
-                    ToolsRowGlyphFace(
-                        title: "Filter by project", symbol: "line.3.horizontal.decrease", glyphSize: 14,
-                        isActive: Self.filterIsActive(
-                            projectID: store.projectID, isPresented: projectFilterPresented))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    filterStateText
+                    Spacer(minLength: 8)
+                    toolButtons(list)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Filter by project")
-                .accessibilityValue(Self.filterState(projectID: store.projectID))
-                #if os(macOS)
-                    .help("Filter by project")
-                #endif
-                .popover(isPresented: $projectFilterPresented) {
-                    ProjectFilterPopover(
-                        projects: list.knownProjects, offersNoProject: list.offersNoProject,
-                        selection: store.projectID,
-                        onSelect: { projectID in
-                            projectFilterPresented = false
-                            guard store.projectID != projectID else { return }
-                            navigation.recordOperatorNavigation()
-                            store.selectProjectFilter(projectID)
-                            // The operator's filter beats a selection it
-                            // hides, even a linked item's; a route does the
-                            // opposite (`revealSelection`).
-                            if let selection, !list.holds(selection) { navigation.select(nil) }
-                        }
-                    )
-                    .presentationCompactAdaptation(.popover)
-                }
-                #if os(macOS)
-                    Button {
-                        navigation.newTaskComposerPresented = true
-                    } label: {
-                        ToolsRowGlyphFace(title: "New Task", symbol: "plus.square", glyphSize: 15)
+                // At large text the state takes a line of its own, so the
+                // buttons never squeeze it to an ellipsis.
+                VStack(alignment: .leading, spacing: 8) {
+                    filterStateText
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        toolButtons(list)
                     }
-                    .buttonStyle(.plain)
-                    .help(newTaskBlockedReason ?? "New Task")
-                    .disabled(newTaskBlockedReason != nil)
-                #endif
+                }
+            }
+            if let position = store.positionFilter {
+                positionFilterLine(position)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.bottom, 10)
+    }
+
+    private var filterStateText: some View {
+        Text(Self.filterState(projectID: store.projectID))
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(store.projectID == nil ? Color.inkDim : Color.ink)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .accessibilityHidden(true)
+    }
+
+    /// Work Status, the project filter, and on the Mac New Task.
+    @ViewBuilder
+    private func toolButtons(_ list: UnifiedList) -> some View {
+        Button {
+            navigation.route(to: .workStatus)
+        } label: {
+            ToolsRowGlyphFace(
+                title: "Work Status", symbol: "chart.bar.xaxis", glyphSize: 14,
+                isActive: navigation.path.last == .workStatus)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Work Status")
+        #if os(macOS)
+            .help("Work Status")
+        #endif
+        Button {
+            projectFilterPresented = true
+        } label: {
+            ToolsRowGlyphFace(
+                title: "Filter by project", symbol: "line.3.horizontal.decrease", glyphSize: 14,
+                isActive: Self.filterIsActive(
+                    projectID: store.projectID, isPresented: projectFilterPresented))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Filter by project")
+        .accessibilityValue(Self.filterState(projectID: store.projectID))
+        #if os(macOS)
+            .help("Filter by project")
+        #endif
+        .popover(isPresented: $projectFilterPresented) {
+            ProjectFilterPopover(
+                projects: list.knownProjects, offersNoProject: list.offersNoProject,
+                selection: store.projectID,
+                onSelect: { projectID in
+                    projectFilterPresented = false
+                    guard store.projectID != projectID else { return }
+                    navigation.recordOperatorNavigation()
+                    store.selectProjectFilter(projectID)
+                    // The operator's filter beats a selection it
+                    // hides, even a linked item's; a route does the
+                    // opposite (`revealSelection`).
+                    if let selection, !list.holds(selection) { navigation.select(nil) }
+                }
+            )
+            .presentationCompactAdaptation(.popover)
+        }
+        #if os(macOS)
+            Button {
+                navigation.newTaskComposerPresented = true
+            } label: {
+                ToolsRowGlyphFace(title: "New Task", symbol: "plus.square", glyphSize: 15)
+            }
+            .buttonStyle(.plain)
+            .help(newTaskBlockedReason ?? "New Task")
+            .disabled(newTaskBlockedReason != nil)
+        #endif
+    }
+
+    /// The work status count the list shows, and its Clear.
+    private func positionFilterLine(_ position: WorkStatus.Position) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(position.label)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.ink)
+                .accessibilityLabel("Showing \(position.label)")
+            Spacer(minLength: 8)
+            Button {
+                navigation.recordOperatorNavigation()
+                store.selectPositionFilter(nil)
+            } label: {
+                Text("Clear")
+                    .font(FreesideFont.noticeAction)
+                    .foregroundStyle(Color.accentText)
+            }
+            .buttonStyle(.plain)
+            .freesideFocusRing(cornerRadius: 4)
+            .accessibilityLabel("Clear \(position.label) filter")
+        }
     }
 
     @ViewBuilder

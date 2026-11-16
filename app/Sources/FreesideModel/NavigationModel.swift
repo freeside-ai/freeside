@@ -24,6 +24,9 @@ public final class NavigationModel {
         /// A run is reached through its task: routing selects the task and
         /// pushes the run timeline over it.
         case run(taskID: String, runID: String)
+        /// The work status view (plan §8): where tasks sit right now. It
+        /// stands for no row, so the list selects nothing under it.
+        case workStatus
     }
 
     /// What the detail column draws for a route.
@@ -33,6 +36,7 @@ public final class NavigationModel {
         /// An item with no held task: its card alone.
         case card(itemID: String)
         case run(taskID: String, runID: String)
+        case workStatus
     }
 
     /// The one route: an item, a task, or a task with its run over it. The
@@ -193,6 +197,8 @@ public final class NavigationModel {
             .taskPage(taskID: taskID, leadingItemID: nil)
         case .run(let taskID, let runID):
             .run(taskID: taskID, runID: runID)
+        case .workStatus:
+            .workStatus
         }
     }
 
@@ -349,7 +355,7 @@ public final class NavigationModel {
         switch path.first.map({ Self.surface(for: $0, in: list) }) {
         case .card: true
         case .taskPage(_, let leadingItemID): leadingItemID != nil
-        case .run, nil: false
+        case .run, .workStatus, nil: false
         }
     }
 
@@ -466,7 +472,7 @@ public final class NavigationModel {
                 path = []
                 return
             }
-        case .run, nil:
+        case .run, .workStatus, nil:
             break
         }
     }
