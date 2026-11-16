@@ -279,3 +279,29 @@ func TestClosedPublicationObservationKeepsBlockedTaskHold(t *testing.T) {
 		}
 	})
 }
+
+// TestClosedPublicationObservationSkipsABusyRun: invariant 7 (#3214). While
+// a task goroutine of the closed run still runs, the sweep leaves that run
+// alone, so the observation never runs beside the run's own task; it
+// observes the run on the first sweep after the goroutine ends.
+func TestClosedPublicationObservationSkipsABusyRun(t *testing.T) {
+	t.Parallel()
+	h := newClosedPublicationHarness(t)
+	w := h.workflow()
+	block := make(chan struct{})
+	busy := w.runs.Go(h.runID, func() { <-block })
+	if err := w.observeClosedWorkflows(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.attemptAt) != 0 {
+		t.Fatalf("observed a run whose task still runs: %v", h.attemptAt)
+	}
+	close(block)
+	<-busy
+	if err := w.observeClosedWorkflows(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.attemptAt) != 1 {
+		t.Fatalf("observations after the task ended = %d, want 1", len(h.attemptAt))
+	}
+}

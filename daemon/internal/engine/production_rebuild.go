@@ -143,8 +143,9 @@ const defaultProjectImageRebuildTimeout = time.Hour
 
 // build runs one build under the rebuild's time bound. The builder's proofs
 // run the candidate's own verification commands with no bound of their own,
-// and the lane handles one task at a time, so an unbounded build would let one
-// candidate stop publication for every run.
+// and a build holds the daemon's one build gate and its task's run, so an
+// unbounded build would let one candidate stop every other rebuild and image
+// upkeep for good.
 //
 // The bound ends the build's work. The builder then cleans up under a context
 // it detaches from this one, so a container runtime that stalls there is not

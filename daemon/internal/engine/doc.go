@@ -120,6 +120,8 @@
 //   - production_publication.go the production publication workflow: the
 //     reconcile loop, the binding re-gate, readiness, completion, and PR
 //     bindings
+//   - production_publication_runs.go the lane's per-run goroutines: which
+//     runs are busy, and no start after shutdown
 //   - production_publication_task.go publication task keys and the restart
 //     reconstruction of a stored task row
 //   - production_publication_progress.go how far a forward-route task got

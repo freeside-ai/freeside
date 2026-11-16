@@ -41,7 +41,7 @@ func newHeldFixture(t *testing.T) *heldFixture {
 // task and the end-of-task proof runs after its loop.
 func (hf *heldFixture) pass(t *testing.T) {
 	t.Helper()
-	if _, err := hf.w.reconcile(t.Context()); err != nil {
+	if _, err := hf.w.reconcile(t.Context(), true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -183,7 +183,7 @@ func TestEndOfTaskProofRunsOncePerProcess(t *testing.T) {
 		store: hf.w.store, attention: hf.w.attention, now: hf.w.now, launchBound: hf.w.launchBound,
 		proveVerificationAbsent: hf.w.proveVerificationAbsent,
 	}
-	if _, err := restarted.w.reconcile(t.Context()); err != nil {
+	if _, err := restarted.w.reconcile(t.Context(), true); err != nil {
 		t.Fatal(err)
 	}
 	if len(hf.asked) != 2 || !hf.held(t) {
@@ -232,7 +232,7 @@ func TestEndOfTaskProofLeavesPendingTasks(t *testing.T) {
 		}
 		// The pass's own handling of the task may fail in this fixture; only
 		// the end-of-task proof's choice is under test.
-		_, _ = hf.w.reconcile(t.Context())
+		_, _ = hf.w.reconcile(t.Context(), true)
 		if len(hf.asked) != 0 || !hf.held(t) || len(hf.alerts(t)) != 0 {
 			t.Fatalf("a pending run's reservation was re-proved %d times, held = %v, alerts %v",
 				len(hf.asked), hf.held(t), hf.alerts(t))
@@ -252,7 +252,7 @@ func TestEndOfTaskProofLeavesPendingTasks(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		_, _ = hf.w.reconcile(t.Context())
+		_, _ = hf.w.reconcile(t.Context(), true)
 		if len(hf.asked) != 0 || !hf.held(t) {
 			t.Fatalf("a pass that could not read a pending task re-proved %d times, held = %v", len(hf.asked), hf.held(t))
 		}
@@ -274,7 +274,7 @@ func TestEndOfTaskProofLeavesPendingTasks(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		_, _ = hf.w.reconcile(t.Context())
+		_, _ = hf.w.reconcile(t.Context(), true)
 		hf.wantOneAlert(t, domain.StatusResolved)
 	})
 }
@@ -295,16 +295,54 @@ func TestReleaseWithCommandGoneStillNeedsContainerAbsence(t *testing.T) {
 	}
 }
 
-// TestReleaseReportsABusyLane: a pass holding the lane refuses the release
-// at once instead of waiting.
-func TestReleaseReportsABusyLane(t *testing.T) {
+// holdRun holds runID in the lane, as a task goroutine of that run does,
+// until the returned release, which waits for the hold to end.
+func (hf *heldFixture) holdRun(t *testing.T, runID domain.RunID) (release func()) {
+	t.Helper()
+	block := make(chan struct{})
+	done := hf.w.runs.Go(runID, func() { <-block })
+	if done == nil {
+		t.Fatalf("run %s is held already", runID)
+	}
+	return func() {
+		close(block)
+		<-done
+	}
+}
+
+// TestReleaseRefusesOnlyWhileItsRunIsBusy: while the lane runs work of the
+// task's run, the release refuses at once instead of waiting. Work of
+// another run no longer refuses it (#3214).
+func TestReleaseRefusesOnlyWhileItsRunIsBusy(t *testing.T) {
 	t.Parallel()
 	hf := newHeldFixture(t)
-	hf.w.reconcileMu.Lock()
-	defer hf.w.reconcileMu.Unlock()
+	release := hf.holdRun(t, hf.run.ID)
 	_, err := (&Engine{productionPublication: hf.w}).ReleaseVerificationMemory(t.Context(), hf.run.TaskID, false)
+	release()
 	if !errors.Is(err, ErrPublicationLaneBusy) || len(hf.asked) != 0 {
-		t.Fatalf("release under a busy lane = %v, proofs %d", err, len(hf.asked))
+		t.Fatalf("release under a busy run = %v, proofs %d", err, len(hf.asked))
+	}
+	defer hf.holdRun(t, "run-other")()
+	if report := hf.release(t, false); !report.Invocations[0].Released || hf.held(t) || len(hf.asked) != 1 {
+		t.Fatalf("release beside another run's work = %+v, held = %v, proofs %d", report, hf.held(t), len(hf.asked))
+	}
+}
+
+// TestEndOfTaskProofWaitsForItsRun: a pass skips the end-of-task proof of a
+// run whose work from an earlier pass still runs, marking nothing proved, and
+// a pass after that work returns runs it.
+func TestEndOfTaskProofWaitsForItsRun(t *testing.T) {
+	t.Parallel()
+	hf := newHeldFixture(t)
+	release := hf.holdRun(t, hf.run.ID)
+	hf.pass(t)
+	release()
+	if len(hf.asked) != 0 || !hf.held(t) {
+		t.Fatalf("proof beside the run's work: asked %d, held = %v; want none", len(hf.asked), hf.held(t))
+	}
+	hf.pass(t)
+	if len(hf.asked) != 1 || hf.held(t) {
+		t.Fatalf("proof after the run's work: asked %d, held = %v; want one release", len(hf.asked), hf.held(t))
 	}
 }
 
@@ -323,5 +361,31 @@ func TestVerificationMemoryHeldInvocation(t *testing.T) {
 		if got != want || ok != (want != "") {
 			t.Errorf("%s: got %q, %v; want %q", id, got, ok, want)
 		}
+	}
+}
+
+// TestEndOfTaskProofSkipsAReservationReleasedSinceTheRead: a pass reads an
+// open reservation, and an operator release frees it before the pass's proof
+// goroutine holds the run. The proof finds it released and proves nothing.
+func TestEndOfTaskProofSkipsAReservationReleasedSinceTheRead(t *testing.T) {
+	t.Parallel()
+	hf := newHeldFixture(t)
+	var read []domain.LaunchReservation
+	if err := hf.w.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		read, err = tx.ListOpenVerificationReservations(t.Context())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(read) != 1 {
+		t.Fatalf("open reservations = %d, want 1", len(read))
+	}
+	hf.release(t, false)
+	if err := hf.w.reproveEndedVerification(t.Context(), read[0]); err != nil {
+		t.Fatal(err)
+	}
+	if len(hf.asked) != 1 || len(hf.alerts(t)) != 0 {
+		t.Fatalf("proofs %d, alerts %d after the stale proof; want the release's proof alone", len(hf.asked), len(hf.alerts(t)))
 	}
 }

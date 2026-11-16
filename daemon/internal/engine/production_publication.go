@@ -27,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -308,7 +309,8 @@ type productionPublicationWorkflow struct {
 	proveVerificationContainersAbsent func(context.Context, domain.Run, domain.InvocationID) error
 	// verificationReproved and verificationHeldAlerts are the end-of-task
 	// proof's process state (verification_memory_held.go), read and written
-	// under reconcileMu.
+	// under verificationMu, since proofs of different runs run at once.
+	verificationMu         sync.Mutex
 	verificationReproved   map[domain.InvocationID]bool
 	verificationHeldAlerts map[domain.InvocationID]bool
 	rebuild                *ProjectImageRebuild
@@ -343,7 +345,12 @@ type productionPublicationWorkflow struct {
 	recipeReadTimeout               time.Duration
 	holdRetryInterval               time.Duration
 	now                             func() time.Time
-	holdRetryAfter                  map[string]time.Time
+	// pacingMu guards holdRetryAfter, successorObservationPending, and
+	// reviewRetryAfter, which tasks of different runs read and write at once;
+	// read and write them only through their accessors
+	// (production_publication_holds.go).
+	pacingMu       sync.Mutex
+	holdRetryAfter map[string]time.Time
 	// successorObservationPending counts consecutive successor attempts, by
 	// task intent key, that saw GitHub's PR view lagging the branch (#1544).
 	// Process state only: a restart starts the tolerance window again.
@@ -352,7 +359,9 @@ type productionPublicationWorkflow struct {
 	// closedPublicationRetry paces the closed-workflow publication
 	// observation per run (#2343). Process state only: a restart starts each
 	// schedule again from one immediate attempt, and the run's durable hold
-	// carries the finding across it.
+	// carries the finding across it. closedObservationMu serializes
+	// observeClosedWorkflows, which alone reads and writes it.
+	closedObservationMu    sync.Mutex
 	closedPublicationRetry map[domain.RunID]closedPublicationPace
 	// reconcileClosedPublication replaces the publisher's closed-run
 	// observation when set, so a test can count attempts.
@@ -371,10 +380,35 @@ type productionPublicationWorkflow struct {
 	afterTerminal        func() error
 	afterTaskLockRelease func() error
 	transitionHook       DurableTransitionHook
-	// running counts the lane's verification jobs and image builds for the
-	// restart readiness read; Engine.New sets it from WithRunningWork.
-	running     *RunningWork
-	reconcileMu sync.Mutex
+	// running counts the lane's passes, task goroutines, verification jobs,
+	// and image builds for the restart readiness read; Engine.New sets it
+	// from WithRunningWork.
+	running *RunningWork
+	// passMu serializes passes: startup review recovery, the pending read,
+	// and starting each run's goroutine. A pass never holds it across a
+	// task's work, so a long task delays no other run (#3214).
+	passMu sync.Mutex
+	// runs holds each run's lane work, one goroutine per run at a time: its
+	// pending tasks in the order the pass read them, its end-of-task memory
+	// proof, the operator's memory release, and its closed-workflow
+	// observation. A run whose work still runs is skipped, not queued, and
+	// the next pass picks it up.
+	runs laneRuns
+	// outcomes carries what task and proof goroutines finished to the next
+	// pass that collects it.
+	outcomes publicationOutcomes
+	// launchWaits keeps the lane's memory waits alive while a task goroutine
+	// runs; process state only.
+	launchWaits launchWaitKeeper
+}
+
+// clock is the lane's clock, or the wall clock for a lane built without one,
+// as attentionCreatedAt reads it: every pass now reads it at its start.
+func (w *productionPublicationWorkflow) clock() func() time.Time {
+	if w.now == nil {
+		return time.Now
+	}
+	return w.now
 }
 
 func (w *productionPublicationWorkflow) attentionCreatedAt() time.Time {
@@ -548,15 +582,58 @@ func mapsClone[K comparable, V any](in map[K]V) map[K]V {
 	return out
 }
 
-func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (productionPublicationResult, error) {
-	w.reconcileMu.Lock()
-	defer w.reconcileMu.Unlock()
+// reconcile runs one lane pass: under passMu it reads the pending tasks and
+// starts each run's tasks in that run's own goroutine, which runs them one
+// after another in the order the pass read them (#3214). With wait it then
+// waits for the goroutines it started. Its result adds the counts and errors
+// of every task and proof goroutine that finished since the last pass
+// collected them. A non-retryable error among those stops the lane: the pass
+// returns it before starting anything, one pass later than a serial lane
+// would have when the pass does not wait.
+func (w *productionPublicationWorkflow) reconcile(ctx context.Context, wait bool) (productionPublicationResult, error) {
+	earlier, err := w.outcomes.collect()
+	if err != nil {
+		return earlier, err
+	}
+	started, result, err := w.startPass(ctx)
+	result.add(earlier)
+	if !wait {
+		return result, err
+	}
+	for _, done := range started {
+		<-done
+	}
+	finished, finishedErr := w.outcomes.collect()
+	result.add(finished)
+	return result, errors.Join(err, finishedErr)
+}
+
+// pendingPublicationTask is one row a pass read, decoded, or with the
+// decode's error and the run its key names.
+type pendingPublicationTask struct {
+	entry     store.QueueEntry
+	runID     domain.RunID
+	task      productionPublicationTask
+	decodeErr error
+}
+
+// startPass is reconcile's part under passMu. Nothing in it waits on a
+// task's work: startup review recovery is the one network call, and it runs
+// on the first pass, before any task goroutine exists.
+func (w *productionPublicationWorkflow) startPass(
+	ctx context.Context,
+) (started []<-chan struct{}, result productionPublicationResult, joined error) {
+	w.passMu.Lock()
+	defer w.passMu.Unlock()
+	since := w.launchWaits.startPass(w.clock()())
 	if w.reviewRecoveryPending {
 		// Startup only: recovery aborts every started review as orphaned, so a
 		// runtime pass would kill live ones. abortRecoveredReview reaps the one
-		// review an operator recovery frees.
+		// review an operator recovery frees. It runs before this process's
+		// first task goroutine starts, under passMu, which every goroutine's
+		// start needs.
 		if err := w.reviewRecovery(ctx); err != nil {
-			return productionPublicationResult{}, fmt.Errorf("recover reviews at startup: %w", err)
+			return nil, result, fmt.Errorf("recover reviews at startup: %w", err)
 		}
 		w.reviewRecoveryPending = false
 	}
@@ -565,31 +642,34 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		// tasks (an attended daemon recognizing unattended work), which is a
 		// hold an operator should see per run, not a silent return: record
 		// the typed cause for each queued task before pausing (issue #394).
-		if err := w.recordAttendedPublicationHolds(ctx); err != nil {
-			return productionPublicationResult{}, err
-		}
-		return productionPublicationResult{}, nil
+		return nil, result, w.recordAttendedPublicationHolds(ctx)
 	}
-	var result productionPublicationResult
-	var joined error
 	feedbackTransitions, err := w.reconcileOperatorFeedback(ctx)
 	result.feedbackTransitions = feedbackTransitions
 	if err != nil {
 		joined = errors.Join(joined, fmt.Errorf("reconcile returned operator feedback: %w", err))
 	}
+	// A run busy now may finish its task before this pass starts the run
+	// again, and the read below would still list that task as pending, so
+	// this pass leaves every such run, and its proof, to the next pass.
+	busy := w.runs.Busy()
 	pending, releasedWaits, concludedWaits, err := w.readPendingTasks(ctx)
 	if err != nil {
-		return result, errors.Join(joined, err)
+		return nil, result, errors.Join(joined, err)
 	}
 	if err := w.retireClosureWaits(ctx, concludedWaits); err != nil {
 		joined = errors.Join(joined, fmt.Errorf("retire concluded closure waits: %w", err))
 	}
 	w.pruneHeldTaskRetries(pending)
-	// The end-of-task proof after the loop treats a verification reservation
-	// as ended only when no pending task this pass read belongs to its run,
-	// and none at all when a pending task could not be read.
-	pendingRuns := make(map[domain.RunID]bool, len(pending))
+	// The end-of-task proof treats a verification reservation as ended only
+	// when no pending task this pass read belongs to its run, and none at all
+	// when a pending task could not be read.
+	pendingRuns := make(map[domain.RunID]bool, len(pending)+len(busy))
+	for runID := range busy {
+		pendingRuns[runID] = true
+	}
 	pendingUnread := false
+	tasks := make([]pendingPublicationTask, 0, len(pending))
 	for _, entry := range pending {
 		task, err := w.decodePendingTask(ctx, entry)
 		if err != nil {
@@ -605,160 +685,281 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 				))
 				continue
 			}
-			// A task row this daemon cannot reconstruct is the marker's
-			// failure mode one row over: a newer daemon writes a newer task
-			// too, so joining the error here would end Engine.Run on every
-			// pass for as long as the row exists (#424). Quarantine the run
-			// it names and leave the row pending for a daemon that can read
-			// it. A row whose key this lane could not have filed names no
-			// run, so it stays loud.
-			if runID, ok := productionRunIDFromPendingTaskKey(entry.IdempotencyKey); ok {
-				quarantined, quarantineErr := w.quarantineTaskRow(ctx, runID)
-				if quarantineErr != nil {
-					joined = errors.Join(joined, fmt.Errorf(
-						"task %q: %w", entry.IdempotencyKey, quarantineErr))
-					continue
-				}
-				if quarantined {
-					continue
-				}
+			// A row whose key this lane could not have filed names no run, so
+			// it stays loud. One that names a run is quarantined in that
+			// run's goroutine (advanceTask).
+			runID, ok := productionRunIDFromPendingTaskKey(entry.IdempotencyKey)
+			if !ok {
+				joined = errors.Join(joined, fmt.Errorf(
+					"task %q cannot be reconstructed: %w: %w",
+					entry.IdempotencyKey, err, domain.ErrParentKeyMismatch,
+				))
+				continue
 			}
-			joined = errors.Join(joined, fmt.Errorf(
-				"task %q cannot be reconstructed: %w: %w",
-				entry.IdempotencyKey, err, domain.ErrParentKeyMismatch,
-			))
+			tasks = append(tasks, pendingPublicationTask{entry: entry, runID: runID, decodeErr: err})
 			continue
 		}
 		pendingRuns[task.RunID] = true
-		if err := w.requireWorkflowOpen(ctx, task.RunID); err != nil {
-			if workflowAdvancementFenced(err) {
-				continue
-			}
-			joined = errors.Join(joined, err)
-			continue
-		}
-		// The task reads again, so its own hold has ended. It has to be
-		// retired here, while the row is still pending: a task that completes
-		// leaves the pending scan, and no later pass would reach its notice.
-		if err := releaseProductionQuarantine(
-			ctx, w.store, w.attention,
-			productionTaskQuarantinePrefix, task.RunID,
-		); err != nil {
-			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err))
-			continue
-		}
-		// The publication lane holds a quarantined run too. reconcileTask
-		// re-gates its own authority from the store and never reads the
-		// marker, so without this check a run whose marker stopped
-		// authenticating would still import, verify, and open a real pull
-		// request while its notice claims it is held out of the lane.
-		markerQuarantined, err := w.quarantineTaskMarkers(ctx, task)
-		if err != nil {
-			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err))
-			continue
-		}
-		if markerQuarantined {
-			continue
-		}
-		if retryAfter, held := w.holdRetryAfter[task.intentKey()]; held {
-			if w.now().Before(retryAfter) {
-				continue
-			}
-			delete(w.holdRetryAfter, task.intentKey())
-		}
-		lockDir := filepath.Join(w.workDir, "task-locks")
-		if err := os.MkdirAll(lockDir, 0o700); err != nil {
-			// A work directory the daemon cannot prepare pauses the task just
-			// as a retryable reconcile failure does, so it is the same
-			// operator-visible hold: without this the run is paused with no
-			// cause (or a stale one) on the read surface (issue #394).
-			if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
-				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
-			}
-			w.deferHeldTask(task)
-			continue
-		}
-		release, err := acquirePublicationLock(ctx, lockDir, entry.IdempotencyKey)
-		if err != nil {
-			if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
-				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
-			}
-			w.deferHeldTask(task)
-			continue
-		}
-		// The attempt starts here, so an attended daemon's pause of this
-		// queued task has ended: clearing it now keeps the read surface from
-		// reporting attended_mode_active through a long fetch, verification,
-		// and publication attempt (issue #394). Only that cause is cleared —
-		// a hold this attempt is about to re-record (a definitive block, an
-		// environmental back-off) keeps its row and its span. A failed
-		// projection write is joined loud but never stops the attempt: the
-		// observation surface has no authority over publication.
-		if obsErr := w.clearAttendedPublicationHold(ctx, task); obsErr != nil {
-			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
-		}
-		outcome, reconcileErr := w.reconcileTask(ctx, task)
-		releaseErr := release()
-		if w.afterTaskLockRelease != nil {
-			releaseErr = errors.Join(releaseErr, w.afterTaskLockRelease())
-		}
-		if releaseErr != nil {
-			// The task may already be durably complete. Preserve its outcome;
-			// lock cleanup is environmental and cannot invalidate committed work.
-			w.deferHeldTask(task)
-		}
-		if !waitsOnImage(reconcileErr) {
-			if obsErr := w.clearImageUpkeepHold(ctx, task); obsErr != nil {
-				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
-			}
-		}
-		if reconcileErr != nil {
-			if workflowAdvancementFenced(reconcileErr) {
-				continue
-			}
-			if productionPublicationRetryableFailure(reconcileErr) {
-				// The environmental back-off is a hold an operator can see:
-				// record its typed cause beside the retry window (issue
-				// #394). A failed observation write is a store fault, joined
-				// loud like any other.
-				if obsErr := w.recordRetryableHold(ctx, task, reconcileErr); obsErr != nil {
-					joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
-				}
-				w.deferHeldTask(task)
-			} else {
-				// A published task re-entered only to release its closure hold
-				// fails loud once, not on every pass: its wait retires first, so a
-				// pull request the repair cannot reach (for example one merged
-				// before the pass observed it) stays a draft rather than wedging
-				// the lane across restarts.
-				if slices.Contains(releasedWaits, entry.IdempotencyKey) {
-					reconcileErr = errors.Join(reconcileErr, w.retireClosureWaits(ctx, []string{entry.IdempotencyKey}))
-				}
-				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, reconcileErr))
-			}
-			continue
-		}
-		result.completed += boolCount(outcome.completed)
-		result.accepted += boolCount(outcome.accepted)
-		if outcome.readiness != nil {
-			switch outcome.readiness.Class {
-			case domain.ReadinessBlocked:
-				// Blocked readiness is represented by the blocked task path.
-			case domain.ReadinessReadyClean:
-				result.readyClean++
-			case domain.ReadinessReadyDegraded:
-				result.readyDegraded++
-			}
-		}
-		result.blocked += boolCount(outcome.blocked)
-		if outcome.prNumber > 0 {
-			result.lastPR = outcome.prNumber
-		}
+		tasks = append(tasks, pendingPublicationTask{entry: entry, runID: task.RunID, task: task})
 	}
-	if err := w.reproveEndedVerificationReservations(ctx, pendingRuns, !pendingUnread); err != nil {
+	parts := keyedrun.Partition(tasks, func(p pendingPublicationTask) domain.RunID { return p.runID })
+	started = w.startRuns(ctx, parts, busy, since,
+		func(ctx context.Context, p pendingPublicationTask) (productionPublicationResult, error) {
+			return w.advanceTask(ctx, p, releasedWaits)
+		})
+	proofs, err := w.reproveEndedVerificationReservations(ctx, pendingRuns, !pendingUnread)
+	if err != nil {
 		joined = errors.Join(joined, fmt.Errorf("re-prove ended verification reservations: %w", err))
 	}
+	return append(started, proofs...), result, joined
+}
+
+// startRuns starts each part's tasks in its run's own goroutine and returns
+// the channels of the goroutines it started. A run in skip, busy when the
+// pass read its tasks, or whose goroutine still runs, is skipped: its tasks
+// wait for the next pass. A run's tasks run one after another in the part's
+// order, so two tasks of one run never overlap. Each goroutine counts as
+// running publication work for restart readiness, and keeps the lane's
+// memory waits alive, from before the pass returns until it does; canceling
+// ctx stops it before its next task, leaving that task pending.
+func (w *productionPublicationWorkflow) startRuns(
+	ctx context.Context,
+	parts []keyedrun.Part[domain.RunID, pendingPublicationTask],
+	skip map[domain.RunID]bool,
+	since time.Time,
+	advance func(context.Context, pendingPublicationTask) (productionPublicationResult, error),
+) []<-chan struct{} {
+	var started []<-chan struct{}
+	for _, part := range parts {
+		if skip[part.Key] {
+			continue
+		}
+		endRunning := w.running.Begin(domain.RestartBlockerPublication)
+		endKeep := w.launchWaits.keep(ctx, w.store, w.clock(), w.logger, since)
+		done := w.runs.Go(part.Key, func() {
+			defer endRunning()
+			defer endKeep()
+			for _, p := range part.Items {
+				if ctx.Err() != nil {
+					return
+				}
+				w.outcomes.record(advance(ctx, p))
+			}
+		})
+		if done == nil {
+			endKeep()
+			endRunning()
+			continue
+		}
+		started = append(started, done)
+	}
+	return started
+}
+
+// holdRuns runs fn with every run in runIDs held in w.runs, so no task,
+// proof, or other holder of those runs runs beside it, and returns false,
+// running nothing, when any of them is held already. It never waits for a
+// busy run, so two callers cannot deadlock.
+func (w *productionPublicationWorkflow) holdRuns(runIDs []domain.RunID, fn func()) bool {
+	runIDs = slices.Compact(slices.Sorted(slices.Values(runIDs)))
+	var hold func([]domain.RunID) bool
+	hold = func(rest []domain.RunID) bool {
+		if len(rest) == 0 {
+			fn()
+			return true
+		}
+		held := false
+		done := w.runs.Go(rest[0], func() { held = hold(rest[1:]) })
+		if done == nil {
+			return false
+		}
+		<-done
+		return held
+	}
+	return hold(runIDs)
+}
+
+// advanceTask is one pending task's attempt, in its run's goroutine: the
+// pre-checks that may hold it, its on-disk lock, and reconcileTask. It
+// returns the task's counts and every error that would stop the lane.
+func (w *productionPublicationWorkflow) advanceTask(
+	ctx context.Context, p pendingPublicationTask, releasedWaits []string,
+) (result productionPublicationResult, joined error) {
+	entry, task := p.entry, p.task
+	if p.decodeErr != nil {
+		// A task row this daemon cannot reconstruct is the marker's
+		// failure mode one row over: a newer daemon writes a newer task
+		// too, so joining the error here would end Engine.Run on every
+		// pass for as long as the row exists (#424). Quarantine the run
+		// it names and leave the row pending for a daemon that can read
+		// it.
+		quarantined, err := w.quarantineTaskRow(ctx, p.runID)
+		if err != nil {
+			return result, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err)
+		}
+		if quarantined {
+			return result, nil
+		}
+		return result, fmt.Errorf(
+			"task %q cannot be reconstructed: %w: %w",
+			entry.IdempotencyKey, p.decodeErr, domain.ErrParentKeyMismatch,
+		)
+	}
+	if err := w.requireWorkflowOpen(ctx, task.RunID); err != nil {
+		if workflowAdvancementFenced(err) {
+			return result, nil
+		}
+		return result, err
+	}
+	// The task reads again, so its own hold has ended. It has to be
+	// retired here, while the row is still pending: a task that completes
+	// leaves the pending scan, and no later pass would reach its notice.
+	if err := releaseProductionQuarantine(
+		ctx, w.store, w.attention,
+		productionTaskQuarantinePrefix, task.RunID,
+	); err != nil {
+		return result, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err)
+	}
+	// The publication lane holds a quarantined run too. reconcileTask
+	// re-gates its own authority from the store and never reads the
+	// marker, so without this check a run whose marker stopped
+	// authenticating would still import, verify, and open a real pull
+	// request while its notice claims it is held out of the lane.
+	markerQuarantined, err := w.quarantineTaskMarkers(ctx, task)
+	if err != nil {
+		return result, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err)
+	}
+	if markerQuarantined || !w.heldTaskDue(task) {
+		return result, nil
+	}
+	lockDir := filepath.Join(w.workDir, "task-locks")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		// A work directory the daemon cannot prepare pauses the task just
+		// as a retryable reconcile failure does, so it is the same
+		// operator-visible hold: without this the run is paused with no
+		// cause (or a stale one) on the read surface (issue #394).
+		if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
+			joined = fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr)
+		}
+		w.deferHeldTask(task)
+		return result, joined
+	}
+	release, err := acquirePublicationLock(ctx, lockDir, entry.IdempotencyKey)
+	if err != nil {
+		if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
+			joined = fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr)
+		}
+		w.deferHeldTask(task)
+		return result, joined
+	}
+	// The attempt starts here, so an attended daemon's pause of this
+	// queued task has ended: clearing it now keeps the read surface from
+	// reporting attended_mode_active through a long fetch, verification,
+	// and publication attempt (issue #394). Only that cause is cleared —
+	// a hold this attempt is about to re-record (a definitive block, an
+	// environmental back-off) keeps its row and its span. A failed
+	// projection write is joined loud but never stops the attempt: the
+	// observation surface has no authority over publication.
+	if obsErr := w.clearAttendedPublicationHold(ctx, task); obsErr != nil {
+		joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+	}
+	outcome, reconcileErr := w.reconcileTask(ctx, task)
+	releaseErr := release()
+	if w.afterTaskLockRelease != nil {
+		releaseErr = errors.Join(releaseErr, w.afterTaskLockRelease())
+	}
+	if releaseErr != nil {
+		// The task may already be durably complete. Preserve its outcome;
+		// lock cleanup is environmental and cannot invalidate committed work.
+		w.deferHeldTask(task)
+	}
+	if !waitsOnImage(reconcileErr) {
+		if obsErr := w.clearImageUpkeepHold(ctx, task); obsErr != nil {
+			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+		}
+	}
+	if reconcileErr != nil {
+		if workflowAdvancementFenced(reconcileErr) {
+			return result, joined
+		}
+		if productionPublicationRetryableFailure(reconcileErr) {
+			// The environmental back-off is a hold an operator can see:
+			// record its typed cause beside the retry window (issue
+			// #394). A failed observation write is a store fault, joined
+			// loud like any other.
+			if obsErr := w.recordRetryableHold(ctx, task, reconcileErr); obsErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+			}
+			w.deferHeldTask(task)
+			return result, joined
+		}
+		// A published task re-entered only to release its closure hold
+		// fails loud once, not on every pass: its wait retires first, so a
+		// pull request the repair cannot reach (for example one merged
+		// before the pass observed it) stays a draft rather than wedging
+		// the lane across restarts.
+		if slices.Contains(releasedWaits, entry.IdempotencyKey) {
+			reconcileErr = errors.Join(reconcileErr, w.retireClosureWaits(ctx, []string{entry.IdempotencyKey}))
+		}
+		return result, errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, reconcileErr))
+	}
+	result.completed = boolCount(outcome.completed)
+	result.accepted = boolCount(outcome.accepted)
+	if outcome.readiness != nil {
+		switch outcome.readiness.Class {
+		case domain.ReadinessBlocked:
+			// Blocked readiness is represented by the blocked task path.
+		case domain.ReadinessReadyClean:
+			result.readyClean = 1
+		case domain.ReadinessReadyDegraded:
+			result.readyDegraded = 1
+		}
+	}
+	result.blocked = boolCount(outcome.blocked)
+	result.lastPR = outcome.prNumber
 	return result, joined
+}
+
+// add folds another result's counts into r; a later pull request number
+// replaces an earlier one.
+func (r *productionPublicationResult) add(other productionPublicationResult) {
+	r.feedbackTransitions += other.feedbackTransitions
+	r.completed += other.completed
+	r.accepted += other.accepted
+	r.readyClean += other.readyClean
+	r.readyDegraded += other.readyDegraded
+	r.blocked += other.blocked
+	if other.lastPR > 0 {
+		r.lastPR = other.lastPR
+	}
+}
+
+// publicationOutcomes carries what lane goroutines finished to the next pass
+// that collects it, as offPassOutcomes does for the engine pass: the counts,
+// and every error that would have stopped a serial pass, so a correctness
+// error still stops the lane's loop rather than vanishing into a log.
+type publicationOutcomes struct {
+	mu     sync.Mutex
+	result productionPublicationResult
+	errs   []error
+}
+
+func (o *publicationOutcomes) record(result productionPublicationResult, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.result.add(result)
+	if err != nil {
+		o.errs = append(o.errs, err)
+	}
+}
+
+// collect returns and forgets what was recorded since the last collect.
+func (o *publicationOutcomes) collect() (productionPublicationResult, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	result, err := o.result, errors.Join(o.errs...)
+	o.result, o.errs = productionPublicationResult{}, nil
+	return result, err
 }
 
 // readPendingTasks reads every task the lane's pass works: the pending
@@ -1682,7 +1883,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	// nothing about the lag, and clearing on it would let a flaky GitHub
 	// postpone the card for a PR that is really missing.
 	if err == nil || !productionPublicationRetryableFailure(err) {
-		delete(w.successorObservationPending, task.intentKey())
+		w.endLaggingSuccessorObservation(task)
 	}
 	if err != nil {
 		if errors.Is(err, publish.ErrSuccessorObservationPending) {
@@ -2637,12 +2838,7 @@ func (w *productionPublicationWorkflow) holdLaggingSuccessorObservation(
 	imported importer.Result,
 	err error,
 ) (productionTaskOutcome, error) {
-	if w.successorObservationPending == nil {
-		w.successorObservationPending = make(map[string]int)
-	}
-	key := task.intentKey()
-	w.successorObservationPending[key]++
-	if w.successorObservationPending[key] <= successorObservationPendingTolerance {
+	if w.countLaggingSuccessorObservation(task) <= successorObservationPendingTolerance {
 		return productionTaskOutcome{}, err
 	}
 	reason := productionBlockSuccessorPRNotListed
