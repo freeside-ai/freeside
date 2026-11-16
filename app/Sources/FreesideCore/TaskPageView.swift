@@ -3033,14 +3033,15 @@ enum TaskTimelinePresentation {
         return parts.isEmpty ? nil : (parts.joined(separator: " · "), .faint)
     }
 
-    /// Whether the task strip ends `run` at its newest milestone (#3234).
-    /// The synced run's lifecycle says so when the client holds it; a task
-    /// timeline run carries no lifecycle, so otherwise the run chip's rule
-    /// stands in: a successor or the task leaving its active lifecycle
-    /// ended it.
+    /// Whether the task strip ends `run` (#3234). Served clocks say so
+    /// with their end (#3236). From a daemon older than that, the synced
+    /// run's lifecycle says so when the client holds it; a task timeline
+    /// run carries no lifecycle, so otherwise the run chip's rule stands
+    /// in: a successor or the task leaving its active lifecycle ended it.
     static func runIsFinished(
         _ run: Components.Schemas.TaskTimelineRun, task: Components.Schemas.Task, synced: Components.Schemas.Run?
     ) -> Bool {
+        if let clocks = run.clocks?.value1 { return clocks.ended_at != nil }
         if let synced, synced.lifecycle != .unknown { return synced.lifecycle == .finished }
         return run.superseded_by != nil || !TaskDisplay.isActive(task)
     }
@@ -3054,7 +3055,7 @@ enum TaskTimelinePresentation {
             TaskTimeStrip.Run(
                 runID: run.run_id,
                 finished: runIsFinished(run, task: task, synced: synced.first { $0.run.id == run.run_id }?.run),
-                milestones: run.milestones)
+                milestones: run.milestones, holdHistory: run.hold_history ?? [], clocks: run.clocks?.value1)
         }
     }
 

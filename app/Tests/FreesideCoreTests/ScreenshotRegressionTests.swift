@@ -3293,9 +3293,10 @@
                     }
                 }
             }
-            // Where the run's time went (#3233): the strip's three kinds,
-            // from a question answered hours later and an open final review,
-            // on their own coordinator so the inbox digests don't move.
+            // Where the run's time went (#3233, #3237): the strip's four
+            // kinds, from a question answered an hour later, a quota hold,
+            // and an open final review, on their own coordinator so the
+            // inbox digests don't move.
             let stripCache = InMemoryCacheStore()
             try stripCache.save(
                 .init(

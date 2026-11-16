@@ -2,10 +2,10 @@ import FreesideAPI
 import SwiftUI
 
 /// Where a run's time went, to scale (#3233): one bar cut into agent
-/// working, waiting on you, and everything else, with the elapsed time and
-/// each kind's total under it. The bar keeps true scale, so a short segment
-/// can be thin; the totals and each segment's own accessible button carry
-/// what the eye can't.
+/// working, waiting on you, held (#3237), and everything else, with the
+/// elapsed time and each kind's total under it. The bar keeps true scale,
+/// so a short segment can be thin; the totals and each segment's own
+/// accessible button carry what the eye can't.
 struct RunTimeStripView: View {
     let strip: RunTimeStrip.Strip
     /// Brings the milestones rail to a segment. Nil (a screenshot) leaves
@@ -91,20 +91,31 @@ struct RunTimeStripView: View {
     }
 
     private func segmentLabel(_ segment: RunTimeStrip.Segment) -> String {
-        let now = pinnedNow ?? Date()
+        Self.segmentLabel(segment, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
+    }
+
+    /// A segment's kind, a held segment's reason in the hold callout's
+    /// words, its length, and its span: the segment's tooltip and
+    /// accessible label.
+    static func segmentLabel(
+        _ segment: RunTimeStrip.Segment, now: Date, locale: Locale, timeZone: TimeZone
+    ) -> String {
         let from = FreesideFormat.shortTime(segment.start, now: now, locale: locale, timeZone: timeZone)
         let to = FreesideFormat.shortTime(segment.end, now: now, locale: locale, timeZone: timeZone)
-        return "\(Self.label(segment.kind)), \(Self.duration(segment.duration, locale: locale, width: .wide)), "
-            + "\(from) to \(to)"
+        let name = [label(segment.kind), segment.holdReason.map(RunDisplay.label)].compactMap { $0 }
+        return (name + [duration(segment.duration, locale: locale, width: .wide), "\(from) to \(to)"])
+            .joined(separator: ", ")
     }
 
     /// Water for the agent, as a running invocation is; the accent for
-    /// waiting on you, as a blocked one is; a strong neutral for the rest.
-    /// Wax stays the rail's failure mark.
+    /// waiting on you, as a blocked one is; the dim ink for a hold, apart
+    /// from the strong neutral the rest takes. Wax stays the rail's failure
+    /// mark.
     static func color(_ kind: RunTimeStrip.Kind) -> Color {
         switch kind {
         case .agentWorking: .waterText
         case .waitingOnYou: .accentBorder
+        case .held: .inkDim
         case .other: .ruleStrong
         }
     }
@@ -113,6 +124,7 @@ struct RunTimeStripView: View {
         switch kind {
         case .agentWorking: "Agent working"
         case .waitingOnYou: "Waiting on you"
+        case .held: "Held"
         case .other: "Other"
         }
     }

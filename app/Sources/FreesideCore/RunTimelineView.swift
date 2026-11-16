@@ -175,7 +175,8 @@ struct RunTimelineView: View {
     ) -> some View {
         if let strip = RunTimeStrip.strip(
             run: snapshot.run, milestones: timeline.milestones,
-            attentionItems: coordinator.store.orderedSnapshots, now: now)
+            attentionItems: coordinator.store.orderedSnapshots, holdHistory: timeline.hold_history ?? [],
+            clocks: timeline.clocks?.value1, now: now)
         {
             RunTimeStripView(
                 strip: strip,

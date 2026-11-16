@@ -863,10 +863,7 @@ import Testing
     @Test func aStripSegmentScrollsToItsNewestRowElseTheOneBeforeIt() throws {
         let timeline = RunFixtures.timeStripTimeline()
         let rows = RunHistoryPresentation.rows(milestones: timeline.milestones, context: { _ in nil })
-        let strip = try #require(
-            RunTimeStrip.strip(
-                run: RunFixtures.timeStripRun().run, milestones: timeline.milestones,
-                attentionItems: AttentionFixtures.timeStripItems(), now: RunFixtures.timeStripNow))
+        let strip = try Self.timeStrip()
         func target(_ index: Int) -> String? {
             RunHistoryPresentation.scrollTarget(rows: rows, segment: strip.segments[index], barEnd: strip.end)
                 .map { rows[$0].label }
@@ -875,11 +872,14 @@ import Testing
         #expect(target(0) == "Invocation Admitted")
         // Agent working, 3 to 41: its start; the stop at 41 opens the wait.
         #expect(target(1) == "Invocation Started")
-        // Waiting on you, 41 to 130: the stop that raised the question.
+        // Waiting on you, 41 to 100: the stop that raised the question.
         #expect(target(2) == "Execution Outcome Recorded · Blocked")
+        // Held, 100 to 132: nothing inside, so that same stop; the
+        // admission at 132 opens the next segment.
+        #expect(target(3) == "Execution Outcome Recorded · Blocked")
         // Waiting on you, 175 to now: nothing inside, so the export before it.
-        #expect(target(6) == "Execution Export Recorded")
-        #expect(strip.segments.count == 7)
+        #expect(target(7) == "Execution Export Recorded")
+        #expect(strip.segments.count == 8)
     }
 
     /// At the bar's end a row closes the last segment rather than falling
@@ -899,15 +899,39 @@ import Testing
     }
 
     @Test @MainActor func theStripSummaryNamesTheElapsedTimeAndEachTotal() throws {
-        let strip = try #require(
-            RunTimeStrip.strip(
-                run: RunFixtures.timeStripRun().run, milestones: RunFixtures.timeStripTimeline().milestones,
-                attentionItems: AttentionFixtures.timeStripItems(), now: RunFixtures.timeStripNow))
+        let strip = try Self.timeStrip()
         let locale = Locale(identifier: "en_US")
         #expect(
             RunTimeStripView.summary(strip, locale: locale)
                 == "Elapsed 3 hours, 50 minutes: agent working 1 hour, 15 minutes, "
-                + "waiting on you 2 hours, 24 minutes, other 11 minutes.")
+                + "waiting on you 1 hour, 54 minutes, held 32 minutes, other 9 minutes.")
         #expect(RunTimeStripView.duration(strip.elapsed, locale: locale) == "3h 50m")
+    }
+
+    /// A held segment names its reason in the hold callout's words; other
+    /// segments name only their kind (#3237).
+    @Test @MainActor func aHeldSegmentsLabelNamesItsReason() throws {
+        let strip = try Self.timeStrip()
+        func label(_ index: Int) -> String {
+            RunTimeStripView.segmentLabel(
+                strip.segments[index], now: RunFixtures.timeStripNow, locale: Locale(identifier: "en_US"),
+                timeZone: .gmt)
+        }
+        #expect(
+            label(3)
+                == "Held, Waiting for quota window to reset, 32 minutes, Aug 12, 4:20\u{202F}AM to Aug 12, 4:52\u{202F}AM"
+        )
+        #expect(label(2) == "Waiting on you, 59 minutes, Aug 12, 3:21\u{202F}AM to Aug 12, 4:20\u{202F}AM")
+    }
+
+    /// The strip fixture as the run page draws it, with its served holds
+    /// and clocks.
+    private static func timeStrip() throws -> RunTimeStrip.Strip {
+        let timeline = RunFixtures.timeStripTimeline()
+        return try #require(
+            RunTimeStrip.strip(
+                run: RunFixtures.timeStripRun().run, milestones: timeline.milestones,
+                attentionItems: AttentionFixtures.timeStripItems(), holdHistory: timeline.hold_history ?? [],
+                clocks: timeline.clocks?.value1, now: RunFixtures.timeStripNow))
     }
 }
