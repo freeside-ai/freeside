@@ -19,6 +19,8 @@ import (
 // The read surface re-validates every row and fails closed, so a row the
 // current vocabulary cannot express is an error, never a silently weaker
 // observation (issues #394 and #657; the reconstruction-gate convention).
+// Ending a hold also records it in the hold history (migration 0145,
+// run_hold_span.go).
 
 const (
 	appendRunMilestoneSQL = `INSERT INTO run_milestones
@@ -28,7 +30,8 @@ const (
 	listRunMilestonesSQL = `SELECT run_id, kind, invocation_id, terminal,
 			outcome, reason, recorded_at
 		FROM run_milestones WHERE run_id = ? ORDER BY id`
-	selectRunHoldMergeSQL = `SELECT reason, invocation_id, first_observed_at
+	selectRunHoldCauseSQL = `SELECT reason, invocation_id,
+			first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
 	upsertInvocationObservationSQL = `INSERT INTO invocation_observations
 		(invocation_id, run_id, status, live, observed_at)
@@ -97,7 +100,8 @@ const (
 // or crash-retry that re-observes the same (run, kind, invocation) converges
 // on the already-recorded instant instead of duplicating or erroring. A
 // milestone that actually inserts is forward progress and clears the run's
-// current hold; a converged replay clears nothing, because no progress
+// current hold, which the hold history records as cleared at the milestone's
+// recorded instant; a converged replay clears nothing, because no progress
 // happened now and a standing hold must not blink out under replays.
 func (tx *WriteTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone) error {
 	if err := m.Validate(); err != nil {
@@ -132,7 +136,7 @@ func (tx *WriteTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone
 	if inserted == 0 {
 		return nil
 	}
-	if err := tx.ClearRunHold(ctx, m.RunID); err != nil {
+	if err := tx.clearRunHoldAt(ctx, m.RunID, m.RecordedAt); err != nil {
 		return fmt.Errorf("append run milestone %s %s: %w", m.RunID, m.Kind, err)
 	}
 	return nil
@@ -166,8 +170,9 @@ func (tx *WriteTx) RecordInvocationObservation(
 // RecordRunHold records the run's current hold. The (reason, invocation)
 // pair identifies the cause: re-observing the same cause advances only
 // LastObservedAt and keeps the recorded first instant, while a changed cause
-// replaces the row and restarts the span. The detail is not part of the
-// cause: each write overwrites it with the latest. The stored row is
+// replaces the row and restarts the span, recording the replaced hold in the
+// history as cleared at the new hold's first instant. The detail is not part
+// of the cause: each write overwrites it with the latest. The stored row is
 // projection, so
 // it is only ever merged with, never trusted: a row the current vocabulary
 // cannot express, an unparsable stored instant, or a stored span the
@@ -178,22 +183,25 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 	if err := h.Validate(); err != nil {
 		return fmt.Errorf("record run hold: %w", err)
 	}
-	var (
-		storedReason, storedFirst string
-		storedInvocation          sql.NullString
-	)
-	err := tx.tx.QueryRowContext(ctx, selectRunHoldMergeSQL, h.RunID).
-		Scan(&storedReason, &storedInvocation, &storedFirst)
+	stored := endedRunHold{runID: h.RunID}
+	err := tx.tx.QueryRowContext(ctx, selectRunHoldCauseSQL, h.RunID).
+		Scan(&stored.reason, &stored.invocation, &stored.first, &stored.last)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
-	case storedReason == string(h.Reason) &&
-		storedInvocation.Valid == (h.InvocationID != nil) &&
-		(!storedInvocation.Valid || storedInvocation.String == string(*h.InvocationID)):
-		if firstAt, parseErr := parseTime(storedFirst); parseErr == nil &&
+	case stored.reason == string(h.Reason) &&
+		stored.invocation.Valid == (h.InvocationID != nil) &&
+		(!stored.invocation.Valid || stored.invocation.String == string(*h.InvocationID)):
+		// The same cause continues the hold, so no span ends, even when the
+		// stored first instant can't be kept and only the start moves.
+		if firstAt, parseErr := parseTime(stored.first); parseErr == nil &&
 			!h.LastObservedAt.Before(firstAt) {
 			h.FirstObservedAt = firstAt
+		}
+	default:
+		if err := tx.recordRunHoldSpan(ctx, stored, h.FirstObservedAt); err != nil {
+			return fmt.Errorf("record run hold: %w", err)
 		}
 	}
 	var invocation, check, agent, launchStage, launchDigest, unservedPart, unservedEnrollment any
@@ -270,10 +278,20 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 	return nil
 }
 
-// ClearRunHold removes the run's current hold observation, if any.
+// ClearRunHold removes the run's current hold observation, if any, and
+// records it in the hold history as cleared now, by the store's clock.
 func (tx *WriteTx) ClearRunHold(ctx context.Context, runID domain.RunID) error {
+	return tx.clearRunHoldAt(ctx, runID, time.Now().UTC())
+}
+
+// clearRunHoldAt is ClearRunHold with the instant the hold ended, which a
+// milestone supplies as its own recorded instant.
+func (tx *WriteTx) clearRunHoldAt(ctx context.Context, runID domain.RunID, clearedAt time.Time) error {
 	if runID == "" {
 		return fmt.Errorf("clear run hold: %w", domain.ErrEmptyID)
+	}
+	if err := tx.recordEndedRunHolds(ctx, clearedAt, selectEndingRunHoldSQL, runID); err != nil {
+		return fmt.Errorf("clear run hold: %w", err)
 	}
 	if _, err := tx.tx.ExecContext(ctx, clearRunHoldSQL, runID); err != nil {
 		return fmt.Errorf("clear run hold %s: %w", runID, err)
@@ -284,9 +302,10 @@ func (tx *WriteTx) ClearRunHold(ctx context.Context, runID domain.RunID) error {
 // ClearRunHoldCause removes the run's hold observation only while it still
 // names the given cause. A lane that ends one cause must not erase a hold
 // another cause is keeping (nor restart a live hold's span by deleting and
-// re-recording it), so the cause is a delete predicate: the stored row is
-// still never read back, and a row naming a different cause is left exactly
-// as it stands.
+// re-recording it), so the cause is a delete predicate, and a row naming a
+// different cause is left exactly as it stands. A matching row is read only
+// to copy it into the hold history, cleared now by the store's clock; the
+// delete doesn't depend on that read.
 func (tx *WriteTx) ClearRunHoldCause(
 	ctx context.Context, runID domain.RunID, reason domain.RunHoldReason,
 ) error {
@@ -296,6 +315,10 @@ func (tx *WriteTx) ClearRunHoldCause(
 	if !slices.Contains(domain.AllRunHoldReasons, reason) {
 		return fmt.Errorf("clear run hold cause %s: reason %q: %w",
 			runID, reason, domain.ErrInvalidRunHoldReason)
+	}
+	if err := tx.recordEndedRunHolds(ctx, time.Now().UTC(),
+		selectEndingRunHoldOfReasonSQL, runID, reason); err != nil {
+		return fmt.Errorf("clear run hold cause: %w", err)
 	}
 	if _, err := tx.tx.ExecContext(ctx, clearRunHoldCauseSQL, runID, reason); err != nil {
 		return fmt.Errorf("clear run hold cause %s: %w", runID, err)

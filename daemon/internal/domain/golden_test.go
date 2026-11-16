@@ -2149,6 +2149,17 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	holdClearedAt := ts.Add(3 * time.Minute)
+	holdSpan := domain.RunHoldSpan{
+		RunID: "run-1", InvocationID: &obsInvocationID,
+		Reason:          domain.HoldOperationStopped,
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+		ClearedAt:       &holdClearedAt,
+	}
+	openHoldSpan := holdSpan
+	openHoldSpan.InvocationID = nil
+	openHoldSpan.ClearedAt = nil
 	exhaustedPool := domain.UsagePoolID("claude-owner-subscription")
 	usagePoolHold := holdObservation
 	usagePoolHold.Reason = domain.HoldUsagePoolExhausted
@@ -2838,6 +2849,8 @@ func TestGolden(t *testing.T) {
 		{"run_hold_observation_quota_window", quotaWindowHold},
 		{"run_hold_observation_quota_window_offers", quotaWindowHoldOffers},
 		{"run_hold_observation_machine_capacity", machineCapacityHold},
+		{"run_hold_span", holdSpan},
+		{"run_hold_span_open", openHoldSpan},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},

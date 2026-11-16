@@ -5888,6 +5888,21 @@ at all.
   unrepresentable in the observation surface (the `publish.MintRecord`
   precedent). The richer prose stays on the separately gated attention
   items.
+- **Hold history** (issue #3235) keeps one span per hold a run was under:
+  its cause (reason and invocation, the pair that decides whether a hold
+  continues), when the cause was first and last observed, and when it
+  ended. It carries none of the hold's detail. The store writes a span into
+  the insert-only `run_hold_spans` table in the transaction that ends the
+  hold, and nowhere else. The current hold stays in `run_hold_observations`
+  alone, and `ListRunHoldSpans` and `ListRunHoldSpansBetween` return it as
+  the open span, with no clear time, so a hold still open at an upgrade or a
+  restart is recorded once, when it ends. The clear time comes from what
+  ended the hold: a milestone's `recorded_at`, a new cause's
+  `first_observed_at`, or the store's clock for `ClearRunHold`,
+  `ClearRunHoldCause`, and `ClearUpdateDrainHolds` (a lifted update drain). A clear time before the span's `last_observed_at` is
+  stored as `last_observed_at`. A current row that can't make a valid span
+  ends with no span, and a restarted span of the same cause writes none.
+  Holds cleared before migration 0145 left no record.
 - **Liveness** is derived, never stored: `DeriveInvocationLiveness`
   classifies the last observation (status, live bit, daemon-clock instant)
   against a freshness window, so a stopped daemon or unobservable runtime

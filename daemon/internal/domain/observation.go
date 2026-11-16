@@ -930,6 +930,69 @@ func (h RunHoldObservation) Validate() error {
 	return nil
 }
 
+// RunHoldSpan is one hold a run was under: its cause (the reason and the
+// invocation, the pair RecordRunHold continues a hold by) and its instants.
+// It carries none of the hold's detail. A closed span records when the hold
+// ended; the run's current hold reads as the open span, with a nil ClearedAt
+// (issue #3235).
+type RunHoldSpan struct {
+	RunID RunID `json:"run_id"`
+	// InvocationID is the invocation the hold named; nil renders explicit
+	// null (pointer-for-optional).
+	InvocationID    *InvocationID `json:"invocation_id"`
+	Reason          RunHoldReason `json:"reason"`
+	FirstObservedAt time.Time     `json:"first_observed_at"`
+	LastObservedAt  time.Time     `json:"last_observed_at"`
+	// ClearedAt is the UTC instant the hold ended, never before
+	// LastObservedAt; nil while the hold is current, rendering explicit
+	// null.
+	ClearedAt *time.Time `json:"cleared_at"`
+}
+
+// Validate reports whether the span is structurally sound.
+func (s RunHoldSpan) Validate() error {
+	if s.RunID == "" {
+		return fmt.Errorf("run hold span run_id: %w", ErrEmptyID)
+	}
+	if s.InvocationID != nil && *s.InvocationID == "" {
+		return fmt.Errorf("run hold span %s invocation_id: %w", s.RunID, ErrEmptyID)
+	}
+	if !s.Reason.valid() {
+		return fmt.Errorf("run hold span %s reason %q: %w",
+			s.RunID, s.Reason, ErrInvalidRunHoldReason)
+	}
+	checkInstant := func(name string, at time.Time) error {
+		if at.IsZero() {
+			return fmt.Errorf("run hold span %s %s: %w", s.RunID, name, ErrMissingTimestamp)
+		}
+		if at.Location() != time.UTC {
+			return fmt.Errorf("run hold span %s %s: %w", s.RunID, name, ErrTimestampNotUTC)
+		}
+		return nil
+	}
+	if err := checkInstant("first_observed_at", s.FirstObservedAt); err != nil {
+		return err
+	}
+	if err := checkInstant("last_observed_at", s.LastObservedAt); err != nil {
+		return err
+	}
+	if s.LastObservedAt.Before(s.FirstObservedAt) {
+		return fmt.Errorf("run hold span %s observation reads backwards: %w",
+			s.RunID, ErrTimestampOutOfOrder)
+	}
+	if s.ClearedAt == nil {
+		return nil
+	}
+	if err := checkInstant("cleared_at", *s.ClearedAt); err != nil {
+		return err
+	}
+	if s.ClearedAt.Before(s.LastObservedAt) {
+		return fmt.Errorf("run hold span %s cleared before its last observation: %w",
+			s.RunID, ErrTimestampOutOfOrder)
+	}
+	return nil
+}
+
 // InvocationLiveness is the derived answer to "is this invocation being
 // observed right now": never stored, always computed from the last
 // observation against a freshness window, so a stopped daemon yields an
