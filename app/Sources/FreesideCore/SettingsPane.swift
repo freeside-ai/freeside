@@ -494,7 +494,7 @@ struct SettingsPaneView: View {
             if let sync {
                 DevicesView(
                     model: sync.devices, host: host, unresolvedActionCount: sync.unresolvedActionCount,
-                    client: client, rendersInteractiveControls: rendersInteractiveControls
+                    onPairDevice: pairDevice, client: client, rendersInteractiveControls: rendersInteractiveControls
                 )
                 .padding(SettingsPaneInsets.grammar(client))
             } else {
@@ -525,6 +525,16 @@ struct SettingsPaneView: View {
                 unpaired
             }
         }
+    }
+
+    /// The Devices pane's Pair a Device…: the Mac's, with a supervised
+    /// daemon; never the iPhone's.
+    private var pairDevice: (() -> Void)? {
+        #if os(macOS)
+            mac?.pairDevice
+        #else
+            nil
+        #endif
     }
 
     /// Unpaired, the Mac still draws its supervised daemon with Start or

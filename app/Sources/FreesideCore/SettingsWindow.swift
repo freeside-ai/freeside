@@ -16,15 +16,17 @@
         private let launchColorScheme: ColorScheme?
         private let launchDynamicTypeSize: DynamicTypeSize?
         private let openTask: (String) -> Void
+        private let pairDevice: (() -> Void)?
         @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
 
         /// `openTask` shows a task's page in the main window, for a seated
         /// finding card's Task link: this window has no page of its own to
-        /// show it in.
+        /// show it in. `pairDevice` opens the Pair a Device window from the
+        /// Devices pane.
         public init(
             session: AppSession, navigation: NavigationModel, daemon: DaemonMenuModel?,
             flowPreferences: DecisionFlowPreferences, launchInputs: LaunchInputs,
-            openTask: @escaping (String) -> Void
+            openTask: @escaping (String) -> Void, pairDevice: (() -> Void)? = nil
         ) {
             FreesideFont.registration
             self.session = session
@@ -32,6 +34,7 @@
             self.daemon = daemon
             self.flowPreferences = flowPreferences
             self.openTask = openTask
+            self.pairDevice = pairDevice
             launchColorScheme = launchInputs.colorScheme
             launchDynamicTypeSize = launchInputs.dynamicTypeSize
         }
@@ -71,7 +74,8 @@
                 state: daemon.state, actionError: daemon.actionError,
                 start: { Task { await daemon.start() } },
                 stop: { Task { await daemon.stop() } },
-                openApprovalSettings: { daemon.openApprovalSettings() })
+                openApprovalSettings: { daemon.openApprovalSettings() },
+                pairDevice: pairDevice)
         }
     }
 

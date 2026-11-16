@@ -1103,7 +1103,7 @@
                 state: .running(
                     DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant),
                     restartObserved: false),
-                actionError: nil, start: {}, stop: {}, openApprovalSettings: {})
+                actionError: nil, start: {}, stop: {}, openApprovalSettings: {}, pairDevice: {})
             // The System Health pane (#2920) reads the default inbox's
             // findings: an advisory and a blocking one open, a resolved one
             // closed, with the gate the blocking one closes. Its empty state

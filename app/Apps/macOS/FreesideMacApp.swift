@@ -262,7 +262,8 @@ private struct FreesideSettings: View {
             openTask: { taskID in
                 navigation.route(to: .task(taskID))
                 showMainWindow(openWindow)
-            })
+            },
+            pairDevice: { openWindow(id: PairDeviceWindow.id) })
     }
 }
 
