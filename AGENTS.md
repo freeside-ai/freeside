@@ -575,6 +575,13 @@ directory named before it in the same bullet. All under `daemon/`:
   `cmd/freesided/onboard.go`, `cmd/freesided/setup.go` (also hands the
   registration code to the exchange for the App key), and
   `cmd/freesided/preflight.go`.
+  The App authority's single-writer gate joins them:
+  `internal/daemoncompose/app_authority_gate.go` (`prod`'s start order,
+  which takes the writer lock before it opens the keystore and runs
+  without a driver when it can't), `internal/daemoncompose/execution_pause.go`
+  (releases a pause, after which `prod` never takes the lock), and
+  `cmd/freesided/execution_pause.go` (the operator commands and the
+  control route that request and clear the pause).
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
