@@ -523,6 +523,10 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard2(tx.GetRunHold(ctx, domain.RunID(k.s[0])))
 		})},
+	{"run hold span", []string{"run_hold_spans"}, eachKey(`SELECT DISTINCT run_id FROM run_hold_spans`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.ListRunHoldSpans(ctx, domain.RunID(k.s[0])))
+		})},
 	{"production attempt", []string{"production_attempts"}, eachKey(`SELECT campaign_id, attempt_number FROM production_attempts`, "sn",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.GetProductionAttempt(ctx, domain.CampaignID(k.s[0]), int(k.n[0])))

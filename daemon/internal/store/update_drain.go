@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -58,8 +59,13 @@ func (tx *ReadTx) RequireNoUpdateDrain(ctx context.Context) error {
 
 // ClearUpdateDrainHolds removes every run's hold observation that names
 // update_drain. Lifting a drain ends every such wait at once; a hold that
-// names another cause stays as it is.
+// names another cause stays as it is. Each removed hold is recorded in the
+// hold history as cleared now, by the store's clock.
 func (tx *WriteTx) ClearUpdateDrainHolds(ctx context.Context) error {
+	if err := tx.recordEndedRunHolds(ctx, time.Now().UTC(),
+		selectEndingHoldsOfReasonSQL, domain.HoldUpdateDrain); err != nil {
+		return fmt.Errorf("clear update drain holds: %w", err)
+	}
 	if _, err := tx.tx.ExecContext(ctx,
 		`DELETE FROM run_hold_observations WHERE reason = ?`, domain.HoldUpdateDrain); err != nil {
 		return fmt.Errorf("clear update drain holds: %w", err)
