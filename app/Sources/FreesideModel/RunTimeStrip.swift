@@ -64,17 +64,31 @@ package enum RunTimeStrip {
         attentionItems: [Components.Schemas.AttentionItemSnapshot],
         now: Date
     ) -> Strip? {
+        strip(
+            runID: run.id, finished: run.lifecycle == .finished, milestones: milestones,
+            attentionItems: attentionItems, now: now)
+    }
+
+    /// The same strip for a run known only by its id and whether it
+    /// finished, as the task strip knows a task timeline's runs (#3234).
+    package static func strip(
+        runID: String,
+        finished: Bool,
+        milestones: [Components.Schemas.RunMilestone],
+        attentionItems: [Components.Schemas.AttentionItemSnapshot],
+        now: Date
+    ) -> Strip? {
         guard let newest = milestones.map(\.recorded_at).max(),
             let earliest = milestones.map(\.recorded_at).min()
         else { return nil }
         let start = milestones.first { $0.kind == .run_submitted }?.recorded_at ?? earliest
-        let end = run.lifecycle == .finished ? newest : max(now, newest)
+        let end = finished ? newest : max(now, newest)
         guard end > start else { return nil }
 
         let agent = agentSpans(milestones, barEnd: end)
         // An open card waits to the bar's end, so a device clock behind
         // the daemon's can't drop a card created moments ago.
-        let waiting = waitingSpans(runID: run.id, attentionItems, now: end)
+        let waiting = waitingSpans(runID: runID, attentionItems, now: end)
 
         // Every span edge inside the bar cuts it; each piece between two
         // cuts lies wholly inside or wholly outside any one span.
