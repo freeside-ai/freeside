@@ -812,6 +812,20 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.ProjectSettingsRevisions(ctx, domain.ProjectID(k.s[0])))
 		})},
+	{"project readiness", []string{"project_readiness"}, walkProjectReadiness},
+}
+
+// walkProjectReadiness decodes every readiness row by its key, mapping
+// revisions 0 and 0 back to file settings.
+func walkProjectReadiness(ctx context.Context, s *Store) error {
+	return eachKey(`SELECT project_id, instance_revision, project_revision FROM project_readiness`, "snn",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			var settings *domain.SettingsRevisions
+			if k.n[0] != 0 || k.n[1] != 0 {
+				settings = &domain.SettingsRevisions{Instance: int(k.n[0]), Project: int(k.n[1])}
+			}
+			return discard(tx.ProjectReadiness(ctx, domain.ProjectID(k.s[0]), settings))
+		})(ctx, s)
 }
 
 // walkFollowUpFiling reads each intent, which reconstructs its attempts, and

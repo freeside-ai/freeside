@@ -156,6 +156,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"ALTER TABLE run_hold_observations DROP COLUMN capacity_budget_mib",
 				"ALTER TABLE run_hold_observations DROP COLUMN capacity_ahead",
 				"DROP TABLE memory_budget",
+				"DROP TABLE project_readiness",
 				"DROP TABLE run_hold_spans",
 				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
