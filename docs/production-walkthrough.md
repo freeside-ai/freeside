@@ -406,8 +406,9 @@ CLI-mode rows, for the visibility seed on a fresh root
 
 The real run's writer and judgment models and efforts are chosen for this
 run and named in the go-ahead, never inherited (#3024). Decision records:
-`devlog/2026-11-10-1639-exit-run-real-lineup.md`, and for the escalated
-specifier `devlog/2026-11-10-1758-escalated-specifier-default.md`.
+`devlog/2026-11-10-1639-exit-run-real-lineup.md`,
+`devlog/2026-11-10-1758-escalated-specifier-default.md`, and for the current
+default and reviewer `devlog/2026-11-16-1500-real-run-lineup-high.md`.
 
 - **The tracker's lineup, when the owner pinned one.** The tracker's Exit
   section or its exit-proof unit names it; use it as written.
@@ -415,8 +416,8 @@ specifier `devlog/2026-11-10-1758-escalated-specifier-default.md`.
 
   | Key | Real-run value |
   | --- | --- |
-  | `writers.specifier`, `writers.implementer`, `writers.remediator` | `claude-opus-5-5` at `medium` |
-  | `writers.specifier_escalated` | `claude-fable-5-1` at `medium` |
+  | `writers.specifier`, `writers.implementer`, `writers.remediator` | `claude-opus-5-5` at `high` |
+  | `writers.specifier_escalated` | `claude-fable-5-1` at `high` |
   | `judgment.model`, `judgment.effort` | `claude-opus-5-5` at `medium` |
 
   The escalated specifier runs only on a task the triager escalates; the
@@ -430,10 +431,13 @@ specifier `devlog/2026-11-10-1758-escalated-specifier-default.md`.
   (`devlog/2026-10-22-1346-rehearsal-real-models.md`), so a `--task-line`
   the tracker names may need a role on its own model or effort; the
   tracker's lineup then sets it.
-- **Review stays with onboarding.** `review.model` and `review.effort` stay
-  as the real project's onboarding set them. They feed the review
-  configuration digest the onboarding approved, so this choice leaves them
-  alone.
+- **Review: `gpt-6.1-sol` at `high`, set at onboarding.** The reviewer runs
+  the Codex harness (`agent_tree.review_harness` `codex_cli` or absent,
+  `review.auth_mode` `subscription`). `review.model` and `review.effort`
+  feed the review configuration digest the project's onboarding approved,
+  so a run can't change them on its own: a project onboarded with another
+  reviewer keeps it until a fresh onboarding review approves this one, and
+  the go-ahead names the reviewer the run actually has.
 - **Never copied, never the fixture's.** Don't take the lineup from an
   earlier root's settings: Wave 9's real root did, and a real pull request
   was written by Haiku at `low` without anyone choosing it (#3024). The
