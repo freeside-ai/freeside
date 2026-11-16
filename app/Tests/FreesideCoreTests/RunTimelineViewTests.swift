@@ -857,4 +857,57 @@ import Testing
         #expect(count("Implementation · Pass 1 · Round 2") == 2)
         #expect(count("Implementation · Pass 1 · Round 1") == 4)
     }
+
+    /// A strip segment scrolls the rail to the newest row recorded inside
+    /// it, else the newest before it (#3233).
+    @Test func aStripSegmentScrollsToItsNewestRowElseTheOneBeforeIt() throws {
+        let timeline = RunFixtures.timeStripTimeline()
+        let rows = RunHistoryPresentation.rows(milestones: timeline.milestones, context: { _ in nil })
+        let strip = try #require(
+            RunTimeStrip.strip(
+                run: RunFixtures.timeStripRun().run, milestones: timeline.milestones,
+                attentionItems: AttentionFixtures.timeStripItems(), now: RunFixtures.timeStripNow))
+        func target(_ index: Int) -> String? {
+            RunHistoryPresentation.scrollTarget(rows: rows, segment: strip.segments[index], barEnd: strip.end)
+                .map { rows[$0].label }
+        }
+        // Other, 0 to 3: the admission, not the start at its end.
+        #expect(target(0) == "Invocation Admitted")
+        // Agent working, 3 to 41: its start; the stop at 41 opens the wait.
+        #expect(target(1) == "Invocation Started")
+        // Waiting on you, 41 to 130: the stop that raised the question.
+        #expect(target(2) == "Execution Outcome Recorded · Blocked")
+        // Waiting on you, 175 to now: nothing inside, so the export before it.
+        #expect(target(6) == "Execution Export Recorded")
+        #expect(strip.segments.count == 7)
+    }
+
+    /// At the bar's end a row closes the last segment rather than falling
+    /// outside every segment.
+    @Test func theBarsEndClosesTheLastSegment() {
+        let end = RunFixtures.timeStripInstant(minute: 10)
+        let rows = [
+            TimelineRail.Row(kind: .event, label: "Terminal", recordedAt: end),
+            TimelineRail.Row(kind: .event, label: "Started", recordedAt: RunFixtures.timeStripInstant(minute: 2)),
+            TimelineRail.Row(kind: .event, label: "Undated", recordedAt: nil),
+        ]
+        let last = RunTimeStrip.Segment(kind: .other, start: RunFixtures.timeStripInstant(minute: 5), end: end)
+        #expect(RunHistoryPresentation.scrollTarget(rows: rows, segment: last, barEnd: end) == 0)
+        let early = RunTimeStrip.Segment(
+            kind: .other, start: RunFixtures.timeStripInstant(minute: 0), end: RunFixtures.timeStripInstant(minute: 1))
+        #expect(RunHistoryPresentation.scrollTarget(rows: rows, segment: early, barEnd: end) == nil)
+    }
+
+    @Test @MainActor func theStripSummaryNamesTheElapsedTimeAndEachTotal() throws {
+        let strip = try #require(
+            RunTimeStrip.strip(
+                run: RunFixtures.timeStripRun().run, milestones: RunFixtures.timeStripTimeline().milestones,
+                attentionItems: AttentionFixtures.timeStripItems(), now: RunFixtures.timeStripNow))
+        let locale = Locale(identifier: "en_US")
+        #expect(
+            RunTimeStripView.summary(strip, locale: locale)
+                == "Elapsed 3 hours, 50 minutes: agent working 1 hour, 15 minutes, "
+                + "waiting on you 2 hours, 24 minutes, other 11 minutes.")
+        #expect(RunTimeStripView.duration(strip.elapsed, locale: locale) == "3h 50m")
+    }
 }

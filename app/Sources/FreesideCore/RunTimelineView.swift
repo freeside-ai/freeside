@@ -71,28 +71,10 @@ struct RunTimelineView: View {
     }
 
     private var liveContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                header
-                if let timeline {
-                    sections(timeline)
-                } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
-                    UnavailableStateView(
-                        glyph: .tasks, title: "Timeline unavailable",
-                        description: "Freeside could not load daemon observations for this run."
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 180)
-                } else {
-                    ProgressView("Loading timeline…")
-                        .tint(.waterText)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .frame(maxWidth: .infinity, minHeight: 180)
-                }
-                folds(hold: timeline?.hold?.value1)
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                liveColumn(scrollProxy: scrollProxy)
             }
-            .foregroundStyle(Color.ink)
-            .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
         }
         .navigationTitle(snapshot.run.project_id)
         // A bootstrap now keeps the cached timeline (SyncCoordinator.adopt);
@@ -106,6 +88,30 @@ struct RunTimelineView: View {
         .task(id: requestKey) {
             await coordinator.refreshTaskTimeline(for: snapshot.run.task_id)
         }
+    }
+
+    private func liveColumn(scrollProxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            header
+            if let timeline {
+                sections(timeline, scrollProxy: scrollProxy)
+            } else if coordinator.timelineLoadStates[snapshot.run.id] == .unavailable {
+                UnavailableStateView(
+                    glyph: .tasks, title: "Timeline unavailable",
+                    description: "Freeside could not load daemon observations for this run."
+                )
+                .frame(maxWidth: .infinity, minHeight: 180)
+            } else {
+                ProgressView("Loading timeline…")
+                    .tint(.waterText)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .frame(maxWidth: .infinity, minHeight: 180)
+            }
+            folds(hold: timeline?.hold?.value1)
+        }
+        .foregroundStyle(Color.ink)
+        .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
     }
 
     private var requestKey: TimelineRequestKey {
@@ -133,17 +139,59 @@ struct RunTimelineView: View {
     }
 
     /// What the daemon recorded for the run, each under its own keyword:
-    /// the hold, the review rounds, the milestones, and the invocations.
+    /// where the run's time went, the hold, the review rounds, the
+    /// milestones, and the invocations. A scroll proxy (the live page)
+    /// lets a strip segment bring its milestone into view.
     @ViewBuilder
     private func sections(
-        _ timeline: Components.Schemas.RunTimeline, persistsFolds: Bool = true
+        _ timeline: Components.Schemas.RunTimeline, persistsFolds: Bool = true,
+        scrollProxy: ScrollViewProxy? = nil
     ) -> some View {
+        timeStrip(timeline, scrollProxy: scrollProxy)
         if let hold = timeline.hold?.value1 {
             holdCallout(hold)
         }
         reviewSection(timeline, persistsFolds: persistsFolds)
-        timelineSection(timeline)
+        timelineSection(timeline, identifiesRows: scrollProxy != nil)
         invocationSection(timeline)
+    }
+
+    /// The time strip. A live, unfinished run grows it each minute; a
+    /// finished run, or a screenshot on its pinned clock, draws it once.
+    @ViewBuilder
+    private func timeStrip(_ timeline: Components.Schemas.RunTimeline, scrollProxy: ScrollViewProxy?) -> some View {
+        if scrollProxy == nil || snapshot.run.lifecycle == .finished {
+            timeStrip(timeline, now: pinnedNow ?? Date(), scrollProxy: scrollProxy)
+        } else {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                timeStrip(timeline, now: pinnedNow ?? context.date, scrollProxy: scrollProxy)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func timeStrip(
+        _ timeline: Components.Schemas.RunTimeline, now: Date, scrollProxy: ScrollViewProxy?
+    ) -> some View {
+        if let strip = RunTimeStrip.strip(
+            run: snapshot.run, milestones: timeline.milestones,
+            attentionItems: coordinator.store.orderedSnapshots, now: now)
+        {
+            RunTimeStripView(
+                strip: strip,
+                onSelect: scrollProxy.map { proxy in
+                    { segment in
+                        let rows = milestoneRows(timeline)
+                        guard
+                            let index = RunHistoryPresentation.scrollTarget(
+                                rows: rows, segment: segment, barEnd: strip.end)
+                        else { return }
+                        withAnimation {
+                            proxy.scrollTo(TimelineRail.holdKeys(rows)[index], anchor: .center)
+                        }
+                    }
+                })
+        }
     }
 
     /// The page's one hairline, then its fold (R26): the exact identifiers
@@ -378,11 +426,17 @@ struct RunTimelineView: View {
         "\(run.lifecycle == .finished ? "Recorded hold" : "Hold"): \(RunDisplay.label(hold.reason))"
     }
 
-    private func timelineSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
-        let rows = RunHistoryPresentation.rows(
+    private func milestoneRows(_ timeline: Components.Schemas.RunTimeline) -> [TimelineRail.Row] {
+        RunHistoryPresentation.rows(
             milestones: timeline.milestones,
             context: { attemptContext(invocationID: $0, in: timeline) },
             reviewRounds: timeline.review?.value1.rounds ?? [])
+    }
+
+    private func timelineSection(
+        _ timeline: Components.Schemas.RunTimeline, identifiesRows: Bool = false
+    ) -> some View {
+        let rows = milestoneRows(timeline)
         return VStack(alignment: .leading, spacing: 11) {
             KeywordLabel(text: "Milestones")
             if rows.isEmpty {
@@ -390,7 +444,7 @@ struct RunTimelineView: View {
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             } else {
-                TimelineRail(rows: rows)
+                TimelineRail(rows: rows, identifiesRows: identifiesRows)
             }
         }
     }
@@ -534,6 +588,27 @@ enum RunHistoryPresentation {
         var rows = Array(oldestFirst.reversed())
         if !rows.isEmpty { rows[0].isNewest = true }
         return rows
+    }
+
+    /// The rail row a time-strip segment scrolls to: the newest row
+    /// recorded inside the segment, else the newest recorded before it, so
+    /// a wait with no milestone of its own lands on what started it. A row
+    /// at a segment's start is inside it; one at its end belongs to the
+    /// segment after, except at the bar's end, which closes the last
+    /// segment. Rows come newest first, so the first match is the newest.
+    /// Nil when no row is recorded inside or before the segment.
+    static func scrollTarget(
+        rows: [TimelineRail.Row], segment: RunTimeStrip.Segment, barEnd: Date
+    ) -> Int? {
+        let inside = rows.firstIndex { row in
+            guard let recordedAt = row.recordedAt else { return false }
+            return recordedAt >= segment.start
+                && (recordedAt < segment.end || (recordedAt == segment.end && segment.end == barEnd))
+        }
+        return inside
+            ?? rows.firstIndex { row in
+                row.recordedAt.map { $0 < segment.start } ?? false
+            }
     }
 
     private static func kind(

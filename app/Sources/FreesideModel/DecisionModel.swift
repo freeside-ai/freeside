@@ -205,7 +205,7 @@ public final class DecisionModel {
             .max { $0.item.item_version < $1.item.item_version }
     }
 
-    private static func runID(of subject: Components.Schemas.Subject) -> String? {
+    nonisolated package static func runID(of subject: Components.Schemas.Subject) -> String? {
         switch subject {
         case .run(let run), .proposal_batch(let run): return run.run_id
         case .task, .project, .system: return nil
