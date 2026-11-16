@@ -4068,3 +4068,35 @@ each passage names the stage that delivers it.
 
 (Owner decision of 2026-11-13 on #3201;
 [decision note](../../devlog/2026-11-14-1114-one-daemon-every-project.md).)
+
+## Revision 126 ("The Work Status View Comes Forward"):
+
+1. **The plan commits to a work status view now, not in Phase 3**
+   (Section [8](../plan.md#8-observability-and-optimization-telemetry), which
+   states what the view shows and that it decides nothing). Phase 3 had
+   listed it as "WIP views" since revision 25, with no decisions-log entry
+   of its own.
+2. **Tracker #3231 delivers three outcomes, and its units start by fiat**
+   (Section [11](../plan.md#11-roadmap-build-order-and-coordination),
+   [Timeline Strips, Work Status, and Cause Counts](../plan.md#timeline-strips-work-status-and-cause-counts)):
+   a time-scaled strip on the run timeline and the task page, the work
+   status view, and a command that counts repeated causes on demand. All
+   three read stored records and decide nothing.
+3. **The daemon computes and serves each run's clocks** (Sections
+   [5.1](../plan.md#51-overview) and [8](../plan.md#8-observability-and-optimization-telemetry)).
+   It works out each run's active and elapsed clocks from the run's
+   recorded history and serves them with the intervals behind them, each
+   hold with its reason, so a client does no clock arithmetic. This
+   replaces "the engine records" the clocks; nothing was built under the
+   old wording, and the engine still records the rein-policy digest.
+
+Rejected: a standalone long-waits view, because most long waits follow the
+owner's workday, so the view would mostly show that; recurrence analysis
+run by a model, because cause counts are a plain query over typed causes;
+and compaction as a strip class, because the daemon records no compaction.
+The initiative view and its dependency graph stay Phase 1B.2 work (#885).
+
+Nothing in this revision is built yet: tracker #3231 builds it.
+
+(Owner decision of 2026-11-16 on #3231;
+[decision note](../../devlog/2026-11-16-0951-work-status-view-forward.md).)
