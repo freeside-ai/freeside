@@ -222,40 +222,79 @@ func TestFollowUpFilerClosureRetiresProvenUnsentReservation(t *testing.T) {
 	}
 }
 
-// TestFollowUpFilerSurvivesAKillAtEveryStep stops a filing at each point
-// where the filer reaches outside the store, which brackets every durable
-// step and both sides of the create call, then restarts the daemon. Whatever
-// the stop point, recovery ends in one issue and one ledger row, or in the
+// TestFollowUpFilerSurvivesAKillInEveryDurableState stops a filing once in
+// each durable state a filing passes through, then restarts the daemon.
+// Whatever the stop, recovery ends in one issue and one ledger row, or in the
 // ambiguous outcome and its notice, and never sends a second create.
-func TestFollowUpFilerSurvivesAKillAtEveryStep(t *testing.T) {
+//
+// A kill can only land where the filer reaches outside the store, and every
+// such point leaves the filing in one of four states: an open intent, a
+// recorded pre-dispatch set, a dispatched create the forge never saw, or a
+// dispatched create the forge answered. Each stop is named by its step and the
+// store state it must see, so a stop the filing no longer reaches fails rather
+// than passing unexercised. The pinned step list stands in for killing at
+// every step: a new step fails the test until someone decides whether it
+// reaches a new durable state and, if it does, adds a stop for it.
+func TestFollowUpFilerSurvivesAKillInEveryDurableState(t *testing.T) {
 	t.Parallel()
 	const createPath = "POST " + testRepoPath + "/issues"
-	var stops []string
-	for kill := 1; ; kill++ {
-		stoppedAt := ""
-		t.Run(fmt.Sprintf("stop-%d", kill), func(t *testing.T) {
+	listPath := fmt.Sprintf("GET /repositories/%d/issues", testRepoID)
+
+	t.Run("pinned steps", func(t *testing.T) {
+		h := newFilingHarness(t)
+		h.approve(h.seedRun("run-a", nil, nil), 0)
+		var steps []string
+		h.step = func(name string) { steps = append(steps, name) }
+		h.mustPass()
+		h.step = nil
+		want := []string{
+			"token", "send GET " + testRepoPath, "receive GET " + testRepoPath,
+			"token", "send GET " + testRepoPath + "/milestones", "receive GET " + testRepoPath + "/milestones",
+			"token", "send " + listPath, "receive " + listPath,
+			"token", "send " + createPath, "receive " + createPath,
+		}
+		if !slices.Equal(steps, want) {
+			t.Fatalf("filing steps = %q, want %q", steps, want)
+		}
+	})
+
+	dispatched := func(intent *domain.FollowUpFilingIntent) bool {
+		return intent != nil && len(intent.Attempts) == 1 && intent.Terminal == nil
+	}
+	for _, stop := range []struct {
+		state string
+		step  string
+		at    func(*domain.FollowUpFilingIntent) bool
+	}{
+		{"open intent", "receive " + listPath, func(intent *domain.FollowUpFilingIntent) bool {
+			return intent != nil && intent.PreDispatch == nil
+		}},
+		{"recorded set", "token", func(intent *domain.FollowUpFilingIntent) bool {
+			return intent != nil && intent.PreDispatch != nil && len(intent.Attempts) == 0
+		}},
+		{"dispatched unsent", "send " + createPath, dispatched},
+		{"dispatched answered", "receive " + createPath, dispatched},
+	} {
+		t.Run(stop.state, func(t *testing.T) {
 			h := newFilingHarness(t)
 			instance := h.approve(h.seedRun("run-a", nil, nil), 0)
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			steps := 0
+			stopped := false
 			h.step = func(name string) {
-				if steps++; steps == kill {
-					stoppedAt = name
+				if !stopped && name == stop.step && stop.at(h.intent(instance.ID)) {
+					stopped = true
 					cancel()
 				}
 			}
 			err := h.filer.Pass(ctx)
 			h.step = nil
-			if stoppedAt == "" {
-				if err != nil {
-					t.Fatalf("uninterrupted pass: %v", err)
-				}
-				return
+			if !stopped {
+				t.Fatalf("pass never reached %q in state %s", stop.step, stop.state)
 			}
 			if err == nil {
-				t.Fatalf("pass stopped at %q reported no error", stoppedAt)
+				t.Fatalf("pass stopped at %q reported no error", stop.step)
 			}
 
 			h.restart()
@@ -267,37 +306,22 @@ func TestFollowUpFilerSurvivesAKillAtEveryStep(t *testing.T) {
 
 			issues := h.forgeIssues()
 			if got := h.creates(); got > 1 || len(issues) > 1 {
-				t.Fatalf("stopped at %q: %d create requests, %d issues", stoppedAt, got, len(issues))
+				t.Fatalf("stopped at %q: %d create requests, %d issues", stop.step, got, len(issues))
 			}
 			// Only a create that was marked dispatched and never reached the
 			// forge leaves nothing to adopt.
-			if stoppedAt == "send "+createPath {
+			if stop.step == "send "+createPath {
 				if len(issues) != 0 {
-					t.Fatalf("stopped at %q: forge holds %+v", stoppedAt, issues)
+					t.Fatalf("stopped at %q: forge holds %+v", stop.step, issues)
 				}
 				h.assertTerminal(instance.ID, domain.FollowUpFilingAmbiguous, "", "follow_up_filing_ambiguous")
 				return
 			}
 			if len(issues) != 1 {
-				t.Fatalf("stopped at %q: forge holds %d issues, want 1", stoppedAt, len(issues))
+				t.Fatalf("stopped at %q: forge holds %d issues, want 1", stop.step, len(issues))
 			}
 			h.assertLedgered(instance.ID, issues[0].Number)
 		})
-		if stoppedAt == "" {
-			break
-		}
-		stops = append(stops, stoppedAt)
-	}
-	// The stop points must include both sides of the create call, a point
-	// after the intent opened, and a point after the pre-dispatch set was
-	// recorded (the create request's own token).
-	for _, want := range []string{"send " + createPath, "receive " + createPath} {
-		if !slices.Contains(stops, want) {
-			t.Fatalf("stop points %q never reached %q", stops, want)
-		}
-	}
-	if last := stops[len(stops)-3:]; last[0] != "token" {
-		t.Fatalf("stop points end %q, want the create request's token before its send", last)
 	}
 }
 
