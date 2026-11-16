@@ -32,8 +32,10 @@ import (
 //     (AuthenticateAdmission, ImportOptionsRecord) authenticates the immutable
 //     record without it.
 //   - Current backend conformance, before a start or recovery only
-//     (AuthenticateStart): an intent admitted under one backend configuration
-//     cannot start under another.
+//     (AuthenticateStart): an unattended intent starts only when the running
+//     backend yields the admission's configuration digest for the admission's
+//     image (BackendConfigurationDigestFor), and that configuration's current
+//     durable record still authorizes it.
 //   - The resolved policy's digest against the admission and, under current
 //     policy, its path allowlist against this daemon's configured
 //     AllowedPaths (ResolvedPathAllowlist).
@@ -69,6 +71,11 @@ type Authority struct {
 	// StartAuthors caches start-time commit-author authentication per
 	// invocation; nil authenticates on every start.
 	StartAuthors *CommitAuthorCache
+	// BackendConfigurationDigestFor returns the configuration digest the
+	// running runner backend yields for a writer image. An unattended start or
+	// recovery is refused unless it returns the admission's recorded digest
+	// for the admission's image; nil refuses every unattended start.
+	BackendConfigurationDigestFor func(image string) domain.Digest
 }
 
 // CommitAuthorResolver resolves the GitHub App identity selected for a
@@ -184,14 +191,18 @@ func (a Authority) admission(
 		if kind == admissionForExecution {
 			// Existing attempts bypass fresh admission on replay. Re-run the
 			// recording-time conformance check here so an intent admitted under
-			// backend configuration A cannot start or recover after this daemon
-			// has restarted under a current proof for B. Authenticated released
-			// output can only be imported, so its current-policy read omits this
-			// launch gate while retaining the admission and path checks.
-			// The authenticate gate tolerates a same-configuration recheck in
-			// progress (a supersession marker for A) so this daemon's startup
-			// re-proof cannot permanently reject an in-flight admission (#761); a
-			// proof for a different configuration B still refuses.
+			// backend configuration A cannot start or recover once this
+			// process can no longer run A, or once A's own current record no
+			// longer authorizes it. Authenticated released output can only be
+			// imported, so its current-policy read omits this launch gate
+			// while retaining the admission and path checks.
+			if err := a.requireRunnableConfiguration(admission); err != nil {
+				return err
+			}
+			// The authenticate gate judges A by A's own rows (#3211) and
+			// tolerates a recheck of A in progress (a supersession marker for
+			// A), so this daemon's re-proof cannot permanently reject an
+			// in-flight admission (#761). A failed proof for A still refuses.
 			if err := tx.AuthenticateBackendConformant(ctx, admission); err != nil {
 				return err
 			}
@@ -218,6 +229,34 @@ func (a Authority) admission(
 			admission.ID, domain.ErrParentKeyMismatch)
 	}
 	return admission, allowedPaths, nil
+}
+
+// requireRunnableConfiguration re-checks, for an unattended admission, that
+// the running backend yields the admission's recorded configuration digest
+// for the admission's image. It is the gate that stops an attempt admitted
+// under one configuration from starting or recovering in a process that
+// runs another, for example after a restart with a changed runtime, daemon
+// binary, or ward setting. The store's gate cannot: it judges each
+// configuration by its own rows, so A's passed row still stands after the
+// daemon moves to B. The digest is a pure function of this process's
+// configuration and the image, so the check reads no proof state; whether
+// A is proven is the store's question. Attended admissions bind no digest.
+func (a Authority) requireRunnableConfiguration(admission domain.ExecutionAdmission) error {
+	if admission.OperatingMode != domain.ModeUnattended {
+		return nil
+	}
+	if a.BackendConfigurationDigestFor == nil {
+		return fmt.Errorf("admission %s: no backend configuration to check against: %w",
+			admission.ID, domain.ErrAdmissionConfigurationMismatch)
+	}
+	current := a.BackendConfigurationDigestFor(string(admission.ImageRef))
+	if current != admission.BackendConfigurationDigest {
+		return fmt.Errorf(
+			"admission %s configuration %s, running backend yields %q for image %s: %w",
+			admission.ID, admission.BackendConfigurationDigest, current, admission.ImageRef,
+			domain.ErrAdmissionConfigurationMismatch)
+	}
+	return nil
 }
 
 // ResolvedPathAllowlist binds the submitted, digest-addressed policy to the

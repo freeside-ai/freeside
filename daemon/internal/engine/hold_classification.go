@@ -102,6 +102,15 @@ var holdClasses = []holdClass{
 		sentinel: ErrQuotaWindowExhausted, action: holdActionInvocation,
 		reason: domain.HoldQuotaWindowExhausted, clearsOnStart: true,
 	},
+	// An image with no published proof holds only the attempts on it: ward
+	// proves each image on its own (#3211), so an attempt on another,
+	// proven image behind it in the outbox still starts. It precedes the
+	// configuration-mismatch row it is joined with, and the pre-job refusal
+	// row a start on it reaches.
+	{
+		sentinel: ErrImageNotProved, action: holdActionInvocation,
+		reason: domain.HoldBackendNotConformant,
+	},
 	{
 		sentinel: store.ErrBackendNotConformant, action: holdActionPassMutablePolicy,
 		reason: domain.HoldBackendNotConformant,

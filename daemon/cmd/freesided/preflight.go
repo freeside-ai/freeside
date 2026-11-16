@@ -1088,7 +1088,7 @@ func validateCompositionRepositoryBase(cfg preflightConfig) error {
 // pass, which resets the branch to its baseline first (#3205 moves the check
 // into the daemon). When no recorded image serves that base (serves false),
 // it is the pointed-to image ward starts on while writer attempts hold
-// (startupWriterImage).
+// (startClaudeConformance).
 //
 // It first runs the record-only refusals the daemon's start runs on the
 // -agent-image seed (projectimage.ResolvePreparation). With no pointer
@@ -1114,7 +1114,7 @@ func selectPreflightWriterImage(
 	if database.AdmittedImageFound {
 		pointed = database.AdmittedImage
 	}
-	selected, serves, err := daemoncompose.SelectAmongRecordedImages(pointed, database.ProjectImages, cfg.Repo, cfg.BaseSHA, "",
+	selected, serves, err := daemoncompose.SelectAmongRecordedImages(pointed, database.ProjectImages, cfg.Repo, cfg.BaseSHA, nil,
 		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
 			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA, layout)
 		})

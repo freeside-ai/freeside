@@ -741,6 +741,17 @@ func newScenarioParts(
 	}, nil
 }
 
+// trackedConfigurations is the configuration of every image ward holds
+// proof state for, which the doctor judges.
+func trackedConfigurations(backend *ward.Backend) []domain.Digest {
+	images := backend.TrackedImages()
+	digests := make([]domain.Digest, len(images))
+	for i, image := range images {
+		digests[i] = backend.ConfigurationDigestFor(image)
+	}
+	return digests
+}
+
 // newDoctorPass returns a doctor pass, which does nothing outside Claude
 // mode. The startup pass takes a nil probe, so it reports recorded
 // credential-integrity marks only and starting the daemon starts no
@@ -769,7 +780,7 @@ func newDoctorPass(
 			Store: st, Attention: attention,
 			ProjectID:                 domain.ProjectID("project-system"),
 			Backend:                   domain.BackendFreshVMReadOnlyVolumeHandoff,
-			ConfigurationDigest:       claudeWiring.Backend.ConfigurationDigest(),
+			ConfigurationDigests:      trackedConfigurations(claudeWiring.Backend),
 			ReviewConfigurationDigest: claudeWiring.ReviewConfigurationDigest,
 			Mode:                      cfg.Claude.OperatingMode,
 			Now:                       cfg.Now,

@@ -92,8 +92,9 @@ const (
 	ConformancePassed ConformanceOutcome = "passed"
 	ConformanceFailed ConformanceOutcome = "failed"
 	// ConformanceSuperseded is the durable form of beginConformanceProof: a
-	// recheck has begun, so the previous declaration no longer admits. The
-	// recheck's own completed outcome supersedes it in turn.
+	// recheck of its configuration has begun, or the configuration's proof
+	// was retired, so the previous declaration no longer admits. A recheck's
+	// own completed outcome supersedes it in turn.
 	ConformanceSuperseded ConformanceOutcome = "superseded"
 )
 
@@ -114,10 +115,14 @@ func (o ConformanceOutcome) valid() bool {
 // BackendConformance is the durable record of what a named backend's last
 // completed full conformance pass proved (§5.7, issues #327/#320): the class,
 // exact normalized backend configuration, proven capability declaration, and
-// completion time. The store appends one per completed pass and the newest
-// record per backend is the backend's current declaration; an unattended
-// admission is gated against it at the write boundary, so a writer's
-// in-process claim is never the thing that admits.
+// completion time. The store appends one per completed pass. For a ward
+// admission the newest record for the admission's own configuration is that
+// configuration's current declaration (#3211): ward holds one proof per
+// writer image, each image yielding its own configuration. The host
+// verification executor holds one declaration, its class's newest record.
+// An unattended admission is gated against its current declaration at the
+// write boundary, so a writer's in-process claim is never the thing that
+// admits.
 //
 // The record is a ceiling, never a grant: holding a passed record admits
 // nothing by itself, because the live capability floor still has to be met by

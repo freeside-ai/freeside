@@ -64,8 +64,10 @@ type Config struct {
 	// PreJob is the production backend's lightweight fail-closed probe. It
 	// runs after duplicate arbitration and before materialization or intent
 	// persistence, so a refused probe starts no work and a duplicate replay
-	// does not depend on current runtime health.
-	PreJob func(context.Context, domain.InvocationID) error
+	// does not depend on current runtime health. It receives the
+	// authenticated start's image, so the probe runs in the image the
+	// attempt was admitted on (#3211).
+	PreJob func(context.Context, domain.InvocationID, domain.ImageRef) error
 	// Stall, when set, hears the running writer's stall heartbeat for the
 	// invocation (ward.HandoffSpec.Stall). It is advisory: it never changes
 	// the handoff's result, the writer's budget, or the journaled spec.
@@ -141,7 +143,7 @@ type Driver struct {
 	artifacts         Artifacts
 	provider          Provider
 	credentialMount   CredentialMountPolicy
-	preJob            func(context.Context, domain.InvocationID) error
+	preJob            func(context.Context, domain.InvocationID, domain.ImageRef) error
 	stall             func(context.Context, domain.InvocationID, bool) error
 	adoptedHosts      func(context.Context, int64) ([]string, error)
 	imports           importer.Options
@@ -642,7 +644,7 @@ func (d *Driver) StartWithInputs(
 		return err
 	}
 	if d.preJob != nil {
-		if err := d.preJob(ctx, id); err != nil {
+		if err := d.preJob(ctx, id, spec.ImageRef); err != nil {
 			return fmt.Errorf("pre-job probe: %w",
 				errors.Join(exec.ErrPreJobRefused, err))
 		}

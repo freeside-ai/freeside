@@ -103,6 +103,23 @@ type ConfigurationBoundBackend interface {
 	ConfigurationDigest() domain.Digest
 }
 
+// ImageBoundBackend is a ConfigurationBoundBackend that proves one
+// configuration per writer image and holds those proofs at once (#3211):
+// the configuration digest an attempt binds to, and the capabilities its
+// proof earned, depend on the image the attempt runs. Admission reads both
+// for the attempt's image through ConformanceFor instead of
+// ConfigurationDigest and Capabilities, so an attempt is never admitted
+// against another image's proof. Capabilities still returns the base
+// declaration every image shares.
+type ImageBoundBackend interface {
+	ConfigurationBoundBackend
+	// ConformanceFor returns the configuration digest image yields, the
+	// capabilities the backend declares for image as an independent copy,
+	// and whether the backend holds a published proof of image's
+	// configuration. All three come from one read.
+	ConformanceFor(image string) (digest domain.Digest, declared CapabilitySet, proved bool)
+}
+
 // ErrCapabilityRefused is the class sentinel for capability refusals;
 // CapabilityRefusal unwraps to it so errors.Is matches the class while
 // errors.As reaches the details.
@@ -153,17 +170,25 @@ type Admission struct {
 //
 // The backend's declaration is read once here and the returned snapshot is a
 // frozen clone of it, so the gate decision and the audited snapshot come from
-// the same read and cannot diverge. This is the single admission entry point:
-// a second function that re-read Capabilities() would reopen the
+// the same read and cannot diverge. A caller that must not re-read
+// Capabilities() reads the declaration once itself and passes it to
+// CheckDeclaredCapabilities; nothing else re-reads it, which would reopen the
 // observe-a-different-set race this snapshot exists to close.
 func CheckCapabilities(backend RunnerBackend, minimum []Capability) (Admission, error) {
-	declared := backend.Capabilities()
+	return CheckDeclaredCapabilities(backend.Name(), backend.Capabilities(), minimum)
+}
+
+// CheckDeclaredCapabilities is CheckCapabilities over a declaration the
+// caller already read once, such as an ImageBoundBackend's ConformanceFor
+// set for the attempt's image. The returned snapshot is a frozen clone of
+// declared.
+func CheckDeclaredCapabilities(backend string, declared CapabilitySet, minimum []Capability) (Admission, error) {
 	// domain.MissingCapabilities is the same predicate the store re-runs when
 	// it reconstructs a persisted admission, so a snapshot cannot pass the
 	// spawn gate under one reading of the floor and fail re-admission under
 	// another.
 	if missing := domain.MissingCapabilities(declared.Snapshot(), minimum); len(missing) > 0 {
-		return Admission{}, &CapabilityRefusal{Backend: backend.Name(), Missing: missing}
+		return Admission{}, &CapabilityRefusal{Backend: backend, Missing: missing}
 	}
-	return Admission{Backend: backend.Name(), Declared: declared.Clone()}, nil
+	return Admission{Backend: backend, Declared: declared.Clone()}, nil
 }

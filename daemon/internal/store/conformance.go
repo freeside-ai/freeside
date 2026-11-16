@@ -25,15 +25,20 @@ var ErrBackendNotConformant = errors.New(
 var ErrConformanceGenerationSupplied = errors.New(
 	"conformance proof generation is store-assigned; a record must arrive with generation zero")
 
-// The durable backend-conformance record (plan §5.7; issues #327, #320): the
-// append-only log of what each backend's completed full conformance passes
-// proved, bound to the normalized configuration each pass exercised. The
-// newest row per backend is its current declaration and the row id is the
-// proof generation, mirroring ward's in-memory generation guard: a newer
-// append (any outcome) supersedes the older record, and a failed append
-// invalidates the declaration. Rows are daemon-internal and written by the
-// suite runner through InternalTx, so they carry no
-// entity_version/as_of_revision and never bump the server revision.
+// The durable backend-conformance record (plan §5.7; issues #327, #320,
+// #3211): the append-only log of what each backend's completed full
+// conformance passes proved, bound to the normalized configuration each pass
+// exercised. The row id is the proof generation, mirroring ward's in-memory
+// generation guard: a newer append (any outcome) supersedes the older record
+// for the same configuration, and a failed append invalidates that
+// configuration's declaration. Ward holds one declaration per configuration
+// it proves (one per writer image), so a ward admission is judged against the
+// newest row for its own configuration digest, and a row for another
+// configuration neither admits nor refuses it. The macOS verification
+// executor keeps one declaration per backend: its newest row is its current
+// declaration. Rows are daemon-internal and written by the suite runner
+// through InternalTx, so they carry no entity_version/as_of_revision and never
+// bump the server revision.
 const (
 	recordBackendConformanceSQL = `
 INSERT INTO backend_conformance_records
@@ -45,24 +50,33 @@ VALUES (?, ?, ?, ?, ?)`
 	latestBackendConformanceSQL = `
 SELECT id, outcome, configuration_digest, capabilities, proved_at
 FROM backend_conformance_records WHERE backend = ? ORDER BY id DESC LIMIT 1`
-	// The row immediately preceding a given generation for a backend, across
-	// every outcome and configuration digest, ordered by id for the same reason
-	// as latestBackendConformanceSQL. In the append-only log this row is, by
-	// construction, exactly the declaration a supersession marker at that
-	// generation superseded: whatever was latest the instant the marker was
-	// written. The authenticate re-gate tolerates only when that declaration
-	// both passed and matches the admission's digest, so this must not filter
-	// by outcome or digest. Skipping any intervening marker or other-digest row
-	// to reach an older same-digest pass would resurrect a declaration the
-	// backend already cleared: a proof for another configuration in between (a
-	// roll forward to B then back to A), or a stacked marker from a mid-recheck
-	// restart after a reconfiguration, means no completed pass currently
-	// authorizes the admission's configuration, and the immediately-preceding
-	// row (a marker, a failure, or a different digest) makes that refuse.
-	latestBackendConformanceBeforeSQL = `
+	// The newest row for one backend and configuration digest: a ward
+	// configuration's current declaration. Ordered by id for the same reason
+	// as latestBackendConformanceSQL.
+	latestConfigurationConformanceSQL = `
 SELECT id, outcome, configuration_digest, capabilities, proved_at
 FROM backend_conformance_records
-WHERE backend = ? AND id < ?
+WHERE backend = ? AND configuration_digest = ?
+ORDER BY id DESC LIMIT 1`
+	// The row immediately preceding a given generation for one backend and
+	// configuration digest, across every outcome, ordered by id for the same
+	// reason as latestBackendConformanceSQL. In the append-only log this row
+	// is, by construction, exactly the declaration of that configuration a
+	// supersession marker at that generation superseded: whatever was that
+	// configuration's newest row the instant the marker was written. The
+	// authenticate re-gate tolerates only when that declaration passed, so
+	// this must not filter by outcome. Skipping an intervening marker or
+	// failure to reach an older pass would resurrect a declaration the
+	// backend already cleared: a failed pass in between, or a stacked marker
+	// from a recheck that never concluded (a restart mid-recheck, or a
+	// retirement followed by a new proof), means no completed pass currently
+	// authorizes the configuration, and the immediately-preceding row makes
+	// that refuse. Rows for other configurations are not in this
+	// configuration's history and do not matter.
+	latestConfigurationConformanceBeforeSQL = `
+SELECT id, outcome, configuration_digest, capabilities, proved_at
+FROM backend_conformance_records
+WHERE backend = ? AND configuration_digest = ? AND id < ?
 ORDER BY id DESC LIMIT 1`
 )
 
@@ -125,20 +139,33 @@ func (tx *ReadTx) LatestBackendConformance(
 	return scanBackendConformance(backend, row)
 }
 
-// latestBackendConformanceBefore recovers the row immediately preceding
-// generation for a backend: in the append-only log, exactly the declaration a
-// supersession marker at that generation superseded. It deliberately returns a
-// marker, a failure, or an other-digest row too, since the authenticate re-gate
-// re-binds only when that declaration both passed and matches the admission's
-// digest and must refuse otherwise. It shares the reconstruction-time
-// validation of LatestBackendConformance: a row that no longer validates
-// against the class ceiling fails closed rather than restoring a wider
-// declaration.
-func (tx *ReadTx) latestBackendConformanceBefore(
-	ctx context.Context, backend domain.RunnerBackendClass, generation uint64,
+// LatestConfigurationConformance reconstructs one configuration's current
+// declaration: the newest record a backend appended for digest. Presence and
+// validation follow LatestBackendConformance. Ward startup reads it to
+// restore each image's proof, and the doctor to judge each configuration
+// ward tracks.
+func (tx *ReadTx) LatestConfigurationConformance(
+	ctx context.Context, backend domain.RunnerBackendClass, digest domain.Digest,
 ) (domain.BackendConformance, bool, error) {
-	row := tx.tx.QueryRowContext(ctx, latestBackendConformanceBeforeSQL,
-		string(backend), generation)
+	row := tx.tx.QueryRowContext(ctx, latestConfigurationConformanceSQL,
+		string(backend), string(digest))
+	return scanBackendConformance(backend, row)
+}
+
+// latestConfigurationConformanceBefore recovers the row immediately
+// preceding generation for one backend and configuration digest: in the
+// append-only log, exactly the declaration of that configuration a
+// supersession marker at that generation superseded. It deliberately returns
+// a marker or a failure too, since the authenticate re-gate re-binds only
+// when that declaration passed and must refuse otherwise. It shares the
+// reconstruction-time validation of LatestBackendConformance: a row that no
+// longer validates against the class ceiling fails closed rather than
+// restoring a wider declaration.
+func (tx *ReadTx) latestConfigurationConformanceBefore(
+	ctx context.Context, backend domain.RunnerBackendClass, digest domain.Digest, generation uint64,
+) (domain.BackendConformance, bool, error) {
+	row := tx.tx.QueryRowContext(ctx, latestConfigurationConformanceBeforeSQL,
+		string(backend), string(digest), generation)
 	return scanBackendConformance(backend, row)
 }
 
@@ -198,14 +225,17 @@ func scanBackendConformance(
 
 // RequireBackendConformant is the backend-conformance half of §5.7's
 // unattended conditions, checked in the admitting transaction (issue #320):
-// the named backend's current durable declaration must exist, record a pass,
-// and cover the admission's capability snapshot. Like
-// RequireUnattendedAdmissible it is a recording-time precondition on new
-// unattended operation, not part of a record's meaning, so reconstruction
-// (scanExecutionAdmission) deliberately does not re-run it: a lapsed or
-// superseded conformance must stop what happens next, not make recorded
-// history unreadable. attended_dev is exempt by the owner-ratified reading
-// of #320: §5.7 admits a weaker, unproven runner class there on purpose.
+// the current durable declaration of the admission's own backend
+// configuration must exist, record a pass, and cover the admission's
+// capability snapshot. A ward backend holds one declaration per configuration
+// it proves (#3211), so a newer row for another configuration neither admits
+// nor refuses this one. Like RequireUnattendedAdmissible it is a
+// recording-time precondition on new unattended operation, not part of a
+// record's meaning, so reconstruction (scanExecutionAdmission) deliberately
+// does not re-run it: a lapsed or superseded conformance must stop what
+// happens next, not make recorded history unreadable. attended_dev is exempt
+// by the owner-ratified reading of #320: §5.7 admits a weaker, unproven
+// runner class there on purpose.
 func (tx *ReadTx) RequireBackendConformant(
 	ctx context.Context, admission domain.ExecutionAdmission,
 ) error {
@@ -213,16 +243,19 @@ func (tx *ReadTx) RequireBackendConformant(
 }
 
 // AuthenticateBackendConformant re-gates an already-recorded admission against
-// current conformance state, tolerating one thing the mint gate does not: a
-// same-configuration supersession marker. The startup suite (and the scheduled
-// doctor re-proof) writes that marker the instant a recheck of the current
-// configuration begins, before the marker's own passed outcome lands. A
-// same-configuration re-proof is a proof refresh, not a policy change, so an
-// invocation already admitted against the proof the marker superseded stays
-// authenticated across the window; without this, a re-proof racing an in-flight
-// invocation's re-gate makes the invocation permanently unauthenticatable and
-// durable-stops the daemon (issue #761). A failed proof, or a marker for a
-// different configuration, is a real policy change and stays a refusal.
+// its configuration's current conformance state, tolerating one thing the mint
+// gate does not: a supersession marker for that configuration. The startup
+// suite (and the scheduled doctor re-proof) writes that marker the instant a
+// recheck of the configuration begins, before the marker's own passed outcome
+// lands. A re-proof is a proof refresh, not a policy change, so an invocation
+// already admitted against the proof the marker superseded stays authenticated
+// across the window; without this, a re-proof racing an in-flight invocation's
+// re-gate makes the invocation permanently unauthenticatable and durable-stops
+// the daemon (issue #761). A failed proof, or a second marker, for the
+// configuration is a real change and stays a refusal. Rows for other
+// configurations do not matter. Whether this process could still run the
+// admission's configuration at all is the caller's check
+// (admissionauth.Authority).
 func (tx *ReadTx) AuthenticateBackendConformant(
 	ctx context.Context, admission domain.ExecutionAdmission,
 ) error {
@@ -233,8 +266,8 @@ func (tx *ReadTx) AuthenticateBackendConformant(
 // row that is not itself a current passed proof. The mint gate refuses
 // anything but a current passed row (work not yet admitted loses nothing by
 // holding out a recheck window); the authenticate gate additionally recovers
-// the passed proof a same-configuration supersession marker superseded, so a
-// persisted admission survives the window.
+// the passed proof a supersession marker for the same configuration
+// superseded, so a persisted admission survives the window.
 type backendConformanceGate int
 
 const (
@@ -248,11 +281,18 @@ func (tx *ReadTx) requireBackendConformant(
 	if admission.OperatingMode != domain.ModeUnattended {
 		return nil
 	}
+	// An admission recorded before the configuration binding names no
+	// configuration, so no per-configuration proof can cover it.
+	if admission.BackendConfigurationDigest == "" {
+		return fmt.Errorf("admission %q backend %q names no configuration: %w",
+			admission.InvocationID, admission.Backend, domain.ErrAdmissionConfigurationMismatch)
+	}
 	return tx.requireConformantDeclaration(ctx, conformanceSubject{
-		label:        fmt.Sprintf("admission %q", admission.InvocationID),
-		class:        domain.RunnerBackendClass(admission.Backend),
-		digest:       admission.BackendConfigurationDigest,
-		capabilities: admission.Capabilities,
+		label:            fmt.Sprintf("admission %q", admission.InvocationID),
+		class:            domain.RunnerBackendClass(admission.Backend),
+		digest:           admission.BackendConfigurationDigest,
+		capabilities:     admission.Capabilities,
+		perConfiguration: true,
 	}, gate)
 }
 
@@ -260,8 +300,9 @@ func (tx *ReadTx) requireBackendConformant(
 // unattended condition for the credential-free macOS verification executor:
 // the executor class's current durable declaration must exist, record a pass,
 // be bound to the executor's configuration digest, and cover the capabilities
-// the executor declares now. It applies the same checks and refusals as the
-// mint gate for a ward admission, against the executor's own record. The class
+// the executor declares now. Unlike a ward admission it reads the newest row
+// for the class, whatever its configuration: the executor holds one
+// declaration, and a proof of any other configuration replaces it. The class
 // is fixed here rather than taken from the caller, so a host verification job
 // can never be re-gated against the ward's record. There is no authenticate
 // variant: a host verification admission is not yet persisted (#2882), so no
@@ -279,34 +320,45 @@ func (tx *ReadTx) RequireHostVerificationConformant(
 
 // conformanceSubject is what requireConformantDeclaration gates: a declaration
 // a backend of class made under configuration digest. label prefixes every
-// refusal so the caller's record is named.
+// refusal so the caller's record is named. perConfiguration judges it by the
+// newest row for digest (a ward admission); otherwise by the newest row for
+// the class (the executor).
 type conformanceSubject struct {
-	label        string
-	class        domain.RunnerBackendClass
-	digest       domain.Digest
-	capabilities domain.CapabilitySnapshot
+	label            string
+	class            domain.RunnerBackendClass
+	digest           domain.Digest
+	capabilities     domain.CapabilitySnapshot
+	perConfiguration bool
 }
 
 func (tx *ReadTx) requireConformantDeclaration(
 	ctx context.Context, subject conformanceSubject, gate backendConformanceGate,
 ) error {
-	record, found, err := tx.LatestBackendConformance(ctx, subject.class)
+	var (
+		record domain.BackendConformance
+		found  bool
+		err    error
+	)
+	if subject.perConfiguration {
+		record, found, err = tx.LatestConfigurationConformance(ctx, subject.class, subject.digest)
+	} else {
+		record, found, err = tx.LatestBackendConformance(ctx, subject.class)
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", subject.label, err)
 	}
 	if !found {
-		return fmt.Errorf("%s backend %q: %w",
-			subject.label, subject.class, ErrBackendNotConformant)
+		return fmt.Errorf("%s backend %q configuration %s: %w",
+			subject.label, subject.class, subject.digest, ErrBackendNotConformant)
 	}
 	if record.Outcome != domain.ConformancePassed {
-		// A same-configuration supersession marker, in the authenticate gate
-		// only, re-binds to the passed proof it superseded. Every other
-		// non-passed latest row (a failure, or a marker for a different
-		// configuration) refuses exactly as the mint gate does. The recovered
-		// proof carries the same-digest capability ceiling; the shared checks
-		// below then run against it unchanged.
-		passed, recovered, err := tx.supersededSameConfigurationProof(
-			ctx, subject.class, subject.digest, record, gate)
+		// A supersession marker for the subject's configuration, in the
+		// authenticate gate only, re-binds to the passed proof it superseded.
+		// Every other non-passed latest row (a failure, or a marker for a
+		// different configuration) refuses exactly as the mint gate does. The
+		// recovered proof carries the same-digest capability ceiling; the
+		// shared checks below then run against it unchanged.
+		passed, recovered, err := tx.supersededSameConfigurationProof(ctx, subject, record, gate)
 		if err != nil {
 			return fmt.Errorf("%s: %w", subject.label, err)
 		}
@@ -338,51 +390,44 @@ func (tx *ReadTx) requireConformantDeclaration(
 }
 
 // supersededSameConfigurationProof reports the passed proof to re-bind an
-// admission to when the backend's latest row is a supersession marker for the
-// admission's own configuration. recovered is false (refuse) unless every
-// condition holds: the gate authenticates, the latest row is a supersession
-// marker (not a failure), the marker's configuration is bound and equals the
-// admission's bound digest, and the exact declaration the marker superseded
-// (the newest completed proof for that digest) passed. A marker for a
-// different configuration means the operator reconfigured the backend, so the
-// admission's configuration is no longer current and stays refused; the digest
-// equality is checked here rather than left to the shared mismatch check so a
-// reconfiguration refuses as "no current passed record" rather than silently
-// recovering a stale proof. Re-binding to the *superseded* declaration, not
-// the immediately-preceding row, is what keeps every non-refresh history
-// fatal: that row is the exact declaration the marker superseded, so an
-// already-admitted invocation is authenticated only against the state the
-// backend actually held when this re-proof began, never an older pass the log
-// moved past (a fail-open the mint gate refuses). A failure, an
-// other-configuration proof, or another marker (a mid-recheck restart after a
-// reconfiguration) in that position all mean no completed pass currently
-// authorizes the admission's configuration, so tolerance closes. Two digest
-// checks are required and distinct: the marker must be re-proving the
-// admission's configuration (a refresh, not a reconfiguration), and the
-// declaration it superseded must itself be a pass for that configuration.
+// admission to when its configuration's latest row is a supersession marker.
+// recovered is false (refuse) unless every condition holds: the gate
+// authenticates, the subject is judged per configuration, the latest row is a
+// supersession marker (not a failure), the marker's configuration is bound
+// and equals the admission's bound digest, and the exact declaration of that
+// configuration the marker superseded passed. Re-binding to the superseded
+// declaration, the configuration's immediately-preceding row, is what keeps
+// every non-refresh history fatal: an already-admitted invocation is
+// authenticated only against the state the configuration actually held when
+// this re-proof began, never an older pass its log moved past (a fail-open the
+// mint gate refuses). A failure or another marker (a recheck that never
+// concluded) in that position means no completed pass currently authorizes
+// the configuration, so tolerance closes. The marker's digest equality is
+// checked here even though the per-configuration read already filters by it,
+// so the rule does not rest on which query found the row.
 func (tx *ReadTx) supersededSameConfigurationProof(
 	ctx context.Context,
-	class domain.RunnerBackendClass,
-	digest domain.Digest,
+	subject conformanceSubject,
 	latest domain.BackendConformance,
 	gate backendConformanceGate,
 ) (domain.BackendConformance, bool, error) {
-	if gate != backendConformanceAuthenticate {
+	if gate != backendConformanceAuthenticate || !subject.perConfiguration {
 		return domain.BackendConformance{}, false, nil
 	}
 	if latest.Outcome != domain.ConformanceSuperseded {
 		return domain.BackendConformance{}, false, nil
 	}
 	if !latest.ConfigurationBound() ||
-		latest.ConfigurationDigest != digest {
+		latest.ConfigurationDigest != subject.digest {
 		return domain.BackendConformance{}, false, nil
 	}
-	superseded, found, err := tx.latestBackendConformanceBefore(ctx, class, latest.Generation)
+	superseded, found, err := tx.latestConfigurationConformanceBefore(
+		ctx, subject.class, subject.digest, latest.Generation)
 	if err != nil {
 		return domain.BackendConformance{}, false, err
 	}
 	if !found || superseded.Outcome != domain.ConformancePassed ||
-		superseded.ConfigurationDigest != digest {
+		superseded.ConfigurationDigest != subject.digest {
 		return domain.BackendConformance{}, false, nil
 	}
 	return superseded, true, nil

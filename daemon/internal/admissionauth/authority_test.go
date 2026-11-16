@@ -190,7 +190,16 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolver := &admissionauth.CountingCommitAuthorResolver{Identity: publish.AppBotIdentity{AppSlug: "freeside-test", BotUserID: 12345}}
-	authority := admissionauth.Authority{Store: st, Blobs: blobs, AllowedPaths: []string{"daemon/**"}, CommitAuthors: resolver}
+	running := oldDigest
+	authority := admissionauth.Authority{
+		Store: st, Blobs: blobs, AllowedPaths: []string{"daemon/**"}, CommitAuthors: resolver,
+		BackendConfigurationDigestFor: func(image string) domain.Digest {
+			if image != string(admission.ImageRef) {
+				return domain.Digest("sha256:" + strings.Repeat("9", 64))
+			}
+			return running
+		},
+	}
 	spec := exec.StartSpecFromAdmission(admission)
 	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
 		t.Fatalf("original start authority: %v", err)
@@ -204,10 +213,25 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	if !slices.Contains(protected, ".freeside/recipe.yaml") || slices.Contains(protected, "**/AGENTS.md") {
 		t.Fatalf("protected patterns = %q", protected)
 	}
+	// A newer proof for another configuration, another writer image's, is
+	// not a change to this admission's: it still starts (#3211).
 	now = now.Add(time.Minute)
-	recordProof(domain.Digest("sha256:" + strings.Repeat("2", 64)))
+	newDigest := domain.Digest("sha256:" + strings.Repeat("2", 64))
+	recordProof(newDigest)
+	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); err != nil {
+		t.Fatalf("start beside another configuration's newer proof: %v", err)
+	}
+	// A process that yields another digest for the admission's image, as one
+	// restarted with a changed runtime or binary does, refuses to start or
+	// recover it even though the admission's own proof still stands.
+	running = newDigest
 	if err := authority.AuthenticateStart(ctx, production.InvocationID, spec); !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
 		t.Fatalf("changed backend allowed execution: %v", err)
+	}
+	withoutDigest := authority
+	withoutDigest.BackendConfigurationDigestFor = nil
+	if err := withoutDigest.AuthenticateStart(ctx, production.InvocationID, spec); !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
+		t.Fatalf("authority with no backend configuration allowed execution: %v", err)
 	}
 	if err := authority.AuthenticateImport(ctx, production.InvocationID, spec); err != nil {
 		t.Fatalf("released import after backend change: %v", err)

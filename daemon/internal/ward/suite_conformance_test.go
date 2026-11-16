@@ -41,7 +41,7 @@ func TestSuiteFullRecordsPassedConformance(t *testing.T) {
 		t.Fatalf("Full = %v, want nil", err)
 	}
 	for _, c := range []exec.Capability{exec.CapNetworklessExport, exec.CapEnforcedProviderEgress} {
-		if !s.b.Capabilities().Has(c) {
+		if !capabilitiesFor(s.b, s.fx.AgentImage).Has(c) {
 			t.Errorf("successful Full did not declare %q", c)
 		}
 	}
@@ -86,7 +86,7 @@ func TestSuiteFullRecordsFailedConformance(t *testing.T) {
 		t.Fatal("Full = nil, want failure")
 	}
 	for _, c := range []exec.Capability{exec.CapNetworklessExport, exec.CapEnforcedProviderEgress} {
-		if s.b.Capabilities().Has(c) {
+		if capabilitiesFor(s.b, s.fx.AgentImage).Has(c) {
 			t.Errorf("failed Full retained %q", c)
 		}
 	}
@@ -114,7 +114,7 @@ func TestSuiteFullRecorderFailureFailsThePass(t *testing.T) {
 		t.Fatalf("Full = %v, want the recorder failure", err)
 	}
 	for _, c := range []exec.Capability{exec.CapNetworklessExport, exec.CapEnforcedProviderEgress} {
-		if s.b.Capabilities().Has(c) {
+		if capabilitiesFor(s.b, s.fx.AgentImage).Has(c) {
 			t.Errorf("unrecorded pass still declares %q", c)
 		}
 	}
@@ -143,7 +143,7 @@ func TestSuiteFullRegistryHandoffFailureWithholdsCapabilities(t *testing.T) {
 		t.Error("the provider_registry writer started behind a proxy missing its registry")
 	}
 	for _, c := range conformancePendingCapabilities {
-		if s.b.Capabilities().Has(c) {
+		if capabilitiesFor(s.b, s.fx.AgentImage).Has(c) {
 			t.Errorf("Full declared %q without the provider_registry proof", c)
 		}
 	}
@@ -173,7 +173,7 @@ func TestSuiteFullPanicRecordsFailure(t *testing.T) {
 	if len(rec.records) != 2 || rec.records[1].Outcome != domain.ConformanceFailed {
 		t.Fatalf("recorder after panic = %+v, want the marker then the failed record", rec.records)
 	}
-	if s.b.Capabilities().Has(exec.CapEnforcedProviderEgress) {
+	if capabilitiesFor(s.b, s.fx.AgentImage).Has(exec.CapEnforcedProviderEgress) {
 		t.Error("panicked Full still declares supports_enforced_provider_egress")
 	}
 }

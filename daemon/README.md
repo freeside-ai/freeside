@@ -4048,8 +4048,9 @@ belong to #1980. Historical records remain in the database.
 
 Each full pass spends one bounded writer launch (at most three minutes) on
 the implementer identity's real subscription. This includes startup with
-`-run-conformance`, scheduled doctor passes (24 hours by default), and full
-passes following writer-image changes. The implementer's model, effort, and
+`-run-conformance`, each image a scheduled doctor pass (24 hours by
+default) re-proves, one launch per image, and the pass that proves an image
+an attempt selects. The implementer's model, effort, and
 enrolled credential generation are used. Other implementer adapters are
 skipped. No synthetic provider substitutes for this observation.
 
@@ -4070,7 +4071,8 @@ capabilities. It removes its credential volume after verifying ownership.
 The default test run skips it.
 
 `freesided doctor -db <path> -backend-configuration-digest <digest>` reports
-the current config-bound conformance and workspace-handoff declaration plus
+that configuration's config-bound conformance and workspace-handoff
+declaration plus
 checkpoint encryption, checkpoint currency, artifact closure, and restore-test
 age. Pass each current policy digest as a repeatable `-approved-recipe`; the
 same set gates both artifact reconstruction and checkpoint closure. Before
@@ -4078,8 +4080,14 @@ its first backup pass, the daemon rebuilds any missing effect-proposal
 evidence body from its durable proposal rows, so a store written before
 proposal paths persisted those bodies reaches a healthy closure. Each
 unhealthy dimension converges on one blocking `system_health` item; a later
-healthy pass resolves that item. Production driver mode supplies its live
-backend digest and runs the same composition at startup and every 24 hours by
+healthy pass resolves that item. Production driver mode supplies the
+configuration of every image ward holds a proof, a failed pass, or a pass
+in flight for. Both findings are healthy while at least one tracked
+configuration's newest record covers the floor, and their detail names
+every configuration with its own verdict: one configuration's failed or
+running pass holds only that configuration's attempts, at the store gate,
+never every attempt through a blocking item. It runs the same composition
+at startup and every 24 hours by
 default (`-doctor-interval` overrides the cadence). The production daemon
 accepts the same repeatable `-approved-recipe` flag and supplies that exact set
 to persistence reconstruction and every scheduled doctor pass. A janitor
@@ -4878,9 +4886,10 @@ advances the pointer (Keep Project Images Current).
 
 Each unattended writer attempt runs in the image selected from the
 pointer and the repository's recorded images at its run's base, in this
-order: the image ward proves, while it serves the base and keeps what the
-pointed-to image binds; the pointed-to image; then the first recorded
-image that serves the base and keeps what the pointed-to image binds.
+order: an image ward has proved, while it serves the base and keeps what
+the pointed-to image binds, the pointed-to image first; the pointed-to
+image; then the first recorded image that serves the base and keeps what
+the pointed-to image binds.
 Every record is re-gated before it is chosen. A rebuilt image of the same
 repository serves a later base the pointed-to image cannot, and the
 write-once records let an older base keep the image built for it.
@@ -4893,8 +4902,8 @@ an operator-feedback turn) starts and selects its image at the recorded
 base, however far the tip has moved. A run held before its first
 admission follows the tip until it is admitted. A run stored before runs
 recorded a base takes the base of its earliest admission. An attempt with
-no stored tip holds under `input_unavailable`. The start selects ward's
-first image at the stored tip, and each conformance and adapter proof
+no stored tip holds under `input_unavailable`. The start selects its
+image at the stored tip, and each conformance and adapter proof
 seeds its workspace at the tip stored when the pass starts. Every start
 reads the tip and stores it before anything is admitted, so a branch that
 moved or was reset while the daemon was down is not recorded as a new
@@ -4902,16 +4911,36 @@ run's base. A start that cannot read the tip starts at the stored one,
 which the tip watch then corrects, and fails when none is stored, as on a
 fresh root. The daemon takes no `-base-sha`.
 
-Ward proves one writer image at a time, so its conformance follows the
-selection. A start points ward at the selected image before it restores
-or runs conformance; a start that restores starts ward on the image the
-latest passed record proves, so the proof restores without a new pass.
-When an attempt selects an image ward does not prove, the daemon repoints
-ward and runs the full suite once, and the attempt holds under
-`backend_not_conformant` until that pass is recorded. The doctor's
-scheduled pass never runs beside it. A pass that fails leaves the
-attempt held under `backend_capability_refused` until a later pass
-succeeds.
+Ward holds a proof per writer image. Each image yields its own
+conformance configuration, and each configuration is judged by its own
+newest record, so proving one image never retires another's. A start
+restores the proof of each recorded image, and of the pointed-to image,
+whose configuration's newest record passed; with `-run-conformance` it
+then proves the image it selects at the tip. An unattended start that
+neither restores nor runs any proof fails. When an attempt selects an
+image ward has no proof of, the daemon runs the full suite on that image
+once, and the attempt holds under `backend_not_conformant` until the pass
+is recorded, while attempts on proven images keep starting. Passes run
+one at a time, the doctor's scheduled pass included. A pass that fails
+holds that image's attempts under `backend_not_conformant` and is retried,
+for that image only, after a backoff of five minutes that doubles to an
+hour. A start on an image with no published proof holds that attempt
+alone, so attempts behind it on proven images still start. An attempt
+admitted under one configuration starts only while the daemon yields that
+configuration for its image.
+
+The scheduled pass bounds the proofs ward holds. It keeps the images
+attempts selected or started on since the previous scheduled pass, and
+always the most recently selected one, and re-proves each in its own
+pass under its own memory reservation, except that an image whose last
+pass failed waits out its backoff. A failed re-proof fails the scheduled
+doctor pass, which stops the daemon, only when the round leaves ward no
+published proof. It retires every other proof: it
+records a supersession marker for the image's configuration, so the
+store stops admitting under it and a restart does not restore it, and
+the image proves again when an attempt next selects it or starts on it.
+An attempt admitted under a retired configuration holds under
+`backend_not_conformant` while that configuration's next pass runs.
 
 A base no recorded image serves no longer fails the start. Its attempts
 hold under `image_upkeep_pending` while image upkeep has a resolution

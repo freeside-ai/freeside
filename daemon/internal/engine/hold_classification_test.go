@@ -52,6 +52,14 @@ func joinedHoldClassificationCases() []holdClassificationCase {
 			"agent not admissible joined with blocking system health",
 			errors.Join(ErrAgentNotAdmissible, domain.ErrBlockingSystemHealth),
 		},
+		{
+			"image not proved joined with configuration mismatch",
+			errors.Join(ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch),
+		},
+		{
+			"pre-job refusal joined with image not proved",
+			errors.Join(exec.ErrPreJobRefused, ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch),
+		},
 		{"typed agent gate refusal on blocking system health", &AgentAdmissionRefusal{
 			Refusal: domain.AdmissionRefusal{Check: domain.AdmissionCheckAgentGate},
 			err:     errors.Join(ErrAgentNotAdmissible, domain.ErrBlockingSystemHealth),

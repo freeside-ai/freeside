@@ -39,6 +39,36 @@ var refusedCapabilities = []exec.Capability{
 	exec.CapCredentialFreeHostVerification,
 }
 
+// testImageA and testImageB are two digest-pinned writer images, each with
+// its own configuration and proof.
+var (
+	testImageA = "example.test/agent@sha256:" + strings.Repeat("1", 64)
+	testImageB = "example.test/agent@sha256:" + strings.Repeat("2", 64)
+)
+
+// capabilitiesFor is the declaration admission reads for image.
+func capabilitiesFor(b *Backend, image string) exec.CapabilitySet {
+	_, caps, _ := b.ConformanceFor(image)
+	return caps
+}
+
+// passedRecordFor is a persisted passed record of image's configuration.
+func passedRecordFor(t *testing.T, b *Backend, image string, generation uint64) domain.BackendConformance {
+	t.Helper()
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: b.ConfigurationDigestFor(image),
+		Capabilities:        domain.NewCapabilitySnapshot(provenCapabilities()...),
+		ProvedAt:            time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance: %v", err)
+	}
+	record.Generation = generation
+	return record
+}
+
 func newTestBackend(t *testing.T) *Backend {
 	t.Helper()
 	b, err := New(stubRuntime{}, testConfig())
@@ -80,63 +110,99 @@ func TestCapabilitySnapshot(t *testing.T) {
 func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	if b.Capabilities().Has(exec.CapNetworklessExport) {
+	if capabilitiesFor(b, testImageA).Has(exec.CapNetworklessExport) {
 		t.Fatal("new backend declared supports_networkless_export before conformance")
 	}
-	if _, err := exec.CheckCapabilities(b, conformancePendingCapabilities); !errors.Is(err, exec.ErrCapabilityRefused) {
+	if _, err := exec.CheckDeclaredCapabilities(BackendName, capabilitiesFor(b, testImageA),
+		conformancePendingCapabilities); !errors.Is(err, exec.ErrCapabilityRefused) {
 		t.Fatalf("unproven networkless capability = %v, want ErrCapabilityRefused", err)
 	}
-	b.networkless.Store(true)
-	if _, err := exec.CheckCapabilities(b, append(declaredCapabilities, exec.CapNetworklessExport)); err != nil {
+	generation, _ := b.beginConformanceProof(testImageA, nil)
+	b.finishConformanceProof(testImageA, generation, true)
+	if _, err := exec.CheckDeclaredCapabilities(BackendName, capabilitiesFor(b, testImageA),
+		append(declaredCapabilities, exec.CapNetworklessExport)); err != nil {
 		t.Fatalf("proven networkless capability = %v, want admission", err)
+	}
+	// The base declaration never carries an image's earned capabilities.
+	if b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Fatal("base declaration carries supports_networkless_export")
 	}
 }
 
 func TestRestoreConformancePublishesDurableCapabilitiesOnce(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:             domain.ConformancePassed,
-		ConfigurationDigest: b.ConfigurationDigest(),
-		Capabilities: domain.NewCapabilitySnapshot(
-			domain.CapDetachableWorkspace,
-			domain.CapPostExitExport,
-			domain.CapReadOnlyRemount,
-			domain.CapNetworklessExport,
-			domain.CapEnforcedProviderEgress,
-		),
-		ProvedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("NewBackendConformance: %v", err)
-	}
-	record.Generation = 7
-	if err := b.RestoreConformance(record); err != nil {
+	record := passedRecordFor(t, b, testImageA, 7)
+	if err := b.RestoreConformance(testImageA, record); err != nil {
 		t.Fatalf("RestoreConformance: %v", err)
 	}
 	for _, capability := range conformancePendingCapabilities {
-		if !b.Capabilities().Has(capability) {
-			t.Errorf("restored backend does not declare %q", capability)
+		if !capabilitiesFor(b, testImageA).Has(capability) {
+			t.Errorf("restored image does not declare %q", capability)
+		}
+		if capabilitiesFor(b, testImageB).Has(capability) {
+			t.Errorf("restoring image A declared %q for image B", capability)
 		}
 	}
+	if err := b.RestoreConformance(testImageA, record); err == nil {
+		t.Fatal("a second restore of the same image was accepted")
+	}
 
-	if _, err := b.beginConformanceProof(nil); err != nil {
+	if _, err := b.beginConformanceProof(testImageA, nil); err != nil {
 		t.Fatalf("begin proof: %v", err)
 	}
-	if err := b.RestoreConformance(record); err == nil {
+	if err := b.RestoreConformance(testImageA, record); err == nil {
 		t.Fatal("durable success was restored after a live proof began")
 	}
 	for _, capability := range conformancePendingCapabilities {
-		if b.Capabilities().Has(capability) {
+		if capabilitiesFor(b, testImageA).Has(capability) {
 			t.Errorf("stale restore resurrected %q after a live proof began", capability)
 		}
 	}
 }
 
+// TestRestoreIsPerImage: a live proof of one image leaves another image's
+// restore open, and a restore is refused only once its own image's proof
+// began.
+func TestRestoreIsPerImage(t *testing.T) {
+	t.Parallel()
+	b := newTestBackend(t)
+	generation, _ := b.beginConformanceProof(testImageB, nil)
+	b.finishConformanceProof(testImageB, generation, true)
+	if err := b.RestoreConformance(testImageA, passedRecordFor(t, b, testImageA, 3)); err != nil {
+		t.Fatalf("restore image A after only image B's proof began = %v", err)
+	}
+	if err := b.RestoreConformance(testImageB, passedRecordFor(t, b, testImageB, 4)); err == nil {
+		t.Fatal("restore of image B accepted after image B's live proof began")
+	}
+	if got := b.ProvenImages(); !slices.Equal(got, []string{testImageA, testImageB}) {
+		t.Fatalf("ProvenImages = %q, want both images", got)
+	}
+}
+
+// TestRestoreRefusesAPreviousConfigurationVersion: a row written under the
+// per-backend rule (/v4) for the same image neither restores nor matches
+// the image's digest, so the image proves again (#3211).
+func TestRestoreRefusesAPreviousConfigurationVersion(t *testing.T) {
+	t.Parallel()
+	b := newTestBackend(t)
+	v4 := b.configurationDigest("freeside.ward.conformance-configuration/v4", testImageA)
+	if v4 == b.ConfigurationDigestFor(testImageA) {
+		t.Fatal("a /v4 digest equals the current digest for the same image")
+	}
+	record := passedRecordFor(t, b, testImageA, 5)
+	record.ConfigurationDigest = v4
+	if err := b.RestoreConformance(testImageA, record); err == nil {
+		t.Fatal("a /v4 proof was restored")
+	}
+	if digest, caps, proved := b.ConformanceFor(testImageA); digest == v4 || proved || caps.Has(exec.CapNetworklessExport) {
+		t.Fatalf("ConformanceFor after a refused /v4 restore = (%s, %v)", digest, caps)
+	}
+}
+
 func TestRestoreConformanceRejectsUnpersistedOrFailedRecords(t *testing.T) {
 	t.Parallel()
-	configurationDigest := newTestBackend(t).ConfigurationDigest()
+	configurationDigest := newTestBackend(t).ConfigurationDigestFor(testImageA)
 	passed, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
 		Outcome:             domain.ConformancePassed,
@@ -173,11 +239,11 @@ func TestRestoreConformanceRejectsUnpersistedOrFailedRecords(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newTestBackend(t)
-			if err := b.RestoreConformance(tc.record); err == nil {
+			if err := b.RestoreConformance(testImageA, tc.record); err == nil {
 				t.Fatal("RestoreConformance accepted a record that cannot grant capabilities")
 			}
 			for _, capability := range conformancePendingCapabilities {
-				if b.Capabilities().Has(capability) {
+				if capabilitiesFor(b, testImageA).Has(capability) {
 					t.Errorf("rejected record published %q", capability)
 				}
 			}
@@ -188,17 +254,7 @@ func TestRestoreConformanceRejectsUnpersistedOrFailedRecords(t *testing.T) {
 func TestRestoreConformanceRejectsAnotherBackendConfiguration(t *testing.T) {
 	t.Parallel()
 	proved := newTestBackend(t)
-	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:             domain.ConformancePassed,
-		ConfigurationDigest: proved.ConfigurationDigest(),
-		Capabilities:        domain.NewCapabilitySnapshot(provenCapabilities()...),
-		ProvedAt:            time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("NewBackendConformance: %v", err)
-	}
-	record.Generation = 7
+	record := passedRecordFor(t, proved, testImageA, 7)
 
 	cfg := testConfig()
 	cfg.ExporterImage = "example.test/other-exporter@sha256:" + strings.Repeat("2", 64)
@@ -206,11 +262,15 @@ func TestRestoreConformanceRejectsAnotherBackendConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(active): %v", err)
 	}
-	if err := active.RestoreConformance(record); err == nil {
+	if err := active.RestoreConformance(testImageA, record); err == nil {
 		t.Fatal("proof from another exporter configuration was restored")
 	}
+	// A record of image A's configuration never restores as image B's.
+	if err := proved.RestoreConformance(testImageB, record); err == nil {
+		t.Fatal("image A's proof was restored for image B")
+	}
 	for _, capability := range conformancePendingCapabilities {
-		if active.Capabilities().Has(capability) {
+		if capabilitiesFor(active, testImageA).Has(capability) || capabilitiesFor(proved, testImageB).Has(capability) {
 			t.Errorf("mismatched configuration published %q", capability)
 		}
 	}
@@ -348,139 +408,127 @@ func TestConfigurationDigestTracksRuntimeExecutableBytes(t *testing.T) {
 func TestConformanceProofRejectsStaleGeneration(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	older, _ := b.beginConformanceProof(nil)
-	newer, _ := b.beginConformanceProof(nil)
-	if !b.finishConformanceProof(newer, false) {
+	older, _ := b.beginConformanceProof(testImageA, nil)
+	newer, _ := b.beginConformanceProof(testImageA, nil)
+	if !b.finishConformanceProof(testImageA, newer, false) {
 		t.Fatal("current generation reported itself superseded")
 	}
-	if b.finishConformanceProof(older, true) {
+	if b.finishConformanceProof(testImageA, older, true) {
 		t.Fatal("superseded generation reported itself current")
 	}
 	for _, c := range conformancePendingCapabilities {
-		if b.Capabilities().Has(c) {
+		if capabilitiesFor(b, testImageA).Has(c) {
 			t.Fatalf("older successful proof overrode a newer failed proof for %q", c)
 		}
 	}
 
-	latest, _ := b.beginConformanceProof(nil)
-	if !b.finishConformanceProof(latest, true) {
+	latest, _ := b.beginConformanceProof(testImageA, nil)
+	if !b.finishConformanceProof(testImageA, latest, true) {
 		t.Fatal("latest proof reported itself superseded")
 	}
 	for _, c := range conformancePendingCapabilities {
-		if !b.Capabilities().Has(c) {
+		if !capabilitiesFor(b, testImageA).Has(c) {
 			t.Fatalf("latest successful proof did not publish %q", c)
 		}
 	}
 }
 
-// TestRepointAgentImageMovesTheConformanceIdentity pins that the image is
-// part of the identity an admission records: repointing changes the digest
-// to exactly the one ConfigurationDigestFor predicts, and repointing to the
-// current image changes nothing.
-func TestRepointAgentImageMovesTheConformanceIdentity(t *testing.T) {
+// TestConformanceForBindsEachImagesDigest pins that the image is part of the
+// identity an admission records: each image yields its own digest, exactly
+// the one ConfigurationDigestFor predicts, and the static digest is the
+// configured image's.
+func TestConformanceForBindsEachImagesDigest(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
-	initial := "example.test/agent@sha256:" + strings.Repeat("1", 64)
-	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
-	cfg.AgentImage = initial
+	cfg.AgentImage = testImageA
 	b, err := New(stubRuntime{}, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	image, digest := b.ConformanceIdentity()
-	if image != initial || digest != b.ConfigurationDigest() || digest != b.ConfigurationDigestFor(initial) {
-		t.Fatalf("ConformanceIdentity = (%q, %s), want the configured image and its digest", image, digest)
+	digestA, _, _ := b.ConformanceFor(testImageA)
+	digestB, _, _ := b.ConformanceFor(testImageB)
+	if digestA != b.ConfigurationDigestFor(testImageA) || digestA != b.ConfigurationDigest() {
+		t.Fatalf("ConformanceFor(A) digest = %s, want the configured image's", digestA)
 	}
-
-	generation, _ := b.beginConformanceProof(nil)
-	b.finishConformanceProof(generation, true)
-	if err := b.RepointAgentImage(initial); err != nil {
-		t.Fatalf("RepointAgentImage(current) = %v", err)
-	}
-	if b.ConfigurationDigest() != digest {
-		t.Fatal("repointing to the current image changed the configuration digest")
-	}
-	for _, c := range conformancePendingCapabilities {
-		if !b.Capabilities().Has(c) {
-			t.Fatalf("repointing to the current image cleared %q", c)
-		}
-	}
-
-	if err := b.RepointAgentImage(repointed); err != nil {
-		t.Fatalf("RepointAgentImage = %v", err)
-	}
-	image, moved := b.ConformanceIdentity()
-	if image != repointed || moved != b.ConfigurationDigestFor(repointed) {
-		t.Fatalf("ConformanceIdentity = (%q, %s), want the repointed image and its digest", image, moved)
-	}
-	if moved == digest {
-		t.Fatal("repointing to another image kept the configuration digest")
-	}
-	for _, c := range conformancePendingCapabilities {
-		if b.Capabilities().Has(c) {
-			t.Fatalf("repointing kept %q declared before any pass proved the new image", c)
-		}
-	}
-	if err := b.RepointAgentImage("example.test/agent:latest"); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("RepointAgentImage(tag) = %v, want ErrInvalidConfig", err)
-	}
-	if got, _ := b.ConformanceIdentity(); got != repointed {
-		t.Fatalf("a refused repoint moved the image to %q", got)
+	if digestB != b.ConfigurationDigestFor(testImageB) || digestB == digestA {
+		t.Fatalf("ConformanceFor(B) digest = %s, want image B's own", digestB)
 	}
 }
 
-// TestRepointBeforeAnyProofLeavesRestoreOpen pins the startup order: the
-// daemon repoints ward at the image it selected, then restores that image's
-// durable proof without running the suite again.
-func TestRepointBeforeAnyProofLeavesRestoreOpen(t *testing.T) {
+// TestProofsAreHeldPerImage is #3211's in-memory rule: a begin, a failed
+// conclude, or a stale pass for image A never touches image B's published
+// proof, and a pass for A that a newer begin for A superseded cannot
+// publish.
+func TestProofsAreHeldPerImage(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
-	if err := b.RepointAgentImage(repointed); err != nil {
-		t.Fatalf("RepointAgentImage = %v", err)
+	generationB, _ := b.beginConformanceProof(testImageB, nil)
+	b.finishConformanceProof(testImageB, generationB, true)
+	published := func(image string) bool {
+		return capabilitiesFor(b, image).Has(exec.CapNetworklessExport) &&
+			capabilitiesFor(b, image).Has(exec.CapEnforcedProviderEgress)
 	}
-	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: domain.ConformancePassed,
-		ConfigurationDigest: b.ConfigurationDigestFor(repointed),
-		Capabilities:        domain.NewCapabilitySnapshot(provenCapabilities()...),
-		ProvedAt:            time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatal(err)
+
+	stale, _ := b.beginConformanceProof(testImageA, nil)
+	if !published(testImageB) {
+		t.Fatal("a begin for image A cleared image B's proof")
 	}
-	record.Generation = 3
-	if err := b.RestoreConformance(record); err != nil {
-		t.Fatalf("RestoreConformance after a startup repoint = %v", err)
+	current, _ := b.beginConformanceProof(testImageA, nil)
+	if b.finishConformanceProof(testImageA, stale, true) || published(testImageA) {
+		t.Fatal("a superseded pass for image A published")
 	}
-	for _, c := range conformancePendingCapabilities {
-		if !b.Capabilities().Has(c) {
-			t.Fatalf("restore did not publish %q", c)
-		}
+	if !b.finishConformanceProof(testImageA, current, false) {
+		t.Fatal("the current pass for image A reported itself superseded")
+	}
+	if published(testImageA) || !published(testImageB) {
+		t.Fatalf("after A failed: A published=%v, B published=%v; want only B", published(testImageA), published(testImageB))
+	}
+	// A pass for B can never conclude a generation stamped for A.
+	if b.finishConformanceProof(testImageB, current, false) || !published(testImageB) {
+		t.Fatal("image A's generation concluded image B's proof")
+	}
+	if got := b.ProvenImages(); !slices.Equal(got, []string{testImageB}) {
+		t.Fatalf("ProvenImages = %q, want only image B", got)
 	}
 }
 
-// TestRepointSupersedesARunningProof pins that a Full pass begun for the old
-// image can neither publish nor record once the backend is repointed, so its
-// success never declares capabilities for an image it did not run.
-func TestRepointSupersedesARunningProof(t *testing.T) {
+// TestRetireConformanceWritesTheMarkerFirst: retiring appends the
+// superseding marker for the image's own configuration, then stops tracking
+// the image, so its proof is unpublished and a later pass proves it afresh;
+// another image's proof is untouched. A failed append still unpublishes the
+// image and keeps tracking it.
+func TestRetireConformanceWritesTheMarkerFirst(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	generation, _ := b.beginConformanceProof(nil)
-	if err := b.RepointAgentImage("example.test/agent@sha256:" + strings.Repeat("2", 64)); err != nil {
-		t.Fatalf("RepointAgentImage = %v", err)
+	for _, image := range []string{testImageA, testImageB} {
+		generation, _ := b.beginConformanceProof(image, nil)
+		b.finishConformanceProof(image, generation, true)
 	}
-	recorded := false
-	published, err := b.concludeConformanceProof(generation, true, func() error {
-		recorded = true
-		return nil
-	})
-	if published || err != nil || recorded {
-		t.Fatalf("pass for the old image: published=%v recorded=%v err=%v, want neither", published, recorded, err)
+	rec := &recordingConformance{}
+	if err := b.RetireConformance(t.Context(), testImageA, rec); err != nil {
+		t.Fatalf("RetireConformance = %v", err)
 	}
-	for _, c := range conformancePendingCapabilities {
-		if b.Capabilities().Has(c) {
-			t.Fatalf("superseded pass declared %q", c)
-		}
+	if len(rec.records) != 1 || rec.records[0].Outcome != domain.ConformanceSuperseded ||
+		rec.records[0].ConfigurationDigest != b.ConfigurationDigestFor(testImageA) {
+		t.Fatalf("retire recorded %+v, want one marker for image A's configuration", rec.records)
+	}
+	if got := b.TrackedImages(); !slices.Equal(got, []string{testImageB}) {
+		t.Fatalf("TrackedImages = %q, want only image B", got)
+	}
+	if got := b.ProvenImages(); !slices.Equal(got, []string{testImageB}) {
+		t.Fatalf("ProvenImages = %q, want only image B", got)
+	}
+	generation, _ := b.beginConformanceProof(testImageA, nil)
+	if !b.finishConformanceProof(testImageA, generation, true) || !slices.Contains(b.ProvenImages(), testImageA) {
+		t.Fatal("a retired image did not prove again")
+	}
+
+	failing := &recordingConformance{err: errors.New("disk full")}
+	if err := b.RetireConformance(t.Context(), testImageB, failing); err == nil {
+		t.Fatal("a failed marker append retired the image")
+	}
+	if slices.Contains(b.ProvenImages(), testImageB) || !slices.Contains(b.TrackedImages(), testImageB) {
+		t.Fatal("a failed retirement left image B published or untracked")
 	}
 }
 
@@ -491,7 +539,7 @@ func TestRepointSupersedesARunningProof(t *testing.T) {
 func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	gen, _ := b.beginConformanceProof(nil)
+	gen, _ := b.beginConformanceProof(testImageA, nil)
 
 	var mu sync.Mutex
 	var order []string
@@ -500,7 +548,7 @@ func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
 	concludeDone := make(chan struct{})
 	go func() {
 		defer close(concludeDone)
-		published, err := b.concludeConformanceProof(gen, true, func() error {
+		published, err := b.concludeConformanceProof(testImageA, gen, true, func() error {
 			close(recordEntered)
 			<-releaseRecord
 			mu.Lock()
@@ -517,7 +565,8 @@ func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
 	beginDone := make(chan struct{})
 	go func() {
 		defer close(beginDone)
-		_, _ = b.beginConformanceProof(nil)
+		// Another image's begin waits too: one guard covers every image.
+		_, _ = b.beginConformanceProof(testImageB, nil)
 		mu.Lock()
 		order = append(order, "begin")
 		mu.Unlock()
@@ -544,10 +593,11 @@ func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
 func TestConcludePersistsBeforePublishing(t *testing.T) {
 	t.Parallel()
 	b := newTestBackend(t)
-	gen, _ := b.beginConformanceProof(nil)
+	gen, _ := b.beginConformanceProof(testImageA, nil)
 	var observed []bool
-	published, recordErr := b.concludeConformanceProof(gen, true, func() error {
-		observed = append(observed, b.networkless.Load(), b.providerEgress.Load())
+	published, recordErr := b.concludeConformanceProof(testImageA, gen, true, func() error {
+		// The record step runs under proofMu, so read the flag directly.
+		observed = append(observed, b.proofs[testImageA].published)
 		return nil
 	})
 	if !published || recordErr != nil {
@@ -556,7 +606,7 @@ func TestConcludePersistsBeforePublishing(t *testing.T) {
 	if slices.Contains(observed, true) {
 		t.Fatal("capabilities were observable while the durable append was in flight")
 	}
-	if !b.Capabilities().Has(exec.CapEnforcedProviderEgress) {
+	if !capabilitiesFor(b, testImageA).Has(exec.CapEnforcedProviderEgress) {
 		t.Fatal("publication missing after a successful append")
 	}
 }

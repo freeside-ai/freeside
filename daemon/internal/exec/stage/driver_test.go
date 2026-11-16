@@ -2216,8 +2216,10 @@ func TestStartRunsPreJobAfterDuplicateArbitration(t *testing.T) {
 	}, newStubExports())
 	probes := 0
 	refuse := true
-	d.preJob = func(context.Context, domain.InvocationID) error {
+	var probedImage domain.ImageRef
+	d.preJob = func(_ context.Context, _ domain.InvocationID, image domain.ImageRef) error {
 		probes++
+		probedImage = image
 		if refuse {
 			return errors.New("runtime unavailable")
 		}
@@ -2236,6 +2238,9 @@ func TestStartRunsPreJobAfterDuplicateArbitration(t *testing.T) {
 	}
 	if probes != 1 || loadCalls != 0 {
 		t.Fatalf("refused probes = %d, loads = %d, want 1 and 0", probes, loadCalls)
+	}
+	if probedImage != spec.ImageRef {
+		t.Fatalf("pre-job probed image %q, want the start's image %q", probedImage, spec.ImageRef)
 	}
 	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, exec.ErrUnknownInvocation) {
 		t.Fatalf("Inspect after pre-job refusal = %v, want unknown invocation", err)

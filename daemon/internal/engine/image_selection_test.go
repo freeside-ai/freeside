@@ -54,22 +54,30 @@ func TestSelectProjectImageOrder(t *testing.T) {
 	images := []domain.ProjectImage{stale, other, pointed, rebuilt}
 
 	for name, tc := range map[string]struct {
-		proved   domain.ImageRef
+		proved   []domain.ImageRef
 		manifest string
 		images   []domain.ProjectImage
 		want     domain.ImageRef
 	}{
 		"the proved image when it serves": {
-			proved: rebuilt.ImageRef, manifest: "2", images: images, want: rebuilt.ImageRef,
+			proved: []domain.ImageRef{rebuilt.ImageRef}, manifest: "2", images: images, want: rebuilt.ImageRef,
 		},
 		"the proved image when it is the pointed-to image": {
-			proved: pointed.ImageRef, manifest: "2", images: images, want: pointed.ImageRef,
+			proved: []domain.ImageRef{pointed.ImageRef}, manifest: "2", images: images, want: pointed.ImageRef,
+		},
+		"the pointed-to image first among proved images that serve": {
+			proved: []domain.ImageRef{rebuilt.ImageRef, pointed.ImageRef}, manifest: "2", images: images,
+			want: pointed.ImageRef,
+		},
+		"the first proved recorded image that serves": {
+			proved: []domain.ImageRef{stale.ImageRef, other.ImageRef, rebuilt.ImageRef}, manifest: "2",
+			images: images, want: rebuilt.ImageRef,
 		},
 		"the pointed-to image over an unserving proved image": {
-			proved: stale.ImageRef, manifest: "2", images: images, want: pointed.ImageRef,
+			proved: []domain.ImageRef{stale.ImageRef}, manifest: "2", images: images, want: pointed.ImageRef,
 		},
 		"the pointed-to image over a proved image that keeps nothing it binds": {
-			proved: other.ImageRef, manifest: "2", images: images, want: pointed.ImageRef,
+			proved: []domain.ImageRef{other.ImageRef}, manifest: "2", images: images, want: pointed.ImageRef,
 		},
 		"the pointed-to image when nothing is proved": {
 			manifest: "2", images: images, want: pointed.ImageRef,
@@ -78,7 +86,7 @@ func TestSelectProjectImageOrder(t *testing.T) {
 		// holds the manifests stale baked, which the pointed-to image does
 		// not.
 		"the first recorded image that serves an older base": {
-			proved: pointed.ImageRef, manifest: "9", images: images, want: stale.ImageRef,
+			proved: []domain.ImageRef{pointed.ImageRef}, manifest: "9", images: images, want: stale.ImageRef,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -99,7 +107,7 @@ func TestSelectProjectImageOrder(t *testing.T) {
 		t.Parallel()
 		reads := 0
 		got, found, err := SelectProjectImage(ProjectImageSelection{
-			Proved: pointed.ImageRef, Pointed: pointed, Images: images, BaseSHA: base,
+			Proved: []domain.ImageRef{pointed.ImageRef}, Pointed: pointed, Images: images, BaseSHA: base,
 			BaseInputs:  selectionBase(base, "5", &reads),
 			Preparation: projectimage.PreparationDigest(),
 		})
@@ -132,7 +140,7 @@ func TestSelectProjectImageRegatesDecodedRecords(t *testing.T) {
 			pointed := selectionImage(t, base, "2", "d", edit)
 			reads := 0
 			got, found, err := SelectProjectImage(ProjectImageSelection{
-				Proved: pointed.ImageRef, Pointed: pointed, Images: []domain.ProjectImage{pointed},
+				Proved: []domain.ImageRef{pointed.ImageRef}, Pointed: pointed, Images: []domain.ProjectImage{pointed},
 				BaseSHA: base, BaseInputs: selectionBase(base, "2", &reads),
 				Preparation: projectimage.PreparationDigest(),
 			})
@@ -149,7 +157,7 @@ func TestSelectProjectImageReadsTheBaseOnlyWhenItMust(t *testing.T) {
 	pointed := selectionImage(t, base, "2", "d", nil)
 	reads := 0
 	got, found, err := SelectProjectImage(ProjectImageSelection{
-		Proved: pointed.ImageRef, Pointed: pointed, Images: []domain.ProjectImage{pointed},
+		Proved: []domain.ImageRef{pointed.ImageRef}, Pointed: pointed, Images: []domain.ProjectImage{pointed},
 		BaseSHA: base, BaseInputs: selectionBase(base, "2", &reads),
 		Preparation: projectimage.PreparationDigest(),
 	})

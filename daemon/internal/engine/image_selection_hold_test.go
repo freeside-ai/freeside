@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
@@ -146,31 +148,73 @@ func TestUnservedBaseHoldsAndResumes(t *testing.T) {
 	}
 }
 
-// identityBackend is a runner backend that proves one image at a time.
-type identityBackend struct {
+// imageBoundBackend is a runner backend that holds a published proof for
+// each image in proved, each image under its own digest.
+type imageBoundBackend struct {
 	exec.RunnerBackend
-	image  string
-	digest domain.Digest
+	proved []string
 }
 
-func (b identityBackend) ConformanceIdentity() (string, domain.Digest) { return b.image, b.digest }
+func (b imageBoundBackend) ConfigurationDigest() domain.Digest {
+	return b.digestFor("")
+}
+
+func (b imageBoundBackend) digestFor(image string) domain.Digest {
+	return domain.Digest(contentaddr.Sum([]byte("configuration of " + image)))
+}
+
+func (b imageBoundBackend) ConformanceFor(image string) (domain.Digest, exec.CapabilitySet, bool) {
+	caps := b.Capabilities()
+	proved := slices.Contains(b.proved, image)
+	if proved {
+		caps[exec.CapNetworklessExport] = struct{}{}
+		caps[exec.CapEnforcedProviderEgress] = struct{}{}
+	}
+	return b.digestFor(image), caps, proved
+}
 
 // An unattended admission never names an image the backend does not prove:
 // it is refused and held under backend_not_conformant, with no admission
 // recorded.
+// An unattended attempt on an image the backend holds no published proof
+// of holds under backend_not_conformant, and holds alone: ward proves each
+// image on its own, so the dispatch pass goes on to the intent queued
+// behind it.
 func TestAdmissionRefusesAnImageTheBackendDoesNotProve(t *testing.T) {
 	t.Parallel()
+	ctx := t.Context()
 	h := newSelectionHoldFixture(t)
 	h.engine.admission.environment.OperatingMode = domain.ModeUnattended
-	h.engine.admission.backend = identityBackend{
+	h.engine.admission.backend = imageBoundBackend{
 		RunnerBackend: h.engine.admission.backend,
-		image:         "ghcr.io/owner/project@sha256:" + strings.Repeat("d", 64),
-		digest:        domain.Digest("sha256:" + strings.Repeat("4", 64)),
+		proved:        []string{"ghcr.io/owner/project@sha256:" + strings.Repeat("d", 64)},
 	}
 	h.selected = selectionTestImage
+	// An undecodable production marker for a later run. The pass quarantines
+	// it only if it goes on past the held intent.
+	laterRun := domain.RunID("zz-later-run")
+	if err := h.fixture.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, domain.Run{
+			ID: laterRun, ProjectID: "project-1",
+			SpecDigest:   domain.Digest("sha256:" + strings.Repeat("a", 64)),
+			PolicyDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			Stages: []domain.Stage{{
+				ID: productionStageID(laterRun), RunID: laterRun,
+				Name: productionStageName, Attempts: []domain.Attempt{},
+			}},
+		})
+	}); err != nil {
+		t.Fatalf("seed later run: %v", err)
+	}
+	seedProductionMarker(t, ctx, h.fixture.store, laterRun, productionRequestJSON(
+		`"version":"freeside.production-invocation/v3",`+
+			`"invocation_id":"inv-implement-zz-later-run",`+
+			`"run_id":"zz-later-run","stage_id":"implement-zz-later-run"`,
+	))
 	if started := h.dispatch(t); started != 0 {
 		t.Fatalf("started %d under an unproved image", started)
 	}
+	requireQuarantineItem(t, ctx, h.fixture.store, laterRun)
 	hold, found := h.hold(t)
 	if !found || hold.Reason != domain.HoldBackendNotConformant {
 		t.Fatalf("hold = %+v, found %t; want backend_not_conformant", hold, found)

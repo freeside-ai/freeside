@@ -109,8 +109,8 @@ func newIntegrityDoctor(t *testing.T) *integrityDoctor {
 	return &integrityDoctor{t: t, st: st, attention: attention, doctor: operations.Doctor{
 		Store: st, Attention: attention, ProjectID: "project-system",
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Mode: domain.ModeAttendedDev,
-		ConfigurationDigest: configuration,
-		Now:                 func() time.Time { return integrityAt.Add(time.Hour) },
+		ConfigurationDigests: []domain.Digest{configuration},
+		Now:                  func() time.Time { return integrityAt.Add(time.Hour) },
 		IdentityLabel: func(identity domain.AuthIdentity) string {
 			if identity.AccountBinding != integrityAccount {
 				t.Errorf("label asked for binding %q", identity.AccountBinding)

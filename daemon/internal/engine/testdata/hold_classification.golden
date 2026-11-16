@@ -88,6 +88,17 @@
     "refusal_hold_reason": false
   },
   {
+    "case": "the runner backend holds no published proof of the selected image",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
     "case": "backend has no current passed conformance record",
     "hold_reason": "backend_not_conformant",
     "admission_refusal": null,
@@ -589,6 +600,28 @@
     "operating_gate_hold": "blocking_system_health",
     "cleared_on_start": false,
     "refusal_hold_reason": false
+  },
+  {
+    "case": "image not proved joined with configuration mismatch",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
+    "case": "pre-job refusal joined with image not proved",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
   },
   {
     "case": "typed agent gate refusal on blocking system health",

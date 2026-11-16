@@ -66,7 +66,7 @@ type Config struct {
 	Authority    stage.AdmissionAuthority
 	Artifacts    stage.Artifacts
 	Volumes      AuthStoreVolumes
-	PreJob       func(context.Context, domain.InvocationID) error
+	PreJob       func(context.Context, domain.InvocationID, domain.ImageRef) error
 	Stall        func(context.Context, domain.InvocationID, bool) error
 	Import       importer.Options
 	Preparation  []string

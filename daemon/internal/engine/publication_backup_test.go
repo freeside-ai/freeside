@@ -239,7 +239,7 @@ func TestHistoricalSpecificationCheckpointRoundTrip(t *testing.T) {
 	doctor := operations.Doctor{
 		Store: db, Attention: signet.NewService(db), ProjectID: "project-backup",
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Mode: domain.ModeAttendedDev,
-		ConfigurationDigest: configuration,
+		ConfigurationDigests: []domain.Digest{configuration},
 	}
 	if report, err := doctor.Run(ctx); err != nil || report.Healthy {
 		t.Fatalf("initial backup health = %+v, %v; want unhealthy", report, err)

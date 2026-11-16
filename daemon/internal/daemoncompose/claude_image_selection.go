@@ -18,13 +18,15 @@ import (
 )
 
 // The writer image comes from the admitted-image pointer (plan §5.7,
-// Project-image upkeep), and ward's conformance follows it: ward proves one
-// writer image at a time, so when selection picks another image the daemon
-// repoints ward at it and runs the full suite once, and the attempt holds
-// under backend_not_conformant until that pass is recorded. An attempt also
-// holds there while ward names the selected image but has published no proof
-// for it, after a failed pass or during one; a failed follower pass is retried
-// once its backoff has passed.
+// Project-image upkeep). Ward holds one proof per writer image's
+// configuration (#3211), so proving one image never retires another's: when
+// selection picks an image ward has not proved, the daemon proves it once,
+// and that attempt holds under backend_not_conformant until the pass is
+// recorded while attempts on proven images keep starting. An attempt also
+// holds there after its image's pass failed; the pass is retried once its
+// backoff has passed. The scheduled pass re-proves the images attempts
+// selected since the previous one and retires every other proof
+// (runScheduled), so the live proofs stay bounded by the images in use.
 
 // A failed follower pass may be retried after followerRetryBackoff, doubled
 // for each consecutive failure up to followerRetryBackoffCap, so a suite that
@@ -92,139 +94,171 @@ func (m *baseInputsMemo) read(
 	return inputs, nil
 }
 
-// imageRepointer is the part of ward's backend the follower drives.
-type imageRepointer interface {
-	RepointAgentImage(image string) error
+// proofLedger is the part of ward's backend the follower reads: the images
+// with a published proof, and every image ward holds proof state for.
+type proofLedger interface {
+	ProvenImages() []string
+	TrackedImages() []string
 }
 
-// startupWardBackend is the part of ward's backend a start drives before
-// any proof is restored or run.
-type startupWardBackend interface {
-	imageRepointer
-	ConfigurationDigestFor(image string) domain.Digest
+// followerConfig composes a conformanceFollower.
+type followerConfig struct {
+	Ledger proofLedger
+	// Prove runs the full suite for an image; Retire withdraws an image's
+	// proof (ward.Backend.RetireConformance).
+	Prove  func(context.Context, domain.ImageRef) error
+	Retire func(context.Context, domain.ImageRef) error
+	// Start is the image the start proved or would have, which the first
+	// scheduled pass keeps when no attempt has selected an image yet.
+	Start  domain.ImageRef
+	Now    func() time.Time
+	Logger *slog.Logger
 }
 
-// conformanceFollower moves ward's proof to the image selection picks. It
-// runs at most one conformance pass at a time, its own or the doctor's
-// scheduled one, so a scheduled pass never proves an image the follower is
-// about to leave. It remembers the image its last pass failed on, so a later
-// selection of that image can retry it once the backoff has passed.
+// followerFailure is an image's consecutive failed passes and when it may
+// be retried.
+type followerFailure struct {
+	failures int
+	retryAt  time.Time
+}
+
+// conformanceFollower proves the images selection picks. It runs at most one
+// conformance pass at a time, its own or the doctor's scheduled one, so
+// passes never compete for the runtime. It remembers, per image, a pass that
+// failed, so a later selection of that image retries it only once the
+// backoff has passed.
 type conformanceFollower struct {
-	backend imageRepointer
-	// prove runs the full suite for the backend's current image.
-	prove  func(context.Context) error
-	now    func() time.Time
-	logger *slog.Logger
+	cfg followerConfig
 
 	passMu sync.Mutex
 
 	mu        sync.Mutex
 	following domain.ImageRef
-	// failed is the image the last follower pass failed on, failures the
-	// consecutive failed follower passes, and retryAt when failed may be
-	// retried. Any successful pass clears all three.
-	failed   domain.ImageRef
-	failures int
-	retryAt  time.Time
+	// failed holds the images whose last pass failed. Any successful pass
+	// of an image clears that image's entry only.
+	failed map[domain.ImageRef]followerFailure
+	// selected holds the images attempts selected since the last scheduled
+	// pass, and latest the most recent of them, or the start's image before
+	// any attempt selected one.
+	selected map[domain.ImageRef]struct{}
+	latest   domain.ImageRef
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func newConformanceFollower(
-	backend imageRepointer, prove func(context.Context) error, now func() time.Time, logger *slog.Logger,
-) *conformanceFollower {
+func newConformanceFollower(cfg followerConfig) *conformanceFollower {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &conformanceFollower{backend: backend, prove: prove, now: now, logger: logger, ctx: ctx, cancel: cancel}
+	return &conformanceFollower{
+		cfg: cfg, failed: map[domain.ImageRef]followerFailure{}, selected: map[domain.ImageRef]struct{}{},
+		latest: cfg.Start, ctx: ctx, cancel: cancel,
+	}
 }
 
-// follow starts repointing ward at image and proving it, unless a pass is
-// already following an image; an attempt still waiting after that pass asks
-// again. It never blocks the caller.
-func (f *conformanceFollower) follow(image domain.ImageRef) {
+// noteSelected records that an attempt selected image, which keeps image's
+// proof through the next scheduled pass.
+func (f *conformanceFollower) noteSelected(image domain.ImageRef) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selected[image] = struct{}{}
+	f.latest = image
+}
+
+// errImageNotProved holds an unattended attempt on an image ward holds no
+// published proof of. The engine holds only that attempt, so attempts on
+// other, proven images still start.
+var errImageNotProved = errors.Join(engine.ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch)
+
+// use gates an unattended start on image. Like a selection, it keeps
+// image's proof through the next scheduled pass. When image has no
+// published proof it asks for one and refuses the start with
+// errImageNotProved. A recorded attempt starts under its stored admission
+// without selecting its image again, so its start is what asks to prove an
+// image whose proof was retired, or not restored, while the attempt waited.
+func (f *conformanceFollower) use(image domain.ImageRef) error {
+	f.noteSelected(image)
+	if slices.Contains(f.cfg.Ledger.ProvenImages(), string(image)) {
+		return nil
+	}
+	f.request(image)
+	return fmt.Errorf("image %s has no published conformance proof: %w", image, errImageNotProved)
+}
+
+// request starts proving image in the background, unless a pass is already
+// following an image or image's last pass failed and its backoff has not
+// passed; an attempt still waiting asks again on the next admission pass.
+// It never blocks the caller.
+func (f *conformanceFollower) request(image domain.ImageRef) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.following != "" || f.ctx.Err() != nil {
 		return
 	}
-	f.startPass(image, false)
-}
-
-// retry proves image again when the follower's last pass failed on it and
-// its backoff has passed, unless a pass is already following an image. It
-// never blocks the caller.
-func (f *conformanceFollower) retry(image domain.ImageRef) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.following != "" || f.ctx.Err() != nil || f.failed != image || f.now().Before(f.retryAt) {
+	if !f.retryDueLocked(image) {
 		return
 	}
-	f.startPass(image, true)
-}
-
-// startPass runs one follower pass for image in the background; f.mu must be
-// held. A retry that waited behind a scheduled pass runs no suite when that
-// pass cleared the failure, because ward then already proves image.
-func (f *conformanceFollower) startPass(image domain.ImageRef, retry bool) {
 	f.following = image
 	f.wg.Add(1)
-	go func() {
-		defer f.wg.Done()
-		defer func() {
-			f.mu.Lock()
-			f.following = ""
-			f.mu.Unlock()
-		}()
-		f.passMu.Lock()
-		defer f.passMu.Unlock()
-		if retry && !f.stillFailed(image) {
-			return
-		}
-		if err := f.backend.RepointAgentImage(string(image)); err != nil {
-			f.logger.Error("repoint ward at the selected writer image", "image", image, "error", err)
-			return
-		}
-		if retry {
-			f.logger.Info("retrying conformance for the selected writer image", "image", image)
-		} else {
-			f.logger.Info("ward repointed at the selected writer image; running conformance", "image", image)
-		}
-		if err := f.prove(f.ctx); err != nil {
-			// A pass Close cancelled did not fail; it says nothing of the image.
-			if f.ctx.Err() == nil {
-				retryAt := f.recordFailure(image)
-				f.logger.Warn("conformance for the selected writer image failed",
-					"image", image, "retry_at", retryAt, "error", err)
-			}
-			return
-		}
-		f.clearFailure()
-		f.logger.Info("conformance recorded for the selected writer image", "image", image)
-	}()
+	go f.pass(image)
 }
 
-func (f *conformanceFollower) stillFailed(image domain.ImageRef) bool {
+// pass is one follower pass for image. A pass that waited behind a
+// scheduled one runs no suite when image is proven by then.
+func (f *conformanceFollower) pass(image domain.ImageRef) {
+	defer f.wg.Done()
+	defer func() {
+		f.mu.Lock()
+		f.following = ""
+		f.mu.Unlock()
+	}()
+	f.passMu.Lock()
+	defer f.passMu.Unlock()
+	if slices.Contains(f.cfg.Ledger.ProvenImages(), string(image)) {
+		return
+	}
+	if f.failedFor(image) {
+		f.cfg.Logger.Info("retrying conformance for the selected writer image", "image", image)
+	} else {
+		f.cfg.Logger.Info("running conformance for the selected writer image", "image", image)
+	}
+	if err := f.cfg.Prove(f.ctx, image); err != nil {
+		// A pass Close cancelled did not fail; it says nothing of the image.
+		if f.ctx.Err() == nil {
+			retryAt := f.recordFailure(image)
+			f.cfg.Logger.Warn("conformance for the selected writer image failed",
+				"image", image, "retry_at", retryAt, "error", err)
+		}
+		return
+	}
+	f.clearFailure(image)
+	f.cfg.Logger.Info("conformance recorded for the selected writer image", "image", image)
+}
+
+// failedFor reports whether image's last pass failed.
+func (f *conformanceFollower) failedFor(image domain.ImageRef) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.failed == image
+	_, ok := f.failed[image]
+	return ok
 }
 
-// recordFailure remembers a failed follower pass on image and returns when it
-// may be retried.
+// recordFailure remembers a failed pass on image and returns when it may be
+// retried.
 func (f *conformanceFollower) recordFailure(image domain.ImageRef) time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.failed = image
-	f.failures++
-	f.retryAt = f.now().Add(followerBackoff(f.failures))
-	return f.retryAt
+	failure := f.failed[image]
+	failure.failures++
+	failure.retryAt = f.cfg.Now().Add(followerBackoff(failure.failures))
+	f.failed[image] = failure
+	return failure.retryAt
 }
 
-func (f *conformanceFollower) clearFailure() {
+func (f *conformanceFollower) clearFailure(image domain.ImageRef) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.failed, f.failures, f.retryAt = "", 0, time.Time{}
+	delete(f.failed, image)
 }
 
 // followerBackoff is the wait after failures consecutive failed passes.
@@ -244,23 +278,94 @@ func (f *conformanceFollower) pendingFor(image domain.ImageRef) bool {
 }
 
 // runScheduled is the doctor's scheduled pass, serialized with the
-// follower's. It proves ward's current image. A success clears the follower's
-// failure; a failure is not remembered, so it arms no retry and waits for the
-// next scheduled pass. A pass whose memory the budget refuses for good runs
-// nothing and leaves the standing proof as it was, so it is skipped, logged,
-// rather than failing the doctor pass, which would stop the daemon.
+// follower's. It keeps the images attempts selected since the previous
+// scheduled pass, and always the most recently selected one, or the start's
+// image when none was selected yet. It re-proves each kept image with a
+// published proof, and the most recent one whether or not it has one unless
+// its last pass failed and its backoff has not passed, one pass after
+// another, each under its own reservation. It retires every other image
+// ward tracks, published or failed, so a proof nobody used stops admitting
+// and is proved again only when an attempt next selects or starts on its
+// image.
+//
+// A failed pass closes only its own image's configuration: it is
+// remembered like a follower pass's, so its image retries after the
+// backoff, and it fails the doctor pass, which stops the daemon, only when
+// the round leaves ward no published proof at all. A failed retirement
+// always fails it, since the durable marker did not land. A pass whose
+// memory the budget refuses for good runs nothing and leaves the standing
+// proof as it was, so it is skipped, logged.
 func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	f.passMu.Lock()
 	defer f.passMu.Unlock()
-	if err := f.prove(ctx); err != nil {
-		if reservationRefusedForGood(err) {
-			f.logger.Warn("scheduled conformance pass skipped: the memory budget can never grant it", "error", err)
-			return nil
-		}
-		return err
+	f.mu.Lock()
+	keep, latest := f.selected, f.latest
+	if latest != "" {
+		keep[latest] = struct{}{}
 	}
-	f.clearFailure()
-	return nil
+	f.selected = map[domain.ImageRef]struct{}{}
+	f.mu.Unlock()
+
+	proven := f.cfg.Ledger.ProvenImages()
+	reprove := []domain.ImageRef{}
+	if latest != "" && (slices.Contains(proven, string(latest)) || f.retryDue(latest)) {
+		reprove = append(reprove, latest)
+	}
+	var errs, failedPasses []error
+	for _, tracked := range f.cfg.Ledger.TrackedImages() {
+		image := domain.ImageRef(tracked)
+		if _, ok := keep[image]; !ok {
+			if err := f.cfg.Retire(ctx, image); err != nil {
+				errs = append(errs, fmt.Errorf("retire image %s's proof: %w", image, err))
+				continue
+			}
+			f.clearFailure(image)
+			f.cfg.Logger.Info("retired the proof of a writer image no attempt selected", "image", image)
+			continue
+		}
+		// Another kept image whose pass failed is retried when an attempt
+		// selects it, after its backoff.
+		if image != latest && slices.Contains(proven, tracked) {
+			reprove = append(reprove, image)
+		}
+	}
+	for _, image := range reprove {
+		if err := f.cfg.Prove(ctx, image); err != nil {
+			if reservationRefusedForGood(err) {
+				f.cfg.Logger.Warn("scheduled conformance pass skipped: the memory budget can never grant it",
+					"image", image, "error", err)
+				continue
+			}
+			if ctx.Err() == nil {
+				f.recordFailure(image)
+			}
+			failedPasses = append(failedPasses, fmt.Errorf("re-prove image %s: %w", image, err))
+			continue
+		}
+		f.clearFailure(image)
+	}
+	if len(failedPasses) > 0 {
+		if len(f.cfg.Ledger.ProvenImages()) == 0 {
+			errs = append(errs, failedPasses...)
+		} else {
+			f.cfg.Logger.Warn("scheduled conformance pass failed; its configuration holds until a pass succeeds",
+				"error", errors.Join(failedPasses...))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// retryDue reports whether image may be proved again: its last pass did
+// not fail, or its backoff has passed.
+func (f *conformanceFollower) retryDue(image domain.ImageRef) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.retryDueLocked(image)
+}
+
+func (f *conformanceFollower) retryDueLocked(image domain.ImageRef) bool {
+	failure, ok := f.failed[image]
+	return !ok || !f.cfg.Now().Before(failure.retryAt)
 }
 
 // Close stops a pass in flight and waits for it.
@@ -279,11 +384,9 @@ func (f *conformanceFollower) Close(ctx context.Context) error {
 	}
 }
 
-// wardConformance reads the image ward proves and the capabilities it
-// declares for it.
-type wardConformance interface {
-	ConformanceIdentity() (image string, digest domain.Digest)
-	Capabilities() exec.CapabilitySet
+// provenImages reads the images ward holds a published proof for.
+type provenImages interface {
+	ProvenImages() []string
 }
 
 // claudeImageSelector selects each writer attempt's image from the pointer
@@ -292,7 +395,7 @@ type claudeImageSelector struct {
 	store        *store.Store
 	repo         string
 	repositoryID int64
-	backend      wardConformance
+	backend      provenImages
 	base         *baseInputsMemo
 	follower     *conformanceFollower
 
@@ -312,15 +415,17 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 // selectImage is the engine's ImageSelection. It returns the image to admit,
 // or the error that holds the attempt: image_upkeep_pending or the unserved
 // admission_policy_refused hold when no image serves base, the run's base,
-// backend_not_conformant while ward does not yet prove the selected image,
-// and input_unavailable when the base could not be read.
+// backend_not_conformant while ward holds no published proof of the
+// selected image, and input_unavailable when the base could not be read.
 //
-// Ward proves the selected image only once it also publishes the two
-// capabilities a pass earns, supports_networkless_export and
-// supports_enforced_provider_egress: a pass publishes both on success, and
-// one that is running or failed leaves both cleared. Until then the attempt
-// holds as unproved rather than reaching admission's capability check, and a
-// failed follower pass is retried.
+// Selection prefers an image ward has proved (engine.SelectProjectImage).
+// Ward publishes an image's proof, the two capabilities a pass earns
+// (supports_networkless_export and supports_enforced_provider_egress), only
+// once its pass is recorded; a pass that is running or failed leaves them
+// cleared. Until then the attempt holds as unproved rather than reaching
+// admission's capability check, and the follower proves the image, or
+// retries its failed pass after the backoff. Every selected image is noted,
+// which keeps its proof through the next scheduled pass.
 //
 // A maintenance task's run (repair non-nil) skips that choice: it runs on the
 // image its refusal was measured from while the pointer still names it, and
@@ -329,7 +434,7 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 func (s *claudeImageSelector) selectImage(
 	ctx context.Context, _ domain.InvocationID, base domain.BaseRevision, repair *domain.ImageUpkeepRefusal,
 ) (domain.ImageRef, error) {
-	proved, _ := s.backend.ConformanceIdentity()
+	proven := s.backend.ProvenImages()
 	var (
 		selected domain.ProjectImage
 		found    bool
@@ -346,7 +451,7 @@ func (s *claudeImageSelector) selectImage(
 		}
 	} else {
 		selected, found, err = selectRecordedImage(ctx, s.store, s.repo, s.repositoryID, base.BaseSHA,
-			domain.ImageRef(proved), s.base)
+			imageRefs(proven), s.base)
 		if err != nil {
 			return "", err
 		}
@@ -367,22 +472,27 @@ func (s *claudeImageSelector) selectImage(
 		}
 		return "", &engine.ImageUpkeepPendingError{Hold: *hold}
 	}
-	notProved := errors.Join(engine.ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch)
+	s.follower.noteSelected(selected.ImageRef)
 	switch {
-	case string(selected.ImageRef) != proved:
-		s.follower.follow(selected.ImageRef)
-		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef, notProved)
+	case slices.Contains(proven, string(selected.ImageRef)):
+		return selected.ImageRef, nil
 	case s.follower.pendingFor(selected.ImageRef):
-		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef, notProved)
-	case !publishedProof(s.backend.Capabilities()):
-		s.follower.retry(selected.ImageRef)
-		return "", fmt.Errorf("image %s has no published conformance proof: %w", selected.ImageRef, notProved)
+		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef, errImageNotProved)
+	case s.follower.failedFor(selected.ImageRef):
+		s.follower.request(selected.ImageRef)
+		return "", fmt.Errorf("image %s has no published conformance proof: %w", selected.ImageRef, errImageNotProved)
+	default:
+		s.follower.request(selected.ImageRef)
+		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef, errImageNotProved)
 	}
-	return selected.ImageRef, nil
 }
 
-func publishedProof(caps exec.CapabilitySet) bool {
-	return caps.Has(exec.CapNetworklessExport) && caps.Has(exec.CapEnforcedProviderEgress)
+func imageRefs(images []string) []domain.ImageRef {
+	refs := make([]domain.ImageRef, len(images))
+	for i, image := range images {
+		refs[i] = domain.ImageRef(image)
+	}
+	return refs
 }
 
 // repairImage returns the pointed-to image when it is the one refusal was
@@ -419,7 +529,7 @@ func (s *claudeImageSelector) repairImage(
 // instead of failing the dispatch pass.
 func selectRecordedImage(
 	ctx context.Context, st *store.Store, repo string, repositoryID int64, baseSHA string,
-	proved domain.ImageRef, base *baseInputsMemo,
+	proved []domain.ImageRef, base *baseInputsMemo,
 ) (domain.ProjectImage, bool, error) {
 	var (
 		pointed domain.ProjectImage
@@ -453,7 +563,7 @@ func selectRecordedImage(
 // domain.ErrRepositoryIdentityMismatch; a base that cannot be read is
 // exec.ErrInputUnavailable.
 func SelectAmongRecordedImages(
-	pointed domain.ProjectImage, images []domain.ProjectImage, repo, baseSHA string, proved domain.ImageRef,
+	pointed domain.ProjectImage, images []domain.ProjectImage, repo, baseSHA string, proved []domain.ImageRef,
 	baseInputs func(domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
 ) (domain.ProjectImage, bool, error) {
 	if pointed.Repository != repo {
@@ -472,47 +582,43 @@ func SelectAmongRecordedImages(
 	return selected, found, nil
 }
 
-// startupProvedImage names the recorded image whose configuration digest,
-// on this backend, is the latest passed conformance record's: the image a
-// restart can restore a proof for without running the suite again.
-func startupProvedImage(
-	ctx context.Context, st *store.Store, repositoryID int64,
-	digestFor func(image string) domain.Digest, conformance domain.BackendConformance, found bool,
-) (domain.ImageRef, error) {
-	if !found || conformance.Outcome != domain.ConformancePassed {
-		return "", nil
-	}
-	var images []domain.ProjectImage
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		images, err = tx.ListProjectImages(ctx, repositoryID)
-		return err
-	}); err != nil {
-		return "", fmt.Errorf("list project images: %w", err)
-	}
-	for _, image := range images {
-		if digestFor(string(image.ImageRef)) == conformance.ConfigurationDigest {
-			return image.ImageRef, nil
-		}
-	}
-	return "", nil
+// proofRestorer is the part of ward's backend a start restores proofs into.
+type proofRestorer interface {
+	ConfigurationDigestFor(image string) domain.Digest
+	RestoreConformance(image string, record domain.BackendConformance) error
 }
 
-// startupWriterImage is the image ward starts on. It is the selected image,
-// or the pointed-to image when none serves the base, so attempts hold until
-// upkeep acts. A start that will not run the suite starts ward on the image
-// the latest record proves instead, when that is another one, so the proof
-// restores; the first attempt then moves ward to the selected image through
-// the follower rather than the start failing for want of a proof.
-func startupWriterImage(
-	selected domain.ProjectImage, found bool, pointed domain.ImageRef, proved domain.ImageRef, runConformance bool,
-) domain.ImageRef {
-	target := pointed
-	if found {
-		target = selected.ImageRef
+// restoreRecordedProofs restores ward's proof of each of images whose
+// configuration's newest conformance row passed, and returns those images.
+// A configuration whose newest row is a failure or a supersession marker,
+// including one a scheduled pass retired, is not restored.
+func restoreRecordedProofs(
+	ctx context.Context, st *store.Store, backend proofRestorer, images []domain.ImageRef,
+) ([]domain.ImageRef, error) {
+	var restored []domain.ImageRef
+	for _, image := range images {
+		if slices.Contains(restored, image) {
+			continue
+		}
+		var (
+			record domain.BackendConformance
+			found  bool
+		)
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			record, found, err = tx.LatestConfigurationConformance(ctx,
+				domain.BackendFreshVMReadOnlyVolumeHandoff, backend.ConfigurationDigestFor(string(image)))
+			return err
+		}); err != nil {
+			return nil, fmt.Errorf("read image %s's conformance: %w", image, err)
+		}
+		if !found || record.Outcome != domain.ConformancePassed {
+			continue
+		}
+		if err := backend.RestoreConformance(string(image), record); err != nil {
+			return nil, fmt.Errorf("restore image %s's conformance: %w", image, err)
+		}
+		restored = append(restored, image)
 	}
-	if !runConformance && proved != "" {
-		return proved
-	}
-	return target
+	return restored, nil
 }

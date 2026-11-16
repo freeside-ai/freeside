@@ -108,7 +108,7 @@ func TestControlDoctorPreservesRequestedCheckpointRecipes(t *testing.T) {
 	seedDoctor := operations.Doctor{
 		Store: h.Store, Attention: signet.NewService(h.Store), ProjectID: "project-system",
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Mode: domain.ModeAttendedDev,
-		ConfigurationDigest: recipeA,
+		ConfigurationDigests: []domain.Digest{recipeA},
 		BackupHealthSource: store.BackupHealthSourceFunc(func(context.Context, store.BackupHealthContext) (domain.BackupHealth, error) {
 			return domain.BackupHealth{
 				Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,

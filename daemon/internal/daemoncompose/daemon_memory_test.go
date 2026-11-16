@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -223,7 +224,8 @@ func TestDaemonWorkRunnerKeepsAReservationWhoseContainerRuns(t *testing.T) {
 // TestScheduledConformanceSkipsAPassTheBudgetRefusesForGood: a scheduled
 // proof pass whose memory the budget can never grant, after a lowered budget
 // or on a runtime with no recorded overhead, runs nothing and fails no
-// doctor pass, which would stop the daemon; any other failure still fails it.
+// doctor pass, which would stop the daemon; any other failure that leaves
+// no proof standing still fails it.
 func TestScheduledConformanceSkipsAPassTheBudgetRefusesForGood(t *testing.T) {
 	t.Parallel()
 	suiteFailed := errors.New("suite failed")
@@ -237,9 +239,19 @@ func TestScheduledConformanceSkipsAPassTheBudgetRefusesForGood(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			f := newConformanceFollower(nil, func(context.Context) error {
-				return fmt.Errorf("reserve memory for the proof pass: %w", tc.cause)
-			}, time.Now, slog.New(slog.DiscardHandler))
+			image := domain.ImageRef("ghcr.io/owner/project@sha256:" + strings.Repeat("d", 64))
+			ledger := newFakeWard(image)
+			f := newConformanceFollower(followerConfig{
+				Ledger: ledger,
+				Prove: func(context.Context, domain.ImageRef) error {
+					if tc.want != nil {
+						// A pass that ran withdrew the image's proof first.
+						ledger.publish(image, false)
+					}
+					return fmt.Errorf("reserve memory for the proof pass: %w", tc.cause)
+				},
+				Start: image, Now: time.Now, Logger: slog.New(slog.DiscardHandler),
+			})
 			if err := f.runScheduled(t.Context()); !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
 				t.Fatalf("scheduled pass = %v, want %v", err, tc.want)
 			}
