@@ -4003,3 +4003,68 @@ Nothing in this revision is built yet: #3155 builds it.
 
 (Owner decision of 2026-11-13 on #3180;
 [decision note](../../devlog/2026-11-13-0957-review-guide-caps-trim.md).)
+
+## Revision 125 ("One Supervised Daemon Runs Every Project"):
+
+1. **One daemon executes** (Section [10](../plan.md#10-operations-and-onboarding),
+   Environments). The launchd-supervised `prod` daemon runs real work. It
+   starts executing when its stored settings say so and its checks pass, and
+   launchd keeps it running across updates and crashes.
+2. **One daemon serves every onboarded project** (Section
+   [10](../plan.md#10-operations-and-onboarding), Environments). A project is a stored
+   record, and adding one is onboarding, never a new state root or a second
+   process. Phase 1A's one repository becomes a limit that Stage 2 lifts
+   (Section [5.5](../plan.md#55-the-ci-trust-boundary)).
+3. **Only shared resources bound throughput, never the project or the
+   process** (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency)).
+   A task waits only for a resource limit the operator sets or for its own
+   project's state. The limits are four: the memory budget, each usage
+   pool's limits, the macOS verification executor's slots, and the image
+   builder limit. No daemon-wide lane makes one task's long work wait behind
+   another's, and no lock that tasks share is held across a network call.
+4. **Settings live in the store, in three scopes** (Section
+   [10](../plan.md#10-operations-and-onboarding), Environments): instance, identity,
+   and project. A task binds the settings revisions it was admitted under,
+   and a later edit changes only later tasks, except that each gate still
+   re-checks stored authority against current policy, so an edit to
+   authority can stop an in-flight task at its next gate.
+5. **The deputy is the attended run of an unreleased build** (Section
+   [10](../plan.md#10-operations-and-onboarding), Environments). The App authority
+   never has two holders at once, and the daemon enforces that, where
+   #2080's two start-time checks alone left a gap. Pausing `prod` before a
+   deputy run is the operator's procedure, and a deputy refuses while `prod`
+   reports that it is executing.
+
+Four rules change with them. A busy Section
+[5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry)
+judgment site makes a call wait its turn instead of returning its fallback,
+and how many calls it runs at once is a limit on the pool, starting at one,
+in place of a fixed one. Every container the daemon starts on its own
+reserves memory, and only a command the operator runs by hand stays outside
+the budget. One builder per daemon becomes a builder limit in the instance
+settings, starting at one (Section
+[5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes)). And
+`freesided execution pause` and `execution resume` are a use of the durable
+operator stop, never the update drain, and a third sanctioned lifecycle path
+(Section [5.2](../plan.md#52-the-daemon-and-its-supervisor)).
+
+This narrows revision 71's rejection of running real work through `prod`'s
+own store: its reason, that the harness isolates a run's database from
+`prod` on purpose, still holds for an unreleased build and doesn't apply to
+daily work. Rejected: a persistent deputy that serves many projects, which
+duplicates `prod` and keeps the App authority on permanent loan; one deputy
+per repository, which the App's single authority forbids and which splits
+the memory and pool limits by hand; many projects before `prod` executes,
+when the supervised launch is the smaller step; keeping #2080's two
+start-time checks without a lock, whose gap an executing `prod` under
+`KeepAlive` reaches on every restart; and importing the deputy roots' task
+history, a Tier A data import for display only.
+
+Nothing in this revision is built yet: tracker #3201 builds it in the three
+stages of Section [11](../plan.md#11-roadmap-build-order-and-coordination)
+([One Daemon for Every Project, in Three Stages](../plan.md#one-daemon-for-every-project-in-three-stages)), and
+each passage names the stage that delivers it.
+
+(Owner decision of 2026-11-13 on #3201;
+[decision note](../../devlog/2026-11-14-1114-one-daemon-every-project.md).)
