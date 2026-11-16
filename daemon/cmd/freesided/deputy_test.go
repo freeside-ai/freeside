@@ -524,7 +524,7 @@ func TestDeputyStartRunsAClaudeReviewerOnTheWriterIdentity(t *testing.T) {
 		t.Fatalf("acquire lease: %v, %+v", err, interrupted)
 	}
 	defer func() { _ = lease.Close() }()
-	cfg := deputyPreflightConfig(settings, paths, lease)
+	cfg := deputyPreflightConfig(settings, paths, lease, nil)
 	// composePreflight takes the database from the lease and the agents from
 	// the lineup it resolves.
 	cfg.DBPath, cfg.Agents = paths.DB, agents
@@ -554,12 +554,12 @@ func TestDeputyPreflightConfigCarriesTheSecondWriter(t *testing.T) {
 		t.Fatalf("acquire lease: %v, %+v", err, interrupted)
 	}
 	defer func() { _ = lease.Close() }()
-	cfg := deputyPreflightConfig(settings, paths, lease)
+	cfg := deputyPreflightConfig(settings, paths, lease, nil)
 	if cfg.SecondAuthIdentityID != "claude-2" || cfg.SecondAuthVolume != "claude-auth-second" {
 		t.Fatalf("preflight second writer = %q on %q", cfg.SecondAuthIdentityID, cfg.SecondAuthVolume)
 	}
 	settings.AgentTree.SecondWriter = nil
-	if cfg := deputyPreflightConfig(settings, paths, lease); cfg.SecondAuthIdentityID != "" || cfg.SecondAuthVolume != "" {
+	if cfg := deputyPreflightConfig(settings, paths, lease, nil); cfg.SecondAuthIdentityID != "" || cfg.SecondAuthVolume != "" {
 		t.Fatalf("one writer: preflight second writer = %q on %q", cfg.SecondAuthIdentityID, cfg.SecondAuthVolume)
 	}
 }

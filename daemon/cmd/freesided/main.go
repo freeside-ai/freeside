@@ -28,6 +28,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -408,6 +409,19 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	// A daemon started with a driver takes the App authority writer lock
+	// before run, so it never opens the authority beside another holder. A
+	// -prod-app-authority daemon takes it under the rig lease and before it
+	// probes prod, so a prod that holds it is refused here.
+	var authorityLock *publish.AuthorityWriterLock
+	if execution == executionClaude && *publicationStateDir != "" {
+		lock, err := acquireAppAuthority(*publicationStateDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		authorityLock = lock
+	}
 	if *prodAppAuthority {
 		err := checkProdDriverless(context.Background(), newProductionRigHost().ProdExecution, paths.PublicationStateDir)
 		if err != nil {
@@ -446,6 +460,7 @@ func main() {
 		SeedFixture:                        *seedFixture,
 		MemoryBudgetMiB:                    memoryBudgetMiB,
 		Logger:                             logger,
+		AuthorityLock:                      authorityLock,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
 	if err != nil {
@@ -628,6 +643,9 @@ type config struct {
 	// DeputyLaunch is set only by deputy: the composition this daemon serves
 	// under, which every new submission must bind (deputyLaunch.admit).
 	DeputyLaunch *deputyLaunch
+	// AuthorityLock is the App authority writer lock a Claude-mode daemon
+	// opens the authority under, taken before run by main or the deputy.
+	AuthorityLock *publish.AuthorityWriterLock
 }
 
 // defaultLogLevel emits what an unattended daemon's operator needs and
@@ -800,7 +818,8 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 		SchedulerInterval: cfg.SchedulerInterval, AttentionDeliveryInterval: cfg.AttentionDeliveryInterval,
 		ApprovedRecipes: cfg.ApprovedRecipes, SeedWalkingSkeleton: cfg.SeedWalkingSkeleton, SeedFixture: fixture,
 		IntakeInitiators: cfg.IntakeInitiators, MemoryBudgetMiB: cfg.MemoryBudgetMiB, Logger: cfg.Logger,
-		Claude: cfg.Claude, Scenario: cfg.Scenario,
+		Claude: cfg.Claude, AppAuthority: daemoncompose.AppAuthority{Lock: cfg.AuthorityLock},
+		Scenario:       cfg.Scenario,
 		ManualProjects: manualProjects, ManualInitiator: manualInitiator, StoreOptions: storeOptions,
 		ReadinessEnvironment: string(cfg.Environment), Version: buildVersion(),
 		IdentityLabel: credentialIdentityLabel,

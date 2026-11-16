@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
@@ -195,7 +196,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 	}
 	assertSecretAbsent(t, manifestCode, interruptedOut.String(), interruptedErr.String(), interruptedRunErr.Error())
 	assertSecretAbsentFromRegularFiles(t, root, manifestCode)
-	keystore, err := publish.NewKeystore(first.CredentialsDir, first.StateDir)
+	keystore, err := openTestKeystore(t, first.StateDir, first.CredentialsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +250,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 		info.Mode().Perm() != 0o600 {
 		t.Fatalf("authority file info = %v, err = %v", info, err)
 	}
-	authority, err := publish.NewInstallationAuthorityStore(second.StateDir)
+	authority, err := openTestAuthorityStore(t, second.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +266,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 		t.Fatalf("authority document = %+v", document)
 	}
 	installationURL, err := installationURLForRegistration(
-		second.CredentialsDir, second.StateDir, second.Registration.AppID,
+		publishtest.HoldAuthority(t, second.StateDir), second.CredentialsDir, second.Registration.AppID,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -282,11 +283,11 @@ func TestSetupCommandDoesNotCreateAuthorityForExistingCredentials(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	keystore, err := publish.NewKeystore(layout.CredentialsDir, layout.StateDir)
+	keystore, err := openTestKeystore(t, layout.StateDir, layout.CredentialsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := publish.NewInstallationAuthorityStore(layout.StateDir)
+	authority, err := openTestAuthorityStore(t, layout.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,11 +359,11 @@ func TestSetupCommandSelectsOperatorRegistrationFromMultipleApps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keystore, err := publish.NewKeystore(layout.CredentialsDir, layout.StateDir)
+	keystore, err := openTestKeystore(t, layout.StateDir, layout.CredentialsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := publish.NewInstallationAuthorityStore(layout.StateDir)
+	authority, err := openTestAuthorityStore(t, layout.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}

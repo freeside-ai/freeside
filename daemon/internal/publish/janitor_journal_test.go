@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -23,6 +24,7 @@ import (
 const (
 	journalFileName     = "installation-janitor-journal.json"
 	journalLockFileName = "installation-janitor-journal.lock"
+	writerLockFileName  = "app-authority-writer.lock"
 )
 
 // operatorDocument is the authority for the registration the janitor tests
@@ -67,7 +69,7 @@ func newDocumentStore(t *testing.T, document publish.InstallationAuthorityDocume
 
 func reopenAuthorityStore(t *testing.T, dir string) *publish.InstallationAuthorityStore {
 	t.Helper()
-	store, err := publish.NewInstallationAuthorityStore(dir)
+	store, err := publish.NewInstallationAuthorityStore(publishtest.HoldAuthority(t, dir))
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -125,7 +127,7 @@ func assertNoResidue(t *testing.T, dir string) {
 	}
 	for _, entry := range entries {
 		switch entry.Name() {
-		case "installation-authority.json", journalFileName, journalLockFileName:
+		case "installation-authority.json", journalFileName, journalLockFileName, writerLockFileName:
 		default:
 			t.Fatalf("state directory holds %q after a durable write", entry.Name())
 		}

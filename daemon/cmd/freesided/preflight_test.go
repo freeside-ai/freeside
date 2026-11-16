@@ -1574,7 +1574,7 @@ func TestPreflightRefusesProdAppDirectoriesWithoutAuthority(t *testing.T) {
 		{"no credentials", func(*testing.T, string, string) {}, "no usable GitHub App credentials"},
 		{"credentials without matching authority", func(t *testing.T, state, credentials string) {
 			t.Helper()
-			keystore, err := publish.NewKeystore(credentials, state)
+			keystore, err := openTestKeystore(t, state, credentials)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1585,7 +1585,7 @@ func TestPreflightRefusesProdAppDirectoriesWithoutAuthority(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			authority, err := publish.NewInstallationAuthorityStore(state)
+			authority, err := openTestAuthorityStore(t, state)
 			if err != nil {
 				t.Fatal(err)
 			}

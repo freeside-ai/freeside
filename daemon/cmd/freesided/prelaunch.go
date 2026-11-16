@@ -206,10 +206,13 @@ func (r *prelaunchRecord) status(name string) compositionStatus {
 // prelaunchHost is what the command touches outside its root. Tests replace
 // each part; production uses the deputy's own.
 type prelaunchHost struct {
-	rig       rigHost
-	preflight preflightEnvironment
-	leaseRoot string
-	now       func() time.Time
+	// authorityLock takes the App authority writer lock on prod's App state
+	// directory under the lease.
+	authorityLock func(stateDir string) (*publish.AuthorityWriterLock, error)
+	rig           rigHost
+	preflight     preflightEnvironment
+	leaseRoot     string
+	now           func() time.Time
 	// build is the daemon build the record and the composition name.
 	build string
 	// preLease runs the deputy's checks before its lease.
@@ -235,10 +238,11 @@ type prelaunchIssueObservation struct {
 
 func productionPrelaunchHost() prelaunchHost {
 	return prelaunchHost{
-		rig:       newProductionRigHost(),
-		preflight: newProductionPreflightEnvironment(),
-		now:       func() time.Time { return time.Now().UTC() },
-		build:     buildVersion(),
+		authorityLock: acquireAppAuthority,
+		rig:           newProductionRigHost(),
+		preflight:     newProductionPreflightEnvironment(),
+		now:           func() time.Time { return time.Now().UTC() },
+		build:         buildVersion(),
 		preLease: func(settings loadedDeputySettings, paths deputyPaths) (deputyHomes, error) {
 			return deputyPreLeaseChecks(settings, paths, readTailscaleIPs)
 		},
@@ -446,6 +450,13 @@ func skipLeaseBound(record *prelaunchRecord, why string, noLive bool) {
 // skipUnderLease records the checks that run only under a held lease as not
 // run.
 func skipUnderLease(record *prelaunchRecord, why string, noLive bool) {
+	record.skip(prelaunchGroupRig, "app_authority_lock", why)
+	skipUnderAuthorityLock(record, why, noLive)
+}
+
+// skipUnderAuthorityLock records the checks that run only under the held App
+// authority writer lock as not run.
+func skipUnderAuthorityLock(record *prelaunchRecord, why string, noLive bool) {
 	record.skip(prelaunchGroupRig, "installed_daemon", why)
 	record.skip(prelaunchGroupComposition, "composition", why)
 	record.skip(prelaunchGroupInputs, "launch_binding", why)
@@ -930,6 +941,17 @@ func runPrelaunchUnderLease(
 		return nil
 	}
 	record.pass(prelaunchGroupRig, "rig_lease", "acquired and idle; released when the checks end")
+	// The App authority writer lock, taken under the lease as a deputy takes
+	// it, and closed before the deferred release frees the lease.
+	authority, err := host.authorityLock(settings.Prod.AppStateDir)
+	if err != nil {
+		record.fail(prelaunchGroupRig, "app_authority_lock", err.Error(),
+			"pause an executing prod with freesided execution pause, or wait for the deputy run to end, then rerun prelaunch")
+		skipUnderAuthorityLock(record, "the App authority writer lock could not be taken", cfg.NoLive)
+		return nil
+	}
+	defer func() { _ = authority.Close() }()
+	record.pass(prelaunchGroupRig, "app_authority_lock", "held; released when the checks end")
 
 	if err := host.prodAuthority(ctx, homes, settings, tokenFile, leaseRoot); err != nil {
 		record.fail(prelaunchGroupRig, "installed_daemon", err.Error(),
@@ -938,13 +960,13 @@ func runPrelaunchUnderLease(
 		record.pass(prelaunchGroupRig, "installed_daemon", "prod's App authority is usable under the lease")
 	}
 
-	manifest := composePrelaunchManifest(ctx, record, settings, paths, lease, tokenFile, host, now)
+	manifest := composePrelaunchManifest(ctx, record, settings, paths, lease, authority, tokenFile, host, now)
 	checkPrelaunchLaunchBinding(record, manifest, inputs, settings.Repository.Project)
 	if cfg.NoLive {
 		record.skip(prelaunchGroupLive, "target_issue", "-no-live")
 		record.skip(prelaunchGroupLive, "lineup_probe", "-no-live")
 	} else {
-		checkPrelaunchTargetIssue(ctx, record, settings, paths, lease, inputs, state, manifest, host)
+		checkPrelaunchTargetIssue(ctx, record, settings, paths, lease, authority, inputs, state, manifest, host)
 		probePrelaunchLineup(ctx, record, settings, paths, tokenFile, host, now)
 	}
 	return manifest
@@ -1001,9 +1023,9 @@ func releasePrelaunchLease(ctx context.Context, rig rigHost, paths deputyPaths, 
 // beside the database binds submissions, and only a deputy start writes one.
 func composePrelaunchManifest(
 	ctx context.Context, record *prelaunchRecord, settings loadedDeputySettings, paths deputyPaths,
-	lease *daemonlock.RigLease, tokenFile string, host prelaunchHost, now time.Time,
+	lease *daemonlock.RigLease, authority *publish.AuthorityWriterLock, tokenFile string, host prelaunchHost, now time.Time,
 ) *compositionManifest {
-	cfg := deputyPreflightConfig(settings, paths, lease)
+	cfg := deputyPreflightConfig(settings, paths, lease, authority)
 	cfg.RigTokenFile = tokenFile
 	manifest, err := composePreflight(ctx, cfg, host.preflight, now, host.build)
 	if err != nil {
@@ -1061,7 +1083,7 @@ func checkPrelaunchLaunchBinding(
 // authority's one writer can't start meanwhile.
 func checkPrelaunchTargetIssue(
 	ctx context.Context, record *prelaunchRecord, settings loadedDeputySettings, paths deputyPaths,
-	lease *daemonlock.RigLease, inputs *prelaunchInputs, state prelaunchState, manifest *compositionManifest,
+	lease *daemonlock.RigLease, authority *publish.AuthorityWriterLock, inputs *prelaunchInputs, state prelaunchState, manifest *compositionManifest,
 	host prelaunchHost,
 ) {
 	const name = "target_issue"
@@ -1095,7 +1117,7 @@ func checkPrelaunchTargetIssue(
 		record.skip(prelaunchGroupLive, name, "the composition resolved no App bot; see publication_authority")
 		return
 	}
-	cfg := deputyPreflightConfig(settings, paths, lease)
+	cfg := deputyPreflightConfig(settings, paths, lease, authority)
 	cfg.DBPath = lease.Manifest().Resources.DatabasePath
 	// The mint's App JWT is valid for minutes from the clock it is signed
 	// with, so the read takes the clock now, not the time the checks began:
@@ -1225,10 +1247,11 @@ func readManagedIssue(
 func mintPrelaunchIssueToken(
 	ctx context.Context, cfg preflightConfig, now time.Time, client *http.Client, apiBase string,
 ) (publish.InstallationToken, error) {
-	keystore, authorityStore, selected, err := selectRepositoryAuthority(ctx, cfg, now)
+	keystore, authorityStore, selected, release, err := selectRepositoryAuthority(ctx, cfg, now)
 	if err != nil {
 		return publish.InstallationToken{}, err
 	}
+	defer release()
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
 		return publish.InstallationToken{}, err

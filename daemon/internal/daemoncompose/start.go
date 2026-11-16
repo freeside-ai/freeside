@@ -88,7 +88,10 @@ type StartOptions struct {
 	MemoryBudgetMiB  int
 	Logger           *slog.Logger
 	Claude           *ClaudeDriverConfig
-	Scenario         *Scenario
+	// AppAuthority is how a Claude-mode daemon holds the App authority
+	// writer lock (AppAuthority).
+	AppAuthority AppAuthority
+	Scenario     *Scenario
 	// ManualProjects are the projects the manual-submission file configures,
 	// and ManualInitiator resolves a client submission's policy from them.
 	ManualProjects  map[domain.ProjectID]engine.ManualInitiator
@@ -268,6 +271,19 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 			_ = st.Close()
 		}
 	}()
+	// Start owns the App authority writer lock from here: a failed start
+	// releases it, and the shell releases it after the workers stop.
+	authorityLock := cfg.AppAuthority.Lock
+	defer func() {
+		if !success {
+			_ = authorityLock.Close()
+		}
+	}()
+	if cfg.Claude != nil {
+		claude := *cfg.Claude
+		claude.AuthorityLock = authorityLock
+		cfg.Claude = &claude
+	}
 	// The budget's checks wait for the store, because a budget recorded there
 	// wins over the declared one.
 	bound, err := cfg.startupLaunchBound(parent, st, cfg.ManualProjects)
@@ -417,7 +433,8 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	d := &Daemon{
 		Shell: daemonshell.New(daemonshell.Parts{
 			Lock: lock, Store: st, Listener: listener, LoopbackTwin: loopbackTwin, Server: server,
-			Pairing: pairing, SessionCloser: sessions, Cancel: cancel, Logger: logger, Now: cfg.Now,
+			Pairing: pairing, SessionCloser: sessions, AppAuthority: authorityLock,
+			Cancel: cancel, Logger: logger, Now: cfg.Now,
 		}),
 		Store: st, Attention: attention, Workflow: workflow, Driver: driver, Usage: usage,
 	}

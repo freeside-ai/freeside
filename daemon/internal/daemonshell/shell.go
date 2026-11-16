@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -58,6 +59,7 @@ type Shell struct {
 	pairing       PairingControl
 	cancel        context.CancelFunc
 	sessionCloser SessionCloser
+	appAuthority  io.Closer
 	errs          chan error
 	wg            sync.WaitGroup
 	closeOnce     sync.Once
@@ -92,9 +94,13 @@ type Parts struct {
 	Server        *http.Server
 	Pairing       PairingControl
 	SessionCloser SessionCloser
-	Cancel        context.CancelFunc
-	Logger        *slog.Logger
-	Now           func() time.Time
+	// AppAuthority is the App authority writer lock a Claude-mode daemon
+	// holds, or nil. Close releases it once the sessions and workers that
+	// use the authority have stopped.
+	AppAuthority io.Closer
+	Cancel       context.CancelFunc
+	Logger       *slog.Logger
+	Now          func() time.Time
 }
 
 // New builds a shell from the composition's parts. It starts nothing.
@@ -107,6 +113,7 @@ func New(parts Parts) *Shell {
 		server:        parts.Server,
 		pairing:       parts.Pairing,
 		sessionCloser: parts.SessionCloser,
+		appAuthority:  parts.AppAuthority,
 		cancel:        parts.Cancel,
 		errs:          make(chan error, 1),
 		logger:        parts.Logger,
@@ -246,7 +253,11 @@ func (s *Shell) Close() error {
 		shutdownErr := s.server.Shutdown(ctx)
 		pairingErr := s.closePairing()
 		s.wg.Wait()
-		s.closeErr = errors.Join(driverErr, shutdownErr, pairingErr, s.store.Close(), s.lock.Close())
+		var authorityErr error
+		if s.appAuthority != nil {
+			authorityErr = s.appAuthority.Close()
+		}
+		s.closeErr = errors.Join(driverErr, shutdownErr, pairingErr, authorityErr, s.store.Close(), s.lock.Close())
 	})
 	return s.closeErr
 }

@@ -83,11 +83,18 @@ func runSetupCommand(
 	if err != nil {
 		return err
 	}
-	keystore, err := publish.NewKeystore(layout.CredentialsDir, layout.StateDir)
+	// Setup writes the App authority, so it refuses while an executing prod
+	// or a deputy run holds it, and holds the lock until it returns.
+	authorityLock, err := acquireAppAuthority(layout.StateDir)
 	if err != nil {
 		return err
 	}
-	authority, err := publish.NewInstallationAuthorityStore(layout.StateDir)
+	defer func() { _ = authorityLock.Close() }()
+	keystore, err := publish.NewKeystore(authorityLock, layout.CredentialsDir)
+	if err != nil {
+		return err
+	}
+	authority, err := publish.NewInstallationAuthorityStore(authorityLock)
 	if err != nil {
 		return err
 	}

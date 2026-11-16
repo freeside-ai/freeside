@@ -80,15 +80,14 @@ var (
 	_ JanitorRecorder             = (*InstallationAuthorityStore)(nil)
 )
 
-// NewInstallationAuthorityStore resolves the state directory once, the way the
+// NewInstallationAuthorityStore opens the state directory the caller's held
+// writer lock covers; a nil or released lock is refused, so no caller opens the
+// authority beside another holder. The lock resolved the directory the way the
 // keystore resolves its roots: a symlink at the directory itself is the
 // operator's own choice, but nothing that appears inside it afterwards is
 // followed.
-func NewInstallationAuthorityStore(stateDir string) (*InstallationAuthorityStore, error) {
-	if strings.TrimSpace(stateDir) == "" {
-		return nil, errors.New("installation authority: empty state directory")
-	}
-	resolved, err := resolveExisting(stateDir)
+func NewInstallationAuthorityStore(lock *AuthorityWriterLock) (*InstallationAuthorityStore, error) {
+	resolved, err := lock.requireHeld()
 	if err != nil {
 		return nil, fmt.Errorf("installation authority: %w", err)
 	}

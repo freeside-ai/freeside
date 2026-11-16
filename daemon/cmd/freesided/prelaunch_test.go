@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
@@ -122,6 +123,11 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 	f.preflight.database.ReviewAuthStoreVolume = adopt.storePath
 	f.prober = passingLineupProber()
 	f.host = prelaunchHost{
+		// The settings name a prod App state directory that does not exist
+		// here; the fake preflight environment never opens it.
+		authorityLock: func(string) (*publish.AuthorityWriterLock, error) {
+			return publish.AcquireAuthorityWriterLock(base)
+		},
 		rig: &fakeRigHost{}, preflight: f.preflight, leaseRoot: leaseRoot,
 		now: func() time.Time { return prelaunchTestNow }, build: "2dce6570ee23",
 		preLease: func(loadedDeputySettings, deputyPaths) (deputyHomes, error) {
@@ -1315,7 +1321,7 @@ func newPrelaunchIssueReaderFixture(
 ) (preflightConfig, *httptest.Server, *[]string) {
 	t.Helper()
 	state, credentials := prodAppDirs(t, t.TempDir())
-	keystore, err := publish.NewKeystore(credentials, state)
+	keystore, err := openTestKeystore(t, state, credentials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1326,7 +1332,7 @@ func newPrelaunchIssueReaderFixture(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	authority, err := publish.NewInstallationAuthorityStore(state)
+	authority, err := openTestAuthorityStore(t, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1381,7 +1387,8 @@ func newPrelaunchIssueReaderFixture(
 	t.Cleanup(server.Close)
 	return preflightConfig{
 		PublicationStateDir: state, PublicationCredentialsDir: credentials,
-		Repo: "acme/widgets", RepositoryID: 42, DBPath: dbPath,
+		AuthorityLock: publishtest.HoldAuthority(t, state),
+		Repo:          "acme/widgets", RepositoryID: 42, DBPath: dbPath,
 		ApprovedRecipe: approveShadowReviewDigest("a"),
 	}, server, &requests
 }

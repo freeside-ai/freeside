@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
@@ -78,7 +79,7 @@ func TestScheduledJanitorCredentialFailures(t *testing.T) {
 			if err := os.MkdirAll(state, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			ks, err := publish.NewKeystore(filepath.Join(root, "credentials"), state)
+			ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, state), filepath.Join(root, "credentials"))
 			if err != nil {
 				t.Fatal(err)
 			}

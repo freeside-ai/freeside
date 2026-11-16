@@ -23,6 +23,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -99,7 +100,7 @@ func newLiveMinterWithKeystore(t *testing.T) (m *publish.Minter, repo string, pr
 	}
 
 	base := t.TempDir()
-	ks, err := publish.NewKeystore(filepath.Join(base, "credentials"), filepath.Join(base, "state"))
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, filepath.Join(base, "state")), filepath.Join(base, "credentials"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +567,7 @@ func TestLiveInstallationJanitorPublishesCoverage(t *testing.T) {
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
 		t.Fatalf("create state dir: %v", err)
 	}
-	ks, err := publish.NewKeystore(filepath.Join(base, "credentials"), stateDir)
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, stateDir), filepath.Join(base, "credentials"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +611,7 @@ func TestLiveInstallationJanitorPublishesCoverage(t *testing.T) {
 		t.Fatalf("write authority: %v", err)
 	}
 
-	store, err := publish.NewInstallationAuthorityStore(stateDir)
+	store, err := publish.NewInstallationAuthorityStore(publishtest.HoldAuthority(t, stateDir))
 	if err != nil {
 		t.Fatalf("new authority store: %v", err)
 	}

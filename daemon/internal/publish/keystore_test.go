@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
 )
 
 // testKey generates a throwaway RSA key once per test binary; keystore
@@ -75,13 +76,12 @@ func TestNewKeystoreRejectsOverlap(t *testing.T) {
 		{"case-folded key inside state", filepath.Join(base, "State", "creds"), filepath.Join(base, "state"), true},
 		{"unclean nested path", filepath.Join(state, "x", "..", "creds"), state, true},
 		{"empty credentials dir", "", state, true},
-		{"empty state dir", filepath.Join(base, "creds"), "", true},
 		{"disjoint siblings", filepath.Join(base, "creds"), state, false},
 		{"disjoint not yet created", filepath.Join(base, "new", "creds"), filepath.Join(base, "new", "state"), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := publish.NewKeystore(tc.credentials, tc.state)
+			_, err := publish.NewKeystore(publishtest.HoldAuthority(t, tc.state), tc.credentials)
 			if tc.wantErr {
 				if !errors.Is(err, publish.ErrCredentialsInsideStateDir) {
 					t.Errorf("NewKeystore(%q, %q) = %v, want ErrCredentialsInsideStateDir", tc.credentials, tc.state, err)
@@ -92,6 +92,34 @@ func TestNewKeystoreRejectsOverlap(t *testing.T) {
 				t.Errorf("NewKeystore(%q, %q) = %v, want nil", tc.credentials, tc.state, err)
 			}
 		})
+	}
+}
+
+// TestNewKeystoreRequiresAHeldLock: the keystore opens only under a held
+// App authority writer lock, so no caller can open it beside another holder.
+func TestNewKeystoreRequiresAHeldLock(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	credentials := filepath.Join(base, "credentials")
+	if _, err := publish.NewKeystore(nil, credentials); err == nil {
+		t.Fatal("NewKeystore accepted a nil lock")
+	}
+	state := filepath.Join(base, "state")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := publish.AcquireAuthorityWriterLock(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publish.NewKeystore(lock, credentials); err != nil {
+		t.Fatalf("NewKeystore under a held lock: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publish.NewKeystore(lock, credentials); err == nil {
+		t.Fatal("NewKeystore accepted a released lock")
 	}
 }
 
@@ -761,7 +789,7 @@ func TestKeystoreWritesStayOutsideStateDir(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ks, err := publish.NewKeystore(credRoot, stateDir)
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, stateDir), credRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +823,7 @@ func TestKeystoreWritesStayOutsideStateDir(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if path != stateDir {
+		if path != stateDir && path != filepath.Join(stateDir, writerLockFileName) {
 			t.Errorf("state dir gained an entry: %s", path)
 		}
 		return nil
@@ -901,7 +929,7 @@ func TestKeystoreRejectsSymlinkedAppDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ks, err := publish.NewKeystore(credRoot, stateDir)
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, stateDir), credRoot)
 	if err != nil {
 		t.Fatalf("NewKeystore: %v", err)
 	}
@@ -943,7 +971,7 @@ func TestKeystoreRejectsSymlinkedOwnerDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ks, err := publish.NewKeystore(credRoot, stateDir)
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, stateDir), credRoot)
 	if err != nil {
 		t.Fatalf("NewKeystore: %v", err)
 	}
@@ -1076,7 +1104,7 @@ func TestSaveAppRejectsSymlinkedAncestor(t *testing.T) {
 	}
 	// The credentials root's parent does not exist at construction.
 	credRoot := filepath.Join(base, "a", "creds")
-	ks, err := publish.NewKeystore(credRoot, stateDir)
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, stateDir), credRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1093,8 +1121,10 @@ func TestSaveAppRejectsSymlinkedAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Errorf("state dir gained %d entries; writes escaped through the ancestor link", len(entries))
+	for _, entry := range entries {
+		if entry.Name() != writerLockFileName {
+			t.Errorf("state dir gained %s; writes escaped through the ancestor link", entry.Name())
+		}
 	}
 }
 
@@ -1355,7 +1385,7 @@ func TestLoadAppEmpty(t *testing.T) {
 func newTestKeystore(t *testing.T) *publish.Keystore {
 	t.Helper()
 	base := t.TempDir()
-	ks, err := publish.NewKeystore(filepath.Join(base, "credentials"), filepath.Join(base, "state"))
+	ks, err := publish.NewKeystore(publishtest.HoldAuthority(t, filepath.Join(base, "state")), filepath.Join(base, "credentials"))
 	if err != nil {
 		t.Fatalf("NewKeystore: %v", err)
 	}

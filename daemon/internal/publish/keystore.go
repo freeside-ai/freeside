@@ -78,15 +78,21 @@ type Keystore struct {
 }
 
 // NewKeystore roots a keystore at credentialsDir after proving it is
-// disjoint from stateDir. Overlap in either direction is rejected: a
+// disjoint from the App authority state directory, which it takes from the
+// writer lock its caller holds: a nil or released lock is refused, so no
+// caller opens the keystore beside another holder. Overlap in either direction is rejected: a
 // credentials directory inside the state directory would land the key
 // in checkpoints, and a state directory inside the credentials
 // directory would complect the two surfaces the containment invariant
 // keeps separate. Symlinks are resolved through the deepest existing
 // ancestor of each path, so a symlinked credentials directory cannot
 // tunnel back inside the state directory; any ambiguity fails closed.
-func NewKeystore(credentialsDir, stateDir string) (*Keystore, error) {
-	if credentialsDir == "" || stateDir == "" {
+func NewKeystore(lock *AuthorityWriterLock, credentialsDir string) (*Keystore, error) {
+	stateDir, err := lock.requireHeld()
+	if err != nil {
+		return nil, fmt.Errorf("keystore: %w", err)
+	}
+	if credentialsDir == "" {
 		return nil, fmt.Errorf("keystore: empty directory: %w", ErrCredentialsInsideStateDir)
 	}
 	cred, err := resolveExisting(credentialsDir)

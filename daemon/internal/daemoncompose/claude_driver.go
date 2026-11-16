@@ -101,8 +101,12 @@ type ClaudeDriverConfig struct {
 	HostVerification MacverifyExecutorConfig
 	// StateRoot and CredentialsDir locate the GitHub App authority and
 	// credential material the exact-base transport authenticates with.
-	StateRoot                   string
-	CredentialsDir              string
+	StateRoot      string
+	CredentialsDir string
+	// AuthorityLock is the App authority writer lock held on StateRoot.
+	// Start sets it from StartOptions.AppAuthority; the composition opens
+	// the authority only under it and refuses a lock on another directory.
+	AuthorityLock               *publish.AuthorityWriterLock
 	OperatingMode               domain.OperatingMode
 	ReviewImage                 string
 	ReviewInputRoot             string
@@ -893,7 +897,10 @@ func composeClaudeDriver(
 			return nil, err
 		}
 	}
-	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
+	if err := cfg.AuthorityLock.Covers(cfg.StateRoot); err != nil {
+		return nil, fmt.Errorf("open the App authority: %w", err)
+	}
+	authority, err := publish.NewInstallationAuthorityStore(cfg.AuthorityLock)
 	if err != nil {
 		return nil, err
 	}
@@ -1847,7 +1854,7 @@ func claudeTransport(
 	authority *publish.InstallationAuthorityStore,
 ) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, followUpPosters, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, *publish.HandBackLabelRemover, publish.TokenSource, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
+	keystore, err := publish.NewKeystore(cfg.AuthorityLock, cfg.CredentialsDir)
 	if err != nil {
 		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
 	}

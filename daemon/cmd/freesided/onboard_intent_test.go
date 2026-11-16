@@ -213,7 +213,7 @@ func newOnboardIntentFixture(t *testing.T) onboardIntentFixture {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ks, err := publish.NewKeystore(credentialsDir, stateDir)
+	ks, err := openTestKeystore(t, stateDir, credentialsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func newOnboardIntentFixture(t *testing.T) onboardIntentFixture {
 	if err := ks.SaveApp(app); err != nil {
 		t.Fatal(err)
 	}
-	authority, err := publish.NewInstallationAuthorityStore(stateDir)
+	authority, err := openTestAuthorityStore(t, stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
