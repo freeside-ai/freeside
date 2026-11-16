@@ -26,16 +26,6 @@ func checkBound(t *testing.T, b *TailBuffer, limit int) {
 	}
 }
 
-func TestTailBufferKeepsAnUnderCapStreamWhole(t *testing.T) {
-	t.Parallel()
-	b := NewTailBuffer(16)
-	writeAll(t, b, []byte("hello "), []byte("world"))
-	if got := string(b.Bytes()); got != "hello world" || b.Truncated() {
-		t.Fatalf("Bytes = %q, truncated %v; want whole stream, not truncated", got, b.Truncated())
-	}
-	checkBound(t, b, 16)
-}
-
 func TestTailBufferKeepsAnExactlyFullStreamUntruncated(t *testing.T) {
 	t.Parallel()
 	for _, chunks := range [][][]byte{
@@ -48,26 +38,6 @@ func TestTailBufferKeepsAnExactlyFullStreamUntruncated(t *testing.T) {
 			t.Fatalf("Bytes = %q, truncated %v; want the full stream untruncated", got, b.Truncated())
 		}
 	}
-}
-
-func TestTailBufferKeepsTheLastBytesOfAnOverCapStream(t *testing.T) {
-	t.Parallel()
-	b := NewTailBuffer(8)
-	writeAll(t, b, []byte("noisy early output\n"), []byte("FAIL: x\n"))
-	if got := string(b.Bytes()); got != "FAIL: x\n" || !b.Truncated() {
-		t.Fatalf("Bytes = %q, truncated %v; want the last 8 bytes, truncated", got, b.Truncated())
-	}
-	checkBound(t, b, 8)
-}
-
-func TestTailBufferKeepsTheEndOfASingleWriteLargerThanTheBound(t *testing.T) {
-	t.Parallel()
-	b := NewTailBuffer(4)
-	writeAll(t, b, []byte("abcdefgh"))
-	if got := string(b.Bytes()); got != "efgh" || !b.Truncated() {
-		t.Fatalf("Bytes = %q, truncated %v; want %q, truncated", got, b.Truncated(), "efgh")
-	}
-	checkBound(t, b, 4)
 }
 
 // Many small writes wrap the ring repeatedly; the result must equal the

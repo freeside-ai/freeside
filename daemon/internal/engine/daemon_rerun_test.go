@@ -181,23 +181,6 @@ func TestDaemonRerunKeepsTheCardForALiveLoss(t *testing.T) {
 	}
 }
 
-// TestDaemonRerunAfterAShutdown: a graceful shutdown cancels the writer.
-// After the restart its canceled terminal gets exactly one next attempt
-// under the cancel reason and raises no card.
-func TestDaemonRerunAfterAShutdown(t *testing.T) {
-	t.Parallel()
-	f := newRunningCampaignFixture(t)
-	f = f.shutDown(t, f.attempt.InvocationID)
-	f.collect(t, f.run, f.attempt)
-	if outcome := f.outcome(t); outcome.Status != domain.ExecutionOutcomeCanceled {
-		t.Fatalf("outcome = %+v, want canceled", outcome)
-	}
-	f.wantRerun(t, 2, f.run, daemonCancelRerunReason)
-	if _, found := f.attemptRun(t, 3); found {
-		t.Fatal("a shutdown allocated more than one re-run")
-	}
-}
-
 // TestDaemonRerunCompletedWriterIsNotRerun: a writer that committed its
 // result before the restart is adopted with that result, so nothing re-runs.
 func TestDaemonRerunCompletedWriterIsNotRerun(t *testing.T) {

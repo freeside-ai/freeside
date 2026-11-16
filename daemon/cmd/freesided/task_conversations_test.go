@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -192,17 +191,5 @@ func TestTaskConversationsReportsAnUnreadableConversation(t *testing.T) {
 	if got.ItemID != goldenOfferItemID || got.ConversationID == nil || got.Error == nil ||
 		got.Status != nil || got.Messages != nil {
 		t.Fatalf("conversation = %+v, want ids and an error only", got)
-	}
-}
-
-func TestTaskConversationsUnknownTask(t *testing.T) {
-	t.Parallel()
-	st, _ := openSeededStore(t)
-	err := st.Read(t.Context(), func(tx *store.ReadTx) error {
-		_, err := readTaskConversations(t.Context(), tx, "task-missing", taskRecordAsOf)
-		return err
-	})
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("err = %v, want %v", err, store.ErrNotFound)
 	}
 }

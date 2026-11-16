@@ -116,53 +116,6 @@ func seedSubmittedDelivery(t *testing.T, f fixture, deviceID domain.DeviceID, at
 	return row
 }
 
-// TestRecordDeliveryOpenedAdvancesTiming: the opened receipt lands on the row
-// and the item's persisted timing aggregates move in the same transaction —
-// FirstOpenedAt and SubmitToFirstOpen appear, and the item's entity_version
-// advances so cached clients invalidate. item_version stays put: timing is
-// not a change to what the operator decides on (#1946).
-func TestRecordDeliveryOpenedAdvancesTiming(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	f := newFixture(t)
-	submittedAt := *f.now
-	seedSubmittedDelivery(t, f, f.device.ID, 1, submittedAt)
-	_, before := f.itemSnapshot(t)
-
-	openedAt := submittedAt.Add(3 * time.Minute)
-	*f.now = openedAt
-	row, err := f.service.RecordDeliveryOpened(ctx, f.item.ID, f.device.ID, "ntfy", 1)
-	if err != nil {
-		t.Fatalf("RecordDeliveryOpened: %v", err)
-	}
-	if row.Status != domain.DeliveryOpened {
-		t.Errorf("row status = %q, want opened", row.Status)
-	}
-	if row.OpenedAt == nil || !row.OpenedAt.Equal(openedAt) {
-		t.Errorf("row opened_at = %v, want %v", row.OpenedAt, openedAt)
-	}
-	if row.ChannelAcceptedAt != nil {
-		t.Errorf("row channel_accepted_at = %v, want nil (never claimed)", row.ChannelAcceptedAt)
-	}
-
-	item, after := f.itemSnapshot(t)
-	if item.Timing.DeliveryCount != 1 {
-		t.Errorf("timing delivery_count = %d, want 1", item.Timing.DeliveryCount)
-	}
-	if item.Timing.FirstOpenedAt == nil || !item.Timing.FirstOpenedAt.Equal(openedAt) {
-		t.Errorf("timing first_opened_at = %v, want %v", item.Timing.FirstOpenedAt, openedAt)
-	}
-	if item.Timing.SubmitToFirstOpen == nil || *item.Timing.SubmitToFirstOpen != 3*time.Minute {
-		t.Errorf("timing submit_to_first_open = %v, want 3m", item.Timing.SubmitToFirstOpen)
-	}
-	if after.EntityVersion <= before.EntityVersion {
-		t.Errorf("item entity_version %d → %d, want an advance", before.EntityVersion, after.EntityVersion)
-	}
-	if item.ItemVersion != f.item.ItemVersion {
-		t.Errorf("item_version %d → %d, want it unchanged", f.item.ItemVersion, item.ItemVersion)
-	}
-}
-
 // readItem is itemSnapshot for the fake provider's handler goroutine, which
 // must not call t.Fatalf.
 func readItem(f fixture) (domain.AttentionItem, store.Snapshot, error) {

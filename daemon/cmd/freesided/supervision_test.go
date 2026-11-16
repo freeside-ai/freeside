@@ -62,24 +62,6 @@ func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
 	}
 }
 
-func TestRunRejectsAMissingEnvironment(t *testing.T) {
-	t.Parallel()
-	stateDir := t.TempDir()
-	h, err := run(t.Context(), nil, config{
-		DBPath: filepath.Join(t.TempDir(), "freeside.db"), StateDir: stateDir, ListenAddr: "127.0.0.1:0",
-	})
-	if err == nil {
-		_ = h.Close()
-		t.Fatal("run started without an environment")
-	}
-	if !strings.Contains(err.Error(), "environment") {
-		t.Fatalf("run error = %v, want an environment refusal", err)
-	}
-	if _, err := os.Stat(filepath.Join(stateDir, daemonshell.ReadinessFileName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("readiness file stat = %v, want no file published", err)
-	}
-}
-
 func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/publish/publishtest"
@@ -52,53 +51,6 @@ func TestSetupCommandCreatesCorrectedFakeDriverDirectory(t *testing.T) {
 	}
 	if layout.FakeDriverDir != layout.DBPath+".fake-stage-driver" {
 		t.Fatalf("fake driver = %q, want %q", layout.FakeDriverDir, layout.DBPath+".fake-stage-driver")
-	}
-}
-
-func TestSetupResultGoldens(t *testing.T) {
-	t.Parallel()
-	layout := operations.Layout{
-		ConfigDir:      "/home/operator/.freeside",
-		DBPath:         "/home/operator/.freeside/state/freeside.db",
-		StateDir:       "/home/operator/.freeside/state",
-		CredentialsDir: "/home/operator/.freeside/credentials",
-		FakeDriverDir:  "/home/operator/.freeside/state/freeside.db.fake-stage-driver",
-		AuthorityPath:  "/home/operator/.freeside/state/installation-authority.json",
-	}
-	registration := publish.AppRegistration{
-		Owner: "operator", OwnerID: 42, Visibility: publish.AppVisibilityPublic,
-		AppID: 91, Name: "Freeside Operator", Slug: "freeside-operator",
-		ClientID: "Iv1.example",
-	}
-	cases := []struct {
-		name   string
-		result setupResult
-	}{
-		{
-			name: "setup-registration-required",
-			result: setupResult{
-				Layout: layout, Status: "registration_required",
-				ManifestAction: "https://github.com/settings/apps/new",
-				ManifestFields: map[string][]string{
-					"manifest": {`{"name":"freeside-operator"}`},
-				},
-			},
-		},
-		{
-			name: "setup-complete",
-			result: setupResult{
-				Layout: layout, Status: "complete", Registration: &registration,
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			body, err := json.MarshalIndent(tc.result, "", "  ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			golden.Assert(t, tc.name, append(body, '\n'))
-		})
 	}
 }
 

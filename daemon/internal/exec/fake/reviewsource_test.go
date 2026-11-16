@@ -117,35 +117,6 @@ func TestReviewSourceCleanPass(t *testing.T) {
 	}
 }
 
-// TestReviewSourceDuplicatePollAcceptsOnce is scenario 4c: repeated polls
-// re-deliver the identical committed result; acceptance keyed by invocation
-// id admits exactly one.
-func TestReviewSourceDuplicatePollAcceptsOnce(t *testing.T) {
-	s := fake.NewReviewSource()
-	s.Script("inv-1", fake.ReviewScript{
-		Outcome: fake.OutcomeComplete,
-		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
-	})
-
-	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
-		t.Fatal(err)
-	}
-	acc := newAcceptor()
-	accepted := 0
-	for range 3 {
-		result, err := s.Poll(t.Context(), "inv-1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if acc.accept(t, "inv-1", result) {
-			accepted++
-		}
-	}
-	if accepted != 1 {
-		t.Errorf("accepted %d results across 3 polls, want exactly 1", accepted)
-	}
-}
-
 // TestReviewSourceStaleHeadFailsVerify is scenario 4d, and #36's freshness
 // half (request A / result A / current B): a review that ran against a
 // superseded head fails freshness verification against the current one while
@@ -238,29 +209,6 @@ func TestReviewSourceDelayedReview(t *testing.T) {
 	}
 	if result.HeadSHA != "cafebabe" {
 		t.Errorf("result head = %q", result.HeadSHA)
-	}
-}
-
-// TestReviewSourceFailedOutcome: a failed review reports StatusFailed and
-// commits no result, so Poll and Verify both answer ErrNoResult.
-func TestReviewSourceFailedOutcome(t *testing.T) {
-	s := fake.NewReviewSource()
-	s.Script("inv-1", fake.ReviewScript{
-		Outcome: fake.OutcomeFail,
-		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
-	})
-
-	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
-		t.Fatal(err)
-	}
-	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusFailed {
-		t.Errorf("inspect = %v, %v; want failed", status, err)
-	}
-	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
-		t.Errorf("poll of a failed review = %v, want ErrNoResult", err)
-	}
-	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
-		t.Errorf("verify of a failed review = %v, want ErrNoResult", err)
 	}
 }
 

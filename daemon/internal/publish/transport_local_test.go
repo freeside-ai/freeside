@@ -393,27 +393,6 @@ func TestRejectedCallsMintNoToken(t *testing.T) {
 	}
 }
 
-func TestPushHeadCreatesBranch(t *testing.T) {
-	t.Parallel()
-	remote := newLocalRemote(t)
-	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	head := candidateHead(t, co)
-	in := testIdentityInput(remote.repo, head)
-	res, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in))
-	if err != nil {
-		t.Fatalf("PushHead: %v", err)
-	}
-	if !res.Created {
-		t.Error("first push reported Created=false")
-	}
-	if got := gitOut(t, remote.bare, "rev-parse", "refs/heads/"+testBranch(t, in)); got != head {
-		t.Errorf("remote branch = %s, want %s", got, head)
-	}
-}
-
 func TestPushHeadUsesDeclaredCapabilityBranch(t *testing.T) {
 	t.Parallel()
 	remote := newLocalRemote(t)

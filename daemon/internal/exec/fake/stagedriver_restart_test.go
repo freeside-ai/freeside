@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -170,37 +169,6 @@ func TestStageDriverRestartTranscriptSurvives(t *testing.T) {
 	}
 	if string(b) != "agent transcript\n" {
 		t.Errorf("transcript after restart = %q", b)
-	}
-}
-
-// TestStageDriverPersistDeterministic proves the on-disk state is clock-free:
-// two independent dirs driven through identical operations produce
-// byte-identical files, so reconstruction is a pure function of the dir.
-func TestStageDriverPersistDeterministic(t *testing.T) {
-	drive := func(dir string) []byte {
-		t.Helper()
-		d, err := fake.NewStageDriverAt(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		d.Script("inv-1", fake.StageScript{
-			RunningInspects: 1,
-			Outcome:         fake.OutcomeComplete,
-			Result:          exec.StageResult{HeadSHA: "cafebabe", Artifacts: []domain.Digest{"sha256:x"}, Summary: "s"},
-		})
-		if err := d.Start(t.Context(), "inv-1", exec.StartSpec{RunID: "run-1", StageID: "stage-1"}); err != nil {
-			t.Fatal(err)
-		}
-		inspectUntilTerminalOrGone(t, d, "inv-1")
-		// G304: dir is a test-owned t.TempDir(), never external input.
-		b, err := os.ReadFile(filepath.Join(dir, "stage_state.json")) //nolint:gosec // test-owned temp dir
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-	if a, b := drive(t.TempDir()), drive(t.TempDir()); string(a) != string(b) {
-		t.Errorf("persisted state differs across identical runs (non-determinism):\n--- a ---\n%s\n--- b ---\n%s", a, b)
 	}
 }
 

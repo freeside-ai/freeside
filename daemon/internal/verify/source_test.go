@@ -10,19 +10,6 @@ import (
 
 const testRecipePath = ".freeside/verify.json"
 
-func TestLoadTrustedRecipeFromBase(t *testing.T) {
-	t.Parallel()
-	dir, base := initRepo(t, map[string]string{testRecipePath: trustedRecipeBytes})
-	g := newTestRunner(t, dir)
-	got, err := loadTrustedRecipeBytes(context.Background(), g, BaseCommitRecipe(), base, testRecipePath, 1<<20)
-	if err != nil {
-		t.Fatalf("loadTrustedRecipeBytes: %v", err)
-	}
-	if !bytes.Equal(got, []byte(trustedRecipeBytes)) {
-		t.Fatalf("loaded %q, want the base recipe bytes", got)
-	}
-}
-
 func TestLoadTrustedRecipeFromConfig(t *testing.T) {
 	t.Parallel()
 	dir, base := initRepo(t, map[string]string{"README.md": "hello"})

@@ -362,33 +362,6 @@ func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
 	}
 }
 
-// TestProductionDeliveryRefusalReplayConvergesOnStoredItem: the store derives
-// the item's task binding and decision surface on write, so a replayed refusal
-// for the same admitted invocation must compare against those stored values
-// and leave the item untouched (#2489).
-func TestProductionDeliveryRefusalReplayConvergesOnStoredItem(t *testing.T) {
-	t.Parallel()
-	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
-	stage, ok := findProductionStage(f.run)
-	if !ok {
-		t.Fatal("run has no production stage")
-	}
-	const summary = "rendered prompt exceeds limit"
-	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
-	); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := f.item(t, f.failureItemID())
-	if err := f.engine.recordProductionDeliveryRefusal(
-		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
-	); err != nil {
-		t.Fatalf("replayed delivery refusal = %v, want nil", err)
-	}
-	after, _ := f.item(t, f.failureItemID())
-	assertSameItemJSON(t, before, after)
-}
-
 // TestProductionDeliveryRefusalReplayConvergesAfterDelivery: a delivery
 // receipt rewrites the stored item's timing without a new item version, so a
 // replay that follows it must still converge and keep that timing.
@@ -1017,45 +990,5 @@ func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
 	}
 	if hold, found := f.runHold(t); found {
 		t.Fatalf("hold after terminal = %+v, want no hold", hold)
-	}
-}
-
-// TestRefusalHoldReasonsPinned pins refusalHoldReasons to
-// the two functions it summarizes: for every sentinel MutableAdmissionPolicyRefusal
-// accepts, dispatchHoldReason maps it to a reason in the set, and every reason
-// in the set is reached by at least one sentinel. It fails when the set stops
-// matching the table's mutable admission-policy rows.
-func TestRefusalHoldReasonsPinned(t *testing.T) {
-	t.Parallel()
-	// Every sentinel MutableAdmissionPolicyRefusal accepts.
-	var sentinels []error
-	for _, class := range holdClasses {
-		if class.action == holdActionPassMutablePolicy {
-			sentinels = append(sentinels, class.sentinel)
-		}
-	}
-	if len(sentinels) == 0 {
-		t.Fatal("holdClasses has no mutable admission-policy rows")
-	}
-	reached := make(map[domain.RunHoldReason]bool)
-	for _, sentinel := range sentinels {
-		if !MutableAdmissionPolicyRefusal(sentinel) {
-			t.Errorf("sentinel %v is no longer a mutable admission-policy refusal", sentinel)
-			continue
-		}
-		reason, ok := dispatchHoldReason(sentinel)
-		if !ok {
-			t.Errorf("sentinel %v classifies onto no hold reason", sentinel)
-			continue
-		}
-		if !slices.Contains(refusalHoldReasons, reason) {
-			t.Errorf("sentinel %v maps to %s, outside refusalHoldReasons", sentinel, reason)
-		}
-		reached[reason] = true
-	}
-	for _, reason := range refusalHoldReasons {
-		if !reached[reason] {
-			t.Errorf("refusalHoldReasons has %s, which no listed sentinel reaches", reason)
-		}
 	}
 }

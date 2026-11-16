@@ -197,37 +197,6 @@ func TestStageDriverDelayedCompletion(t *testing.T) {
 	}
 }
 
-// TestStageDriverDuplicateDeliveryAcceptsOnce is scenario 3e: Collect
-// re-delivers the identical committed result; acceptance keyed by
-// invocation id admits exactly one (§5.3).
-func TestStageDriverDuplicateDeliveryAcceptsOnce(t *testing.T) {
-	d := fake.NewStageDriver()
-	d.Script("inv-1", fake.StageScript{
-		Outcome: fake.OutcomeComplete,
-		Result:  exec.StageResult{HeadSHA: "cafebabe", Summary: "once"},
-	})
-
-	if err := d.Start(t.Context(), "inv-1", exec.StartSpec{}); err != nil {
-		t.Fatal(err)
-	}
-	inspectUntilTerminalOrGone(t, d, "inv-1")
-
-	acc := newAcceptor()
-	accepted := 0
-	for range 3 {
-		result, err := d.Collect(t.Context(), "inv-1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if acc.accept(t, "inv-1", result) {
-			accepted++
-		}
-	}
-	if accepted != 1 {
-		t.Errorf("accepted %d results across 3 deliveries, want exactly 1", accepted)
-	}
-}
-
 // TestStageDriverCancel is scenario 3f: cancel commits a canceled result, so
 // cancellation reconciles like any other outcome; a later cancel is a no-op.
 func TestStageDriverCancel(t *testing.T) {

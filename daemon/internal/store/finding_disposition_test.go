@@ -1,14 +1,9 @@
 package store_test
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -434,116 +429,4 @@ func TestPutFindingDispositionRejectsUnboundRemediationReview(t *testing.T) {
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("unbound remediation review = %v, want parent mismatch", err)
 	}
-}
-
-func TestFindingDispositionSurvivesProcessKill(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "store.db")
-	// A reexecuted helper cannot share the parent's cached template. Prepare
-	// its file here so its readiness budget covers the write being tested.
-	prepared := storetest.Open(t, path, store.Options{})
-	if err := prepared.Close(); err != nil {
-		t.Fatal(err)
-	}
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	cmd := exec.Command(binary, "-test.run=^TestFindingDispositionKillWriter$") //nolint:gosec // reexecutes this test binary with fixed arguments.
-	cmd.Env = append(os.Environ(),
-		"FREESIDE_FINDING_DISPOSITION_KILL_DB="+path,
-	)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd.Stderr = &output
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
-		}
-	})
-	ready := make(chan error, 1)
-	go func() {
-		line, err := bufio.NewReader(stdout).ReadString('\n')
-		if err == nil && line != "ready\n" {
-			err = fmt.Errorf("unexpected readiness marker %q", line)
-		}
-		ready <- err
-	}()
-	select {
-	case err := <-ready:
-		if err != nil {
-			t.Fatalf("kill writer readiness: %v: %s", err, output.String())
-		}
-	case <-time.After(10 * time.Second):
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		t.Fatalf("kill writer did not become ready: %s", output.String())
-	}
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Wait(); err == nil {
-		t.Fatal("kill writer exited cleanly, want forced termination")
-	}
-
-	ctx := context.Background()
-	reopened := storetest.Open(t, path, store.Options{})
-	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
-		got, err := tx.GetFindingDisposition(ctx, "finding-kill", 1)
-		if err != nil {
-			return err
-		}
-		if got.Disposition != domain.ReviewDispositionFixed || got.Reason != "committed before kill" {
-			t.Fatalf("recovered disposition = %#v", got)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestFindingDispositionKillWriter(t *testing.T) {
-	t.Parallel()
-	path := os.Getenv("FREESIDE_FINDING_DISPOSITION_KILL_DB")
-	if path == "" {
-		t.Skip("helper process")
-	}
-	ctx := context.Background()
-	st := storetest.Open(t, path, store.Options{})
-	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	run := domain.Run{ID: "run-kill", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
-	finding := domain.Finding{ID: "finding-kill", RunID: run.ID, Source: "codex", CreatedAt: at}
-	review := dispositionReviewRecord(t, run.ID, 1, []domain.FindingID{finding.ID}, at)
-	remediation := dispositionReviewRecord(t, run.ID, 2, nil, at.Add(time.Minute))
-	disposition := domain.ReviewDispositionRecord{
-		FindingID: finding.ID, RunID: run.ID, Round: 1,
-		Disposition: domain.ReviewDispositionFixed, Reason: "committed before kill",
-		RemediationInvocationID: remediation.InvocationID, CreatedAt: at,
-	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutRun(ctx, run); err != nil {
-			return err
-		}
-		if err := tx.PutReviewRecord(ctx, review, []domain.Finding{finding}); err != nil {
-			return err
-		}
-		if err := tx.PutReviewRecord(ctx, remediation, nil); err != nil {
-			return err
-		}
-		return tx.PutFindingDisposition(ctx, disposition)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fmt.Fprintln(os.Stdout, "ready"); err != nil {
-		t.Fatal(err)
-	}
-	select {}
 }

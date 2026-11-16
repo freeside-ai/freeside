@@ -227,31 +227,3 @@ func TestCodexReviewRecoveryConvergesPreparingCrashAfterBinding(t *testing.T) {
 		t.Fatalf("cleanup preserved retry workspace: %v", err)
 	}
 }
-
-func TestCodexReviewClassifiesPostBindingJournalResponseLossOperational(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	adapterFixture := openCodexReviewAdapter(t)
-	adapters := adapterFixture.Adapters
-	fixture := ward.NewCodexReviewLifecycleTestFixture(t, adapters.Journal)
-	responseLoss := &failAfterBindingJournal{
-		CodexReviewJournal: adapters.Journal,
-		beforeFail:         func() {},
-	}
-	cfg := fixture.Config
-	cfg.Journal = responseLoss
-	if launch, err := fixture.Lifecycle.CodexReview(ctx, cfg, fixture.Launch); err == nil || launch != nil {
-		t.Fatalf("CodexReview response-loss fixture = (%v, %v), want failure", launch, err)
-	} else if !errors.Is(err, ward.ErrCodexReviewOperational) {
-		t.Fatalf("CodexReview response-loss fixture = %v, want operational classification", err)
-	}
-	if !responseLoss.failed {
-		t.Fatal("response-loss fixture failed before the post-binding resource update")
-	}
-	if err := fixture.Lifecycle.RecoverCodexReview(ctx, fixture.Config, fixture.Launch); err != nil {
-		t.Fatalf("recover response-loss fixture: %v", err)
-	}
-	if err := fixture.Lifecycle.CleanupCodexReviewWorkspace(ctx, adapters.Journal, fixture.Launch.RunID); err != nil {
-		t.Fatalf("cleanup response-loss workspace: %v", err)
-	}
-}

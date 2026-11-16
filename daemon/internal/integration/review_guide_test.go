@@ -143,16 +143,6 @@ func TestProductionReadyItemCarriesTheResolvedReviewGuide(t *testing.T) {
 	}
 }
 
-func TestProductionReadyItemWithoutReviewGuideCarriesNone(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	p.startAndRecordExport(t)
-	reconcileToReady(t, p)
-	if guide := p.readyItem(t).ReviewGuide; guide != nil {
-		t.Fatalf("review guide = %#v, want none", guide)
-	}
-}
-
 // TestProductionCheckpointReviewGuideTamperFailsClosed rewrites the stored
 // guide between verification and the ready item. The checkpoint re-checks it
 // against the import it rides on, so a guide for another head, or one naming

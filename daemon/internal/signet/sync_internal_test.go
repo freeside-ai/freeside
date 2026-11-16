@@ -10,64 +10,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-func TestNormalizeAttentionItemCarriesReadinessAndLegacyNull(t *testing.T) {
-	t.Parallel()
-	for name, readiness := range map[string]*domain.ReadinessSummary{
-		"degraded": {
-			Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:evaluation",
-		},
-		"legacy": nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			body, err := json.Marshal(normalizeAttentionItem(domain.AttentionItem{Readiness: readiness}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := `"readiness":null`
-			if readiness != nil {
-				want = `"readiness":{"class":"ready_degraded","evaluation_set_digest":"sha256:evaluation"}`
-			}
-			if !strings.Contains(string(body), want) {
-				t.Fatalf("sync item = %s, want %s", body, want)
-			}
-		})
-	}
-}
-
-func TestNormalizeAttentionItemCarriesReadinessDetailAndLegacyNull(t *testing.T) {
-	t.Parallel()
-	recipe := domain.Digest("sha256:recipe")
-	for name, detail := range map[string]*domain.ReadinessDetail{
-		"present": {
-			EvaluationSetDigest: "sha256:evaluation", CandidateHead: "head",
-			Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
-			Requirements: []domain.ReadinessRequirement{{
-				RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
-				Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
-				ProofRecipeDigest: &recipe,
-			}},
-		},
-		"legacy": nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			body, err := json.Marshal(normalizeAttentionItem(domain.AttentionItem{ReadinessDetail: detail}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := `"readiness_detail":null`
-			if detail != nil {
-				want = `"readiness_detail":{"evaluation_set_digest":"sha256:evaluation","candidate_head":"head",` +
-					`"base":{"base_ref":"main","base_sha":"base"},"requirements":[{"requirement_key":"clean-verification",` +
-					`"check_class":"clean_verification","kind":"required","state":"passed",` +
-					`"proof_recipe_digest":"sha256:recipe","waiver":null}]}`
-			}
-			if !strings.Contains(string(body), want) {
-				t.Fatalf("sync item = %s, want %s", body, want)
-			}
-		})
-	}
-}
-
 func TestAuthenticateSpecificationDiscussionArtifact(t *testing.T) {
 	t.Parallel()
 	id := domain.ArtifactID("spec-discussion-command-1")

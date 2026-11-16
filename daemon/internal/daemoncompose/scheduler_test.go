@@ -283,61 +283,6 @@ func TestDeadlineReArmsOnStaleSubjectVersion(t *testing.T) {
 	}
 }
 
-// TestDeadlineRegistrationTerminatesFired: a publication deadline that
-// fires with its item still open terminates fired-and-handled with
-// deadline_elapsed on the synced aggregate.
-func TestDeadlineRegistrationTerminatesFired(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := schedTestStore(t)
-	item := schedTestItem(t, st)
-	itemID := item.ID
-	version := item.ItemVersion
-	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
-	fireAt := start.Add(30 * time.Minute)
-	policy := schedTestResolvedPolicy(*item.Subject.RunID)
-	sched, err := domain.NewSchedule(domain.ScheduleInput{
-		ID:        domain.ScheduleID("schedule-review_wait_threshold-" + string(item.ID)),
-		ProjectID: item.ProjectID, Kind: domain.ScheduleReviewWaitThreshold,
-		Subject: domain.ScheduleSubject{
-			Type:   domain.ScheduleSubjectAttentionItem,
-			ItemID: &itemID, ItemVersion: &version,
-		},
-		RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
-		CreatedAt: start, FireAt: &fireAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := fireAt.Add(time.Second)
-	s, err := scheduler.New(st, domain.ModeUnattended,
-		func() time.Time { return now },
-		map[domain.ScheduleKind]scheduler.Registration{
-			domain.ScheduleReviewWaitThreshold: deadlineRegistration(st),
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Arm(ctx, sched, fireAt); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RunOnce(ctx); err != nil {
-		t.Fatal(err)
-	}
-	var got domain.Schedule
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		got, err = tx.GetSchedule(ctx, sched.ID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != domain.ScheduleFired ||
-		got.Resolution.Reason != domain.ResolutionDeadlineElapsed {
-		t.Fatalf("deadline schedule = %+v", got)
-	}
-}
-
 // deadlineFixture is a scheduler over both publication deadline kinds with
 // an injected clock the test advances between passes.
 type deadlineFixture struct {

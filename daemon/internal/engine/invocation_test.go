@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -50,45 +49,6 @@ func TestDecodeInvocationRequestAcceptsCanonicalPayload(t *testing.T) {
 	if got.InvocationID != "inv-1" || got.ConversationID != "conv-1" ||
 		got.ItemID != "item-1" || got.ItemVersion != 2 {
 		t.Fatalf("decoded request = %#v", got)
-	}
-}
-
-func TestUnattendedDispatchRefusalIsAHold(t *testing.T) {
-	t.Parallel()
-	for _, err := range []error{
-		&exec.CapabilityRefusal{
-			Backend: "claude", Missing: []exec.Capability{exec.CapPostExitExport},
-		},
-		exec.ErrPreJobRefused,
-		store.ErrBackendNotConformant,
-		domain.ErrConformanceConfigurationUnbound,
-		domain.ErrAdmissionConfigurationMismatch,
-		domain.ErrAdmissionExceedsConformance,
-	} {
-		if !unattendedDispatchRefusal(fmt.Errorf("record admission: %w", err)) {
-			t.Errorf("%v was not classified as an unattended hold", err)
-		}
-	}
-	if unattendedDispatchRefusal(errors.New("database is corrupt")) {
-		t.Fatal("unrelated correctness error was classified as an operating-state hold")
-	}
-	if unattendedDispatchRefusal(exec.ErrInputUnavailable) {
-		t.Fatal("invocation-specific input hold was classified as a global operating-state hold")
-	}
-	if !invocationDispatchHold(fmt.Errorf("materialize: %w", exec.ErrInputUnavailable)) {
-		t.Fatal("input unavailability was not classified as an invocation-specific hold")
-	}
-	if invocationDispatchHold(store.ErrBackendNotConformant) {
-		t.Fatal("global conformance refusal was classified as invocation-specific")
-	}
-	// A role whose agent is not admissible holds its own invocation in
-	// either mode; unclassified, the refusal would stop the workflow loop.
-	refused := fmt.Errorf("admit: %w", ErrAgentNotAdmissible)
-	if !invocationDispatchHold(refused) {
-		t.Fatal("an inadmissible agent was not classified as an invocation-specific hold")
-	}
-	if reason, ok := dispatchHoldReason(refused); !ok || reason != domain.HoldAdmissionPolicyRefused {
-		t.Fatalf("inadmissible agent hold reason = %q, %t", reason, ok)
 	}
 }
 

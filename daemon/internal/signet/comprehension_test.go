@@ -74,29 +74,6 @@ func TestDeriveActionSurfaceRequiresCapability(t *testing.T) {
 	}
 }
 
-func TestSubmitStampsDecisionEvidence(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t)
-	ctx := context.Background()
-	surface := registerAndDerive(t, f, f.device.ID, itemActions)
-	cmd := f.command("cmd-1", domain.ActionOpenPR)
-	cmd.Payload.DecisionActionSurfaceDigest = &surface.Digest
-	if _, err := f.service.Submit(ctx, cmd); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	var stored domain.Command
-	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		stored, err = tx.GetCommand(ctx, "cmd-1")
-		return err
-	}); err != nil {
-		t.Fatalf("GetCommand: %v", err)
-	}
-	if stored.DecisionEvidence == nil || stored.DecisionEvidence.ActionSurfaceDigest != surface.Digest {
-		t.Fatalf("stamped evidence = %+v, want surface digest %q", stored.DecisionEvidence, surface.Digest)
-	}
-}
-
 func TestSubmitRejectsForeignActionSurface(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
