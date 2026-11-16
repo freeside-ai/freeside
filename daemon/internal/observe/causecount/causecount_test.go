@@ -3,6 +3,7 @@ package causecount
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,7 +76,10 @@ func TestComputeCountsPeriodAndPreviousPeriod(t *testing.T) {
 		wantJSON, _ := json.MarshalIndent(want, "", "  ")
 		t.Fatalf("Compute =\n%s\nwant\n%s", gotJSON, wantJSON)
 	}
-	report := Report{Period: period, PreviousPeriod: period.Previous(), Causes: got, Skipped: []Skipped{}}
+	report := Report{
+		Period: period, PreviousPeriod: period.Previous(), Causes: got,
+		Holds: ComputeHolds(nil, period, period.Start, periodEnd), Skipped: []Skipped{},
+	}
 	if err := report.Validate(); err != nil {
 		t.Fatalf("computed report is invalid: %v", err)
 	}
@@ -145,6 +149,15 @@ func goldenReport() Report {
 				FirstSeen: timePtr(at(1)), LastSeen: timePtr(at(1)),
 			},
 		},
+		// Recorded from the period's start, so the golden pins both filled
+		// figures and the previous period's nulls.
+		Holds: Holds{
+			RecordedSince: period.Start, PeriodCoverage: CoverageFull, PreviousPeriodCoverage: CoverageNone,
+			Reasons: []HoldCount{
+				{Reason: "machine_capacity", Known: true, Holds: intPtr(3), Runs: intPtr(2), HeldSeconds: secPtr(days(2.5))},
+				{Reason: "solar_flare", Known: false, Holds: intPtr(1), Runs: intPtr(1), HeldSeconds: secPtr(3600)},
+			},
+		},
 		Skipped: []Skipped{{
 			Table: "run_milestones", Row: "42",
 			Error: `recorded_at: parse RFC3339Nano timestamp: parsing time "yesterday" as "2006-01-02T15:04:05.999999999Z07:00": cannot parse "yesterday" as "2006"`,
@@ -183,6 +196,46 @@ func TestReportValidateRefusesBrokenInvariants(t *testing.T) {
 		mutate(&report)
 		if err := report.Validate(); err == nil {
 			t.Errorf("%s: Validate accepted the report", name)
+		}
+	}
+}
+
+// TestReportValidateRefusesBrokenHolds checks each hold invariant against
+// the golden's hold section (period full, previous period none), naming the
+// check that must refuse, since a broken count often breaks several.
+func TestReportValidateRefusesBrokenHolds(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		mutate func(*Holds)
+		want   string
+	}{
+		"no recorded since": {func(h *Holds) { h.RecordedSince = time.Time{} }, "recorded_since is not set"},
+		"unknown coverage":  {func(h *Holds) { h.PeriodCoverage = "" }, "unknown coverage"},
+		"period coverage":   {func(h *Holds) { h.RecordedSince = at(3) }, "period coverage does not match"},
+		"previous coverage": {
+			func(h *Holds) { h.PreviousPeriodCoverage = CoveragePartial }, "previous period coverage does not match",
+		},
+		"null figure":       {func(h *Holds) { h.Reasons[0].Runs = nil }, "period: figures must be null exactly"},
+		"figure under none": {func(h *Holds) { h.Reasons[0].PreviousHolds = intPtr(0) }, "previous period: figures must be null"},
+		"empty reason":      {func(h *Holds) { h.Reasons[0].Reason = "" }, "empty reason"},
+		"unsorted reasons":  {func(h *Holds) { h.Reasons[0].Reason = "zzz" }, "not unique and sorted"},
+		"duplicate reasons": {func(h *Holds) { h.Reasons[1].Reason = "machine_capacity" }, "not unique and sorted"},
+		"more runs":         {func(h *Holds) { h.Reasons[0].Runs = intPtr(4) }, "more runs than holds"},
+		"negative held":     {func(h *Holds) { h.Reasons[0].HeldSeconds = secPtr(-1) }, "negative figure"},
+		"time with no holds": {
+			func(h *Holds) { h.Reasons[1].Holds, h.Reasons[1].Runs = intPtr(0), intPtr(0) }, "runs or time held with no holds",
+		},
+		"no holds": {
+			func(h *Holds) {
+				h.Reasons[1].Holds, h.Reasons[1].Runs, h.Reasons[1].HeldSeconds = intPtr(0), intPtr(0), secPtr(0)
+			},
+			"no holds",
+		},
+	} {
+		report := goldenReport()
+		tc.mutate(&report.Holds)
+		if err := report.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: Validate error = %v, want %q", name, err, tc.want)
 		}
 	}
 }

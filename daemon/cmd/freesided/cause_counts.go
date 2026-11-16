@@ -19,7 +19,8 @@ import (
 
 // runCauseCountsMain is the operator entry point that prints how often each
 // typed cause occurred over a period, and in the period before it (issue
-// #3238). It is a read: no model runs and nothing is written.
+// #3238), and how often and how long each hold reason held runs (#3239). It
+// is a read: no model runs and nothing is written.
 func runCauseCountsMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -48,7 +49,9 @@ func runCauseCountsCommand(ctx context.Context, args []string, stdout, stderr io
 	if *period <= 0 {
 		return errors.New("-period must be positive")
 	}
-	end := time.Now().UTC()
+	// now is read once: it is the default -end and where an open hold ends.
+	now := time.Now().UTC()
+	end := now
 	if *endFlag != "" {
 		parsed, err := time.Parse(time.RFC3339, *endFlag)
 		if err != nil {
@@ -91,6 +94,7 @@ func runCauseCountsCommand(ctx context.Context, args []string, stdout, stderr io
 		Period:         window,
 		PreviousPeriod: window.Previous(),
 		Causes:         causecount.Compute(toCauseOccurrences(rows), window),
+		Holds:          causecount.ComputeHolds(toHoldSpans(rows.Holds), window, rows.HoldsRecordedSince, now),
 		Skipped:        toCauseSkipped(rows.Skipped),
 	}
 	if err := json.NewEncoder(stdout).Encode(report); err != nil {
@@ -116,6 +120,14 @@ func toCauseOccurrences(rows store.CauseRows) []causecount.Occurrence {
 		for _, row := range source.rows {
 			out = append(out, causecount.Occurrence{Source: source.source, Value: row.Value, RunID: row.RunID, At: row.At})
 		}
+	}
+	return out
+}
+
+func toHoldSpans(rows []store.HoldRow) []causecount.HoldSpan {
+	out := make([]causecount.HoldSpan, len(rows))
+	for i, row := range rows {
+		out[i] = causecount.HoldSpan{Reason: row.Reason, RunID: row.RunID, Start: row.Start, End: row.End}
 	}
 	return out
 }

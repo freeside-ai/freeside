@@ -8,6 +8,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,8 +23,9 @@ import (
 // period is [Nov 9, Nov 16) and the previous period [Nov 2, Nov 9).
 var causeCountsEnd = time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
 
-// causeCountsFixture writes rows from all five sources: run-1 and run-2 in
-// proj-1 and run-3 in proj-2. Attention items go through the store's writer,
+// causeCountsFixture writes rows from all five sources and hold rows: run-1
+// and run-2 in proj-1 and run-3 in proj-2. The hold history starts on Nov 5,
+// inside the previous period. Attention items go through the store's writer,
 // so the conclusion read sees the body shape the store stores; the other rows
 // are inserted directly, including one unknown value and one undecodable row.
 func causeCountsFixture(t *testing.T) string {
@@ -85,6 +87,20 @@ func causeCountsFixture(t *testing.T) string {
 		   (invocation_id, run_id, round, failure_class, observed_at, body_digest, body)
 		 VALUES ('rev-1', 'run-1', 1, 'transient', '2026-11-10T00:00:00Z', 'sha256:x', '{}'),
 		        ('rev-2', 'run-2', 1, 'transient', '2026-11-08T00:00:00Z', 'sha256:x', '{}')`,
+		// run-2's quota hold spans the period boundary; run-1's solar_flare
+		// hold is a reason this build doesn't know; span 6's end doesn't parse.
+		`INSERT INTO run_hold_spans
+		   (id, run_id, invocation_id, reason, first_observed_at, last_observed_at, cleared_at)
+		 VALUES (1, 'run-1', NULL, 'machine_capacity', '2026-11-10T00:00:00Z', '2026-11-10T00:00:00Z', '2026-11-10T12:00:00Z'),
+		        (2, 'run-2', NULL, 'machine_capacity', '2026-11-11T00:00:00Z', '2026-11-11T00:00:00Z', '2026-11-11T06:00:00Z'),
+		        (3, 'run-3', NULL, 'machine_capacity', '2026-11-12T00:00:00Z', '2026-11-12T00:00:00Z', '2026-11-12T01:00:00Z'),
+		        (4, 'run-2', NULL, 'quota_window_exhausted', '2026-11-08T00:00:00Z', '2026-11-08T00:00:00Z', '2026-11-10T00:00:00Z'),
+		        (5, 'run-1', NULL, 'solar_flare', '2026-11-06T00:00:00Z', '2026-11-06T00:00:00Z', '2026-11-07T00:00:00Z'),
+		        (6, 'run-1', NULL, 'scope_conflict', '2026-11-13T00:00:00Z', '2026-11-13T00:00:00Z', 'yesterday')`,
+		// Still open: it runs to the real now, past -end, so it clips to -end.
+		`INSERT INTO run_hold_observations (run_id, invocation_id, reason, first_observed_at, last_observed_at)
+		 VALUES ('run-1', NULL, 'scope_conflict', '2026-11-15T12:00:00Z', '2026-11-15T12:00:00Z')`,
+		`UPDATE schema_migrations SET applied_at = '2026-11-05T00:00:00Z' WHERE version = 145`,
 	} {
 		if _, err := raw.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("seed: %v\n%s", err, statement)
@@ -204,10 +220,24 @@ func TestCauseCountsCommandCountsEverySource(t *testing.T) {
 		got, _ := json.MarshalIndent(report.Causes, "", "  ")
 		t.Fatalf("causes =\n%s", got)
 	}
-	if len(report.Skipped) != 1 || report.Skipped[0].Table != "execution_outcomes" ||
-		report.Skipped[0].Row != "inv-6" || !strings.HasPrefix(report.Skipped[0].Error, "recorded_at:") {
+	if len(report.Skipped) != 2 || report.Skipped[0].Table != "execution_outcomes" ||
+		report.Skipped[0].Row != "inv-6" || !strings.HasPrefix(report.Skipped[0].Error, "recorded_at:") ||
+		report.Skipped[1].Table != "run_hold_spans" || report.Skipped[1].Row != "6" ||
+		!strings.HasPrefix(report.Skipped[1].Error, "cleared_at:") {
 		t.Fatalf("skipped = %+v", report.Skipped)
 	}
+	const hour = 3600
+	wantHolds := causecount.Holds{
+		RecordedSince:  *day(5),
+		PeriodCoverage: causecount.CoverageFull, PreviousPeriodCoverage: causecount.CoveragePartial,
+		Reasons: []causecount.HoldCount{
+			holdCount("machine_capacity", true, 3, 3, 19*hour, 0, 0, 0),
+			holdCount("quota_window_exhausted", true, 1, 1, 24*hour, 1, 1, 24*hour),
+			holdCount("scope_conflict", true, 1, 1, 12*hour, 0, 0, 0),
+			holdCount("solar_flare", false, 0, 0, 0, 1, 1, 24*hour),
+		},
+	}
+	assertHolds(t, "holds", report.Holds, wantHolds)
 
 	// -project keeps proj-1's rows: run-3's unknown failure cause and its
 	// completed terminal drop out.
@@ -229,6 +259,11 @@ func TestCauseCountsCommandCountsEverySource(t *testing.T) {
 		got, _ := json.MarshalIndent(scoped.Causes, "", "  ")
 		t.Fatalf("scoped causes =\n%s", got)
 	}
+	// run-3's machine capacity hold drops out too.
+	scopedHolds := wantHolds
+	scopedHolds.Reasons = slices.Clone(wantHolds.Reasons)
+	scopedHolds.Reasons[0] = holdCount("machine_capacity", true, 2, 2, 18*hour, 0, 0, 0)
+	assertHolds(t, "scoped holds", scoped.Holds, scopedHolds)
 
 	// -period moves both windows: the last 24h holds only run-1's second
 	// terminal, and the day before it its first and inv-2's quota failure.
@@ -243,6 +278,28 @@ func TestCauseCountsCommandCountsEverySource(t *testing.T) {
 	if !reflect.DeepEqual(lastDay.Causes, lastDayWant) {
 		got, _ := json.MarshalIndent(lastDay.Causes, "", "  ")
 		t.Fatalf("24h causes =\n%s", got)
+	}
+	// Both 24h windows are recorded, and only the open hold falls in them.
+	assertHolds(t, "24h holds", lastDay.Holds, causecount.Holds{
+		RecordedSince:  *day(5),
+		PeriodCoverage: causecount.CoverageFull, PreviousPeriodCoverage: causecount.CoverageFull,
+		Reasons: []causecount.HoldCount{holdCount("scope_conflict", true, 1, 1, 12*hour, 0, 0, 0)},
+	})
+}
+
+func holdCount(reason string, known bool, holds, runs int, held int64, prevHolds, prevRuns int, prevHeld int64) causecount.HoldCount {
+	return causecount.HoldCount{
+		Reason: reason, Known: known, Holds: &holds, Runs: &runs, HeldSeconds: &held,
+		PreviousHolds: &prevHolds, PreviousRuns: &prevRuns, PreviousHeldSeconds: &prevHeld,
+	}
+}
+
+func assertHolds(t *testing.T, name string, got, want causecount.Holds) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		wantJSON, _ := json.MarshalIndent(want, "", "  ")
+		t.Fatalf("%s =\n%s\nwant\n%s", name, gotJSON, wantJSON)
 	}
 }
 
