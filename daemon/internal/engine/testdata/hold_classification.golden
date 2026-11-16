@@ -524,6 +524,17 @@
     "refusal_hold_reason": false
   },
   {
+    "case": "the run's base is being fetched",
+    "hold_reason": "",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": false
+  },
+  {
     "case": "fenced joined with machine capacity",
     "hold_reason": "machine_capacity",
     "admission_refusal": null,
