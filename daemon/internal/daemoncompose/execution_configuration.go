@@ -13,12 +13,19 @@ import (
 const executionConfigurationItemPrefix = "system-health-execution-configuration-"
 
 // The installed daemon remains useful for pairing and state without pretending
-// to execute work. Keep that limitation visible until a driver is configured.
-func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enabled bool, now func() time.Time) error {
+// to execute work. Keep that limitation, and why it holds, visible until a
+// driver runs: a card whose reason no longer matches the state is concluded
+// and the current one raised, so a restart that changes the reason updates
+// the card.
+func convergeExecutionConfiguration(ctx context.Context, st *store.Store, state ExecutionState, now func() time.Time) error {
+	if !state.valid() {
+		return fmt.Errorf("invalid execution state %q", state)
+	}
 	at := time.Now().UTC()
 	if now != nil {
 		at = now().UTC()
 	}
+	code, reason := executionStateDiagnostic(state)
 	return st.Write(ctx, func(tx *store.WriteTx) error {
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
@@ -29,23 +36,27 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enable
 			if !strings.HasPrefix(string(item.ID), executionConfigurationItemPrefix) {
 				continue
 			}
-			found = true
-			if enabled {
-				item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, at,
-					"Resolved when an execution driver was configured.", nil)
-				if err != nil {
-					return err
-				}
-				item.ItemVersion++
-				if err := tx.PutAttentionItem(ctx, item); err != nil {
-					return err
-				}
+			if !state.Runs() && item.HealthDiagnostic != nil && item.HealthDiagnostic.Code == code {
+				found = true
+				continue
+			}
+			resolution := "Resolved when an execution driver was configured."
+			if !state.Runs() {
+				resolution = "Replaced by the card for the reason this daemon now runs no agents."
+			}
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, at, resolution, nil)
+			if err != nil {
+				return err
+			}
+			item.ItemVersion++
+			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return err
 			}
 		}
-		if enabled || found {
+		if state.Runs() || found {
 			return nil
 		}
-		state, err := tx.ServerState(ctx)
+		serverState, err := tx.ServerState(ctx)
 		if err != nil {
 			return err
 		}
@@ -56,14 +67,13 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enable
 		}
 		posture := domain.HealthPostureBlocking
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-			ID:        domain.ItemID(fmt.Sprintf("%s%d", executionConfigurationItemPrefix, state.Revision+1)),
+			ID:        domain.ItemID(fmt.Sprintf("%s%d", executionConfigurationItemPrefix, serverState.Revision+1)),
 			ProjectID: "project-system", Subject: subject,
 			Type: domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
-			Reason: "Agent execution is not configured. This daemon provides pairing, stored state, and backups, " +
-				"but does not run agents or simulate work. Follow the README's real-run setup instructions to enable execution.",
+			Reason:            reason,
 			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 			HealthDiagnostic: &domain.HealthDiagnostic{
-				Code: "execution_not_configured", Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+				Code: code, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
 			},
 			DisplayNames: names, ItemVersion: 1,
 			InterruptionClass: domain.InterruptionExceptional,
@@ -74,4 +84,29 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enable
 		}
 		return tx.PutAttentionItem(ctx, item)
 	})
+}
+
+const executionDriverlessScope = "This daemon provides pairing, stored state, and backups, " +
+	"but does not run agents or simulate work."
+
+// executionStateDiagnostic is the card a driverless state raises: its code
+// and a reason that tells the operator what restarts execution.
+func executionStateDiagnostic(state ExecutionState) (code, reason string) {
+	switch state {
+	case ExecutionConfigured:
+		return "", ""
+	case ExecutionNotConfigured:
+		return "execution_not_configured", "Agent execution is not configured. " + executionDriverlessScope +
+			" Follow the README's real-run setup instructions to enable execution."
+	case ExecutionAuthorityInUse:
+		return "app_authority_in_use", "Agent execution is off: another process, most likely a deputy run, " +
+			"held the App authority when this daemon started. " + executionDriverlessScope +
+			" Once that process ends, run freesided execution resume to restart this daemon with execution."
+	case ExecutionRigLeasePresent:
+		return "rig_lease_present", "Agent execution is off: a production rig lease existed when this daemon " +
+			"started, so a deputy run holds or held the App authority. " + executionDriverlessScope +
+			" Once the deputy run ends, run freesided execution resume to restart this daemon with execution. " +
+			"If no deputy run is running, the lease is stale: run freesided rig recover first."
+	}
+	return "", ""
 }

@@ -412,9 +412,19 @@ func main() {
 	// A daemon started with a driver takes the App authority writer lock
 	// before run, so it never opens the authority beside another holder. A
 	// -prod-app-authority daemon takes it under the rig lease and before it
-	// probes prod, so a prod that holds it is refused here.
+	// probes prod, so a prod that holds it is refused here. prod takes it in
+	// its gated order instead, once its own database is open, and serves
+	// driverless rather than exit when it cannot (daemoncompose.AppAuthority).
 	var authorityLock *publish.AuthorityWriterLock
-	if execution == executionClaude && *publicationStateDir != "" {
+	var prodAuthority *daemoncompose.ProdAuthorityGate
+	if execution == executionClaude && env == environmentProd {
+		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+		prodAuthority = &daemoncompose.ProdAuthorityGate{LeaseRoot: leaseRoot}
+	} else if execution == executionClaude && *publicationStateDir != "" {
 		lock, err := acquireAppAuthority(*publicationStateDir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -425,19 +435,6 @@ func main() {
 	if *prodAppAuthority {
 		err := checkProdDriverless(context.Background(), newProductionRigHost().ProdExecution, paths.PublicationStateDir)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "freesided:", err)
-			os.Exit(2)
-		}
-	}
-	if env == environmentProd {
-		// Before anything opens the database: a real-work run may be using
-		// prod's App authority (#1583), which only a driver would open (#2080).
-		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "freesided:", err)
-			os.Exit(2)
-		}
-		if err := checkProdDriverUnderLease(leaseRoot, execution); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}
@@ -461,6 +458,7 @@ func main() {
 		MemoryBudgetMiB:                    memoryBudgetMiB,
 		Logger:                             logger,
 		AuthorityLock:                      authorityLock,
+		ProdAuthority:                      prodAuthority,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
 	if err != nil {
@@ -646,6 +644,10 @@ type config struct {
 	// AuthorityLock is the App authority writer lock a Claude-mode daemon
 	// opens the authority under, taken before run by main or the deputy.
 	AuthorityLock *publish.AuthorityWriterLock
+	// ProdAuthority is prod's gated order, set in place of AuthorityLock for
+	// a Claude-mode prod: the start takes the lock itself and serves
+	// driverless when it cannot.
+	ProdAuthority *daemoncompose.ProdAuthorityGate
 }
 
 // defaultLogLevel emits what an unattended daemon's operator needs and
@@ -818,7 +820,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 		SchedulerInterval: cfg.SchedulerInterval, AttentionDeliveryInterval: cfg.AttentionDeliveryInterval,
 		ApprovedRecipes: cfg.ApprovedRecipes, SeedWalkingSkeleton: cfg.SeedWalkingSkeleton, SeedFixture: fixture,
 		IntakeInitiators: cfg.IntakeInitiators, MemoryBudgetMiB: cfg.MemoryBudgetMiB, Logger: cfg.Logger,
-		Claude: cfg.Claude, AppAuthority: daemoncompose.AppAuthority{Lock: cfg.AuthorityLock},
+		Claude: cfg.Claude, AppAuthority: daemoncompose.AppAuthority{Lock: cfg.AuthorityLock, Prod: cfg.ProdAuthority},
 		Scenario:       cfg.Scenario,
 		ManualProjects: manualProjects, ManualInitiator: manualInitiator, StoreOptions: storeOptions,
 		ReadinessEnvironment: string(cfg.Environment), Version: buildVersion(),

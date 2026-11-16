@@ -405,7 +405,8 @@ func requireProdAppDirectories(prodRoot string, paths environmentPaths) error {
 
 // checkProdAppAuthority gates -prod-app-authority before the path check
 // grants its exemption. The run must hold the live production rig lease,
-// whose manifest also keeps prod driverless (checkProdDriverUnderLease);
+// whose manifest also keeps a starting prod driverless
+// (daemoncompose.AppAuthority);
 // $HOME and the account home must name one prod root, so the run and a
 // launchd-started prod can't read different authorities; and the installed
 // prod daemon must accept every App authority state format this build writes.
@@ -433,8 +434,8 @@ func checkProdAppAuthority(ctx context.Context, env environment, home, accountHo
 // socket, so the run stays the authority's only writer (#2080). The deputy's
 // preflight records the same probe as prod_execution; this keeps a daemon
 // started by hand, without that preflight, under the same rule. main runs it
-// after the lease is authenticated, so a prod that starts later refuses a
-// driver on its own (checkProdDriverUnderLease).
+// after the lease is authenticated, so a prod that starts later finds the
+// lease and serves driverless (daemoncompose.AppAuthority).
 func checkProdDriverless(
 	ctx context.Context,
 	probe func(context.Context, string) (executionMode, bool, error),
@@ -521,23 +522,4 @@ func requireOneProdRoot(home, accountHome string) error {
 		return fmt.Errorf("$HOME names prod root %q but the account home names %q; -prod-app-authority needs one prod root", fromHome, fromAccount)
 	}
 	return nil
-}
-
-// checkProdDriverUnderLease keeps prod driverless while a production rig
-// lease, live or stale, exists: the run uses prod's App authority, and a prod
-// without a driver never opens it, so the authority keeps one writer. The
-// deputy checks a prod already running once it holds the lease; this is the
-// other side, for a prod that starts later (#2080).
-func checkProdDriverUnderLease(leaseRoot string, execution executionMode) error {
-	present, err := daemonlock.RigManifestPresent(leaseRoot)
-	if err != nil {
-		return fmt.Errorf("check for a production rig lease under %q: %w", leaseRoot, err)
-	}
-	if !present {
-		return nil
-	}
-	if execution == executionDisabled {
-		return nil
-	}
-	return fmt.Errorf("a production rig lease (live or stale) exists under %q, so prod may run only with -driver disabled and refuses -driver %s until the real-work run releases the lease or freesided rig recover clears a stale one", leaseRoot, execution)
 }

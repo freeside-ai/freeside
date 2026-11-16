@@ -223,43 +223,6 @@ func TestRequireOtherDaemon(t *testing.T) {
 	}
 }
 
-// TestCheckProdDriverUnderLease pins #2080: while a production rig lease,
-// live or stale, exists, prod starts only without a driver.
-func TestCheckProdDriverUnderLease(t *testing.T) {
-	t.Parallel()
-	liveLease, liveRoot, _ := acquireTestRig(t)
-	defer func() { _ = liveLease.Close() }()
-	staleLease, staleRoot, _ := acquireTestRig(t)
-	if err := staleLease.Abandon(); err != nil {
-		t.Fatal(err)
-	}
-	leaseRoots := map[string]string{
-		"live":    liveRoot,
-		"stale":   staleRoot,
-		"absent":  t.TempDir(),
-		"missing": filepath.Join(t.TempDir(), "missing"),
-	}
-	for name, leaseRoot := range leaseRoots {
-		leased := name == "live" || name == "stale"
-		for _, mode := range AllExecutionModes {
-			err := checkProdDriverUnderLease(leaseRoot, mode)
-			refused := leased && mode != executionDisabled
-			if !refused {
-				if err != nil {
-					t.Errorf("%s lease, -driver %s: %v", name, mode, err)
-				}
-				continue
-			}
-			want := "-driver " + string(mode)
-			if err == nil || !strings.Contains(err.Error(), leaseRoot) || !strings.Contains(err.Error(), want) ||
-				!strings.Contains(err.Error(), "rig recover") {
-				t.Errorf("%s lease, -driver %s: error = %v, want a refusal naming %q, the lease root, and rig recover",
-					name, mode, err, want)
-			}
-		}
-	}
-}
-
 func TestCheckProdAppAuthorityRefusesBeforeTheLease(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()

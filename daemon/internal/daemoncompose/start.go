@@ -152,6 +152,9 @@ type ControlRouteInputs struct {
 	// Running is the daemon's count of in-process work; the operator's
 	// doctor counts its probe there.
 	Running *engine.RunningWork
+	// Execution is whether a driver runs in this process and, when none
+	// does, why: GET /execution reports it, not the configured driver.
+	Execution ExecutionState
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -279,6 +282,22 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 			_ = authorityLock.Close()
 		}
 	}()
+	// prod's gated order runs here, once its own database is open and before
+	// anything composes the driver; a decline leaves it driverless with the
+	// reason, holding no lock.
+	var gated ExecutionState
+	if gate := cfg.AppAuthority.Prod; gate != nil && cfg.Claude != nil {
+		if authorityLock != nil {
+			return nil, errors.New("app authority: a held lock and prod's gated order are exclusive")
+		}
+		gated, authorityLock, err = gateProdAppAuthority(cfg.Claude.StateRoot, gate.LeaseRoot)
+		if err != nil {
+			return nil, err
+		}
+		if !gated.Runs() {
+			cfg.Claude = nil
+		}
+	}
 	if cfg.Claude != nil {
 		claude := *cfg.Claude
 		claude.AuthorityLock = authorityLock
@@ -403,7 +422,15 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	if err := ConvergeStoredState(parent, st, workflow != nil, cfg.Now, logger); err != nil {
+	execution := ExecutionNotConfigured
+	switch {
+	case workflow != nil:
+		execution = ExecutionConfigured
+	case gated != "":
+		execution = gated
+		logger.Warn("serving without execution", "reason", string(gated))
+	}
+	if err := ConvergeStoredState(parent, st, execution, cfg.Now, logger); err != nil {
 		return nil, err
 	}
 	// The last stored step before anything that launches starts: model
@@ -442,7 +469,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	routes := ControlRouteInputs{
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
-		UpdateDrain: updateDrain, Running: running,
+		UpdateDrain: updateDrain, Running: running, Execution: execution,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()

@@ -155,11 +155,22 @@ func (s pairingControlSocket) Configure(
 func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs) {
 	s.pairing.registerControlRoutes(
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
-		in.IntegrityProbe, in.Usage, s.environment, s.execution, in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop,
+		in.IntegrityProbe, in.Usage, s.environment, effectiveExecution(s.execution, in.Execution), in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop,
 		in.ReleaseVerificationMemory, in.UpdateDrain, in.CancelRootImplementations, in.Running)
 }
 
 func (s pairingControlSocket) Publish() error { return s.pairing.publish() }
+
+// effectiveExecution is the mode GET /execution reports: the -driver mode
+// when a driver runs, and disabled when the start ran none, such as a prod
+// whose gated order declined. A deputy reads it to decide whether prod may
+// open the App authority beside it.
+func effectiveExecution(configured executionMode, state daemoncompose.ExecutionState) executionMode {
+	if !state.Runs() {
+		return executionDisabled
+	}
+	return configured
+}
 
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
