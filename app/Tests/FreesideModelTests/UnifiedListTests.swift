@@ -354,6 +354,76 @@ import Testing
         #expect(TaskDisplay.finishedRow(snapshot, position: nil).cut == .faint)
     }
 
+    /// Each work status count opens the list filtered to exactly the tasks
+    /// it counted, with no scoped item or Finished row, alone and under a
+    /// project filter.
+    @Test func aPositionFilterHoldsExactlyTheTasksItsCountHolds() throws {
+        let open = WorkStatusFixtures.openItems()
+        let tasks = WorkStatusFixtures.tasks()
+        var closed = projectItem("closed-scoped", project: WorkStatusFixtures.project)
+        closed.item.status = .resolved
+        for projectFilter in [nil, WorkStatusFixtures.project, WorkStatusFixtures.otherProject] {
+            let status = WorkStatus(open: open, tasks: tasks, projectFilter: projectFilter)
+            try #require(!status.groups.isEmpty)
+            for group in status.groups {
+                let list = UnifiedList(
+                    open: open, closed: [closed], tasks: tasks, projectFilter: projectFilter,
+                    positionFilter: group.position)
+                #expect(list.rows.map(\.id) == group.taskIDs.map(UnifiedSelection.task), "\(group.position)")
+                #expect(list.finished.isEmpty)
+            }
+        }
+    }
+
+    private func filters(
+        _ current: UnifiedList.Filters, showing selection: UnifiedSelection?,
+        tasks: [Components.Schemas.TaskSnapshot] = WorkStatusFixtures.tasks()
+    ) -> UnifiedList.Filters {
+        UnifiedList.filters(
+            current, showing: selection, open: WorkStatusFixtures.openItems(), closed: [], tasks: tasks)
+    }
+
+    /// A route to a row the position filter hides drops it, and the project
+    /// filter too when that one also hides the row; a row no filter shows
+    /// leaves both.
+    @Test func aRouteToAHiddenRowDropsTheFiltersThatHideIt() {
+        let review = UnifiedList.Filters(projectID: nil, position: .stage("review"))
+        #expect(filters(review, showing: .task("task-spec")) == .init(projectID: nil, position: nil))
+        #expect(filters(review, showing: .item("item-project")) == .init(projectID: nil, position: nil))
+
+        let freesideReview = UnifiedList.Filters(projectID: WorkStatusFixtures.project, position: .stage("review"))
+        #expect(
+            filters(freesideReview, showing: .task("task-spec"))
+                == .init(projectID: WorkStatusFixtures.project, position: nil))
+        #expect(filters(freesideReview, showing: .task("task-other-project")) == .init(projectID: nil, position: nil))
+        #expect(filters(freesideReview, showing: .task("no-such-task")) == freesideReview)
+    }
+
+    /// A selected row the position filter shows stays after its task moves
+    /// to another position, until the selection moves on.
+    @Test func theSelectedRowStaysUnderThePositionFilterAfterItMoves() throws {
+        let implementation = UnifiedList.Filters(projectID: nil, position: .stage("implementation"))
+        let selected = filters(implementation, showing: .task("task-implement"))
+        #expect(selected.keptTaskID == "task-implement")
+        #expect(selected.position == .stage("implementation"))
+
+        var tasks = WorkStatusFixtures.tasks()
+        let index = try #require(tasks.firstIndex { $0.task.id == "task-implement" })
+        tasks[index].task.current_position = .init(
+            value1: .init(run_id: "run-task-implement", stage: "review", round: nil, hold_reason: nil))
+        let moved = UnifiedList(
+            open: WorkStatusFixtures.openItems(), closed: [], tasks: tasks, projectFilter: nil,
+            positionFilter: .stage("implementation"), keeping: selected.keptTaskID)
+        #expect(moved.rows.map(\.id) == [.task("task-implement"), .task("task-implementation")])
+        #expect(filters(selected, showing: .task("task-implement"), tasks: tasks) == selected)
+
+        // Moving on releases the row; with no position filter nothing is kept.
+        #expect(filters(selected, showing: nil, tasks: tasks).keptTaskID == nil)
+        #expect(
+            filters(selected, showing: .task("task-implementation"), tasks: tasks).keptTaskID == "task-implementation")
+        #expect(filters(.init(projectID: nil, position: nil), showing: .task("task-spec")).keptTaskID == nil)
+    }
+
     private func position(
         status: String, hold: Components.Schemas.RunHoldReason? = nil
     ) -> TaskDisplay.Position {

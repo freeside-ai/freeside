@@ -122,6 +122,12 @@ public final class InboxStore {
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     public private(set) var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     public var projectID: String?
+    /// The work status count the list is narrowed to, if any. Nothing
+    /// persists it: a relaunch starts with the whole list.
+    package private(set) var positionFilter: WorkStatus.Position?
+    /// The selected task whose row the position filter keeps after it
+    /// moves (`UnifiedList.Filters`).
+    package private(set) var keptTaskID: String?
     private var pendingLaunchProjectID: String?
 
     /// The project ids the tasks name, so a filter on a project that holds
@@ -450,6 +456,8 @@ public final class InboxStore {
         serverOrder = []
         statusAtOrderRebuild = [:]
         projectID = nil
+        positionFilter = nil
+        keptTaskID = nil
         removalVersionFloors = [:]
         // A local mark clear vouched for an open the previous epoch's daemon
         // may not hold (a restore), so this device rejoins what sync serves.
@@ -501,6 +509,18 @@ public final class InboxStore {
     package func selectProjectFilter(_ projectID: String?) {
         pendingLaunchProjectID = nil
         self.projectID = projectID
+    }
+
+    /// A new count starts with no kept row.
+    package func selectPositionFilter(_ position: WorkStatus.Position?) {
+        positionFilter = position
+        keptTaskID = nil
+    }
+
+    package func applyListFilters(_ filters: UnifiedList.Filters) {
+        if filters.projectID != projectID { selectProjectFilter(filters.projectID) }
+        if filters.position != positionFilter { selectPositionFilter(filters.position) }
+        if filters.keptTaskID != keptTaskID { keptTaskID = filters.keptTaskID }
     }
 
     package func finishLaunchProjectRepair() {

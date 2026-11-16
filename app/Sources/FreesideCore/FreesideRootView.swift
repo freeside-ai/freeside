@@ -665,6 +665,9 @@ public struct FreesideRootView: View {
                 } else {
                     unavailableDetail
                 }
+            case .workStatus:
+                workStatus(coordinator)
+                    .navigationTitle("Work Status")
             }
         }
 
@@ -731,6 +734,8 @@ public struct FreesideRootView: View {
             {
                 taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator, topMargin: topMargin)
                     .id(taskID)
+            } else if surface == .workStatus {
+                workStatus(coordinator, topMargin: topMargin)
             } else if showsInboxClearResult {
                 // The inbox-clear result: the sidebar's empty Needs you
                 // draws nothing, so this pane says it.
@@ -783,8 +788,28 @@ public struct FreesideRootView: View {
     static func routedTaskID(_ path: [NavigationModel.Destination], in list: UnifiedList) -> String? {
         switch path.first.map({ NavigationModel.surface(for: $0, in: list) }) {
         case .taskPage(let taskID, _), .run(let taskID, _): taskID
-        case .card, nil: nil
+        case .card, .workStatus, nil: nil
         }
+    }
+
+    private func workStatus(_ coordinator: SyncCoordinator, topMargin: CGFloat? = nil) -> some View {
+        WorkStatusView(
+            status: coordinator.workStatus, projectID: coordinator.store.projectID,
+            selected: coordinator.store.positionFilter,
+            onSelect: { choosePosition($0, coordinator: coordinator) }, topMargin: topMargin)
+    }
+
+    /// A count narrows the list to its tasks, with Working open when they
+    /// sit there. The Mac keeps the view beside the filtered sidebar; the
+    /// iPhone pops back to the list.
+    private func choosePosition(_ position: WorkStatus.Position, coordinator: SyncCoordinator) {
+        coordinator.store.selectPositionFilter(position)
+        if position != .waitingOnYou { listPreferences.workingExpanded = true }
+        #if os(iOS)
+            navigation.setPath([])
+        #else
+            navigation.recordOperatorNavigation()
+        #endif
     }
 
     private func revealTechnicalDetails(_ itemID: String) {
@@ -844,6 +869,8 @@ public struct FreesideRootView: View {
             listPreferences.workingExpanded = true
             navigation.route(to: .task(taskID))
         } else {
+            // Working shows every active task only without a position filter.
+            coordinator.store.selectPositionFilter(nil)
             showWorking()
         }
     }

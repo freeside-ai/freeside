@@ -673,6 +673,50 @@
                             store: clear, tasks: tasks, runs: runs,
                             navigation: screenshotNavigation(selecting: nil), preferences: finishedOnly
                         ).screenshotContent(now: screenshotNow, sidebarHeight: 640, finishedLimit: 2))))
+            try surfaces += workStatusSurfaces()
+            return surfaces
+        }
+
+        /// The work status view over every position it counts (#3240), in
+        /// the Mac detail column with a count chosen, on the iPhone, and
+        /// under a project filter, and the sidebar narrowed to one count
+        /// with Working open.
+        private func workStatusSurfaces() throws -> [Surface] {
+            let tasks = WorkStatusFixtures.tasks()
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: WorkStatusFixtures.openItems())
+            func view(projectID: String?, selected: WorkStatus.Position?) -> AnyView {
+                AnyView(
+                    WorkStatusView(
+                        status: WorkStatus(open: store.openSnapshots, tasks: tasks, projectFilter: projectID),
+                        projectID: projectID, selected: selected, onSelect: { _ in }
+                    ).screenshotContent())
+            }
+            var surfaces: [Surface] = []
+            for colorScheme in [ColorScheme.light, .dark] {
+                let suffix = colorScheme == .dark ? "-dark" : ""
+                surfaces += [
+                    Surface(
+                        name: "work-status" + suffix, width: 640, colorScheme: colorScheme,
+                        view: view(projectID: nil, selected: .stage("implementation"))),
+                    Surface(
+                        name: "work-status-phone" + suffix, width: 390, colorScheme: colorScheme,
+                        view: view(projectID: nil, selected: nil)),
+                ]
+            }
+            surfaces.append(
+                Surface(
+                    name: "work-status-project-filter", width: 640,
+                    view: view(projectID: WorkStatusFixtures.otherProject, selected: nil)))
+            store.selectPositionFilter(.held(.usage_pool_exhausted))
+            try surfaces.append(
+                Surface(
+                    name: "unified-list-position-filter", width: 320,
+                    view: AnyView(
+                        UnifiedListView(
+                            store: store, tasks: tasks, navigation: screenshotNavigation(selecting: nil),
+                            preferences: screenshotListPreferences(expanded: true)
+                        ).screenshotContent(now: screenshotNow))))
             return surfaces
         }
 

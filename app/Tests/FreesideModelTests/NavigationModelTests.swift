@@ -967,4 +967,24 @@ import Testing
         navigation.route(to: .task(task.task.id))
         #expect(!navigation.holdsCard(in: list(store, tasks: [task])))
     }
+
+    /// The work status view stands for no row: no list selection reads it,
+    /// it holds no card, and list repair keeps it routed under any filter.
+    @Test func workStatusSurvivesRepairAndSelectsNoRow() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.selectProjectFilter(WorkStatusFixtures.otherProject)
+        store.selectPositionFilter(.notStarted)
+        let list = UnifiedList(
+            open: WorkStatusFixtures.openItems(), closed: [], tasks: WorkStatusFixtures.tasks(),
+            projectFilter: store.projectID, positionFilter: store.positionFilter)
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .workStatus)
+        navigation.repairSelection(in: list)
+
+        #expect(navigation.path == [.workStatus])
+        #expect(navigation.attentionSelection == nil)
+        #expect(navigation.taskSelection == nil)
+        #expect(navigation.detailSurface(in: list) == .workStatus)
+        #expect(!navigation.holdsCard(in: list))
+    }
 }
