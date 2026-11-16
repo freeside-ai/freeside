@@ -101,6 +101,29 @@ func TestClosePropagatesATeardownFailure(t *testing.T) {
 	}
 }
 
+// TestServeReturnsARequestedRestart: a requested restart tears the daemon
+// down and returns ErrRestartRequested, which main turns into a clean exit
+// for launchd to restart; a repeated request never blocks; and a teardown
+// failure is returned in its place, so a failed teardown never exits clean.
+func TestServeReturnsARequestedRestart(t *testing.T) {
+	t.Parallel()
+	d := newTeardownDaemon(t, nil)
+	d.errs = make(chan error, 1)
+	d.RequestRestart()
+	d.RequestRestart()
+	if err := Serve(t.Context(), func() {}, d); !errors.Is(err, ErrRestartRequested) {
+		t.Fatalf("Serve = %v, want ErrRestartRequested", err)
+	}
+
+	sentinel := errors.New("lease release refused")
+	failing := newTeardownDaemon(t, closerFunc(func(context.Context) error { return sentinel }))
+	failing.errs = make(chan error, 1)
+	failing.RequestRestart()
+	if err := Serve(t.Context(), func() {}, failing); !errors.Is(err, sentinel) || errors.Is(err, ErrRestartRequested) {
+		t.Fatalf("Serve = %v, want only the teardown failure", err)
+	}
+}
+
 type closerFunc func(context.Context) error
 
 func (f closerFunc) Close(ctx context.Context) error { return f(ctx) }

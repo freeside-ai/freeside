@@ -153,6 +153,9 @@ func main() {
 		case "drain":
 			runDrainMain(os.Args[2:])
 			return
+		case "execution":
+			runExecutionMain(os.Args[2:])
+			return
 		case "raise-item":
 			runRaiseItemMain(os.Args[2:])
 			return
@@ -538,6 +541,11 @@ func main() {
 	}
 
 	if err := daemonshell.Serve(ctx, stop, h.Shell); err != nil {
+		if errors.Is(err, daemonshell.ErrRestartRequested) {
+			// Serve returns the request alone only after a clean teardown.
+			fmt.Fprintln(os.Stderr, "freesided: exiting for the restart this daemon requested")
+			return
+		}
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}

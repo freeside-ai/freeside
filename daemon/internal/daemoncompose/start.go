@@ -155,6 +155,9 @@ type ControlRouteInputs struct {
 	// Execution is whether a driver runs in this process and, when none
 	// does, why: GET /execution reports it, not the configured driver.
 	Execution ExecutionState
+	// ExecutionPause serves freesided execution in a prod started with a
+	// driver, executing or not; nil in any other daemon.
+	ExecutionPause *ExecutionPauseControl
 }
 
 // Daemon is what start composes: the shell that runs the process,
@@ -284,15 +287,25 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	}()
 	// prod's gated order runs here, once its own database is open and before
 	// anything composes the driver; a decline leaves it driverless with the
-	// reason, holding no lock.
+	// reason, holding no lock. A released execution pause declines before
+	// the lock, which the deputy the pause was for is to take.
 	var gated ExecutionState
-	if gate := cfg.AppAuthority.Prod; gate != nil && cfg.Claude != nil {
+	pausable := cfg.AppAuthority.Prod != nil && cfg.Claude != nil
+	if pausable {
 		if authorityLock != nil {
 			return nil, errors.New("app authority: a held lock and prod's gated order are exclusive")
 		}
-		gated, authorityLock, err = gateProdAppAuthority(cfg.Claude.StateRoot, gate.LeaseRoot)
+		pause, err := ReadExecutionPause(parent, st)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read the execution pause: %w", err)
+		}
+		if pause != nil && pause.State == domain.ExecutionPauseReleased {
+			gated = ExecutionPaused
+		} else {
+			gated, authorityLock, err = gateProdAppAuthority(cfg.Claude.StateRoot, cfg.AppAuthority.Prod.LeaseRoot)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if !gated.Runs() {
 			cfg.Claude = nil
@@ -492,6 +505,12 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if workflow != nil {
 		routes.ReleaseVerificationMemory = workflow.ReleaseVerificationMemory
 	}
+	if pausable {
+		routes.ExecutionPause = &ExecutionPauseControl{
+			store: st, readiness: attention.RestartReadiness, restart: d.RequestRestart,
+			now: nowOrWallClock(cfg.Now), executes: gated.Runs(),
+		}
+	}
 	pairing.RegisterRoutes(routes)
 	var fakeSched *scheduler.Scheduler
 	var loops *ClaudeLoops
@@ -538,6 +557,15 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	}
 	if loops != nil {
 		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
+	}
+	if pausable {
+		waiter := executionPauseWaiter{
+			store: st, readiness: attention.RestartReadiness, restart: d.RequestRestart,
+			now: nowOrWallClock(cfg.Now), logger: logger,
+		}
+		d.Go(func() {
+			d.ComponentExited(parent, ctx, daemonshell.ComponentExecutionPause, waiter.run(ctx))
+		})
 	}
 	if scenarioWiring != nil {
 		d.startScenarioLoops(parent, ctx, cfg, scenarioWiring, workflow)

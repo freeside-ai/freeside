@@ -157,6 +157,11 @@ func (s pairingControlSocket) RegisterRoutes(in daemoncompose.ControlRouteInputs
 		s.pairing.mux, in.Store, in.Blobs, in.LocalBackupFiles, in.ApprovedRecipes, s.repositoryID,
 		in.IntegrityProbe, in.Usage, s.environment, effectiveExecution(s.execution, in.Execution), in.Attention, s.launch, in.CommitWorkflowClosure, in.CommitTaskStop,
 		in.ReleaseVerificationMemory, in.UpdateDrain, in.CancelRootImplementations, in.Running)
+	// Only prod's gated order takes the App authority writer lock, so only
+	// prod serves the pause that releases it.
+	if s.environment == environmentProd {
+		s.pairing.registerExecutionPauseRoute(s.pairing.mux, in.ExecutionPause)
+	}
 }
 
 func (s pairingControlSocket) Publish() error { return s.pairing.publish() }

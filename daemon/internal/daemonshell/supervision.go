@@ -47,6 +47,7 @@ const (
 	ComponentReviewReplies         ComponentKind = "review_replies"
 	ComponentHandBackLabels        ComponentKind = "hand_back_labels"
 	ComponentAttentionDeliveries   ComponentKind = "attention_deliveries"
+	ComponentExecutionPause        ComponentKind = "execution_pause"
 	ComponentPanic                 ComponentKind = "panic"
 )
 
@@ -64,6 +65,7 @@ var AllComponentKinds = []ComponentKind{
 	ComponentReviewReplies,
 	ComponentHandBackLabels,
 	ComponentAttentionDeliveries,
+	ComponentExecutionPause,
 	ComponentPanic,
 }
 
@@ -81,6 +83,7 @@ func (k ComponentKind) valid() bool {
 		ComponentReviewReplies,
 		ComponentHandBackLabels,
 		ComponentAttentionDeliveries,
+		ComponentExecutionPause,
 		ComponentPanic:
 		return true
 	default:
@@ -123,7 +126,8 @@ func classifyComponentExit(kind ComponentKind) exitDisposition {
 		ComponentFollowUpFiling,
 		ComponentReviewReplies,
 		ComponentHandBackLabels,
-		ComponentAttentionDeliveries:
+		ComponentAttentionDeliveries,
+		ComponentExecutionPause:
 		return exitDurableStop
 	case ComponentHTTP, ComponentPairingControl:
 		return exitRestartSafe

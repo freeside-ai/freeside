@@ -44,6 +44,9 @@ const (
 	// ExecutionRigLeasePresent: prod was started with a driver and took the
 	// lock, but a production rig lease manifest, live or stale, existed.
 	ExecutionRigLeasePresent ExecutionState = "rig_lease_present"
+	// ExecutionPaused: prod was started with a driver while an execution
+	// pause it had released was in force, so it took no lock.
+	ExecutionPaused ExecutionState = "execution_paused"
 )
 
 // AllExecutionStates is the single registration point for ExecutionState.
@@ -52,11 +55,13 @@ var AllExecutionStates = []ExecutionState{
 	ExecutionNotConfigured,
 	ExecutionAuthorityInUse,
 	ExecutionRigLeasePresent,
+	ExecutionPaused,
 }
 
 func (s ExecutionState) valid() bool {
 	switch s {
-	case ExecutionConfigured, ExecutionNotConfigured, ExecutionAuthorityInUse, ExecutionRigLeasePresent:
+	case ExecutionConfigured, ExecutionNotConfigured, ExecutionAuthorityInUse, ExecutionRigLeasePresent,
+		ExecutionPaused:
 		return true
 	default:
 		return false

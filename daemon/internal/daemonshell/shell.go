@@ -32,10 +32,37 @@ import (
 // nothing abandons the lease on a timer, and abandoning it is a human
 // decision, taken deliberately, with the process still reporting what it
 // was doing.
+//
+// A restart the process asked for (RequestRestart) returns
+// ErrRestartRequested once teardown succeeds, and the teardown's error
+// alone when it fails: the request is not a failure.
 func Serve(ctx context.Context, stop func(), h *Shell) error {
 	waitErr := h.Wait(ctx)
 	stop()
-	return errors.Join(waitErr, h.Close())
+	closeErr := h.Close()
+	if errors.Is(waitErr, ErrRestartRequested) {
+		if closeErr != nil {
+			return closeErr
+		}
+		return ErrRestartRequested
+	}
+	return errors.Join(waitErr, closeErr)
+}
+
+// ErrRestartRequested is what Serve returns when the process asked to be
+// restarted. main exits with status 0, and the LaunchAgent's KeepAlive
+// starts the daemon again, which reads its stored state afresh.
+var ErrRestartRequested = errors.New("restart requested")
+
+// RequestRestart ends Wait with ErrRestartRequested, so Serve tears the
+// daemon down as it does at a signal. It never blocks: when a component
+// failure is already pending, that failure ends the process instead, and
+// launchd restarts it all the same.
+func (s *Shell) RequestRestart() {
+	select {
+	case s.errs <- ErrRestartRequested:
+	default:
+	}
 }
 
 type Readiness struct {

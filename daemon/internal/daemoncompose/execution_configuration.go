@@ -107,6 +107,11 @@ func executionStateDiagnostic(state ExecutionState) (code, reason string) {
 			"started, so a deputy run holds or held the App authority. " + executionDriverlessScope +
 			" Once the deputy run ends, run freesided execution resume to restart this daemon with execution. " +
 			"If no deputy run is running, the lease is stale: run freesided rig recover first."
+	case ExecutionPaused:
+		return "execution_paused", "Agent execution is paused: an operator ran freesided execution pause, " +
+			"and this daemon finished its running work and restarted without execution, so a deputy run " +
+			"can use the App authority. " + executionDriverlessScope +
+			" Once the deputy run ends, run freesided execution resume to restart this daemon with execution."
 	}
 	return "", ""
 }
