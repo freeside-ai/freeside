@@ -740,7 +740,9 @@ available to both Claude Code and Codex. Edit their shared source in
 to `.agents/skills/`; a new skill gets its copy there too. The copies are
 plain files, not symlinks: Freeside's workspace seed refuses a tracked
 symlink (#339), so a symlink would keep Freeside from working on this
-repository.
+repository. `bash scripts/check.sh scripts skill-mirrors` fails when a copy
+is missing, differs, or has no source, and CI runs it whenever either folder
+changes.
 
 In Codex, invoke them as `$exit-run`, `$plan-wave`, or `$review-wave`, followed
 by the inputs the skill needs. Claude Code uses `/exit-run`, `/plan-wave`, and

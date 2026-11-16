@@ -14,6 +14,13 @@ Freeside couldn't seed its own repository.
   unsupported mode/type 120000/blob". Onboarding still completed, because
   the project-image build and proof don't seed through that path. The
   failure appeared only at the first deputy start after onboarding.
+- **A check holds the copies equal.** `scripts/check-skill-mirrors.sh`
+  (`check.sh scripts skill-mirrors`) fails on a missing, differing, or
+  orphaned copy and on a symlink in either tree or at `.claude` or
+  `.agents` itself. CI selects the
+  `scripts` component when either tree changes, so an edit to a skill's
+  source can't land without its copy. This keeps #1513's one-source rule:
+  `.claude/skills/` is still where skills are edited.
 - **Rejected: implement #339 first** (seed a base that tracks a symlink).
   It's Tier A work in the materializer and the ward's host and guest tree
   digests, with its own refute-first review, and the live run would wait
@@ -22,7 +29,9 @@ Freeside couldn't seed its own repository.
 
 ## Consequence
 
-Every skill edit now touches two folders. The duplication is the cost of
-keeping Freeside able to work on its own repository while #339 is open.
+Every skill edit now touches two folders, and CI fails until the copy
+matches. The duplication is the cost of keeping Freeside able to work on
+its own repository while #339 is open.
 
-Revisit when #339 lands: the copies can go back to symlinks.
+Revisit when #339 lands: the copies can go back to symlinks, and this
+check reduces to the symlink-free rule it no longer needs.

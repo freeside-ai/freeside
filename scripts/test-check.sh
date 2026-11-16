@@ -73,7 +73,7 @@ assert_rc 0
 assert_contains 'daemon       build test vet lint'
 assert_contains 'app          generate format test linux build-mac build-ios'
 assert_contains 'api          lint'
-assert_contains 'scripts      syntax shellcheck suites vocabulary tier-a-paths trackercollect'
+assert_contains 'scripts      syntax shellcheck suites vocabulary tier-a-paths skill-mirrors trackercollect'
 assert_contains 'convergence  run'
 assert_contains 'docs         plan-links'
 

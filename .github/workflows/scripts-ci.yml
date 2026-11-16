@@ -12,6 +12,8 @@ name: scripts CI
 # Mac installer's exclusive rename path. The retired-vocabulary check runs
 # from vocabulary-ci.yml because its triggers span components, and the
 # Tier A path check runs from tier-a-paths.yml on every pull request.
+# The skill mirror check runs here, so its triggers include both skill
+# trees.
 # The suites test the script implementations only; nothing here parses
 # PR prose. Shellcheck runs as a pinned, checksum-verified prebuilt binary,
 # matching the pinned-vacuum/golangci-lint determinism convention (a
@@ -27,6 +29,8 @@ on:
       - ".githooks/**"
       - "app/Apps/iOS/Info.plist"
       - "app/Freeside.xcodeproj/project.pbxproj"
+      - ".claude/skills/**"
+      - ".agents/skills/**"
       - ".github/workflows/scripts-ci.yml"
   # Pull requests run this through pull-request.yml, which selects it
   # from the changed paths and reports the required check.
@@ -52,6 +56,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash syntax check (scripts/check.sh)
         run: bash scripts/check.sh scripts syntax
+      - name: skill mirror check (scripts/check.sh)
+        run: bash scripts/check.sh scripts skill-mirrors
       - name: Install shellcheck (pinned binary, checksum-verified)
         run: |
           set -euo pipefail

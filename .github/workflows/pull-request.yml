@@ -96,7 +96,8 @@ jobs:
             scripts/api-compatibility-check.sh
           select_component docs docs/plan.md scripts/link-plan-section-refs.sh scripts/check.sh
           select_component scripts scripts/ app/scripts/ .githooks/ \
-            app/Apps/iOS/Info.plist app/Freeside.xcodeproj/project.pbxproj
+            app/Apps/iOS/Info.plist app/Freeside.xcodeproj/project.pbxproj \
+            .claude/skills/ .agents/skills/
           select_component convergence app/ daemon/ api/openapi.yaml \
             scripts/run-convergence.sh scripts/check.sh \
             images/agent-claude/ images/agent-codex/
