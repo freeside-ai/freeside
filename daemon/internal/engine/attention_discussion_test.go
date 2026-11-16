@@ -326,11 +326,11 @@ func TestAttentionDiscussionRepliesPreserveEveryDecisionSetAndReplay(t *testing.
 			f := newAttentionDiscussionFixture(t, tc.itemType, driver)
 			f.submit(t)
 			engine := f.engine(t, true)
-			if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+			if result, err := reconcileSettled(t, engine); err != nil || result.ResultsAccepted != 1 {
 				t.Fatalf("Reconcile = %#v, %v", result, err)
 			}
 			f.assertReply(t, "The decision set is unchanged.", tc.actions)
-			if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 0 {
+			if result, err := reconcileSettled(t, engine); err != nil || result.ResultsAccepted != 0 {
 				t.Fatalf("replay Reconcile = %#v, %v", result, err)
 			}
 			f.assertReply(t, "The decision set is unchanged.", tc.actions)
@@ -362,14 +362,14 @@ func TestAttentionDiscussionReplySurvivesDeliveryBeforeReply(t *testing.T) {
 	notifier.open(t, notifier.deliver(t, f.item.ID))
 
 	engine := f.engine(t, true)
-	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+	if result, err := reconcileSettled(t, engine); err != nil || result.ResultsAccepted != 1 {
 		t.Fatalf("Reconcile = %#v, %v", result, err)
 	}
 	f.assertReply(t, "The decision set is unchanged.", []domain.Action{domain.ActionDiscuss, domain.ActionStop})
 	if timing := notifier.item(t, f.item.ID).Timing; timing.FirstOpenedAt == nil {
 		t.Fatalf("the reply's transition dropped the item's timing: %+v", timing)
 	}
-	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 0 {
+	if result, err := reconcileSettled(t, engine); err != nil || result.ResultsAccepted != 0 {
 		t.Fatalf("replay Reconcile = %#v, %v", result, err)
 	}
 }
@@ -378,7 +378,7 @@ func TestAttentionDiscussionFallbackReturnsConversationToIdle(t *testing.T) {
 	t.Parallel()
 	f := newAttentionDiscussionFixture(t, domain.AttentionExecutionFailure, nil)
 	f.submit(t)
-	if result, err := f.engine(t, true).Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+	if result, err := reconcileSettled(t, f.engine(t, true)); err != nil || result.ResultsAccepted != 1 {
 		t.Fatalf("Reconcile = %#v, %v", result, err)
 	}
 	f.assertReply(t, unavailableAttentionDiscussionReply, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
@@ -410,7 +410,7 @@ func TestAttentionDiscussionSecretInputUsesFallbackWithoutProvider(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := f.engine(t, true).Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+	if result, err := reconcileSettled(t, f.engine(t, true)); err != nil || result.ResultsAccepted != 1 {
 		t.Fatalf("Reconcile = %#v, %v", result, err)
 	}
 	f.assertReply(t, unavailableAttentionDiscussionReply, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
@@ -533,7 +533,7 @@ func TestAttentionDiscussionIncludesReviewDisputeClaims(t *testing.T) {
 	}})
 	f := newAttentionDiscussionFixture(t, domain.AttentionReviewDispute, driver)
 	f.submit(t)
-	if result, err := f.engine(t, true).Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+	if result, err := reconcileSettled(t, f.engine(t, true)); err != nil || result.ResultsAccepted != 1 {
 		t.Fatalf("Reconcile = %#v, %v", result, err)
 	}
 	requests := driver.Requests()
@@ -577,7 +577,7 @@ func TestAttentionDiscussionReplyLandsAfterTerminalDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := f.engine(t, true).Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+	if result, err := reconcileSettled(t, f.engine(t, true)); err != nil || result.ResultsAccepted != 1 {
 		t.Fatalf("Reconcile = %#v, %v", result, err)
 	}
 	f.assertReply(t, "This late answer remains durable.", []domain.Action{domain.ActionDiscuss, domain.ActionStop})
@@ -633,13 +633,13 @@ func TestAttentionDiscussionRecoversAfterStoreRestart(t *testing.T) {
 	f.store = reopened
 	f.signet = signet.NewService(reopened, signet.WithClock(func() time.Time { return f.now }))
 	engine := f.engine(t, true)
-	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 1 {
+	if result, err := reconcileSettled(t, engine); err != nil || result.ResultsAccepted != 1 {
 		t.Fatalf("restart Reconcile = %#v, %v", result, err)
 	}
 	f.assertReply(t, "Recovered after restart.", []domain.Action{
 		domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
 	})
-	if result, err := engine.Reconcile(t.Context()); err != nil || result.ResultsAccepted != 0 {
+	if result, err := reconcileSettled(t, engine); err != nil || result.ResultsAccepted != 0 {
 		t.Fatalf("restart replay Reconcile = %#v, %v", result, err)
 	}
 }

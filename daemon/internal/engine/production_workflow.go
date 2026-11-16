@@ -1897,19 +1897,23 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 	if inserted && terminal.Status != exec.StatusCompleted && terminal.Status != exec.StatusBlocked &&
 		parked == nil && rerun == "" && e.inference != nil {
 		// A diagnostic claim is advisory-only. Failure to produce or retain one
-		// cannot roll back the durable failure fact or make the engine unavailable.
-		workCtx, finish, workErr := e.beginTaskWork(ctx, run)
-		if workErr != nil {
-			return inserted && terminal.Status == exec.StatusCompleted, nil
-		}
-		defer finish()
-		if err := e.claimRunDispatch(workCtx, run.ID); err != nil {
-			return inserted && terminal.Status == exec.StatusCompleted, nil
-		}
-		_ = e.inference.DiagnoseExecutionFailure(workCtx, inference.DiagnosticInput{
-			Project: string(run.ProjectID), RootLineage: string(run.ID), RunID: string(run.ID),
-			FailureClass: string(terminal.Status), FailingStep: string(terminal.StageID),
-			Reason: terminal.Summary,
+		// cannot roll back the durable failure fact or make the engine
+		// unavailable, so its model call runs outside the pass and nothing
+		// waits for it (#3215).
+		e.diagnoses.Go(run.ID, func() {
+			workCtx, finish, err := e.beginTaskWork(ctx, run)
+			if err != nil {
+				return
+			}
+			defer finish()
+			if err := e.claimRunDispatch(workCtx, run.ID); err != nil {
+				return
+			}
+			_ = e.inference.DiagnoseExecutionFailure(workCtx, inference.DiagnosticInput{
+				Project: string(run.ProjectID), RootLineage: string(run.ID), RunID: string(run.ID),
+				FailureClass: string(terminal.Status), FailingStep: string(terminal.StageID),
+				Reason: terminal.Summary,
+			})
 		})
 	}
 	return inserted && terminal.Status == exec.StatusCompleted, nil

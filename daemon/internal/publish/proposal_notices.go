@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -15,8 +16,8 @@ import (
 // proposalNotices raises and resolves the advisory system_health items one
 // approved-proposal dispatcher keeps beside its proposals: the follow-up
 // filer and the issue comment dispatcher each hold one under their own item
-// prefix and codes. The caller serializes passes, so holding is never
-// touched concurrently.
+// prefix and codes. Passes overlap and each project's proposals drive on
+// their own goroutine (#3215), so the hold state carries its own mutex.
 type proposalNotices struct {
 	// prefix starts every item ID this dispatcher raises.
 	prefix string
@@ -26,9 +27,16 @@ type proposalNotices struct {
 	// resolution is the sentence a resolved transient notice carries.
 	resolution string
 	now        func() time.Time
-	// holding is the transient notices whose condition the current pass saw
-	// still holding; the pass resolves every other open one.
-	holding map[filingNotice]bool
+
+	mu sync.Mutex
+	// held is the transient notices each proposal's last finished drive saw
+	// still holding, and driving the ones a drive in progress has seen so
+	// far. A notice in either stays open; resolveCleared resolves every other
+	// open one. Keeping the last finished drive's holds while the next one
+	// runs means a pass that overlaps a stalled drive never resolves a
+	// notice that drive would hold again.
+	held    map[domain.ProposalInstanceID]map[string]bool
+	driving map[domain.ProposalInstanceID]map[string]bool
 }
 
 // filingNotice names one notice kind on one proposal.
@@ -49,17 +57,53 @@ type filingRef struct {
 func newProposalNotices(prefix string, transient []string, resolution string, now func() time.Time) *proposalNotices {
 	return &proposalNotices{
 		prefix: prefix, transient: transient, resolution: resolution, now: now,
-		holding: map[filingNotice]bool{},
+		held:    map[domain.ProposalInstanceID]map[string]bool{},
+		driving: map[domain.ProposalInstanceID]map[string]bool{},
 	}
 }
 
-// hold marks a transient notice as still holding in this pass.
-func (n *proposalNotices) hold(id domain.ProposalInstanceID, code string) {
-	n.holding[filingNotice{id, code}] = true
+// startPass forgets the holds of every proposal the pass no longer finds,
+// unless a drive of it is still in progress.
+func (n *proposalNotices) startPass(present map[domain.ProposalInstanceID]bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for id := range n.held {
+		if !present[id] && n.driving[id] == nil {
+			delete(n.held, id)
+		}
+	}
 }
 
-// startPass forgets which notices held in the previous pass.
-func (n *proposalNotices) startPass() { clear(n.holding) }
+// begin starts a drive of id; its holds count from here until finish.
+func (n *proposalNotices) begin(id domain.ProposalInstanceID) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.driving[id] = map[string]bool{}
+}
+
+// hold marks a transient notice as still holding in the drive of id.
+func (n *proposalNotices) hold(id domain.ProposalInstanceID, code string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.driving[id] == nil {
+		n.driving[id] = map[string]bool{}
+	}
+	n.driving[id][code] = true
+}
+
+// finish replaces id's held notices with the ones its drive saw.
+func (n *proposalNotices) finish(id domain.ProposalInstanceID) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.held[id] = n.driving[id]
+	delete(n.driving, id)
+}
+
+func (n *proposalNotices) holding(notice filingNotice) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.held[notice.instanceID][notice.code] || n.driving[notice.instanceID][notice.code]
+}
 
 // put opens one advisory, acknowledge-only system_health item on the
 // proposal's own subject, unless the proposal's workflow is closed. Its ID is
@@ -161,7 +205,7 @@ func (n *proposalNotices) cleared(ctx context.Context, tx *store.ReadTx) ([]doma
 		} else if err != nil {
 			return nil, err
 		}
-		if notice, ok := n.transientNotice(item); ok && !n.holding[notice] {
+		if notice, ok := n.transientNotice(item); ok && !n.holding(notice) {
 			cleared = append(cleared, item)
 		}
 	}

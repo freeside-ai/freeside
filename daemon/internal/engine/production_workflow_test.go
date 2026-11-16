@@ -251,6 +251,35 @@ func TestProductionBlockedItemCarriesInvocationBoundSummary(t *testing.T) {
 func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	driver := inferencefake.New()
+	driver.Script(inference.DiagnosticSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"probable_cause":"tool failure","explanation":"the stage returned failed"}`),
+		ComputeUnits: 2,
+	}})
+	workflow, run, terminal, advisoryStore := newDiagnosticFixture(t, driver)
+	if completed, err := workflow.recordProductionTerminalWithAuthority(ctx, run, terminal, false); err != nil || completed {
+		t.Fatalf("record failure = %v, %v", completed, err)
+	}
+	if completed, err := workflow.recordProductionTerminalWithAuthority(ctx, run, terminal, false); err != nil || completed {
+		t.Fatalf("replay failure = %v, %v", completed, err)
+	}
+	workflow.waitOffPass()
+	entries, err := advisoryStore.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[1].Kind != "diagnostic_claim" {
+		t.Fatalf("advisory entries = %#v", entries)
+	}
+}
+
+// newDiagnosticFixture builds an engine whose inference client answers the
+// diagnostic site through driver, with a seeded run and the failed terminal
+// its diagnosis is asked about.
+func newDiagnosticFixture(
+	t *testing.T, driver inference.Driver,
+) (*Engine, domain.Run, productionTerminalRecord, *advisory.Store) {
+	t.Helper()
 	dir := t.TempDir()
 	st := storetest.Open(t, filepath.Join(dir, "store.db"), store.Options{})
 	now := func() time.Time { return time.Unix(2, 0).UTC() }
@@ -260,11 +289,6 @@ func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	driver := inferencefake.New()
-	driver.Script(inference.DiagnosticSiteID, inferencefake.Script{Response: inference.Response{
-		Output:       []byte(`{"probable_cause":"tool failure","explanation":"the stage returned failed"}`),
-		ComputeUnits: 2,
-	}})
 	limits := inference.Limits{Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour}
 	site := inference.DiagnosticSite(inference.Budget{
 		Window: time.Hour, Site: limits, Project: limits, Global: limits,
@@ -282,24 +306,12 @@ func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
 	}
 	workflow := &Engine{store: st, inference: client}
 	run := productionOwnershipRun("run-1")
-	seedProductionOwnershipRun(t, ctx, st, run)
+	seedProductionOwnershipRun(t, context.Background(), st, run)
 	terminal := productionTerminalRecord{
 		InvocationID: "inv-1", RunID: run.ID, StageID: "stage-1",
 		Status: exec.StatusFailed, Summary: "exit 1",
 	}
-	if completed, err := workflow.recordProductionTerminalWithAuthority(ctx, run, terminal, false); err != nil || completed {
-		t.Fatalf("record failure = %v, %v", completed, err)
-	}
-	if completed, err := workflow.recordProductionTerminalWithAuthority(ctx, run, terminal, false); err != nil || completed {
-		t.Fatalf("replay failure = %v, %v", completed, err)
-	}
-	entries, err := advisoryStore.List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 2 || entries[1].Kind != "diagnostic_claim" {
-		t.Fatalf("advisory entries = %#v", entries)
-	}
+	return workflow, run, terminal, advisoryStore
 }
 
 type transientCleanupReviewSource struct {

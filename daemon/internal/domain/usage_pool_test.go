@@ -22,7 +22,7 @@ func TestEffectiveUsagePool(t *testing.T) {
 
 func TestUsagePoolValidate(t *testing.T) {
 	t.Parallel()
-	valid := domain.UsagePool{ID: "pool-1", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 1}
+	valid := domain.UsagePool{ID: "pool-1", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 1, MaxCallsPerSite: 1}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid pool: %v", err)
 	}
@@ -34,6 +34,7 @@ func TestUsagePoolValidate(t *testing.T) {
 		"no provider":      {func(p *domain.UsagePool) { p.Provider = "" }, domain.ErrInvalidAuthProvider},
 		"unknown provider": {func(p *domain.UsagePool) { p.Provider = "anthropic" }, domain.ErrInvalidAuthProvider},
 		"zero limit":       {func(p *domain.UsagePool) { p.MaxParallelExecutions = 0 }, domain.ErrNonPositive},
+		"zero call limit":  {func(p *domain.UsagePool) { p.MaxCallsPerSite = 0 }, domain.ErrNonPositive},
 	} {
 		pool := valid
 		tc.mutate(&pool)
@@ -45,13 +46,14 @@ func TestUsagePoolValidate(t *testing.T) {
 
 func TestValidateUsagePoolTransition(t *testing.T) {
 	t.Parallel()
-	old := domain.UsagePool{ID: "pool-1", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 2}
+	old := domain.UsagePool{ID: "pool-1", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 2, MaxCallsPerSite: 1}
 	for name, tc := range map[string]struct {
 		mutate  func(*domain.UsagePool)
 		wantErr error
 	}{
 		"raised limit":   {func(p *domain.UsagePool) { p.MaxParallelExecutions = 8 }, nil},
 		"lowered limit":  {func(p *domain.UsagePool) { p.MaxParallelExecutions = 1 }, nil},
+		"raised calls":   {func(p *domain.UsagePool) { p.MaxCallsPerSite = 3 }, nil},
 		"other pool":     {func(p *domain.UsagePool) { p.ID = "pool-2" }, domain.ErrImmutableTransition},
 		"other provider": {func(p *domain.UsagePool) { p.Provider = domain.AuthProviderOpenAI }, domain.ErrImmutableTransition},
 	} {

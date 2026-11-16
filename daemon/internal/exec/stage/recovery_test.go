@@ -391,13 +391,13 @@ func TestLiveHandoffErrorRetriesRecoveryWithoutRestart(t *testing.T) {
 	}
 	waitSessionDone(t, d, testInvoke)
 
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+	if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
 		t.Fatalf("Inspect after transient recovery = %q, %v; want running", status.Status, err)
 	}
 	if recoveryCalls != 1 {
 		t.Fatalf("recovery calls after first Inspect = %d, want 1", recoveryCalls)
 	}
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusGone {
+	if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusGone {
 		t.Fatalf("Inspect after proven loss = %q, %v; want gone", status.Status, err)
 	}
 	if _, err := d.Collect(ctx, testInvoke); !errors.Is(err, exec.ErrNoResult) {
@@ -804,7 +804,7 @@ func TestPreHandoffCrashRerunsInsteadOfRecovering(t *testing.T) {
 		t.Fatalf("rerun handoff failure = %#v, want running recovery state", reconstructed)
 	}
 
-	if status, err := d.Inspect(ctx, testInvoke); err != nil {
+	if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil {
 		t.Fatalf("Inspect pre-journal refusal: %v", err)
 	} else if status.Status != exec.StatusRunning {
 		t.Fatalf("Inspect status = %q, want running rerun", status.Status)
@@ -1752,7 +1752,7 @@ func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 			// Before the grace elapses the invocation is still running and no
 			// terminal outcome is recorded.
 			for i := 0; i < 3; i++ {
-				insp, err := d.Inspect(ctx, in.InvocationID)
+				insp, err := inspectRecovered(t, ctx, d, in.InvocationID)
 				if err != nil {
 					t.Fatalf("Inspect before grace: %v", err)
 				}
@@ -1766,7 +1766,7 @@ func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 
 			// Past the grace the driver commits a failed outcome.
 			now = now.Add(defaultRecoveryGrace + time.Minute)
-			insp, err := d.Inspect(ctx, in.InvocationID)
+			insp, err := inspectRecovered(t, ctx, d, in.InvocationID)
 			if err != nil {
 				t.Fatalf("Inspect after grace: %v", err)
 			}
@@ -1877,13 +1877,13 @@ func TestStrandedExportRecoveryPreservesAuthenticatedUsage(t *testing.T) {
 
 	// Under the grace the import keeps failing and the invocation stays running,
 	// but the authenticated usage is recorded into the deferral.
-	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
+	if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
 		t.Fatalf("Inspect before grace = %#v, %v; want running", insp, err)
 	}
 	// Past the grace the driver abandons the recovery as failed, carrying the
 	// authenticated usage onto the terminal.
 	now = now.Add(defaultRecoveryGrace + time.Minute)
-	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil || insp.Status != exec.StatusFailed {
+	if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil || insp.Status != exec.StatusFailed {
 		t.Fatalf("Inspect after grace = %#v, %v; want failed", insp, err)
 	}
 
@@ -2131,14 +2131,14 @@ func TestTransientExportRecoveryClearsBeforeGrace(t *testing.T) {
 	}, spec)
 
 	// A first pass under the grace records the deferral and keeps running.
-	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
+	if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
 		t.Fatalf("Inspect during transient failure = %#v, %v; want running", insp, err)
 	}
 
 	// The fault clears while still under the grace; recovery now completes.
 	now = now.Add(defaultRecoveryGrace / 2)
 	d.seeder = recoveryGitSeeder{repo: repo}
-	if insp, err := d.Inspect(ctx, in.InvocationID); err != nil {
+	if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil {
 		t.Fatalf("Inspect after fault cleared: %v", err)
 	} else if insp.Status != exec.StatusCompleted {
 		t.Fatalf("status after fault cleared = %v, want completed", insp.Status)

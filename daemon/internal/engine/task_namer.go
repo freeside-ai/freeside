@@ -86,7 +86,8 @@ func (e *Engine) enqueueTaskName(run domain.Run) {
 }
 
 // runTaskNames is joined by Run before the daemon can close the store. One
-// worker also respects the inference client's single in-flight call per site.
+// worker is enough: names are advisory, and a busy naming site makes the next
+// call wait its turn.
 func (e *Engine) runTaskNames(ctx context.Context) {
 	for ctx.Err() == nil {
 		select {

@@ -245,7 +245,7 @@ func TestHeartbeatRevisionCoversPoolAndEnrollmentWrites(t *testing.T) {
 
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordUsagePool(ctx, domain.UsagePool{
-			ID: "pool-a", Provider: "openai", MaxParallelExecutions: 3,
+			ID: "pool-a", Provider: "openai", MaxParallelExecutions: 3, MaxCallsPerSite: 1,
 		}, now)
 	}); err != nil {
 		t.Fatalf("set pool-a limit: %v", err)
@@ -306,7 +306,7 @@ func seedUsageEnrollment(t *testing.T, st *store.Store, at time.Time) int {
 	var generation domain.EnrollmentGeneration
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordUsagePool(ctx, domain.UsagePool{
-			ID: "pool-idle", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 1,
+			ID: "pool-idle", Provider: domain.AuthProviderClaude, MaxParallelExecutions: 1, MaxCallsPerSite: 1,
 		}, at); err != nil {
 			return err
 		}

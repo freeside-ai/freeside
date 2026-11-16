@@ -44,7 +44,8 @@ func (a holdAction) valid() bool {
 }
 
 // holdClass is one sentinel the dispatch path classifies. reason is the hold
-// the run records, empty only for the fenced no-more-work rows; check is the
+// the run records, empty only for the fenced no-more-work rows and a triage
+// call in progress; check is the
 // admission check an admission_policy_refused hold names, empty when the
 // vocabulary has none for the sentinel; clearsOnStart marks a scheduling
 // hold that starting the invocation clears.
@@ -237,6 +238,10 @@ var holdClasses = []holdClass{
 	// still records its reason.
 	{sentinel: store.ErrTaskCancellationFenced, action: holdActionInvocation},
 	{sentinel: store.ErrTaskWorkflowClosed, action: holdActionInvocation},
+	// A triage call in progress holds its specifier until the next pass finds
+	// the record. It records no reason: the call is seconds of the daemon's
+	// own work, and nothing waits on an operator.
+	{sentinel: errSpecifierTriagePending, action: holdActionInvocation},
 }
 
 // firstHoldClass is the first row that matches err and satisfies keep.

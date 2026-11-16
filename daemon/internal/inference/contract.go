@@ -584,6 +584,13 @@ type RoleCall struct {
 	Driver           Driver
 	Credential       Secret
 	CredentialSource CredentialSource
+
+	// UsagePool is the pool the enrollment's identity draws on
+	// (domain.AuthIdentity.EffectiveUsagePool), and MaxCallsPerSite that
+	// pool's call limit per site as the store holds it now. Client counts
+	// the call against them and waits for a place when the limit is reached.
+	UsagePool       domain.UsagePoolID
+	MaxCallsPerSite int
 }
 
 // HealthReporter hears whether a judgment role could be admitted and whether

@@ -603,7 +603,7 @@ func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 	}
 	pools := []usagePoolInput{
 		{
-			pool:   domain.UsagePool{ID: "claude-a", Provider: "anthropic", MaxParallelExecutions: 2},
+			pool:   domain.UsagePool{ID: "claude-a", Provider: "anthropic", MaxParallelExecutions: 2, MaxCallsPerSite: 1},
 			record: &store.Snapshotted[domain.PoolUsageObservation]{Value: claudeA, Snapshot: store.Snapshot{AsOfRevision: 17, EntityVersion: 4}},
 			enrollments: []domain.ClientEnrollment{
 				enrollment("enroll-a", "auth-a", domain.HarnessClientClaudeCode),
@@ -611,16 +611,16 @@ func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 			},
 		},
 		{
-			pool:        domain.UsagePool{ID: "claude-c", Provider: "anthropic", MaxParallelExecutions: 1},
+			pool:        domain.UsagePool{ID: "claude-c", Provider: "anthropic", MaxParallelExecutions: 1, MaxCallsPerSite: 1},
 			record:      &store.Snapshotted[domain.PoolUsageObservation]{Value: claudeC, Snapshot: store.Snapshot{AsOfRevision: 15, EntityVersion: 3}},
 			enrollments: []domain.ClientEnrollment{enrollment("enroll-c", "auth-c", domain.HarnessClientClaudeCode)},
 		},
 		{
-			pool:        domain.UsagePool{ID: "codex-b", Provider: "openai", MaxParallelExecutions: 1},
+			pool:        domain.UsagePool{ID: "codex-b", Provider: "openai", MaxParallelExecutions: 1, MaxCallsPerSite: 1},
 			record:      &store.Snapshotted[domain.PoolUsageObservation]{Value: codexB, Snapshot: store.Snapshot{AsOfRevision: 16, EntityVersion: 1}},
 			enrollments: []domain.ClientEnrollment{enrollment("enroll-b", "auth-b", domain.HarnessClientCodexCLI)},
 		},
-		{pool: domain.UsagePool{ID: "spare", Provider: "anthropic", MaxParallelExecutions: 1}},
+		{pool: domain.UsagePool{ID: "spare", Provider: "anthropic", MaxParallelExecutions: 1, MaxCallsPerSite: 1}},
 	}
 	snapshots := make([]UsagePoolSnapshot, 0, len(pools))
 	for _, pool := range pools {

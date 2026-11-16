@@ -279,7 +279,7 @@ func TestUsagePoolParallelismRechecksReplayedAdmissionsAfterLimitReduction(t *te
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordUsagePool(ctx, domain.UsagePool{
-			ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 1,
+			ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 1, MaxCallsPerSite: 1,
 		}, admittedAt.Add(time.Hour))
 	}); err != nil {
 		t.Fatalf("restore lower pool limit: %v", err)

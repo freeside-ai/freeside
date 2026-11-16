@@ -12,6 +12,8 @@
 // Layout, by concept:
 //
 //   - engine.go       Engine, its options, and the Reconcile and Run loops
+//   - off_pass.go     the network calls a pass starts and does not wait for,
+//     and what they hand the next pass (#3215)
 //   - fake_workflow.go the 1A.0 walking skeleton
 //   - legacy_fake_publication.go what outlives the retired 1A.1 fake-candidate
 //     publication lane: its outbox codecs, backup extractors, and the legacy

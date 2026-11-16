@@ -26,24 +26,32 @@ func runSetPoolLimitMain(args []string) {
 }
 
 type setPoolLimitConfig struct {
-	DBPath                string
-	PoolID                domain.UsagePoolID
+	DBPath string
+	PoolID domain.UsagePoolID
+	// MaxParallelExecutions and MaxCallsPerSite are the limits to set; zero
+	// leaves that limit as it is. At least one is given.
 	MaxParallelExecutions int
+	MaxCallsPerSite       int
 }
 
-// setPoolLimitResult reports the revision. Recorded is false when the pool
-// already carried the requested limit, so no revision was written.
+// setPoolLimitResult reports the revision: each limit before and after it, so
+// a limit the command left alone reads the same in both. Recorded is false
+// when the pool already carried the requested limits, so no revision was
+// written.
 type setPoolLimitResult struct {
 	Pool                          domain.UsagePoolID `json:"pool"`
 	PreviousMaxParallelExecutions int                `json:"previous_max_parallel_executions"`
 	MaxParallelExecutions         int                `json:"max_parallel_executions"`
+	PreviousMaxCallsPerSite       int                `json:"previous_max_calls_per_site"`
+	MaxCallsPerSite               int                `json:"max_calls_per_site"`
 	Recorded                      bool               `json:"recorded"`
 }
 
 // runSetPoolLimitCommand records a newer revision of an existing usage pool
-// that changes only its parallel-execution limit. The admission gate reads the
-// current revision on every admission, so a running daemon applies it to the
-// next launch without a restart. An identity with no pool of its own is
+// that changes only the limits given: its parallel-execution limit, its
+// judgment-call limit per site, or both. The admission gate and the inference
+// client read the current revision on every admission and every call, so a
+// running daemon applies it to the next launch or call without a restart. An identity with no pool of its own is
 // addressed by its effective pool, identity:<id>, as auth list prints it.
 func runSetPoolLimitCommand(
 	ctx context.Context, args []string, stdout, stderr io.Writer,
@@ -66,15 +74,24 @@ func runSetPoolLimitCommand(
 		if err != nil {
 			return err
 		}
+		updated := pool
+		if cfg.MaxParallelExecutions != 0 {
+			updated.MaxParallelExecutions = cfg.MaxParallelExecutions
+		}
+		if cfg.MaxCallsPerSite != 0 {
+			updated.MaxCallsPerSite = cfg.MaxCallsPerSite
+		}
 		result = setPoolLimitResult{
 			Pool:                          pool.ID,
 			PreviousMaxParallelExecutions: pool.MaxParallelExecutions,
-			MaxParallelExecutions:         cfg.MaxParallelExecutions,
+			MaxParallelExecutions:         updated.MaxParallelExecutions,
+			PreviousMaxCallsPerSite:       pool.MaxCallsPerSite,
+			MaxCallsPerSite:               updated.MaxCallsPerSite,
 		}
-		if pool.MaxParallelExecutions == cfg.MaxParallelExecutions {
+		if updated == pool {
 			return nil
 		}
-		pool.MaxParallelExecutions = cfg.MaxParallelExecutions
+		pool = updated
 		result.Recorded = true
 		return tx.RecordUsagePool(ctx, pool, time.Now().UTC())
 	}); err != nil {
@@ -94,7 +111,9 @@ func parseSetPoolLimitConfig(args []string, output io.Writer) (setPoolLimitConfi
 	flags.StringVar(&cfg.DBPath, "db", "", "existing SQLite database path (required)")
 	flags.StringVar(&pool, "pool", "", "recorded usage pool id, as auth list prints it (required)")
 	flags.IntVar(&cfg.MaxParallelExecutions, "max-parallel-executions", 0,
-		"launches the pool may run at once, at least 1 (required)")
+		"launches the pool may run at once, at least 1")
+	flags.IntVar(&cfg.MaxCallsPerSite, "max-calls-per-site", 0,
+		"judgment calls one inference site may run at once on the pool, at least 1")
 	if err := flags.Parse(args); err != nil {
 		return setPoolLimitConfig{}, err
 	}
@@ -107,8 +126,16 @@ func parseSetPoolLimitConfig(args []string, output io.Writer) (setPoolLimitConfi
 	if pool == "" {
 		return setPoolLimitConfig{}, errors.New("-pool is required")
 	}
-	if cfg.MaxParallelExecutions < 1 {
+	given := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	if !given["max-parallel-executions"] && !given["max-calls-per-site"] {
+		return setPoolLimitConfig{}, errors.New("-max-parallel-executions or -max-calls-per-site is required")
+	}
+	if given["max-parallel-executions"] && cfg.MaxParallelExecutions < 1 {
 		return setPoolLimitConfig{}, errors.New("-max-parallel-executions must be at least 1")
+	}
+	if given["max-calls-per-site"] && cfg.MaxCallsPerSite < 1 {
+		return setPoolLimitConfig{}, errors.New("-max-calls-per-site must be at least 1")
 	}
 	cfg.PoolID = domain.UsagePoolID(pool)
 	return cfg, nil

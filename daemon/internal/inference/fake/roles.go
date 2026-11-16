@@ -41,6 +41,9 @@ type Roles struct {
 	// AuthorPrompt is the publication author's prompt file; empty selects
 	// DefaultAuthorPrompt.
 	AuthorPrompt []byte
+	// MaxCallsPerSite is the call limit of the pool every role draws on;
+	// zero is one.
+	MaxCallsPerSite int
 	// Edit, when set, changes what the source returns for a role after the
 	// admissible answer is built. An error is the source's own refusal.
 	Edit func(domain.RoleName, *inference.RoleCall) error
@@ -128,6 +131,7 @@ func (r Roles) ResolveRole(_ context.Context, role domain.RoleName) (inference.R
 		WriterLineage: r.WriterLineage,
 		Driver:        r.Driver, Credential: r.Credential,
 		CredentialSource: inference.CredentialSourceEnrollment,
+		UsagePool:        identity.EffectiveUsagePool(), MaxCallsPerSite: max(r.MaxCallsPerSite, 1),
 	}
 	if r.Edit != nil {
 		if err := r.Edit(role, &call); err != nil {

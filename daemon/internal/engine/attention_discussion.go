@@ -34,7 +34,9 @@ type attentionDiscussionCardFacts struct {
 
 // reconcileAttentionDiscussions consumes the conversation intents that do not
 // belong to a workspace workflow. One malformed or foreign intent stays
-// pending and cannot stop unrelated reconciliation work.
+// pending and cannot stop unrelated reconciliation work. A reply's model call
+// and its acceptance run outside the pass (#3215), so the count this returns
+// is the replies accepted since the previous pass.
 func (e *Engine) reconcileAttentionDiscussions(ctx context.Context) (int, error) {
 	var pending []store.QueueEntry
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -45,7 +47,10 @@ func (e *Engine) reconcileAttentionDiscussions(ctx context.Context) (int, error)
 		return 0, err
 	}
 
-	accepted := 0
+	accepted, err := e.discussionOutcomes.collect()
+	if err != nil {
+		return accepted, err
+	}
 	for _, entry := range pending {
 		discussion, err := e.loadAttentionDiscussion(ctx, entry)
 		if err != nil {
@@ -87,41 +92,64 @@ func (e *Engine) reconcileAttentionDiscussions(ctx context.Context) (int, error)
 		if held {
 			continue
 		}
-		reply, err := e.produceAttentionDiscussionReply(ctx, *discussion)
-		if errors.Is(err, store.ErrTaskWorkflowClosed) {
-			if _, err := e.retireClosedInvocationIntent(ctx, entry,
-				*discussion.item.Subject.RunID, discussion.item.ConversationID); err != nil {
-				return accepted, err
+		// The model call and the acceptance of its reply run outside the
+		// pass, one per intent (#3215). answerAttentionDiscussion accepts
+		// through a pre-commit gate that re-checks the card the call
+		// answered, so a reply that won its claim lands even when the
+		// workflow closes while the model answers.
+		e.discussions.Go(entry.IdempotencyKey, func() {
+			// A worker for this intent that finished after the pass loaded
+			// it may have answered already, so read the discussion again
+			// and never ask the model twice for one reply.
+			asked, err := e.loadAttentionDiscussion(ctx, entry)
+			if err != nil || asked == nil || asked.reply != nil {
+				return
 			}
-			continue
-		}
-		if err != nil {
-			e.logger.Warn("attention discussion reply remains pending", "intent", entry.IdempotencyKey, "error", err)
-			continue
-		}
-		if err := e.signet.AcceptAgentCompletion(ctx, discussion.invocation.ID, signet.AgentReply{Body: reply},
-			signet.WithPreCommitGate(func(ctx context.Context, tx *store.ReadTx) error {
-				item, err := tx.GetAttentionItem(ctx, discussion.item.ID)
-				if err != nil {
-					return err
-				}
-				if item.Status == domain.StatusOpen && item.ItemVersion != discussion.request.ItemVersion ||
-					item.Type != discussion.item.Type || item.ConversationID == nil ||
-					*item.ConversationID != discussion.request.ConversationID {
-					return domain.ErrParentKeyMismatch
-				}
-				return nil
-			}),
-		); err != nil {
-			e.logger.Warn("attention discussion completion remains pending", "intent", entry.IdempotencyKey, "error", err)
-			continue
-		}
-		accepted++
-		if err := e.retireAttentionDiscussion(ctx, discussion.entry.IdempotencyKey); err != nil {
-			return accepted, err
-		}
+			answered, err := e.answerAttentionDiscussion(ctx, *asked)
+			if ctx.Err() != nil {
+				return
+			}
+			e.discussionOutcomes.record(answered, err)
+		})
 	}
 	return accepted, nil
+}
+
+// answerAttentionDiscussion asks the model for discussion's reply and
+// accepts it, reporting whether it accepted one. It runs outside the pass
+// (#3215). An error it returns stops the next pass, as it stopped the pass
+// that answered before the call moved out; a reply that stays pending is
+// logged and a later pass asks again.
+func (e *Engine) answerAttentionDiscussion(ctx context.Context, discussion attentionDiscussion) (bool, error) {
+	entry := discussion.entry
+	reply, err := e.produceAttentionDiscussionReply(ctx, discussion)
+	if errors.Is(err, store.ErrTaskWorkflowClosed) {
+		_, err := e.retireClosedInvocationIntent(ctx, entry,
+			*discussion.item.Subject.RunID, discussion.item.ConversationID)
+		return false, err
+	}
+	if err != nil {
+		e.logger.Warn("attention discussion reply remains pending", "intent", entry.IdempotencyKey, "error", err)
+		return false, nil
+	}
+	if err := e.signet.AcceptAgentCompletion(ctx, discussion.invocation.ID, signet.AgentReply{Body: reply},
+		signet.WithPreCommitGate(func(ctx context.Context, tx *store.ReadTx) error {
+			item, err := tx.GetAttentionItem(ctx, discussion.item.ID)
+			if err != nil {
+				return err
+			}
+			if item.Status == domain.StatusOpen && item.ItemVersion != discussion.request.ItemVersion ||
+				item.Type != discussion.item.Type || item.ConversationID == nil ||
+				*item.ConversationID != discussion.request.ConversationID {
+				return domain.ErrParentKeyMismatch
+			}
+			return nil
+		}),
+	); err != nil {
+		e.logger.Warn("attention discussion completion remains pending", "intent", entry.IdempotencyKey, "error", err)
+		return false, nil
+	}
+	return true, e.retireAttentionDiscussion(ctx, entry.IdempotencyKey)
 }
 
 // attentionDiscussionHeld applies the same fail-closed operating-state rule

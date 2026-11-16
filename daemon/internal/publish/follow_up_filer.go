@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -77,12 +78,15 @@ type FollowUpFiler struct {
 	now      func() time.Time
 	wake     chan struct{}
 
-	// mu serializes passes, so a wake during a sweep cannot drive one intent
-	// from two goroutines.
-	mu              sync.Mutex
-	listingFailures map[domain.ProposalInstanceID]int
-	// failingSince is when each filing's current run of failed passes began.
-	failingSince map[domain.ProposalInstanceID]time.Time
+	// repositories runs each target repository's filings apart, so one
+	// repository's stalled GitHub call holds up only its own filings
+	// (#3215). It keys by repository, not project, because the rate cap and
+	// the one-outstanding-filing rule count a repository's filings, and one
+	// goroutine per repository keeps those checks from racing. A filing
+	// belongs to one repository, so overlapping passes never drive one
+	// intent from two goroutines.
+	repositories keyedrun.Group[int64]
+	failures     *proposalFailures
 	notices      *proposalNotices
 }
 
@@ -106,8 +110,7 @@ func NewFollowUpFiler(
 	return &FollowUpFiler{
 		store: s, forge: newForge(tokens, client, strings.TrimRight(baseURL, "/")),
 		identity: identity, now: now, wake: make(chan struct{}, 1),
-		listingFailures: map[domain.ProposalInstanceID]int{},
-		failingSince:    map[domain.ProposalInstanceID]time.Time{},
+		failures: newProposalFailures(),
 		notices: newProposalNotices(followUpFilingItemPrefix, transientFilingNoticeCodes,
 			"Resolved when the condition holding the follow-up filing cleared.", now),
 	}, nil
@@ -136,10 +139,17 @@ func (f *FollowUpFiler) Run(ctx context.Context, interval time.Duration, report 
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// Each pass runs on its own goroutine, so a pass waiting on a stalled
+	// repository never delays the next tick or wake; that pass skips the busy
+	// repository.
+	var passes sync.WaitGroup
+	defer passes.Wait()
 	for {
-		if err := f.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
-			report(err)
-		}
+		passes.Go(func() {
+			if err := f.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
+				report(err)
+			}
+		})
 		select {
 		case <-ctx.Done():
 			return nil
@@ -149,38 +159,64 @@ func (f *FollowUpFiler) Run(ctx context.Context, interval time.Duration, report 
 	}
 }
 
-// Pass drives every approved filing one step at a time, oldest first. An
-// error on one filing is collected and does not stop the pass.
+// Pass drives every approved filing one step at a time, oldest first within
+// each repository, one goroutine per repository, and returns once the
+// repositories it started finish. A repository whose previous run has not
+// returned is skipped. An error on one filing is collected and does not stop
+// the pass.
 func (f *FollowUpFiler) Pass(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	filings, unreadable, err := f.discover(ctx)
 	if err != nil {
 		return fmt.Errorf("follow-up filing: %w", err)
 	}
-	f.notices.startPass()
-	var errs []error
+	present := map[domain.ProposalInstanceID]bool{}
 	for _, ref := range unreadable {
-		errs = append(errs, f.reportUnreadable(ctx, ref.filingRef, ref.err))
+		present[ref.instanceID] = true
 	}
 	for _, filing := range filings {
-		if ctx.Err() != nil {
-			return errors.Join(append(errs, ctx.Err())...)
-		}
-		err := f.drive(ctx, filing, filings)
-		if err == nil {
-			delete(f.failingSince, filing.instanceID)
-			continue
-		}
-		errs = append(errs, fmt.Errorf("follow-up filing %q: %w", filing.instanceID, err))
-		if ctx.Err() == nil && !errors.Is(err, errFollowUpFilingUnreadable) {
-			errs = append(errs, f.noteStall(ctx, filing.filingRef))
-		}
+		present[filing.instanceID] = true
 	}
-	// Every filing was visited, so holding is complete for this pass unless
-	// the context ended inside the last one.
-	if ctx.Err() == nil {
-		errs = append(errs, f.notices.resolveCleared(ctx, f.store))
+	f.notices.startPass(present)
+	var errs []error
+	// An unreadable filing has no repository to wait on, and reporting it
+	// is a store write, so it runs inline.
+	for _, ref := range unreadable {
+		f.notices.begin(ref.instanceID)
+		errs = append(errs, f.reportUnreadable(ctx, ref.filingRef, ref.err))
+		f.notices.finish(ref.instanceID)
+	}
+	parts := keyedrun.Partition(filings, func(filing approvedFiling) int64 { return filing.repositoryID })
+	errs = append(errs, keyedrun.Run(&f.repositories, parts, func(repositoryFilings []approvedFiling) error {
+		// The cap counts read every discovered filing, so drive still sees
+		// the whole list.
+		return f.driveRepository(ctx, repositoryFilings, filings)
+	}))
+	if ctx.Err() != nil {
+		return errors.Join(append(errs, ctx.Err())...)
+	}
+	errs = append(errs, f.notices.resolveCleared(ctx, f.store))
+	return errors.Join(errs...)
+}
+
+// driveRepository drives one repository's filings in order. Each filing's
+// notice holds count from its begin to its finish.
+func (f *FollowUpFiler) driveRepository(ctx context.Context, filings, all []approvedFiling) error {
+	var errs []error
+	for _, filing := range filings {
+		if ctx.Err() != nil {
+			return errors.Join(errs...)
+		}
+		f.notices.begin(filing.instanceID)
+		err := f.drive(ctx, filing, all)
+		if err == nil {
+			f.failures.passed(filing.instanceID)
+		} else {
+			errs = append(errs, fmt.Errorf("follow-up filing %q: %w", filing.instanceID, err))
+			if ctx.Err() == nil && !errors.Is(err, errFollowUpFilingUnreadable) {
+				errs = append(errs, f.noteStall(ctx, filing.filingRef))
+			}
+		}
+		f.notices.finish(filing.instanceID)
 	}
 	return errors.Join(errs...)
 }
@@ -194,9 +230,8 @@ var errFollowUpFilingUnreadable = errors.New("follow-up filing does not read")
 // restart starts it again.
 func (f *FollowUpFiler) noteStall(ctx context.Context, ref filingRef) error {
 	f.notices.hold(ref.instanceID, followUpFilingStalledCode)
-	since, failing := f.failingSince[ref.instanceID]
+	since, failing := f.failures.failing(ref.instanceID, f.now())
 	if !failing {
-		f.failingSince[ref.instanceID] = f.now()
 		return nil
 	}
 	if f.now().Before(since.Add(followUpFilingStallNoticeAfter)) {
@@ -912,21 +947,20 @@ func (f *FollowUpFiler) settle(ctx context.Context, filing approvedFiling, view 
 		// A definite answer, not a listing failure: it does not wait out the
 		// listing bound.
 		if fault := dispatchIdentityFault(intent.PreDispatch, target.bot); fault != "" {
-			delete(f.listingFailures, filing.instanceID)
+			f.failures.listingSettled(filing.instanceID)
 			return f.recordAmbiguous(ctx, filing, view, fault)
 		}
 		candidates, err = f.candidates(ctx, view, target)
 	}
 	if err != nil {
-		f.listingFailures[filing.instanceID]++
-		if f.listingFailures[filing.instanceID] < followUpFilingListingBound {
+		if f.failures.listingFailed(filing.instanceID) < followUpFilingListingBound {
 			return err
 		}
-		delete(f.listingFailures, filing.instanceID)
+		f.failures.listingSettled(filing.instanceID)
 		return f.recordAmbiguous(ctx, filing, view, fmt.Sprintf(
 			"the listing of the App's issues could not complete in %d tries", followUpFilingListingBound))
 	}
-	delete(f.listingFailures, filing.instanceID)
+	f.failures.listingSettled(filing.instanceID)
 	if len(candidates) != 1 {
 		return f.recordAmbiguous(ctx, filing, view, fmt.Sprintf(
 			"%d issues could be the one this filing created", len(candidates)))

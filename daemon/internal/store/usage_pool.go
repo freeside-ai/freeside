@@ -96,14 +96,14 @@ func (tx *WriteTx) RecordUsagePool(ctx context.Context, pool domain.UsagePool, r
 
 // settleIdentityUsagePool keeps the pool an identity counts against recorded,
 // and never lets a step raise anyone's concurrency. A new identity's pool
-// starts at one. An identity characterized into a pool brings the limit of the
-// pool it leaves, and the pool takes the lower of the two. previous is nil for
-// a new identity.
+// starts at one launch and one call per site. An identity characterized into
+// a pool brings the limits of the pool it leaves, and the pool takes the lower
+// of each pair. previous is nil for a new identity.
 func (tx *WriteTx) settleIdentityUsagePool(
 	ctx context.Context, previous *domain.AuthIdentity, identity domain.AuthIdentity, recordedAt time.Time,
 ) error {
 	target := identity.EffectiveUsagePool()
-	limit := 1
+	limit, calls := 1, 1
 	if previous != nil {
 		from := previous.EffectiveUsagePool()
 		if from == target {
@@ -118,23 +118,24 @@ func (tx *WriteTx) settleIdentityUsagePool(
 		if err != nil {
 			return err
 		}
-		limit = left.MaxParallelExecutions
+		limit, calls = left.MaxParallelExecutions, left.MaxCallsPerSite
 	}
 	current, err := tx.GetUsagePool(ctx, target)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return tx.RecordUsagePool(ctx, domain.UsagePool{
-			ID: target, Provider: identity.Provider, MaxParallelExecutions: limit,
+			ID: target, Provider: identity.Provider, MaxParallelExecutions: limit, MaxCallsPerSite: calls,
 		}, recordedAt)
 	case err != nil:
 		return err
 	case current.Provider != identity.Provider:
 		return fmt.Errorf("usage pool %q belongs to provider %q, identity is %q: %w",
 			target, current.Provider, identity.Provider, domain.ErrImmutableTransition)
-	case previous == nil || current.MaxParallelExecutions <= limit:
+	case previous == nil || (current.MaxParallelExecutions <= limit && current.MaxCallsPerSite <= calls):
 		return nil
 	}
-	current.MaxParallelExecutions = limit
+	current.MaxParallelExecutions = min(current.MaxParallelExecutions, limit)
+	current.MaxCallsPerSite = min(current.MaxCallsPerSite, calls)
 	return tx.RecordUsagePool(ctx, current, recordedAt)
 }
 

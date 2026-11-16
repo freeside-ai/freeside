@@ -2184,21 +2184,37 @@ gets the descriptive Source issue link either way. Decision record:
 ### Set A Usage Pool's Parallel Limit
 
 `freesided set-pool-limit` records a newer revision of a usage pool that
-changes only `max_parallel_executions`, the number of launches the pool may
-run at once. The limit is the pool's, not an identity's: identities sharing a
-pool share one limit, and execution and review launches both count against it.
-An identity with no recorded `usage_pool` has a pool of its own named
-`identity:<auth-identity>`, the id `freesided auth list` prints. New pools
-start at 1. The command works whether `freesided` is stopped or running; a
-running daemon applies the new limit at its next admission. It refuses a pool
-the store has not recorded, and it prints the previous and new limits as JSON.
-Repeating the current limit writes nothing.
+changes only the limits it is given:
+
+- **`-max-parallel-executions`:** the number of launches the pool may run at
+  once. Execution and review launches both count against it.
+- **`-max-calls-per-site`:** the number of judgment calls one inference site
+  (adjudication, naming, triage, and the others) may run at once on the
+  pool's credentials. A call to a site at its limit waits its turn; it never
+  returns the site's fail-safe because another task is calling. The wait
+  doesn't count against the call's timeout, and a call abandoned at its
+  timeout keeps its place until the provider call ends. Calls hold no
+  launch slot, so calls can exceed the launch limit by at most this many
+  requests per site.
+
+Give one or both. The limits are the pool's, not an identity's: identities
+sharing a pool share them. An identity with no recorded `usage_pool` has a
+pool of its own named `identity:<auth-identity>`, the id `freesided auth
+list` prints with both limits. New pools start at 1 for each, and an
+identity that joins a pool never raises either limit: the pool takes the
+lower of its own and the one the identity brings. The command works whether
+`freesided` is stopped or running; a running daemon applies a new launch
+limit at its next admission and a new call limit at the next call that
+arrives or ends. It refuses a pool the store has not recorded, and it prints
+each limit before and after as JSON. Repeating the current limits writes
+nothing.
 
 ```sh
 freesided set-pool-limit \
   -db <state-root>/daemon/freeside.db \
   -pool <usage_pool from freesided auth list> \
-  -max-parallel-executions 4
+  -max-parallel-executions 4 \
+  -max-calls-per-site 2
 ```
 
 A launch at the limit waits under a `usage_pool_exhausted` hold naming the
@@ -4038,10 +4054,10 @@ healthy pass resolves that item. Production driver mode supplies its live
 backend digest and runs the same composition at startup and every 24 hours by
 default (`-doctor-interval` overrides the cadence). The production daemon
 accepts the same repeatable `-approved-recipe` flag and supplies that exact set
-to persistence reconstruction and every scheduled doctor pass. Scheduled
-conformance holds the janitor's latest completed coverage stable for its
-authenticated fetch, so the janitor's deliberate mid-pass withdrawal cannot
-terminate the daemon. Doctor applies the selected mode's full capability floor; unattended
+to persistence reconstruction and every scheduled doctor pass. A janitor
+pass in progress serves the last completed pass's coverage (#3215), so
+scheduled conformance's authenticated fetch never meets coverage withdrawn
+mid-pass and cannot terminate the daemon that way. Doctor applies the selected mode's full capability floor; unattended
 health therefore requires the networkless-export and enforced-provider-egress
 proofs in addition to the attended handoff floor. The minimum is per backend
 class: the one host-side class `unattended` admits, the credential-free macOS

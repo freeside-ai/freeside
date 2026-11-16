@@ -951,7 +951,7 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 		engine.admission.environment.OperatingMode != domain.ModeAttendedDev {
 		t.Fatalf("engine composition = specification %v, admission %+v", engine.specification, engine.admission)
 	}
-	result, err := engine.Reconcile(t.Context())
+	result, err := reconcileSettled(t, engine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -973,7 +973,7 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 	driver = f.newDriver(t)
 	capturingDriver.StageDriver = driver
 	engine = f.newEngine(t, capturingDriver)
-	result, err = engine.Reconcile(t.Context())
+	result, err = reconcileSettled(t, engine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1049,10 +1049,10 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
 	thirdPrompt, ok := capturingDriver.prompt(thirdID)
@@ -1117,7 +1117,7 @@ func TestSpecificationResearchApprovalStartsDigestBoundImplementation(t *testing
 		})
 		directResult <- err
 	}()
-	result, err = engine.Reconcile(t.Context())
+	result, err = reconcileSettled(t, engine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2569,7 +2569,7 @@ func TestSpecificationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	}
 	f.submit(t)
 	engine := f.newEngine(t, capturing)
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
 	firstItem, snapshot := f.item(t, "spec-approval-implementation-run-1")
@@ -2583,7 +2583,7 @@ func TestSpecificationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
 	secondID := specificationInvocationID("specification-run", 2)
@@ -2594,7 +2594,7 @@ func TestSpecificationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
 	thirdID := specificationInvocationID("specification-run", 3)
@@ -2604,7 +2604,7 @@ func TestSpecificationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
 	prompt, ok := capturing.prompt(thirdID)
@@ -3395,7 +3395,7 @@ func TestSpecificationResearchRefusalBecomesDurableFailure(t *testing.T) {
 	}
 	f.submit(t)
 	engine := f.newEngine(t, driver)
-	if _, err := engine.Reconcile(t.Context()); err != nil {
+	if _, err := reconcileSettled(t, engine); err != nil {
 		t.Fatal(err)
 	}
 	item, _ := f.item(t, domain.ItemID("execution-failure-"+string(id)))
@@ -3403,7 +3403,7 @@ func TestSpecificationResearchRefusalBecomesDurableFailure(t *testing.T) {
 		t.Fatalf("research refusal item = %+v", item)
 	}
 	requireInterpretationFailure(t, item, domain.InterpretationFailureResearchURLRefused, id)
-	if replay, err := engine.Reconcile(t.Context()); err != nil || replay.ResultsAccepted != 0 {
+	if replay, err := reconcileSettled(t, engine); err != nil || replay.ResultsAccepted != 0 {
 		t.Fatalf("research refusal replay = %+v, %v", replay, err)
 	}
 	if f.fetchCalls.Load() != 0 {

@@ -162,6 +162,8 @@ type InstallationJanitor struct {
 	now          func() time.Time
 	maxRemovals  int
 
+	// cycleMu keeps two passes apart. No coverage reader takes it, so a
+	// reader never waits on a pass's GitHub calls.
 	cycleMu    sync.Mutex
 	mu         sync.RWMutex
 	running    bool
@@ -234,25 +236,39 @@ func (j *InstallationJanitor) ActiveFor(registrationID int64) bool {
 	return ok
 }
 
-// AwaitActiveFor waits for a reconciliation pass already in progress to
-// publish its complete result before reporting registration coverage. It does
-// not preserve stale coverage: the caller remains denied until the pass has
-// finished, then receives only that pass's result.
+// AwaitActiveFor reports registration coverage from the latest complete pass,
+// which a pass in progress keeps serving until it publishes its own result
+// (#3215). A caller the served view does not cover waits for a pass already
+// in progress and reads its result, so a registration the next pass is about
+// to cover, as at first start, is not denied for the pass's duration.
 func (j *InstallationJanitor) AwaitActiveFor(registrationID int64) bool {
 	if j == nil {
 		return false
 	}
+	return j.awaitCovered(func() bool {
+		_, ok := j.covered[registrationID]
+		return ok
+	})
+}
+
+// awaitCovered evaluates allowed, under j.mu's read lock, against the served
+// view. It returns at once when allowed holds or no pass is running, and
+// otherwise waits for the running pass to publish and evaluates it again. It
+// waits on the pass, never on a lock a pass holds, and holds no lock while it
+// waits.
+func (j *InstallationJanitor) awaitCovered(allowed func() bool) bool {
 	for {
 		j.mu.RLock()
-		if j.passDone != nil {
-			done := j.passDone
+		if allowed() {
 			j.mu.RUnlock()
-			<-done
-			continue
+			return true
 		}
-		_, ok := j.covered[registrationID]
+		done := j.passDone
 		j.mu.RUnlock()
-		return ok
+		if done == nil {
+			return false
+		}
+		<-done
 	}
 }
 
@@ -278,52 +294,25 @@ func (j *InstallationJanitor) AllowsRepository(registrationID, installationID, r
 }
 
 // AwaitAllowsRepository returns the latest completed pass's exact trusted
-// grant observation. If a pass is in progress, it waits for that pass to
-// publish or withdraw coverage rather than exposing the deliberate transient
-// withdrawal between those two events. Onboarding and the final runtime mint
-// gate use this coordinated view; direct status probes retain the immediate
-// fail-closed view above.
+// grant observation, which a pass in progress keeps serving. A grant the
+// served view lacks waits for a pass already in progress and reads its
+// result, so a repository onboarding has just added is seen once that pass
+// covers it. Onboarding and the final runtime mint gate use this view; direct
+// status probes keep the immediate view above.
 func (j *InstallationJanitor) AwaitAllowsRepository(
 	registrationID, installationID, repositoryID int64,
 ) bool {
 	if j == nil {
 		return false
 	}
-	for {
-		j.mu.RLock()
-		if j.passDone != nil {
-			done := j.passDone
-			j.mu.RUnlock()
-			<-done
-			continue
-		}
-		coverage, ok := j.covered[registrationID]
+	return j.awaitCovered(func() bool {
+		repositories, ok := j.covered[registrationID].repositories[installationID]
 		if !ok {
-			j.mu.RUnlock()
-			return false
-		}
-		repositories, ok := coverage.repositories[installationID]
-		if !ok {
-			j.mu.RUnlock()
 			return false
 		}
 		_, ok = repositories[repositoryID]
-		j.mu.RUnlock()
 		return ok
-	}
-}
-
-// WithStableCoverage runs fn while no reconciliation pass can withdraw or
-// replace the latest complete coverage snapshot. It is reserved for bounded
-// operational probes, such as scheduled conformance, whose own authenticated
-// reads must not fail merely because the janitor starts a concurrent pass.
-func (j *InstallationJanitor) WithStableCoverage(fn func() error) error {
-	if j == nil || fn == nil {
-		return errors.New("installation janitor: nil stable-coverage dependency")
-	}
-	j.cycleMu.Lock()
-	defer j.cycleMu.Unlock()
-	return fn()
+	})
 }
 
 // PendingReady reports whether the latest complete pass observed the exact
@@ -341,6 +330,12 @@ func (j *InstallationJanitor) PendingReady(
 	}
 	j.mu.RLock()
 	defer j.mu.RUnlock()
+	return j.pendingReadyLocked(envelope)
+}
+
+// pendingReadyLocked is PendingReady's check against the served view; the
+// caller holds j.mu and has validated envelope.
+func (j *InstallationJanitor) pendingReadyLocked(envelope PendingInstallationEnvelope) (int64, bool) {
 	coverage, ok := j.covered[envelope.RegistrationID]
 	if !ok || coverage.pendingReady == nil ||
 		(envelope.InstallationID > 0 &&
@@ -359,8 +354,8 @@ func (j *InstallationJanitor) PendingReady(
 }
 
 // AwaitPendingReady is the pending-envelope counterpart to
-// AwaitAllowsRepository: it linearizes the onboarding transition gate after
-// any reconciliation pass already in progress.
+// AwaitAllowsRepository: it answers from the served view when that view is
+// ready, and otherwise reads the result of a pass already in progress.
 func (j *InstallationJanitor) AwaitPendingReady(
 	envelope PendingInstallationEnvelope,
 ) (int64, bool) {
@@ -369,35 +364,16 @@ func (j *InstallationJanitor) AwaitPendingReady(
 		len(envelope.ExpectedRepositoryIDs) == 0 {
 		return 0, false
 	}
-	for {
-		j.mu.RLock()
-		if j.passDone != nil {
-			done := j.passDone
-			j.mu.RUnlock()
-			<-done
-			continue
-		}
-		coverage, ok := j.covered[envelope.RegistrationID]
-		if !ok || coverage.pendingReady == nil ||
-			(envelope.InstallationID > 0 &&
-				coverage.pendingReady.installationID != envelope.InstallationID) ||
-			coverage.pendingReady.activeEpoch != envelope.ActiveEpoch ||
-			coverage.pendingReady.durableIntentRevision != envelope.DurableIntentRevision ||
-			len(coverage.pendingReady.repositories) != len(envelope.ExpectedRepositoryIDs) {
-			j.mu.RUnlock()
-			return 0, false
-		}
-		ready := true
-		for _, repositoryID := range envelope.ExpectedRepositoryIDs {
-			if _, ok := coverage.pendingReady.repositories[repositoryID]; !ok {
-				ready = false
-				break
-			}
-		}
-		installationID := coverage.pendingReady.installationID
-		j.mu.RUnlock()
-		return installationID, ready
+	var installationID int64
+	ready := j.awaitCovered(func() bool {
+		var ok bool
+		installationID, ok = j.pendingReadyLocked(envelope)
+		return ok
+	})
+	if !ready {
+		return 0, false
 	}
+	return installationID, true
 }
 
 // RegistrationFaults reports the registrations the most recently completed
@@ -464,16 +440,19 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 	defer j.finishRun()
 
 	for {
-		// A pass that stalls or fails must not leave the previous pass's
-		// coverage looking current. Its diagnostics stay published: they are
-		// not grants, and clearing them would leave a persistently failing or
-		// churning registration reporting as merely unvisited for as long as
-		// each pass takes.
+		// The previous pass's coverage stays served while this pass runs
+		// (#3215), so a mint or resolution never waits on the janitor's own
+		// GitHub calls. A pass is bounded, because every request it makes is
+		// (the daemon's client timeout, installationMaxPages, maxRemovals), so
+		// coverage is never served more than one pass stale. A pass that
+		// fails withdraws it before anyone reads the result, and a pass that
+		// completes replaces it whole. Diagnostics stay published throughout:
+		// they are not grants.
 		j.cycleMu.Lock()
 		done := j.beginPublishedPass()
-		j.withdrawCoverage()
 		_, pass, err := j.runCycle(ctx)
 		if err != nil {
+			j.withdrawCoverage()
 			j.endPublishedPass(done)
 			j.cycleMu.Unlock()
 			if errors.Is(err, context.Canceled) {
@@ -496,8 +475,9 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 }
 
 // RunScheduledPass performs one reconciliation pass with the always-on
-// loop's full coverage lifecycle — withdraw, reconcile, publish, under the
-// cycle mutex — for a caller that owns the cadence (the §5.16 durable
+// loop's full coverage lifecycle — reconcile, then publish or, on a
+// pass-wide failure, withdraw, under the cycle mutex — for a caller that owns
+// the cadence (the §5.16 durable
 // scheduler's janitor kind). The janitor keeps ownership of what a pass
 // means and what coverage it publishes; only the ticker moved out. Coverage
 // persists between scheduled passes exactly as it does between always-on
@@ -518,9 +498,9 @@ func (j *InstallationJanitor) RunScheduledPass(ctx context.Context) error {
 	}
 	done := j.beginPublishedPass()
 	defer j.endPublishedPass(done)
-	j.withdrawCoverage()
 	_, pass, err := j.runCycle(ctx)
 	if err != nil {
+		j.withdrawCoverage()
 		return err
 	}
 	j.publishPass(pass)

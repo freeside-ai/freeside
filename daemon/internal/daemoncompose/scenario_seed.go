@@ -244,7 +244,7 @@ func seedScenarioRecords(
 		}
 		for _, reviewer := range fake.ReviewIdentities() {
 			if err := tx.RecordUsagePool(ctx, domain.UsagePool{
-				ID: reviewer.EffectiveUsagePool(), Provider: reviewer.Provider, MaxParallelExecutions: 4,
+				ID: reviewer.EffectiveUsagePool(), Provider: reviewer.Provider, MaxParallelExecutions: 4, MaxCallsPerSite: 1,
 			}, now); err != nil {
 				return err
 			}
@@ -277,7 +277,7 @@ func seedScenarioSubscription(
 ) (domain.EnrollmentGeneration, error) {
 	identity, enrollment := subscription.Identity, subscription.Enrollment
 	if err := tx.RecordUsagePool(ctx, domain.UsagePool{
-		ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 4,
+		ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 4, MaxCallsPerSite: 1,
 	}, now); err != nil {
 		return domain.EnrollmentGeneration{}, err
 	}

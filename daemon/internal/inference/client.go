@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -52,8 +51,7 @@ type Client struct {
 	ledger     *ledger
 	advisory   AdvisoryWriter
 	now        func() time.Time
-	inFlightMu sync.Mutex
-	inFlight   map[string]bool
+	slots      *callSlots
 }
 
 // New constructs a client. A nil RoleSource, or a resolved role with a nil
@@ -167,7 +165,7 @@ func New(cfg Config) (*Client, error) {
 		logger: cfg.Logger,
 		roles:  cfg.Roles, health: cfg.Health, callLaunch: callLaunch,
 		sites: sites, siteRoles: siteRoles, ledger: ledger, advisory: cfg.Advisory,
-		now: cfg.Now, inFlight: map[string]bool{},
+		now: cfg.Now, slots: newCallSlots(),
 	}, nil
 }
 
@@ -192,6 +190,10 @@ type admittedCall struct {
 	credential Secret
 	// launch is the model and effort the driver passes for the admitted agent.
 	launch domain.AgentLaunchSelection
+	// pool is the usage pool the call draws on and maxCalls that pool's call
+	// limit per site, as the source read them for this admission.
+	pool     domain.UsagePoolID
+	maxCalls int
 }
 
 // admit resolves the site's role and runs the wardless admission on what the
@@ -221,6 +223,10 @@ func admitRole(
 	}
 	if !resolved.CredentialSource.valid() {
 		return admittedCall{}, fmt.Errorf("role %s: credential source %q is unknown", role, resolved.CredentialSource)
+	}
+	if resolved.UsagePool == "" || resolved.MaxCallsPerSite < 1 {
+		return admittedCall{}, fmt.Errorf("role %s: usage pool %q with call limit %d cannot place a call",
+			role, resolved.UsagePool, resolved.MaxCallsPerSite)
 	}
 	admission, err := domain.AdmitWardlessRole(domain.WardlessAdmissionInput{
 		Role: role, Line: resolved.Line, LineupRevision: resolved.LineupRevision,
@@ -289,6 +295,7 @@ func admitRole(
 		identity: identity, producer: resolved.Route.ServiceOperator + "/" + selection.ModelID,
 		prompt: prompt, driver: resolved.Driver, credential: resolved.Credential,
 		launch: domain.AgentLaunchSelection{RouteModelID: model, RequestedEffort: requested, NativeEffort: nativeEffort},
+		pool:   resolved.UsagePool, maxCalls: resolved.MaxCallsPerSite,
 	}, nil
 }
 
@@ -337,41 +344,54 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		return fallback(site, unboundProducer, FallbackRoleSourceAbsent), nil
 	}
 	role := c.siteRoles[site.ID]
-	admitted, err := c.admit(ctx, site, role)
-	switch {
-	case errors.Is(err, ErrRoleOff):
-		c.reportResolved(ctx, role)
-		return fallback(site, unboundProducer, FallbackRoleOff), nil
-	case err != nil:
-		if c.health != nil {
-			c.health.RoleUnbound(ctx, role, err.Error())
+	// A call takes a place at its site on the pool it draws on, waiting its
+	// turn when the pool's call limit is reached, and never falls back
+	// because another task is calling. The wait comes before the ledger
+	// reservation and the deadline, so neither counts it. Admission computes
+	// the credential window from now, so a call that waited is admitted
+	// again; if that admission names another pool, the call gives its place
+	// back and waits there.
+	var (
+		held     *callSlotKey
+		prepared preparedCall
+	)
+	releaseHeld := func() {
+		if held != nil {
+			c.slots.release(*held)
+			held = nil
 		}
-		return fallback(site, unboundProducer, FallbackRoleUnbound), nil
 	}
-	c.reportResolved(ctx, role)
-	outbound := make(map[string]string, len(fields))
-	for name, field := range fields {
-		value := field.Value
-		if secret := admitted.credential.Reveal(); secret != "" {
-			value = redactCredential(value, secret)
+	for {
+		var refused *CallResult
+		prepared, refused = c.prepare(ctx, site, role, fields)
+		if refused != nil {
+			releaseHeld()
+			return *refused, nil
 		}
-		outbound[name] = value
+		key := callSlotKey{pool: prepared.admitted.pool, site: site.ID}
+		if held != nil && *held == key {
+			break
+		}
+		releaseHeld()
+		waited, err := c.slots.acquire(ctx, key, prepared.admitted.maxCalls)
+		if err != nil {
+			// A caller that ends while it waits gets what a canceled call
+			// gets: there is no record, since none was reserved.
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fallback(site, prepared.admitted.producer, FallbackDeadlineExceeded), nil
+			}
+			return fallback(site, prepared.admitted.producer, FallbackDriverFailed), nil
+		}
+		held = &key
+		if !waited {
+			break
+		}
 	}
-	body, err := json.Marshal(outbound)
-	if err != nil || len(body) > site.MaxInputBytes {
-		return fallback(site, admitted.producer, FallbackInputTooLarge), nil
-	}
-	digest := contentaddr.Sum(body)
-	if admitted.driver == nil {
-		return fallback(site, admitted.producer, FallbackDriverAbsent), nil
-	}
-	if !c.beginDriver(site.ID) {
-		return fallback(site, admitted.producer, FallbackCallInFlight), nil
-	}
+	key, admitted, outbound, digest := *held, prepared.admitted, prepared.outbound, prepared.digest
 	record, err := c.ledger.reserveCall(site, project, root, admitted.producer, digest, admitted.identity)
 	c.reportLedger(ctx)
 	if err != nil {
-		c.endDriver(site.ID)
+		c.slots.release(key)
 		reason := FallbackLedgerUnavailable
 		if errors.Is(err, errBudgetExhausted) {
 			reason = FallbackBudgetExhausted
@@ -412,13 +432,14 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		select {
 		case completed <- completion{response: response, err: err}:
 		case <-abandoned:
-			c.endDriver(site.ID)
+			// An abandoned call keeps its place until the provider call ends.
+			c.slots.release(key)
 		}
 	}()
 	var response Response
 	select {
 	case result := <-completed:
-		defer c.endDriver(site.ID)
+		defer c.slots.release(key)
 		if result.err != nil {
 			if errors.Is(result.err, context.DeadlineExceeded) || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
 				return fail(FallbackDeadlineExceeded), nil
@@ -458,6 +479,54 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		return fail(FallbackAuditPersistenceFailed), err
 	}
 	return result, nil
+}
+
+// preparedCall is a call admitted and checked up to its ledger reservation:
+// the admission and the redacted request body it sends.
+type preparedCall struct {
+	admitted admittedCall
+	outbound map[string]string
+	digest   string
+}
+
+// prepare admits the site's role and builds the redacted request, or returns
+// the fallback that ends the call first. It runs again after a wait, so the
+// admission, redaction, and driver are the ones the call runs with.
+func (c *Client) prepare(
+	ctx context.Context, site Site, role domain.RoleName, fields map[string]InputField,
+) (preparedCall, *CallResult) {
+	refuse := func(producer string, reason FallbackReason) (preparedCall, *CallResult) {
+		result := fallback(site, producer, reason)
+		return preparedCall{}, &result
+	}
+	admitted, err := c.admit(ctx, site, role)
+	switch {
+	case errors.Is(err, ErrRoleOff):
+		c.reportResolved(ctx, role)
+		return refuse(unboundProducer, FallbackRoleOff)
+	case err != nil:
+		if c.health != nil {
+			c.health.RoleUnbound(ctx, role, err.Error())
+		}
+		return refuse(unboundProducer, FallbackRoleUnbound)
+	}
+	c.reportResolved(ctx, role)
+	outbound := make(map[string]string, len(fields))
+	for name, field := range fields {
+		value := field.Value
+		if secret := admitted.credential.Reveal(); secret != "" {
+			value = redactCredential(value, secret)
+		}
+		outbound[name] = value
+	}
+	body, err := json.Marshal(outbound)
+	if err != nil || len(body) > site.MaxInputBytes {
+		return refuse(admitted.producer, FallbackInputTooLarge)
+	}
+	if admitted.driver == nil {
+		return refuse(admitted.producer, FallbackDriverAbsent)
+	}
+	return preparedCall{admitted: admitted, outbound: outbound, digest: contentaddr.Sum(body)}, nil
 }
 
 // RoleCheck is one judgment role's standing admission result.
@@ -598,22 +667,6 @@ func redactCredential(value, secret string) string {
 	}
 	escaped := string(encoded[1 : len(encoded)-1])
 	return strings.ReplaceAll(value, escaped, "[REDACTED]")
-}
-
-func (c *Client) beginDriver(siteID string) bool {
-	c.inFlightMu.Lock()
-	defer c.inFlightMu.Unlock()
-	if c.inFlight[siteID] {
-		return false
-	}
-	c.inFlight[siteID] = true
-	return true
-}
-
-func (c *Client) endDriver(siteID string) {
-	c.inFlightMu.Lock()
-	defer c.inFlightMu.Unlock()
-	delete(c.inFlight, siteID)
 }
 
 func fallback(site Site, producer string, reason FallbackReason) CallResult {

@@ -140,7 +140,7 @@ func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *stor
 		if f.poolLimit > 0 {
 			if err := tx.RecordUsagePool(ctx, domain.UsagePool{
 				ID: f.identity.EffectiveUsagePool(), Provider: f.identity.Provider,
-				MaxParallelExecutions: f.poolLimit,
+				MaxParallelExecutions: f.poolLimit, MaxCallsPerSite: 1,
 			}, admissionEpoch); err != nil {
 				return err
 			}

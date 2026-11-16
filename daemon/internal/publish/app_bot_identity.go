@@ -27,10 +27,14 @@ type GitHubAppBotIdentityResolver struct {
 	baseURL  string
 	now      func() time.Time
 
-	// mu is held through authority resolution and a possible GitHub bot lookup
-	// so concurrent invocation paths cannot burst either endpoint.
-	mu    sync.Mutex
-	cache map[string]appBotIdentityCacheEntry
+	// mu guards only cache and looking. It is never held across the token
+	// source or the GitHub bot lookup, so one repository's slow call never
+	// delays another's identity. Cold callers for one repository wait on
+	// the lookup already running for it (looking), so they don't burst the
+	// identity endpoint.
+	mu      sync.Mutex
+	cache   map[string]appBotIdentityCacheEntry
+	looking map[string]chan struct{}
 }
 
 type appBotIdentityCacheEntry struct {
@@ -59,7 +63,7 @@ func NewGitHubAppBotIdentityResolver(
 	return &GitHubAppBotIdentityResolver{
 		tokens: tokens, keystore: keystore, client: noRedirect(client),
 		baseURL: strings.TrimRight(baseURL, "/"), now: now,
-		cache: map[string]appBotIdentityCacheEntry{},
+		cache: map[string]appBotIdentityCacheEntry{}, looking: map[string]chan struct{}{},
 	}, nil
 }
 
@@ -90,9 +94,7 @@ func (r *GitHubAppBotIdentityResolver) Resolve(
 	if r == nil || r.tokens == nil || r.keystore == nil || r.client == nil || r.now == nil {
 		return AppBotIdentity{}, errors.New("app bot identity resolver: nil dependency")
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.revalidateLocked(ctx, repo)
+	return r.revalidate(ctx, repo)
 }
 
 // Revalidate names the import boundary's explicit current-binding check.
@@ -103,15 +105,13 @@ func (r *GitHubAppBotIdentityResolver) Revalidate(
 	if r == nil || r.tokens == nil || r.keystore == nil || r.client == nil || r.now == nil {
 		return AppBotIdentity{}, errors.New("app bot identity resolver: nil dependency")
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.revalidateLocked(ctx, repo)
+	return r.revalidate(ctx, repo)
 }
 
-// revalidateLocked authenticates the selected registration/token binding and
-// only then trusts or refreshes the returned GitHub bot object. r.mu is held so
-// concurrent cold callers cannot burst either authority or identity endpoints.
-func (r *GitHubAppBotIdentityResolver) revalidateLocked(
+// revalidate authenticates the selected registration/token binding and only
+// then trusts or refreshes the returned GitHub bot object. Every call takes
+// the token first, so a cache hit still runs the current-authority check.
+func (r *GitHubAppBotIdentityResolver) revalidate(
 	ctx context.Context,
 	repo string,
 ) (AppBotIdentity, error) {
@@ -149,17 +149,39 @@ func (r *GitHubAppBotIdentityResolver) revalidateLocked(
 			ErrAppBotIdentityMismatch,
 		)
 	}
-	if cached, ok := r.cache[repo]; ok &&
-		cached.repo == repo && cached.registrationID == token.RegistrationID &&
-		cached.installationID == token.InstallationID &&
-		cached.repositoryID == token.RepositoryID && cached.appSlug == selected.Slug &&
-		cached.tokenExpiresAt.Equal(token.ExpiresAt) &&
-		r.now().Before(cached.tokenExpiresAt.Add(-tokenExpirySkew)) {
-		return cached.identity, nil
+	for {
+		r.mu.Lock()
+		cached, ok := r.cache[repo]
+		if ok &&
+			cached.repo == repo && cached.registrationID == token.RegistrationID &&
+			cached.installationID == token.InstallationID &&
+			cached.repositoryID == token.RepositoryID && cached.appSlug == selected.Slug &&
+			cached.tokenExpiresAt.Equal(token.ExpiresAt) &&
+			r.now().Before(cached.tokenExpiresAt.Add(-tokenExpirySkew)) {
+			r.mu.Unlock()
+			return cached.identity, nil
+		}
+		running, busy := r.looking[repo]
+		if !busy {
+			break
+		}
+		r.mu.Unlock()
+		select {
+		case <-running:
+		case <-ctx.Done():
+			return AppBotIdentity{}, fmt.Errorf("resolve App bot identity: %w", ctx.Err())
+		}
 	}
+	done := make(chan struct{})
+	r.looking[repo] = done
+	r.mu.Unlock()
 	identity, err := lookupAppBotIdentity(
 		ctx, *selected, r.client, r.baseURL, token.Token.Reveal(),
 	)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.looking, repo)
+	close(done)
 	if err != nil {
 		return AppBotIdentity{}, fmt.Errorf("resolve App bot identity: %w", err)
 	}

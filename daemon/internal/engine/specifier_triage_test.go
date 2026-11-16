@@ -100,10 +100,29 @@ func unregisteredTriageFixtureOn(t *testing.T, output, model string) (*agentAdmi
 }
 
 // admitSpecifier runs the engine's admission of the fixture run's
-// specification stage under invocation.
+// specification stage under invocation. Admission holds while the task's
+// triage call runs outside it, so this waits for that call and admits again,
+// as the next pass would.
 func (f *agentAdmissionFixture) admitSpecifier(
 	t *testing.T, invocation domain.InvocationID,
 ) (domain.ExecutionAdmission, error) {
+	t.Helper()
+	admission, admitted, err := f.admitSpecifierOnce(t, invocation)
+	if errors.Is(err, errSpecifierTriagePending) {
+		f.engine.waitOffPass()
+		admission, admitted, err = f.admitSpecifierOnce(t, invocation)
+	}
+	if err == nil && !admitted {
+		t.Fatalf("admitAttempt(%s) admitted nothing", invocation)
+	}
+	return admission, err
+}
+
+// admitSpecifierOnce is one admission of the fixture run's specification
+// stage under invocation, as one pass makes it.
+func (f *agentAdmissionFixture) admitSpecifierOnce(
+	t *testing.T, invocation domain.InvocationID,
+) (domain.ExecutionAdmission, bool, error) {
 	t.Helper()
 	message, err := domain.NewMessage("message-1", "conversation-1", domain.AuthorUser, "please specify", nil, agentTestAt)
 	if err != nil {
@@ -117,10 +136,7 @@ func (f *agentAdmissionFixture) admitSpecifier(
 	}
 	stage := domain.Stage{ID: specificationStageID(f.run.ID), RunID: f.run.ID, Name: specificationStageName}
 	admission, _, admitted, err := f.engine.admitAttempt(t.Context(), binding, stage, invocation)
-	if err == nil && !admitted {
-		t.Fatalf("admitAttempt(%s) admitted nothing", invocation)
-	}
-	return admission, err
+	return admission, admitted, err
 }
 
 // triageState reads the fixture task's triage record and lines.

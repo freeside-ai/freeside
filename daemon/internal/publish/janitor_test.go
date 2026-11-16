@@ -772,11 +772,13 @@ func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 		time.Sleep(interval)
 		<-secondStarted
 		synctest.Wait()
-		if janitor.ActiveFor(501) {
-			t.Fatal("janitor left stale coverage active while the next pass was blocked")
+		// The last complete pass's coverage is served while the next one runs
+		// (#3215); shutdown, like a failed pass, withdraws it.
+		if !janitor.ActiveFor(501) {
+			t.Fatal("janitor withdrew the last pass's coverage while the next pass was blocked")
 		}
-		if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
-			t.Fatal("trusted grant remained allowed while the next pass was blocked")
+		if !janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+			t.Fatal("trusted grant was denied while the next pass was blocked")
 		}
 		stop()
 		if janitor.ActiveFor(501) {

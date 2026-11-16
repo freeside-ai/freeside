@@ -319,13 +319,12 @@ func (failingInputReadCloser) Close() error {
 }
 
 type stubJanitorRunner struct {
-	active         bool
-	passes         int
-	runErr         error
-	stableCoverage int
-	faults         []publish.JanitorRegistrationFault
-	churn          []publish.JanitorRegistrationChurn
-	incomplete     []publish.JanitorRegistrationIncomplete
+	active     bool
+	passes     int
+	runErr     error
+	faults     []publish.JanitorRegistrationFault
+	churn      []publish.JanitorRegistrationChurn
+	incomplete []publish.JanitorRegistrationIncomplete
 }
 
 func (j *stubJanitorRunner) RunScheduledPass(context.Context) error {
@@ -338,11 +337,6 @@ func (j *stubJanitorRunner) RunScheduledPass(context.Context) error {
 }
 
 func (j *stubJanitorRunner) ActiveFor(int64) bool { return j.active }
-
-func (j *stubJanitorRunner) WithStableCoverage(fn func() error) error {
-	j.stableCoverage++
-	return fn()
-}
 
 func (j *stubJanitorRunner) RegistrationFaults() []publish.JanitorRegistrationFault {
 	return j.faults
@@ -369,12 +363,6 @@ func TestJanitorSessionPrimesCoverageSynchronously(t *testing.T) {
 	}
 	if janitor.passes != 1 || !janitor.ActiveFor(4385298) {
 		t.Fatalf("startup pass = %d, active = %v", janitor.passes, janitor.active)
-	}
-	if err := session.WithStableCoverage(func() error { return nil }); err != nil {
-		t.Fatalf("WithStableCoverage: %v", err)
-	}
-	if janitor.stableCoverage != 1 {
-		t.Fatalf("stable coverage calls = %d, want 1", janitor.stableCoverage)
 	}
 	// The scheduler-fired pass reaches the same lifecycle.
 	if err := session.RunScheduledPass(t.Context()); err != nil {

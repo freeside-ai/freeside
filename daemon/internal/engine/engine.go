@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -70,8 +71,18 @@ type Engine struct {
 	taskNamesActive     map[domain.TaskID]struct{}
 	taskNamesFullWarned bool
 
-	// triageMu serializes specifier triage calls (triageSpecifier).
-	triageMu sync.Mutex
+	// The network calls a pass starts outside itself (#3215): a task's
+	// specifier triage, a discussion's reply by its intent's idempotency
+	// key, each with what it reports to the next pass, a specification
+	// attempt's research fetches by its invocation, and a failed run's
+	// advisory diagnosis. Run joins them before it returns.
+	triages            keyedrun.Group[domain.TaskID]
+	triageOutcomes     offPassOutcomes
+	discussions        keyedrun.Group[string]
+	discussionOutcomes offPassOutcomes
+	research           researchFetches
+	diagnoses          keyedrun.Group[domain.RunID]
+
 	// startedRoots holds the root implementation invocations this process
 	// started (domain.InvocationID keys). Their loss is a live failure, not
 	// one a restart caused, so it keeps its card (daemon_rerun.go).
@@ -286,6 +297,11 @@ type ReconcileResult struct {
 func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	e.reconcileMu.Lock()
 	defer e.reconcileMu.Unlock()
+	// A triage call that failed outside the last pass stops this one, as it
+	// stopped the pass that made the call before the call moved out (#3215).
+	if _, err := e.triageOutcomes.collect(); err != nil {
+		return ReconcileResult{}, err
+	}
 	if e.inference != nil {
 		_ = e.inference.Maintain(ctx)
 	}
@@ -428,7 +444,8 @@ func (e *Engine) beginPublicationPass(ctx context.Context) (end func(), run bool
 // correctness error stops the loop instead of being hidden by retries; a
 // caller may restart after repairing the durable state or driver boundary.
 // Run also owns the advisory task-name worker and joins it before returning;
-// direct Reconcile calls only queue names and do not advance that worker.
+// direct Reconcile calls only queue names and do not advance that worker. It
+// also joins the network calls passes started outside themselves.
 //
 // It does not advance the production publication lane; a composition that
 // configured one runs RunProductionPublications beside this loop.
@@ -442,11 +459,21 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
 	defer func() {
 		cancel()
 		<-namingDone
+		e.waitOffPass()
 	}()
 	return runReconcileLoop(ctx, e.logger, "run engine", interval, func(ctx context.Context) error {
 		_, err := e.Reconcile(ctx)
 		return err
 	})
+}
+
+// waitOffPass blocks until every network call a pass started outside itself
+// has returned, so none outlives the store.
+func (e *Engine) waitOffPass() {
+	e.triages.Wait()
+	e.discussions.Wait()
+	e.research.runs.Wait()
+	e.diagnoses.Wait()
 }
 
 // RunProductionPublications advances the production publication lane on its

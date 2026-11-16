@@ -1006,9 +1006,11 @@ func testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
 }
 
 // TestInstallationJanitorFaultsOutliveTheGateTheyExplain keeps the diagnosis
-// readable. Coverage is withdrawn before every pass, but clearing faults with
-// it would report a registration that has failed for hours as merely unvisited
-// for as long as each pass takes.
+// readable: clearing faults when a pass starts would report a registration
+// that has failed for hours as merely unvisited for as long as each pass
+// takes. While the pass runs, the covered registration keeps the last pass's
+// coverage and is answered at once; the faulted one waits for the pass and is
+// still denied (#3215).
 func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
@@ -1047,13 +1049,12 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 
 	awaitFault(t, janitor, 601)
 	<-blocked
-	if janitor.ActiveFor(501) {
-		t.Error("coverage survived into the next pass")
+	if !janitor.ActiveFor(501) {
+		t.Error("the last pass's coverage was withdrawn while the next pass runs")
 	}
-	awaited := make(chan bool, 1)
-	go func() {
-		awaited <- janitor.AwaitAllowsRepository(501, 701, fixtureRepositoryID)
-	}()
+	if !janitor.AwaitAllowsRepository(501, 701, fixtureRepositoryID) {
+		t.Fatal("coordinated gate denied the last pass's coverage while the next pass runs")
+	}
 	faulted := make(chan bool, 1)
 	go func() {
 		faulted <- janitor.AwaitAllowsRepository(601, 801, fixtureRepositoryID)
@@ -1067,8 +1068,8 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 		pending <- ready
 	}()
 	select {
-	case <-awaited:
-		t.Fatal("coordinated onboarding gate observed transient pass withdrawal")
+	case <-faulted:
+		t.Fatal("coordinated gate answered for the faulted registration before the pass published")
 	case <-time.After(20 * time.Millisecond):
 	}
 	faults := janitor.RegistrationFaults()
@@ -1076,9 +1077,6 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 		t.Errorf("faults = %+v mid-pass, want the last pass's fault for 601", faults)
 	}
 	close(release)
-	if allowed := <-awaited; !allowed {
-		t.Fatal("coordinated onboarding gate rejected the newly completed clean pass")
-	}
 	if allowed := <-faulted; allowed {
 		t.Fatal("coordinated onboarding gate retained coverage after a registration fault")
 	}
@@ -1088,11 +1086,12 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 	assertShutdown(t, cancel, done)
 }
 
-// TestResolverWaitsForScheduledPassPublication reproduces run 482's outage
-// shape: the active-resource cadence enters resolution after a scheduled pass
-// withdraws coverage but before that clean pass republishes it. The resolver
-// must wait for the safety pass, not misreport a durable inactive janitor.
-func TestResolverWaitsForScheduledPassPublication(t *testing.T) {
+// TestResolverServesCoverageDuringScheduledPass covers run 482's outage
+// shape: the active-resource cadence enters resolution while a scheduled pass
+// is in progress. The resolver must neither misreport a durable inactive
+// janitor nor wait on the pass's GitHub calls: the last complete pass's
+// coverage is served until this pass publishes (#3215).
+func TestResolverServesCoverageDuringScheduledPass(t *testing.T) {
 	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	blocked := make(chan struct{})
@@ -1136,8 +1135,8 @@ func TestResolverWaitsForScheduledPassPublication(t *testing.T) {
 	passDone := make(chan error, 1)
 	go func() { passDone <- janitor.RunScheduledPass(context.Background()) }()
 	<-blocked
-	if janitor.ActiveFor(501) {
-		t.Fatal("scheduled pass did not withdraw coverage")
+	if !janitor.ActiveFor(501) {
+		t.Fatal("scheduled pass withdrew the last pass's coverage while it runs")
 	}
 
 	resolver := publish.NewInstallationResolverWithJanitor(
@@ -1152,21 +1151,62 @@ func TestResolverWaitsForScheduledPassPublication(t *testing.T) {
 		binding, err := resolver.Resolve(context.Background(), "operator")
 		resolved <- resolveResult{binding: binding, err: err}
 	}()
+	var result resolveResult
 	select {
-	case result := <-resolved:
-		t.Fatalf("resolution escaped the in-progress pass: %+v, %v", result.binding, result.err)
-	case <-time.After(20 * time.Millisecond):
+	case result = <-resolved:
+	case <-time.After(10 * time.Second):
+		t.Fatal("resolution waited on the in-progress pass")
 	}
 	close(release)
 	if err := <-passDone; err != nil {
 		t.Fatalf("scheduled pass: %v", err)
 	}
-	result := <-resolved
 	if result.err != nil {
-		t.Fatalf("Resolve after pass publication: %v", result.err)
+		t.Fatalf("Resolve during the pass: %v", result.err)
 	}
 	if result.binding.RegistrationID != 501 || result.binding.InstallationID != 701 {
 		t.Fatalf("binding = %+v, want registration 501 installation 701", result.binding)
+	}
+}
+
+// TestScheduledPassFailureWithdrawsCoverage: coverage is served while a pass
+// runs only because a pass that fails withdraws it, so a pass-wide failure
+// leaves no registration covered (#3215).
+func TestScheduledPassFailureWithdrawsCoverage(t *testing.T) {
+	t.Parallel()
+	ks := publicJanitorKeystore(t)
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			_, _ = io.WriteString(w, operatorInstallations)
+			return
+		}
+		if !handleExactGrant(w, r, fixtureRepositoryID) {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})))
+	defer srv.Close()
+	janitor := newJanitor(
+		t, ks, srv,
+		publicAuthority(publish.TrustedInstallation{
+			RegistrationID: 501, InstallationID: 701,
+			Account: "operator", AccountID: 101,
+			RepositoryIDs: []int64{fixtureRepositoryID},
+		}),
+		&removalRecorder{}, 4,
+	)
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("prime janitor: %v", err)
+	}
+	if !janitor.ActiveFor(501) {
+		t.Fatal("priming pass did not publish coverage")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := janitor.RunScheduledPass(canceled); err == nil {
+		t.Fatal("pass under a canceled context succeeded")
+	}
+	if janitor.ActiveFor(501) || janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+		t.Fatal("failed pass left the last pass's coverage served")
 	}
 }
 

@@ -19,6 +19,11 @@ type UsagePool struct {
 	// pool at once. It is at least one, since a pool that can run nothing
 	// would hold its work forever.
 	MaxParallelExecutions int `json:"max_parallel_executions"`
+	// MaxCallsPerSite is how many judgment calls may run at once at one
+	// inference site on this pool's credentials. A call past it waits its
+	// turn instead of falling back, so it is at least one for the same
+	// reason as MaxParallelExecutions. Calls hold no execution slot.
+	MaxCallsPerSite int `json:"max_calls_per_site"`
 }
 
 // Validate reports whether the pool declaration is well-formed.
@@ -32,6 +37,10 @@ func (p UsagePool) Validate() error {
 	if p.MaxParallelExecutions < 1 {
 		return fmt.Errorf("usage pool %s max_parallel_executions %d: %w",
 			p.ID, p.MaxParallelExecutions, ErrNonPositive)
+	}
+	if p.MaxCallsPerSite < 1 {
+		return fmt.Errorf("usage pool %s max_calls_per_site %d: %w",
+			p.ID, p.MaxCallsPerSite, ErrNonPositive)
 	}
 	return nil
 }
@@ -53,7 +62,7 @@ func (e *UsagePoolExhaustedError) Error() string {
 func (e *UsagePoolExhaustedError) Is(target error) bool { return target == ErrUsagePoolExhausted }
 
 // ValidateUsagePoolTransition reports whether updated is a legal successor to
-// the stored pool old. A pool's id and provider are fixed; its limit may
+// the stored pool old. A pool's id and provider are fixed; its limits may
 // change freely.
 func ValidateUsagePoolTransition(old, updated UsagePool) error {
 	if updated.ID != old.ID {

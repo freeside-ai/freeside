@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -58,13 +59,13 @@ type IssueCommentDispatcher struct {
 	now      func() time.Time
 	wake     chan struct{}
 
-	// mu serializes passes, so a wake during a sweep cannot drive one intent
+	// projects runs each project's comments apart, so one repository's
+	// stalled GitHub call holds up only its own comments (#3215). A comment
+	// belongs to one project, so overlapping passes never drive one intent
 	// from two goroutines.
-	mu              sync.Mutex
-	listingFailures map[domain.ProposalInstanceID]int
-	// failingSince is when each comment's current run of failed passes began.
-	failingSince map[domain.ProposalInstanceID]time.Time
-	notices      *proposalNotices
+	projects keyedrun.Group[domain.ProjectID]
+	failures *proposalFailures
+	notices  *proposalNotices
 }
 
 // NewIssueCommentDispatcher wires a dispatcher. tokens must mint the filing
@@ -82,8 +83,7 @@ func NewIssueCommentDispatcher(
 	return &IssueCommentDispatcher{
 		store: s, forge: newForge(tokens, client, strings.TrimRight(baseURL, "/")),
 		identity: identity, auditor: auditor, now: now, wake: make(chan struct{}, 1),
-		listingFailures: map[domain.ProposalInstanceID]int{},
-		failingSince:    map[domain.ProposalInstanceID]time.Time{},
+		failures: newProposalFailures(),
 		notices: newProposalNotices(issueCommentItemPrefix,
 			[]string{issueCommentStalledCode, issueCommentUnreadableCode},
 			"Resolved when the condition holding the issue comment cleared.", now),
@@ -111,10 +111,17 @@ func (d *IssueCommentDispatcher) Run(ctx context.Context, interval time.Duration
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	// Each pass runs on its own goroutine, so a pass waiting on a stalled
+	// project never delays the next tick or wake; that pass skips the busy
+	// project.
+	var passes sync.WaitGroup
+	defer passes.Wait()
 	for {
-		if err := d.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
-			report(err)
-		}
+		passes.Go(func() {
+			if err := d.Pass(ctx); err != nil && ctx.Err() == nil && report != nil {
+				report(err)
+			}
+		})
 		select {
 		case <-ctx.Done():
 			return nil
@@ -124,36 +131,70 @@ func (d *IssueCommentDispatcher) Run(ctx context.Context, interval time.Duration
 	}
 }
 
-// Pass drives every approved comment one step at a time, oldest first. An
-// error on one comment is collected and does not stop the pass.
+// Pass drives every approved comment one step at a time, oldest first within
+// each project, one goroutine per project, and returns once the projects it
+// started finish. A project whose previous run has not returned is skipped.
+// An error on one comment is collected and does not stop the pass.
 func (d *IssueCommentDispatcher) Pass(ctx context.Context) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	comments, unreadable, err := d.discover(ctx)
 	if err != nil {
 		return fmt.Errorf("issue comment: %w", err)
 	}
-	d.notices.startPass()
-	var errs []error
+	present := map[domain.ProposalInstanceID]bool{}
+	items := make([]issueCommentItem, 0, len(unreadable)+len(comments))
 	for _, ref := range unreadable {
-		errs = append(errs, d.reportUnreadable(ctx, ref.filingRef, ref.err))
+		present[ref.instanceID] = true
+		items = append(items, issueCommentItem{projectID: ref.projectID, unreadable: &ref})
 	}
 	for _, comment := range comments {
-		if ctx.Err() != nil {
-			return errors.Join(append(errs, ctx.Err())...)
-		}
-		err := d.drive(ctx, comment)
-		if err == nil {
-			delete(d.failingSince, comment.instanceID)
+		present[comment.instanceID] = true
+		items = append(items, issueCommentItem{projectID: comment.projectID, comment: &comment})
+	}
+	d.notices.startPass(present)
+	parts := keyedrun.Partition(items, func(item issueCommentItem) domain.ProjectID { return item.projectID })
+	err = keyedrun.Run(&d.projects, parts, func(items []issueCommentItem) error {
+		return d.driveProject(ctx, items)
+	})
+	if ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	return errors.Join(err, d.notices.resolveCleared(ctx, d.store))
+}
+
+// issueCommentItem is one comment a pass drives, or one it reports as
+// unreadable.
+type issueCommentItem struct {
+	projectID  domain.ProjectID
+	unreadable *unreadableComment
+	comment    *approvedComment
+}
+
+// driveProject drives one project's comments in order. Each proposal's
+// notice holds count from its begin to its finish.
+func (d *IssueCommentDispatcher) driveProject(ctx context.Context, items []issueCommentItem) error {
+	var errs []error
+	for _, item := range items {
+		if ref := item.unreadable; ref != nil {
+			d.notices.begin(ref.instanceID)
+			errs = append(errs, d.reportUnreadable(ctx, ref.filingRef, ref.err))
+			d.notices.finish(ref.instanceID)
 			continue
 		}
-		errs = append(errs, fmt.Errorf("issue comment %q: %w", comment.instanceID, err))
-		if ctx.Err() == nil && !errors.Is(err, errIssueCommentUnreadable) {
-			errs = append(errs, d.noteStall(ctx, comment.filingRef))
+		comment := *item.comment
+		if ctx.Err() != nil {
+			return errors.Join(errs...)
 		}
-	}
-	if ctx.Err() == nil {
-		errs = append(errs, d.notices.resolveCleared(ctx, d.store))
+		d.notices.begin(comment.instanceID)
+		err := d.drive(ctx, comment)
+		if err == nil {
+			d.failures.passed(comment.instanceID)
+		} else {
+			errs = append(errs, fmt.Errorf("issue comment %q: %w", comment.instanceID, err))
+			if ctx.Err() == nil && !errors.Is(err, errIssueCommentUnreadable) {
+				errs = append(errs, d.noteStall(ctx, comment.filingRef))
+			}
+		}
+		d.notices.finish(comment.instanceID)
 	}
 	return errors.Join(errs...)
 }
@@ -166,9 +207,8 @@ var errIssueCommentUnreadable = errors.New("issue comment does not read")
 // followUpFilingStallNoticeAfter. The run of failures is held in memory.
 func (d *IssueCommentDispatcher) noteStall(ctx context.Context, ref filingRef) error {
 	d.notices.hold(ref.instanceID, issueCommentStalledCode)
-	since, failing := d.failingSince[ref.instanceID]
+	since, failing := d.failures.failing(ref.instanceID, d.now())
 	if !failing {
-		d.failingSince[ref.instanceID] = d.now()
 		return nil
 	}
 	if d.now().Before(since.Add(followUpFilingStallNoticeAfter)) {
@@ -722,21 +762,20 @@ func (d *IssueCommentDispatcher) settle(ctx context.Context, comment approvedCom
 		// A definite answer, not a listing failure: it does not wait out the
 		// listing bound.
 		if fault := commentIdentityFault(intent.PreDispatch, target.bot); fault != "" {
-			delete(d.listingFailures, comment.instanceID)
+			d.failures.listingSettled(comment.instanceID)
 			return d.recordAmbiguous(ctx, comment, view, fault)
 		}
 		candidates, err = d.candidates(ctx, intent, target)
 	}
 	if err != nil {
-		d.listingFailures[comment.instanceID]++
-		if d.listingFailures[comment.instanceID] < followUpFilingListingBound {
+		if d.failures.listingFailed(comment.instanceID) < followUpFilingListingBound {
 			return err
 		}
-		delete(d.listingFailures, comment.instanceID)
+		d.failures.listingSettled(comment.instanceID)
 		return d.recordAmbiguous(ctx, comment, view, fmt.Sprintf(
 			"the listing of the issue's comments could not complete in %d tries", followUpFilingListingBound))
 	}
-	delete(d.listingFailures, comment.instanceID)
+	d.failures.listingSettled(comment.instanceID)
 	if len(candidates) != 1 {
 		return d.recordAmbiguous(ctx, comment, view, fmt.Sprintf(
 			"%d comments could be the one this proposal posted", len(candidates)))
