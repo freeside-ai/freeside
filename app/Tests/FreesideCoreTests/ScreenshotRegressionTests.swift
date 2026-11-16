@@ -38,6 +38,14 @@
             let value: DynamicTypeSize
         }
 
+        /// A Mac daemon that refuses Get Code, for the pairing screen's
+        /// failure notice.
+        private struct RefusingPairingCodeSource: PairingCodeSource {
+            func mint() async throws(PairingCodeFailure) -> MintedPairingCode {
+                throw .refused(exitStatus: 1)
+            }
+        }
+
         private let canvasWidth: CGFloat = 960
         /// A detail column just wide enough for the one-column card at its
         /// cap (R18): the card and the pane's 24pt margins.
@@ -3572,6 +3580,21 @@
                     name: "pairing-awaiting-facts",
                     view: AnyView(
                         PairingView(model: awaitingFacts) { _ in }.screenshotContent(now: screenshotNow))
+                ))
+            // The Mac pairing with its own daemon: Get Code beside the
+            // field, after a request that failed, so the notice draws too.
+            let getCode = PairingModel(
+                client: client,
+                credentials: InMemoryCredentialStore(),
+                displayName: "Operator's Mac",
+                codeSource: RefusingPairingCodeSource()
+            )
+            await getCode.getCode()
+            surfaces.append(
+                Surface(
+                    name: "pairing-get-code",
+                    view: AnyView(
+                        PairingView(model: getCode) { _ in }.screenshotContent(now: screenshotNow))
                 ))
             let taskProposalFacts = Components.Schemas.TaskProposalFactsSnapshot(
                 as_of_revision: 12,
