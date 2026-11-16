@@ -2207,6 +2207,51 @@ func TestGolden(t *testing.T) {
 	}
 	runClocks := *domain.RunClocksOf(clockMilestones, true, ts.Add(time.Hour))
 	runClocksOpen := *domain.RunClocksOf(clockMilestones[:2], false, ts.Add(10*time.Minute))
+	// Work hours (#3241) over the clock fixtures' run: an empty period, the
+	// finished run held before it started, a run that crosses midnight, and
+	// the run still working while a card waited before it started.
+	workHours := func(t *testing.T, period domain.WorkHoursPeriod, asOf time.Time, project *domain.ProjectID,
+		runs []domain.WorkHoursRun, items []domain.AttentionItem,
+	) domain.WorkHours {
+		t.Helper()
+		hours, err := domain.WorkHoursOf(domain.WorkHoursInput{
+			Period: period, AsOf: asOf, ProjectID: project, HoldHistorySince: ts.Add(-24 * time.Hour),
+			Runs: runs, Items: items,
+		})
+		if err != nil {
+			t.Fatalf("work hours fixture: %v", err)
+		}
+		return hours
+	}
+	workHoursDay := domain.WorkHoursPeriod{From: ts, Days: 1, Location: time.UTC}
+	workHoursProject := domain.ProjectID("proj-1")
+	workHoursEmpty := workHours(t, domain.WorkHoursPeriod{From: ts, Days: 2, Location: time.UTC}, ts.Add(time.Hour), nil, nil, nil)
+	workHoursOneTask := workHours(t, workHoursDay, ts.Add(time.Hour), &workHoursProject,
+		[]domain.WorkHoursRun{{
+			RunID: "run-1", TaskID: "task-1", Milestones: clockMilestones, Finished: true,
+			Holds: []domain.RunHoldSpan{{
+				RunID: "run-1", Reason: domain.HoldMachineCapacity, FirstObservedAt: ts.Add(30 * time.Second),
+				LastObservedAt: ts.Add(45 * time.Second), ClearedAt: new(ts.Add(time.Minute)),
+			}},
+		}}, nil)
+	midnight := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	crossingInvocation := domain.InvocationID("inv-crossing")
+	workHoursCrossing := workHours(t, domain.WorkHoursPeriod{From: ts, Days: 2, Location: time.UTC}, midnight.Add(time.Hour), nil,
+		[]domain.WorkHoursRun{{
+			RunID: "run-1", TaskID: "task-1", Finished: true,
+			Milestones: []domain.RunMilestone{
+				{RunID: "run-1", Kind: domain.MilestoneRunSubmitted, InvocationID: &crossingInvocation, RecordedAt: midnight.Add(-10 * time.Minute)},
+				{RunID: "run-1", Kind: domain.MilestoneInvocationStarted, InvocationID: &crossingInvocation, RecordedAt: midnight.Add(-5 * time.Minute)},
+				{RunID: "run-1", Kind: domain.MilestoneExecutionExportRecorded, InvocationID: &crossingInvocation, RecordedAt: midnight.Add(10 * time.Minute)},
+			},
+		}}, nil)
+	waitingRun := domain.RunID("run-1")
+	workHoursInProgress := workHours(t, workHoursDay, ts.Add(10*time.Minute), nil,
+		[]domain.WorkHoursRun{{RunID: waitingRun, TaskID: "task-1", Milestones: clockMilestones[:2]}},
+		[]domain.AttentionItem{{
+			ID: "item-1", Subject: domain.Subject{RunID: &waitingRun}, Status: domain.StatusOpen,
+			CreatedAt: new(ts.Add(30 * time.Second)),
+		}})
 	exhaustedPool := domain.UsagePoolID("claude-owner-subscription")
 	usagePoolHold := holdObservation
 	usagePoolHold.Reason = domain.HoldUsagePoolExhausted
@@ -2903,6 +2948,10 @@ func TestGolden(t *testing.T) {
 		{"run_hold_span_open", openHoldSpan},
 		{"run_clocks", runClocks},
 		{"run_clocks_open", runClocksOpen},
+		{"work_hours_empty", workHoursEmpty},
+		{"work_hours_one_task", workHoursOneTask},
+		{"work_hours_crossing_midnight", workHoursCrossing},
+		{"work_hours_in_progress", workHoursInProgress},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},

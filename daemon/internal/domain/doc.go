@@ -79,6 +79,8 @@
 //     liveness, and outcomes
 //   - run_clocks.go   a run's elapsed and active time, derived from its
 //     milestones at each read
+//   - work_hours.go   how runs' time divides into classes over the days of
+//     a period, derived at each read
 //   - invocation_intent.go, remediation_intent.go, operator_feedback_intent.go
 //     durable dispatch intents and the retained remediation and operator
 //     feedback contracts

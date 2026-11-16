@@ -665,3 +665,7 @@ var (
 	ErrProjectNotReady              = errors.New("project is not ready to run unattended work")
 	ErrProjectReadinessInconsistent = errors.New("project readiness record is inconsistent")
 )
+
+// ErrInvalidWorkHoursPeriod refuses a work-hours period outside 1 to
+// MaxWorkHoursDays days or without a time zone (issue #3241).
+var ErrInvalidWorkHoursPeriod = errors.New("invalid work hours period")
