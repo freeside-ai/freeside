@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -24,10 +25,21 @@ import (
 // The pause lives in the instance settings' execution_pause section, so it
 // survives a restart: a prod restarted while the pause is requested keeps
 // waiting, and one restarted after the release stays driverless.
+//
+// A released pause nobody uses keeps prod from executing with nothing to show
+// for it, so once no rig lease manifest has existed for an hour the waiter
+// raises an advisory card naming resume.
 
 const (
 	executionPauseItemPrefix = "system-health-execution-pause-"
 	executionPauseCode       = "execution_pause"
+	// The unused-pause card's prefix is not an extension of the pause card's,
+	// so the pause card's prefix match never finds it.
+	unusedExecutionPauseItemPrefix = "system-health-unused-execution-pause-"
+	unusedExecutionPauseCode       = "execution_pause_unused"
+	// executionPauseUnusedAfter is how long a released pause may go with no
+	// rig lease manifest before its card is raised.
+	executionPauseUnusedAfter = time.Hour
 	// executionPauseSetBy records the daemon's own release of a pause.
 	executionPauseSetBy = "daemon:execution-pause"
 	// executionPauseInterval is how often the waiter reads restart
@@ -64,19 +76,25 @@ func RequestExecutionPause(ctx context.Context, st *store.Store, setBy string, a
 		if err := appendExecutionPause(ctx, tx, domain.ExecutionPauseRequested, setBy, at); err != nil {
 			return err
 		}
-		open, err := openExecutionPauseCards(ctx, tx)
+		open, err := openPauseCards(ctx, &tx.ReadTx, executionPauseItemPrefix)
 		if err != nil || len(open) != 0 {
 			return err
 		}
-		return putExecutionPauseCard(ctx, tx, at)
+		return putPauseCard(ctx, tx, executionPauseItemPrefix, executionPauseCode,
+			"Agent execution is pausing: an operator ran freesided execution pause. This daemon "+
+				"starts no new work and waits for its running work to finish, then restarts without "+
+				"execution so a deputy run can use the App authority. Run freesided execution resume "+
+				"to cancel the pause, or to restart this daemon with execution once the deputy run ends.", at)
 	})
 }
 
-// ResumeExecution clears the pause and concludes its card, in one write, and
-// reports whether a pause was in force. It writes nothing when neither is.
+// ResumeExecution clears the pause and concludes its cards, the pause card
+// and any unused-pause card, in one write, and reports whether a pause was in
+// force. It writes nothing when neither is.
 // Restarting a running daemon is the caller's: offline, the next start reads
 // the cleared section.
 func ResumeExecution(ctx context.Context, st *store.Store, setBy string, at time.Time) (bool, error) {
+	at = at.UTC()
 	var cleared bool
 	err := st.Write(ctx, func(tx *store.WriteTx) error {
 		pause, err := tx.ExecutionPause(ctx)
@@ -89,24 +107,35 @@ func ResumeExecution(ctx context.Context, st *store.Store, setBy string, at time
 			}
 			cleared = true
 		}
-		open, err := openExecutionPauseCards(ctx, tx)
-		if err != nil {
-			return err
-		}
-		for _, item := range open {
-			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, at,
-				"Resolved when the operator resumed execution.", nil)
-			if err != nil {
-				return err
-			}
-			item.ItemVersion++
-			if err := tx.PutAttentionItem(ctx, item); err != nil {
+		for _, prefix := range []string{executionPauseItemPrefix, unusedExecutionPauseItemPrefix} {
+			if err := concludePauseCards(ctx, tx, prefix, at,
+				"Resolved when the operator resumed execution."); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
 	return cleared, err
+}
+
+// concludePauseCards concludes the open system_health cards whose IDs start
+// with prefix.
+func concludePauseCards(ctx context.Context, tx *store.WriteTx, prefix string, at time.Time, reason string) error {
+	open, err := openPauseCards(ctx, &tx.ReadTx, prefix)
+	if err != nil {
+		return err
+	}
+	for _, item := range open {
+		item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, at, reason, nil)
+		if err != nil {
+			return err
+		}
+		item.ItemVersion++
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // releaseExecutionPause records a requested pause as released and reports
@@ -144,21 +173,23 @@ func appendExecutionPause(
 	return err
 }
 
-func openExecutionPauseCards(ctx context.Context, tx *store.WriteTx) ([]domain.AttentionItem, error) {
+func openPauseCards(ctx context.Context, tx *store.ReadTx, prefix string) ([]domain.AttentionItem, error) {
 	items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 	if err != nil {
 		return nil, err
 	}
 	var open []domain.AttentionItem
 	for _, item := range items {
-		if strings.HasPrefix(string(item.ID), executionPauseItemPrefix) {
+		if strings.HasPrefix(string(item.ID), prefix) {
 			open = append(open, item)
 		}
 	}
 	return open, nil
 }
 
-func putExecutionPauseCard(ctx context.Context, tx *store.WriteTx, at time.Time) error {
+// putPauseCard raises an advisory, acknowledge-only system_health card. Both
+// pause cards are advisory: see RequestExecutionPause.
+func putPauseCard(ctx context.Context, tx *store.WriteTx, prefix, code, reason string, at time.Time) error {
 	serverState, err := tx.ServerState(ctx)
 	if err != nil {
 		return err
@@ -171,16 +202,13 @@ func putExecutionPauseCard(ctx context.Context, tx *store.WriteTx, at time.Time)
 	at = at.UTC()
 	posture := domain.HealthPostureAdvisory
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:        domain.ItemID(fmt.Sprintf("%s%d", executionPauseItemPrefix, serverState.Revision+1)),
+		ID:        domain.ItemID(fmt.Sprintf("%s%d", prefix, serverState.Revision+1)),
 		ProjectID: "project-system", Subject: subject,
 		Type: domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
-		Reason: "Agent execution is pausing: an operator ran freesided execution pause. This daemon " +
-			"starts no new work and waits for its running work to finish, then restarts without " +
-			"execution so a deputy run can use the App authority. Run freesided execution resume " +
-			"to cancel the pause, or to restart this daemon with execution once the deputy run ends.",
+		Reason:            reason,
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		HealthDiagnostic: &domain.HealthDiagnostic{
-			Code: executionPauseCode, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+			Code: code, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
 		},
 		DisplayNames: names, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionExceptional,
@@ -195,11 +223,14 @@ func putExecutionPauseCard(ctx context.Context, tx *store.WriteTx, at time.Time)
 // executionPauseWaiter releases a requested pause once nothing runs, then
 // asks for the restart that brings prod back driverless. It runs for the
 // daemon's life in every prod started with a driver, so a pause requested
-// online and one interrupted by a restart are both served.
+// online and one interrupted by a restart are both served. In a prod that
+// started with the pause released it watches for the pause going unused.
 type executionPauseWaiter struct {
 	store     *store.Store
 	readiness func(context.Context) (signet.RestartReadinessResponse, error)
 	restart   func()
+	// leaseRoot is where a deputy run's rig lease manifest appears.
+	leaseRoot string
 	now       func() time.Time
 	logger    *slog.Logger
 }
@@ -209,8 +240,9 @@ type executionPauseWaiter struct {
 func (w executionPauseWaiter) run(ctx context.Context) error {
 	ticker := time.NewTicker(executionPauseInterval)
 	defer ticker.Stop()
+	leaseSeen := w.now()
 	for {
-		released, err := w.step(ctx)
+		released, err := w.step(ctx, &leaseSeen)
 		if err != nil {
 			return err
 		}
@@ -228,16 +260,87 @@ func (w executionPauseWaiter) run(ctx context.Context) error {
 	}
 }
 
-func (w executionPauseWaiter) step(ctx context.Context) (bool, error) {
+// step releases a requested pause once readiness counts nothing, and keeps
+// the unused-pause card in step with a released one. leaseSeen is when a rig
+// lease manifest was last seen, or when the pause was last not released.
+func (w executionPauseWaiter) step(ctx context.Context, leaseSeen *time.Time) (bool, error) {
 	pause, err := ReadExecutionPause(ctx, w.store)
-	if err != nil || pause == nil || pause.State != domain.ExecutionPauseRequested {
+	if err != nil {
 		return false, err
+	}
+	if err := w.watchUnused(ctx, pause, leaseSeen); err != nil {
+		return false, err
+	}
+	if pause == nil || pause.State != domain.ExecutionPauseRequested {
+		return false, nil
 	}
 	readiness, err := w.readiness(ctx)
 	if err != nil || len(readiness.Blockers) != 0 {
 		return false, err
 	}
 	return releaseExecutionPause(ctx, w.store, w.now().UTC())
+}
+
+// watchUnused raises the unused-pause card once a released pause has gone
+// executionPauseUnusedAfter with no rig lease manifest, and concludes it when
+// a manifest appears or the pause is no longer released. A manifest that
+// can't be read is logged and leaves the card as it is: the card is advisory,
+// and a lease root gone bad must not stop a driverless prod's service.
+func (w executionPauseWaiter) watchUnused(
+	ctx context.Context, pause *domain.ExecutionPauseSettings, leaseSeen *time.Time,
+) error {
+	now := w.now()
+	if pause == nil || pause.State != domain.ExecutionPauseReleased {
+		*leaseSeen = now
+		return syncUnusedPauseCard(ctx, w.store, false, "Resolved when the pause cleared.", now)
+	}
+	present, err := daemonlock.RigManifestPresent(w.leaseRoot)
+	if err != nil {
+		w.logger.Warn("execution pause: cannot check for a rig lease", "lease_root", w.leaseRoot, "error", err)
+		return nil
+	}
+	if present {
+		*leaseSeen = now
+		return syncUnusedPauseCard(ctx, w.store, false, "Resolved when a deputy run took a rig lease.", now)
+	}
+	return syncUnusedPauseCard(ctx, w.store, now.Sub(*leaseSeen) >= executionPauseUnusedAfter, "", now)
+}
+
+// syncUnusedPauseCard raises the unused-pause card when want and none is
+// open, or concludes the open ones with reason when not want. It reads before
+// it writes, so a tick that changes nothing takes no write. The write re-reads
+// the pause and raises no card unless it is still released, so a resume that
+// committed after the waiter's read never leaves a card behind.
+func syncUnusedPauseCard(ctx context.Context, st *store.Store, want bool, reason string, at time.Time) error {
+	var open []domain.AttentionItem
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		open, err = openPauseCards(ctx, tx, unusedExecutionPauseItemPrefix)
+		return err
+	}); err != nil {
+		return err
+	}
+	if want == (len(open) != 0) {
+		return nil
+	}
+	at = at.UTC()
+	return st.Write(ctx, func(tx *store.WriteTx) error {
+		if !want {
+			return concludePauseCards(ctx, tx, unusedExecutionPauseItemPrefix, at, reason)
+		}
+		pause, err := tx.ExecutionPause(ctx)
+		if err != nil || pause == nil || pause.State != domain.ExecutionPauseReleased {
+			return err
+		}
+		open, err := openPauseCards(ctx, &tx.ReadTx, unusedExecutionPauseItemPrefix)
+		if err != nil || len(open) != 0 {
+			return err
+		}
+		return putPauseCard(ctx, tx, unusedExecutionPauseItemPrefix, unusedExecutionPauseCode,
+			"Agent execution has been paused for over an hour with no deputy run holding a rig "+
+				"lease. This daemon serves without execution until the pause clears. Run freesided "+
+				"execution resume to restart it with execution.", at)
+	})
 }
 
 // ExecutionPauseStatus is what the execution pause commands answer.

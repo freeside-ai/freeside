@@ -3,6 +3,7 @@ package daemoncompose
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,8 +42,9 @@ func requirePauseState(t *testing.T, st *store.Store, want domain.ExecutionPause
 	}
 }
 
-// pauseCards returns every execution pause card, open or concluded.
-func pauseCards(t *testing.T, st *store.Store) (open, concluded int) {
+// pauseCards counts the advisory system_health cards whose IDs start with
+// prefix and carry code, open or concluded.
+func pauseCards(t *testing.T, st *store.Store, prefix, code string) (open, concluded int) {
 	t.Helper()
 	ctx := t.Context()
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -52,10 +54,10 @@ func pauseCards(t *testing.T, st *store.Store) (open, concluded int) {
 		}
 		for _, snapshot := range items {
 			item := snapshot.Value
-			if !strings.HasPrefix(string(item.ID), executionPauseItemPrefix) {
+			if !strings.HasPrefix(string(item.ID), prefix) {
 				continue
 			}
-			if item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != executionPauseCode ||
+			if item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != code ||
 				*item.Posture != domain.HealthPostureAdvisory {
 				t.Errorf("pause card %s: diagnostic %+v, posture %s", item.ID, item.HealthDiagnostic, *item.Posture)
 			}
@@ -85,7 +87,7 @@ func TestExecutionPauseRequestAndResume(t *testing.T) {
 			t.Fatal(err)
 		}
 		requirePauseState(t, st, domain.ExecutionPauseRequested)
-		if open, concluded := pauseCards(t, st); open != 1 || concluded != 0 {
+		if open, concluded := pauseCards(t, st, executionPauseItemPrefix, executionPauseCode); open != 1 || concluded != 0 {
 			t.Fatalf("cards: %d open, %d concluded; want 1 open", open, concluded)
 		}
 	}
@@ -102,7 +104,7 @@ func TestExecutionPauseRequestAndResume(t *testing.T) {
 		t.Fatalf("resume = %t, %v; want cleared", cleared, err)
 	}
 	requirePauseState(t, st, "")
-	if open, concluded := pauseCards(t, st); open != 0 || concluded != 1 {
+	if open, concluded := pauseCards(t, st, executionPauseItemPrefix, executionPauseCode); open != 0 || concluded != 1 {
 		t.Fatalf("cards after resume: %d open, %d concluded; want 1 concluded", open, concluded)
 	}
 	if cleared, err := ResumeExecution(ctx, st, "cli:operator", pauseEpoch); err != nil || cleared {
@@ -173,8 +175,8 @@ func TestExecutionPauseWaiterReleasesOnceNothingRuns(t *testing.T) {
 				defer mu.Unlock()
 				return signet.RestartReadinessResponse{Blockers: blockers}, nil
 			},
-			restart: func() { restarts.Add(1) },
-			now:     time.Now, logger: slog.New(slog.DiscardHandler),
+			restart:   func() { restarts.Add(1) },
+			leaseRoot: t.TempDir(), now: time.Now, logger: slog.New(slog.DiscardHandler),
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
@@ -202,6 +204,78 @@ func TestExecutionPauseWaiterReleasesOnceNothingRuns(t *testing.T) {
 		synctest.Sleep(3 * executionPauseInterval)
 		if got := restarts.Load(); got != 1 {
 			t.Fatalf("restarts after the release = %d, want 1", got)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("waiter = %v, want nil on cancel", err)
+		}
+	})
+}
+
+// TestExecutionPauseWaiterRaisesTheUnusedCard: with the pause released, the
+// waiter raises the unused-pause card once no rig lease manifest has existed
+// for an hour, concludes it when a manifest appears, counts the hour again
+// from the manifest's last sighting, and leaves no card once resume clears
+// the pause. It never asks for a restart.
+func TestExecutionPauseWaiterRaisesTheUnusedCard(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		st := openPauseStore(t)
+		if err := RequestExecutionPause(ctx, st, "cli:operator", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if released, err := releaseExecutionPause(ctx, st, time.Now()); err != nil || !released {
+			t.Fatalf("release = %t, %v", released, err)
+		}
+		leaseRoot := t.TempDir()
+		manifest := filepath.Join(leaseRoot, "production-rig.json")
+		var restarts atomic.Int32
+		waiter := executionPauseWaiter{
+			store: st,
+			readiness: func(context.Context) (signet.RestartReadinessResponse, error) {
+				return signet.RestartReadinessResponse{}, nil
+			},
+			restart:   func() { restarts.Add(1) },
+			leaseRoot: leaseRoot, now: time.Now, logger: slog.New(slog.DiscardHandler),
+		}
+		done := make(chan error, 1)
+		go func() { done <- waiter.run(ctx) }()
+		requireUnused := func(step string, wantOpen, wantConcluded int) {
+			t.Helper()
+			synctest.Wait()
+			open, concluded := pauseCards(t, st, unusedExecutionPauseItemPrefix, unusedExecutionPauseCode)
+			if open != wantOpen || concluded != wantConcluded {
+				t.Fatalf("%s: %d open, %d concluded; want %d open, %d concluded",
+					step, open, concluded, wantOpen, wantConcluded)
+			}
+		}
+
+		synctest.Sleep(executionPauseUnusedAfter - time.Second)
+		requireUnused("just short of the hour", 0, 0)
+		synctest.Sleep(executionPauseInterval)
+		requireUnused("at the hour", 1, 0)
+
+		if err := os.WriteFile(manifest, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Sleep(executionPauseInterval)
+		requireUnused("with a lease", 0, 1)
+		if err := os.Remove(manifest); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Sleep(executionPauseUnusedAfter - executionPauseInterval)
+		requireUnused("an hour after the lease was last seen, less a tick", 0, 1)
+		synctest.Sleep(executionPauseInterval)
+		requireUnused("an hour after the lease was last seen", 1, 1)
+
+		if _, err := ResumeExecution(ctx, st, "cli:operator", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Sleep(executionPauseUnusedAfter + executionPauseInterval)
+		requireUnused("after resume", 0, 2)
+		if got := restarts.Load(); got != 0 {
+			t.Fatalf("restarts = %d, want none", got)
 		}
 		cancel()
 		if err := <-done; err != nil {

@@ -561,7 +561,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if pausable {
 		waiter := executionPauseWaiter{
 			store: st, readiness: attention.RestartReadiness, restart: d.RequestRestart,
-			now: nowOrWallClock(cfg.Now), logger: logger,
+			leaseRoot: cfg.AppAuthority.Prod.LeaseRoot, now: nowOrWallClock(cfg.Now), logger: logger,
 		}
 		d.Go(func() {
 			d.ComponentExited(parent, ctx, daemonshell.ComponentExecutionPause, waiter.run(ctx))
