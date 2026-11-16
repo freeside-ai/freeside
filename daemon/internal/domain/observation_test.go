@@ -719,6 +719,66 @@ func TestRunHoldObservationValidate(t *testing.T) {
 	}
 }
 
+func TestRunHoldSpanValidate(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	inv := InvocationID("inv-1")
+	cleared := ts.Add(2 * time.Minute)
+	valid := RunHoldSpan{
+		RunID: "run-1", InvocationID: &inv, Reason: HoldOperationStopped,
+		FirstObservedAt: ts, LastObservedAt: ts.Add(time.Minute), ClearedAt: &cleared,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid span rejected: %v", err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*RunHoldSpan)
+		want   error
+	}{
+		{"missing run id", func(s *RunHoldSpan) { s.RunID = "" }, ErrEmptyID},
+		{"empty invocation id", func(s *RunHoldSpan) { empty := InvocationID(""); s.InvocationID = &empty }, ErrEmptyID},
+		{"invalid reason", func(s *RunHoldSpan) { s.Reason = "vibes" }, ErrInvalidRunHoldReason},
+		{"zero reason", func(s *RunHoldSpan) { s.Reason = "" }, ErrInvalidRunHoldReason},
+		{"zero first", func(s *RunHoldSpan) { s.FirstObservedAt = time.Time{} }, ErrMissingTimestamp},
+		{"zero last", func(s *RunHoldSpan) { s.LastObservedAt = time.Time{} }, ErrMissingTimestamp},
+		{"zero cleared", func(s *RunHoldSpan) { s.ClearedAt = &time.Time{} }, ErrMissingTimestamp},
+		{"non-UTC first", func(s *RunHoldSpan) {
+			s.FirstObservedAt = s.FirstObservedAt.In(time.FixedZone("PST", -8*3600))
+		}, ErrTimestampNotUTC},
+		{"non-UTC cleared", func(s *RunHoldSpan) {
+			local := s.ClearedAt.In(time.FixedZone("PST", -8*3600))
+			s.ClearedAt = &local
+		}, ErrTimestampNotUTC},
+		{"backwards observation", func(s *RunHoldSpan) {
+			s.LastObservedAt = s.FirstObservedAt.Add(-time.Second)
+		}, ErrTimestampOutOfOrder},
+		{"cleared before last observation", func(s *RunHoldSpan) {
+			early := s.LastObservedAt.Add(-time.Nanosecond)
+			s.ClearedAt = &early
+		}, ErrTimestampOutOfOrder},
+	}
+	for _, tc := range cases {
+		s := valid
+		tc.mutate(&s)
+		if err := s.Validate(); !errors.Is(err, tc.want) {
+			t.Errorf("%s: Validate() = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	// The current hold reads as an open span, and a hold may name no
+	// invocation; a hold cleared at its last observation is a valid span.
+	open := valid
+	open.ClearedAt = nil
+	open.InvocationID = nil
+	if err := open.Validate(); err != nil {
+		t.Errorf("open span rejected: %v", err)
+	}
+	atLast := valid
+	atLast.ClearedAt = &atLast.LastObservedAt
+	if err := atLast.Validate(); err != nil {
+		t.Errorf("span cleared at its last observation rejected: %v", err)
+	}
+}
+
 func TestImageUpkeepHoldValidate(t *testing.T) {
 	refusal := Digest("sha256:" + strings.Repeat("ab", 32))
 	item, task := ItemID("item-adopt"), TaskID("task-maintain")
