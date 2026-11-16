@@ -4001,7 +4001,8 @@ included. Without them, lint's heap reaches the room's limit and the step
 slows under reclaim. Freeside's `.freeside/verify.json` first runs its two
 history commands (Onboard Freeside), which the offline proof skips, then
 this command, then `bash scripts/check.sh docs`, then `env VACUUM=vacuum
-bash scripts/check.sh api`, then `check.sh scripts` with the same Go limits,
+bash scripts/check.sh api lint digest policy` (Onboard Freeside says why
+not `compat`), then `check.sh scripts` with the same Go limits,
 because `trackercollect` runs `go build`, `test`, and `vet`, then `bash
 scripts/check.sh app generate`, then `bash scripts/check.sh app linux`.
 Measured on 2026-11-10 with this recipe on
@@ -4475,8 +4476,12 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   operator approves the new recipe digest before it runs. Then come the
   four `daemon`, `docs`, `api`, and `scripts` commands sized above, then
   `bash scripts/check.sh app generate` and
-  `bash scripts/check.sh app linux`. Five run on the macOS verification
-  executor (`macos_host`): `app format`, `app test`,
+  `bash scripts/check.sh app linux`. The `api` command names its steps,
+  `lint digest policy`, and leaves out `compat`: the step needs `oasdiff`
+  and the merge base's spec, and the project image has neither, so a bare
+  `check.sh api` failed the image's proof. CI's `required` still runs
+  `compat`; running it in the recipe is #3262. Five run on the macOS
+  verification executor (`macos_host`): `app format`, `app test`,
   `app build-mac`, `app build-ios`, and `convergence run`. The last four
   run as `env APP_MACVERIFY=1 bash scripts/check.sh <component> <step>`.
   The switch adds the executor flags documented under Install the macOS
