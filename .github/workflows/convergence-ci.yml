@@ -16,9 +16,10 @@ name: convergence CI
 # the convergence suite, and the swift-format gate runs first; the build
 # is the same either way. The job runs only through pull-request.yml: a
 # push to main carries a tree its PR tested under the up-to-date rule,
-# and the Go build cache it restores is saved by daemon-ci.yml's
-# `macos-main` job, the SwiftPM mirror by app-ci.yml's `generate` job,
-# and the Swift build by app-ci.yml's `swift-build-cache` job.
+# and the Go build cache and the convergence harness it restores are
+# saved by daemon-ci.yml's `macos-main` job, the SwiftPM mirror by
+# app-ci.yml's `generate` job, and the Swift build by app-ci.yml's
+# `swift-build-cache` job.
 
 on:
   workflow_call:
@@ -96,30 +97,66 @@ jobs:
             -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
           xcrun swift-format format --in-place "${files[@]}"
           git diff --exit-code
+      # The convergence harness key's one input: daemon/'s git tree, which
+      # covers every file's name, mode, and content. Nothing outside daemon/
+      # decides the binary: go.mod pins the toolchain with no toolchain or
+      # replace line, there is no go.work, no package in the harness graph
+      # has cgo files, and no workflow sets GOFLAGS, CGO_ENABLED,
+      # GOEXPERIMENT, or GOTOOLCHAIN (#3293). daemon-ci.yml's `macos-main`
+      # job carries the same step byte for byte, and the workflow guard
+      # pins the two equal, or writer and reader would never share an entry.
+      - name: Resolve the convergence harness key
+        id: harness-key
+        run: |
+          tree="$(git rev-parse HEAD:daemon)"
+          if [ -z "${tree}" ]; then
+            echo "harness-key: empty daemon tree" >&2
+            exit 1
+          fi
+          echo "tree=${tree}" >>"$GITHUB_OUTPUT"
+      - name: Restore the convergence harness
+        id: harness
+        uses: actions/cache/restore@v4
+        with:
+          # freeside-signet-dev, saved by daemon-ci.yml's `macos-main` job on
+          # a push to main. The key names daemon/'s tree, so a hit holds the
+          # binary this tree builds and any daemon/ change misses. No
+          # fallback key: a stale harness would test the client against old
+          # daemon behavior and pass. Restore-only: a save here would be
+          # scoped to this PR.
+          path: .convergence-harness
+          key: convergence-harness-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.harness-key.outputs.tree }}
+      # Go is needed only to build the harness, so a hit skips the toolchain
+      # and both Go caches.
       - uses: actions/setup-go@v5
         id: go
+        if: steps.harness.outputs.cache-hit != 'true'
         with:
           go-version-file: daemon/go.mod
           cache: false
       # Same two Go caches as daemon-ci.yml, which carries the rationale:
       # modules keyed on go.sum alone, build output restored from the
       # daemon's macOS rest namespace, which `macos-main` fills with every
-      # compiled package on a push to main, so the harness build does not
-      # recompile from scratch. Restore-only: this job never runs on push.
+      # compiled package on a push to main, so the harness build, which
+      # uses the same -trimpath, does not recompile from scratch.
+      # Restore-only: this job never runs on push.
       - name: Resolve Go cache paths
         id: go-cache
+        if: steps.harness.outputs.cache-hit != 'true'
         working-directory: daemon
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
           mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
+        if: steps.harness.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ${{ steps.go-cache.outputs.mod }}
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Restore Go build output
+        if: steps.harness.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
@@ -162,12 +199,20 @@ jobs:
           # Skip the Swift build only on an exact hit, and never for an app
           # PR: its --all-tests run must compile the PR's own app changes.
           CONVERGENCE_SKIP_BUILD: ${{ steps.swift-build.outputs.cache-hit == 'true' && !inputs.app_tests && '1' || '' }}
+          # Launch the restored harness only on an exact hit; otherwise
+          # run-convergence.sh builds it.
+          CONVERGENCE_HARNESS: ${{ steps.harness.outputs.cache-hit == 'true' && format('{0}/.convergence-harness/freeside-signet-dev', github.workspace) || '' }}
         run: bash scripts/check.sh convergence
       - name: Record the Swift build cache result
         if: always()
         run: |
           echo "cache-hit=${{ steps.swift-build.outputs.cache-hit }}"
           du -sh app/.build 2>/dev/null || echo "app/.build: absent"
+      - name: Record the convergence harness cache result
+        if: always()
+        run: |
+          echo "cache-hit=${{ steps.harness.outputs.cache-hit }}"
+          du -sh .convergence-harness 2>/dev/null || echo ".convergence-harness: absent"
       # The screenshot suite dumps each mismatched render next to its digest
       # line; publishing those PNGs is the only way to review a hosted
       # runner's raster before it is recorded as an override (#1139). The

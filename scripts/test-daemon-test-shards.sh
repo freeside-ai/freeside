@@ -473,6 +473,87 @@ class Coverage(unittest.TestCase):
             self.assertNotIn('APP_MACVERIFY', workflow.read_text(), workflow.name)
         self.assertEqual(re.findall(r'^ *swift_args\+=\((.*)\)$', runner, re.M),
                          ['--filter FreesideConvergenceTests', '--skip-build'])
+        # The convergence harness cache (#3293): macos-main writes the
+        # binary on a push to main, keyed on daemon/'s git tree, and the
+        # convergence job restores it on an exact key with no fallback, so
+        # a stale harness never tests the client against old daemon
+        # behavior. The two key steps must match, or writer and reader
+        # never share an entry.
+        harness_cache = ("          path: .convergence-harness\n"
+                         "          key: convergence-harness-v1-${{ runner.os }}-${{ runner.arch }}-"
+                         "${{ steps.harness-key.outputs.tree }}\n")
+        harness_miss = "        if: steps.harness.outputs.cache-hit != 'true'\n"
+        harness_keys = [re.search(r'^      - name: Resolve the convergence harness key\n(.*?)(?=^      (?:- |#))',
+                                  job, re.M | re.S).group(0) for job in (convergence, main)]
+        self.assertEqual(harness_keys[0], harness_keys[1])
+        self.assertIn('        id: harness-key\n', harness_keys[0])
+        self.assertIn('tree="$(git rev-parse HEAD:daemon)"\n', harness_keys[0])
+        restore = re.search(r'^      - name: Restore the convergence harness\n(.*?)(?=^      (?:- |#))',
+                            convergence, re.M | re.S).group(1)
+        self.assertIn('        id: harness\n        uses: actions/cache/restore@v4\n', restore)
+        self.assertIn(harness_cache, restore)
+        self.assertNotIn('restore-keys', restore)
+        self.assertNotIn('lookup-only', restore)
+        # Go builds only the harness, so a hit skips the toolchain and both
+        # Go caches, and only a hit names the restored binary.
+        reader_steps = re.findall(r'^      - (.*?)\n(.*?)(?=^      (?:- |#)|\Z)', convergence, re.M | re.S)
+        reader = {title.removeprefix('name: '): body for title, body in reader_steps}
+        for title in ('uses: actions/setup-go@v5', 'Resolve Go cache paths', 'Cache Go modules',
+                      'Restore Go build output'):
+            self.assertIn(harness_miss, reader[title], title)
+        reader_titles = [title.removeprefix('name: ') for title, _ in reader_steps]
+        self.assertLess(reader_titles.index('Restore the convergence harness'),
+                        reader_titles.index('uses: actions/setup-go@v5'))
+        self.assertIn("          CONVERGENCE_HARNESS: ${{ steps.harness.outputs.cache-hit == 'true' && "
+                      "format('{0}/.convergence-harness/freeside-signet-dev', github.workspace) || '' }}\n",
+                      reader['Run the convergence pass (scripts/check.sh)'])
+        self.assertEqual(len(re.findall(r'^          CONVERGENCE_HARNESS:', convergence, re.M)), 1)
+        # The writer looks the key up, and builds and saves only on a miss,
+        # right after the daemon build: a later test failure must not skip
+        # the save.
+        writer_steps = re.findall(r'^      - (.*?)\n(.*?)(?=^      (?:- |#)|\Z)', main, re.M | re.S)
+        writer_titles = [title.removeprefix('name: ') for title, _ in writer_steps]
+        harness_writer = {title.removeprefix('name: '): body for title, body in writer_steps}
+        self.assertEqual(writer_titles[writer_titles.index('build (scripts/check.sh)') + 1:][:4],
+                         ['Resolve the convergence harness key', 'Look up the convergence harness',
+                          'Build the convergence harness', 'Save the convergence harness'])
+        self.assertLess(writer_titles.index('Save the convergence harness'),
+                        writer_titles.index('Compile every test binary'))
+        lookup = harness_writer['Look up the convergence harness']
+        self.assertIn('        id: harness\n        uses: actions/cache/restore@v4\n', lookup)
+        self.assertIn(harness_cache + '          lookup-only: true\n', lookup)
+        self.assertNotIn('restore-keys', lookup)
+        # The whole build step is pinned, so no step env changes the build.
+        self.assertEqual(harness_writer['Build the convergence harness'],
+                         harness_miss + '        working-directory: daemon\n        run: |\n'
+                         '          mkdir -p ../.convergence-harness\n'
+                         '          go build -trimpath -o ../.convergence-harness/freeside-signet-dev '
+                         './cmd/freeside-signet-dev\n')
+        # The key leaves out the Go build environment, so neither workflow
+        # may set it (#3293).
+        for job in (convergence, (root / '.github/workflows/daemon-ci.yml').read_text()):
+            self.assertIsNone(re.search(r'^\s*(?:GOFLAGS|CGO_ENABLED|GOEXPERIMENT|GOTOOLCHAIN|GOARCH|GOOS|GOAMD64|GOARM64)\s*:',
+                                        job, re.M))
+        self.assertEqual(harness_writer['Save the convergence harness'],
+                         harness_miss + '        uses: actions/cache/save@v4\n        with:\n'
+                         '          path: .convergence-harness\n'
+                         '          key: ${{ steps.harness.outputs.cache-primary-key }}\n')
+        # A hit launches the binary the writer built in place of the one
+        # run-convergence.sh would build, so both build with the same flags
+        # from daemon/. A changed flag needs the same flag in both places and
+        # a convergence-harness-v1 prefix bump, or a hit would run a binary
+        # built without it. -trimpath lets both reuse the Go build cache
+        # macos-main compiles with it.
+        build = r'go build (.*?) -o (\S+) (\./cmd/freeside-signet-dev)\)?$'
+        script_build = re.findall(r'^ *\(cd "\$repo_root/daemon" && ' + build, runner, re.M)
+        writer_build = re.findall(r'^          ' + build, harness_writer['Build the convergence harness'], re.M)
+        self.assertEqual(len(script_build), 1)
+        self.assertEqual(writer_build, [('-trimpath', '../.convergence-harness/freeside-signet-dev',
+                                         './cmd/freeside-signet-dev')])
+        self.assertEqual(script_build[0][0], writer_build[0][0])
+        self.assertEqual(script_build[0][2], writer_build[0][2])
+        self.assertIn('-trimpath', script_build[0][0].split())
+        self.assertEqual(runner.count('go build'), 1)
         # The SwiftPM mirror: generate writes it on push, convergence and
         # apps only restore it, and all three name the same
         # workspace-relative path and key prefix, or the entries would not

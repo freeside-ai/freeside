@@ -587,6 +587,31 @@ misses until the next push to `main` that touches `app/`, and PRs build as
 before meanwhile. To retire every entry, bump the `swift-build-v1` prefix in
 both workflows and in `scripts/test-daemon-test-shards.sh`.
 
+CI's convergence harness cache holds the `freeside-signet-dev` binary the
+`convergence` job launches, so a PR that leaves `daemon/` alone skips Go
+entirely there: `setup-go`, both Go caches, and the harness build (#3293).
+Its key is `convergence-harness-v1-<os>-<arch>-<daemon/ tree>`, where the
+tree is `git rev-parse HEAD:daemon`. Nothing outside `daemon/` decides the
+binary: `daemon/go.mod` pins the Go toolchain, no package in the harness's
+graph has cgo files, and no workflow sets a Go build variable. Daemon CI's
+`macos-main` job writes it on a push to `main` when the key is absent,
+right after its build step, so a later test failure still saves it. The
+`convergence` job restores it and on an exact hit passes the binary as
+`CONVERGENCE_HARNESS` (`scripts/run-convergence.sh --harness`); its log
+prints `using prebuilt freeside-signet-dev` or `building freeside-signet-dev`.
+A PR that changes `daemon/` misses by construction and builds as before.
+There is no fallback key: a stale harness would test the client against old
+daemon behavior and pass. Both builds use `go build -trimpath`, the flag
+every compiled package in the restored Go build cache carries, so a miss
+links from that cache instead of recompiling; the workflow guard pins the
+two builds' flags equal, and a changed flag needs a prefix bump. If
+`macos-main` and `convergence` ever run on different architectures, every
+run misses quietly, since the key names the architecture. To retire every
+entry, bump the `convergence-harness-v1` prefix in both workflows and in
+`scripts/test-daemon-test-shards.sh`, or delete each `convergence-harness-`
+key that `gh cache list --repo freeside-ai/freeside` lists with
+`gh cache delete --repo freeside-ai/freeside <key>`.
+
 On an app PR the `convergence` job builds once and then runs the screenshot
 matrix as concurrent slices beside the other suites
 (`scripts/run-convergence.sh --all-tests`, #2292). Each slice is a

@@ -415,6 +415,42 @@ jobs:
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
       - name: build (scripts/check.sh)
         run: bash scripts/check.sh daemon build
+      # The convergence harness the convergence job launches on an exact
+      # hit (#3293). convergence-ci.yml carries the key's rationale and the
+      # same key step byte for byte. The build runs before the tests, so a
+      # test failure on main still saves the binary, which is the one a PR
+      # with this daemon/ tree would build. It links from the packages the
+      # build step just compiled, since both use -trimpath, and it uses
+      # the flags run-convergence.sh builds with; the workflow guard pins
+      # them equal.
+      - name: Resolve the convergence harness key
+        id: harness-key
+        run: |
+          tree="$(git rev-parse HEAD:daemon)"
+          if [ -z "${tree}" ]; then
+            echo "harness-key: empty daemon tree" >&2
+            exit 1
+          fi
+          echo "tree=${tree}" >>"$GITHUB_OUTPUT"
+      - name: Look up the convergence harness
+        id: harness
+        uses: actions/cache/restore@v4
+        with:
+          path: .convergence-harness
+          key: convergence-harness-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.harness-key.outputs.tree }}
+          lookup-only: true
+      - name: Build the convergence harness
+        if: steps.harness.outputs.cache-hit != 'true'
+        working-directory: daemon
+        run: |
+          mkdir -p ../.convergence-harness
+          go build -trimpath -o ../.convergence-harness/freeside-signet-dev ./cmd/freeside-signet-dev
+      - name: Save the convergence harness
+        if: steps.harness.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .convergence-harness
+          key: ${{ steps.harness.outputs.cache-primary-key }}
       - name: Compile every test binary
         working-directory: daemon
         # -trimpath matches the GOFLAGS check.sh exports, so the test steps

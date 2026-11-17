@@ -155,6 +155,11 @@
 #                          (run-convergence.sh --skip-build); CI sets it
 #                          only on an exact Swift build cache hit for a run
 #                          without the app component
+#   CONVERGENCE_HARNESS    a prebuilt freeside-signet-dev to launch instead
+#                          of building one (run-convergence.sh --harness);
+#                          CI sets it only on an exact hit of the
+#                          convergence harness cache, keyed on daemon/'s
+#                          git tree
 #   CONVERGENCE_SCREENSHOT_SHARDS
 #                          with CONVERGENCE_ALL_TESTS, the number of
 #                          concurrent slices the screenshot regression
@@ -744,7 +749,8 @@ scripts_trackercollect() {
 # --- convergence -----------------------------------------------------------
 
 convergence_run() {
-  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests} ${CONVERGENCE_SKIP_BUILD:+--skip-build}
+  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests} ${CONVERGENCE_SKIP_BUILD:+--skip-build} \
+    ${CONVERGENCE_HARNESS:+--harness "$CONVERGENCE_HARNESS"}
 }
 
 # --- docs ------------------------------------------------------------------
