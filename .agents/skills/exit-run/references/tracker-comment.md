@@ -1,0 +1,246 @@
+# Tracker Comment Templates
+
+Four records an exit run writes on the tracker. The diagram follows
+`docs/tracker-format.md` (§status) with Freeside's additions in
+docs/coordination.md (Tracking Issues); this file only fixes the section
+order so consecutive runs read alike. Replace every bracketed placeholder;
+delete a section that has nothing to say rather than leaving it empty.
+
+## Exit-Run Comment
+
+````markdown
+<!-- freeside-<tracker>-exit-run:<run label> -->
+## <Tracker Name> Exit Run: <Target> (<run label>)
+
+**<Bottom line: can the tracker close? If not, what stands between here and
+closure, in two sentences.>** Proposal: <every finding that isn't fixed
+in-run Deferred; the ones suggested to block on, in one line>. Dispositions
+below are a proposal until the owner adopts them.
+
+*Status revision <date>: <what changed since the comment was posted>.*
+
+Evidence basis: the run itself from `main` at `<sha>`, the state root
+`<name>`, the operator's reports on <devices>, and screenshots attached to
+<issues>. No unit issue's checklist was edited.
+
+### The Run
+
+| Step | Result |
+| --- | --- |
+| Rehearsal | <fixture pass: the pass's build SHA, and when the real run started from a newer tip, that SHA and the `scripts/runtime-diff.sh` verdict line; root; settings digest; canonical issue; task and run ids; `billable_cost`; record checks, alerts raised, lease released: passed or the finding> |
+| Seeded pass, <gate> | <the mechanism and its command; build SHA; root and each difference from the rehearsal, or the scenario's name; task and run ids; the record fields that show the response; `billable_cost`> |
+| State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
+| Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes; the iPhone's notifications switch: off, or on from `<time>` for <gate>> |
+| Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
+| Campaign <n>, implementation attempt <k> | <run id; outcome; if failed, the finding and whether an item was raised> |
+| Review | <review id; model and reasoning; instruction digest; round outcomes> |
+| Task record | <`freesided inspect task` read: task id, `as_of_revision`, publication outcome and its head; each record check passed or failed; ready item and its offered actions> |
+| Publication | <PR link; base to head; branch; whether merged and by whom> |
+| Completion fact | <the recorded completion row after the merge, or why none> |
+| Spend | <per role; total; review cost owner> |
+
+**Gates:** the contract's gate table (`references/checkpoints.md`) with a
+Result column: passed, failed with the finding, or not measurable as
+recorded before launch.
+
+| Gate | Trigger | Expected on Mac | Expected on iPhone | When | Result |
+| --- | --- | --- | --- | --- | --- |
+| <gate> | <real, synthetic, seeded, or none> | <expected> | <expected> | <point in the run> | <result> |
+
+**Exit-proof unit (#<n>):** <each Acceptance line in its own words:
+evidenced by <row or record>, or not evidenced and why> ... The unit's
+checkboxes and state are untouched until the owner accepts the run.
+
+**Actions exercised on real items:** <action (card, device)> ...
+**Not evidenced this run:** <action: why; what covers it instead> ...
+**Synthetic-trigger proofs:** <alert: `freesided raise-item` command; item
+ID and its `status` in the task record, or for `stall` its listing in
+`freesided inspect health`; where the card showed and what it said,
+per device; the notification only where the gate expected one> ... These
+items were raised by command, not by the condition: they prove the item
+reaches the clients and how it displays, and the daemon's tests prove the
+condition raises the item.
+**Seeded-condition proofs:** <gate: the mechanism and its command; the
+pass it ran on; the record fields that show the response, such as a line's
+`passed_over` or a run's hold and reset> ... These conditions were seeded
+or injected, not produced by the provider: they prove what the daemon does
+once the condition holds.
+
+### Findings
+
+Severity and exit disposition are separate. "Deferred" means
+deferral-labeled now and swept at the next planning; the proposal defers
+every finding that isn't fixed in-run. The owner's answer can make one
+"Required" (merge before exit) or "Investigate" (diagnose before exit and
+fix any proven gap); those rows appear with the status revision that
+records it.
+
+**Suggested to block on:**
+
+- #<n>: <which stated outcome it contradicts, in one line>.
+
+| Issue | What's wrong | Sev | Disposition | Reason or trigger |
+| --- | --- | --- | --- | --- |
+| #<n> | <one line> | P<1-3> | Fixed in-run, PR #<n> | <why every run would hit it> |
+| #<n> | <one line> | P<1-3> | Deferred, suggested to block on | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | Deferred | <trigger that promotes it> |
+| #<n> | <one line> | P<1-3> | Required (owner, <date>) | <which stated outcome it contradicts> |
+| #<n> | <one line> | P<1-3> | Investigate (owner, <date>) | <what a proven gap would require> |
+
+Not filed: <symptom>, covered by #<n>; <symptom>, appears covered by #<n>,
+please confirm.
+
+Conditionally blocking, needs one check before deciding: <#n: the check>.
+
+### Start Order (For The Adopted Exit Set)
+
+<Leave this section out of a proposal. Add it with the status revision that
+records the owner's Required and Investigate findings.>
+
+Prerequisites: <what is already merged; `main` at `<sha>`>.
+
+**Startable now (structural only):** <each unit as a bare `#N`, or
+`#N (contract)`; or why none is startable>.
+
+**Typed chains:** <every arrow is `starts-after` unless marked>.
+#a → #b → #c; #d → #e. <Units with no relationship start freely and are
+not listed here.>
+
+**Critical path:** <chain>, <n> units.
+
+**Landing order:** <each `merges-after` pair, which only the owner's
+approval order or `--order` enforces; or none>.
+
+**Tier A units:** <units on a Tier A path, which keep refute-first, a
+fresh-context review, and a decision note; or none>.
+
+```mermaid
+flowchart LR
+    i<A>[["#<A> <three to five words>"]]
+    i<B>["#<B> <three to five words>"]
+    i<C>["#<C> <three to five words>"]
+    i<A> ==> i<B>
+    i<B> -.-> i<C>
+    classDef contract fill:#fde2c8,stroke:#c2410c,color:#000
+    classDef owner fill:#e5e7eb,stroke:#6b7280,stroke-dasharray:5 5,color:#000
+    classDef startable stroke:#15803d,stroke-width:3px
+    classDef investigation fill:#fff2cc,stroke:#a80,color:#000
+    class i<A> contract
+    class i<B> startable
+```
+
+**Legend:** thick arrow critical path · arrow starts-after · double border merged · green outline startable now · orange contract · grey dashed owner-run.
+
+**Edges:** dotted arrow `merges-after`; a `stacked-on` edge is labeled.
+Yellow fill marks a required investigation. Deferred issues are omitted.
+
+**Authority:** each unit issue's Dependencies field is authoritative; this
+digest and diagram are projections, and where they diverge the issue wins
+and this comment and the body index get repaired. Grounded at `main`
+`<sha>`.
+
+### What I Verified And What I Didn't
+
+- Passed: <the pipeline end to end; the task record from `freesided inspect task`; checks on in-run fix branches>.
+- Checked: <read-only inventories; source traces, with file:line>.
+- Not run: <walkthrough steps not done; devices unavailable; any fix>.
+- Caveat: <store edit with backup path; anything that makes the state root unclean evidence>.
+
+### Decision-Note Disposition
+
+<This comment records the run and proposes dispositions; it changes no
+policy. If the owner adopts <the reinterpretation>, that is a lasting
+decision and gets a devlog note in its own PR.> Reusable run mechanics live
+outside the repository at <redacted location>.
+````
+
+## Exit-Preparation Comment (Run Blocked Before Launch)
+
+```markdown
+## Exit Preparation: <What Blocked It>
+
+The requested exit exercise targets <target link>, in <mode>, with the
+source text: > <exact text>.
+
+**Blocked by <#n or condition>.** At `main` `<sha>`, <one sentence on why
+the run cannot start>. <What a workaround would test instead, and why that
+is not the requested path.>
+
+Preparation verified: <target prerequisites closed; no open PR for it;
+credentials; app access; environment>. Not verified: <list>.
+
+No production run, submission, specification approval, or target PR was
+created. <Anything that was created or spent: onboarding, images, a filed
+issue.> The tracker stays open.
+
+Resume after <condition>, using <the documented path>.
+```
+
+## Exit-Preparation Comment (Mid-Wave Rehearsal)
+
+One comment per attempt, posted when the attempt ends, whether or not a
+pass completed (SKILL.md, A Mid-Wave Rehearsal).
+
+```markdown
+## Exit Preparation: Mid-Wave Rehearsal (#<unit>), Attempt <k>
+
+**<Bottom line: did a pass complete, and which of the unit's Acceptance
+lines does this attempt evidence, in two sentences.>** <What stopped it, or
+what needs an owner call.>
+
+Evidence basis: `main` at `<sha>`, the state root `<name>`, and the task
+record. No operator took part, and no unit issue's checklist was edited.
+
+### The Pass
+
+| Step | Result |
+| --- | --- |
+| Rehearsal | <as the exit-run comment's Rehearsal row; for an attempt that stopped, the step it reached and the refusal or error, verbatim> |
+| Seeded pass, <line> | <as the exit-run comment's Seeded pass row> |
+| Spend | <per role; total> |
+
+**Acceptance (#<unit>):** <each line in its own words: evidenced by <row
+or record>, not evidenced and why, or needs an owner call>.
+
+### Findings
+
+<The exit-run comment's Findings section, with the proposal.>
+
+### What I Verified And What I Didn't
+
+- Passed: <...>.
+- Checked: <...>.
+- Not run: <...>.
+```
+
+Record the owner's answer as a dated status revision under the bottom
+line: the pass accepted, and any Acceptance line the owner narrowed or
+moved to the exit proof.
+
+## Tracker Body Update
+
+Make these edits to the body in the same operation as the comment, after
+reading the current body:
+
+- When the exit set isn't empty, add one bullet to `## Exit` linking the
+  exit-run comment as the owner-approved (or proposed) exit follow-up,
+  ending with `Evidence:` and the exit-set units, chained as
+  `Evidence: #N, then #M` when the proof lands in steps, so "all units
+  merged" is no longer read as sufficient on its own. If Exit already
+  has six bullets, the format's maximum, extend the closest existing
+  bullet's text and Evidence instead. A clean run adds no Exit bullet: the
+  comment is the record, and the owner ticks the existing bullets.
+- Add the exit set, the findings the owner made Required or Investigate
+  before exit, to `## Units` as bare `- [ ] #<n>` lines in its one flat
+  list. On a wave tracker, listing is half of scheduling (AGENTS.md Work
+  Units): set the phase milestone on each in the same edit. An ad hoc
+  tracker schedules nothing and sets no milestone. A `needs-human` finding
+  in the exit set goes under `### Owner-run`, unmilestoned.
+- Keep a deferred finding out of Units and the diagram on either kind of
+  tracker. Record the adopted dispositions in the Notes block, one bullet
+  per disposition group with its date and a link to the comment, for
+  example `**Deferred beyond exit (owner-adopted <date>):** #<n>, #<m>.`
+  The comment's table stays the full record.
+- Refresh the Status section: add the exit-set units as nodes with their
+  edges and recompute **Startable now**, so the body and the comment
+  project the same state.

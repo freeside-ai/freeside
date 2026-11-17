@@ -736,13 +736,17 @@ own additions to that format.
 
 The repository's `exit-run`, `plan-wave`, and `review-wave` skills are
 available to both Claude Code and Codex. Edit their shared source in
-`.claude/skills/`; `.agents/skills/` contains relative symlinks to those same
-folders, including their supporting references. When adding a skill, add its
-matching link under `.agents/skills/` too.
+`.claude/skills/`, then copy each changed skill folder, references included,
+to `.agents/skills/`; a new skill gets its copy there too. The copies are
+plain files, not symlinks: Freeside's workspace seed refuses a tracked
+symlink (#339), so a symlink would keep Freeside from working on this
+repository. `bash scripts/check.sh scripts skill-mirrors` fails when a copy
+is missing, differs, or has no source, and CI runs it whenever either folder
+changes.
 
 In Codex, invoke them as `$exit-run`, `$plan-wave`, or `$review-wave`, followed
 by the inputs the skill needs. Claude Code uses `/exit-run`, `/plan-wave`, and
 `/review-wave`. For example, `$plan-wave 8` and `/plan-wave 8` select the same
-workflow. Codex supports these repository-local symlinks through its
+workflow. Codex finds them through its
 [skill discovery](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 If a skill does not appear after updating the checkout, restart Codex.
