@@ -335,6 +335,13 @@ func (o *CredentialOnboarder) InstallationURL(registration AppRegistration) (str
 	return o.webBaseURL + "/apps/" + url.PathEscape(registration.Slug) + "/installations/new", nil
 }
 
+// rsaPrivateKeyPEMHeader opens the one key format GitHub's manifest flow
+// returns. It is split so the source holds no credential-shaped line: agents
+// work on this repository, and one that quoted the whole header into its
+// transcript or a reply would trip the export scan and the importer's
+// credential rules (#3305).
+const rsaPrivateKeyPEMHeader = "-----BEGIN " + "RSA PRIVATE KEY-----"
+
 // ImportKey verifies a downloaded PEM against the canonical App and its
 // visibility before it can replace local credentials. The bounded PEM bytes
 // are cleared after parsing; only the parsed key reaches SaveApp.
@@ -358,7 +365,7 @@ func (o *CredentialOnboarder) ImportKey(
 		return AppCredentials{}, errors.New("credential onboarding: private key PEM exceeds the size limit")
 	}
 	trimmed := bytes.TrimSpace(raw)
-	if !bytes.HasPrefix(trimmed, []byte("-----BEGIN RSA PRIVATE KEY-----")) {
+	if !bytes.HasPrefix(trimmed, []byte(rsaPrivateKeyPEMHeader)) {
 		return AppCredentials{}, errors.New("credential onboarding: downloaded key is not one RSA PRIVATE KEY PEM")
 	}
 	block, rest := pem.Decode(trimmed)
