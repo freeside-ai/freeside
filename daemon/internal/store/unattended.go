@@ -536,20 +536,6 @@ func (tx *ReadTx) ListOpenAttentionItems(
 	return items, nil
 }
 
-// ListOpenAttentionItemsForRun returns every open item bound to one run, in
-// id order. The independent subject_run_id column scopes the candidate set
-// before body reconstruction and mutable evidence-policy gating, so corrupt
-// or stale-policy rows for other runs do not block observation of this run.
-// The scoped divergence guard still fails closed if either view would omit a
-// selected row. The production-lifecycle supervisor (#795) is the consumer.
-func (tx *ReadTx) ListOpenAttentionItemsForRun(
-	ctx context.Context, runID domain.RunID,
-) ([]domain.AttentionItem, error) {
-	return tx.listOpenAttentionItemsForRun(ctx, runID, func(sc scanner) (domain.AttentionItem, Snapshot, error) {
-		return tx.scanAttentionItemSnapshot(ctx, sc)
-	})
-}
-
 // ListOpenAttentionItemRecordsForRun returns structurally authenticated open
 // item records for one run without applying mutable evidence policy. It is a
 // diagnostic-history primitive: callers must discard non-actionable records
@@ -568,6 +554,11 @@ func (tx *ReadTx) ListOpenAttentionItemRecordsForRun(
 	})
 }
 
+// listOpenAttentionItemsForRun returns every open item bound to one run, in
+// id order, reconstructed by scan. The independent subject_run_id column
+// scopes the candidate set before scan runs, so corrupt rows for other runs
+// do not block observation of this run. The scoped divergence guard still
+// fails closed if either view would omit a selected row.
 func (tx *ReadTx) listOpenAttentionItemsForRun(
 	ctx context.Context,
 	runID domain.RunID,
@@ -608,9 +599,9 @@ func (tx *ReadTx) listOpenAttentionItemsForRun(
 // beyond 1,000 levels, while decode uses encoding/json and accepts a deeper
 // otherwise-valid body. A tampered subject_run_id could hide that body from
 // SQLite's dual-view candidate set, so this lightweight pass uses the same Go
-// decoder to find candidate bodies before the indexed query reconstructs and
-// policy-gates its selected rows. It only examines lookup fields: unrelated
-// malformed or stale-policy rows remain isolated from the requested run.
+// decoder to find candidate bodies before the indexed query reconstructs its
+// selected rows. It only examines lookup fields: unrelated malformed rows
+// remain isolated from the requested run.
 func (tx *ReadTx) checkAttentionRunBodyLookup(ctx context.Context, runID domain.RunID) error {
 	rows, err := tx.tx.QueryContext(ctx, attentionRunBodyLookupSQL)
 	if err != nil {

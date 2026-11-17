@@ -492,10 +492,6 @@ func TestAttentionItemReadsRegateOfferedAlternatives(t *testing.T) {
 			_, err := tx.ListOpenAttentionItems(ctx, domain.AttentionFindingAdjudication)
 			return err
 		}},
-		{"list open run", func(tx *store.ReadTx) error {
-			_, err := tx.ListOpenAttentionItemsForRun(ctx, runID)
-			return err
-		}},
 	}
 	for _, test := range reads {
 		t.Run(test.name, func(t *testing.T) {
@@ -559,10 +555,6 @@ func TestAttentionItemReadsRegateFindingAdjudicationBinding(t *testing.T) {
 		}},
 		{"list open type", func(tx *store.ReadTx) error {
 			_, err := tx.ListOpenAttentionItems(ctx, domain.AttentionFindingAdjudication)
-			return err
-		}},
-		{"list open run", func(tx *store.ReadTx) error {
-			_, err := tx.ListOpenAttentionItemsForRun(ctx, runID)
 			return err
 		}},
 	}
