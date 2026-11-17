@@ -2,10 +2,7 @@ package store
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -53,41 +50,24 @@ var poolUsageReaderFiles = []string{
 
 func TestOnlyAllowlistedFilesReadPoolUsageObservations(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("..", "..")
+	parsed, err := daemonSources()
+	if err != nil {
+		t.Fatal(err)
+	}
 	inspected := 0
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		relative = filepath.ToSlash(relative)
-		for _, allowed := range poolUsageReaderFiles {
-			if relative == allowed || strings.HasSuffix(allowed, "/") && strings.HasPrefix(relative, allowed) {
-				return nil
-			}
+	for _, source := range parsed.sources {
+		if slices.ContainsFunc(poolUsageReaderFiles, func(allowed string) bool {
+			return source.rel == allowed || strings.HasSuffix(allowed, "/") && strings.HasPrefix(source.rel, allowed)
+		}) {
+			continue
 		}
 		inspected++
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
+		ast.Inspect(source.file, func(node ast.Node) bool {
 			if identifier, ok := node.(*ast.Ident); ok && poolUsageReaders[identifier.Name] {
-				t.Errorf("%s references the pool usage record reader %s", relative, identifier.Name)
+				t.Errorf("%s references the pool usage record reader %s", source.rel, identifier.Name)
 			}
 			return true
 		})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	// A broken walk must not pass by inspecting nothing.
 	if inspected < 500 {

@@ -270,6 +270,18 @@ func lineupProbeOutputFiles(version, stdout, stderr, status string) []tarFile {
 	}
 }
 
+// probeLineupImageNoWait is ProbeLineupImage with a Sleep that returns at
+// once. The fake runtime reports a container stopped after a set number of
+// inspects, not after wall time, so the stop poll needs no real wait.
+func probeLineupImageNoWait(
+	ctx context.Context, rt Runtime, p LineupProbe, authorize RuntimeResourceAuthorizer,
+) (LineupProbeOutput, error) {
+	return probeLineupImage(ctx, rt, p, authorize, Config{Sleep: noWaitSleep})
+}
+
+// noWaitSleep is a Config.Sleep that waits for nothing.
+func noWaitSleep(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+
 func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) {
 	t.Parallel()
 	for _, p := range []LineupProbe{claudeWriterProbe(t), codexReviewerProbe()} {
@@ -293,7 +305,7 @@ func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) 
 			var granted RuntimeResourceNames
 			authorize := func(_ context.Context, names RuntimeResourceNames) error { granted = names; return nil }
 
-			out, err := ProbeLineupImage(t.Context(), rt, p, authorize)
+			out, err := probeLineupImageNoWait(t.Context(), rt, p, authorize)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -367,7 +379,7 @@ func TestProbeLineupImageReportsWhetherTheProviderAnswered(t *testing.T) {
 				}
 				return nil
 			}
-			out, err := probeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil, Config{EgressDialContext: dial})
+			out, err := probeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil, Config{EgressDialContext: dial, Sleep: noWaitSleep})
 			if err != nil || clientErr != nil {
 				t.Fatalf("probe = %v, client = %v", err, clientErr)
 			}
@@ -443,7 +455,7 @@ func TestProbeLineupImageNamesBindUnderAHeldRigLease(t *testing.T) {
 		return err
 	}
 
-	out, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), authorize)
+	out, err := probeLineupImageNoWait(t.Context(), rt, claudeWriterProbe(t), authorize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +478,7 @@ func TestProbeLineupImageRefusesAnExportStillHoldingTheCredential(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			files := append(lineupProbeOutputFiles("v\n", "", "", "0\n"), held)
 			rt := newLineupProbeFakeRuntime(t, files...)
-			_, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil)
+			_, err := probeLineupImageNoWait(t.Context(), rt, claudeWriterProbe(t), nil)
 			if err == nil || !strings.Contains(err.Error(), "still holds the credential") {
 				t.Fatalf("err = %v", err)
 			}
@@ -482,7 +494,7 @@ func TestProbeLineupImageRefusesAnExportStillHoldingTheCredential(t *testing.T) 
 func TestProbeLineupImageRefusesAnExportWithoutAStatus(t *testing.T) {
 	t.Parallel()
 	rt := newLineupProbeFakeRuntime(t, tarFile{lineupProbeStdout, []byte("x")})
-	if _, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil); err == nil ||
+	if _, err := probeLineupImageNoWait(t.Context(), rt, claudeWriterProbe(t), nil); err == nil ||
 		!strings.Contains(err.Error(), "no exit status") {
 		t.Fatalf("err = %v", err)
 	}

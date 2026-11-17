@@ -24,6 +24,7 @@ var lineupProbeSequenceSteps = []string{"create", "inspect", "allowlist", "start
 func newLineupProbeSequenceRun(t *testing.T, rt Runtime) *lineupProbeRun {
 	t.Helper()
 	cfg := Config{}.withDefaults()
+	cfg.Sleep = noWaitSleep
 	owner, err := newOwnershipLabel()
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +148,7 @@ func TestProbeLineupImageReportsAMemoryLimitKill(t *testing.T) {
 		}
 		return nil
 	}
-	_, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil)
+	_, err := probeLineupImageNoWait(t.Context(), rt, claudeWriterProbe(t), nil)
 	mle, ok := err.(*MemoryLimitError) //nolint:errorlint // the contract is an unwrapped *MemoryLimitError
 	if !ok {
 		t.Fatalf("ProbeLineupImage = %v (%T), want an unwrapped *MemoryLimitError", err, err)

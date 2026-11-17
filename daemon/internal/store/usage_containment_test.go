@@ -2,9 +2,7 @@ package store
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,39 +10,37 @@ import (
 
 func TestAdmissionAndPolicyPackagesCannotReadUsageObservations(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("..")
+	parsed, err := daemonSources()
+	if err != nil {
+		t.Fatal(err)
+	}
 	targets := []string{"domain", "store", "intake", "signet", "exec", "inference", "publish", "engine"}
 	inspected := 0
-	fset := token.NewFileSet()
 	for _, target := range targets {
-		err := filepath.WalkDir(filepath.Join(root, target), func(
-			path string, entry os.DirEntry, err error,
-		) error {
-			if err != nil {
-				return err
+		matched := false
+		for _, source := range parsed.sources {
+			if !strings.HasPrefix(source.rel, "internal/"+target+"/") {
+				continue
 			}
-			if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			if target == "store" && (entry.Name() == "usage_observation.go" || entry.Name() == "tx.go") {
-				return nil
+			matched = true
+			if name := path.Base(source.rel); target == "store" && (name == "usage_observation.go" || name == "tx.go") {
+				continue
 			}
 			inspected++
-			file, err := parser.ParseFile(fset, path, nil, 0)
-			if err != nil {
-				return err
-			}
-			ast.Inspect(file, func(node ast.Node) bool {
+			// The path from this package's directory, as the scan named it
+			// before it shared the parse.
+			filename := filepath.Join("..", filepath.FromSlash(strings.TrimPrefix(source.rel, "internal/")))
+			ast.Inspect(source.file, func(node ast.Node) bool {
 				identifier, ok := node.(*ast.Ident)
 				if ok && (identifier.Name == "ReadUsage" || identifier.Name == "UsageReadTx") {
-					t.Errorf("%s references the observation-only usage reader %s", path, identifier.Name)
+					t.Errorf("%s references the observation-only usage reader %s", filename, identifier.Name)
 				}
 				return true
 			})
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
+		}
+		// A renamed or removed target must fail, not drop out of the scan.
+		if !matched {
+			t.Fatalf("no non-test Go files under %s", filepath.Join("..", target))
 		}
 	}
 	if inspected < 200 {

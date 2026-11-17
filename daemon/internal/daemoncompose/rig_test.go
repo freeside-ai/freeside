@@ -256,11 +256,16 @@ func taskRuntimeNames(cycle int) ward.RuntimeResourceNames {
 //
 //nolint:paralleltest // Serial: heldRigTokenFile sets HOME with t.Setenv.
 func TestRigHoldSurvivesRepeatedTasksWithRelease(t *testing.T) {
+	// rigHoldCycles must exceed the unreleased ceiling, so the released run
+	// proves release lets a hold pass it. The unreleased subtest fails if the
+	// ceiling ever rises past it; then raise this. Every cycle locks and
+	// rewrites the manifest, so keep the count close to the ceiling.
+	const rigHoldCycles = 30
 	t.Run("released", func(t *testing.T) {
 		stateRoot, tokenFile := heldRigTokenFile(t)
 		authorize := ProductionRigRuntimeAuthorizer(stateRoot, tokenFile)
 		release := ProductionRigRuntimeReleaser(stateRoot, tokenFile)
-		for cycle := range 100 {
+		for cycle := range rigHoldCycles {
 			names := taskRuntimeNames(cycle)
 			if err := authorize(t.Context(), names); err != nil {
 				t.Fatalf("bind task %d: %v", cycle, err)
@@ -275,13 +280,13 @@ func TestRigHoldSurvivesRepeatedTasksWithRelease(t *testing.T) {
 		}
 		if n := len(manifest.Resources.Containers) + len(manifest.Resources.Volumes) +
 			len(manifest.Resources.Networks); n != 0 {
-			t.Fatalf("rig holds %d names after 100 released tasks, want 0", n)
+			t.Fatalf("rig holds %d names after %d released tasks, want 0", n, rigHoldCycles)
 		}
 	})
 	t.Run("unreleased", func(t *testing.T) {
 		stateRoot, tokenFile := heldRigTokenFile(t)
 		authorize := ProductionRigRuntimeAuthorizer(stateRoot, tokenFile)
-		for cycle := range 100 {
+		for cycle := range rigHoldCycles {
 			err := authorize(t.Context(), taskRuntimeNames(cycle))
 			if err == nil {
 				continue
@@ -291,7 +296,7 @@ func TestRigHoldSurvivesRepeatedTasksWithRelease(t *testing.T) {
 			}
 			return
 		}
-		t.Fatal("100 unreleased tasks fit the manifest; the regression no longer shows the ceiling it guards")
+		t.Fatalf("%d unreleased tasks fit the manifest; the regression no longer shows the ceiling it guards", rigHoldCycles)
 	})
 }
 
