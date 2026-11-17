@@ -3422,7 +3422,7 @@ func TestSpecificationBackupPayloadDigests(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		claim, err = tx.GetOutbox(t.Context(), specificationImplementationClaimKey("specification-run", "implementation-run"))
+		claim, err = tx.GetOutbox(t.Context(), specificationImplementationClaimKey("implementation-run"))
 		return err
 	}); err != nil {
 		t.Fatal(err)

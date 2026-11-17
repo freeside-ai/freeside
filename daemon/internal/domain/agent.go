@@ -341,8 +341,6 @@ func CanonicalStageRole(name string) (StageName, error) {
 		return canonical, nil
 	}
 	switch name {
-	case legacySpecificationStageName:
-		return StageNameSpecification, nil
 	case "implement":
 		return StageNameImplementation, nil
 	}

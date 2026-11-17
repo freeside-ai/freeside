@@ -253,26 +253,16 @@ func TestReattemptTaskWithoutCampaign(t *testing.T) {
 	}
 }
 
-// The frozen database supplies an authenticated, approved campaign, including
-// its specification root and publication metadata, without launching an agent.
+// reattemptTaskFixture approves a submitted specification through the real
+// engine, so its campaign carries an authenticated specification root and
+// publication metadata, and reopens the database the way a command does.
 func reattemptTaskFixture(t *testing.T) (string, *store.Store, domain.Run) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "state.db")
-	dump, err := os.ReadFile(filepath.Join("..", "..", "internal", "store", "testdata", "pre_rename_specification_vocabulary.sql"))
-	if err != nil {
+	approved := approveSubmittedSpecification(t, "# Task\n\nImplement the thing.")
+	if err := approved.st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateTopicKey(dbPath, false); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := sql.Open("sqlite", "file:"+dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, loadErr := raw.ExecContext(t.Context(), string(dump))
-	if err := errors.Join(loadErr, raw.Close()); err != nil {
-		t.Fatal(err)
-	}
+	dbPath := approved.cfg.DBPath
 	st, _, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +271,7 @@ func reattemptTaskFixture(t *testing.T) (string, *store.Store, domain.Run) {
 	var parent domain.Run
 	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		parent, err = tx.GetRun(t.Context(), "implementation-from-submit")
+		parent, err = tx.GetRun(t.Context(), approved.implementationRun.ID)
 		return err
 	}); err != nil {
 		t.Fatal(err)

@@ -13,8 +13,6 @@
 //   - transitions.go  the legal-successor checks for stored runs,
 //     conversations, attention items and deliveries, devices, pairing codes,
 //     and decision surfaces
-//   - legacy_vocabulary.go the pre-rename specification-run spelling and its
-//     canonical mapping
 //   - attention_item.go, attention_delivery.go, attention_conclusion.go
 //     the attention model and how a closed item concluded (§4)
 //   - decision_surface.go the daemon-owned decision surface an item presents

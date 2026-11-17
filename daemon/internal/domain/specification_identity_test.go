@@ -57,3 +57,45 @@ func TestSpecificationArtifactAndApprovalIDMatching(t *testing.T) {
 		}
 	}
 }
+
+// The run, stage, and invocation identities are stored and parsed back, so
+// the parser's refusals are pinned on the current prefix: host verification
+// admission trusts the run it recovers.
+func TestSpecificationRunAndInvocationIdentity(t *testing.T) {
+	t.Parallel()
+	if got := SpecificationStageID("specification-run"); got != "specify-specification-run" {
+		t.Errorf("stage id = %q", got)
+	}
+	if got := SpecificationInvocationID("specification-run", 1); got != "inv-specify-specification-run-1" {
+		t.Errorf("invocation id = %q", got)
+	}
+	for _, id := range []InvocationID{"inv-specify-specification-run-1", "inv-specify-specification-run-3"} {
+		if runID, ok := SpecificationRunIDFromInvocationID(id); !ok || runID != "specification-run" {
+			t.Errorf("parse %q = %q, %t", id, runID, ok)
+		}
+	}
+	for _, id := range []InvocationID{
+		"inv-specify-specification-run-01",
+		"inv-specify-specification-run-",
+		"inv-specify-specification-run-99999999999999999999",
+		"inv-specify--1",
+		"inv-implement-run-1",
+	} {
+		if runID, ok := SpecificationRunIDFromInvocationID(id); ok {
+			t.Errorf("parse %q accepted as run %q", id, runID)
+		}
+	}
+	implementation := RunID("implementation-run")
+	if !SpecificationRunIDMatchesImplementation(SpecificationRunIDForImplementation(implementation), implementation) ||
+		SpecificationRunIDMatchesImplementation("specification-run", implementation) {
+		t.Error("derivation match disagrees with the derivation")
+	}
+	if commandID, ok := SpecificationDiscussionCommandID("specification-discussion-cmd-1"); !ok || commandID != "cmd-1" {
+		t.Errorf("discussion command = %q, %t", commandID, ok)
+	}
+	for _, key := range []string{"inv-cmd-1", "specification-discussion-"} {
+		if commandID, ok := SpecificationDiscussionCommandID(key); ok {
+			t.Errorf("%q parsed as discussion command %q", key, commandID)
+		}
+	}
+}

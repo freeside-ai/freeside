@@ -5,13 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // TestTaskReconstructionRegatesLifecycleFacts pins the fact-loader trust
@@ -281,23 +278,14 @@ func insertRawRunFixture(ctx context.Context, db *sql.DB, id, projectID, policy 
 func TestTaskReconstructionRejectsCoherentRunRetarget(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db := openRaw(t)
-	dump, err := os.ReadFile(filepath.Join("testdata", "pre_rename_specification_vocabulary.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, string(dump)); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
-	st := &Store{db: db}
+	st := openTestStore(t)
+	db := st.db
+	_, seeded := SeedApprovedCampaign(t, st, "project-1", "implementation-run")
 	var run domain.Run
 	var task domain.Task
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		var err error
-		run, err = tx.GetRun(ctx, "implementation-from-submit")
+		run, err = tx.GetRun(ctx, seeded.ID)
 		if err != nil {
 			return err
 		}

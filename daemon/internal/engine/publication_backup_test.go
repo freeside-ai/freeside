@@ -86,7 +86,7 @@ func publicationBackupCases(t *testing.T, publication ProductionPublication) []p
 		{
 			name: "specification implementation claim", claim: true,
 			entry: store.QueueEntry{
-				IdempotencyKey: specificationImplementationClaimKey(specification.SpecificationRunID, specification.ImplementationRunID),
+				IdempotencyKey: specificationImplementationClaimKey(specification.ImplementationRunID),
 				Kind:           KindSpecificationImplementationClaim, Payload: marshal(specification), Status: "dispatched",
 			},
 			extract: SpecificationImplementationClaimBackupPayloadDigests,

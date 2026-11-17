@@ -740,18 +740,6 @@ func applyLaunchSubmission(
 		// result from here on; a new submission is refused below.
 		reference = acceptedSourceReference(publication)
 	}
-	var err error
-	// A database written before the rename holds this task's intake
-	// state under the legacy specification identity; converge on it instead
-	// of minting a second specification run for the same implementation.
-	if resolved, err := engine.ResolveSpecificationRunID(ctx, st, implementationRunID); err != nil {
-		return submitResult{}, fmt.Errorf("submit: %w", err)
-	} else if resolved != specificationRunID {
-		specificationRunID = resolved
-		if resolvedPolicy, err = domain.NewResolvedPolicy(specificationRunID, keys); err != nil {
-			return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
-		}
-	}
 	specArtifact, err := engine.SubmissionArtifact(
 		domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
 	if err != nil {

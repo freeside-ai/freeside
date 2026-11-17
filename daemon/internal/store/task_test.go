@@ -357,15 +357,12 @@ func TestTaskNamePreservesOperatorChoice(t *testing.T) {
 func TestTaskRetainsRetryAndLaterCampaignHistory(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	s := openPreRenameDatabase(t)
-	var parent, retry, later domain.Run
+	s := openStore(t, store.Options{})
+	original, parent := store.SeedApprovedCampaign(t, s, "project-1", "implementation-run")
+	var retry, later domain.Run
 	var task, unrelated domain.Task
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		var err error
-		parent, err = tx.GetRun(ctx, legacyImplementationRun)
-		if err != nil {
-			return err
-		}
 		task, err = tx.GetTask(ctx, parent.TaskID)
 		if err != nil {
 			return err
@@ -417,10 +414,6 @@ func TestTaskRetainsRetryAndLaterCampaignHistory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		original, err := tx.GetRun(ctx, legacySpecificationRun)
-		if err != nil {
-			return err
-		}
 		later = domain.Run{
 			ID: domain.SpecificationRunIDForImplementation(implementationID), ProjectID: parent.ProjectID,
 			SpecDigest: original.SpecDigest, PolicyDigest: original.PolicyDigest, CampaignID: campaignID, AttemptNumber: 1, Stages: []domain.Stage{},
@@ -449,7 +442,7 @@ func TestTaskRetainsRetryAndLaterCampaignHistory(t *testing.T) {
 			t.Fatalf("task continuity: retry=%q later=%q task=%+v", retry.TaskID, later.TaskID, stored)
 		}
 		runs, err := tx.TaskRunIDs(ctx, task.ID)
-		if err == nil && !slices.Equal(runs, []domain.RunID{legacySpecificationRun, parent.ID, retry.ID, later.ID}) {
+		if err == nil && !slices.Equal(runs, []domain.RunID{original.ID, parent.ID, retry.ID, later.ID}) {
 			t.Fatalf("task run order = %v", runs)
 		}
 		return err

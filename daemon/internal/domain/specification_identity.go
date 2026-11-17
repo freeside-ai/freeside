@@ -10,13 +10,10 @@ import (
 
 // The specification lane's identifiers derive from one another: the
 // specification run from the implementation run it precedes, the stage and
-// every invocation from the run. Two identifier families exist. A run minted
-// before the rename (#986) keeps its original prefix forever, together with
-// the stage and invocation identifiers derived from it, because outbox and
-// inbox idempotency keys, attention item subjects, and backup manifests
-// embed those bytes. The family is a pure function of the run ID prefix, so
-// every site that mints or parses a derived identifier goes through these
-// helpers instead of spelling a prefix.
+// every invocation from the run. Outbox and inbox idempotency keys,
+// attention item subjects, and backup manifests embed those bytes, so every
+// site that mints or parses a derived identifier goes through these helpers
+// instead of spelling a prefix.
 const (
 	specificationRunIDPrefix        = "run-specification-"
 	specificationStageIDPrefix      = "specify-"
@@ -25,40 +22,26 @@ const (
 )
 
 // SpecificationRunIDForImplementation derives the specification run identity
-// from the operator-visible implementation identity. A run derived before the
-// rename has the legacy family's identity instead; see
-// LegacySpecificationRunIDForImplementation.
+// from the operator-visible implementation identity.
 func SpecificationRunIDForImplementation(implementationRunID RunID) RunID {
-	return derivedSpecificationRunID(specificationRunSeed, specificationRunIDPrefix, implementationRunID)
-}
-
-func derivedSpecificationRunID(seed, prefix string, implementationRunID RunID) RunID {
-	sum := sha256.Sum256([]byte(seed + "\x00" + string(implementationRunID)))
-	return RunID(prefix + hex.EncodeToString(sum[:]))
+	sum := sha256.Sum256([]byte(specificationRunSeed + "\x00" + string(implementationRunID)))
+	return RunID(specificationRunIDPrefix + hex.EncodeToString(sum[:]))
 }
 
 // SpecificationRunIDMatchesImplementation reports whether the specification
-// run identity is the one derived from the implementation run in either
-// identifier family.
+// run identity is the one derived from the implementation run.
 func SpecificationRunIDMatchesImplementation(specificationRunID, implementationRunID RunID) bool {
-	return specificationRunID == SpecificationRunIDForImplementation(implementationRunID) ||
-		specificationRunID == LegacySpecificationRunIDForImplementation(implementationRunID)
+	return specificationRunID == SpecificationRunIDForImplementation(implementationRunID)
 }
 
 // SpecificationStageID names the single stage of a specification run.
 func SpecificationStageID(runID RunID) StageID {
-	if LegacySpecificationRun(runID) {
-		return StageID(legacySpecificationStageIDPrefix + string(runID))
-	}
 	return StageID(specificationStageIDPrefix + string(runID))
 }
 
 // SpecificationInvocationIDPrefix is the prefix shared by every invocation of
 // the run, ending in the separator before the iteration number.
 func SpecificationInvocationIDPrefix(runID RunID) string {
-	if LegacySpecificationRun(runID) {
-		return legacySpecificationInvocationIDPrefix + string(runID) + "-"
-	}
 	return specificationInvocationIDPrefix + string(runID) + "-"
 }
 
@@ -69,18 +52,13 @@ func SpecificationInvocationID(runID RunID, iteration int) InvocationID {
 }
 
 // SpecificationRunIDFromInvocationID recovers the run from a specification
-// invocation identity in either family. It accepts only the canonical
-// spelling: the iteration must be a positive decimal without leading zeros
-// and the whole identifier must re-mint from its parts.
+// invocation identity. It accepts only the canonical spelling: the iteration
+// must be a positive decimal without leading zeros and the whole identifier
+// must re-mint from its parts.
 func SpecificationRunIDFromInvocationID(id InvocationID) (RunID, bool) {
 	raw := string(id)
-	var prefix string
-	switch {
-	case strings.HasPrefix(raw, specificationInvocationIDPrefix):
-		prefix = specificationInvocationIDPrefix
-	case strings.HasPrefix(raw, legacySpecificationInvocationIDPrefix):
-		prefix = legacySpecificationInvocationIDPrefix
-	default:
+	prefix := specificationInvocationIDPrefix
+	if !strings.HasPrefix(raw, prefix) {
 		return "", false
 	}
 	lastDash := strings.LastIndexByte(raw, '-')
@@ -107,17 +85,14 @@ func SpecificationDiscussionInvocationID(commandID string) InvocationID {
 }
 
 // SpecificationDiscussionCommandID recovers the command from a discussion
-// invocation identity or idempotency key in either family.
+// invocation identity or idempotency key.
 func SpecificationDiscussionCommandID(id string) (string, bool) {
-	if commandID, ok := strings.CutPrefix(id, specificationDiscussionInvocationIDPrefix); ok {
-		return commandID, commandID != ""
-	}
-	commandID, ok := strings.CutPrefix(id, legacySpecificationDiscussionInvocationIDPrefix)
+	commandID, ok := strings.CutPrefix(id, specificationDiscussionInvocationIDPrefix)
 	return commandID, ok && commandID != ""
 }
 
 // specificationDiscussionInvocationIDMatches reports whether id names the
-// command's discussion invocation in either family.
+// command's discussion invocation.
 func specificationDiscussionInvocationIDMatches(id InvocationID, commandID string) bool {
 	got, ok := SpecificationDiscussionCommandID(string(id))
 	return ok && got == commandID
