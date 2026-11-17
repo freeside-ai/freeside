@@ -16,6 +16,9 @@ struct DaemonPane: View {
             let start: () -> Void
             let stop: () -> Void
             let openApprovalSettings: () -> Void
+            /// Opens the Pair a Device window, which the Devices pane offers
+            /// beside Refresh; nil when the app offers none.
+            var pairDevice: (() -> Void)? = nil
         }
     #endif
 

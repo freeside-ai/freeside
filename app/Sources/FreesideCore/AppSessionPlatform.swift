@@ -5,11 +5,19 @@ import Foundation
 /// names no Apple-only store.
 extension AppSession {
     /// `fromEnvironment(environment:keychainStore:)` with the Keychain as
-    /// the supervised tiers' credential store.
+    /// the supervised tiers' credential store and, on the Mac, the bundled
+    /// `freesided` as the tier's pairing-code source.
     public static func fromEnvironment(
         environment: FreesideEnvironment
     ) throws(LaunchError) -> AppSession {
-        try fromEnvironment(environment: environment, keychainStore: keychainCredentialStore)
+        #if os(macOS)
+            let pairingCodeSource: (any PairingCodeSource)? = BundledPairingCodeSource(environment: environment)
+        #else
+            let pairingCodeSource: (any PairingCodeSource)? = nil
+        #endif
+        return try fromEnvironment(
+            environment: environment, keychainStore: keychainCredentialStore,
+            pairingCodeSource: pairingCodeSource)
     }
 
     /// `fromEnvironment(keychainStore:)` with the Keychain as the remote

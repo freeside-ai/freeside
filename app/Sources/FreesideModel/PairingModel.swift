@@ -39,8 +39,20 @@ public final class PairingModel {
     /// and again whenever the code changes or the daemon rejects it. Display
     /// facts only: nothing here is a credential.
     public private(set) var facts: Components.Schemas.PairingFacts?
+    /// Get Code's progress, apart from the pairing exchange's `phase`.
+    public private(set) var codeRequest: CodeRequestState = .idle
+
+    public enum CodeRequestState: Equatable {
+        case idle
+        case requesting
+        case failed(String)
+    }
 
     private let client: any APIProtocol
+    /// Mints a code on this device's own daemon host: set only when this
+    /// screen pairs with the Mac's supervised daemon (`AppSession`), so
+    /// Get Code never fetches a code for another daemon.
+    private let codeSource: (any PairingCodeSource)?
     private let credentials: any DeviceCredentialStore
     private var isApplyingPairingCodePrefill = false
     private var pairingCodeWasEdited = false
@@ -49,10 +61,12 @@ public final class PairingModel {
         client: any APIProtocol,
         credentials: any DeviceCredentialStore,
         pairingCode: String = "",
-        displayName: String? = nil
+        displayName: String? = nil,
+        codeSource: (any PairingCodeSource)? = nil
     ) {
         self.client = client
         self.credentials = credentials
+        self.codeSource = codeSource
         self.pairingCode = Self.canonicalPairingCode(pairingCode)
         self.displayName = displayName ?? Self.systemDeviceName()
     }
@@ -82,6 +96,26 @@ public final class PairingModel {
 
     public func applyPairingCodeInput(_ code: String) {
         pairingCode = Self.canonicalPairingCode(code)
+    }
+
+    /// Whether this screen offers Get Code.
+    public var canGetCode: Bool { codeSource != nil }
+
+    /// Mints a code on this Mac's daemon and fills the field with it, as
+    /// operator input, so a later readiness change can't clear it. A
+    /// failure leaves the field as it was, and so does a code the operator
+    /// typed or pasted while the request ran.
+    public func getCode() async {
+        guard let codeSource, codeRequest != .requesting else { return }
+        codeRequest = .requesting
+        let codeBefore = pairingCode
+        do {
+            let minted = try await codeSource.mint()
+            if pairingCode == codeBefore { applyPairingCodeInput(minted.code) }
+            codeRequest = .idle
+        } catch {
+            codeRequest = .failed(error.message)
+        }
     }
 
     /// Asks the daemon what the current code would join, without redeeming
@@ -190,7 +224,7 @@ public final class PairingModel {
         }
     }
 
-    static func canonicalPairingCode(_ typed: String) -> String {
+    nonisolated static func canonicalPairingCode(_ typed: String) -> String {
         let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         return String(
             trimmed.uppercased().compactMap { character in
@@ -203,7 +237,7 @@ public final class PairingModel {
             })
     }
 
-    static func groupPairingCode(_ canonical: String) -> String {
+    nonisolated static func groupPairingCode(_ canonical: String) -> String {
         guard !canonical.isEmpty else { return "" }
         var groups: [String] = []
         var start = canonical.startIndex

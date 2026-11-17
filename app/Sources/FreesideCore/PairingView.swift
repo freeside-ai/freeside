@@ -49,10 +49,16 @@ struct PairingView: View {
         }
     }
 
-    static let instructions =
-        "Run the pairing command on the daemon host and enter its one-time code. "
-        + "The device name appears in Devices on the host and in the audit record "
-        + "of every decision made from this device."
+    /// Names Get Code when the screen offers it: only the Mac, pairing
+    /// with its own supervised daemon.
+    static func instructions(offersGetCode: Bool) -> String {
+        (offersGetCode
+            ? "Choose Get Code for a one-time code from this Mac's daemon, or run the pairing command "
+                + "on the daemon host and enter its code. "
+            : "Run the pairing command on the daemon host and enter its one-time code. ")
+            + "The device name appears in Devices on the host and in the audit record "
+            + "of every decision made from this device."
+    }
 
     /// The one pairing composition, drawn live and by the screenshot suite.
     /// `now` fixes the clock the expiry row reads; nil lets it tick.
@@ -67,7 +73,7 @@ struct PairingView: View {
                     .font(FreesideFont.ask)
                     .accessibilityAddTraits(.isHeader)
             }
-            Text(Self.instructions)
+            Text(Self.instructions(offersGetCode: model.canGetCode))
                 .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
@@ -76,18 +82,26 @@ struct PairingView: View {
                     if rendersInteractiveControls {
                         if dynamicTypeSize.isAccessibilitySize {
                             fieldBox { pairingCodeField }
-                            pasteButton.frame(maxWidth: .infinity, alignment: .trailing)
+                            HStack(spacing: 12) {
+                                getCodeButton
+                                pasteButton
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         } else {
                             HStack(spacing: 12) {
                                 fieldBox { pairingCodeField }
+                                getCodeButton
                                 pasteButton
                             }
                         }
                     } else {
-                        fieldBox {
-                            Text(model.formattedPairingCode)
-                                .font(FreesideFont.monoValue)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 12) {
+                            fieldBox {
+                                Text(model.formattedPairingCode)
+                                    .font(FreesideFont.monoValue)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            getCodeButton
                         }
                     }
                 }
@@ -120,6 +134,10 @@ struct PairingView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if case .failed(let message) = model.codeRequest {
+                Notice(tone: .wax, keyword: "No code", sentence: message)
+                    .accessibilityElement(children: .combine)
+            }
             if case .failed(let message) = model.phase {
                 Notice(tone: .wax, keyword: "Failed", sentence: message)
                     .accessibilityElement(children: .combine)
@@ -242,6 +260,21 @@ struct PairingView: View {
     /// the screenshot suite.
     func screenshotContent(now: Date) -> some View {
         content(now: now, rendersInteractiveControls: false)
+    }
+
+    /// Fills the code from this Mac's own daemon; absent when the screen
+    /// pairs with any other daemon, and on the iPhone.
+    @ViewBuilder private var getCodeButton: some View {
+        if model.canGetCode {
+            Button(model.codeRequest == .requesting ? "Getting Code…" : "Get Code") {
+                Task { await model.getCode() }
+            }
+            .buttonStyle(.plain)
+            .font(FreesideFont.noticeAction)
+            .foregroundStyle(Color.accentText)
+            .freesideFocusRing(cornerRadius: 4)
+            .disabled(model.codeRequest == .requesting || model.phase == .pairing)
+        }
     }
 
     private var pasteButton: some View {

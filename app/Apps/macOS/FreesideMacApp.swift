@@ -40,6 +40,9 @@ struct FreesideMacApp: App {
     @State private var flowPreferences: DecisionFlowPreferences
     private let launchInputs: LaunchInputs
     private let environment: FreesideEnvironment
+    /// Mints codes for the Pair a Device window; nil without a supervised
+    /// daemon, when nothing offers the window.
+    private let pairingCodeSource: BundledPairingCodeSource?
 
     init() {
         #if DEBUG
@@ -61,6 +64,7 @@ struct FreesideMacApp: App {
         let launchInputs = LaunchInputs.standard()
         self.launchInputs = launchInputs
         self.environment = environment
+        pairingCodeSource = BundledPairingCodeSource(environment: environment)
         _session = State(initialValue: session)
         _daemon = State(initialValue: Self.daemonModel(environment: environment))
         _navigation = State(initialValue: NavigationModel(launchInputs: launchInputs))
@@ -126,6 +130,21 @@ struct FreesideMacApp: App {
             }
         }
         .menuBarExtraStyle(.window)
+
+        // Declared in every tier, because a scene builder can't bind an
+        // optional; without a supervised daemon nothing opens it.
+        Window("Pair a Device", id: PairDeviceWindow.id) {
+            if let pairingCodeSource {
+                PairDeviceWindow(source: pairingCodeSource)
+            }
+        }
+        .windowResizability(.contentSize)
+        // Reopened at launch it would mint a code nobody asked for.
+        .restorationBehavior(.disabled)
+        // Only the panel row and the Devices button open it, and both exist
+        // only with a supervised daemon; a Window-menu item would open an
+        // empty window in `ephemeral`.
+        .commandsRemoved()
 
         Settings {
             FreesideSettings(
@@ -243,7 +262,8 @@ private struct FreesideSettings: View {
             openTask: { taskID in
                 navigation.route(to: .task(taskID))
                 showMainWindow(openWindow)
-            })
+            },
+            pairDevice: { openWindow(id: PairDeviceWindow.id) })
     }
 }
 
@@ -271,6 +291,7 @@ private struct DaemonMenu: View {
                 openApp: showApp,
                 showNeedsYou: showApp,
                 showSystemHealth: showSystemHealth,
+                pairDevice: showPairDevice,
                 start: { Task { await model?.start() } },
                 stop: { Task { await model?.stop() } },
                 openApprovalSettings: { model?.openApprovalSettings() },
@@ -294,6 +315,13 @@ private struct DaemonMenu: View {
         navigation.openSystemHealth()
         NSApplication.shared.activate()
         openSettings()
+    }
+
+    /// The Pair a Device window, with the app activated so it opens in
+    /// front of whatever the operator was using.
+    private func showPairDevice() {
+        openWindow(id: PairDeviceWindow.id)
+        NSApplication.shared.activate()
     }
 }
 

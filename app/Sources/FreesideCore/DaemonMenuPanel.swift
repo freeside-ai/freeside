@@ -57,6 +57,7 @@
             public let openApp: () -> Void
             public let showNeedsYou: () -> Void
             public let showSystemHealth: () -> Void
+            public let pairDevice: () -> Void
             public let start: () -> Void
             public let stop: () -> Void
             public let openApprovalSettings: () -> Void
@@ -66,6 +67,7 @@
                 openApp: @escaping () -> Void,
                 showNeedsYou: @escaping () -> Void,
                 showSystemHealth: @escaping () -> Void,
+                pairDevice: @escaping () -> Void,
                 start: @escaping () -> Void,
                 stop: @escaping () -> Void,
                 openApprovalSettings: @escaping () -> Void,
@@ -74,6 +76,7 @@
                 self.openApp = openApp
                 self.showNeedsYou = showNeedsYou
                 self.showSystemHealth = showSystemHealth
+                self.pairDevice = pairDevice
                 self.start = start
                 self.stop = stop
                 self.openApprovalSettings = openApprovalSettings
@@ -87,6 +90,7 @@
             case openApp
             case showNeedsYou
             case showSystemHealth
+            case pairDevice
             case openApprovalSettings
             case control
             case quit
@@ -161,6 +165,9 @@
                     row(.showSystemHealth, "System Health", trailing: countTrailing(openFindings)) {
                         actions.showSystemHealth()
                     }
+                }
+                if offersPairDevice {
+                    row(.pairDevice, "Pair a Device…", enabled: canPairDevice) { actions.pairDevice() }
                 }
                 divider
                 stateBlock
@@ -282,6 +289,15 @@
         var openFindings: Int? {
             guard let open = systemHealth?.open, open > 0 else { return nil }
             return open
+        }
+
+        /// Pair a Device… gets a code from the supervised daemon, so an app
+        /// with none doesn't offer it.
+        var offersPairDevice: Bool { state != .unsupervised }
+
+        /// Only a running daemon can mint a code.
+        var canPairDevice: Bool {
+            if case .running = state { true } else { false }
         }
 
         private func countTrailing(_ count: Int) -> some View {
@@ -447,6 +463,9 @@
             if openFindings != nil {
                 order.append(.showSystemHealth)
             }
+            if canPairDevice {
+                order.append(.pairDevice)
+            }
             if state == .needsApproval {
                 order.append(.openApprovalSettings)
             }
@@ -477,6 +496,8 @@
                 perform(actions.showNeedsYou)
             case .showSystemHealth:
                 perform(actions.showSystemHealth)
+            case .pairDevice:
+                perform(actions.pairDevice)
             case .openApprovalSettings:
                 perform(actions.openApprovalSettings)
             case .control:

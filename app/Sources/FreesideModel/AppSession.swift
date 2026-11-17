@@ -71,6 +71,10 @@ public final class AppSession {
     /// it changes, so a session that re-pairs mid-run would otherwise have
     /// nothing to prefill from.
     private var lastReadiness: DaemonReadiness?
+    /// Mints pairing codes on this Mac's supervised daemon; nil on iOS and
+    /// for `ephemeral`. A pairing screen gets it only while it pairs with
+    /// that daemon (`localCodeSource`).
+    private let pairingCodeSource: (any PairingCodeSource)?
 
     public init(
         client: any APIProtocol,
@@ -88,7 +92,8 @@ public final class AppSession {
         // launch path passes its own, and a session built without one (a
         // demo, mock, or test) never reaches `connect(serverURL:)`.
         credentialStore: @escaping (URL) -> any DeviceCredentialStore = { _ in InMemoryCredentialStore() },
-        persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
+        persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults,
+        pairingCodeSource: (any PairingCodeSource)? = nil
     ) {
         self.connection = Connection(
             client: client, credentials: credentials, cache: cache,
@@ -98,6 +103,7 @@ public final class AppSession {
         self.localDaemonURL = localDaemonURL
         self.cacheRoot = cacheRoot
         self.credentialStore = credentialStore
+        self.pairingCodeSource = pairingCodeSource
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
         // mints a new device (#64; a lost token is revoke-and-repair).
@@ -121,8 +127,21 @@ public final class AppSession {
             phase = .needsPairing(
                 PairingModel(
                     client: client, credentials: credentials, pairingCode: pairingCode,
-                    displayName: displayName))
+                    displayName: displayName,
+                    codeSource: Self.localCodeSource(
+                        pairingCodeSource, deploymentURL: deploymentURL, localDaemonURL: localDaemonURL)))
         }
+    }
+
+    /// `source` when `deploymentURL` is this tier's own supervised daemon,
+    /// the one daemon the source mints for; nil for any other.
+    static func localCodeSource(
+        _ source: (any PairingCodeSource)?, deploymentURL: URL?, localDaemonURL: URL?
+    ) -> (any PairingCodeSource)? {
+        guard let source, let deploymentURL, let localDaemonURL,
+            deploymentKey(for: deploymentURL) == deploymentKey(for: localDaemonURL)
+        else { return nil }
+        return source
     }
 
     /// Hands the freshly paired identity to the synced surface; the
@@ -185,7 +204,9 @@ public final class AppSession {
         phase = .needsPairing(
             PairingModel(
                 client: connection.client, credentials: connection.credentials,
-                displayName: connection.displayName))
+                displayName: connection.displayName,
+                codeSource: Self.localCodeSource(
+                    pairingCodeSource, deploymentURL: connection.deploymentURL, localDaemonURL: localDaemonURL)))
         // Prefill the fresh screen from the last readiness, exactly as a
         // launch would; an operator-typed code is never overwritten.
         applyReadiness(lastReadiness)
@@ -276,9 +297,11 @@ public final class AppSession {
         localDaemonURL: URL?, cacheRoot: URL?,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,
         persistServerURL: @escaping (URL) -> Void,
-        connectionRefusal: DaemonReadinessRefusal? = nil
+        connectionRefusal: DaemonReadinessRefusal? = nil,
+        pairingCodeSource: (any PairingCodeSource)?
     ) {
         connection = nil
+        self.pairingCodeSource = pairingCodeSource
         self.connectionRefusal = connectionRefusal
         self.persistServerURL = persistServerURL
         self.localDaemonURL = localDaemonURL
@@ -290,7 +313,8 @@ public final class AppSession {
     public func connect(serverURL: URL) {
         let selected = Self.live(
             serverURL: serverURL, localDaemonURL: localDaemonURL, cacheRoot: cacheRoot,
-            credentialStore: credentialStore, persistServerURL: persistServerURL)
+            credentialStore: credentialStore, persistServerURL: persistServerURL,
+            pairingCodeSource: pairingCodeSource)
         connection = selected.connection
         phase = selected.phase
         connectionRefusal = nil
@@ -507,10 +531,12 @@ public final class AppSession {
     /// Mac's local daemon, readiness file, and persisted-URL rule come from
     /// its tier (`launchMode(environment:...)`). Sample data requires an
     /// explicit mock or pairing-demo launch argument. `keychainStore` is the
-    /// supervised tiers' durable store (`AppSessionPlatform.swift`).
+    /// supervised tiers' durable store (`AppSessionPlatform.swift`), and
+    /// `pairingCodeSource` mints codes on the tier's own daemon.
     package static func fromEnvironment(
         environment: FreesideEnvironment,
-        keychainStore: @escaping (URL) -> any DeviceCredentialStore
+        keychainStore: @escaping (URL) -> any DeviceCredentialStore,
+        pairingCodeSource: (any PairingCodeSource)? = nil
     ) throws(LaunchError) -> AppSession {
         let arguments = argumentDomain()
         let argumentServerURL = arguments["FreesideServerURL"] as? String
@@ -533,7 +559,8 @@ public final class AppSession {
             for: mode, localDaemonURL: environment.supervisedAPIURL,
             cacheRoot: environment.stateRoot(),
             credentialStore: credentialStore(for: environment, keychainStore: keychainStore),
-            persistServerURL: persist, mockAlternates: arguments["FreesideAlternates"] as? String == "YES")
+            persistServerURL: persist, mockAlternates: arguments["FreesideAlternates"] as? String == "YES",
+            pairingCodeSource: pairingCodeSource)
         // `launchMode` threw for any path it would not follow, so only a
         // validated one names the window's instance.
         session.readinessRun = followedReadinessRun(
@@ -610,17 +637,19 @@ public final class AppSession {
     static func session(
         for mode: LaunchMode, localDaemonURL: URL?, cacheRoot: URL?,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,
-        persistServerURL: @escaping (URL) -> Void, mockAlternates: Bool = false
+        persistServerURL: @escaping (URL) -> Void, mockAlternates: Bool = false,
+        pairingCodeSource: (any PairingCodeSource)? = nil
     ) -> AppSession {
         switch mode {
         case .needsConnection:
             AppSession(
                 localDaemonURL: localDaemonURL, cacheRoot: cacheRoot, credentialStore: credentialStore,
-                persistServerURL: persistServerURL)
+                persistServerURL: persistServerURL, pairingCodeSource: pairingCodeSource)
         case .live(let url, let pairingCode):
             live(
                 serverURL: url, pairingCode: pairingCode, localDaemonURL: localDaemonURL,
-                cacheRoot: cacheRoot, credentialStore: credentialStore, persistServerURL: persistServerURL)
+                cacheRoot: cacheRoot, credentialStore: credentialStore, persistServerURL: persistServerURL,
+                pairingCodeSource: pairingCodeSource)
         case .pairingDemo:
             pairingDemo()
         case .mock:
@@ -628,7 +657,8 @@ public final class AppSession {
         case .refused(let refusal):
             AppSession(
                 localDaemonURL: localDaemonURL, cacheRoot: cacheRoot, credentialStore: credentialStore,
-                persistServerURL: persistServerURL, connectionRefusal: refusal)
+                persistServerURL: persistServerURL, connectionRefusal: refusal,
+                pairingCodeSource: pairingCodeSource)
         }
     }
 
@@ -659,7 +689,8 @@ public final class AppSession {
         serverURL: URL, pairingCode: String = "", localDaemonURL: URL? = nil,
         cacheRoot: URL? = AppSession.defaultCacheRoot,
         credentialStore: @escaping (URL) -> any DeviceCredentialStore,
-        persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
+        persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults,
+        pairingCodeSource: (any PairingCodeSource)? = nil
     ) -> AppSession {
         let credentials = credentialStore(serverURL)
         let directory = cacheRoot.map { cacheDirectory(for: serverURL, in: $0) }
@@ -676,7 +707,8 @@ public final class AppSession {
             localDaemonURL: localDaemonURL,
             cacheRoot: cacheRoot,
             credentialStore: credentialStore,
-            persistServerURL: persistServerURL
+            persistServerURL: persistServerURL,
+            pairingCodeSource: pairingCodeSource
         )
     }
 

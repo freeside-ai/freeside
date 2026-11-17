@@ -17,6 +17,9 @@ struct DevicesView: View {
     /// Actions made under this pairing whose delivery is unresolved; the
     /// confirmation for revoking this device says they will not be retried.
     let unresolvedActionCount: Int
+    /// Opens the Pair a Device window; only the Mac, which mints codes for
+    /// its own daemon, passes one.
+    var onPairDevice: (() -> Void)? = nil
     var client: SettingsClient = .current
     var rendersInteractiveControls = true
 
@@ -75,8 +78,12 @@ struct DevicesView: View {
                     }
                 }
             }
-            HStack {
+            HStack(spacing: 10) {
                 Spacer(minLength: 0)
+                if let onPairDevice {
+                    Button("Pair a Device…", action: onPairDevice)
+                        .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
+                }
                 Button("Refresh") {
                     Task { await model.load() }
                 }

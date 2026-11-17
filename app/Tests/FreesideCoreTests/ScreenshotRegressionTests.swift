@@ -38,6 +38,14 @@
             let value: DynamicTypeSize
         }
 
+        /// A Mac daemon that refuses Get Code, for the pairing screen's
+        /// failure notice.
+        private struct RefusingPairingCodeSource: PairingCodeSource {
+            func mint() async throws(PairingCodeFailure) -> MintedPairingCode {
+                throw .refused(exitStatus: 1)
+            }
+        }
+
         private let canvasWidth: CGFloat = 960
         /// A detail column just wide enough for the one-column card at its
         /// cap (R18): the card and the pane's 24pt margins.
@@ -1103,7 +1111,7 @@
                 state: .running(
                     DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant),
                     restartObserved: false),
-                actionError: nil, start: {}, stop: {}, openApprovalSettings: {})
+                actionError: nil, start: {}, stop: {}, openApprovalSettings: {}, pairDevice: {})
             // The System Health pane (#2920) reads the default inbox's
             // findings: an advisory and a blocking one open, a resolved one
             // closed, with the gate the blocking one closes. Its empty state
@@ -3573,6 +3581,21 @@
                     view: AnyView(
                         PairingView(model: awaitingFacts) { _ in }.screenshotContent(now: screenshotNow))
                 ))
+            // The Mac pairing with its own daemon: Get Code beside the
+            // field, after a request that failed, so the notice draws too.
+            let getCode = PairingModel(
+                client: client,
+                credentials: InMemoryCredentialStore(),
+                displayName: "Operator's Mac",
+                codeSource: RefusingPairingCodeSource()
+            )
+            await getCode.getCode()
+            surfaces.append(
+                Surface(
+                    name: "pairing-get-code",
+                    view: AnyView(
+                        PairingView(model: getCode) { _ in }.screenshotContent(now: screenshotNow))
+                ))
             let taskProposalFacts = Components.Schemas.TaskProposalFactsSnapshot(
                 as_of_revision: 12,
                 entity_version: 12,
@@ -4138,7 +4161,7 @@
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
                 compatibilityLevel: 1_000, compatibilityFloor: 1_000)
             let panelActions = DaemonMenuPanel.Actions(
-                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, start: {}, stop: {},
+                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
                 openApprovalSettings: {}, quit: {})
             surfaces.append(
                 Surface(
@@ -4227,6 +4250,35 @@
                             actionError: "The daemon could not be stopped: launchctl exited 3.",
                             needsYou: .init(rows: 6),
                             actions: panelActions))))
+
+            // The Pair a Device window (#3286): a code with the phone's
+            // address forwarded from loopback, the same by dusk on a daemon
+            // already on the tailnet, a Mac with no Tailscale address, an
+            // expired code, and a failed request.
+            let pairCode = MintedPairingCode(
+                code: "7KQ4M2XP", expiresAt: screenshotNow.addingTimeInterval(9 * 60 + 41),
+                apiURL: URL(string: "http://127.0.0.1:7331")!)
+            let pairTailnet = URL(string: "http://100.101.102.103:7331")!
+            for (name, colorScheme, state, now) in [
+                (
+                    "pair-device-forwarded", ColorScheme.light,
+                    PairDeviceModel.State.minted(pairCode, .forwarded(pairTailnet)), screenshotNow
+                ),
+                ("pair-device-tailnet-dark", .dark, .minted(pairCode, .tailnet(pairTailnet)), screenshotNow),
+                ("pair-device-this-mac-only", .light, .minted(pairCode, .thisMacOnly(pairCode.apiURL)), screenshotNow),
+                (
+                    "pair-device-expired", .light, .minted(pairCode, .forwarded(pairTailnet)),
+                    pairCode.expiresAt.addingTimeInterval(1)
+                ),
+                ("pair-device-failed", .light, .failed(.refused(exitStatus: 1)), screenshotNow),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: 420,
+                        colorScheme: colorScheme,
+                        view: AnyView(PairDeviceView(state: state, newCode: {}, now: now))))
+            }
 
             var due = AttentionFixtures.degradedReady().item
             due.expires_when = screenshotNow.addingTimeInterval(2 * 3_600)

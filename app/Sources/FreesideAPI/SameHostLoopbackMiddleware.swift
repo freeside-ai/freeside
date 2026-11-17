@@ -100,7 +100,7 @@
 
         /// Whether `value` is an IP literal inside Tailscale's ranges, mirroring the
         /// daemon's `isTailscaleAddr` bit test rather than a string prefix.
-        static func isTailscaleIP(_ value: String) -> Bool {
+        package static func isTailscaleIP(_ value: String) -> Bool {
             if let v4 = IPv4Address(value) {
                 let b = [UInt8](v4.rawValue)
                 return b.count == 4 && b[0] == 100 && (64...127).contains(b[1])

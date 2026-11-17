@@ -110,12 +110,31 @@ import Testing
                 DaemonMenuPanel(
                     state: .unsupervised, actionError: nil, needsYou: nil, systemHealth: count,
                     actions: .init(
-                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, start: {}, stop: {},
+                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
                         openApprovalSettings: {}, quit: {}))
             }
             #expect(panel(nil).openFindings == nil)
             #expect(panel(.init(open: 0)).openFindings == nil)
             #expect(panel(.init(open: 3)).openFindings == 3)
+        }
+
+        /// Pair a Device… is offered with a supervised daemon and works only
+        /// while it runs.
+        @Test func pairADeviceIsOfferedWithASupervisedDaemonAndEnabledWhileRunning() {
+            func panel(_ state: DaemonMenuState) -> DaemonMenuPanel {
+                DaemonMenuPanel(
+                    state: state, actionError: nil, needsYou: nil,
+                    actions: .init(
+                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
+                        openApprovalSettings: {}, quit: {}))
+            }
+            let running = panel(.running(DaemonHealth(version: "1.0.0", startedAt: .now), restartObserved: false))
+            #expect(running.offersPairDevice && running.canPairDevice)
+            for state in [DaemonMenuState.stopped, .unreachable, .needsApproval, .checking, .unavailable] {
+                #expect(panel(state).offersPairDevice)
+                #expect(!panel(state).canPairDevice)
+            }
+            #expect(!panel(.unsupervised).offersPairDevice)
         }
     #endif
 
