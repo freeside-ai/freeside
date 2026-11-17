@@ -1767,6 +1767,28 @@ func runClaudeConformance(
 	})
 }
 
+// conformanceSuiteFixture is the ward suite fixture a proof pass runs. The
+// suite seeds the project's real base, so its workspace is a run's size: the
+// suite's synthetic default can't hold a real repository, and a seed that
+// overflows its volume fails conformance for a reason no run would meet.
+func conformanceSuiteFixture(
+	image domain.ImageRef, base domain.BaseRevision, runID, registryRunID string, nonce [8]byte, seedDir string,
+) ward.SuiteFixture {
+	return ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
+		AgentImage:       string(image),
+		CredentialTarget: "/var/lib/freeside/conformance-token",
+		CredentialMarker: "FREESIDE_CONF_" + strings.ToUpper(hex.EncodeToString(nonce[:])),
+		RunID:            runID,
+		RegistryRunID:    registryRunID,
+		WorkspaceSizeMB:  claude.WorkspaceSizeMB,
+		Seed: ward.WorkspaceSeed{
+			Mode:      ward.SeedBaseCheckout,
+			SourceDir: seedDir,
+			Base:      base,
+		},
+	}
+}
+
 // runReservedConformance runs the full ward suite on image and then the
 // adapter proof in it, under the proof pass's reservation.
 func runReservedConformance(
@@ -1774,18 +1796,10 @@ func runReservedConformance(
 	leaser *AdapterConformanceLeaser, image domain.ImageRef, base domain.BaseRevision,
 	runID, registryRunID string, nonce [8]byte, seedDir string,
 ) error {
-	suite, err := ward.NewSuite(backend, ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
-		AgentImage:       string(image),
-		CredentialTarget: "/var/lib/freeside/conformance-token",
-		CredentialMarker: "FREESIDE_CONF_" + strings.ToUpper(hex.EncodeToString(nonce[:])),
-		RunID:            runID,
-		RegistryRunID:    registryRunID,
-		Seed: ward.WorkspaceSeed{
-			Mode:      ward.SeedBaseCheckout,
-			SourceDir: seedDir,
-			Base:      base,
-		},
-	}, ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st}))
+	suite, err := ward.NewSuite(
+		backend, conformanceSuiteFixture(image, base, runID, registryRunID, nonce, seedDir),
+		ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st}),
+	)
 	if err != nil {
 		return err
 	}

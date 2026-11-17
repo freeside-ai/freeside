@@ -38,8 +38,10 @@ const (
 	// workspaceDir is where the gate mounts the workspace volume; the agent
 	// runs with it as the working directory.
 	workspaceDir = "/workspace"
-	// workspaceSizeMB bounds one run's workspace volume.
-	workspaceSizeMB int64 = 4096
+	// WorkspaceSizeMB bounds one run's workspace volume. Ward conformance
+	// seeds the same base into a volume of this size, so it proves what a
+	// run will get.
+	WorkspaceSizeMB int64 = 4096
 	agentUID              = "1001"
 	agentGID              = "1001"
 	// writerOutcomePrepareFailed is the pre-agent sentinel the root wrapper
@@ -739,7 +741,7 @@ func (p claudeProvider) HandoffSpec(
 
 	hs := ward.HandoffSpec{
 		RunID:           in.RunID,
-		WorkspaceSizeMB: workspaceSizeMB,
+		WorkspaceSizeMB: WorkspaceSizeMB,
 		Seed: ward.WorkspaceSeed{
 			Mode: ward.SeedBaseCheckout, SourceDir: in.Seed, Base: spec.Base,
 		},
