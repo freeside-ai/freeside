@@ -792,6 +792,98 @@ the owning sibling registry names it. Policy/profile and reviewer-configuration
 drift remains covered by the adjacent fail-closed recovery fixtures; a new
 drift axis needs both a preterminal refusal and a terminal-fact adoption case.
 
+**Test shapes not to write.** The daemon test audit of 2026-11-16 found
+seven shapes that cost the most run time while catching nothing a remaining
+test misses (`devlog/2026-11-16-2122-test-writing-rules.md`). A new or
+substantially revised test doesn't take one. This is a ratchet, not a sweep:
+an existing test with one of these shapes drains through its own unit, never
+a fix in passing. Each rule says what to write instead and when the shape is
+still right.
+
+- **A test per add-only migration.** A migration that only adds a table,
+  column, or index needs no test of its own.
+  `TestMigrationSnapshotsMatchInProcessMigration` applies it and compares
+  schemas and applied history at every step, `TestMigrationsDeclareDrops`
+  checks its removals, `TestStoredCorpusResumes` applies it to databases
+  earlier builds wrote, and every template store opens the schema it builds.
+  Test the new table or column through the store's API on a template store
+  instead. `TestSettingsRevisionsMigrationCreatesTables`, with its
+  `rewindSettingsRevisions` helper, has the shape. Exception: a migration
+  that moves, rewrites, or drops rows, or rebuilds a table, gets a test (the
+  data-rewrite rule below).
+- **A store test that migrates from empty.** Open a template store
+  (Template store, above): `storetest.Open` outside `package store`,
+  `openTemplateStore` or `openTemplateStoreAt` inside it. Exceptions: the
+  tests that paragraph keeps on the raw `store.Open` path (migrations, `Open`
+  behavior, refusal of an existing file); and a reexecuted kill helper, which
+  can't share the parent's cached template, so it opens a file its parent
+  prepared with `storetest.Open` and closed
+  (`devlog/2026-09-04-1515-store-test-template.md`).
+- **"Survives reopen" or "survives process kill" per record type.** A
+  committed row is durable because SQLite is, so reopening the store or
+  killing the process after a write proves that again for one more table.
+  Write the round-trip without the reopen. Restart and kill at the daemon's
+  effect boundaries are covered by the durable transition matrix (above) and
+  `TestDaemonRecoversAcrossSIGKILL` in `cmd/freesided/kill_recovery_test.go`.
+  Exceptions: a reopen test of something the store computes on open or
+  re-checks on read stays, such as epoch seeding (`TestEpochSurvivesReopen`)
+  or the re-gate of a stored authority bit (AGENTS.md, Trust boundaries at
+  reconstruction/persistence); and the durable transition matrix keeps both
+  crash sides of every registered boundary.
+- **A data-rewrite migration test that never retires.** A test of a
+  migration that rewrites data starts from the head before that migration
+  (`openRawThrough` or `copySnapshotThrough`) and checks only that
+  migration's rewrite, so it can go with the migration. The squash that
+  takes the migration below the baseline (Squashing Migrations, whose squash
+  rule says when one is due) deletes every test that starts below the new
+  baseline and the `rewind*` helpers only those tests use, as #3252 did
+  (`devlog/2026-11-16-1313-migration-baseline-squash.md`). Don't make a
+  head-schema test depend on a row format only an old migration wrote; a
+  reader of such a format retires with the reader (#3266), not the squash.
+  Exception: this rule changes when the test goes, not whether it is
+  written; a migration that rewrites data still gets one.
+- **The same refusal asserted at two or three layers.** The lowest layer
+  that can express a refusal owns its cases, usually the domain record's
+  `Validate` or constructor; each higher layer asserts once that it applies
+  it. `TestRoutingPolicyRefusals` in `internal/domain` owns the routing
+  policy's refusals, and `TestAppendRoutingPolicyRefusesAnInvalidPolicy`
+  checks with one case that the store applies them. Exception: a Tier A
+  gate keeps its tamper and refusal tests at the gate's own layer, even when
+  a lower layer tests the same rule, and adding, removing, or changing one
+  stays Tier A work (AGENTS.md, Assurance Tiers, Classification). The Tier B
+  tamper ratchet (`devlog/2026-11-07-1119-tier-b-tamper-ratchet.md`) is
+  unchanged.
+- **Tests of test doubles and harnesses.** A fake's `StageDriver` or
+  `ReviewSource` behavior is tested by the shared contract suite in
+  `internal/exec/contract`: `TestStageDriverContract` runs it against the
+  fake (`internal/exec/fake`) and the stage driver (`internal/exec/stage`),
+  and `TestReviewSourceContract` against the fake. A fake gets
+  its own test only for behavior the suite can't express, once, and a
+  fixture builder used by one package is tested through that package's
+  tests. Exception: a shared test helper whose failure would let other tests
+  pass silently keeps its test: the template store
+  (`TestTemplateDatabaseIsCompleteAndSeedsIndependentEpochs`),
+  `internal/gitenv`'s decoy tests, and `internal/golden` (`TestAssert`).
+- **Kill matrices and loops over every enum member.** When several rows
+  reach the same state, keep one row per distinct state and say in a comment
+  which state each reaches. `TestFollowUpFilerSurvivesAKillInEveryDurableState`
+  is the worked example: four kill points stand for twelve steps, and a
+  pinned step list fails on a new step until someone places it
+  (`devlog/2026-11-16-1330-trim-tier-a-test-matrices.md`).
+  `TestEnumRegistration` needs one test reference to each `AllX` slice, not a
+  fixture per member. Exceptions: the durable transition matrix keeps both
+  crash sides of every registered boundary, because each side is its own
+  state; the store round-trip of every `AllX` member for an enum column with
+  no CHECK list stays (Adding a Migration); and a table that only calls
+  `valid()` on each member is cheap and stays.
+
+**Removing a test.** A test may go when a named remaining test still catches
+the failure it guards (`superseded by <test>`), or when missing that failure
+is acceptable for a stated reason (`accepted: <reason>`). The pull request
+that removes a test gives one of the two for it. Removing or disabling a test
+of a Tier A gate stays Tier A work (AGENTS.md, Assurance Tiers,
+Classification).
+
 ## Adding a Migration
 
 Name the file `NNNN_description.sql` in `migrations/` and take the next
