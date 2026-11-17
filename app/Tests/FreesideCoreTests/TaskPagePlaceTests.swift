@@ -171,6 +171,32 @@ import Testing
             let state = Mutex(State())
         }
 
+        /// Counts the mock daemon's answers to the page's history reads.
+        final class Answers: Sendable {
+            private let value = Mutex(0)
+
+            func record() { value.withLock { $0 += 1 } }
+            var count: Int { value.withLock { $0 } }
+        }
+
+        /// Holds the mock daemon's answers until the test opens it, so a
+        /// state that lasts while a read is in flight lasts until the test
+        /// has seen it, however slowly the page draws.
+        final class Gate: Sendable {
+            private let isOpen = Mutex(false)
+
+            func open() { isOpen.withLock { $0 = true } }
+
+            /// Returns once the gate opens, or after 30 s so a test that
+            /// never opens it still ends.
+            func pass() async {
+                let deadline = Date().addingTimeInterval(30)
+                while !isOpen.withLock({ $0 }), Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+            }
+        }
+
         private struct Harness: View {
             let coordinator: SyncCoordinator
             let task: Components.Schemas.TaskSnapshot
@@ -231,6 +257,9 @@ import Testing
             /// while settling.
             var tracked: String?
             var trackedTops: [CGFloat] = []
+            /// The daemon's answers to history reads, which only the page's
+            /// own refetch makes.
+            let historyAnswers: Answers
 
             /// The task's spec approval, closed, which gives the page a
             /// conversation.
@@ -303,6 +332,11 @@ import Testing
                     }
                     return snapshot
                 }
+                let historyAnswers = Answers()
+                self.historyAnswers = historyAnswers
+                await server.setAfterRespond { operation in
+                    if operation == "getTaskTimeline" { historyAnswers.record() }
+                }
                 coordinator = SyncCoordinator(
                     client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
                 await coordinator.bootstrap()
@@ -360,9 +394,19 @@ import Testing
                 }
             }
 
-            func settle(until done: () throws -> Bool) async throws {
-                let deadline = Date().addingTimeInterval(5)
-                while try !done(), Date() < deadline {
+            /// Waits until `done` holds, then a little longer for the passes
+            /// it starts. A loaded machine can take many seconds to draw, so
+            /// the deadline is generous; running out of it is a failure at
+            /// the caller's wait, not a quiet return.
+            func settle(
+                until done: () throws -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+            ) async throws {
+                let deadline = Date().addingTimeInterval(30)
+                while try !done() {
+                    guard Date() < deadline else {
+                        Issue.record("timed out after 30 s waiting", sourceLocation: sourceLocation)
+                        break
+                    }
                     try await settle(0.05)
                 }
                 try await settle(0.3)
@@ -390,9 +434,16 @@ import Testing
 
             /// Changes what the daemon serves, then refreshes as sync does:
             /// a bootstrap, the page's refetch, and the route's repair.
+            ///
+            /// A seated card's first open moves the daemon's revision. When
+            /// that lands after the bootstrap read its snapshot, the card's
+            /// next check sees the newer revision and the cache stays
+            /// unvalidated until another bootstrap, so the refresh
+            /// bootstraps again, as the heartbeat would.
             func refresh(
                 _ serve: (inout Served.State) -> Void = { _ in },
-                history change: ((inout Components.Schemas.TaskTimeline) -> Void)? = nil
+                history change: ((inout Components.Schemas.TaskTimeline) -> Void)? = nil,
+                sourceLocation: SourceLocation = #_sourceLocation
             ) async throws {
                 if let change {
                     change(&history)
@@ -400,16 +451,37 @@ import Testing
                 }
                 let previouslyOpen = Set(coordinator.store.openSnapshots.map(\.item.id))
                 served.state.withLock { serve(&$0) }
-                let generation = coordinator.cacheGeneration
-                await coordinator.bootstrap()
+                try await bootstrap(sourceLocation: sourceLocation)
                 navigation.repairSelection(in: coordinator.unifiedList, previouslyOpen: previouslyOpen)
+                var rounds = 0
+                while coordinator.store.freshness == .unvalidated, rounds < 3 {
+                    rounds += 1
+                    try await bootstrap(sourceLocation: sourceLocation)
+                }
+                try #require(
+                    coordinator.store.freshness == .fresh,
+                    "the mock daemon refused the refresh: \(coordinator.store.freshness)",
+                    sourceLocation: sourceLocation)
+            }
+
+            /// Bootstraps, then waits for the page's own refetch of its
+            /// history for the new cache: the daemon's answer to it, and
+            /// the coordinator holding it. The harness reads no history
+            /// itself, so a page that stopped refetching would fail here.
+            private func bootstrap(sourceLocation: SourceLocation) async throws {
+                let generation = coordinator.cacheGeneration
+                let answered = historyAnswers.count
+                await coordinator.bootstrap()
+                try #require(
+                    coordinator.cacheGeneration != generation,
+                    "the mock daemon refused the refresh: \(coordinator.store.freshness)",
+                    sourceLocation: sourceLocation)
                 let taskID = task.task.id
-                try await settle(until: {
-                    self.coordinator.cacheGeneration != generation
-                        && self.coordinator.taskTimelineLoadStates[taskID] == .loaded
-                })
-                try #require(coordinator.store.freshness == .fresh, "the mock daemon refused the refresh")
-                try #require(coordinator.cacheGeneration != generation)
+                try await settle(
+                    until: {
+                        self.historyAnswers.count > answered
+                            && self.coordinator.taskTimelineLoadStates[taskID] == .loaded
+                    }, sourceLocation: sourceLocation)
             }
 
             /// The page's own scroll view: the tallest document in the
@@ -448,12 +520,14 @@ import Testing
             // At the top: the item's row draws, nothing scrolls, and the chip
             // stays Task.
             try await page.refresh { $0.items.append(Page.question) }
+            try await page.settle(until: { page.probe.oneLineItemIDs == [Page.question.item.id] })
             #expect(page.navigation.path == [.task(page.task.task.id)])
             #expect(page.lead == nil)
             #expect(page.probe.oneLineItemIDs == [Page.question.item.id])
             #expect(page.offset == 0)
             #expect(page.probe.selectedSection == .task)
             try await page.refresh { $0.close(Page.question.item.id) }
+            try await page.settle(until: { page.probe.oneLineItemIDs.isEmpty })
             #expect(page.probe.oneLineItemIDs.isEmpty)
 
             // In the rail: the row draws above the reader, who doesn't move,
@@ -464,6 +538,9 @@ import Testing
             let chip = page.probe.selectedSection
             page.samples = []
             try await page.refresh { $0.items.append(Page.question) }
+            try await page.settle(until: {
+                page.probe.oneLineItemIDs == [Page.question.item.id] && page.offset > readingOffset
+            })
             #expect(page.lead == nil)
             #expect(page.probe.oneLineItemIDs == [Page.question.item.id])
             #expect(page.probe.selectedSection == chip)
@@ -492,6 +569,7 @@ import Testing
                 event.recorded_at = newest.addingTimeInterval(60)
                 history.events.insert(event, at: 0)
             })
+            try await page.settle(until: { page.offset > readingOffset })
             try expectHeld(page, reading, scroll: scroll, document: document, "after a rail row arrives")
             #expect(page.offset > readingOffset, "the row arrived above the reader")
             #expect(page.samples.allSatisfy { $0 >= readingOffset - 0.5 }, "no trip to the top")
@@ -499,12 +577,17 @@ import Testing
             // A hold callout in the header. A working task's status line
             // names its hold itself, so the callout draws beside an open
             // decision, which the reader has above them already.
+            let beforeItem = page.offset
             try await page.refresh { $0.items.append(Page.question) }
+            try await page.settle(until: {
+                page.probe.oneLineItemIDs == [Page.question.item.id] && page.offset > beforeItem
+            })
             try expectHeld(page, reading, scroll: scroll, document: document, "after an item opens")
             reading = try #require(page.probe.reading)
             readingOffset = page.offset
             page.samples = []
             try await page.refresh { $0.held = true }
+            try await page.settle(until: { page.offset > readingOffset })
             try expectHeld(page, reading, scroll: scroll, document: document, "after a hold callout draws")
             #expect(page.offset > readingOffset, "the callout drew above the reader")
             #expect(page.samples.allSatisfy { $0 >= readingOffset - 0.5 }, "no trip to the top")
@@ -549,6 +632,7 @@ import Testing
             try #require(reading.key == "card:thread")
             var readingOffset = page.offset
             try await messageArrives(3)
+            try await page.settle(until: { page.offset > readingOffset })
             try expectHeld(page, reading, scroll: scroll, document: document, "after a message arrives in the card")
             #expect(page.offset > readingOffset, "the message arrived above the reader")
 
@@ -558,6 +642,7 @@ import Testing
             readingOffset = page.offset
             page.samples = []
             try await messageArrives(4)
+            try await page.settle(until: { page.offset > readingOffset })
             try expectHeld(page, reading, scroll: scroll, document: document, "after a message arrives")
             #expect(page.offset > readingOffset, "the message arrived above the reader")
             #expect(page.samples.allSatisfy { $0 >= readingOffset - 0.5 }, "no trip to the top")
@@ -574,6 +659,7 @@ import Testing
                 state.items[index].item.item_version += 1
                 state.items[index].entity_version += 1
             }
+            try await page.settle(until: { page.offset > readingOffset })
             try expectHeld(page, reading, scroll: scroll, document: document, "after the card grows")
             #expect(page.offset > readingOffset, "the card grew above the reader")
 
@@ -581,12 +667,15 @@ import Testing
             reading = try #require(page.probe.reading)
             readingOffset = page.offset
             try await page.refresh { $0.close(Page.discussed.item.id) }
+            // The sibling's card has no thread.
+            try await page.settle(until: { page.probe.viewTops["card:thread"] == nil })
             #expect(page.lead == Page.sibling.item.id)
             try expectHeld(page, reading, scroll: scroll, document: document, "after the lead passes")
 
             // The last card resolves.
             reading = try #require(page.probe.reading)
             try await page.refresh { $0.close(Page.sibling.item.id) }
+            try await page.settle(until: { !page.probe.viewTops.keys.contains { $0.hasPrefix("card:") } })
             #expect(page.lead == nil)
             try expectHeld(page, reading, scroll: scroll, document: document, "after the last card resolves")
         }
@@ -612,10 +701,11 @@ import Testing
             try #require(reading.key == "card:controls")
             let readingOffset = page.offset
 
-            // The card's check waits on the daemon, so its row stays long
-            // enough to sample.
+            // The card's check waits on the daemon until the test has seen
+            // its row.
+            let check = Gate()
             await page.server.setBeforeRespond { operation in
-                if operation == "getAttentionItem" { try? await Task.sleep(for: .milliseconds(300)) }
+                if operation == "getAttentionItem" { await check.pass() }
             }
             page.tracked = reading.key
             page.trackedTops = []
@@ -628,7 +718,10 @@ import Testing
                 guard let index = state.items.firstIndex(where: { $0.item.id == advanced.item.id }) else { return }
                 state.items[index] = advanced
             }
-            try await page.settle(0.8)
+            // The row draws above the reader, and goes when the check ends.
+            try await page.settle(until: { page.samples.contains { $0 > readingOffset + 1 } })
+            check.open()
+            try await page.settle(until: { abs(page.offset - readingOffset) <= 1 })
             #expect(page.samples.contains { $0 > readingOffset + 1 }, "the validation row drew above the reader")
             #expect(
                 page.trackedTops.allSatisfy { abs($0 - reading.top) <= 1 },
@@ -652,6 +745,7 @@ import Testing
             try await page.refresh(history: { history in
                 for index in history.events.indices { history.events[index].recorded_at.addTimeInterval(1) }
             })
+            try await page.settle(until: { page.probe.viewTops[held.key] == nil })
             #expect(page.probe.viewTops[held.key] == nil, "the held row's key went")
 
             let reading = try #require(page.probe.reading)
@@ -663,6 +757,7 @@ import Testing
                 event.recorded_at = newest.addingTimeInterval(60)
                 history.events.insert(event, at: 0)
             })
+            try await page.settle(until: { page.offset > readingOffset })
             try expectHeld(page, reading, scroll: scroll, document: document, "after a rail row arrives")
             #expect(page.offset > readingOffset, "the row arrived above the reader")
 
@@ -689,6 +784,7 @@ import Testing
                 event.recorded_at = newest.addingTimeInterval(120)
                 history.events.insert(event, at: 0)
             })
+            try await page.settle(until: { page.offset > lastOffset })
             let rows = railRows()
             let row = try #require(rows.indices.contains(fromOldest) ? rows[fromOldest] : nil)
             #expect(row.key != last.key, "the held row's key went")
@@ -715,6 +811,7 @@ import Testing
             let reading = try #require(page.probe.reading)
 
             try await page.refresh { $0.close(Page.question.item.id) }
+            try await page.settle(until: { !page.probe.viewTops.keys.contains { $0.hasPrefix("card:") } })
             #expect(page.lead == nil)
             let top = page.probe.viewTops[reading.key]
             let held = top.map { abs($0 - reading.top) <= 1 } == true
@@ -784,11 +881,15 @@ import Testing
             let openFolder = try #require(page.probe.openStateFold)
             openFolder("Specification")
             openFolder(TaskPagePlaceProbe.whatHappened)
-            try await page.settle(0.2)
+            try await page.settle(until: {
+                page.probe.openStateFolds == ["Specification", TaskPagePlaceProbe.whatHappened]
+            })
             #expect(page.probe.openStateFolds == ["Specification", TaskPagePlaceProbe.whatHappened])
 
             try await page.refresh(
                 { $0.items.append(Page.question) }, history: { $0.events[0].recorded_at.addTimeInterval(1) })
+            // The page has drawn the refresh: its new item's row is in.
+            try await page.settle(until: { page.probe.oneLineItemIDs == [Page.question.item.id] })
             for fold in persisted { #expect(page.disclosures.isExpanded(fold, taskID: taskID), "\(fold)") }
             #expect(page.probe.openStateFolds == ["Specification", TaskPagePlaceProbe.whatHappened])
         }
