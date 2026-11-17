@@ -251,6 +251,67 @@ func TestRestoreClassifiesEveryInsertTrigger(t *testing.T) {
 	}
 }
 
+// deleteTriggerRestoreExclusions maps each delete trigger restore may leave in
+// place to the reason it may. An entry belongs here only for a trigger that
+// never fires during restore: one on a table restore doesn't clear
+// (schema_migrations or an sqlite_ table), or an INSTEAD OF trigger on a view.
+// Every other delete trigger goes in appendOnlyDeleteGuards (restore.go),
+// including one that never raises, because its side effects would run on
+// every row restore deletes.
+var deleteTriggerRestoreExclusions = map[string]string{}
+
+var deleteTriggerSQL = regexp.MustCompile(`(?is)^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?\S+\s+(?:BEFORE\s+|AFTER\s+|INSTEAD\s+OF\s+)?DELETE\s+ON\s`)
+
+// TestRestoreSuspendsEveryDeleteGuard keeps appendOnlyDeleteGuards in step
+// with the schema. An unlisted trigger stays in place while restore deletes
+// every table's rows, so it fires only once its table holds a row, which a
+// test store rarely does: an unlisted append-only guard would first fail a
+// real restore, and a trigger that writes would change other tables' rows
+// during one. Listed guards need no check here, since every restore fails
+// when one is missing or not canonical.
+func TestRestoreSuspendsEveryDeleteGuard(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	rows, err := st.db.QueryContext(ctx,
+		`SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var name, table, definition string
+		if err := rows.Scan(&name, &table, &definition); err != nil {
+			t.Fatal(err)
+		}
+		if !deleteTriggerSQL.MatchString(definition) {
+			// A header the pattern cannot read must not let a delete
+			// trigger skip the check.
+			header, _, _ := strings.Cut(strings.ToUpper(definition), "BEGIN")
+			if strings.Contains(header, "DELETE") {
+				t.Errorf("cannot read the event of trigger %s: %s", name, header)
+			}
+			continue
+		}
+		seen[name] = true
+		listed := slices.ContainsFunc(appendOnlyDeleteGuards, func(g deleteGuard) bool { return g.name == name })
+		if _, excluded := deleteTriggerRestoreExclusions[name]; !listed && !excluded {
+			t.Errorf("delete trigger %s on %s is not suspended by restore: add a deleteGuard with its "+
+				"canonical SQL to appendOnlyDeleteGuards (restore.go), or, if it never fires during restore, "+
+				"add it to deleteTriggerRestoreExclusions with the reason", name, table)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for name := range deleteTriggerRestoreExclusions {
+		if !seen[name] {
+			t.Errorf("excluded delete trigger %s is not in the schema", name)
+		}
+	}
+}
+
 // restoreCheckpoint checkpoints src and restores that checkpoint into dst
 // with the plaintext Restore path.
 func restoreCheckpoint(t *testing.T, src, dst *Store) {
