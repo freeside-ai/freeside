@@ -86,7 +86,7 @@ func TestReconcilerLogsAPassFailureAtError(t *testing.T) {
 // error value and an attribute value by different paths.
 func TestNoCredentialReachesALogRecord(t *testing.T) {
 	t.Parallel()
-	const token = "ghs_liveinstallationtokenvalue"
+	const token = "ghs_" + "liveinstallationtokenvalue"
 	secret := publish.Secret(token)
 
 	var out bytes.Buffer

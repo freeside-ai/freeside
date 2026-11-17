@@ -22,16 +22,26 @@ var fixtureTime = time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 
 const fixtureAppID = int64(12345)
 
-// fixtureKey loads the committed test-only signing key. The key was
-// generated for these fixtures and has never authenticated anything;
-// it is test data, not a secret.
-func fixtureKey(t *testing.T) *rsa.PrivateKey {
+// fixtureKeyPEM returns the committed test-only signing key as PKCS #1 PEM.
+// The key was generated for these fixtures and has never authenticated
+// anything; it is test data, not a secret. The file holds only the base64
+// body and the armor is added here, so the repository tracks no
+// credential-shaped line an agent working on it could quote into an export
+// the credential scan would refuse (#3305).
+func fixtureKeyPEM(t *testing.T) []byte {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/test-signing-key.pem")
+	body, err := os.ReadFile("testdata/test-signing-key.pem.body")
 	if err != nil {
 		t.Fatalf("read fixture key: %v", err)
 	}
-	block, _ := pem.Decode(raw)
+	const label = "RSA " + "PRIVATE KEY"
+	return []byte("-----BEGIN " + label + "-----\n" + string(body) + "-----END " + label + "-----\n")
+}
+
+// fixtureKey parses fixtureKeyPEM.
+func fixtureKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	block, _ := pem.Decode(fixtureKeyPEM(t))
 	if block == nil {
 		t.Fatal("fixture key is not PEM")
 		return nil

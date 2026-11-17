@@ -16,7 +16,7 @@
 #   daemon       build test vet lint
 #   app          generate format test linux build-mac build-ios
 #   api          lint digest policy compat
-#   scripts      syntax shellcheck suites vocabulary tier-a-paths skill-mirrors trackercollect
+#   scripts      syntax shellcheck suites vocabulary tier-a-paths skill-mirrors credential-literals trackercollect
 #   convergence  run
 #   docs         plan-links
 #
@@ -189,7 +189,7 @@ steps_for() { # <component>; prints the component's steps in default order
     daemon) echo 'build test vet lint' ;;
     app) echo 'generate format test linux build-mac build-ios' ;;
     api) echo 'lint digest policy compat' ;;
-    scripts) echo 'syntax shellcheck suites vocabulary tier-a-paths skill-mirrors trackercollect' ;;
+    scripts) echo 'syntax shellcheck suites vocabulary tier-a-paths skill-mirrors credential-literals trackercollect' ;;
     convergence) echo 'run' ;;
     docs) echo 'plan-links' ;;
     *) return 1 ;;
@@ -734,6 +734,7 @@ scripts_suites() {
 scripts_vocabulary() { in_dir "$ROOT" bash scripts/check-vocabulary.sh; }
 scripts_tier_a_paths() { in_dir "$ROOT" bash scripts/check-tier-a-paths.sh; }
 scripts_skill_mirrors() { in_dir "$ROOT" bash scripts/check-skill-mirrors.sh; }
+scripts_credential_literals() { in_dir "$ROOT" bash scripts/check-credential-literals.sh; }
 scripts_trackercollect() {
   in_dir "$ROOT" go -C scripts/trackercollect build ./...
   in_dir "$ROOT" go -C scripts/trackercollect test ./...

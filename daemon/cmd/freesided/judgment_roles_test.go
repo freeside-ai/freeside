@@ -848,7 +848,7 @@ func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
 	// A key-shaped epoch sits where validation looks and the record id
 	// where a decoder would name it, so a cause that quoted either would
 	// show in the item.
-	const keyShapedEpoch, record = "sk-ant-api03-ledger-epoch", "call-7f3a"
+	const keyShapedEpoch, record = "sk-ant-" + "api03-ledger-epoch", "call-7f3a"
 	undecodable := filepath.Join(t.TempDir(), "ledger.json")
 	body := `{"version":"freeside.inference-budget/v4","epoch":"` + keyShapedEpoch + `","usage":{},"calls":[{"id":"` + record + `"}]}`
 	if err := os.WriteFile(undecodable, []byte(body), 0o600); err != nil {

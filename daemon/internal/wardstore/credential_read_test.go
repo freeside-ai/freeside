@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	readSentinelToken = "sk-ant-oat-READ-SENTINEL-0123456789abcdefghijklmnopqrstuv" //nolint:gosec // G101: test fixture
+	readSentinelToken = "sk-ant-" + "oat-READ-SENTINEL-0123456789abcdefghijklmnopqrstuv"
 	readIdentity      = domain.AuthIdentityID("claude-main")
 	readVolume        = "claude-main-auth"
 )

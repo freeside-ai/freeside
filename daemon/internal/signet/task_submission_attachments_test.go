@@ -367,7 +367,7 @@ func TestSubmitTaskCommandHTTPRejectsMalformedAttachments(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	handler, s := newRealSubmitTaskHandlerAndStore(t)
-	const secret = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	const secret = "ghp_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	stored := domain.Digest(contentaddr.Sum([]byte("stored")))
 	if response := authenticatedRequest(t, handler, http.MethodPut, "/attachments/"+string(stored),
 		bytes.NewReader([]byte("stored"))); response.Code != http.StatusCreated {

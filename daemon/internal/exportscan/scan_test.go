@@ -22,9 +22,9 @@ func TestCredentialScannerBlocksLeakedMaterial(t *testing.T) {
 		{"github token", "remote: https://ghp_" + strings.Repeat("b", 36) + "@github.com/x/y"},
 		{"github fine-grained token", "token=github_pat_" + strings.Repeat("c", 24)},
 		{"slack token", "SLACK_TOKEN=xoxb-" + strings.Repeat("d", 24)},
-		{"pem private key", "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n"},
-		{"pem private key with numeric label", "-----BEGIN PKCS8 PRIVATE KEY-----\nabc\n"},
-		{"aws access key", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"},
+		{"pem private key", "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nabc\n"},
+		{"pem private key with numeric label", "-----BEGIN " + "PKCS8 PRIVATE KEY-----\nabc\n"},
+		{"aws access key", "AWS_ACCESS_KEY_ID=AKIA" + "IOSFODNN7EXAMPLE"},
 		{"gcp service-account key id", `"private_key_id":"` + strings.Repeat("e", 40) + `"`},
 	}
 	for _, tc := range tests {

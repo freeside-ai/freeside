@@ -21,7 +21,7 @@ import (
 // operator typed: a credential can be pasted into a line.
 
 // unservedCanary stands for a credential pasted into a line's selection.
-const unservedCanary = "sk-ant-oat01-unserved-canary"
+const unservedCanary = "sk-ant-" + "oat01-unserved-canary"
 
 // unservedCatalogModel is the model the fixture catalog lists. The effort
 // leg types the canary as this model, which the catalog then lists too: an

@@ -22,7 +22,7 @@ import (
 )
 
 // fixtureTokenValue must match testdata/token-response.json.
-const fixtureTokenValue = "ghs_FIXTURETOKENFIXTURETOKEN0000" //nolint:gosec // fixture value from the recorded response, not a credential
+const fixtureTokenValue = "ghs_" + "FIXTURETOKENFIXTURETOKEN0000"
 
 type captureRecorder struct {
 	records []publish.MintRecord

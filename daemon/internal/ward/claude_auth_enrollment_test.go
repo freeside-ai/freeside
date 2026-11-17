@@ -18,8 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-//nolint:gosec // G101 false positive: a fixture token, not a credential.
-const claudeEnrollmentTestToken = "sk-ant-oat01-fixture-token-value-0123456789abcdef"
+const claudeEnrollmentTestToken = "sk-ant-" + "oat01-fixture-token-value-0123456789abcdef"
 
 // fakeClaudeEnrollmentStore records what the enrollment persisted and hands
 // the leaser the lease Begin grants, so the deferred release matches it.
@@ -393,7 +392,7 @@ func TestEnrollClaudeSetupTokenRefusesATokenTheProbeDoesNotPass(t *testing.T) {
 func TestEnrollClaudeSetupTokenRefusesAVolumeHoldingAnotherToken(t *testing.T) {
 	t.Parallel()
 	fx := newClaudeEnrollmentFixture(t)
-	fx.readBack = []byte("sk-ant-oat01-another-fixture-token-0123456789")
+	fx.readBack = []byte("sk-ant-" + "oat01-another-fixture-token-0123456789")
 	_, err := enrollClaudeInBubble(t, fx.cfg)
 	if err == nil || !strings.Contains(err.Error(), "holds a different token") {
 		t.Fatalf("err = %v, want the read-back mismatch", err)

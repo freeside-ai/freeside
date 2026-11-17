@@ -533,8 +533,8 @@ func TestObservationPaceReportsChangeSeparatelyFromRefresh(t *testing.T) {
 // unrepresentable; this test pins that against a future detail field.
 func TestHoldObservationsPassTheLeakAxisEnumeration(t *testing.T) {
 	t.Parallel()
-	axes := map[string]string{ //nolint:gosec // G101: deliberately fake leak payloads, not credentials
-		"credential":      "ghs_SECRETINSTALLATIONTOKEN2026",
+	axes := map[string]string{
+		"credential":      "ghs_" + "SECRETINSTALLATIONTOKEN2026",
 		"provider_output": "PROVIDER-STDERR: panic at /agent/workspace/main.go",
 		"specification":   "SPEC-CONTENT: implement the hidden billing bypass",
 		"policy":          "POLICY-CONTENT: allow paths daemon/** except secret/**",

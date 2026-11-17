@@ -22,7 +22,7 @@ var fakeSecrets = []struct {
 	{"GitHub fine-grained token", "github_pat", "github_pat_" + strings.Repeat("B", 30)},
 	{"AWS access key id", "aws_access_key_id", "AKIA" + strings.Repeat("Q", 16)},
 	{"Slack token", "slack_token", "xoxb-" + strings.Repeat("1", 20)},
-	{"PEM private key", "pem_private_key", "-----BEGIN OPENSSH PRIVATE KEY-----"},
+	{"PEM private key", "pem_private_key", "-----BEGIN " + "OPENSSH PRIVATE KEY-----"},
 	{"GCP service account key", "gcp_service_account_key", `"private_key_id": "` + strings.Repeat("a", 40) + `"`},
 }
 

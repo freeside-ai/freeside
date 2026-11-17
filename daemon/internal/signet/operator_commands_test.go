@@ -714,7 +714,7 @@ func TestOperatorCommandsFailClosedWithoutTheirHook(t *testing.T) {
 }
 
 // pastedRole reads like a credential pasted where a role belongs.
-const pastedRole = "sk-ant-oat01-fixture-not-a-token"
+const pastedRole = "sk-ant-" + "oat01-fixture-not-a-token"
 
 func TestOperatorCommandsHTTP(t *testing.T) {
 	t.Parallel()

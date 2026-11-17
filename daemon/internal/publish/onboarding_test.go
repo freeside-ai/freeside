@@ -284,10 +284,7 @@ func TestCredentialOnboardingImportsPerMachineKey(t *testing.T) {
 		t.Fatalf("machine-key step = %+v", step)
 	}
 
-	raw, err := os.ReadFile(filepath.Join("testdata", "test-signing-key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := fixtureKeyPEM(t)
 	creds, err := onboarder.ImportKey(context.Background(), registration, bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("ImportKey: %v", err)
@@ -345,10 +342,7 @@ func TestCredentialOnboardingKeyRotationPreservesManifestSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
-	raw, err := os.ReadFile(filepath.Join("testdata", "test-signing-key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := fixtureKeyPEM(t)
 	if _, err := onboarder.ImportKey(
 		context.Background(),
 		publicFixtureRegistration(),
@@ -422,13 +416,10 @@ func TestCredentialOnboardingRejectsUntrustedKeyOrAppMetadata(t *testing.T) {
 			ks := newTestKeystore(t)
 			onboarder, forge, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
 			tt.mutate(forge)
-			raw, err := os.ReadFile(filepath.Join("testdata", "test-signing-key.pem"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			raw := fixtureKeyPEM(t)
 			raw = append([]byte(tt.pemPrefix), raw...)
 			raw = append(raw, tt.pemSuffix...)
-			_, err = onboarder.ImportKey(
+			_, err := onboarder.ImportKey(
 				context.Background(),
 				publicFixtureRegistration(),
 				bytes.NewReader(raw),
@@ -950,11 +941,8 @@ func TestCredentialDoctorDetections(t *testing.T) {
 		if err := os.MkdirAll(legacyDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		raw, err := os.ReadFile(filepath.Join("testdata", "test-signing-key.pem"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(legacyDir, "app.pem"), raw, 0o600); err != nil { //nolint:gosec // fixed test-only keystore path
+		raw := fixtureKeyPEM(t)
+		if err := os.WriteFile(filepath.Join(legacyDir, "app.pem"), raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		metadata := fmt.Sprintf(

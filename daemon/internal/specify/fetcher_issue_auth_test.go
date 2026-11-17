@@ -21,7 +21,7 @@ const (
 	issueRepositoryID = 4242
 	// issueTokenNeedle is recognizable so a leak into an envelope or error
 	// shows up as a substring match.
-	issueTokenNeedle = "ghs_ISSUEREADNEEDLE0000000000000" //nolint:gosec // leak-detection needle, not a credential
+	issueTokenNeedle = "ghs_" + "ISSUEREADNEEDLE0000000000000"
 )
 
 var issueScope = specify.ManagedRepository{Repo: issueRepo, RepositoryID: issueRepositoryID}

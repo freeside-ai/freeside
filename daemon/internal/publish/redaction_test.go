@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +22,7 @@ import (
 func TestNoCredentialValueRenders(t *testing.T) {
 	t.Parallel()
 	key := fixtureKey(t)
-	pemRaw, err := os.ReadFile("testdata/test-signing-key.pem")
-	if err != nil {
-		t.Fatal(err)
-	}
+	pemRaw := fixtureKeyPEM(t)
 	// A middle line of the PEM body: pure base64 key material.
 	pemNeedle := strings.Split(strings.TrimSpace(string(pemRaw)), "\n")[3]
 

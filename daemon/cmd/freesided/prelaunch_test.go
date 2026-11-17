@@ -1309,7 +1309,7 @@ func TestPrelaunchIssueReaderTrustsOnlyTheAnswerItAskedFor(t *testing.T) {
 	}
 }
 
-const prelaunchIssueReadToken = "ghs_PRELAUNCHISSUEREAD" //nolint:gosec // fixture value, not a credential
+const prelaunchIssueReadToken = "ghs_" + "PRELAUNCHISSUEREAD"
 
 // newPrelaunchIssueReaderFixture writes a private App registration for acme,
 // its durable authority (with installation 555 trusted on repository 42 when

@@ -11,7 +11,7 @@ import (
 
 // secretValue is deliberately distinctive so any leak is unambiguous in
 // a failure message.
-const secretValue = "ghs_SECRETSECRETSECRETSECRET"
+const secretValue = "ghs_" + "SECRETSECRETSECRETSECRET"
 
 // TestSecretRendersRedactedEverywhere drives every implicit rendering a
 // Secret can reach — each fmt verb (including the non-string verbs that
