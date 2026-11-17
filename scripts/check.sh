@@ -160,6 +160,11 @@
 #                          CI sets it only on an exact hit of the
 #                          convergence harness cache, keyed on daemon/'s
 #                          git tree
+#   CONVERGENCE_NO_DEBUG_INFO
+#                          non-empty builds and runs the Swift tests with
+#                          `-debug-info-format none`
+#                          (run-convergence.sh --no-debug-info); only CI
+#                          sets it, matching app-ci.yml's cached build
 #   CONVERGENCE_SCREENSHOT_SHARDS
 #                          with CONVERGENCE_ALL_TESTS, the number of
 #                          concurrent slices the screenshot regression
@@ -749,8 +754,8 @@ scripts_trackercollect() {
 # --- convergence -----------------------------------------------------------
 
 convergence_run() {
-  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests} ${CONVERGENCE_SKIP_BUILD:+--skip-build} \
-    ${CONVERGENCE_HARNESS:+--harness "$CONVERGENCE_HARNESS"}
+  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests} ${CONVERGENCE_HARNESS:+--harness "$CONVERGENCE_HARNESS"} \
+    ${CONVERGENCE_SKIP_BUILD:+--skip-build} ${CONVERGENCE_NO_DEBUG_INFO:+--no-debug-info}
 }
 
 # --- docs ------------------------------------------------------------------

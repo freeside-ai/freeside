@@ -569,7 +569,7 @@ delete each `swiftpm-mirror-` key that
 CI's Swift build cache holds `app/.build`, test bundle included, so a PR
 that leaves `app/` alone skips the Swift build in the `convergence` job
 (#2291). Its key is
-`swift-build-v1-<os>-<arch>-<image OS>-<Xcode build>-<toolchain>-<app/ tree>`.
+`swift-build-v2-<os>-<arch>-<image OS>-<Xcode build>-<toolchain>-<app/ tree>`.
 The image OS is `$ImageOS`; the Xcode build is the pinned Xcode's
 `xcodebuild -version` build number; the toolchain is the `swiftlang-` token
 of its `swift --version`; and the tree is `git rev-parse HEAD:app`, which
@@ -584,8 +584,16 @@ construction, so a stale artifact cannot register as a pass; an app PR also
 builds on a hit. There is no fallback key: a partial build still recompiles
 every project module (#2249). After an Xcode or toolchain change every run
 misses until the next push to `main` that touches `app/`, and PRs build as
-before meanwhile. To retire every entry, bump the `swift-build-v1` prefix in
-both workflows and in `scripts/test-daemon-test-shards.sh`.
+before meanwhile. CI builds the bundle without debug info
+(`-debug-info-format none`, both in the writer and in the `convergence`
+job's `CONVERGENCE_NO_DEBUG_INFO`, `scripts/run-convergence.sh
+--no-debug-info`), which saves build time (#3292): assertion failures keep
+their source locations, which Swift Testing records through macros, but a
+crash backtrace in CI loses its line numbers. Local runs keep debug info.
+A new build flag in either place needs the same flag in the other and a
+prefix bump, or a hit would run a bundle built with other flags. To retire
+every entry, bump the `swift-build-v2` prefix in both workflows and in
+`scripts/test-daemon-test-shards.sh`.
 
 CI's convergence harness cache holds the `freeside-signet-dev` binary the
 `convergence` job launches, so a PR that leaves `daemon/` alone skips Go
@@ -697,10 +705,15 @@ Swift formatting and style analysis both come from the toolchain's
 `swift-format` (swift-format 6.4.4, shipped with Xcode 27.2; CI pins the
 matching Xcode and fails if the tool version drifts). The configuration is
 `.swift-format` in this directory; the decision record is
-`devlog/2026-07-20-1140-swift-style-tooling.md`. In CI the gate runs at the
-start of the convergence job (`.github/workflows/convergence-ci.yml`), the
-PR's one macOS Swift job, which also runs FreesideCoreTests and the
-screenshot regressions beside the convergence suite (#2248).
+`devlog/2026-07-20-1140-swift-style-tooling.md`. In CI the gate runs in the
+convergence job (`.github/workflows/convergence-ci.yml`), the PR's one macOS
+Swift job, which also runs FreesideCoreTests and the screenshot regressions
+beside the convergence suite (#2248). It starts in the background after the
+`swift-format` version check, so it overlaps the job's setup and build, and
+a step after the convergence pass prints its result and fails the job on a
+finding, even when the pass failed too (#3292). CI's drift check formats a
+copy of the files under `$RUNNER_TEMP` and diffs it against the sources, so
+it never writes under `app/` while the build reads it.
 
 From `app/`:
 

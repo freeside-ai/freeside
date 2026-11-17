@@ -13,8 +13,9 @@ name: convergence CI
 # requests is queue time for every other run (#2248). When the caller
 # selects the app component, the same `swift test` invocation runs every
 # Darwin-only suite (FreesideCoreTests, the screenshot regressions) beside
-# the convergence suite, and the swift-format gate runs first; the build
-# is the same either way. The job runs only through pull-request.yml: a
+# the convergence suite, and the swift-format gate runs in the background
+# beside the setup and the build (#3292); the build is the same either
+# way. The job runs only through pull-request.yml: a
 # push to main carries a tree its PR tested under the up-to-date rule,
 # and the Go build cache and the convergence harness it restores are
 # saved by daemon-ci.yml's `macos-main` job, the SwiftPM mirror by
@@ -83,20 +84,48 @@ jobs:
             echo "swift-format ${version} != pinned ${SWIFT_FORMAT_VERSION}" >&2
             exit 1
           fi
-      - name: Lint (scripts/check.sh)
+      # The swift-format gate, lint then drift, runs in the background so
+      # its ~20 s overlap the Go setup, the cache restores, and the build
+      # instead of preceding them (#3292); `Collect the swift-format gate`
+      # after the convergence pass prints its output and fails the job on
+      # a finding. The drift check copies the checked files twice under
+      # $RUNNER_TEMP, with the configuration at the root of each copy so
+      # swift-format finds it as it would under app/, formats one copy, and
+      # diffs the two: nothing under app/ is written while the build reads
+      # it, and no source's modification time changes. The hosted runner
+      # reaps orphaned processes only at job end, so the gate outlives this
+      # step. `set -e` does not apply inside the `||` lists below, so each
+      # command's failure is checked explicitly.
+      - name: Start the swift-format gate
+        id: format-gate
         if: inputs.app_tests
-        run: bash scripts/check.sh app format
-      - name: Check formatting drift
-        if: inputs.app_tests
-        working-directory: app
         run: |
-          files=(Package.swift)
-          while IFS= read -r -d '' file; do
-            files+=("$file")
-          done < <(find Sources Tests Apps -name '*.swift' \
-            -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
-          xcrun swift-format format --in-place "${files[@]}"
-          git diff --exit-code
+          gate="$RUNNER_TEMP/swift-format-gate"
+          mkdir -p "$gate"
+          drift() (
+            cd app || return 1
+            files=(.swift-format Package.swift)
+            while IFS= read -r -d '' file; do
+              files+=("$file")
+            done < <(find Sources Tests Apps -name '*.swift' \
+              -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
+            for copy in source formatted; do
+              mkdir -p "$gate/$copy" &&
+                printf '%s\0' "${files[@]}" | tar -c --null -T - -f - | tar -x -f - -C "$gate/$copy" ||
+                return 1
+            done
+            (cd "$gate/formatted" && xcrun swift-format format --in-place "${files[@]:1}") || return 1
+            git -C "$gate" diff --no-index --exit-code source formatted
+          )
+          (
+            status=0
+            echo "Lint (scripts/check.sh app format)"
+            bash scripts/check.sh app format || status=1
+            echo "Check formatting drift"
+            drift || status=1
+            echo "$status" >"$gate/status.tmp"
+            mv "$gate/status.tmp" "$gate/status"
+          ) >"$gate/log" 2>&1 </dev/null &
       # The convergence harness key's one input: daemon/'s git tree, which
       # covers every file's name, mode, and content. Nothing outside daemon/
       # decides the binary: go.mod pins the toolchain with no toolchain or
@@ -192,7 +221,7 @@ jobs:
           # build SwiftPM must re-scan and partly recompile, which saved
           # under a minute when #2249 measured it.
           path: app/.build
-          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
+          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
       - name: Run the convergence pass (scripts/check.sh)
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
@@ -202,7 +231,30 @@ jobs:
           # Launch the restored harness only on an exact hit; otherwise
           # run-convergence.sh builds it.
           CONVERGENCE_HARNESS: ${{ steps.harness.outputs.cache-hit == 'true' && format('{0}/.convergence-harness/freeside-signet-dev', github.workspace) || '' }}
+          # Build without debug info on every run, as app-ci.yml's
+          # `swift-build-cache` job builds the bundle a hit restores, and as
+          # a run that misses builds its own (#3292). Assertion failures keep
+          # their source locations; crash backtraces lose line numbers.
+          CONVERGENCE_NO_DEBUG_INFO: '1'
         run: bash scripts/check.sh convergence
+      # Runs whenever the gate started and the job wasn't cancelled, so a
+      # format finding shows even when the convergence pass failed. The
+      # gate takes about 25 s and the pass several minutes, so the bound
+      # only catches a gate that hung or died.
+      - name: Collect the swift-format gate
+        if: ${{ !cancelled() && steps.format-gate.outcome == 'success' }}
+        run: |
+          gate="$RUNNER_TEMP/swift-format-gate"
+          for _ in $(seq 300); do
+            [ -f "$gate/status" ] && break
+            sleep 1
+          done
+          cat "$gate/log"
+          if [ ! -f "$gate/status" ]; then
+            echo "swift-format gate: no result after 300 s" >&2
+            exit 1
+          fi
+          exit "$(cat "$gate/status")"
       - name: Record the Swift build cache result
         if: always()
         run: |

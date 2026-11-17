@@ -401,8 +401,9 @@ class Coverage(unittest.TestCase):
         # macOS test job at all, so a PR asks for three macOS jobs, not five.
         self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
         convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
+        no_debug_info = '-debug-info-format none'
         swift_build_cache = ("          path: app/.build\n"
-                             "          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-"
+                             "          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-"
                              "${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-"
                              "${{ steps.swift-key.outputs.toolchain }}-"
                              "${{ steps.swift-key.outputs.tree }}\n")
@@ -412,6 +413,30 @@ class Coverage(unittest.TestCase):
         self.assertNotIn(trim, convergence)
         self.assertIn("CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}", convergence)
         self.assertIn('-rest-${{ hashFiles', convergence)
+        # The swift-format gate (#3292) starts in the background before the
+        # pass and is collected after it, even when the pass failed, and
+        # its drift check never formats a file under app/: it formats a
+        # copy under $RUNNER_TEMP, so the build's sources keep their times.
+        def step(name):
+            return re.search(r'^      - name: ' + re.escape(name) + r'\n(.*?)(?=^      (?:- |#))',
+                             convergence, re.M | re.S).group(1)
+        start, collect = step('Start the swift-format gate'), step('Collect the swift-format gate')
+        self.assertIn('        id: format-gate\n        if: inputs.app_tests\n', start)
+        self.assertIn(") >\"$gate/log\" 2>&1 </dev/null &\n", start)
+        self.assertIn('bash scripts/check.sh app format || status=1\n', start)
+        self.assertIn('-C "$gate/$copy"', start)
+        self.assertIn('(cd "$gate/formatted" && xcrun swift-format format --in-place', start)
+        self.assertIn('git -C "$gate" diff --no-index --exit-code source formatted\n', start)
+        self.assertEqual(convergence.count('format --in-place'), 1)
+        self.assertIn("        if: ${{ !cancelled() && steps.format-gate.outcome == 'success' }}\n", collect)
+        self.assertIn('exit "$(cat "$gate/status")"\n', collect)
+        self.assertNotIn('continue-on-error', collect)
+        self.assertLess(convergence.index('- name: Verify pinned swift-format version\n'),
+                        convergence.index('- name: Start the swift-format gate\n'))
+        self.assertLess(convergence.index('- name: Start the swift-format gate\n'),
+                        convergence.index('- name: Run the convergence pass'))
+        self.assertLess(convergence.index('- name: Run the convergence pass'),
+                        convergence.index('- name: Collect the swift-format gate\n'))
         # The Swift build cache (#2291): an exact key over all of app/ with
         # no fallback, and the build skipped only on that hit and never for
         # an app PR, whose --all-tests run must compile its own changes.
@@ -443,7 +468,8 @@ class Coverage(unittest.TestCase):
         self.assertNotIn('restore-keys', lookup)
         self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
                       "        working-directory: app\n"
-                      "        run: swift build --only-use-versions-from-resolved-file --build-tests\n", writer)
+                      "        run: swift build --only-use-versions-from-resolved-file --build-tests "
+                      + no_debug_info + "\n", writer)
         self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
                       "        uses: actions/cache/save@v4\n        with:\n          path: app/.build\n"
                       "          key: ${{ steps.swift-build.outputs.cache-primary-key }}\n", writer)
@@ -458,13 +484,25 @@ class Coverage(unittest.TestCase):
         # The writer's build is the bundle run-convergence.sh runs with
         # --skip-build, so the script's `swift test` arguments stay pinned:
         # a build flag added there needs the same flag in the writer's
-        # build and a swift-build-v1 prefix bump, or a hit would run a
-        # bundle built without it.
+        # build and a swift-build-vN prefix bump, or a hit would run a
+        # bundle built without it. CI builds without debug info (#3292):
+        # the convergence pass sets CONVERGENCE_NO_DEBUG_INFO, check.sh maps
+        # it to --no-debug-info, and the script adds the writer's flag to
+        # every swift command.
         # A verification slot adds --disable-sandbox under APP_MACVERIFY,
         # which no workflow sets, so CI's arguments stay the pinned flag.
         runner = (root / 'scripts/run-convergence.sh').read_text()
         self.assertIn('swift_args=(--only-use-versions-from-resolved-file '
-                      '${sandbox_args[@]+"${sandbox_args[@]}"})\n', runner)
+                      '${sandbox_args[@]+"${sandbox_args[@]}"} '
+                      '${debug_info_args[@]+"${debug_info_args[@]}"})\n', runner)
+        self.assertIn('  build_args=(--build-tests --only-use-versions-from-resolved-file '
+                      '${sandbox_args[@]+"${sandbox_args[@]}"} '
+                      '${debug_info_args[@]+"${debug_info_args[@]}"})\n', runner)
+        self.assertEqual(re.findall(r'debug_info_args=\(([^)]*)\)', runner), ['', no_debug_info])
+        self.assertIn('    --no-debug-info) debug_info_args=(' + no_debug_info + ') ;;\n', runner)
+        self.assertIn("          CONVERGENCE_NO_DEBUG_INFO: '1'\n", step('Run the convergence pass (scripts/check.sh)'))
+        check = (root / 'scripts/check.sh').read_text()
+        self.assertIn('${CONVERGENCE_SKIP_BUILD:+--skip-build} ${CONVERGENCE_NO_DEBUG_INFO:+--no-debug-info}\n', check)
         self.assertEqual(re.findall(r'^ *sandbox_args=\((.*)\)$', runner, re.M),
                          ['', '--disable-sandbox'])
         self.assertIn('if [[ -n "${APP_MACVERIFY:-}" ]]; then\n'
