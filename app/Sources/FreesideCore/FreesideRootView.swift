@@ -16,6 +16,9 @@ public struct FreesideRootView: View {
     @State private var feedback: DecisionFeedbackModel
     @State private var flowPreferences: DecisionFlowPreferences
     @State private var listPreferences = ListSectionPreferences()
+    /// The work status view's Over Time model for the paired coordinator,
+    /// so its period survives leaving the view.
+    @State private var workHoursModels = WorkHoursModelCache()
     private let notificationOpens: NotificationOpenLog
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     @State private var showsInboxClearResult: Bool
@@ -796,7 +799,9 @@ public struct FreesideRootView: View {
         WorkStatusView(
             status: coordinator.workStatus, projectID: coordinator.store.projectID,
             selected: coordinator.store.positionFilter,
-            onSelect: { choosePosition($0, coordinator: coordinator) }, topMargin: topMargin)
+            onSelect: { choosePosition($0, coordinator: coordinator) },
+            hours: workHoursModels.model(for: coordinator),
+            onOpenTask: { navigation.route(to: .task($0)) }, topMargin: topMargin)
     }
 
     /// A count narrows the list to its tasks, with Working open when they
@@ -925,6 +930,25 @@ struct RevokedPane: View {
         }
     }
 #endif
+
+/// The Over Time model, built once per coordinator so the period stays put
+/// when the operator leaves the work status view and comes back, and a new
+/// pairing starts afresh. A plain reference held in `@State`, as
+/// `SettingsModelCache` is: filling it while the body draws changes nothing
+/// the view observes.
+@MainActor
+final class WorkHoursModelCache {
+    private var coordinatorID: ObjectIdentifier?
+    private var cached: WorkHoursModel?
+
+    func model(for coordinator: SyncCoordinator) -> WorkHoursModel {
+        if let cached, coordinatorID == ObjectIdentifier(coordinator) { return cached }
+        let model = WorkHoursModel(coordinator: coordinator)
+        coordinatorID = ObjectIdentifier(coordinator)
+        cached = model
+        return model
+    }
+}
 
 /// The iPhone bottom bar's gear and its open-findings badge. Not gated to
 /// iOS so the screenshot suite, which renders on the Mac, can draw it.

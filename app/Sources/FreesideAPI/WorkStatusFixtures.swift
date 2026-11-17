@@ -72,6 +72,70 @@ public enum WorkStatusFixtures {
         ]
     }
 
+    /// A task with hours that the screenshot tasks don't hold, so the Over
+    /// Time tab shows it by id.
+    public static let unheldTaskID = "task-archived-3f9c"
+
+    /// A week of the project's work hours ending on the capture day, for
+    /// the Over Time tab (#3242): `workHoursDays()` on 2026-08-10 and 11,
+    /// a day waiting on you, a day mostly held, a zero day, a task the
+    /// screenshot tasks don't hold, and the capture day's first minutes.
+    public static func workHoursWeekDays() -> [Components.Schemas.WorkHoursDay] {
+        [
+            workHoursDay(
+                "2026-08-06", working: 5_400, waiting: 3_600, held: [], other: 1_200,
+                tasks: [
+                    .init(task_id: "task-review", elapsed_seconds: 6_000),
+                    .init(task_id: "task-spec", elapsed_seconds: 4_200),
+                ]),
+            workHoursDay(
+                "2026-08-07", working: 2_400, waiting: 0, held: [.init(reason: .usage_pool_exhausted, seconds: 7_200)],
+                other: 600,
+                tasks: [
+                    .init(task_id: "task-capacity", elapsed_seconds: 9_600),
+                    .init(task_id: "task-implement", elapsed_seconds: 600),
+                ]),
+            workHoursDay(
+                "2026-08-09", working: 1_800, waiting: 5_400, held: [.init(reason: .scope_conflict, seconds: 1_200)],
+                other: 0,
+                tasks: [
+                    .init(task_id: "task-card", elapsed_seconds: 6_600),
+                    .init(task_id: unheldTaskID, elapsed_seconds: 1_800),
+                ]),
+        ] + workHoursDays() + [
+            workHoursDay(
+                "2026-08-12", working: 1_500, waiting: 0, held: [], other: 600,
+                tasks: [.init(task_id: "task-implement", elapsed_seconds: 2_100)])
+        ]
+    }
+
+    /// The first date of the week `workHoursWeekDays()` covers.
+    public static let workHoursWeekFrom = "2026-08-06"
+
+    /// The Over Time tab's answer for that week in UTC, as the mock serves
+    /// it at the capture instant, for screenshots that draw a state without
+    /// a fetch. A day that ended before `holdHistorySince` has its held
+    /// time read as other, as the daemon reads it; `empty` serves no hours.
+    public static func workHoursWeek(
+        holdHistorySince: Date = RunFixtures.screenshotInstant.addingTimeInterval(-30 * 86_400),
+        skippedRunCount: Int = 0, empty: Bool = false
+    ) -> Components.Schemas.WorkHours {
+        let days = workHoursWeekDays().map { day in
+            guard day.ends_at <= holdHistorySince else { return day }
+            var folded = day
+            folded.other_seconds += day.held_seconds
+            folded.held_seconds = 0
+            folded.held_by_reason = []
+            return folded
+        }
+        var hours = MockWorkHours.response(
+            .init(from: workHoursWeekFrom, days: 7, timeZoneName: "UTC", timeZone: .gmt, projectID: project),
+            fixtures: empty ? [:] : [project: days], holdHistorySince: holdHistorySince,
+            asOf: RunFixtures.screenshotInstant)
+        hours.skipped_run_count = skippedRunCount
+        return hours
+    }
+
     private static func workHoursDay(
         _ date: String, working: Int64, waiting: Int64, held: [Components.Schemas.WorkHoursHeld], other: Int64,
         tasks: [Components.Schemas.WorkHoursTask]
