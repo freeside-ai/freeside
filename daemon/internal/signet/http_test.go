@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -89,38 +91,55 @@ func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
 	}
 }
 
+// TestHTTPOnlyHealthAndPairingAreUnauthenticated probes every route in the
+// production route table, so a route registered there without
+// h.authenticated fails here unless it joins the allowlist. A request with no
+// Authorization header must get 401 Bearer from everything else. Each probe
+// must reach its own pattern: a probe that a neighbouring authenticated route
+// wins would pass while the route under test stays open.
 func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	handler := signet.NewHTTPHandler(f.service, nil)
-	for _, route := range []struct {
-		method string
-		path   string
-	}{
-		{http.MethodGet, "/devices"},
-		{http.MethodPost, "/devices/device-1/revoke"},
-		{http.MethodGet, "/sync/bootstrap"},
-		{http.MethodGet, "/sync/revision"},
-		{http.MethodGet, "/restart-readiness"},
-		{http.MethodGet, "/attention/items"},
-		{http.MethodGet, "/attention/items/item-1"},
-		{http.MethodGet, "/attention/items/item-1/effect-proposal"},
-		{http.MethodGet, "/attention/items/item-1/deliveries"},
-		{http.MethodPut, "/attention/items/item-1/deliveries/ntfy/1/opened"},
-		{http.MethodGet, "/runs"},
-		{http.MethodGet, "/runs/run-1"},
-		{http.MethodGet, "/runs/run-1/timeline"},
-		{http.MethodGet, "/tasks/task-1/timeline"},
-		{http.MethodGet, "/schedules"},
-		{http.MethodGet, "/conversations/conversation-1"},
-		{http.MethodPost, "/commands"},
-		{http.MethodPut, "/attachments/sha256:abc"},
-		{http.MethodGet, "/attachments/sha256:abc"},
-	} {
-		t.Run(route.method+" "+route.path, func(t *testing.T) {
-			response := bearerRequest(t, handler, route.method, route.path, "", nil)
-			if response.Code != http.StatusUnauthorized {
-				t.Fatalf("status = %d body=%s, want 401", response.Code, response.Body.String())
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+	unauthenticated := map[string]bool{
+		"GET /health":           true,
+		"POST /pairing":         true,
+		"POST /pairing/preview": true,
+	}
+	patterns := signet.HTTPRoutePatterns()
+	for allowed := range unauthenticated {
+		if !slices.Contains(patterns, allowed) {
+			t.Errorf("allowlisted route %q is not in the route table", allowed)
+		}
+	}
+	// The probe mux matches requests exactly as the served mux does, because
+	// it holds the same patterns; it only reports which pattern won.
+	probeMux := http.NewServeMux()
+	for _, pattern := range patterns {
+		probeMux.Handle(pattern, http.NotFoundHandler())
+	}
+	// {$} matches only the bare trailing slash, and {name...} takes two
+	// segments so a single-segment {name} beside it can't win the probe.
+	probePath := strings.NewReplacer("{$}", "").Replace
+	remainder := regexp.MustCompile(`\{[^}]*\.\.\.\}`)
+	segment := regexp.MustCompile(`\{[^}]*\}`)
+	for _, pattern := range patterns {
+		if unauthenticated[pattern] {
+			continue
+		}
+		t.Run(pattern, func(t *testing.T) {
+			method, path, ok := strings.Cut(pattern, " ")
+			if !ok || method == "" || !strings.HasPrefix(path, "/") {
+				t.Fatalf("pattern %q is not METHOD /path", pattern)
+			}
+			target := segment.ReplaceAllString(remainder.ReplaceAllString(probePath(path), "x/x"), "x")
+			if _, matched := probeMux.Handler(httptest.NewRequest(method, target, nil)); matched != pattern {
+				t.Fatalf("probe %s %s reaches %q, not its own pattern", method, target, matched)
+			}
+			response := bearerRequest(t, handler, method, target, "", nil)
+			if response.Code != http.StatusUnauthorized || response.Header().Get("WWW-Authenticate") != "Bearer" {
+				t.Fatalf("status = %d WWW-Authenticate %q body=%s, want 401 Bearer",
+					response.Code, response.Header().Get("WWW-Authenticate"), response.Body.String())
 			}
 		})
 	}

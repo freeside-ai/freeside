@@ -51,43 +51,63 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	health.Features = domain.AllDaemonFeatures
 	h := httpHandler{service: service, authorize: authorize, health: health}
 	mux := http.NewServeMux()
-	// GET /health, POST /pairing, and POST /pairing/preview are the
-	// unauthenticated routes (api/openapi.yaml security: []). Health exposes
-	// only process liveness; pairing and its preview use the short-lived
-	// code as the authenticator.
-	mux.Handle("GET /health", http.HandlerFunc(h.getHealth))
-	mux.Handle("POST /pairing", http.HandlerFunc(h.pairDevice))
-	mux.Handle("POST /pairing/preview", http.HandlerFunc(h.previewPairing))
-	mux.Handle("GET /devices", h.authenticated(h.listDevices))
-	mux.Handle("POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice))
-	mux.Handle("PUT /devices/{device_id}/notifications", h.authenticated(h.setDeviceNotifications))
-	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
-	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
-	mux.Handle("GET /restart-readiness", h.authenticated(h.getRestartReadiness))
-	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
-	mux.Handle("GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem))
-	mux.Handle("GET /attention/items/{item_id}/task-proposal", h.authenticated(h.getTaskProposalFacts))
-	mux.Handle("GET /attention/items/{item_id}/effect-proposal", h.authenticated(h.getEffectProposalFacts))
-	mux.Handle("GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries))
-	mux.Handle("PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened))
-	mux.Handle("GET /runs", h.authenticated(h.listRuns))
-	mux.Handle("GET /schedules", h.authenticated(h.listSchedules))
-	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
-	mux.Handle("GET /runs/{run_id}/timeline", h.authenticated(h.getRunTimeline))
-	mux.Handle("GET /tasks/{task_id}/timeline", h.authenticated(h.getTaskTimeline))
-	mux.Handle("GET /runs/{run_id}/review/{round}/evidence", h.authenticated(h.getReviewEvidence))
-	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
-	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
-	mux.Handle("PUT /attachments/{digest}", h.authenticated(h.putAttachment))
-	mux.Handle("GET /attachments/{digest}", h.authenticated(h.getAttachment))
-	// Comprehension telemetry (plan §8, §5.14): capability registration, the
-	// daemon-derived action surface, and event ingestion. Each is deliberately
-	// not a ClientCommand, like reportDeliveryOpened. The device is always the
-	// bearer credential's; the capability path device must equal it (else 404).
-	mux.Handle("PUT /devices/{device_id}/capability-contract", h.authenticated(h.registerCapabilityContract))
-	mux.Handle("GET /attention/items/{item_id}/action-surface", h.authenticated(h.getActionSurface))
-	mux.Handle("PUT /telemetry/comprehension/{event_id}", h.authenticated(h.recordComprehensionEvent))
+	for _, route := range h.routes() {
+		mux.Handle(route.pattern, route.handler)
+	}
 	return compressJSON(mux)
+}
+
+// httpRoute is one served pattern and the handler registered for it.
+type httpRoute struct {
+	pattern string
+	handler http.Handler
+}
+
+// routes is the only place the HTTP surface is registered: NewHTTPHandler
+// mounts exactly these entries, and the unauthenticated-route test reads the
+// same table, so a route added here without h.authenticated fails that test
+// unless it joins the test's explicit allowlist. Each entry writes its
+// wrapping out instead of deriving it from a flag, so the test checks the
+// handler that is served. A route registered anywhere else escapes the test.
+func (h httpHandler) routes() []httpRoute {
+	return []httpRoute{
+		// GET /health, POST /pairing, and POST /pairing/preview are the
+		// unauthenticated routes (api/openapi.yaml security: []). Health exposes
+		// only process liveness; pairing and its preview use the short-lived
+		// code as the authenticator.
+		{"GET /health", http.HandlerFunc(h.getHealth)},
+		{"POST /pairing", http.HandlerFunc(h.pairDevice)},
+		{"POST /pairing/preview", http.HandlerFunc(h.previewPairing)},
+		{"GET /devices", h.authenticated(h.listDevices)},
+		{"POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice)},
+		{"PUT /devices/{device_id}/notifications", h.authenticated(h.setDeviceNotifications)},
+		{"GET /sync/bootstrap", h.authenticated(h.getBootstrap)},
+		{"GET /sync/revision", h.authenticated(h.getRevision)},
+		{"GET /restart-readiness", h.authenticated(h.getRestartReadiness)},
+		{"GET /attention/items", h.authenticated(h.listAttentionItems)},
+		{"GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem)},
+		{"GET /attention/items/{item_id}/task-proposal", h.authenticated(h.getTaskProposalFacts)},
+		{"GET /attention/items/{item_id}/effect-proposal", h.authenticated(h.getEffectProposalFacts)},
+		{"GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries)},
+		{"PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened)},
+		{"GET /runs", h.authenticated(h.listRuns)},
+		{"GET /schedules", h.authenticated(h.listSchedules)},
+		{"GET /runs/{run_id}", h.authenticated(h.getRun)},
+		{"GET /runs/{run_id}/timeline", h.authenticated(h.getRunTimeline)},
+		{"GET /tasks/{task_id}/timeline", h.authenticated(h.getTaskTimeline)},
+		{"GET /runs/{run_id}/review/{round}/evidence", h.authenticated(h.getReviewEvidence)},
+		{"GET /conversations/{conversation_id}", h.authenticated(h.getConversation)},
+		{"POST /commands", h.authenticated(h.submitCommand)},
+		{"PUT /attachments/{digest}", h.authenticated(h.putAttachment)},
+		{"GET /attachments/{digest}", h.authenticated(h.getAttachment)},
+		// Comprehension telemetry (plan §8, §5.14): capability registration, the
+		// daemon-derived action surface, and event ingestion. Each is deliberately
+		// not a ClientCommand, like reportDeliveryOpened. The device is always the
+		// bearer credential's; the capability path device must equal it (else 404).
+		{"PUT /devices/{device_id}/capability-contract", h.authenticated(h.registerCapabilityContract)},
+		{"GET /attention/items/{item_id}/action-surface", h.authenticated(h.getActionSurface)},
+		{"PUT /telemetry/comprehension/{event_id}", h.authenticated(h.recordComprehensionEvent)},
+	}
 }
 
 type httpHandler struct {
