@@ -510,6 +510,7 @@ class Coverage(unittest.TestCase):
         needs['commit-messages'] = {'result': 'success'}
         needs['migration-history'] = {'result': 'success'}
         needs['tier-a-paths'] = {'result': 'success'}
+        needs['credential-literals'] = {'result': 'success'}
         def result(value):
             return subprocess.run(['bash', '-c', command], env=dict(os.environ, NEEDS=json.dumps(value)),
                                   capture_output=True).returncode
@@ -518,9 +519,11 @@ class Coverage(unittest.TestCase):
             self.assertNotEqual(result(dict(needs, daemon={'result': bad})), 0)
             self.assertNotEqual(result(dict(needs, **{'migration-history': {'result': bad}})), 0)
             self.assertNotEqual(result(dict(needs, **{'tier-a-paths': {'result': bad}})), 0)
+            self.assertNotEqual(result(dict(needs, **{'credential-literals': {'result': bad}})), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'daemon'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'migration-history'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'tier-a-paths'}), 0)
+        self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'credential-literals'}), 0)
         self.assertNotEqual(result(dict(needs, unexpected={'result': 'success'})), 0)
 
     def test_helper_and_weight_only_changes_select_daemon(self):
