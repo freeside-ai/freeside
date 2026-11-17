@@ -716,6 +716,7 @@
                 Surface(
                     name: "work-status-project-filter", width: 640,
                     view: view(projectID: WorkStatusFixtures.otherProject, selected: nil)))
+            surfaces += try workHoursSurfaces(tasks: tasks, store: store)
             store.selectPositionFilter(.held(.usage_pool_exhausted))
             try surfaces.append(
                 Surface(
@@ -725,6 +726,70 @@
                             store: store, tasks: tasks, navigation: screenshotNavigation(selecting: nil),
                             preferences: screenshotListPreferences(expanded: true)
                         ).screenshotContent(now: screenshotNow))))
+            return surfaces
+        }
+
+        /// The work status view's Over Time tab (#3242): the week ending on
+        /// the capture day with a day chosen, in the Mac detail column and on
+        /// the iPhone, light and dark; loading an earlier week, so Later is
+        /// on; an empty week; a failed fetch with Retry; a week that starts
+        /// before hold history, with a day that straddles its start; and
+        /// figures left incomplete by skipped runs.
+        private func workHoursSurfaces(
+            tasks: [Components.Schemas.TaskSnapshot], store: InboxStore
+        ) throws
+            -> [Surface]
+        {
+            let today = try #require(CalendarDate("2026-08-12"))
+            let week = WorkHoursPeriod(endingOn: today)
+            func view(
+                _ display: WorkHoursModel.Display, period: WorkHoursPeriod = week, selected: String? = nil
+            ) -> AnyView {
+                AnyView(
+                    WorkStatusView(
+                        status: WorkStatus(open: store.openSnapshots, tasks: tasks, projectFilter: nil),
+                        projectID: nil, selected: nil, onSelect: { _ in }
+                    ).screenshotContent(
+                        overTime: WorkHoursView(
+                            display: display, period: period, canGoLater: period != week,
+                            selectedDate: selected.flatMap(CalendarDate.init))))
+            }
+            func chart(_ hours: Components.Schemas.WorkHours) throws -> WorkHoursModel.Display {
+                .loaded(try #require(WorkHoursChart(hours, tasks: tasks)))
+            }
+            let loaded = try chart(WorkStatusFixtures.workHoursWeek())
+            var surfaces: [Surface] = []
+            for colorScheme in [ColorScheme.light, .dark] {
+                let suffix = colorScheme == .dark ? "-dark" : ""
+                surfaces += [
+                    Surface(
+                        name: "work-status-over-time" + suffix, width: 640, colorScheme: colorScheme,
+                        view: view(loaded, selected: "2026-08-10")),
+                    Surface(
+                        name: "work-status-over-time-phone" + suffix, width: 390, colorScheme: colorScheme,
+                        view: view(loaded, selected: "2026-08-09")),
+                ]
+            }
+            let holdHistorySince = try #require(ISO8601DateFormatter().date(from: "2026-08-09T14:00:00Z"))
+            surfaces += [
+                Surface(
+                    name: "work-status-over-time-loading", width: 640,
+                    view: view(.loading, period: WorkHoursPeriod(endingOn: today, periodsBack: 1))),
+                Surface(
+                    name: "work-status-over-time-empty", width: 640,
+                    view: view(try chart(WorkStatusFixtures.workHoursWeek(empty: true)))),
+                Surface(
+                    name: "work-status-over-time-failed", width: 390,
+                    view: view(.failed(WorkHoursModel.loadFailureMessage))),
+                Surface(
+                    name: "work-status-over-time-hold-history", width: 390,
+                    view: view(
+                        try chart(WorkStatusFixtures.workHoursWeek(holdHistorySince: holdHistorySince)),
+                        selected: "2026-08-07")),
+                Surface(
+                    name: "work-status-over-time-incomplete", width: 640,
+                    view: view(try chart(WorkStatusFixtures.workHoursWeek(skippedRunCount: 2)))),
+            ]
             return surfaces
         }
 
