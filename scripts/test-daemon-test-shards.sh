@@ -403,7 +403,7 @@ class Coverage(unittest.TestCase):
         convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
         no_debug_info = '-debug-info-format none'
         swift_build_cache = ("          path: app/.build\n"
-                             "          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-"
+                             "          key: swift-build-v3-${{ runner.os }}-${{ runner.arch }}-"
                              "${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-"
                              "${{ steps.swift-key.outputs.toolchain }}-"
                              "${{ steps.swift-key.outputs.tree }}\n")
@@ -473,6 +473,16 @@ class Coverage(unittest.TestCase):
         self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
                       "        uses: actions/cache/save@v4\n        with:\n          path: app/.build\n"
                       "          key: ${{ steps.swift-build.outputs.cache-primary-key }}\n", writer)
+        # The entry carries the source file times the build saw (#3294):
+        # recorded only when it builds, after the build and before the
+        # save, so the record describes the saved build.
+        record_times = ("      - name: Record the source file times\n"
+                        "        if: steps.swift-build.outputs.cache-hit != 'true'\n"
+                        "        run: python3 scripts/swift-build-times.py record app "
+                        "app/.build/source-times.tsv\n")
+        self.assertIn(record_times, writer)
+        self.assertLess(writer.index('- name: Build app/ with its tests\n'), writer.index(record_times))
+        self.assertLess(writer.index(record_times), writer.index('- name: Save the Swift build\n'))
         key_steps = [re.search(r'^      - name: Resolve the Swift build key\n(.*?)(?=^      (?:- |#))',
                                job, re.M | re.S).group(0) for job in (convergence, writer)]
         self.assertEqual(key_steps[0], key_steps[1])
