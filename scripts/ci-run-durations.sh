@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Print job and step seconds, then successful-job medians, for recent CI runs.
-# Usage: ci-run-durations.sh <workflow-name> [--branch main] [--limit N]
+# Usage: ci-run-durations.sh <workflow-name> [--branch main | --all-branches]
+#          [--created RANGE] [--limit N]
+# --all-branches reads every branch's runs, as pull request runs sit on their
+# head branches; --created passes a gh run list date range (2026-11-11..2026-11-16).
+# The last column is the job ID, for gh run view --job ID --log.
 # Cohorts: ci-run-durations.sh --cohort samples.json --out DIRECTORY
 # Requires authenticated gh and jq. Run from the repository to measure.
 # Re-runs report the latest attempt; save each report before the next re-run.
@@ -182,7 +186,7 @@ PY
 fi
 
 usage() {
-  echo "usage: $0 <workflow-name> [--branch main] [--limit N]" >&2
+  echo "usage: $0 <workflow-name> [--branch main | --all-branches] [--created RANGE] [--limit N]" >&2
   exit 2
 }
 
@@ -190,19 +194,28 @@ usage() {
 workflow=$1
 shift
 branch=main
+branch_given=""
+all_branches=""
+created=""
 limit=6
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --branch) [[ $# -ge 2 && -n $2 ]] || usage; branch=$2; shift 2 ;;
+    --branch) [[ $# -ge 2 && -n $2 ]] || usage; branch=$2; branch_given=1; shift 2 ;;
+    --all-branches) all_branches=1; shift ;;
+    --created) [[ $# -ge 2 && -n $2 ]] || usage; created=$2; shift 2 ;;
     --limit) [[ $# -ge 2 ]] || usage; limit=$2; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ $limit =~ ^[1-9][0-9]*$ ]] || usage
+[[ -z $all_branches || -z $branch_given ]] || usage
+filters=(--branch "$branch")
+[[ -z $all_branches ]] || filters=()
+[[ -z $created ]] || filters+=(--created "$created")
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
-gh run list --workflow "$workflow" --branch "$branch" --limit "$limit" \
+gh run list --workflow "$workflow" ${filters[@]+"${filters[@]}"} --limit "$limit" \
   --json databaseId,headSha,createdAt >"$scratch/runs.json"
 jq -r '.[].databaseId' "$scratch/runs.json" >"$scratch/ids"
 while IFS= read -r run_id; do
@@ -221,14 +234,14 @@ jq -rs --slurpfile runs "$scratch/runs.json" '
     if $n % 2 == 1 then .[$n / 2 | floor]
     else (.[($n / 2) - 1] + .[$n / 2]) / 2 end;
   . as $jobs |
-  (["kind", "run", "attempt", "sha", "job", "step", "conclusion", "seconds", "samples"] | @tsv),
+  (["kind", "run", "attempt", "sha", "job", "step", "conclusion", "seconds", "samples", "job_id"] | @tsv),
   ($jobs[] | . as $job |
     ($runs[0][] | select(.databaseId == $job.run_id) | .headSha) as $sha |
-    (["job", .run_id, .run_attempt, $sha, .name, "", .conclusion, seconds, ""] | @tsv),
+    (["job", .run_id, .run_attempt, $sha, .name, "", .conclusion, seconds, "", .id] | @tsv),
     (.steps[] | ["step", $job.run_id, $job.run_attempt, $sha, $job.name,
-      .name, .conclusion, seconds, ""] | @tsv)),
+      .name, .conclusion, seconds, "", $job.id] | @tsv)),
   ($jobs | map(select(.conclusion == "success" and seconds != null)) |
     group_by(.name)[] |
     ["median", "", "", "", .[0].name, "", "success",
-      (map(seconds) | median), length] | @tsv)
+      (map(seconds) | median), length, ""] | @tsv)
 ' "$scratch/jobs.jsonl"
