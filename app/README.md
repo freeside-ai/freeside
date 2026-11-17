@@ -372,15 +372,10 @@ Swift build cache under [Build and test](#build-and-test)).
 selects one slice: every `count`th key of the sorted manifest. A slice
 compares only its own keys, and slice 0 also renders any key the manifest
 lacks and runs the whole-matrix checks against the manifest. Recording
-refuses a slice. The same selector splits the accessibility insertion pass
-(`insertingASurfaceUnderAnAssistiveClientDoesNotRecurse`) by sorted light
-surface name, so a slice inserts only its own surfaces; CI runs each
-slice's share of both, and slice 0 alone runs the suite's other tests. To
-run one slice of either locally, from `app/`:
+refuses a slice. To run one locally, from `app/`:
 
 ```sh
 FREESIDE_SCREENSHOT_SHARD=0/2 swift test --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels
-FREESIDE_SCREENSHOT_SHARD=1/2 swift test --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/insertingASurfaceUnderAnAssistiveClientDoesNotRecurse
 ```
 
 ### Screenshot Regression Determinism
@@ -594,10 +589,8 @@ both workflows and in `scripts/test-daemon-test-shards.sh`.
 
 On an app PR the `convergence` job builds once and then runs the screenshot
 matrix as concurrent slices beside the other suites
-(`scripts/run-convergence.sh --all-tests`, #2292). Each slice runs its share
-of the matrix and of the accessibility insertion pass (#3291), and the job
-fails when a slice log lacks the insertion pass's own pass line. Each slice
-is a `swift test --skip-build --scratch-path` run on its own APFS clone of
+(`scripts/run-convergence.sh --all-tests`, #2292). Each slice is a
+`swift test --skip-build --scratch-path` run on its own APFS clone of
 `app/.build` (`cp -c -R`), because SwiftPM holds the `app/.build` lock for
 the whole of a `swift test` run: concurrent `swift test` runs on one scratch
 path wait for each other and save nothing.

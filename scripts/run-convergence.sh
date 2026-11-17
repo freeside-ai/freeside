@@ -19,11 +19,9 @@
 # (#2248). It builds the test bundle once, then runs every suite but
 # ScreenshotRegressionTests in one `swift test` while the screenshot matrix
 # renders as concurrent slices beside it, each slice a `swift test` with
-# FREESIDE_SCREENSHOT_SHARD=<index>/<count>. Each slice also runs its share
-# of the accessibility insertion pass, split by surface name (#3291), and
-# slice 0 runs the suite's other tests. The matrix and the pass run serially
-# on the main actor, so one process left two of the runner's three cores
-# idle for most of the job (#2292). Each slice runs from its own clone of
+# FREESIDE_SCREENSHOT_SHARD=<index>/<count>. The matrix renders serially on
+# the main actor, so one process left two of the runner's three cores idle
+# for most of the job (#2292). Each slice runs from its own clone of
 # app/.build through `--scratch-path` (`cp -c`: an APFS clone with no extra
 # disk, or a full copy where the volume can't clone), because
 # SwiftPM holds the app/.build lock for a whole `swift test` run, so
@@ -268,15 +266,12 @@ run_pids+=($!)
 run_logs+=("$workdir/main.log")
 for ((i = 0; i < shards; i++)); do
   # Slice 0 runs the whole suite, so its other tests run once; the rest
-  # run only their shares of the matrix and of the insertion pass.
-  filters=(
-    --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels
-    --filter ScreenshotRegressionTests/insertingASurfaceUnderAnAssistiveClientDoesNotRecurse
-  )
+  # run only the matrix comparison.
+  filter="ScreenshotRegressionTests/surfacesMatchRecordedPixels"
   if ((i == 0)); then
-    filters=(--filter ScreenshotRegressionTests)
+    filter="ScreenshotRegressionTests"
   fi
-  shard_args=("${run_args[@]}" --scratch-path "$workdir/shard-$i" "${filters[@]}")
+  shard_args=("${run_args[@]}" --scratch-path "$workdir/shard-$i" --filter "$filter")
   selector=""
   if ((shards > 1)); then
     selector="$i/$shards"
@@ -319,12 +314,6 @@ fi
 for ((i = 0; i < shards; i++)); do
   if ! grep -q "Suite ScreenshotRegressionTests passed" "$workdir/shard-$i.log"; then
     echo "run-convergence: screenshot slice $i did not run to a pass" >&2
-    exit 1
-  fi
-  # The suite's pass line holds when a filter drops the insertion pass, so
-  # each slice must also show the pass's own line (#3291).
-  if ! grep -qF "Test insertingASurfaceUnderAnAssistiveClientDoesNotRecurse() passed" "$workdir/shard-$i.log"; then
-    echo "run-convergence: screenshot slice $i did not run its insertion pass to a pass" >&2
     exit 1
   fi
 done
