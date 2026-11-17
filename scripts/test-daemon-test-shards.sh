@@ -401,8 +401,9 @@ class Coverage(unittest.TestCase):
         # macOS test job at all, so a PR asks for three macOS jobs, not five.
         self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
         convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
+        no_debug_info = '-debug-info-format none'
         swift_build_cache = ("          path: app/.build\n"
-                             "          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-"
+                             "          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-"
                              "${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-"
                              "${{ steps.swift-key.outputs.toolchain }}-"
                              "${{ steps.swift-key.outputs.tree }}\n")
@@ -467,7 +468,8 @@ class Coverage(unittest.TestCase):
         self.assertNotIn('restore-keys', lookup)
         self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
                       "        working-directory: app\n"
-                      "        run: swift build --only-use-versions-from-resolved-file --build-tests\n", writer)
+                      "        run: swift build --only-use-versions-from-resolved-file --build-tests "
+                      + no_debug_info + "\n", writer)
         self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
                       "        uses: actions/cache/save@v4\n        with:\n          path: app/.build\n"
                       "          key: ${{ steps.swift-build.outputs.cache-primary-key }}\n", writer)
@@ -482,13 +484,25 @@ class Coverage(unittest.TestCase):
         # The writer's build is the bundle run-convergence.sh runs with
         # --skip-build, so the script's `swift test` arguments stay pinned:
         # a build flag added there needs the same flag in the writer's
-        # build and a swift-build-v1 prefix bump, or a hit would run a
-        # bundle built without it.
+        # build and a swift-build-vN prefix bump, or a hit would run a
+        # bundle built without it. CI builds without debug info (#3292):
+        # the convergence pass sets CONVERGENCE_NO_DEBUG_INFO, check.sh maps
+        # it to --no-debug-info, and the script adds the writer's flag to
+        # every swift command.
         # A verification slot adds --disable-sandbox under APP_MACVERIFY,
         # which no workflow sets, so CI's arguments stay the pinned flag.
         runner = (root / 'scripts/run-convergence.sh').read_text()
         self.assertIn('swift_args=(--only-use-versions-from-resolved-file '
-                      '${sandbox_args[@]+"${sandbox_args[@]}"})\n', runner)
+                      '${sandbox_args[@]+"${sandbox_args[@]}"} '
+                      '${debug_info_args[@]+"${debug_info_args[@]}"})\n', runner)
+        self.assertIn('  build_args=(--build-tests --only-use-versions-from-resolved-file '
+                      '${sandbox_args[@]+"${sandbox_args[@]}"} '
+                      '${debug_info_args[@]+"${debug_info_args[@]}"})\n', runner)
+        self.assertEqual(re.findall(r'debug_info_args=\(([^)]*)\)', runner), ['', no_debug_info])
+        self.assertIn('    --no-debug-info) debug_info_args=(' + no_debug_info + ') ;;\n', runner)
+        self.assertIn("          CONVERGENCE_NO_DEBUG_INFO: '1'\n", step('Run the convergence pass (scripts/check.sh)'))
+        check = (root / 'scripts/check.sh').read_text()
+        self.assertIn('${CONVERGENCE_SKIP_BUILD:+--skip-build} ${CONVERGENCE_NO_DEBUG_INFO:+--no-debug-info}\n', check)
         self.assertEqual(re.findall(r'^ *sandbox_args=\((.*)\)$', runner, re.M),
                          ['', '--disable-sandbox'])
         self.assertIn('if [[ -n "${APP_MACVERIFY:-}" ]]; then\n'

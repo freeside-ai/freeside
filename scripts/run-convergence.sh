@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-convergence.sh — the §5.14 real-daemon convergence pass (issue #72).
 #
-# Usage: run-convergence.sh [--all-tests] [--skip-build] [--harness <path>]
+# Usage: run-convergence.sh [--all-tests] [--skip-build] [--harness <path>] [--no-debug-info]
 #
 # Builds the freeside-signet-dev harness from daemon/, launches it on
 # loopback with a temporary state directory, reads the readiness line
@@ -52,6 +52,16 @@
 # messages, which read runtime.Caller; nothing else in the harness graph
 # reads a source path (#3293).
 #
+# --no-debug-info adds `-debug-info-format none` to every swift command, so
+# the test bundle is built without DWARF: about 7% less build CPU in
+# #3292's measurement. Assertion failures keep their source locations,
+# which Swift Testing records through macros; crash backtraces lose line
+# numbers. Only CI sets it (CONVERGENCE_NO_DEBUG_INFO), and app-ci.yml's
+# cached build carries the same flag, so --skip-build on a restored bundle
+# runs one built as this script would build it. Local runs leave it off:
+# SwiftPM rebuilds app/.build whenever the flags change, so they keep
+# sharing it with plain `swift build` and `swift test`.
+#
 # In a slot of the macOS verification executor (#3155) the sandbox admits
 # only the slot's reserved ports, which the room passes as
 # FREESIDE_VERIFY_PORTS, comma-separated. When it is set, the harness
@@ -68,10 +78,12 @@ set -euo pipefail
 all_tests=""
 skip_build=""
 harness=""
+debug_info_args=()
 while (($# > 0)); do
   case "$1" in
     --all-tests) all_tests=1 ;;
     --skip-build) skip_build=1 ;;
+    --no-debug-info) debug_info_args=(-debug-info-format none) ;;
     --harness)
       if (($# < 2)); then
         echo "run-convergence: --harness needs a path" >&2
@@ -236,7 +248,7 @@ echo "harness ready: api=$api_url control=$control_url" >&2
 # evidence is demanded of an --all-tests run, where the suite is one of
 # many. The command line goes to stderr so a CI log shows whether the
 # build was skipped.
-swift_args=(--only-use-versions-from-resolved-file ${sandbox_args[@]+"${sandbox_args[@]}"})
+swift_args=(--only-use-versions-from-resolved-file ${sandbox_args[@]+"${sandbox_args[@]}"} ${debug_info_args[@]+"${debug_info_args[@]}"})
 if [[ -z "$all_tests" ]]; then
   swift_args+=(--filter FreesideConvergenceTests)
 fi
@@ -265,7 +277,7 @@ fi
 # swift_args, so a flag added there reaches each of them.
 run_args=("${swift_args[@]}")
 if [[ -z "$skip_build" ]]; then
-  build_args=(--build-tests --only-use-versions-from-resolved-file ${sandbox_args[@]+"${sandbox_args[@]}"})
+  build_args=(--build-tests --only-use-versions-from-resolved-file ${sandbox_args[@]+"${sandbox_args[@]}"} ${debug_info_args[@]+"${debug_info_args[@]}"})
   echo "running: swift build ${build_args[*]}" >&2
   (
     cd "$repo_root/app" &&

@@ -173,12 +173,16 @@ jobs:
           # rationale. Lookup only: a hit means this tree's entry exists and
           # there is nothing to build.
           path: app/.build
-          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
+          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
           lookup-only: true
+      # The flags of scripts/run-convergence.sh's build under
+      # CONVERGENCE_NO_DEBUG_INFO, which convergence-ci.yml sets; the
+      # workflow guard pins them equal, or a hit would run a bundle built
+      # with other flags.
       - name: Build app/ with its tests
         if: steps.swift-build.outputs.cache-hit != 'true'
         working-directory: app
-        run: swift build --only-use-versions-from-resolved-file --build-tests
+        run: swift build --only-use-versions-from-resolved-file --build-tests -debug-info-format none
       - name: Record the Swift build size
         if: steps.swift-build.outputs.cache-hit != 'true'
         run: du -sh app/.build
