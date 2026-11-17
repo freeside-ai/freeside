@@ -697,10 +697,15 @@ Swift formatting and style analysis both come from the toolchain's
 `swift-format` (swift-format 6.4.4, shipped with Xcode 27.2; CI pins the
 matching Xcode and fails if the tool version drifts). The configuration is
 `.swift-format` in this directory; the decision record is
-`devlog/2026-07-20-1140-swift-style-tooling.md`. In CI the gate runs at the
-start of the convergence job (`.github/workflows/convergence-ci.yml`), the
-PR's one macOS Swift job, which also runs FreesideCoreTests and the
-screenshot regressions beside the convergence suite (#2248).
+`devlog/2026-07-20-1140-swift-style-tooling.md`. In CI the gate runs in the
+convergence job (`.github/workflows/convergence-ci.yml`), the PR's one macOS
+Swift job, which also runs FreesideCoreTests and the screenshot regressions
+beside the convergence suite (#2248). It starts in the background after the
+`swift-format` version check, so it overlaps the job's setup and build, and
+a step after the convergence pass prints its result and fails the job on a
+finding, even when the pass failed too (#3292). CI's drift check formats a
+copy of the files under `$RUNNER_TEMP` and diffs it against the sources, so
+it never writes under `app/` while the build reads it.
 
 From `app/`:
 

@@ -412,6 +412,30 @@ class Coverage(unittest.TestCase):
         self.assertNotIn(trim, convergence)
         self.assertIn("CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}", convergence)
         self.assertIn('-rest-${{ hashFiles', convergence)
+        # The swift-format gate (#3292) starts in the background before the
+        # pass and is collected after it, even when the pass failed, and
+        # its drift check never formats a file under app/: it formats a
+        # copy under $RUNNER_TEMP, so the build's sources keep their times.
+        def step(name):
+            return re.search(r'^      - name: ' + re.escape(name) + r'\n(.*?)(?=^      (?:- |#))',
+                             convergence, re.M | re.S).group(1)
+        start, collect = step('Start the swift-format gate'), step('Collect the swift-format gate')
+        self.assertIn('        id: format-gate\n        if: inputs.app_tests\n', start)
+        self.assertIn(") >\"$gate/log\" 2>&1 </dev/null &\n", start)
+        self.assertIn('bash scripts/check.sh app format || status=1\n', start)
+        self.assertIn('-C "$gate/$copy"', start)
+        self.assertIn('(cd "$gate/formatted" && xcrun swift-format format --in-place', start)
+        self.assertIn('git -C "$gate" diff --no-index --exit-code source formatted\n', start)
+        self.assertEqual(convergence.count('format --in-place'), 1)
+        self.assertIn("        if: ${{ !cancelled() && steps.format-gate.outcome == 'success' }}\n", collect)
+        self.assertIn('exit "$(cat "$gate/status")"\n', collect)
+        self.assertNotIn('continue-on-error', collect)
+        self.assertLess(convergence.index('- name: Verify pinned swift-format version\n'),
+                        convergence.index('- name: Start the swift-format gate\n'))
+        self.assertLess(convergence.index('- name: Start the swift-format gate\n'),
+                        convergence.index('- name: Run the convergence pass'))
+        self.assertLess(convergence.index('- name: Run the convergence pass'),
+                        convergence.index('- name: Collect the swift-format gate\n'))
         # The Swift build cache (#2291): an exact key over all of app/ with
         # no fallback, and the build skipped only on that hit and never for
         # an app PR, whose --all-tests run must compile its own changes.
