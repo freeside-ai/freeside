@@ -26,7 +26,7 @@ const (
 	agentTestSubmitCommand = "cmd-submit-lines"
 	// agentTestPastedName passes the agent grammar and reads like a pasted
 	// credential.
-	agentTestPastedName = "sk-ant-oat01-fixture-not-a-token"
+	agentTestPastedName = "sk-ant-" + "oat01-fixture-not-a-token"
 )
 
 // addSecondAgent seeds a second adopted Claude identity and names

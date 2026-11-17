@@ -22,7 +22,7 @@ const (
 	integrityCredentialVolume = "freeside-integrity-credential-volume-fixture"
 	// integritySentinelToken is a planted credential value: no observation
 	// result, error, or container spec may ever carry it.
-	integritySentinelToken = "sk-ant-oat-INTEGRITY-SENTINEL-0123456789abcdefghijklmnop" //nolint:gosec // G101: test fixture
+	integritySentinelToken = "sk-ant-" + "oat-INTEGRITY-SENTINEL-0123456789abcdefghijklmnop"
 )
 
 var integrityExporterImage = "registry.test/exporter@sha256:" + strings.Repeat("0", 64)

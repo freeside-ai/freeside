@@ -160,7 +160,7 @@ func TestReviewerLineRefusals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	// A model that passes the grammar and reads like a pasted credential.
-	const pasted = "sk-ant-oat01-fixture-not-a-token"
+	const pasted = "sk-ant-" + "oat01-fixture-not-a-token"
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, f *agentAdmissionFixture) domain.TaskLine

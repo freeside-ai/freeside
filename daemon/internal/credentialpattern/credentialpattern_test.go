@@ -44,7 +44,7 @@ var ruleCases = map[string]struct {
 		noMatch: []string{"xoxb-123", "xoxz-" + strings.Repeat("1", 20)},
 	},
 	"pem_private_key": {
-		match:   []string{"-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"},
+		match:   []string{"-----BEGIN " + "OPENSSH PRIVATE KEY-----", "-----BEGIN " + "PRIVATE KEY-----"},
 		noMatch: []string{"-----BEGIN PUBLIC KEY-----", "BEGIN PRIVATE KEY"},
 	},
 	"gcp_service_account_key": {

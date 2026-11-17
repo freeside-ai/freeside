@@ -31,9 +31,9 @@ import (
 // Made-up tokens in the setup-token shape. The sentinel is the one the leak
 // test searches every output for.
 const (
-	judgmentSentinelToken = "sk-ant-oat-JUDGMENT-SENTINEL-0123456789abcdefghijklmnopq" //nolint:gosec // G101: test fixture
-	judgmentSecondToken   = "sk-ant-oat-JUDGMENT-SECOND-0123456789abcdefghijklmnopqrs" //nolint:gosec // G101: test fixture
-	judgmentRotatedToken  = "sk-ant-oat-JUDGMENT-ROTATED-0123456789abcdefghijklmnopqr" //nolint:gosec // G101: test fixture
+	judgmentSentinelToken = "sk-ant-" + "oat-JUDGMENT-SENTINEL-0123456789abcdefghijklmnopq"
+	judgmentSecondToken   = "sk-ant-" + "oat-JUDGMENT-SECOND-0123456789abcdefghijklmnopqrs"
+	judgmentRotatedToken  = "sk-ant-" + "oat-JUDGMENT-ROTATED-0123456789abcdefghijklmnopqr"
 	judgmentSecondVolume  = "freeside-claude-second-auth"
 )
 

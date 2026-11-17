@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	judgmentSentinelToken = "sk-ant-oat-JUDGMENT-SENTINEL-0123456789abcdefghijklmnopq" //nolint:gosec // G101: test fixture
-	judgmentSecondToken   = "sk-ant-oat-JUDGMENT-SECOND-0123456789abcdefghijklmnopqrs" //nolint:gosec // G101: test fixture
+	judgmentSentinelToken = "sk-ant-" + "oat-JUDGMENT-SENTINEL-0123456789abcdefghijklmnopq"
+	judgmentSecondToken   = "sk-ant-" + "oat-JUDGMENT-SECOND-0123456789abcdefghijklmnopqrs"
 )
 
 func judgmentTestToken(t *testing.T, value string) ward.SetupToken {

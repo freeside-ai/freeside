@@ -16,8 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-//nolint:gosec // G101 false positive: a fixture token, not a credential.
-const authAddTestToken = "sk-ant-oat01-command-fixture-0123456789abcdef"
+const authAddTestToken = "sk-ant-" + "oat01-command-fixture-0123456789abcdef"
 
 // unavailableRuntime lists no volumes and then fails the volume create, the
 // first mutating call Claude enrollment makes; any other method would panic

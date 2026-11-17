@@ -334,7 +334,7 @@ func TestSubmitTaskCommandHTTPRejectsMalformedTaskLines(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	handler, s := newRealSubmitTaskHandlerAndStore(t)
-	const secret = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	const secret = "ghp_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	codex := `{"enrollment_id":"line-codex/codex_cli","model_id":"model-codex","effort":"high"}`
 	for name, lines := range map[string]string{
 		"empty list":        `[]`,

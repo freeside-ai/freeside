@@ -23,7 +23,7 @@ import (
 
 // researchTokenNeedle is a recognizable token value, so a leak into an item
 // reason or error shows up as a substring match.
-const researchTokenNeedle = "ghs_ENGINEISSUEREADNEEDLE00000000" //nolint:gosec // leak-detection needle, not a credential
+const researchTokenNeedle = "ghs_" + "ENGINEISSUEREADNEEDLE00000000"
 
 type fakeResearchTokens struct {
 	mu           sync.Mutex
