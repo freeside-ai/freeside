@@ -389,6 +389,21 @@ unit, never a fix in passing (Monorepo Scope Discipline).
   repository. `scripts/check.sh daemon test` fails when a helper that skips
   it writes through an inherited `GIT_DIR`. Detail:
   `daemon/internal/gitenv/gitenv.go`.
+- **Test shapes:** a new or substantially revised test takes none of the
+  seven shapes the 2026-11-16 audit found: a test per add-only migration, a
+  store test that migrates from empty, a reopen or kill test per record
+  type, a data-rewrite migration test that outlives the squash, one refusal
+  asserted at several layers, a test of a test double beyond the shared
+  contract suite, and a kill matrix or enum loop with more rows than
+  distinct states. Each rule has stated exceptions; a Tier A gate keeps its
+  tests at its own layer. This is a ratchet, not a sweep. Detail:
+  `daemon/README.md` (Testing conventions); decision record:
+  `devlog/2026-11-16-2122-test-writing-rules.md`.
+- **Removing a test:** a test goes only as `superseded by <test>`, naming a
+  remaining test that still catches the failure, or `accepted: <reason>`,
+  stating why missing it is acceptable. Removing or disabling a Tier A gate
+  test stays Tier A work (Assurance Tiers, Classification). Detail:
+  `daemon/README.md` (Testing conventions).
 
 ## Assurance Tiers
 
