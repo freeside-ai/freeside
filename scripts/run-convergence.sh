@@ -36,6 +36,15 @@
 # whose key hashes all of app/, so the bundle was built from this tree
 # (#2291). The harness is always built here.
 #
+# The harness builds with -trimpath, as every daemon step in check.sh
+# does. Go hashes the flag and each package's directory into its build
+# cache keys, so without it the harness reuses none of the build cache
+# CI restores from daemon-ci.yml's `macos-main` job, which compiles with
+# -trimpath. The flag changes only the file paths a stack trace prints,
+# and those modernc.org's libc and sqlite print in their crash and debug
+# messages, which read runtime.Caller; nothing else in the harness graph
+# reads a source path (#3293).
+#
 # In a slot of the macOS verification executor (#3155) the sandbox admits
 # only the slot's reserved ports, which the room passes as
 # FREESIDE_VERIFY_PORTS, comma-separated. When it is set, the harness
@@ -152,7 +161,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "building freeside-signet-dev" >&2
-(cd "$repo_root/daemon" && go build -o "$workdir/freeside-signet-dev" ./cmd/freeside-signet-dev)
+(cd "$repo_root/daemon" && go build -trimpath -o "$workdir/freeside-signet-dev" ./cmd/freeside-signet-dev)
 
 # Pairing now grants a usable ntfy subscription. The convergence matrix does
 # not publish notifications, so a valid loopback sink is enough to compose
