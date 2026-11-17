@@ -140,6 +140,53 @@ func TestHandoffChecksCanonicalSeedSnapshotBeforeLaunchingAContainer(t *testing.
 	}
 }
 
+// A seed larger than its workspace volume is refused by name on the host,
+// before any container starts. Without it the seeder's copy overflows the
+// volume, the seeder's exit status is ignored, and the observer's categorical
+// proof mismatch is all the operator sees (#2382's live run).
+func TestHandoffRefusesASeedLargerThanTheWorkspaceVolume(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		sizeMB  int64
+		refused bool
+	}{
+		{"seed past the volume", 1, true},
+		{"seed within the volume", 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newHandoffFixture(t)
+			hs := fx.seed(t)
+			hs.WorkspaceSizeMB = tc.sizeMB
+			big := bytes.Repeat([]byte("x"), 1<<20+1)
+			if err := os.WriteFile(filepath.Join(hs.Seed.SourceDir, "big.bin"), big, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res, err := fx.backend(t).Handoff(context.Background(), hs)
+			if res != nil {
+				t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+			}
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("seed within the volume: %v", err)
+				}
+				return
+			}
+			wantCheckFailure(t, err, CheckWorkspaceSeeding)
+			var failure *ConformanceFailure
+			if !errors.As(err, &failure) || failure.Reason != "seed source exceeds the 1 MiB workspace volume" {
+				t.Fatalf("refusal = %v, want it to name the 1 MiB workspace volume", err)
+			}
+			for _, call := range fx.rt.calls {
+				if strings.HasPrefix(call, "create-container ") || strings.HasPrefix(call, "start-container ") {
+					t.Fatalf("an oversized seed still launched a container: %v", fx.rt.calls)
+				}
+			}
+		})
+	}
+}
+
 func TestHandoffRejectsSourceGitConfigBeforeWorkspaceCheck(t *testing.T) {
 	t.Parallel()
 	fx := newHandoffFixture(t)

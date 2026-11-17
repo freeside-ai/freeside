@@ -20,6 +20,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 )
 
+// The staging refusals of a source past the byte budget: a file's copy, and
+// the canonical .git/config's growth. seedWorkspace matches them to name the
+// volume when the volume, not the configured budget, set that budget.
+const (
+	seedOverBudgetReason       = "seed source exceeds the byte budget"
+	seedConfigOverBudgetReason = "canonical seed git config exceeds the byte budget"
+)
+
 // gitHeadPath is the file the observer later reads the seeded base from. A
 // source without it is refused on the host rather than staged and then found
 // wanting two VMs later.
@@ -203,7 +211,7 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 		return "", failf(CheckWorkspaceSeeding, "canonical seed git config could not be examined")
 	}
 	if growth := configInfo.Size() - gitConfigSourceBytes; growth > remaining {
-		return "", failf(CheckWorkspaceSeeding, "canonical seed git config exceeds the byte budget")
+		return "", failf(CheckWorkspaceSeeding, seedConfigOverBudgetReason)
 	}
 	configSum, err := rootFileSHA256(snapshotRoot, ".git/config")
 	if err != nil {
@@ -530,7 +538,7 @@ func copySeedFile(source, destination *os.Root, rel string, budget int64) (sum s
 		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed snapshot entry could not be closed")
 	}
 	if written > budget {
-		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source exceeds the byte budget")
+		return "", 0, 0, failf(CheckWorkspaceSeeding, seedOverBudgetReason)
 	}
 	return hex.EncodeToString(h.Sum(nil)), written, perm, nil
 }
@@ -901,10 +909,28 @@ func (b runtimeOps) seedWorkspace(
 	}
 	st.seedSnapshotDir = snapshot
 	seedCfg := b.cfg.seedConfig()
+	// A seed the volume can't hold fails inside the seeder, whose exit status
+	// the gate ignores, so the observer would report only a categorical proof
+	// mismatch over a partial tree. Holding the byte budget to the volume
+	// refuses such a seed here, by name, before any container starts. File
+	// bytes are a lower bound on what the volume needs, so this never refuses
+	// a seed that fits; one within the bound that still overflows is left to
+	// the observer, as before.
+	volumeBound := false
+	if volumeBytes := hs.WorkspaceSizeMB << 20; volumeBytes < seedCfg.MaxSeedBytes {
+		seedCfg.MaxSeedBytes = volumeBytes
+		volumeBound = true
+	}
 	digest, err := stageSeedSource(
 		seedCfg, hs.Seed.SourceDir, hs.Seed.Base.Repo, hs.Seed.Base.RepositoryID, snapshot,
 	)
 	if err != nil {
+		var failure *ConformanceFailure
+		if volumeBound && errors.As(err, &failure) &&
+			(failure.Reason == seedOverBudgetReason || failure.Reason == seedConfigOverBudgetReason) {
+			return failf(CheckWorkspaceSeeding,
+				"seed source exceeds the %d MiB workspace volume", hs.WorkspaceSizeMB)
+		}
 		return err
 	}
 	// Git may honor command-bearing repository configuration while computing
