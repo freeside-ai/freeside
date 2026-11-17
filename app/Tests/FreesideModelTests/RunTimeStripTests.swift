@@ -48,23 +48,45 @@ import Testing
         return snapshot
     }
 
+    /// A hold from `from`, cleared at `to`, or open with no `to`.
+    private static func hold(
+        _ reason: Components.Schemas.RunHoldReason, _ from: Int, _ to: Int? = nil
+    ) -> Components.Schemas.RunHoldSpan {
+        .init(
+            run_id: runID, invocation_id: nil, reason: reason, first_observed_at: at(from),
+            last_observed_at: at(to ?? from), cleared_at: to.map(at))
+    }
+
     private static func strip(
         _ lifecycle: Components.Schemas.RunLifecycle, _ milestones: [Components.Schemas.RunMilestone],
-        cards: [Components.Schemas.AttentionItemSnapshot] = [], now: Int
+        cards: [Components.Schemas.AttentionItemSnapshot] = [], holds: [Components.Schemas.RunHoldSpan] = [],
+        clocks: Components.Schemas.RunClocks? = nil, now: Int
     ) -> RunTimeStrip.Strip? {
-        RunTimeStrip.strip(run: run(lifecycle), milestones: milestones, attentionItems: cards, now: at(now))
+        RunTimeStrip.strip(
+            run: run(lifecycle), milestones: milestones, attentionItems: cards, holdHistory: holds, clocks: clocks,
+            now: at(now))
+    }
+
+    /// Each held segment's reason, oldest first.
+    private static func holdReasons(_ strip: RunTimeStrip.Strip?) -> [Components.Schemas.RunHoldReason?] {
+        strip?.segments.filter { $0.kind == .held }.map(\.holdReason) ?? []
     }
 
     /// The segments as (kind, start minute, end minute), with the strip's
     /// invariants checked on the way: contiguous from the bar's start to its
-    /// end, no touching segments of one kind, and lengths and totals that
-    /// sum to the elapsed time.
+    /// end, a hold reason on held segments only, no touching segments of
+    /// one kind and reason, and lengths and totals that sum to the elapsed
+    /// time.
     private static func shape(_ strip: RunTimeStrip.Strip?) -> [(Kind, Int, Int)] {
         guard let strip else { return [] }
         var cursor = strip.start
         for (index, segment) in strip.segments.enumerated() {
             #expect(segment.start == cursor && segment.end > segment.start)
-            if index > 0 { #expect(strip.segments[index - 1].kind != segment.kind) }
+            #expect((segment.kind == .held) == (segment.holdReason != nil))
+            if index > 0 {
+                let previous = strip.segments[index - 1]
+                #expect(previous.kind != segment.kind || previous.holdReason != segment.holdReason)
+            }
             cursor = segment.end
         }
         #expect(cursor == strip.end)
@@ -256,18 +278,165 @@ import Testing
         #expect(Self.strip(.finished, [Self.milestone(.run_submitted, 0, invocation: nil)], now: 10) == nil)
     }
 
-    @Test func theFixtureRunSplitsThreeWays() {
+    @Test func theFixtureRunSplitsFourWays() {
         let snapshot = RunFixtures.timeStripRun()
+        let timeline = RunFixtures.timeStripTimeline()
         let strip = RunTimeStrip.strip(
-            run: snapshot.run, milestones: RunFixtures.timeStripTimeline().milestones,
+            run: snapshot.run, milestones: timeline.milestones,
             attentionItems: AttentionFixtures.timeStripItems() + AttentionFixtures.defaultInbox(),
-            now: RunFixtures.timeStripNow)
+            holdHistory: timeline.hold_history ?? [], clocks: timeline.clocks?.value1, now: RunFixtures.timeStripNow)
         #expect(
             Self.same(
                 Self.shape(strip),
                 [
-                    (.other, 0, 3), (.agentWorking, 3, 41), (.waitingOnYou, 41, 130), (.other, 130, 135),
-                    (.agentWorking, 135, 172), (.other, 172, 175), (.waitingOnYou, 175, 230),
+                    (.other, 0, 3), (.agentWorking, 3, 41), (.waitingOnYou, 41, 100), (.held, 100, 132),
+                    (.other, 132, 135), (.agentWorking, 135, 172), (.other, 172, 175), (.waitingOnYou, 175, 230),
                 ]))
+        #expect(Self.holdReasons(strip) == [.quota_window_exhausted])
+    }
+
+    // MARK: Held time and served clocks (#3237)
+
+    @Test func aHoldBeforeTheFirstInvocationIsHeld() {
+        let strip = Self.strip(
+            .finished,
+            [
+                Self.milestone(.run_submitted, 0), Self.milestone(.invocation_admitted, 10),
+                Self.milestone(.invocation_started, 12), Self.milestone(.execution_export_recorded, 20),
+            ], holds: [Self.hold(.machine_capacity, 1, 10)], now: 60)
+        #expect(
+            Self.same(
+                Self.shape(strip), [(.other, 0, 1), (.held, 1, 10), (.other, 10, 12), (.agentWorking, 12, 20)]))
+        #expect(Self.holdReasons(strip) == [.machine_capacity])
+    }
+
+    @Test func aHoldBetweenInvocationsIsHeld() {
+        let strip = Self.strip(
+            .finished,
+            [
+                Self.milestone(.run_submitted, 0), Self.milestone(.invocation_started, 2),
+                Self.milestone(.execution_outcome_recorded, 10), Self.milestone(.invocation_started, 30, invocation: 2),
+                Self.milestone(.execution_export_recorded, 40, invocation: 2),
+            ], holds: [Self.hold(.quota_window_exhausted, 12, 28)], now: 60)
+        #expect(
+            Self.same(
+                Self.shape(strip),
+                [
+                    (.other, 0, 2), (.agentWorking, 2, 10), (.other, 10, 12), (.held, 12, 28), (.other, 28, 30),
+                    (.agentWorking, 30, 40),
+                ]))
+    }
+
+    @Test func anOpenHoldRunsToTheBarsEnd() {
+        let strip = Self.strip(
+            .active, [Self.milestone(.run_submitted, 0, invocation: nil)],
+            holds: [Self.hold(.usage_pool_exhausted, 5)], now: 30)
+        #expect(Self.same(Self.shape(strip), [(.other, 0, 5), (.held, 5, 30)]))
+    }
+
+    @Test func twoTouchingHoldsKeepTheirOwnReasons() {
+        let strip = Self.strip(
+            .active, [Self.milestone(.run_submitted, 0, invocation: nil)],
+            holds: [Self.hold(.machine_capacity, 2, 10), Self.hold(.quota_window_exhausted, 10, 20)], now: 25)
+        #expect(Self.same(Self.shape(strip), [(.other, 0, 2), (.held, 2, 10), (.held, 10, 20), (.other, 20, 25)]))
+        #expect(Self.holdReasons(strip) == [.machine_capacity, .quota_window_exhausted])
+    }
+
+    @Test func whereTwoHoldsOverlapTheOneObservedLaterWins() {
+        // Served out of order, so the order the hold was observed decides,
+        // not its place in the list.
+        let strip = Self.strip(
+            .active, [Self.milestone(.run_submitted, 0, invocation: nil)],
+            holds: [Self.hold(.base_advanced, 10, 15), Self.hold(.machine_capacity, 2, 20)], now: 25)
+        #expect(
+            Self.same(
+                Self.shape(strip), [(.other, 0, 2), (.held, 2, 10), (.held, 10, 15), (.held, 15, 20), (.other, 20, 25)]
+            ))
+        #expect(Self.holdReasons(strip) == [.machine_capacity, .base_advanced, .machine_capacity])
+    }
+
+    @Test func agentWorkingWinsOverAHold() {
+        let strip = Self.strip(
+            .active,
+            [
+                Self.milestone(.run_submitted, 0), Self.milestone(.invocation_started, 5),
+                Self.milestone(.execution_export_recorded, 15),
+            ], holds: [Self.hold(.machine_capacity, 2, 20)], now: 30)
+        #expect(
+            Self.same(
+                Self.shape(strip),
+                [(.other, 0, 2), (.held, 2, 5), (.agentWorking, 5, 15), (.held, 15, 20), (.other, 20, 30)]))
+    }
+
+    @Test func waitingOnYouWinsOverAHold() {
+        let strip = Self.strip(
+            .active, [Self.milestone(.run_submitted, 0, invocation: nil)], cards: [Self.card(created: 10)],
+            holds: [Self.hold(.trust_blocked, 5)], now: 30)
+        #expect(Self.same(Self.shape(strip), [(.other, 0, 5), (.held, 5, 10), (.waitingOnYou, 10, 30)]))
+    }
+
+    @Test func aHoldPastAFinishedRunsEndIsCutThere() {
+        let milestones = [
+            Self.milestone(.run_submitted, 0, invocation: nil), Self.milestone(.invocation_started, 2),
+            Self.milestone(.execution_outcome_recorded, 6), Self.milestone(.terminal_recorded, 10, invocation: nil),
+        ]
+        for hold in [Self.hold(.external_conflict, 8, 30), Self.hold(.external_conflict, 8)] {
+            let strip = Self.strip(.finished, milestones, holds: [hold], now: 60)
+            #expect(
+                Self.same(Self.shape(strip), [(.other, 0, 2), (.agentWorking, 2, 6), (.other, 6, 8), (.held, 8, 10)]))
+            #expect(strip?.end == Self.at(10))
+        }
+    }
+
+    @Test func anUnknownReasonDrawsAsHeld() {
+        let strip = Self.strip(
+            .active, [Self.milestone(.run_submitted, 0, invocation: nil)], holds: [Self.hold(.unknown, 2, 5)], now: 10)
+        #expect(Self.same(Self.shape(strip), [(.other, 0, 2), (.held, 2, 5), (.other, 5, 10)]))
+        #expect(Self.holdReasons(strip) == [.unknown])
+    }
+
+    /// Served clocks set the bar and the agent's spans over what the
+    /// milestones would say, and their end, not the run's lifecycle,
+    /// decides whether the run finished.
+    @Test func servedClocksSetTheBarAndTheAgentWorking() {
+        let milestones = [
+            Self.milestone(.run_submitted, 0), Self.milestone(.invocation_started, 2),
+            Self.milestone(.execution_export_recorded, 10),
+        ]
+        let finished = Components.Schemas.RunClocks(
+            started_at: Self.at(1), ended_at: Self.at(12), elapsed_seconds: 11 * 60, active_seconds: 6 * 60,
+            active_intervals: [.init(invocation_id: "inv-1", started_at: Self.at(3), ended_at: Self.at(9))])
+        let ended = Self.strip(.active, milestones, clocks: finished, now: 60)
+        #expect(Self.same(Self.shape(ended), [(.other, 1, 3), (.agentWorking, 3, 9), (.other, 9, 12)]))
+
+        // A live run's open interval runs to the bar's end, which is now.
+        let live = Components.Schemas.RunClocks(
+            started_at: Self.at(0), ended_at: nil, elapsed_seconds: 10 * 60, active_seconds: 8 * 60,
+            active_intervals: [.init(invocation_id: "inv-1", started_at: Self.at(2), ended_at: nil)])
+        let running = Self.strip(.finished, milestones, clocks: live, now: 30)
+        #expect(Self.same(Self.shape(running), [(.other, 0, 2), (.agentWorking, 2, 30)]))
+    }
+
+    /// A finished run's totals, rounded down, are the served seconds, with
+    /// fractional instants and overlapping intervals counted once.
+    @Test func aFinishedRunsTotalsRoundDownToTheServedSeconds() throws {
+        let start = Self.base.addingTimeInterval(0.4)
+        let clocks = Components.Schemas.RunClocks(
+            started_at: start, ended_at: Self.base.addingTimeInterval(3_600.9), elapsed_seconds: 3_600,
+            active_seconds: 990,
+            active_intervals: [
+                .init(
+                    invocation_id: "inv-1", started_at: Self.base.addingTimeInterval(10.25),
+                    ended_at: Self.base.addingTimeInterval(700.8)),
+                .init(
+                    invocation_id: "inv-2", started_at: Self.base.addingTimeInterval(600.5),
+                    ended_at: Self.base.addingTimeInterval(1_000.3)),
+            ])
+        let strip = try #require(
+            Self.strip(
+                .finished, [Self.milestone(.run_submitted, 0), Self.milestone(.terminal_recorded, 60)],
+                holds: [Self.hold(.machine_capacity, 20, 30)], clocks: clocks, now: 90))
+        #expect(Int64(strip.elapsed.rounded(.down)) == clocks.elapsed_seconds)
+        #expect(Int64(strip.total(.agentWorking).rounded(.down)) == clocks.active_seconds)
     }
 }

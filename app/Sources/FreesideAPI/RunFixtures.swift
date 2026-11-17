@@ -126,10 +126,11 @@ public enum RunFixtures {
         return projectingObservationTimes(snapshot, from: refreshedHistoryTimeline())
     }
 
-    /// A run whose time splits three ways, for the run timeline's strip
-    /// (#3233): an attempt that stopped on a question, the hours the answer
-    /// took, the attempt that answer started, which exported, and the open
-    /// final review since. Kept out of `defaultRuns()` and
+    /// A run whose time splits four ways, for the run timeline's strip
+    /// (#3233, #3237): an attempt that stopped on a question, the hour the
+    /// answer took, a half hour held for the quota window, the attempt that
+    /// answer started, which exported, and the open final review since.
+    /// Kept out of `defaultRuns()` and
     /// `defaultTimelines()` so the runs-list digests do not churn; its cards
     /// are `AttentionFixtures.timeStripItems()`.
     public static func timeStripRun() -> Components.Schemas.RunSnapshot {
@@ -150,10 +151,12 @@ public enum RunFixtures {
         date(TimeInterval(minute * 60))
     }
 
+    /// Serves its hold history and clocks itself, as `MockServer` derives
+    /// them, because the screenshot draws it without the mock.
     public static func timeStripTimeline() -> Components.Schemas.RunTimeline {
         var question = milestone(.execution_outcome_recorded, runID: timeStripRunID, minute: 41)
         question.outcome = .init(value1: .blocked)
-        return .init(
+        var timeline = Components.Schemas.RunTimeline(
             as_of_revision: 12, as_of: date(172 * 60), run_id: timeStripRunID,
             milestones: [
                 milestone(.run_submitted, runID: timeStripRunID, minute: 0),
@@ -176,6 +179,16 @@ public enum RunFixtures {
                 writerAdmission("inv-\(timeStripRunID)-2", at: date(132 * 60)),
             ],
             outcomes: noOutcomes)
+        // The answer came at minute 100; the quota window held the retry
+        // until its admission.
+        timeline.hold_history = [
+            .init(
+                run_id: timeStripRunID, invocation_id: nil, reason: .quota_window_exhausted,
+                first_observed_at: date(100 * 60), last_observed_at: date(131 * 60), cleared_at: date(132 * 60))
+        ]
+        timeline.clocks = MockRunTime.clocks(timeline.milestones, finished: false, asOf: timeline.as_of)
+            .map { .init(value1: $0) }
+        return timeline
     }
 
     /// The campaign behind the task strip's task (#3234).
@@ -193,7 +206,8 @@ public enum RunFixtures {
     /// A task whose time spans three runs (#3234): a specification handed
     /// to implementation, a first attempt that stopped on a question and
     /// then failed, an hour and a quarter with no run, and the retry, which
-    /// exported and waits on the final review. Kept out of `defaultRuns()`
+    /// waited 20 minutes for machine capacity, exported, and waits on the
+    /// final review. Kept out of `defaultRuns()`
     /// and `defaultTimelines()` so the runs-list digests do not churn; its
     /// cards are `AttentionFixtures.taskStripItems()`.
     public static func taskStripRuns() -> [Components.Schemas.RunSnapshot] {
@@ -227,11 +241,13 @@ public enum RunFixtures {
         var failed = milestone(.terminal_recorded, runID: first, attempt: 2, minute: 140)
         failed.terminal = .init(value1: .failed)
         func timeline(
-            _ runID: String, _ milestones: [Components.Schemas.RunMilestone]
+            _ runID: String, _ milestones: [Components.Schemas.RunMilestone],
+            holdHistory: [Components.Schemas.RunHoldSpan]? = nil
         ) -> Components.Schemas.RunTimeline {
             .init(
                 as_of_revision: 12, as_of: taskStripNow, run_id: runID, milestones: milestones, invocations: [],
-                completion: nil, billable_cost_so_far: nil, admissions: [], outcomes: noOutcomes)
+                completion: nil, billable_cost_so_far: nil, admissions: [], outcomes: noOutcomes,
+                hold_history: holdHistory)
         }
         return [
             timeline(
@@ -258,9 +274,15 @@ public enum RunFixtures {
                 retry,
                 [
                     milestone(.run_submitted, runID: retry, minute: 215),
-                    milestone(.invocation_admitted, runID: retry, minute: 216),
-                    milestone(.invocation_started, runID: retry, minute: 218),
+                    milestone(.invocation_admitted, runID: retry, minute: 236),
+                    milestone(.invocation_started, runID: retry, minute: 238),
                     milestone(.execution_export_recorded, runID: retry, minute: 262),
+                ],
+                holdHistory: [
+                    .init(
+                        run_id: retry, invocation_id: nil, reason: .machine_capacity,
+                        first_observed_at: date(216 * 60), last_observed_at: date(235 * 60),
+                        cleared_at: date(236 * 60))
                 ]),
         ]
     }

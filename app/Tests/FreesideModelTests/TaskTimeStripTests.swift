@@ -46,6 +46,7 @@ import Testing
         switch kind {
         case .agentWorking: "agent"
         case .waitingOnYou: "waiting"
+        case .held: "held"
         case .other: "other"
         }
     }
@@ -240,5 +241,28 @@ import Testing
                 "a: other 0-2, agent 2-10", "between 10-30", "b: other 30-31, agent 31-35, waiting 35-50",
             ])
         #expect(strip?.total(.waitingOnYou) == TimeInterval(15 * 60))
+    }
+
+    /// Each run's hold history and clocks reach its part (#3237): the
+    /// clocks' end finishes the run whatever `finished` says, and its hold
+    /// keeps its reason.
+    @Test func aRunsHoldsAndClocksReachItsPart() {
+        let milestones = [
+            Self.milestone("a", .execution_export_recorded, 10), Self.milestone("a", .invocation_started, 6),
+            Self.milestone("a", .run_submitted, 0, invocation: nil),
+        ]
+        let run = TaskTimeStrip.Run(
+            runID: "a", finished: false, milestones: milestones,
+            holdHistory: [
+                .init(
+                    run_id: "a", invocation_id: nil, reason: .machine_capacity, first_observed_at: Self.at(1),
+                    last_observed_at: Self.at(5), cleared_at: Self.at(6))
+            ],
+            clocks: .init(
+                started_at: Self.at(0), ended_at: Self.at(10), elapsed_seconds: 600, active_seconds: 240,
+                active_intervals: [.init(invocation_id: "inv-a-1", started_at: Self.at(6), ended_at: Self.at(10))]))
+        let strip = Self.strip([run], now: 60)
+        #expect(Self.shape(strip) == ["a: other 0-1, held 1-6, agent 6-10"])
+        #expect(strip?.runParts.first?.segments[1].holdReason == .machine_capacity)
     }
 }

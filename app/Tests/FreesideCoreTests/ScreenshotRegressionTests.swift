@@ -3293,9 +3293,11 @@
                     }
                 }
             }
-            // Where the run's time went (#3233): the strip's three kinds,
-            // from a question answered hours later and an open final review,
-            // on their own coordinator so the inbox digests don't move.
+            // Where the run's time went (#3233, #3237): the strip's four
+            // kinds, from a question answered an hour later, a quota hold,
+            // and an open final review, with the held segment selected so
+            // its caption shows, on their own coordinator so the inbox
+            // digests don't move.
             let stripCache = InMemoryCacheStore()
             try stripCache.save(
                 .init(
@@ -3313,9 +3315,12 @@
                             name: "run-timeline-strip-\(Int(width))-\(scheme)", width: width,
                             colorScheme: scheme, nativeAppearance: true,
                             view: AnyView(
-                                RunTimelineView(coordinator: stripCoordinator, snapshot: RunFixtures.timeStripRun())
-                                    .screenshotContent(RunFixtures.timeStripTimeline())
-                                    .environment(\.pinnedNow, RunFixtures.timeStripNow))))
+                                RunTimelineView(
+                                    coordinator: stripCoordinator, snapshot: RunFixtures.timeStripRun(),
+                                    selectsStripSegmentAt: RunFixtures.timeStripInstant(minute: 100)
+                                )
+                                .screenshotContent(RunFixtures.timeStripTimeline())
+                                .environment(\.pinnedNow, RunFixtures.timeStripNow))))
                 }
             }
             // Where a task's time went across its runs (#3234): three runs,

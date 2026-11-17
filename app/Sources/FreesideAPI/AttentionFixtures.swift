@@ -236,7 +236,7 @@ public enum AttentionFixtures {
     }
 
     /// The strip run's two cards (#3233): the agent's question, answered
-    /// 89 minutes after it stopped, and the final review, open since the
+    /// 59 minutes after it stopped, and the final review, open since the
     /// second attempt exported.
     public static func timeStripItems() -> [Components.Schemas.AttentionItemSnapshot] {
         let runID = RunFixtures.timeStripRunID
@@ -246,7 +246,7 @@ public enum AttentionFixtures {
         question.item.id = "item-time-strip-question"
         question.item.subject = subject
         question.item.created_at = RunFixtures.timeStripInstant(minute: 41)
-        let answeredAt = RunFixtures.timeStripInstant(minute: 130)
+        let answeredAt = RunFixtures.timeStripInstant(minute: 100)
         question.item.status = .resolved
         question.item.item_version += 1
         question.item.decided_at = answeredAt

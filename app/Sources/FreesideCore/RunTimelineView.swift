@@ -34,6 +34,9 @@ struct RunTimelineView: View {
     /// expanded so a baseline can capture its rows and copy controls. Live use
     /// leaves it false.
     var expandsTechnicalDetails = false
+    /// Screenshot-only: select the time strip's segment starting here, so a
+    /// baseline can capture its caption. Live use leaves it nil.
+    var selectsStripSegmentAt: Date?
     /// Supplies the screenshot composition without the scroll viewport or
     /// the loading tasks. It renders through `body`, as the task timeline's
     /// does, because the helpers below read locale, time zone, and the
@@ -127,7 +130,7 @@ struct RunTimelineView: View {
     func screenshotContent(_ timeline: Components.Schemas.RunTimeline) -> some View {
         RunTimelineView(
             coordinator: coordinator, snapshot: snapshot, expandsTechnicalDetails: expandsTechnicalDetails,
-            screenshotTimeline: timeline, topMargin: topMargin)
+            selectsStripSegmentAt: selectsStripSegmentAt, screenshotTimeline: timeline, topMargin: topMargin)
     }
 
     private func composition(_ timeline: Components.Schemas.RunTimeline) -> some View {
@@ -175,7 +178,8 @@ struct RunTimelineView: View {
     ) -> some View {
         if let strip = RunTimeStrip.strip(
             run: snapshot.run, milestones: timeline.milestones,
-            attentionItems: coordinator.store.orderedSnapshots, now: now)
+            attentionItems: coordinator.store.orderedSnapshots, holdHistory: timeline.hold_history ?? [],
+            clocks: timeline.clocks?.value1, now: now)
         {
             RunTimeStripView(
                 strip: strip,
@@ -190,7 +194,8 @@ struct RunTimelineView: View {
                             proxy.scrollTo(TimelineRail.holdKeys(rows)[index], anchor: .center)
                         }
                     }
-                })
+                },
+                selectedStart: selectsStripSegmentAt)
         }
     }
 

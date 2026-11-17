@@ -3,23 +3,32 @@ import FreesideAPI
 
 /// Where a task's time went, across all its runs (#3234): one time axis from
 /// the first run's start to the last run's end, each run's part cut as its
-/// own run strip cuts it, and the time between runs as a fourth kind that
-/// only this strip has.
+/// own run strip cuts it, and the time between runs as a kind that only
+/// this strip has.
 package enum TaskTimeStrip {
     /// What the strip knows of one run of the task timeline.
     package struct Run: Equatable, Sendable {
         package let runID: String
         /// Whether the run's strip ends at its newest milestone rather than
-        /// at now, as `RunTimeStrip` decides.
+        /// at now, as `RunTimeStrip` decides when the run serves no clocks.
         package let finished: Bool
         /// As the task timeline serves them: newest first, ties in record
         /// order.
         package let milestones: [Components.Schemas.RunMilestone]
+        /// The run's served holds, empty from a daemon older than #3236.
+        package let holdHistory: [Components.Schemas.RunHoldSpan]
+        /// The run's served clocks, nil from a daemon older than #3236.
+        package let clocks: Components.Schemas.RunClocks?
 
-        package init(runID: String, finished: Bool, milestones: [Components.Schemas.RunMilestone]) {
+        package init(
+            runID: String, finished: Bool, milestones: [Components.Schemas.RunMilestone],
+            holdHistory: [Components.Schemas.RunHoldSpan] = [], clocks: Components.Schemas.RunClocks? = nil
+        ) {
             self.runID = runID
             self.finished = finished
             self.milestones = milestones
+            self.holdHistory = holdHistory
+            self.clocks = clocks
         }
     }
 
@@ -38,7 +47,9 @@ package enum TaskTimeStrip {
         /// segments cut to fit.
         func slice(from: Date, to: Date) -> RunPart {
             let kept = segments.filter { $0.end > from && $0.start < to }.map { segment in
-                RunTimeStrip.Segment(kind: segment.kind, start: max(segment.start, from), end: min(segment.end, to))
+                RunTimeStrip.Segment(
+                    kind: segment.kind, start: max(segment.start, from), end: min(segment.end, to),
+                    holdReason: segment.holdReason)
             }
             return RunPart(runID: runID, start: from, end: to, segments: kept)
         }
@@ -123,7 +134,7 @@ package enum TaskTimeStrip {
         let ordered = runs.compactMap { run -> RunPart? in
             RunTimeStrip.strip(
                 runID: run.runID, finished: run.finished, milestones: oldestFirst(run.milestones),
-                attentionItems: attentionItems, now: now
+                attentionItems: attentionItems, holdHistory: run.holdHistory, clocks: run.clocks, now: now
             ).map { RunPart(runID: run.runID, start: $0.start, end: $0.end, segments: $0.segments) }
         }
         .sorted { ($0.start, $0.end, $0.runID) < ($1.start, $1.end, $1.runID) }
