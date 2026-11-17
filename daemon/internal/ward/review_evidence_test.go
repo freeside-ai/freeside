@@ -202,7 +202,7 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 // round: the same fixed collection normalized through the real write path
 // under the Claude provider, so its evidence carries the Claude version tags.
 func claudeGoldenReviewOutcome(events string) CodexReviewSourceOutcome {
-	source := newEquivalenceReviewSource()
+	source := newFixedReviewSource()
 	source.cfg.provider = claudeReviewProvider{}
 	req := exec.ReviewRequest{
 		Admission:    testClaudeReviewAdmission("run-golden"),

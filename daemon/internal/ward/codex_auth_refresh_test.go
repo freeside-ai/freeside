@@ -239,6 +239,46 @@ func TestPrepareCodexReviewAuthRotatesUnderLease(t *testing.T) {
 	}
 }
 
+// The provider may rotate the access and refresh tokens without issuing a new
+// ID token; the stored one must survive the rotation.
+func TestPrepareCodexReviewAuthKeepsStoredIDTokenWhenProviderOmitsIt(t *testing.T) {
+	t.Parallel()
+	lifecycle, rt, cfg, launch, _ := testCodexReviewLifecycle(t)
+	setCodexHostAuth(t, cfg, launch, "old-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch)
+	refresher := &fakeCodexAuthRefresher{tokens: CodexAuthRefreshTokens{
+		AccessToken:  codexReviewJWT(t, codexReviewEpoch.Add(4*time.Hour)),
+		RefreshToken: "new-refresh",
+	}}
+	cfg.AuthStoreLeaser = &fakeLeaser{rt: rt, volume: launch.AuthSnapshot}
+	cfg.AuthRefresher = refresher
+	cfg.AuthState = &fakeCodexAuthState{}
+	cfg.AccessTokenRefreshThreshold = 2 * time.Hour
+
+	if err := lifecycle.prepareCodexReviewAuth(context.Background(), cfg, launch); err != nil {
+		t.Fatalf("prepareCodexReviewAuth = %v", err)
+	}
+	if refresher.calls != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refresher.calls)
+	}
+	body, err := os.ReadFile(launch.AuthSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Tokens struct {
+			IDToken      string `json:"id_token"`
+			RefreshToken string `json:"refresh_token"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Tokens.IDToken != "fixture-id-token" || stored.Tokens.RefreshToken != "new-refresh" {
+		t.Fatalf("stored id_token %q, refresh_token %q; want the stored ID token and the rotated refresh token",
+			stored.Tokens.IDToken, stored.Tokens.RefreshToken)
+	}
+}
+
 func TestPrepareCodexReviewAuthHealthyTokenStillSerializesWithRefresh(t *testing.T) {
 	t.Parallel()
 	lifecycle, rt, cfg, launch, _ := testCodexReviewLifecycle(t)

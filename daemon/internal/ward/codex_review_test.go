@@ -3903,34 +3903,44 @@ func TestCodexReviewIntentStateTokens(t *testing.T) {
 	}
 }
 
-// TestCodexReviewIntentStateValidEquivalence proves the valid() predicate that
-// replaced validateIdentity's inline membership switch decides the full input
-// space identically to that switch: exactly the five registered tokens are
-// valid, and the zero value plus adversarial near-members (case, spacing,
-// prefix/suffix, substring) are rejected.
-func TestCodexReviewIntentStateValidEquivalence(t *testing.T) {
+// TestCodexReviewIntentStateRejectsNearMembers checks that valid() matches
+// tokens exactly: case, spacing, prefix, suffix, and substring variants of a
+// registered state are all invalid. TestCodexReviewEnums covers the registered
+// states and the zero value.
+func TestCodexReviewIntentStateRejectsNearMembers(t *testing.T) {
 	t.Parallel()
-	// oldMembership is the inline switch validateIdentity carried before the
-	// registration point existed, reconstructed here as the equivalence oracle.
-	oldMembership := func(s CodexReviewIntentState) bool {
-		switch s {
-		case CodexReviewIntentPreparing, CodexReviewIntentPrepared,
-			CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed:
-			return true
-		default:
-			return false
-		}
-	}
-	cases := []CodexReviewIntentState{
-		CodexReviewIntentPreparing, CodexReviewIntentPrepared,
-		CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed,
-		"", "Preparing", "PREPARED", " starting", "started ", "start",
+	for _, s := range []CodexReviewIntentState{
+		"Preparing", "PREPARED", " starting", "started ", "start",
 		"startedx", "xclosed", "prepared\n", "prep", "closed closed", "STARTED",
-	}
-	for _, s := range cases {
-		if got, want := s.valid(), oldMembership(s); got != want {
-			t.Errorf("valid(%q) = %v, inline membership = %v", string(s), got, want)
+	} {
+		if s.valid() {
+			t.Errorf("valid(%q) = true, want false", string(s))
 		}
+	}
+}
+
+// TestCodexReviewProviderConstants pins the Codex provider's protocol strings.
+// Goldens pin only digests that contain the evidence and configuration
+// versions, so this is the one place a reviewer sees them change.
+func TestCodexReviewProviderConstants(t *testing.T) {
+	t.Parallel()
+	p := codexReviewProvider{}
+	for _, tc := range []struct{ name, got, want string }{
+		{"sourceLabel", p.sourceLabel(), "codex_local"},
+		{"topologyVersion", p.topologyVersion(), "codex_review_read_only_v3"},
+		{"completionEvidenceVersion", p.completionEvidenceVersion(), "codex-review-completion-v1"},
+		{"resultEvidenceVersion", p.resultEvidenceVersion(), "codex-review-result-v5"},
+		{"configurationVersion", p.configurationVersion(), "codex-review-configuration-v4"},
+		{"promptProtocol", p.promptProtocol(), "codex-production-review-prompt-v6"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+	// The provider must return the package constant, not a copy of it.
+	if p.topologyVersion() != codexReviewTopologyVersion {
+		t.Errorf("provider topologyVersion %q != package constant %q",
+			p.topologyVersion(), codexReviewTopologyVersion)
 	}
 }
 
