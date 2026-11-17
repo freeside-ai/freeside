@@ -75,174 +75,10 @@ func testSubmitCommandSpecificationDigest(
 	preallocateRetry, preallocateForeignRun bool,
 ) {
 	t.Helper()
-	root := t.TempDir()
-	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
-	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifestBody, err := json.Marshal([]domain.CapabilityManifest{manifest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var policyKeys []domain.PolicyKey
-	if err := json.Unmarshal(
-		[]byte(submissionPolicyBody("daemon/**", strings.Repeat("ab", 32))), &policyKeys,
-	); err != nil {
-		t.Fatal(err)
-	}
-	policyKeys = append(policyKeys, domain.PolicyKey{
-		Key: domain.CapabilityManifestPolicyKey, Value: string(manifestBody),
-		Provenance: domain.KeyProvenance{
-			Source: domain.ProvenanceOverride, Digest: "sha256:capability-policy",
-		},
-	})
-	policyBody, err := json.Marshal(policyKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sourceBody := "# Task\n\nImplement the thing."
-	if err := os.WriteFile(taskPath, []byte(sourceBody), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := submitCommandConfig{
-		DBPath: filepath.Join(root, "state.db"), TaskPath: taskPath,
-		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
-		ProjectID: "project-submit-specification", SubmissionID: "implementation-from-submit",
-	}
-	seedTemplateStore(t, cfg.DBPath)
-	submitted, err := runSubmitCommand(t.Context(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := storetest.Open(t, cfg.DBPath, store.Options{
-		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
-			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		},
-	})
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	attention := signet.NewService(st, signet.WithBlobStore(blobs), signet.WithClock(func() time.Time { return now }))
-	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
-		if err := tx.PutDevice(t.Context(), domain.Device{
-			ID: "device-submit", DisplayName: "Operator", Status: domain.DeviceActive, PairedAt: now,
-		}); err != nil {
-			return err
-		}
-		return storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
-			ID: "auth-submit", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
-			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
-		}, 64, now)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	promptBody := []byte("Specify the submitted task.\n")
-	promptDigest := domain.Digest(contentaddr.Sum(promptBody))
-	if _, err := blobs.Put(promptDigest, bytes.NewReader(promptBody)); err != nil {
-		t.Fatal(err)
-	}
-	vendorPath := filepath.Join(root, "AGENTS.md")
-	if err := os.WriteFile(vendorPath, []byte("Stay within the submitted work unit.\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	driver, err := execfake.NewStageDriverAt(filepath.Join(root, "driver"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := specifyfake.Script(driver, submitted.SpecificationInvocationID, 0, 0, specify.Output{
-		Specification: &specify.Specification{
-			Summary:    "Ready for implementation.",
-			Body:       acceptedBody,
-			Addressals: []specify.Addressal{},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	fetcher, err := specify.NewFetcher(st, blobs, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := domain.AuthIdentityID("auth-submit")
-	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport}, engine.AdmissionEnvironment{
-			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
-			EgressProfile:       domain.EgressProviderOnly,
-			ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
-			PromptPackageDigest: promptDigest,
-			VendorInstructions: engine.VendorInstructionConfig{
-				Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
-				HostPath: vendorPath,
-			},
-			Base: domain.BaseRevision{
-				Repo: "owner/repo", RepositoryID: 1,
-				BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
-			},
-			Workspace: "workspace-submit", AuthIdentityID: &identity,
-		}, func() time.Time { return now }),
-		engine.WithSpecification(engine.SpecificationConfig{
-			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
-			PromptPackageDigest: promptDigest,
-		}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	itemID := domain.ItemID("spec-approval-" + string(submitted.RunID) + "-1")
-	var item domain.AttentionItem
-	var snapshot store.Snapshot
-	for range 5 {
-		if _, err := workflow.Reconcile(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		err = st.Read(t.Context(), func(tx *store.ReadTx) error {
-			item, snapshot, err = tx.GetAttentionItemSnapshot(t.Context(), itemID)
-			return err
-		})
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, store.ErrNotFound) {
-			t.Fatal(err)
-		}
-	}
-	if err != nil {
-		t.Fatalf("approval item was not created: %v", err)
-	}
-	if _, err := attention.Submit(t.Context(), signet.ClientCommand{
-		CommandID: "approve-submitted-spec", DeviceID: "device-submit",
-		ExpectedEntityVersion: snapshot.EntityVersion,
-		Payload: signet.DecisionPayload{
-			ItemID: item.ID, Action: domain.ActionApprove,
-			ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var implementationRun domain.Run
-	for range 5 {
-		if _, err := workflow.Reconcile(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		err = st.Read(t.Context(), func(tx *store.ReadTx) error {
-			implementationRun, err = tx.GetRun(t.Context(), submitted.RunID)
-			return err
-		})
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, store.ErrNotFound) {
-			t.Fatal(err)
-		}
-	}
-	if err != nil {
-		t.Fatalf("approved implementation run was not created: %v", err)
-	}
+	f := approveSubmittedSpecification(t, acceptedBody)
+	cfg, submitted, st, attention, driver, workflow := f.cfg, f.submitted, f.st, f.attention, f.driver, f.workflow
+	manifest, promptDigest, vendorPath, identity, now := f.manifest, f.promptDigest, f.vendorPath, f.identity, f.now
+	item, implementationRun := f.item, f.implementationRun
 	if gotSame := implementationRun.SpecDigest == submitted.SourceDigest; gotSame != wantSameDigest {
 		t.Fatalf("implementation/source digest equality = %t, want %t (%q / %q)",
 			gotSame, wantSameDigest, implementationRun.SpecDigest, submitted.SourceDigest)
@@ -544,5 +380,204 @@ func testSubmitCommandSpecificationDigest(
 				t.Fatalf("capability retry replay = %+v, want no transition", replayed)
 			}
 		})
+	}
+}
+
+// approvedSubmission is a task the submit command accepted whose
+// specification ran under a scripted fake driver and was approved from a
+// paired device, so its implementation run exists on an authenticated
+// campaign. It carries what a test needs to keep driving the same engine.
+type approvedSubmission struct {
+	cfg               submitCommandConfig
+	submitted         submitResult
+	st                *store.Store
+	attention         *signet.Service
+	driver            *execfake.StageDriver
+	workflow          *engine.Engine
+	manifest          domain.CapabilityManifest
+	promptDigest      domain.Digest
+	vendorPath        string
+	identity          domain.AuthIdentityID
+	now               time.Time
+	item              domain.AttentionItem
+	implementationRun domain.Run
+}
+
+// approveSubmittedSpecification submits "implementation-from-submit", lets
+// the specification produce acceptedBody, and approves it.
+func approveSubmittedSpecification(t *testing.T, acceptedBody string) approvedSubmission {
+	t.Helper()
+	root := t.TempDir()
+	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	manifest, err := domain.NewCapabilityManifest("Provider web read", domain.EgressProviderWebRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestBody, err := json.Marshal([]domain.CapabilityManifest{manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policyKeys []domain.PolicyKey
+	if err := json.Unmarshal(
+		[]byte(submissionPolicyBody("daemon/**", strings.Repeat("ab", 32))), &policyKeys,
+	); err != nil {
+		t.Fatal(err)
+	}
+	policyKeys = append(policyKeys, domain.PolicyKey{
+		Key: domain.CapabilityManifestPolicyKey, Value: string(manifestBody),
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: "sha256:capability-policy",
+		},
+	})
+	policyBody, err := json.Marshal(policyKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceBody := "# Task\n\nImplement the thing."
+	if err := os.WriteFile(taskPath, []byte(sourceBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := submitCommandConfig{
+		DBPath: filepath.Join(root, "state.db"), TaskPath: taskPath,
+		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
+		ProjectID: "project-submit-specification", SubmissionID: "implementation-from-submit",
+	}
+	seedTemplateStore(t, cfg.DBPath)
+	submitted, err := runSubmitCommand(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, cfg.DBPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	attention := signet.NewService(st, signet.WithBlobStore(blobs), signet.WithClock(func() time.Time { return now }))
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutDevice(t.Context(), domain.Device{
+			ID: "device-submit", DisplayName: "Operator", Status: domain.DeviceActive, PairedAt: now,
+		}); err != nil {
+			return err
+		}
+		return storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
+			ID: "auth-submit", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
+		}, 64, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	promptBody := []byte("Specify the submitted task.\n")
+	promptDigest := domain.Digest(contentaddr.Sum(promptBody))
+	if _, err := blobs.Put(promptDigest, bytes.NewReader(promptBody)); err != nil {
+		t.Fatal(err)
+	}
+	vendorPath := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(vendorPath, []byte("Stay within the submitted work unit.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := execfake.NewStageDriverAt(filepath.Join(root, "driver"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := specifyfake.Script(driver, submitted.SpecificationInvocationID, 0, 0, specify.Output{
+		Specification: &specify.Specification{
+			Summary:    "Ready for implementation.",
+			Body:       acceptedBody,
+			Addressals: []specify.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fetcher, err := specify.NewFetcher(st, blobs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := domain.AuthIdentityID("auth-submit")
+	workflow, err := engine.New(st, attention, driver,
+		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport}, engine.AdmissionEnvironment{
+			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+			EgressProfile:       domain.EgressProviderOnly,
+			ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+			PromptPackageDigest: promptDigest,
+			VendorInstructions: engine.VendorInstructionConfig{
+				Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
+				HostPath: vendorPath,
+			},
+			Base: domain.BaseRevision{
+				Repo: "owner/repo", RepositoryID: 1,
+				BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
+			},
+			Workspace: "workspace-submit", AuthIdentityID: &identity,
+		}, func() time.Time { return now }),
+		engine.WithSpecification(engine.SpecificationConfig{
+			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
+			PromptPackageDigest: promptDigest,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemID := domain.ItemID("spec-approval-" + string(submitted.RunID) + "-1")
+	var item domain.AttentionItem
+	var snapshot store.Snapshot
+	for range 5 {
+		if _, err := workflow.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		err = st.Read(t.Context(), func(tx *store.ReadTx) error {
+			item, snapshot, err = tx.GetAttentionItemSnapshot(t.Context(), itemID)
+			return err
+		})
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatal(err)
+		}
+	}
+	if err != nil {
+		t.Fatalf("approval item was not created: %v", err)
+	}
+	if _, err := attention.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "approve-submitted-spec", DeviceID: "device-submit",
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionApprove,
+			ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var implementationRun domain.Run
+	for range 5 {
+		if _, err := workflow.Reconcile(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		err = st.Read(t.Context(), func(tx *store.ReadTx) error {
+			implementationRun, err = tx.GetRun(t.Context(), submitted.RunID)
+			return err
+		})
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatal(err)
+		}
+	}
+	if err != nil {
+		t.Fatalf("approved implementation run was not created: %v", err)
+	}
+	return approvedSubmission{
+		cfg: cfg, submitted: submitted, st: st, attention: attention, driver: driver, workflow: workflow,
+		manifest: manifest, promptDigest: promptDigest, vendorPath: vendorPath, identity: identity, now: now,
+		item: item, implementationRun: implementationRun,
 	}
 }
