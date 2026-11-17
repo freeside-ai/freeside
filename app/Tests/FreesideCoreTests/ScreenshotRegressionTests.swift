@@ -188,22 +188,11 @@
         /// Every light surface, inserted while an assistive client reads
         /// (#2993; `AccessibilityLabelRecursionTests` explains the crash).
         /// A dark surface has the same accessibility tree as its light
-        /// twin, so the pass skips it. `FREESIDE_SCREENSHOT_SHARD` slices
-        /// the pass by surface name, as it slices the matrix by manifest
-        /// key, so CI's slices each insert a share (#3291); unset, the pass
-        /// inserts every light surface.
+        /// twin, so the pass skips it.
         @Test func insertingASurfaceUnderAnAssistiveClientDoesNotRecurse() async throws {
             guard let timeZone = TimeZone(secondsFromGMT: 0) else { throw ScreenshotError.missingGMT }
-            let shard = try ScreenshotShard.parse(
-                ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_SHARD"])
-            let surfaces = try await insertionSurfaces()
-            let slice = shard.map {
-                Self.shardKeys(surfaces.map(\.name), index: $0.index, count: $0.count)
-            }
-            var inserted: Set<String> = []
             var recursing: [String: [String]] = [:]
-            for surface in surfaces where slice?.contains(surface.name) ?? true {
-                inserted.insert(surface.name)
+            for surface in try await makeSurfaces(at: .large) where surface.colorScheme == .light {
                 let width = surface.width ?? canvasWidth
                 let view = surface.view
                     .environment(\.locale, Locale(identifier: "en_US_POSIX"))
@@ -214,20 +203,7 @@
                 let elements = try AccessibilityInsertionProbe.recursingElements(in: view, width: width)
                 if !elements.isEmpty { recursing[surface.name] = elements }
             }
-            // The slice comes from the same surfaces the loop walks, so an
-            // empty surface list yields an empty slice: check emptiness
-            // directly, so a slice that inserts nothing fails.
-            if let shard, let slice {
-                #expect(inserted == slice)
-                #expect(!inserted.isEmpty, "slice \(shard.index)/\(shard.count) inserted no surface")
-            }
             #expect(recursing.isEmpty, "label lookups recursed on: \(recursing)")
-        }
-
-        /// The surfaces the insertion pass inserts: the light ones at the
-        /// default text size.
-        private func insertionSurfaces() async throws -> [Surface] {
-            try await makeSurfaces(at: .large).filter { $0.colorScheme == .light }
         }
 
         private func captureSurfaces(
@@ -547,27 +523,6 @@
             #expect(try ScreenshotShard.parse(nil) == nil)
             #expect(try ScreenshotShard.parse("0/1") == ScreenshotShard(index: 0, count: 1))
             #expect(try ScreenshotShard.parse("2/3") == ScreenshotShard(index: 2, count: 3))
-        }
-
-        @Test func shardsPartitionTheInsertionPass() async throws {
-            let surfaces = try await insertionSurfaces()
-            let names = Set(surfaces.map(\.name))
-            #expect(!names.isEmpty)
-            // The pass slices by name, so a shared name could fall in two
-            // slices and insert both surfaces twice; unique names keep each
-            // surface inserted exactly once.
-            #expect(names.count == surfaces.count, "two light surfaces share a name")
-            for count in [2, 3] {
-                let slices = (0..<count).map { Self.shardKeys(names, index: $0, count: count) }
-                #expect(slices.reduce(into: Set<String>()) { $0.formUnion($1) } == names)
-                for first in slices.indices {
-                    for second in slices.indices where second > first {
-                        #expect(slices[first].isDisjoint(with: slices[second]))
-                    }
-                }
-                let sizes = slices.map(\.count)
-                #expect(try #require(sizes.max()) - (try #require(sizes.min())) <= 1)
-            }
         }
 
         /// Mirrors the mock's read-time availability projection so the store's
