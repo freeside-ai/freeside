@@ -39,7 +39,7 @@ func ParsePolicy(resolved domain.ResolvedPolicy) (Policy, error) {
 	}
 	values := make(map[string]string, len(resolved.Keys))
 	for _, key := range resolved.Keys {
-		values[canonicalPolicyKey(key.Key)] = key.Value
+		values[key.Key] = key.Value
 	}
 	require := func(key string) (string, error) {
 		value, ok := values[key]

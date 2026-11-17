@@ -137,7 +137,7 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	implementationRunID := intakeImplementationRunID(occurrence)
-	specificationRunID, err := engine.ResolveSpecificationRunID(t.Context(), f.store, implementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		t.Fatal(err)
 	}

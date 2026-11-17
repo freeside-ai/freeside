@@ -303,7 +303,7 @@ func (e *Engine) quarantinePendingSpecificationDiscussionMarker(
 		return false, err
 	}
 	return true, recordProductionQuarantine(
-		ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefixFor(run.ID),
+		ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefix,
 		run.ID, run.ProjectID, specificationDiscussionQuarantineUnreadable,
 	)
 }
@@ -333,10 +333,7 @@ func (e *Engine) enqueuePendingSpecDiscussion(
 				return domain.ErrDuplicate
 			}
 			pending = &entry
-			markerID, err = specificationDiscussionMarkerIdentity(ctx, tx, command.CommandID)
-			if err != nil {
-				return err
-			}
+			markerID = specDiscussionInvocationID(command.CommandID)
 		}
 		return nil
 	}); err != nil {

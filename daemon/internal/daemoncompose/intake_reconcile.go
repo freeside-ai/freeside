@@ -290,7 +290,7 @@ func (r *intakeReconciler) admit(
 		}
 	}
 	implementationRunID := intakeImplementationRunID(occurrence)
-	specificationRunID, err := engine.ResolveSpecificationRunID(ctx, r.store, implementationRunID)
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
 	}

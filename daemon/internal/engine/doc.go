@@ -26,8 +26,6 @@
 //   - observation.go, workflow_observation.go
 //     paced observation writes, run-hold details and recording, and closed
 //     runs' publication observation
-//   - legacy_vocabulary.go the pre-rename specification outbox and marker
-//     identities
 //   - admission.go, agent_admission.go
 //     the per-stage admission environment and runner capability floor, and
 //     the agent admission refusal

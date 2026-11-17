@@ -273,7 +273,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
 		if err := releaseProductionQuarantine(
-			ctx, e.store, e.signet, specificationMarkerQuarantinePrefixFor(binding.run.ID), binding.run.ID,
+			ctx, e.store, e.signet, specificationMarkerQuarantinePrefix, binding.run.ID,
 		); err != nil {
 			return started, err
 		}
@@ -376,16 +376,8 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			}
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
-		retired, err := e.retireSupersededSpecDiscussionMarker(
-			ctx, entry, binding.run, request.InvocationID)
-		if err != nil {
-			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
-		}
-		if retired {
-			continue
-		}
 		if err := releaseProductionQuarantine(
-			ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefixFor(binding.run.ID), binding.run.ID,
+			ctx, e.store, e.signet, specificationDiscussionMarkerQuarantinePrefix, binding.run.ID,
 		); err != nil {
 			return started, err
 		}

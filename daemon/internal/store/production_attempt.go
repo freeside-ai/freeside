@@ -193,9 +193,8 @@ func (tx *ReadTx) FirstSpecificationMarkerKey(
 	prefix := domain.SpecificationInvocationIDPrefix(specificationRunID)
 	rows, err := tx.tx.QueryContext(ctx, `
 SELECT idempotency_key FROM outbox
-WHERE kind IN (?, ?) AND idempotency_key LIKE ?`,
-		string(domain.SpecificationInvocationRequestedKind),
-		queueKindAlias(string(domain.SpecificationInvocationRequestedKind)), prefix+"%")
+WHERE kind = ? AND idempotency_key LIKE ?`,
+		string(domain.SpecificationInvocationRequestedKind), prefix+"%")
 	if err != nil {
 		return "", false, err
 	}
@@ -399,8 +398,8 @@ func (tx *ReadTx) authenticateInitialApprovedSpec(
 	}
 	rows, err := tx.tx.QueryContext(ctx, `
 SELECT idempotency_key FROM outbox
-WHERE kind IN (?, ?) AND idempotency_key LIKE ?`,
-		string(domain.SpecificationInvocationRequestedKind), queueKindAlias(string(domain.SpecificationInvocationRequestedKind)),
+WHERE kind = ? AND idempotency_key LIKE ?`,
+		string(domain.SpecificationInvocationRequestedKind),
 		domain.SpecificationInvocationIDPrefix(attempt.SpecificationRunID)+"%")
 	if err != nil {
 		return err
