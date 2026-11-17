@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-convergence.sh — the §5.14 real-daemon convergence pass (issue #72).
 #
-# Usage: run-convergence.sh [--all-tests] [--skip-build]
+# Usage: run-convergence.sh [--all-tests] [--skip-build] [--harness <path>]
 #
 # Builds the freeside-signet-dev harness from daemon/, launches it on
 # loopback with a temporary state directory, reads the readiness line
@@ -34,7 +34,14 @@
 # --skip-build runs the test bundle already in app/.build instead of
 # building one. CI sets it only on an exact hit of the Swift build cache,
 # whose key hashes all of app/, so the bundle was built from this tree
-# (#2291). The harness is always built here.
+# (#2291).
+#
+# --harness <path> launches that freeside-signet-dev binary instead of
+# building one, and refuses a path that is not an executable file. CI
+# passes it only on an exact hit of the convergence harness cache, whose
+# key names daemon/'s git tree, so the binary was built from this tree
+# with the build command below (#3293). Without it the harness is built
+# here.
 #
 # The harness builds with -trimpath, as every daemon step in check.sh
 # does. Go hashes the flag and each package's directory into its build
@@ -54,21 +61,40 @@
 # since SwiftPM's sandbox does not nest inside the room's. With neither set,
 # the script runs exactly as CI runs it.
 #
-# Requires: Go (daemon toolchain), Swift (app toolchain), macOS.
+# Requires: Go (daemon toolchain, unless --harness), Swift (app toolchain),
+# macOS.
 set -euo pipefail
 
 all_tests=""
 skip_build=""
-for argument in "$@"; do
-  case "$argument" in
+harness=""
+while (($# > 0)); do
+  case "$1" in
     --all-tests) all_tests=1 ;;
     --skip-build) skip_build=1 ;;
+    --harness)
+      if (($# < 2)); then
+        echo "run-convergence: --harness needs a path" >&2
+        exit 2
+      fi
+      harness="$2"
+      shift
+      ;;
     *)
-      echo "run-convergence: unknown argument: $argument" >&2
+      echo "run-convergence: unknown argument: $1" >&2
       exit 2
       ;;
   esac
+  shift
 done
+if [[ -n "$harness" && ! (-f "$harness" && -x "$harness") ]]; then
+  echo "run-convergence: --harness is not an executable file: $harness" >&2
+  exit 2
+fi
+# A path without a slash would launch from PATH, not the file checked here.
+if [[ -n "$harness" && "$harness" != /* ]]; then
+  harness="$PWD/$harness"
+fi
 
 # The convergence target exists only on Darwin (app/Package.swift), and
 # SwiftPM's --filter exits 0 when nothing matches, so off macOS this
@@ -160,13 +186,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "building freeside-signet-dev" >&2
-(cd "$repo_root/daemon" && go build -trimpath -o "$workdir/freeside-signet-dev" ./cmd/freeside-signet-dev)
+if [[ -n "$harness" ]]; then
+  echo "using prebuilt freeside-signet-dev: $harness" >&2
+else
+  echo "building freeside-signet-dev" >&2
+  harness="$workdir/freeside-signet-dev"
+  (cd "$repo_root/daemon" && go build -trimpath -o "$harness" ./cmd/freeside-signet-dev)
+fi
 
 # Pairing now grants a usable ntfy subscription. The convergence matrix does
 # not publish notifications, so a valid loopback sink is enough to compose
 # the same required contract without introducing network access.
-"$workdir/freeside-signet-dev" -db "$workdir/signet.db" -listen "$listen_addr" -control "$control_addr" \
+"$harness" -db "$workdir/signet.db" -listen "$listen_addr" -control "$control_addr" \
   -ntfy-url "$ntfy_url" > "$workdir/readiness.json" &
 harness_pid=$!
 
