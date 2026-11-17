@@ -93,6 +93,22 @@ public struct MockServerTransport: ClientTransport {
             return try Self.json(status: .ok, body: await server.serverRevision(after: after))
         case "getRestartReadiness":
             return try Self.json(status: .ok, body: await server.restartReadiness())
+        case "getWorkHours":
+            let query: MockWorkHours.Request
+            do {
+                query = try MockWorkHours.parse(URLComponents(string: request.path ?? "")?.queryItems ?? [])
+            } catch {
+                return try Self.json(status: .badRequest, body: Components.Schemas._Error(message: error.message))
+            }
+            guard let hours = await server.workHours(query) else {
+                return try Self.json(status: .notFound, body: Components.Schemas._Error(message: "not found"))
+            }
+            if let breach = MockContractValidation.workHoursBreach(hours, from: query.from, days: query.days) {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(message: "work hours failed: \(breach)"))
+            }
+            return try Self.json(status: .ok, body: hours)
         case "getSyncBootstrap":
             do {
                 return try Self.json(

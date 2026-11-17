@@ -229,6 +229,46 @@ import Testing
         #expect(MockContractValidation.runTimeBreach(invalid) == "missing clocks")
     }
 
+    /// A work-hours response breaks the contract when its dates skip or
+    /// start elsewhere, when a day's or the totals' classes exceed the
+    /// elapsed time, or when held reasons exceed the held time.
+    @Test func workHoursBreaches() async throws {
+        let server = MockServer()
+        await server.setWorkHours(project: WorkStatusFixtures.project, days: WorkStatusFixtures.workHoursDays())
+        let hours = try #require(
+            await server.workHours(
+                .init(from: "2026-08-10", days: 2, timeZoneName: "UTC", timeZone: .gmt, projectID: nil)))
+        #expect(MockContractValidation.workHoursBreach(hours, from: "2026-08-10", days: 2) == nil)
+        #expect(
+            MockContractValidation.workHoursBreach(hours, from: "2026-08-09", days: 2)
+                == "work hours dates don't run consecutively from from")
+        var invalid = hours
+        invalid.days.swapAt(0, 1)
+        #expect(
+            MockContractValidation.workHoursBreach(invalid, from: "2026-08-10", days: 2)
+                == "work hours dates don't run consecutively from from")
+        invalid = hours
+        invalid.days[0].other_seconds += 1
+        #expect(
+            MockContractValidation.workHoursBreach(invalid, from: "2026-08-10", days: 2)
+                == "work hours classes exceed elapsed time")
+        invalid = hours
+        invalid.totals.agent_working_seconds += 1
+        #expect(
+            MockContractValidation.workHoursBreach(invalid, from: "2026-08-10", days: 2)
+                == "work hours classes exceed elapsed time")
+        invalid = hours
+        invalid.days[0].held_by_reason[0].seconds += 1
+        #expect(
+            MockContractValidation.workHoursBreach(invalid, from: "2026-08-10", days: 2)
+                == "held reasons exceed held time")
+        invalid = hours
+        invalid.totals.held_by_reason[0].seconds += 1
+        #expect(
+            MockContractValidation.workHoursBreach(invalid, from: "2026-08-10", days: 2)
+                == "held reasons exceed held time")
+    }
+
     /// The mock's clocks follow the daemon's definition: the active run's
     /// two attempts work from minute 2 to its export at 18, and from 21 to
     /// the timeline's as_of at 35, with the second still working.

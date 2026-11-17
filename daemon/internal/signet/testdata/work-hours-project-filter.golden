@@ -1,0 +1,65 @@
+{
+  "as_of": "2026-08-12T13:00:00Z",
+  "time_zone": "UTC",
+  "project_id": "proj-1",
+  "hold_history_since": "2026-08-01T00:00:00Z",
+  "skipped_run_count": 0,
+  "totals": {
+    "elapsed_seconds": 3600,
+    "agent_working_seconds": 1800,
+    "waiting_on_you_seconds": 1200,
+    "held_seconds": 480,
+    "held_by_reason": [
+      {
+        "reason": "update_drain",
+        "seconds": 360
+      },
+      {
+        "reason": "attended_mode_active",
+        "seconds": 120
+      }
+    ],
+    "other_seconds": 120,
+    "task_count": 1
+  },
+  "days": [
+    {
+      "date": "2026-08-12",
+      "starts_at": "2026-08-12T00:00:00Z",
+      "ends_at": "2026-08-13T00:00:00Z",
+      "elapsed_seconds": 3600,
+      "agent_working_seconds": 1800,
+      "waiting_on_you_seconds": 1200,
+      "held_seconds": 480,
+      "held_by_reason": [
+        {
+          "reason": "update_drain",
+          "seconds": 360
+        },
+        {
+          "reason": "attended_mode_active",
+          "seconds": 120
+        }
+      ],
+      "other_seconds": 120,
+      "tasks": [
+        {
+          "task_id": "task-proj-1",
+          "elapsed_seconds": 3600
+        }
+      ]
+    },
+    {
+      "date": "2026-08-13",
+      "starts_at": "2026-08-13T00:00:00Z",
+      "ends_at": "2026-08-14T00:00:00Z",
+      "elapsed_seconds": 0,
+      "agent_working_seconds": 0,
+      "waiting_on_you_seconds": 0,
+      "held_seconds": 0,
+      "held_by_reason": [],
+      "other_seconds": 0,
+      "tasks": []
+    }
+  ]
+}

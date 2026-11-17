@@ -6168,6 +6168,22 @@ at all.
   otherwise counts to the read's `as_of`. A hold doesn't reduce active
   time (`devlog/2026-11-16-1845-run-clock-definition.md`). The task
   timeline computes each run's clocks at its own `as_of`.
+- **Work hours** (`GET /work-hours`, issue #3241) are derived at each read
+  and never stored. The read divides every run's elapsed time, as its clocks
+  define it, into four classes and adds it to the days of a period of 1 to
+  92 dates. Each instant goes to the first class that applies: agent
+  working (an active interval), waiting on you (an attention item naming
+  the run is open, from its `created_at` to its conclusion or `decided_at`),
+  held (a hold span, keeping its reason; where holds overlap, the one first
+  observed later wins), then other. A day runs from the first instant of
+  its date in the zone the client names, never the daemon's, so it is 23 or
+  25 hours across a clock change and starts at the change where one skips
+  midnight. Time after `as_of` counts nowhere, and each figure rounds down
+  on its own. Each run is read with the timelines' own calls, and a run
+  that fails the integrity check is skipped, logged, and counted in
+  `skipped_run_count`; the read never converges the system-health item.
+  `domain.divideRunTime` and `domain.WorkHoursOf` are the definitions
+  (`devlog/2026-11-16-1722-work-hours-by-class.md`).
 - **Liveness** is derived, never stored: `DeriveInvocationLiveness`
   classifies the last observation (status, live bit, daemon-clock instant)
   against a freshness window, so a stopped daemon or unobservable runtime

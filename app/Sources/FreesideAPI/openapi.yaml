@@ -272,6 +272,98 @@ paths:
               schema:
                 $ref: "#/components/schemas/RestartReadiness"
 
+  /work-hours:
+    get:
+      operationId: getWorkHours
+      tags: [runs]
+      summary: How runs' time divided over the days of a period
+      description: |
+        Divides every run's elapsed time into four classes and adds it to
+        the days of a period, for the work status view (plan §4). The read
+        changes no state and is computed when requested.
+
+        A run's elapsed time is the one its timeline's `clocks` serve
+        (`RunClocks`): from its start to its end, or to `as_of` while it
+        isn't finished. Every instant goes to the first class that applies,
+        in the order the run time strips use:
+
+        1. Agent working: inside one of the run's active intervals.
+        2. Waiting on you: an attention item whose subject names the run is
+           open, from its `created_at` to its conclusion's `concluded_at`
+           (or its `decided_at` when it has no conclusion), or to the run's
+           end while it is open. An item that names no run, or has no
+           `created_at`, adds nothing.
+        3. Held: inside one of the run's hold spans (`RunHoldSpan`), from
+           `first_observed_at` to `cleared_at`, or to the run's end while
+           the hold is current. Held time keeps its reason; where two holds
+           overlap, the one first observed later wins.
+        4. Other: what remains, such as queueing, verification, and
+           publication.
+
+        A day runs from the first instant of its calendar date in
+        `time_zone` to the first instant of the next date, so it is 23 or
+        25 hours long across a clock change; where a change skips
+        midnight, the day starts at the change. The daemon's own zone never
+        applies. Time after `as_of` counts nowhere, so today is partial and
+        a later day is all zeros.
+
+        Every seconds figure is computed from exact instants and rounded
+        down on its own, so a day's classes can sum to a few seconds less
+        than its elapsed seconds, and the days to less than the totals.
+        A run whose record fails the daemon's integrity check is left out
+        and counted in `skipped_run_count`.
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: The period's first calendar date, as YYYY-MM-DD.
+          schema:
+            type: string
+            format: date
+        - name: days
+          in: query
+          required: true
+          description: How many calendar dates the period covers, from `from` on.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 92
+        - name: time_zone
+          in: query
+          required: true
+          description: >
+            The IANA time zone name, such as `Europe/Berlin`, that bounds
+            each day. `Local` is refused: the reader names the zone, never
+            the daemon's host.
+          schema:
+            type: string
+            minLength: 1
+        - name: project_id
+          in: query
+          required: false
+          description: Limits the read to one project's runs; absent, every project's.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: The period's hours by class, per day and in total.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkHours"
+        "400":
+          description: >
+            A parameter is missing, repeated, or malformed; `days` is outside
+            1 to 92; the period ends after 9999-12-30; or `time_zone` names a
+            zone the daemon doesn't know.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /attention/items:
     get:
       operationId: listAttentionItems
@@ -4683,6 +4775,206 @@ components:
         started_at: "2026-01-02T03:05:35Z"
         ended_at: "2026-01-02T03:09:05.5Z"
 
+    WorkHours:
+      type: object
+      description: >
+        How runs' time divided into classes over the days of a period
+        (`GET /work-hours` defines every figure).
+      required: [as_of, time_zone, project_id, hold_history_since, skipped_run_count, totals, days]
+      properties:
+        as_of:
+          type: string
+          format: date-time
+        time_zone:
+          type: string
+          minLength: 1
+          description: The time zone the request named.
+        project_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The project the request named; null for every project.
+        hold_history_since:
+          type: string
+          format: date-time
+          description: >
+            When the daemon began recording hold history. Held time before
+            it reads as other, so a client marks those days rather than
+            drawing zero held time.
+        skipped_run_count:
+          type: integer
+          minimum: 0
+          description: >
+            Runs left out because their record failed the daemon's integrity
+            check. The figures are incomplete when it isn't zero.
+        totals:
+          $ref: "#/components/schemas/WorkHoursTotals"
+        days:
+          type: array
+          description: One entry per calendar date, consecutive from the request's `from`.
+          items:
+            $ref: "#/components/schemas/WorkHoursDay"
+      example:
+        as_of: "2026-01-02T04:04:05Z"
+        time_zone: "UTC"
+        project_id: "proj-1"
+        hold_history_since: "2026-01-01T03:04:05Z"
+        skipped_run_count: 0
+        totals:
+          elapsed_seconds: 300
+          agent_working_seconds: 210
+          waiting_on_you_seconds: 0
+          held_seconds: 30
+          held_by_reason:
+            - reason: "machine_capacity"
+              seconds: 30
+          other_seconds: 60
+          task_count: 1
+        days:
+          - date: "2026-01-02"
+            starts_at: "2026-01-02T00:00:00Z"
+            ends_at: "2026-01-03T00:00:00Z"
+            elapsed_seconds: 300
+            agent_working_seconds: 210
+            waiting_on_you_seconds: 0
+            held_seconds: 30
+            held_by_reason:
+              - reason: "machine_capacity"
+                seconds: 30
+            other_seconds: 60
+            tasks:
+              - task_id: "task-1"
+                elapsed_seconds: 300
+
+    WorkHoursTotals:
+      type: object
+      description: >
+        The period's figures, each computed over the whole period and
+        rounded down on its own, and the number of distinct tasks whose
+        runs had elapsed time in it.
+      required:
+        - elapsed_seconds
+        - agent_working_seconds
+        - waiting_on_you_seconds
+        - held_seconds
+        - held_by_reason
+        - other_seconds
+        - task_count
+      properties:
+        elapsed_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        agent_working_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        waiting_on_you_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        held_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        held_by_reason:
+          type: array
+          description: Only reasons with held time, largest first, then by reason.
+          items:
+            $ref: "#/components/schemas/WorkHoursHeld"
+        other_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        task_count:
+          type: integer
+          minimum: 0
+
+    WorkHoursDay:
+      type: object
+      description: >
+        One calendar date's figures. The day runs from `starts_at` to
+        `ends_at`, the first instants of the date and the next in the
+        request's time zone.
+      required:
+        - date
+        - starts_at
+        - ends_at
+        - elapsed_seconds
+        - agent_working_seconds
+        - waiting_on_you_seconds
+        - held_seconds
+        - held_by_reason
+        - other_seconds
+        - tasks
+      properties:
+        date:
+          type: string
+          format: date
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        elapsed_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        agent_working_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        waiting_on_you_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        held_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        held_by_reason:
+          type: array
+          description: The day's held time by reason, as the totals list it.
+          items:
+            $ref: "#/components/schemas/WorkHoursHeld"
+        other_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        tasks:
+          type: array
+          description: >
+            The tasks whose runs had elapsed time that day, largest first,
+            then by id. A run with no task adds hours but no entry.
+          items:
+            $ref: "#/components/schemas/WorkHoursTask"
+
+    WorkHoursHeld:
+      type: object
+      description: The held time one hold reason accounts for.
+      required: [reason, seconds]
+      properties:
+        reason:
+          $ref: "#/components/schemas/RunHoldReason"
+        seconds:
+          type: integer
+          format: int64
+          minimum: 0
+
+    WorkHoursTask:
+      type: object
+      description: The elapsed time one task's runs had in a day.
+      required: [task_id, elapsed_seconds]
+      properties:
+        task_id:
+          type: string
+          minLength: 1
+        elapsed_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+
     InvocationObservation:
       type: object
       description: The daemon's latest observation of one run invocation.
@@ -6455,14 +6747,14 @@ components:
 
     DaemonFeature:
       type: string
-      enum: [parked_task_move, unknown]
+      enum: [parked_task_move, work_hours, unknown]
       description: >
         A feature a daemon build may serve, named in `/health`'s `features`
         so an app can turn off what an older daemon lacks. A name is
         registered here once, by the unit that adds an app-visible surface a
         newer app would otherwise send to a daemon that refuses it.
         `parked_task_move`: the `move_parked_task` command (plan §4, quota
-        park).
+        park). `work_hours`: the `GET /work-hours` read.
 
     PairingRequest:
       type: object

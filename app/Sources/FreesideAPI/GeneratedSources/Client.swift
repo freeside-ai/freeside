@@ -404,6 +404,174 @@ public struct Client: APIProtocol {
             }
         )
     }
+    /// How runs' time divided over the days of a period
+    ///
+    /// Divides every run's elapsed time into four classes and adds it to
+    /// the days of a period, for the work status view (plan §4). The read
+    /// changes no state and is computed when requested.
+    ///
+    /// A run's elapsed time is the one its timeline's `clocks` serve
+    /// (`RunClocks`): from its start to its end, or to `as_of` while it
+    /// isn't finished. Every instant goes to the first class that applies,
+    /// in the order the run time strips use:
+    ///
+    /// 1. Agent working: inside one of the run's active intervals.
+    /// 2. Waiting on you: an attention item whose subject names the run is
+    ///    open, from its `created_at` to its conclusion's `concluded_at`
+    ///    (or its `decided_at` when it has no conclusion), or to the run's
+    ///    end while it is open. An item that names no run, or has no
+    ///    `created_at`, adds nothing.
+    /// 3. Held: inside one of the run's hold spans (`RunHoldSpan`), from
+    ///    `first_observed_at` to `cleared_at`, or to the run's end while
+    ///    the hold is current. Held time keeps its reason; where two holds
+    ///    overlap, the one first observed later wins.
+    /// 4. Other: what remains, such as queueing, verification, and
+    ///    publication.
+    ///
+    /// A day runs from the first instant of its calendar date in
+    /// `time_zone` to the first instant of the next date, so it is 23 or
+    /// 25 hours long across a clock change; where a change skips
+    /// midnight, the day starts at the change. The daemon's own zone never
+    /// applies. Time after `as_of` counts nowhere, so today is partial and
+    /// a later day is all zeros.
+    ///
+    /// Every seconds figure is computed from exact instants and rounded
+    /// down on its own, so a day's classes can sum to a few seconds less
+    /// than its elapsed seconds, and the days to less than the totals.
+    /// A run whose record fails the daemon's integrity check is left out
+    /// and counted in `skipped_run_count`.
+    ///
+    ///
+    /// - Remark: HTTP `GET /work-hours`.
+    /// - Remark: Generated from `#/paths//work-hours/get(getWorkHours)`.
+    public func getWorkHours(_ input: Operations.getWorkHours.Input) async throws -> Operations.getWorkHours.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.getWorkHours.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/work-hours",
+                    parameters: []
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .get
+                )
+                suppressMutabilityWarning(&request)
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "from",
+                    value: input.query.from
+                )
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "days",
+                    value: input.query.days
+                )
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "time_zone",
+                    value: input.query.time_zone
+                )
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "project_id",
+                    value: input.query.project_id
+                )
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                return (request, nil)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.getWorkHours.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.WorkHours.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                case 400:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.getWorkHours.Output.BadRequest.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .badRequest(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Components.Responses.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
     /// List attention items
     ///
     /// Lists attention items as individual resource snapshots. A partial fetch: the result updates only the entities it carries and never marks the whole cache current (plan §5.14).

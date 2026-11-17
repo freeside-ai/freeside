@@ -1,0 +1,42 @@
+{
+  "as_of": "2026-01-02T04:04:05Z",
+  "time_zone": "UTC",
+  "project_id": null,
+  "hold_history_since": "2026-01-01T03:04:05Z",
+  "skipped_run_count": 0,
+  "totals": {
+    "elapsed_seconds": 0,
+    "agent_working_seconds": 0,
+    "waiting_on_you_seconds": 0,
+    "held_seconds": 0,
+    "held_by_reason": [],
+    "other_seconds": 0,
+    "task_count": 0
+  },
+  "days": [
+    {
+      "date": "2026-01-02",
+      "starts_at": "2026-01-02T00:00:00Z",
+      "ends_at": "2026-01-03T00:00:00Z",
+      "elapsed_seconds": 0,
+      "agent_working_seconds": 0,
+      "waiting_on_you_seconds": 0,
+      "held_seconds": 0,
+      "held_by_reason": [],
+      "other_seconds": 0,
+      "tasks": []
+    },
+    {
+      "date": "2026-01-03",
+      "starts_at": "2026-01-03T00:00:00Z",
+      "ends_at": "2026-01-04T00:00:00Z",
+      "elapsed_seconds": 0,
+      "agent_working_seconds": 0,
+      "waiting_on_you_seconds": 0,
+      "held_seconds": 0,
+      "held_by_reason": [],
+      "other_seconds": 0,
+      "tasks": []
+    }
+  ]
+}

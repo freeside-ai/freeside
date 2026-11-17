@@ -193,20 +193,35 @@ func (s *Store) ReadCauseRows(ctx context.Context, project domain.ProjectID) (Ca
 		}
 	}
 
-	// The store migrates before it opens, so the row is always there; a
-	// missing or bad one fails the read rather than guessing the history.
-	var appliedAt string
-	if err := tx.QueryRowContext(ctx, selectHoldsRecordedSinceSQL, holdHistoryMigration).Scan(&appliedAt); err != nil {
-		return CauseRows{}, fmt.Errorf("read hold history start (migration %04d): %w", holdHistoryMigration, err)
-	}
-	if rows.HoldsRecordedSince, err = parseTime(appliedAt); err != nil {
-		return CauseRows{}, fmt.Errorf("read hold history start (migration %04d): applied_at: %w", holdHistoryMigration, err)
+	if rows.HoldsRecordedSince, err = holdsRecordedSince(ctx, tx); err != nil {
+		return CauseRows{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return CauseRows{}, fmt.Errorf("commit cause read: %w", err)
 	}
 	return rows, nil
+}
+
+// HoldsRecordedSince is when the hold history began: the time migration 0145
+// created run_hold_spans. Holds that ended before it left no record.
+func (tx *ReadTx) HoldsRecordedSince(ctx context.Context) (time.Time, error) {
+	return holdsRecordedSince(ctx, tx.tx)
+}
+
+// holdsRecordedSince reads migration 0145's applied_at. The store migrates
+// before it opens, so the row is always there; a missing or bad one fails
+// the read rather than guessing the history.
+func holdsRecordedSince(ctx context.Context, tx *sql.Tx) (time.Time, error) {
+	var appliedAt string
+	if err := tx.QueryRowContext(ctx, selectHoldsRecordedSinceSQL, holdHistoryMigration).Scan(&appliedAt); err != nil {
+		return time.Time{}, fmt.Errorf("read hold history start (migration %04d): %w", holdHistoryMigration, err)
+	}
+	at, err := parseTime(appliedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read hold history start (migration %04d): applied_at: %w", holdHistoryMigration, err)
+	}
+	return at, nil
 }
 
 type rawCauseRow struct {

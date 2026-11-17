@@ -66,20 +66,7 @@ func RunClocksOf(milestones []RunMilestone, finished bool, asOf time.Time) *RunC
 	if len(milestones) == 0 {
 		return nil
 	}
-	start, newest := milestones[0].RecordedAt, milestones[0].RecordedAt
-	for _, m := range milestones[1:] {
-		start = earlierOf(start, m.RecordedAt)
-		newest = laterOf(newest, m.RecordedAt)
-	}
-	if at := slices.IndexFunc(milestones, func(m RunMilestone) bool {
-		return m.Kind == MilestoneRunSubmitted
-	}); at >= 0 {
-		start = milestones[at].RecordedAt
-	}
-	end := laterOf(asOf, newest)
-	if finished {
-		end = newest
-	}
+	start, end := runBounds(milestones, finished, asOf)
 	// endedAt is a fresh copy of the run's end for a finished run, and nil
 	// for one that isn't, so no two fields share a pointer.
 	endedAt := func() *time.Time {
@@ -112,6 +99,27 @@ func RunClocksOf(milestones []RunMilestone, finished bool, asOf time.Time) *RunC
 	}
 	clocks.ActiveSeconds = wholeSeconds(coveredTime(clocks.ActiveIntervals, start, end))
 	return clocks
+}
+
+// runBounds is a run's start and end as RunClocksOf defines them; the end of
+// a run that isn't finished is asOf, or its newest milestone when that is
+// later. The milestones must not be empty. RunClocksOf and the work-hours
+// division both read the bounds here, so the two can't disagree.
+func runBounds(milestones []RunMilestone, finished bool, asOf time.Time) (start, end time.Time) {
+	start, newest := milestones[0].RecordedAt, milestones[0].RecordedAt
+	for _, m := range milestones[1:] {
+		start = earlierOf(start, m.RecordedAt)
+		newest = laterOf(newest, m.RecordedAt)
+	}
+	if at := slices.IndexFunc(milestones, func(m RunMilestone) bool {
+		return m.Kind == MilestoneRunSubmitted
+	}); at >= 0 {
+		start = milestones[at].RecordedAt
+	}
+	if finished {
+		return start, newest
+	}
+	return start, laterOf(asOf, newest)
 }
 
 // invocationEnding is the instant that ends a working span among the

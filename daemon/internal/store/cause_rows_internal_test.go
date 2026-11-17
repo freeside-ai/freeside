@@ -234,5 +234,42 @@ func TestReadCauseRowsFailsWithoutHoldHistoryStart(t *testing.T) {
 		if _, err := st.ReadCauseRows(ctx, ""); err == nil || !strings.Contains(err.Error(), "migration 0145") {
 			t.Errorf("%s: ReadCauseRows error = %v, want a hold history start error", name, err)
 		}
+		err := st.Read(ctx, func(tx *ReadTx) error {
+			_, err := tx.HoldsRecordedSince(ctx)
+			return err
+		})
+		if err == nil || !strings.Contains(err.Error(), "migration 0145") {
+			t.Errorf("%s: HoldsRecordedSince error = %v, want a hold history start error", name, err)
+		}
+	}
+}
+
+// TestHoldsRecordedSinceReadsMigrationTime pins that a read transaction
+// serves the hold history's start ReadCauseRows reads (#3241).
+func TestHoldsRecordedSinceReadsMigrationTime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTestStore(t)
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE schema_migrations SET applied_at = '2026-11-01T00:00:00Z' WHERE version = 145`); err != nil {
+		t.Fatal(err)
+	}
+	var got time.Time
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		got, err = tx.HoldsRecordedSince(ctx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Errorf("HoldsRecordedSince = %v, want %v", got, want)
+	}
+	rows, err := st.ReadCauseRows(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rows.HoldsRecordedSince.Equal(got) {
+		t.Errorf("ReadCauseRows holds recorded since = %v, want the read's %v", rows.HoldsRecordedSince, got)
 	}
 }

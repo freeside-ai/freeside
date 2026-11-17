@@ -95,6 +95,9 @@ public actor MockServer {
 
     private var itemsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var taskHistoryFixtures: [String: Components.Schemas.TaskTimeline] = [:]
+    /// The days `getWorkHours` serves, by project (MockWorkHours).
+    private var workHoursFixtures: [String: [Components.Schemas.WorkHoursDay]] = [:]
+    private var workHoursHoldHistorySince = RunFixtures.screenshotInstant.addingTimeInterval(-30 * 86_400)
     private var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
@@ -480,6 +483,27 @@ public actor MockServer {
     /// daemon's projection moves when an event is recorded.
     public func setTaskTimeline(_ timeline: Components.Schemas.TaskTimeline) {
         taskHistoryFixtures[timeline.task_id] = timeline
+    }
+
+    /// Serves `days` as `project`'s work hours, and `holdHistorySince` as
+    /// when hold history began when given. Each day's date picks the
+    /// requested date it answers; the mock sets its bounds from the request.
+    public func setWorkHours(
+        project: String, days: [Components.Schemas.WorkHoursDay], holdHistorySince: Date? = nil
+    ) {
+        workHoursFixtures[project] = days
+        if let holdHistorySince { workHoursHoldHistorySince = holdHistorySince }
+    }
+
+    /// The work hours for `request` at the fixture clock, or nil for a
+    /// project the mock doesn't have, as the daemon answers 404.
+    func workHours(_ request: MockWorkHours.Request) -> Components.Schemas.WorkHours? {
+        if let project = request.projectID, workHoursFixtures[project] == nil, !workflowProjects.contains(project) {
+            return nil
+        }
+        return MockWorkHours.response(
+            request, fixtures: workHoursFixtures, holdHistorySince: workHoursHoldHistorySince,
+            asOf: RunFixtures.screenshotInstant)
     }
 
     /// Replaces the agent catalog without a synchronized write, as a daemon
