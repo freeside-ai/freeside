@@ -70,13 +70,17 @@ import Testing
 
     @Test func aHangingCLITimesOut() async throws {
         // `exec`, so terminating the process ends the sleep and its pipe.
-        let script = try fixture("exec sleep 30")
+        let script = try fixture("exec sleep 120")
 
-        let started = ContinuousClock.now
         let result = await mint(script, timeout: .milliseconds(300))
 
+        // Only the deadline yields `.timedOut`, and it wins only by firing
+        // before the CLI exits and its output arrives, so the result alone
+        // proves the deadline cut short a CLI that would run 120 s. It does
+        // not pin the 300 ms value. No wall-clock bound: under the parallel
+        // `swift test` run one measured scheduling delay, not the timeout,
+        // and reached 14 s in CI (#3314).
         #expect(result == .failure(.timedOut))
-        #expect(ContinuousClock.now - started < .seconds(10))
     }
 
     @Test func cancellingAMintStopsTheCLI() async throws {
