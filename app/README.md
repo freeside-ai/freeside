@@ -602,6 +602,20 @@ is a `swift test --skip-build --scratch-path` run on its own APFS clone of
 the whole of a `swift test` run: concurrent `swift test` runs on one scratch
 path wait for each other and save nothing.
 
+To measure where that job's time goes, run
+`python3 -I scripts/convergence-phases.py [--jobs N] [--scan M] [--created RANGE]`
+from the repository root (#3290). It reads the newest N (default 20) successful
+`convergence` jobs on app PRs, and only those: a PR without the app component
+runs a different, much shorter job. It prints each job's total, setup before
+the pass, harness build and start, package loading, `swift build`, the
+`app/.build` clones, and the test phase, then their medians and ranges. One
+CI run proves nothing, because runner speed alone moved the same build
+between 154 and 373 s. The main process and slice rows are the sum of each
+process's `swift test` run summaries, so they are test time, not wall time,
+and don't add up to the test phase. The script's header defines each phase's
+boundaries. It looks through the newest M pull request runs (default 200),
+which takes several minutes.
+
 `swift test` renders the whole screenshot matrix. While iterating on a
 visible change, follow
 [Iterating on a Visible Change](#iterating-on-a-visible-change) instead of
