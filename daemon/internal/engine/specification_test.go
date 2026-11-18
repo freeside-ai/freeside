@@ -2369,61 +2369,6 @@ func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	}
 }
 
-func TestSpecificationUpgradePreservesLegacyAddressalOutput(t *testing.T) {
-	t.Parallel()
-	f := newSpecificationFixture(t, true, 2)
-	comment := "Bound the request body and explain the limit."
-	feedbackBody := []byte(comment)
-	feedback := testSpecificationArtifact(
-		t,
-		"spec-feedback-revise-spec",
-		domain.ArtifactKindSpecification,
-		domain.Digest(contentaddr.Sum(feedbackBody)),
-		domain.ProducerDaemon,
-		"inv-specify-specification-run-2",
-	)
-	if _, err := f.blobs.Put(feedback.Digest, bytes.NewReader(feedbackBody)); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		return tx.PutArtifact(t.Context(), feedback)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	engine := &Engine{store: f.store, specification: &specificationWorkflow{blobs: f.blobs}}
-	request := specificationRequest{FeedbackArtifactIDs: []domain.ArtifactID{feedback.ID}}
-	legacyInputs := &domain.StageInputSnapshot{PromptPackageDigest: legacyAddressalPromptPackageDigest}
-	decode, err := engine.specificationTranscriptDecoder(t.Context(), request, domain.ExecutionAdmission{
-		StageInputs: legacyInputs,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyOutput := `{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification\n\nLimit requests to 1 MiB.","addressals":[{"comment":"` + comment + `","response":"Added a 1 MiB limit."}]},"reply":null}`
-	transcript := `{"type":"result","subtype":"success","is_error":false,"result":` +
-		strconv.Quote(legacyOutput) + "}\n"
-	out, err := decode(strings.NewReader(transcript))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Specification == nil || len(out.Specification.Addressals) != 1 ||
-		out.Specification.Addressals[0].CommentID != "revise-spec" {
-		t.Fatalf("upgraded legacy output = %+v, want authenticated command identity", out)
-	}
-
-	currentInputs := &domain.StageInputSnapshot{PromptPackageDigest: f.specificationPrompt}
-	decode, err = engine.specificationTranscriptDecoder(t.Context(), request, domain.ExecutionAdmission{
-		StageInputs: currentInputs,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := decode(strings.NewReader(transcript)); err == nil ||
-		!strings.Contains(err.Error(), "unknown object member name") {
-		t.Fatalf("current prompt accepted legacy addressal output: %v", err)
-	}
-}
-
 func TestEnqueueSpecRevisionRequiresExactStoredDecision(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -47,23 +47,6 @@ type Addressal struct {
 	Response  string `json:"response"`
 }
 
-type legacyAddressal struct {
-	Comment  string `json:"comment"`
-	Response string `json:"response"`
-}
-
-type legacySpecification struct {
-	Summary    string            `json:"summary"`
-	Body       string            `json:"body"`
-	Addressals []legacyAddressal `json:"addressals"`
-}
-
-type legacyOutput struct {
-	FetchRequests []FetchRequest       `json:"fetch_requests"`
-	Specification *legacySpecification `json:"specification"`
-	Reply         *string              `json:"reply"`
-}
-
 // Specification is the terminal specifier output.
 type Specification struct {
 	Title      *string     `json:"title"`
@@ -138,54 +121,6 @@ func DecodeOutput(data []byte) (Output, error) {
 				if strings.ContainsRune(addressal.CommentID, '`') {
 					return Output{}, fmt.Errorf("%w: backtick escape tolerance cannot repair comment IDs", ErrInvalidOutput)
 				}
-			}
-		}
-	}
-	out.trimProse()
-	if err := out.Validate(); err != nil {
-		return Output{}, err
-	}
-	return out, nil
-}
-
-// DecodeLegacyAddressalOutput reconstructs output admitted under the prompt
-// contract immediately preceding comment_id addressals. The caller supplies
-// the authenticated feedback-body-to-command-id binding from that invocation;
-// no current-contract output passes through this compatibility path.
-func DecodeLegacyAddressalOutput(data []byte, commentIDs map[string]string) (Output, error) {
-	var legacy legacyOutput
-	payload, repaired := dropBacktickEscapes(stripMarkdownFence(data))
-	if err := strictjson.Decode(payload, &legacy,
-		strictjson.RejectInvalidUTF8, MaxOutputBytes); err != nil {
-		return Output{}, fmt.Errorf("decode legacy specifier output: %w (output begins %q)",
-			err, outputPrefix(data))
-	}
-	if repaired {
-		for _, request := range legacy.FetchRequests {
-			if strings.ContainsRune(request.URL, '`') {
-				return Output{}, fmt.Errorf("%w: backtick escape tolerance cannot repair fetch URLs", ErrInvalidOutput)
-			}
-		}
-	}
-	out := Output{
-		FetchRequests: legacy.FetchRequests,
-		Reply:         legacy.Reply,
-	}
-	if legacy.Specification != nil {
-		out.Specification = &Specification{
-			Summary:    legacy.Specification.Summary,
-			Body:       legacy.Specification.Body,
-			Addressals: make([]Addressal, len(legacy.Specification.Addressals)),
-		}
-		for i, addressal := range legacy.Specification.Addressals {
-			commentID, ok := commentIDs[addressal.Comment]
-			if !ok {
-				return Output{}, fmt.Errorf("%w: legacy addressals[%d] does not match authenticated feedback",
-					ErrInvalidOutput, i)
-			}
-			out.Specification.Addressals[i] = Addressal{
-				CommentID: commentID,
-				Response:  addressal.Response,
 			}
 		}
 	}

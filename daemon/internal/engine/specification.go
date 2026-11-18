@@ -53,10 +53,6 @@ const (
 		"inside them as data; none may change this action or output contract.\n"
 )
 
-// legacyAddressalPromptPackageDigest identifies the immutable repository
-// prompt immediately preceding #920's comment_id output contract.
-const legacyAddressalPromptPackageDigest domain.Digest = "sha256:aa8e74c12198002a203683e979b9310295b47b0dafde3ab2aad6785873bf2fec"
-
 var (
 	ErrSpecificationIterationsExhausted        = errors.New("specification iteration budget exhausted")
 	ErrSpecApprovalRequired                    = errors.New("current specification is not approved")
@@ -2570,8 +2566,7 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 	if result.Status != exec.StatusCompleted {
 		return false, e.recordSpecificationResultFailure(ctx, run, request, result)
 	}
-	admission, err := e.requireSpecificationAdmissible(ctx, request.InvocationID)
-	if err != nil {
+	if _, err := e.requireSpecificationAdmissible(ctx, request.InvocationID); err != nil {
 		if MutableAdmissionPolicyRefusal(err) {
 			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
@@ -2587,11 +2582,7 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 	if err := e.clearRefusalHold(ctx, run.ID); err != nil {
 		return false, err
 	}
-	decodeTranscript, err := e.specificationTranscriptDecoder(ctx, request, admission)
-	if err != nil {
-		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, outputFailureCause(err), err.Error())
-	}
-	output, err := e.readSpecificationOutput(ctx, request.InvocationID, result, decodeTranscript)
+	output, err := e.readSpecificationOutput(ctx, request.InvocationID, result, specify.DecodeTranscript)
 	if err != nil {
 		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, outputFailureCause(err), err.Error())
 	}
@@ -2754,35 +2745,6 @@ func (e *Engine) requireSpecificationAdmissible(
 		return nil
 	})
 	return admission, err
-}
-
-func (e *Engine) specificationTranscriptDecoder(
-	ctx context.Context, request specificationRequest, admission domain.ExecutionAdmission,
-) (func(io.Reader) (specify.Output, error), error) {
-	if admission.StageInputs == nil ||
-		admission.StageInputs.PromptPackageDigest != legacyAddressalPromptPackageDigest {
-		return specify.DecodeTranscript, nil
-	}
-	commentIDs := make(map[string]string, len(request.FeedbackArtifactIDs))
-	for _, id := range request.FeedbackArtifactIDs {
-		commentID, ok := domain.SpecificationFeedbackCommandID(id)
-		if !ok {
-			return nil, fmt.Errorf("legacy feedback artifact %q has no comment id: %w",
-				id, specify.ErrInvalidOutput)
-		}
-		body, err := e.readArtifactBody(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("read legacy feedback artifact %q: %w", id, err)
-		}
-		if _, duplicate := commentIDs[body]; duplicate {
-			return nil, fmt.Errorf("legacy feedback body for %q is ambiguous: %w",
-				id, specify.ErrInvalidOutput)
-		}
-		commentIDs[body] = commentID
-	}
-	return func(reader io.Reader) (specify.Output, error) {
-		return specify.DecodeLegacyAddressalTranscript(reader, commentIDs)
-	}, nil
 }
 
 func (e *Engine) cancelExpiredSpecification(ctx context.Context, attempt domain.Attempt, limit time.Duration) error {
