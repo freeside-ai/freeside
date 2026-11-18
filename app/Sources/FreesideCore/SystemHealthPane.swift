@@ -164,7 +164,9 @@ struct SystemHealthPane: View {
             Button {
                 openFinding(item.id)
             } label: {
-                FindingRow(item: item, now: now)
+                FindingRow(
+                    item: item, now: now, isFirst: item.id == items.first?.id,
+                    isLast: item.id == items.last?.id)
             }
             .buttonStyle(.plain)
         }
@@ -177,13 +179,41 @@ struct SystemHealthPane: View {
 /// daemon's reason in full under it, since the reason is what names the
 /// held run and the refused check (#3026); and what it is about, its task
 /// or else its project, with the time it opened or closed.
+///
+/// An open blocking finding is marked in wax (#3356): its keyword in wax
+/// semibold and a 3pt wax rule down its leading edge, the color the
+/// Stopped chip above it uses for a stop.
 struct FindingRow: View {
+    /// The rule's width, and its inset from the group's edge: the group's
+    /// 1pt border, so the rule sits inside it and the content, at the
+    /// grouped row's 14pt padding, keeps 10pt from it.
+    static let ruleWidth: CGFloat = 3
+    static let ruleInset: CGFloat = 1
+    /// `SettingsGroup`'s corner radius, which the rule follows.
+    static let groupCornerRadius: CGFloat = 8
+
     let item: Components.Schemas.AttentionItem
     let now: Date
+    /// The row's place in its group, so the rule rounds where it meets the
+    /// group's corner.
+    var isFirst = false
+    var isLast = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    /// Whether the row takes the wax mark: open, and blocking as the pane
+    /// sorts and counts it, an unknown posture included. A closed finding
+    /// never does; its keyword is its outcome.
+    static func isMarkedBlocking(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item.status == .open && SystemHealthFindings.isBlocking(item)
+    }
+
     var body: some View {
-        SidebarRow(keyword: .init(text: SystemHealthFindings.keyword(item)), time: time, grouped: true) {
+        let marked = Self.isMarkedBlocking(item)
+        SidebarRow(
+            keyword: .init(
+                text: SystemHealthFindings.keyword(item), color: marked ? .waxText : .inkDim, isStrong: marked),
+            time: time, grouped: true
+        ) {
             EmptyView()
         } title: {
             VStack(alignment: .leading, spacing: 3) {
@@ -202,6 +232,25 @@ struct FindingRow: View {
             SidebarRowContext(text: Self.context(item))
         } closing: {
             EmptyView()
+        }
+        // A background, so the rule takes the row's full height without
+        // moving its content. Only the rule clips to the group's corner, as
+        // the quote block's does; the border, drawn over the rows, covers
+        // the rest. Clipping the whole group would cut the rows' focus rings.
+        .background {
+            if marked {
+                Rectangle()
+                    .fill(Color.waxText)
+                    .frame(width: Self.ruleWidth)
+                    .padding(.leading, Self.ruleInset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: isFirst ? Self.groupCornerRadius : 0,
+                            bottomLeadingRadius: isLast ? Self.groupCornerRadius : 0)
+                    )
+                    .accessibilityHidden(true)
+            }
         }
         .contentShape(Rectangle())
     }
