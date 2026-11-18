@@ -121,6 +121,21 @@ var atxHeadingRe = regexp.MustCompile(`^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$`)
 // the leading indentation so nested lists survive.
 var listItemRe = regexp.MustCompile(`^( {0,3})([-+*]|[0-9]{1,9}[.)])([ \t]+)(.*)$`)
 
+// tableDelimiterRowRe matches a GFM table delimiter row that has no pipe: one
+// or more hyphens with a colon on either end or both (-:, :-, :-:), padded by
+// spaces. GitHub opens a one-column table on such a row under a paragraph line,
+// and a | inside a code span then splits the span across cells, leaving the
+// text around it live (a mention, link, or HTML). renderAuthoredBodyProse
+// matches it against a line after neutralizeInlineText, which can shorten a
+// line to a row by reducing a link to its text. Rows with a | need no rule
+// here, because escapeInertText escapes every |. Hyphen-only lines are left
+// alone: GitHub reads them as a setext underline, and isThematicBreak already
+// escapes --- and longer. The indentation is unbounded so a list item's
+// continuation line is caught; over-matching an indented code line only adds a
+// visible backslash, the safe direction. Spaces are the only padding to
+// handle, since the screen refuses tabs and every other control character.
+var tableDelimiterRowRe = regexp.MustCompile(`^( *)(:-+:?|-+:)( *)$`)
+
 // isThematicBreak reports whether line is a thematic break (horizontal rule):
 // three or more of the same -, _, or * with only spaces and tabs between and
 // around them. RE2 has no backreference for "the same character repeated", so
@@ -203,11 +218,13 @@ func renderAuthoredPublication(recipe string, a domain.PublicationAuthoring) (ti
 // closure is decided on the emitted line. A column-0 opener is always
 // top-level on GitHub: no list item continues past a column-0 fence opener, and
 // prose outside fences has no blockquote, HTML block, table, or other fence,
-// because escapeInertText escapes >, <, |, backticks, and tildes and the screen
-// refuses tabs and carriage returns. Deciding closure on an indented opener
-// in the input instead would disagree with GitHub, which ends a list item's
-// fence when the list ends (#3053). The cost: a list item's code block renders
-// after the item rather than nested in it.
+// because escapeInertText escapes >, <, |, backticks, and tildes, a pipe-free
+// table delimiter row (tableDelimiterRowRe) is escaped here, and the screen
+// refuses tabs and carriage returns. With every | escaped, a pipe-free row is
+// the only delimiter row left that could open a table. Deciding closure on an
+// indented opener in the input instead would disagree with GitHub, which ends
+// a list item's fence when the list ends (#3053). The cost: a list item's code
+// block renders after the item rather than nested in it.
 func renderAuthoredBodyProse(bodyText string) string {
 	lines := strings.Split(bodyText, "\n")
 	var out []string
@@ -253,7 +270,18 @@ func renderAuthoredBodyProse(bodyText string) string {
 			out = append(out, m[1]+m[2]+m[3]+neutralizeInlineText(m[4]))
 			continue
 		}
-		out = append(out, neutralizeInlineText(line))
+		neutral := neutralizeInlineText(line)
+		if m := tableDelimiterRowRe.FindStringSubmatch(neutral); m != nil {
+			// Matched on the neutralized line, not the input: stripping a link
+			// or image to its text turns "[-:](url)" into a bare "-:". The
+			// backslash goes before the first non-space character, not at
+			// column 0, so the line keeps its indentation and stays inside its
+			// list item. The list item branch above needs no such check: its
+			// output keeps the marker and the space after it, so it is never a
+			// row.
+			neutral = m[1] + `\` + neutral[len(m[1]):]
+		}
+		out = append(out, neutral)
 	}
 	rendered := strings.Join(out, "\n")
 	if fence != "" {
@@ -337,9 +365,11 @@ func neutralizePlainText(s string) string {
 // HTML so raw tags and entities show as text, then backslash-escapes the
 // Markdown punctuation for constructs outside the allowlist: the backslash
 // itself first, then backticks and brackets (links, images, code spans) and the
-// GFM extension markers ~ (strikethrough) and | (tables). Emphasis punctuation
-// (* and _) is intentionally left live; thematic breaks built from it are
-// neutralized at the block level (renderAuthoredBodyProse).
+// GFM extension markers ~ (strikethrough) and | (tables). A table delimiter row
+// with no | is neutralized at the block level (renderAuthoredBodyProse), since
+// escaping every - or : here would change far more text than needed. Emphasis
+// punctuation (* and _) is intentionally left live; thematic breaks built from
+// it are neutralized at the block level too.
 func escapeInertText(s string) string {
 	s = html.EscapeString(s)
 	s = strings.ReplaceAll(s, `\`, `\\`)
