@@ -2207,12 +2207,15 @@ func reevaluationBoundaryClaim(content string) domain.AgentClaim {
 	}
 }
 
-func TestDecodeProductionPublicationTaskPreservesLegacyRemediationNoop(t *testing.T) {
+// TestDecodeProductionPublicationTaskRefusesRemovedFields: a task row from
+// before #3323 that carries a field the task no longer has fails to decode,
+// so the run's publication quarantine notice is raised instead of the row
+// reading as a current task.
+func TestDecodeProductionPublicationTaskRefusesRemovedFields(t *testing.T) {
 	t.Parallel()
-	runID := domain.RunID("run-legacy-remediation-noop")
-	task := validPublicationTask(t, runID, "project-legacy-remediation-noop")
+	runID := domain.RunID("run-removed-task-field")
+	task := validPublicationTask(t, runID, "project-removed-task-field")
 	task.ProducingInvocationID = remediationInvocationID(runID, 1)
-	task.LegacyRemediationNoop = true
 	task.VerificationID = productionVerificationInvocationIDForProducer(
 		runID, task.ProducingInvocationID,
 	)
@@ -2221,16 +2224,20 @@ func TestDecodeProductionPublicationTaskPreservesLegacyRemediationNoop(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := decodeProductionPublicationTask(store.QueueEntry{
+	entry := store.QueueEntry{
 		IdempotencyKey: productionPublicationTaskKey(runID),
 		Kind:           KindProductionPublicationRequested,
 		Payload:        payload,
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	if !decoded.LegacyRemediationNoop {
-		t.Fatal("legacy remediation_noop field was not preserved")
+	if _, err := decodeProductionPublicationTask(entry); err != nil {
+		t.Fatalf("current task: %v", err)
+	}
+	for _, field := range []string{`"remediation_noop":true`} {
+		edited := entry
+		edited.Payload = append([]byte("{"+field+","), payload[1:]...)
+		if _, err := decodeProductionPublicationTask(edited); err == nil {
+			t.Errorf("task with %s decoded", field)
+		}
 	}
 }
 

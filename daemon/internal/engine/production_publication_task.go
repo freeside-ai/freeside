@@ -477,7 +477,6 @@ func (t productionPublicationTask) validateWithPublication(validatePublication f
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
 		!validProducer ||
 		(t.AuthorizingTaskKey != "") != t.reentersBeforePublication() ||
-		(t.LegacyRemediationNoop && !remediationProducer) ||
 		t.VerificationID != productionVerificationInvocationIDForProducer(t.RunID, t.ProducingInvocationID) ||
 		t.PublicationID != wantPublication ||
 		!validCommitSHA(t.HeadSHA) {

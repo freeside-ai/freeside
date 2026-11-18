@@ -232,13 +232,10 @@ func WithProductionPublication(cfg ProductionPublicationConfig) Option {
 }
 
 type productionPublicationTask struct {
-	Version               string              `json:"version"`
-	RunID                 domain.RunID        `json:"run_id"`
-	ProjectID             domain.ProjectID    `json:"project_id"`
-	ProducingInvocationID domain.InvocationID `json:"producing_invocation_id"`
-	// LegacyRemediationNoop preserves v1 task decoding and byte-identical
-	// recorded replay. It is never consulted for change classification.
-	LegacyRemediationNoop bool                         `json:"remediation_noop,omitempty"`
+	Version               string                       `json:"version"`
+	RunID                 domain.RunID                 `json:"run_id"`
+	ProjectID             domain.ProjectID             `json:"project_id"`
+	ProducingInvocationID domain.InvocationID          `json:"producing_invocation_id"`
 	VerificationID        domain.InvocationID          `json:"verification_invocation_id"`
 	PublicationID         domain.InvocationID          `json:"publication_invocation_id"`
 	HeadSHA               string                       `json:"head_sha"`

@@ -224,7 +224,6 @@ func RecordProductionExecutionExport(
 		transition        authenticatedRemediationTransition
 		previousTask      *productionPublicationTask
 		alreadyReplaced   bool
-		legacyNoop        bool
 		continuationFirst bool
 		successor         *domain.PublicationSuccessor
 	)
@@ -312,7 +311,6 @@ func RecordProductionExecutionExport(
 			switch current.ProducingInvocationID {
 			case executionExport.InvocationID:
 				alreadyReplaced = true
-				legacyNoop = current.LegacyRemediationNoop
 			case productionInvocationID(run.ID):
 				previous := current
 				previousTask = &previous
@@ -369,7 +367,6 @@ func RecordProductionExecutionExport(
 	task := productionPublicationTask{
 		Version: productionPublicationTaskVersion, RunID: run.ID, ProjectID: run.ProjectID,
 		ProducingInvocationID: executionExport.InvocationID,
-		LegacyRemediationNoop: legacyNoop,
 		VerificationID: productionVerificationInvocationIDForProducer(
 			run.ID, executionExport.InvocationID),
 		PublicationID: domain.ProductionPublicationInvocationID(run.ID),

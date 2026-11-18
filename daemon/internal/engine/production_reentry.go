@@ -212,7 +212,6 @@ func (t productionPublicationTask) validateReentry() error {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
-		t.LegacyRemediationNoop ||
 		t.VerificationID != reentryVerificationInvocationID(successor) ||
 		t.PublicationID != successor.PublicationID() ||
 		!validCommitSHA(t.HeadSHA) || t.HeadSHA != successor.Reentry.HeadSHA ||
