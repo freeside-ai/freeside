@@ -114,23 +114,6 @@ type RecoveryResult struct {
 // No path releases an unverified export; no loss is committed until the
 // ownership-label audit proves absence on fresh evidence; a recovery error
 // commits nothing, leaves the record open, and is retryable.
-// specMatchesRecord reports whether a re-supplied spec is the one a record's
-// digest bound. A record journaled before launch sizes were declared bound the
-// spec without Class and Size; because both are omitzero, clearing them
-// reproduces those exact bytes. The re-supplied size still governs the
-// recovery's own containers: a size never grants anything, it only bounds a
-// container.
-func specMatchesRecord(hs HandoffSpec, recordDigest string) (bool, error) {
-	digest, err := specDigest(hs)
-	if err != nil || digest == recordDigest {
-		return err == nil, err
-	}
-	unsized := hs
-	unsized.Class, unsized.Size = "", ContainerSize{}
-	digest, err = specDigest(unsized)
-	return err == nil && digest == recordDigest, err
-}
-
 func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (result *RecoveryResult, err error) {
 	// The recovery budget bounds everything, including the durable reads: a
 	// journal or lease-store adapter that honors its context but stalls
@@ -167,50 +150,12 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if hs.RunID != rec.RunID {
 		return nil, fmt.Errorf("%w: re-supplied spec names run %q, record names %q", ErrInvalidJournalRecord, hs.RunID, rec.RunID)
 	}
-	matched, err := specMatchesRecord(hs, rec.SpecDigest)
+	digest, err := specDigest(hs)
 	if err != nil {
 		return nil, err
 	}
-	if !matched && hs.Agent.FailureTranscript != nil {
-		// A historical spec never authorized diagnostic capture. Match its
-		// complete former shape, then retain that omission during recovery.
-		prior := hs
-		prior.Agent.FailureTranscript = nil
-		matched, err = specMatchesRecord(prior, rec.SpecDigest)
-		if err != nil {
-			return nil, err
-		}
-		if matched {
-			hs = prior
-		}
-	}
-	if !matched {
-		if hs.Agent.FailureTranscript != nil {
-			return nil, fmt.Errorf("%w: legacy digest cannot authorize failure transcript capture", ErrInvalidJournalRecord)
-		}
-		if hs.Agent.PromptFile != nil {
-			return nil, fmt.Errorf("%w: legacy digest cannot authorize a prompt file", ErrInvalidJournalRecord)
-		}
-		if len(hs.Agent.Inputs) > 0 {
-			return nil, fmt.Errorf("%w: legacy digest cannot authorize input files", ErrInvalidJournalRecord)
-		}
-		legacyDigest, lerr := legacySpecDigest(hs)
-		if lerr != nil {
-			return nil, lerr
-		}
-		if legacyDigest != rec.SpecDigest {
-			return nil, fmt.Errorf("%w: re-supplied spec does not match the record's spec digest", ErrInvalidJournalRecord)
-		}
-		// The legacy digest did not bind vendor bytes. Only the one safe
-		// compatibility value is admissible: an explicit empty overlay that
-		// masks any image-baked instruction. InstructionPolicy has only one
-		// valid semantic value, already enforced by hs.validate above.
-		if hs.Agent.VendorInstructions.Present {
-			return nil, fmt.Errorf(
-				"%w: legacy spec digest cannot authorize present vendor instructions",
-				ErrInvalidJournalRecord,
-			)
-		}
+	if digest != rec.SpecDigest {
+		return nil, fmt.Errorf("%w: re-supplied spec does not match the record's spec digest", ErrInvalidJournalRecord)
 	}
 	if (hs.AuthStoreLease == nil) != (rec.Lease == nil && rec.ReadHold == nil) {
 		return nil, fmt.Errorf("%w: record and spec disagree on the auth-store lease", ErrInvalidJournalRecord)

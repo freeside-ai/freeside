@@ -716,18 +716,6 @@ func TestSpecDigest(t *testing.T) {
 	if !sha256HexPattern.MatchString(a) {
 		t.Errorf("digest %q is not sha256 hex", a)
 	}
-	legacy, err := legacySpecDigest(testHandoffSpec())
-	if err != nil {
-		t.Fatalf("legacySpecDigest: %v", err)
-	}
-	const historicalFixtureDigest = "6e54b3fbe20c79fd90695024d574c07719b8aba035085725662814836e3b00dc"
-	if legacy != historicalFixtureDigest {
-		t.Errorf("legacy digest = %q, want historical fixture %q", legacy, historicalFixtureDigest)
-	}
-	if legacy == a {
-		t.Error("current and historical fixture encodings digest identically")
-	}
-
 	// A provider_only spec must keep the digest it had before RegistryHosts
 	// joined HandoffSpec: an open journal record from a run started by an
 	// earlier daemon recovers only while its spec still digests the same.

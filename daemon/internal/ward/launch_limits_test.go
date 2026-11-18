@@ -3,7 +3,6 @@ package ward
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -210,22 +209,10 @@ func TestHandoffRefusesAnUnsizedSpec(t *testing.T) {
 	}
 }
 
-// TestUnsizedSpecDigestsInThePreSizeFormat pins why pre-size journal records
-// still recover: with Class and Size zero, the digested bytes carry neither.
-func TestUnsizedSpecDigestsInThePreSizeFormat(t *testing.T) {
-	t.Parallel()
-	hs := testHandoffSpec()
-	hs.Class, hs.Size = "", ContainerSize{}
-	body, err := json.Marshal(hs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(body, []byte(`"Class"`)) || bytes.Contains(body, []byte(`"Size"`)) {
-		t.Fatalf("unsized spec digests with size fields: %s", body)
-	}
-}
-
-func TestRecoverAdoptsARecordJournaledBeforeSizes(t *testing.T) {
+// TestRecoverRefusesARecordJournaledBeforeSizes pins that a record whose
+// digest bound a spec without Class and Size, the encoding before launch
+// sizes were declared, no longer recovers (#3326).
+func TestRecoverRefusesARecordJournaledBeforeSizes(t *testing.T) {
 	t.Parallel()
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
@@ -233,14 +220,10 @@ func TestRecoverAdoptsARecordJournaledBeforeSizes(t *testing.T) {
 	presize.Class, presize.Size = "", ContainerSize{}
 	fx.openRecord(t, presize)
 
-	res, err := fx.recover(t, hs.RunID, hs)
-	if err != nil {
-		t.Fatalf("Recover = %v, want the pre-size record recovered", err)
+	if _, err := fx.recover(t, hs.RunID, hs); !errors.Is(err, ErrInvalidJournalRecord) {
+		t.Fatalf("Recover = %v, want ErrInvalidJournalRecord", err)
 	}
-	if res.Outcome != RecoveryLoss {
-		t.Fatalf("Outcome = %q, want loss", res.Outcome)
-	}
-	fx.wantClosed(t, hs.RunID, HandoffLoss)
+	fx.wantOpen(t, hs.RunID)
 }
 
 func TestRecoverRefusesARecordJournaledAtAnotherSize(t *testing.T) {

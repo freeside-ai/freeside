@@ -473,7 +473,7 @@ func TestInputMountCannotBeRedirectedOrMadeWritable(t *testing.T) {
 
 func TestInputRecoveryRejectsMissingOrRetargetedProof(t *testing.T) {
 	t.Parallel()
-	for _, corruption := range []string{"missing", "wrong_digest", "half_pair", "no_inputs_with_proof", "legacy_digest"} {
+	for _, corruption := range []string{"missing", "wrong_digest", "half_pair", "no_inputs_with_proof"} {
 		t.Run(corruption, func(t *testing.T) {
 			fx := newHandoffFixture(t)
 			j := newFakeJournal()
@@ -501,8 +501,6 @@ func TestInputRecoveryRejectsMissingOrRetargetedProof(t *testing.T) {
 			case "no_inputs_with_proof":
 				hs.Agent.Inputs = nil
 				rec.SpecDigest, err = specDigest(hs)
-			case "legacy_digest":
-				rec.SpecDigest, err = legacySpecDigest(hs)
 			}
 			if err != nil {
 				t.Fatal(err)
