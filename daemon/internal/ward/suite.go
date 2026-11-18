@@ -996,7 +996,11 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// guards itself the same way with HandoffTimeout. The deferred reaps and
 	// the absence proof detach from this budget (cleanupContext), so they
 	// still run after it fires. Registered first, so cancel runs last.
-	ctx, cancel := context.WithTimeout(ctx, s.suiteBudget())
+	// The cause names the budget, so a runtime call it kills says which
+	// deadline ended it. It wraps context.DeadlineExceeded because a caller
+	// that returns context.Cause (net/http does) must keep that class.
+	ctx, cancel := context.WithTimeoutCause(ctx, s.suiteBudget(),
+		fmt.Errorf("ward suite passed its budget of %s: %w", s.suiteBudget(), context.DeadlineExceeded))
 	defer cancel()
 	run, err := s.newRun()
 	if err != nil {

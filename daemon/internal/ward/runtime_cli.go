@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
@@ -107,7 +108,7 @@ func (c *CLIRuntime) runDiscard(ctx context.Context, reportStderr bool, args ...
 
 func (c *CLIRuntime) runTo(ctx context.Context, stdout io.Writer, reportStderr bool, args ...string) error {
 	cmd := osexec.CommandContext(ctx, c.bin, args...) //nolint:gosec // bin is operator-configured; caller fields reach argv only through the fail-closed spec phrasing above
-	return runPrepared(cmd, stdout, reportStderr, args[0])
+	return runPrepared(ctx, cmd, stdout, reportStderr, args[0])
 }
 
 // errStderrTruncated marks a runtime error whose reported stderr lost its
@@ -116,15 +117,21 @@ func (c *CLIRuntime) runTo(ctx context.Context, stdout io.Writer, reportStderr b
 // left may begin with a nested error instead.
 var errStderrTruncated = errors.New("stderr truncated")
 
-func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation string) error {
+// runPrepared runs cmd, which must have been built on ctx. A call that fails
+// after ctx ended names how long it ran and ctx's cause, so a call the budget
+// killed under load reads as a timeout rather than a runtime defect (#3337).
+// That detail is message text only: the chain still holds just the exec error
+// (and errStderrTruncated), because callers classify by context.DeadlineExceeded.
+func runPrepared(ctx context.Context, cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation string) error {
 	cmd.Stdout = stdout
+	started := time.Now()
 	if !reportStderr {
 		// A redacted call never reports stderr (it may echo a caller-supplied
 		// credential), so drain it rather than buffering bytes that are thrown
 		// away — an unbounded buffer would be a memory-exhaustion vector.
 		cmd.Stderr = io.Discard
 		if err := procbound.Run(cmd, procbound.DefaultWaitDelay); err != nil {
-			return fmt.Errorf("container %s: %w", operation, err)
+			return fmt.Errorf("container %s: %w", contextEndedOperation(ctx, operation, started), err)
 		}
 		return nil
 	}
@@ -134,6 +141,7 @@ func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation
 	stderr := procbound.NewTailBuffer(maxStderr)
 	cmd.Stderr = stderr
 	if err := procbound.Run(cmd, procbound.DefaultWaitDelay); err != nil {
+		operation := contextEndedOperation(ctx, operation, started)
 		msg := strings.TrimSpace(string(stderr.Bytes()))
 		if stderr.Truncated() {
 			return fmt.Errorf("container %s: %w: %w: ...%s", operation, err, errStderrTruncated, msg)
@@ -141,6 +149,20 @@ func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation
 		return fmt.Errorf("container %s: %w: %s", operation, err, msg)
 	}
 	return nil
+}
+
+// contextEndedOperation returns operation unchanged while ctx is live, and
+// otherwise adds how long the call ran and why ctx ended. A process killed
+// under a live context (by the OS, say) gets no deadline wording. The cause
+// reaches the redacted branch and ConformanceFailure.Reason, so every cause a
+// runtime call's context can carry must be fixed text, never a runtime's or
+// a credential's.
+func contextEndedOperation(ctx context.Context, operation string, started time.Time) string {
+	if ctx.Err() == nil {
+		return operation
+	}
+	return fmt.Sprintf("%s: ran %s before its context ended (%v)",
+		operation, time.Since(started).Round(100*time.Millisecond), context.Cause(ctx))
 }
 
 func (c *CLIRuntime) CreateVolume(ctx context.Context, name string, sizeMB int64, labels []Label) error {

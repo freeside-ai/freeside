@@ -358,7 +358,11 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// call below derives from this ctx; teardown re-detaches (WithoutCancel) so
 	// it still reaps what the budget interrupts. Registered before the teardown
 	// defer so cancel runs after teardown on unwind.
-	ctx, cancel := context.WithTimeout(ctx, b.cfg.HandoffTimeout)
+	// The cause names the budget, so a runtime call it kills says which
+	// deadline ended it. It wraps context.DeadlineExceeded because a caller
+	// that returns context.Cause (net/http does) must keep that class.
+	ctx, cancel := context.WithTimeoutCause(ctx, b.cfg.HandoffTimeout,
+		fmt.Errorf("handoff passed its HandoffTimeout of %s: %w", b.cfg.HandoffTimeout, context.DeadlineExceeded))
 	defer cancel()
 	st := &runState{ownershipLabel: ownershipLabel}
 	// Registered before the teardown defer so it runs after it and records
