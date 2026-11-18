@@ -251,50 +251,30 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 	return s, admission
 }
 
-// TestLegacyUnboundUnattendedAdmissionReconstructs proves that adding the
-// backend-configuration binding does not make pre-binding durable history
-// unreadable. The historical record reconstructs under its original content
-// address, but the live conformance gate still refuses to dispatch it.
-func TestLegacyUnboundUnattendedAdmissionReconstructs(t *testing.T) {
+// TestWaivedAdmissionReadsWithoutAConfiguredWaiver: the encrypted build
+// cannot configure the retired backup-encryption waiver, so recovery must
+// still reconstruct an admission recorded under one once the four-part
+// backup gate passes.
+func TestWaivedAdmissionReadsWithoutAConfiguredWaiver(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, admission := seedAdmission(t, &domain.BackupEncryptionWaiver{
 		RepositoryID: 424242,
-		Reason:       "pre-binding fixture",
+		Reason:       "waived fixture",
 	})
-
-	admission.BackendConfigurationDigest = ""
-	id, err := admission.ComputeID()
-	if err != nil {
-		t.Fatalf("compute legacy admission id: %v", err)
-	}
-	admission.ID = id
-	body, err := encode(admission)
-	if err != nil {
-		t.Fatalf("encode legacy admission: %v", err)
-	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE execution_admissions SET id = ?, body = ? WHERE invocation_id = ?`,
-		admission.ID, body, admission.InvocationID,
-	); err != nil {
-		t.Fatalf("rewrite as legacy admission: %v", err)
-	}
-	// The encrypted build cannot configure the retired waiver. Recovery must
-	// still reconstruct the old record once the four-part backup gate passes.
 	s.admissionPolicy.BackupEncryptionWaiverRepositoryID = nil
 
-	err = s.Read(ctx, func(tx *ReadTx) error {
+	if err := s.Read(ctx, func(tx *ReadTx) error {
 		got, err := tx.GetExecutionAdmission(ctx, admission.InvocationID)
 		if err != nil {
 			return err
 		}
-		if got.BackendConfigurationDigest != "" {
-			t.Errorf("legacy backend configuration digest = %q, want empty", got.BackendConfigurationDigest)
+		if got.ID != admission.ID {
+			t.Errorf("read back admission %s, want %s", got.ID, admission.ID)
 		}
-		return tx.RequireBackendConformant(ctx, got)
-	})
-	if !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
-		t.Fatalf("legacy dispatch gate = %v, want %v", err, domain.ErrAdmissionConfigurationMismatch)
+		return nil
+	}); err != nil {
+		t.Fatalf("read a waived admission with no waiver configured: %v", err)
 	}
 }
 

@@ -329,27 +329,14 @@ func TestAdmissionAgentEncoding(t *testing.T) {
 
 func TestAdmissionAgentBindingCrossChecks(t *testing.T) {
 	t.Run("agent binding requires instruction provenance", func(t *testing.T) {
-		// All three provenance-less shapes are valid history for a legacy
+		// Both provenance-less shapes are valid history for a legacy
 		// admission and incoherent for a newly written v4 one: absent stage
-		// inputs, a pre-v2 snapshot with no vendor-instruction claim, and
-		// the historical Claude v2 implicit delivery.
+		// inputs, and a pre-v2 snapshot with no vendor-instruction claim.
 		for name, mutate := range map[string]func(*domain.ExecutionAdmissionInput){
 			"nil stage inputs": func(in *domain.ExecutionAdmissionInput) {
 				in.StageInputs = nil
 			},
 			"nil vendor instructions": func(*domain.ExecutionAdmissionInput) {},
-			"implicit v2 delivery": func(in *domain.ExecutionAdmissionInput) {
-				snapshot := *in.StageInputs
-				snapshot.VendorInstructions = &domain.VendorInstructionSnapshot{
-					Vendor: domain.AgentVendorClaude,
-				}
-				id, err := snapshot.ComputeID()
-				if err != nil {
-					t.Fatal(err)
-				}
-				snapshot.ID = id
-				in.StageInputs = &snapshot
-			},
 		} {
 			t.Run(name, func(t *testing.T) {
 				in := admissionInput()

@@ -1602,19 +1602,35 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The same admission without a selection source and with the attended
-	// flag is the body recorded before either change. It must keep the id
-	// the golden pinned then, or every stored agent-bound admission would
-	// stop validating.
-	legacyAgentAdmission := agentAdmission
-	legacyBinding := *agentAdmission.AgentBinding
-	legacyBinding.SelectionSource = ""
-	legacyAttended := true
-	legacyBinding.LegacyAttended = &legacyAttended
-	legacyAgentAdmission.AgentBinding = &legacyBinding
-	const legacyAgentAdmissionID = "sha256:30c98a416a17ac8c357accdf8cfca31370765dad9e6dafab9a4e427ad647822c"
-	if id, err := legacyAgentAdmission.ComputeID(); err != nil || id != legacyAgentAdmissionID {
-		t.Fatalf("sourceless agent admission id = %s (%v), want %s", id, err, legacyAgentAdmissionID)
+	// Before the selection source, a binding carried "attended": true, and
+	// this golden pinned the id such a body was stored under. The flag is no
+	// longer read: the decoded body resolves to another id, so the stored
+	// record is refused rather than read as a current one.
+	const attendedFlagAdmissionID = "sha256:30c98a416a17ac8c357accdf8cfca31370765dad9e6dafab9a4e427ad647822c"
+	attendedAdmission := agentAdmission
+	attendedBinding := *agentAdmission.AgentBinding
+	attendedBinding.SelectionSource = ""
+	attendedAdmission.AgentBinding = &attendedBinding
+	attendedAdmission.ID = attendedFlagAdmissionID
+	attendedBody, err := json.Marshal(attendedAdmission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attendedFields map[string]any
+	if err := json.Unmarshal(attendedBody, &attendedFields); err != nil {
+		t.Fatal(err)
+	}
+	attendedFields["agent_binding"].(map[string]any)["attended"] = true
+	if attendedBody, err = json.Marshal(attendedFields); err != nil {
+		t.Fatal(err)
+	}
+	var attendedDecoded domain.ExecutionAdmission
+	if err := json.Unmarshal(attendedBody, &attendedDecoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := attendedDecoded.Validate(); !errors.Is(err, domain.ErrAdmissionInconsistent) {
+		t.Fatalf("admission stored with the attended flag: Validate() = %v, want %v",
+			err, domain.ErrAdmissionInconsistent)
 	}
 	// The hydration-skipping (v6) variant: the agent-bound admission with a
 	// backend configuration, a capability manifest, and the skip set, so the

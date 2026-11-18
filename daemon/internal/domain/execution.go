@@ -294,13 +294,6 @@ type AdmissionAgentBinding struct {
 	// EffectiveEgress is the canonical (sorted, deduplicated) allowlist of
 	// authorities the writer's proxy admitted for this attempt.
 	EffectiveEgress []string `json:"effective_egress"`
-	// LegacyAttended is the attended flag a binding recorded before plan
-	// revision 97 removed the attended first run. Admission no longer sets
-	// it, nothing reads it, and Validate does not check it. It stays,
-	// omitted when nil, so a stored binding re-encodes to the bytes its
-	// admission id, review digests, and completion evidence were computed
-	// over.
-	LegacyAttended *bool `json:"attended,omitempty"`
 	// RouteModelID, RequestedEffort, and NativeEffort are the model and
 	// effort the launch passes (derived from the agent's offer under an
 	// agent, AgentSelection.LaunchValues under a selection), recorded so
@@ -714,6 +707,13 @@ func (a ExecutionAdmission) Validate() error {
 		return fmt.Errorf("execution admission %s operating_mode %q: %w",
 			a.InvocationID, a.OperatingMode, ErrInvalidOperatingMode)
 	}
+	// The rule NewExecutionAdmission applies: an unattended admission names
+	// its backend configuration. One written before that binding is no
+	// longer read.
+	if a.OperatingMode == ModeUnattended && a.BackendConfigurationDigest == "" {
+		return fmt.Errorf("execution admission %s under mode %q backend configuration: %w",
+			a.InvocationID, a.OperatingMode, ErrConformanceConfigurationUnbound)
+	}
 	if !a.CredentialMode.valid() {
 		return fmt.Errorf("execution admission %s credential_mode %q: %w",
 			a.InvocationID, a.CredentialMode, ErrInvalidCredentialMode)
@@ -775,11 +775,11 @@ func (a ExecutionAdmission) Validate() error {
 		// Unlike the historical nil shapes the legacy reader preserves, a v4
 		// admission is newly written and derives its instruction delivery
 		// from the adapter (§5.4 admission step 5): an agent-bound record
-		// with no explicit vendor-instruction snapshot has lost the
-		// provenance of what the attempt received, so it is an incoherent
-		// record, not history.
-		if a.StageInputs == nil || a.StageInputs.VendorInstructions == nil ||
-			a.StageInputs.VendorInstructions.Delivery == "" {
+		// with no vendor-instruction snapshot has lost the provenance of
+		// what the attempt received, so it is an incoherent record, not
+		// history. StageInputs.Validate above already refuses a snapshot
+		// with no explicit delivery.
+		if a.StageInputs == nil || a.StageInputs.VendorInstructions == nil {
 			return fmt.Errorf(
 				"execution admission %s carries an agent binding without an explicit vendor-instruction snapshot: %w",
 				a.InvocationID, ErrAdmissionInconsistent)

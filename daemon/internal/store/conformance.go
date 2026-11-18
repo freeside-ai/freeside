@@ -281,8 +281,9 @@ func (tx *ReadTx) requireBackendConformant(
 	if admission.OperatingMode != domain.ModeUnattended {
 		return nil
 	}
-	// An admission recorded before the configuration binding names no
-	// configuration, so no per-configuration proof can cover it.
+	// An unattended admission that names no configuration has no
+	// per-configuration proof to check. Validate refuses one; this keeps the
+	// exported gate closed for a caller that passes one unvalidated.
 	if admission.BackendConfigurationDigest == "" {
 		return fmt.Errorf("admission %q backend %q names no configuration: %w",
 			admission.InvocationID, admission.Backend, domain.ErrAdmissionConfigurationMismatch)
