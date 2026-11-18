@@ -384,6 +384,43 @@ func TestRenderAuthoredBodyProseEmitsFencesAtColumnZero(t *testing.T) {
 	}
 }
 
+// A delimiter row with no pipe opens a one-column table on GitHub, and a | in
+// a code span below it then splits the span and leaves its text live (#3073).
+// The renderer escapes the row's first non-space character and keeps its
+// indentation; lines that open no table stay as they were.
+func TestRenderAuthoredBodyProseEscapesPipeFreeDelimiterRows(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, body, want string }{
+		{name: "hyphen colon", body: "x\n-:\n`@octocat|`", want: "x\n\\-:\n`@octocat|`"},
+		{name: "colon hyphen", body: "x\n:-\n`@octocat|`", want: "x\n\\:-\n`@octocat|`"},
+		{name: "colons on both ends", body: "x\n:-:\n`@octocat|`", want: "x\n\\:-:\n`@octocat|`"},
+		{name: "several hyphens", body: "x\n--:\n`@octocat|`", want: "x\n\\--:\n`@octocat|`"},
+		{name: "trailing spaces", body: "x\n-:  \n`@octocat|`", want: "x\n\\-:  \n`@octocat|`"},
+		{name: "indented three spaces", body: "x\n   -:\n`@octocat|`", want: "x\n   \\-:\n`@octocat|`"},
+		{
+			name: "list item continuation",
+			body: "- x\n  -:\n  `@octocat|`",
+			want: "- x\n  \\-:\n  `@octocat|`",
+		},
+		{
+			name: "row left by a stripped link",
+			body: "x\n[-:](https://example.com)\n`@octocat|`",
+			want: "x\n\\-:\n`@octocat|`",
+		},
+		{name: "list item", body: "- a", want: "- a"},
+		{name: "list item holding a row", body: "x\n- -:", want: "x\n- -:"},
+		{name: "setext underline", body: "x\n--", want: "x\n--"},
+		{name: "inside a fence", body: "```\n-:\n```", want: "```\n-:\n```"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := renderAuthoredBodyProse(tc.body); got != tc.want {
+				t.Errorf("rendered:\n%q\nwant:\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRenderAuthoredPublicationRendersEvidenceAndProvenanceInert(t *testing.T) {
 	t.Parallel()
 	ref := domain.PublicationEvidenceReference{ArtifactID: "artifact-1", Digest: domain.Digest("sha256:" + strings.Repeat("b", 64))}
