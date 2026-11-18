@@ -174,10 +174,6 @@ const (
 	// recognized by it.
 	PublicationBlockHandoffConflict     = "The target branch moved after admission, and the candidate conflicts with its current tip; Freeside cannot yet remediate at the current tip, so resolve the conflict and start a new run against the current base."
 	PublicationBlockHandoffVerification = "The target branch moved after admission, and the candidate merged into its current tip did not pass verification; Freeside cannot yet remediate at the current tip, so inspect the verification evidence and start a new run against the current base."
-	// PublicationBlockReentryRetired ends a re-entry cycle an earlier daemon
-	// queued for a base advance (v5 or v6 publication successors), which no
-	// longer runs: a moved tip is verified at handoff instead.
-	PublicationBlockReentryRetired = "The target base advanced after admission, and this run was queued to re-enter under a rule Freeside has retired; start a new run against the current base."
 	// Legacy, read-only: an earlier daemon ended a base-advance re-entry
 	// with these (plan §7, revision 89). Stored items still decode and
 	// recover; nothing writes them.
@@ -659,9 +655,8 @@ func DefinitivePublicationBlockReason(reason string) (RunHoldReason, bool) {
 	case PublicationBlockTrust:
 		return HoldTrustBlocked, true
 	case PublicationBlockBaseAdvanced, PublicationBlockHandoffConflict,
-		PublicationBlockHandoffVerification, PublicationBlockReentryRetired,
-		PublicationBlockBaseAdvancedConflict, PublicationBlockBaseAdvancedVerification,
-		PublicationBlockBaseAdvancedRoundLimit:
+		PublicationBlockHandoffVerification, PublicationBlockBaseAdvancedConflict,
+		PublicationBlockBaseAdvancedVerification, PublicationBlockBaseAdvancedRoundLimit:
 		return HoldBaseAdvanced, true
 	case PublicationBlockVerificationMemoryLimit:
 		return HoldVerificationMemoryLimit, true

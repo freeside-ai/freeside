@@ -889,7 +889,6 @@ func TestDefinitivePublicationBlockReason(t *testing.T) {
 
 		PublicationBlockHandoffConflict:         HoldBaseAdvanced,
 		PublicationBlockHandoffVerification:     HoldBaseAdvanced,
-		PublicationBlockReentryRetired:          HoldBaseAdvanced,
 		PublicationBlockVerificationMemoryLimit: HoldVerificationMemoryLimit,
 
 		// Legacy texts a stored block may still carry.
