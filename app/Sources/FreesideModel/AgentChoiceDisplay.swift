@@ -324,15 +324,8 @@ public enum AgentChoiceDisplay {
         for enrollmentID: String, pools: [Components.Schemas.UsagePoolSnapshot], now: Date,
         locale: Locale = .current, timeZone: TimeZone = .current
     ) -> String? {
-        guard
-            let pool = pools.first(where: { snapshot in
-                snapshot.pool.enrollments.contains { $0.enrollment_id == enrollmentID }
-            })?.pool
-        else { return nil }
-        let tightest = UsageDisplay.windows(pool)
-            .map { UsageDisplay.capacity(window: $0, in: pool, now: now) }
-            .min { tightness($0) < tightness($1) }
-        let shown = tightest.flatMap { capacity in pool.windows.first { $0.window == capacity.window } }
+        guard let found = tightestWindow(for: enrollmentID, pools: pools, now: now) else { return nil }
+        let (pool, tightest, shown) = (found.pool, found.tightest, found.shown)
         func time(_ date: Date) -> String {
             FreesideFormat.shortTime(date, now: now, locale: locale, timeZone: timeZone)
         }
@@ -346,6 +339,45 @@ public enum AgentChoiceDisplay {
             }
         return ([tightest.map { "\($0.name): \($0.value)" }, when].compactMap(\.self))
             .joined(separator: " · ")
+    }
+
+    /// Whether the pool that lists `enrollmentID` has quota left by the
+    /// window `reading` names: that window is neither used up nor without
+    /// a reading, and its reading isn't stale. False when no pool lists
+    /// the enrollment. The card counts offers with it; like the reading,
+    /// it is shown, never weighed (#1722).
+    package static func hasQuotaLeft(
+        for enrollmentID: String, pools: [Components.Schemas.UsagePoolSnapshot], now: Date
+    ) -> Bool {
+        guard let found = tightestWindow(for: enrollmentID, pools: pools, now: now),
+            let tightest = found.tightest, let shown = found.shown
+        else { return false }
+        switch tightest.level {
+        case .fine, .low: return !UsageDisplay.isStale(shown, now: now)
+        case .usedUp, .noReading: return false
+        }
+    }
+
+    /// The pool that lists `enrollmentID`, its window with the least left,
+    /// and that window's reading, the one place `reading` and
+    /// `hasQuotaLeft` choose them, so the two can't name different
+    /// windows. Nil when no pool lists the enrollment.
+    private static func tightestWindow(
+        for enrollmentID: String, pools: [Components.Schemas.UsagePoolSnapshot], now: Date
+    ) -> (
+        pool: Components.Schemas.UsagePoolUsage, tightest: UsageDisplay.WindowCapacity?,
+        shown: Components.Schemas.UsageWindowReading?
+    )? {
+        guard
+            let pool = pools.first(where: { snapshot in
+                snapshot.pool.enrollments.contains { $0.enrollment_id == enrollmentID }
+            })?.pool
+        else { return nil }
+        let tightest = UsageDisplay.windows(pool)
+            .map { UsageDisplay.capacity(window: $0, in: pool, now: now) }
+            .min { tightness($0) < tightness($1) }
+        let shown = tightest.flatMap { capacity in pool.windows.first { $0.window == capacity.window } }
+        return (pool, tightest, shown)
     }
 
     /// Orders windows by how little is left: used up first, then by percent

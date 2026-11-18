@@ -76,6 +76,41 @@ import Testing
         #expect(!facts.contains { $0.label == "Other Agents" })
     }
 
+    /// The failure facts split into what failed, what ran, and the other
+    /// agents (#3358), and `cardFacts` joins them in that order.
+    @Test func executionFailureFactsSplitWhatFailedFromWhatRan() throws {
+        let now = Date(timeIntervalSince1970: 1_767_400_000)
+        let pools = UsageFixtures.alternatesUsagePools(now: now)
+        let locale = Locale(identifier: "en_US_POSIX")
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        var item = AttentionFixtures.quotaFailure().item
+        item.alternate_agents = UsageFixtures.alternateAgentOffers()
+        func split(_ item: Components.Schemas.AttentionItem) -> AttentionDisplay.ExecutionFailureFacts? {
+            AttentionDisplay.executionFailureFacts(item, now: now, pools: pools, locale: locale, timeZone: utc)
+        }
+
+        let facts = try #require(split(item))
+        #expect(facts.failure.map(\.label) == ["Outcome", "Cause", "Stage"])
+        #expect(
+            facts.run.map(\.label) == [
+                "Invocation", "Harness", "Model", "Effort", "Enrollment", "Selection", "Cost Owner",
+                "Credential Mode", "Egress Profile", "Isolation Class",
+            ])
+        #expect(facts.otherAgents?.label == "Other Agents")
+        #expect(
+            AttentionDisplay.cardFacts(item, now: now, pools: pools, locale: locale, timeZone: utc)
+                == facts.failure + facts.run + [try #require(facts.otherAgents)])
+
+        var causeless = item
+        causeless.execution_failure?.value1.cause = nil
+        causeless.alternate_agents = nil
+        let bare = try #require(split(causeless))
+        #expect(bare.failure.map(\.label) == ["Outcome", "Stage"])
+        #expect(bare.otherAgents == nil)
+
+        #expect(split(AttentionFixtures.fixture(type: .agent_question).item) == nil)
+    }
+
     @Test func externalReviewDecisionNamesItsEffects() {
         let item = AttentionFixtures.routedReviewDispute().item
         #expect(AttentionDisplay.ask(item) == "How should these external review findings be handled?")

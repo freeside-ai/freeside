@@ -251,6 +251,29 @@ import Testing
         #expect(enrollments(pools: [], at: 3_000)[0].label == UsageFixtures.readingCollectorID)
     }
 
+    /// The failure card counts the offers with quota left by the window
+    /// each reading names (#3358): only a fresh reading with something left
+    /// counts.
+    @Test func quotaLeftNeedsAFreshReadingWithSomethingLeft() {
+        let now = Self.base
+        let alternates = UsageFixtures.alternatesUsagePools(now: now)
+        func left(_ enrollment: String, _ pools: [Components.Schemas.UsagePoolSnapshot], at now: Date) -> Bool {
+            AgentChoiceDisplay.hasQuotaLeft(for: enrollment, pools: pools, now: now)
+        }
+        #expect(left(UsageFixtures.readingSecondEnrollmentID, alternates, at: now))
+        // 20% left, but the reading is stale.
+        #expect(!left(UsageFixtures.staleEnrollmentID, alternates, at: now))
+        // No reading behind any window.
+        #expect(!left(UsageFixtures.unsupportedCollectorID, alternates, at: now))
+        // No pool lists it.
+        #expect(!left("enrollment-unlisted", alternates, at: now))
+        // The tightest window is used up, though another has room.
+        #expect(
+            !left(
+                UsageFixtures.readingCollectorID, UsageFixtures.defaultUsagePools(),
+                at: now.addingTimeInterval(3_000)))
+    }
+
     @Test func aUsageReadingNeverReordersHidesOrDisablesAnEnrollment() {
         let pools = UsageFixtures.defaultUsagePools()
         let catalogOrder = catalog.enrollments.map(\.enrollment_id)
