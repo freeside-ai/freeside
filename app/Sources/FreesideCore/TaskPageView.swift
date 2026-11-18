@@ -465,7 +465,7 @@ struct TaskPageView: View {
                 }
             }
             .foregroundStyle(Color.ink)
-            .pageBody(compact: compact)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
