@@ -292,64 +292,30 @@ func TestDecodeOutputToleratesBacktickEscape(t *testing.T) {
 	}
 }
 
-func TestDecodeLegacyAddressalOutputToleratesBacktickEscape(t *testing.T) {
-	payload := "{\"specification\":{\"summary\":\"s\",\"body\":\"Use \\`code\\`.\",\"addressals\":[{\"comment\":\"Use \\`code\\`.\",\"response\":\"Added \\`code\\`.\"}]}}"
-	out, err := specify.DecodeLegacyAddressalOutput([]byte(payload), map[string]string{"Use `code`.": "c`"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Specification.Body != "Use `code`." || out.Specification.Addressals[0].CommentID != "c`" ||
-		out.Specification.Addressals[0].Response != "Added `code`." {
-		t.Fatalf("legacy specification = %+v", out.Specification)
-	}
-	for _, payload := range []string{
-		"{\"fetch_requests\":[{\"url\":\"https://example.com/\\`\",\"purpose\":\"research\"}]}",
-		"{\"reply\":\"\\`\\d\"}",
-		"{\"reply\":\"\\`\"}{}",
-	} {
-		if _, err := specify.DecodeLegacyAddressalOutput([]byte(payload), nil); err == nil {
-			t.Fatalf("legacy decoder accepted %q", payload)
-		}
-	}
-}
-
 func TestBacktickEscapePreservesInputLimitAndValidIdentifiers(t *testing.T) {
-	for _, decode := range []func([]byte) (specify.Output, error){
-		specify.DecodeOutput,
-		func(data []byte) (specify.Output, error) {
-			return specify.DecodeLegacyAddressalOutput(data, nil)
-		},
-	} {
-		payload := "{\"reply\":\"\\`\"}"
-		payload += strings.Repeat(" ", int(specify.MaxOutputBytes)+1-len(payload))
-		if _, err := decode([]byte(payload)); !errors.Is(err, strictjson.ErrLimitExceeded) {
-			t.Fatalf("oversized input error = %v, want ErrLimitExceeded", err)
-		}
-		payload = "{\"fetch_requests\":[{\"url\":\"https://example.com/`\",\"purpose\":\"research\"}]}"
-		out, err := decode([]byte(payload))
-		if err != nil || len(out.FetchRequests) != 1 || out.FetchRequests[0].URL != "https://example.com/`" {
-			t.Fatalf("valid identifier = %+v, %v", out, err)
-		}
+	payload := "{\"reply\":\"\\`\"}"
+	payload += strings.Repeat(" ", int(specify.MaxOutputBytes)+1-len(payload))
+	if _, err := specify.DecodeOutput([]byte(payload)); !errors.Is(err, strictjson.ErrLimitExceeded) {
+		t.Fatalf("oversized input error = %v, want ErrLimitExceeded", err)
+	}
+	payload = "{\"fetch_requests\":[{\"url\":\"https://example.com/`\",\"purpose\":\"research\"}]}"
+	out, err := specify.DecodeOutput([]byte(payload))
+	if err != nil || len(out.FetchRequests) != 1 || out.FetchRequests[0].URL != "https://example.com/`" {
+		t.Fatalf("valid identifier = %+v, %v", out, err)
 	}
 }
 
-func TestDecodeLegacyAddressalOutputBindsAuthenticatedFeedback(t *testing.T) {
-	body := []byte(`{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification\n\nBound the request body.","addressals":[{"comment":"Bound the request.","response":"Added a 1 MiB limit."}]},"reply":null}`)
-	out, err := specify.DecodeLegacyAddressalOutput(body, map[string]string{
-		"Bound the request.": "revise-spec",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Specification == nil || len(out.Specification.Addressals) != 1 ||
-		out.Specification.Addressals[0].CommentID != "revise-spec" {
-		t.Fatalf("legacy output = %+v, want authenticated comment id", out)
-	}
-	if _, err := specify.DecodeLegacyAddressalOutput(body, nil); !errors.Is(err, specify.ErrInvalidOutput) {
-		t.Fatalf("unbound legacy output error = %v, want ErrInvalidOutput", err)
-	}
-	if _, err := specify.DecodeOutput(body); err == nil || !strings.Contains(err.Error(), "unknown object member name") {
-		t.Fatalf("current decoder accepted legacy output: %v", err)
+// TestDecodeTranscriptRefusesCommentKeyedAddressals pins what a transcript
+// from the prompt before #920, whose addressals name the comment text
+// instead of its id, now meets: the strict decode refuses it, so the run
+// records an interpretation failure rather than reading it as current.
+func TestDecodeTranscriptRefusesCommentKeyedAddressals(t *testing.T) {
+	output := `{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification\n\nBound the request body.","addressals":[{"comment":"Bound the request.","response":"Added a 1 MiB limit."}]},"reply":null}`
+	transcript := `{"type":"result","subtype":"success","is_error":false,"result":` +
+		strconv.Quote(output) + "}\n"
+	if _, err := specify.DecodeTranscript(strings.NewReader(transcript)); err == nil ||
+		!strings.Contains(err.Error(), "unknown object member name") {
+		t.Fatalf("comment-keyed addressal error = %v, want unknown member refusal", err)
 	}
 }
 

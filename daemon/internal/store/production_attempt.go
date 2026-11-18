@@ -524,9 +524,7 @@ WHERE kind = ? AND idempotency_key LIKE ?`,
 
 func authenticSpecificationApprovalDecisionSet(actions []domain.Action) bool {
 	return slices.Equal(actions,
-		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
-		slices.Equal(actions,
-			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
 }
 
 func authenticatesInitialApprovalClaims(

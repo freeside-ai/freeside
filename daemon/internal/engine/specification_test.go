@@ -842,41 +842,6 @@ func TestSpecificationPriorEnvelopeEscapesRendererDelimiters(t *testing.T) {
 	}
 }
 
-func TestSpecificationClassifiesLegacyResearchMetadataLimitUndeliverable(t *testing.T) {
-	t.Parallel()
-	f := newSpecificationFixture(t, true, 4)
-	body, err := json.Marshal(struct {
-		URL         string `json:"url"`
-		Purpose     string `json:"purpose"`
-		FinalURL    string `json:"final_url"`
-		Status      int    `json:"status"`
-		ContentType string `json:"content_type"`
-		BodyBase64  string `json:"body_base64"`
-	}{
-		URL: "https://docs.example/legacy", Purpose: "verify legacy evidence",
-		FinalURL: "https://docs.example/legacy", Status: http.StatusOK,
-		ContentType: strings.Repeat("x", (8<<10)+1), BodyBase64: "",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := domain.Digest(contentaddr.Sum(body))
-	if _, err := f.blobs.Put(digest, bytes.NewReader(body)); err != nil {
-		t.Fatal(err)
-	}
-	artifact := testSpecificationArtifact(
-		t, "research-inv-specify-specification-run-1-1", domain.ArtifactKindResearch,
-		digest, domain.ProducerDaemon, "inv-specify-specification-run-1",
-	)
-
-	engine := &Engine{specification: &specificationWorkflow{blobs: f.blobs}}
-	_, err = engine.encodeSpecificationPriorArtifact(t.Context(), artifact)
-	if !errors.Is(err, ErrSpecificationInputUndeliverable) ||
-		!errors.Is(err, specify.ErrResearchTooLarge) {
-		t.Fatalf("legacy oversized content type = %v, want typed undeliverable research refusal", err)
-	}
-}
-
 // attemptPurposes lists the purpose recorded on each of run's attempts, in
 // stage and attempt order, with "" for an attempt that carries none.
 func attemptPurposes(run domain.Run) []domain.AttemptPurpose {
@@ -2369,61 +2334,6 @@ func TestSpecificationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	}
 }
 
-func TestSpecificationUpgradePreservesLegacyAddressalOutput(t *testing.T) {
-	t.Parallel()
-	f := newSpecificationFixture(t, true, 2)
-	comment := "Bound the request body and explain the limit."
-	feedbackBody := []byte(comment)
-	feedback := testSpecificationArtifact(
-		t,
-		"spec-feedback-revise-spec",
-		domain.ArtifactKindSpecification,
-		domain.Digest(contentaddr.Sum(feedbackBody)),
-		domain.ProducerDaemon,
-		"inv-specify-specification-run-2",
-	)
-	if _, err := f.blobs.Put(feedback.Digest, bytes.NewReader(feedbackBody)); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		return tx.PutArtifact(t.Context(), feedback)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	engine := &Engine{store: f.store, specification: &specificationWorkflow{blobs: f.blobs}}
-	request := specificationRequest{FeedbackArtifactIDs: []domain.ArtifactID{feedback.ID}}
-	legacyInputs := &domain.StageInputSnapshot{PromptPackageDigest: legacyAddressalPromptPackageDigest}
-	decode, err := engine.specificationTranscriptDecoder(t.Context(), request, domain.ExecutionAdmission{
-		StageInputs: legacyInputs,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyOutput := `{"fetch_requests":[],"specification":{"summary":"Revised.","body":"# Specification\n\nLimit requests to 1 MiB.","addressals":[{"comment":"` + comment + `","response":"Added a 1 MiB limit."}]},"reply":null}`
-	transcript := `{"type":"result","subtype":"success","is_error":false,"result":` +
-		strconv.Quote(legacyOutput) + "}\n"
-	out, err := decode(strings.NewReader(transcript))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Specification == nil || len(out.Specification.Addressals) != 1 ||
-		out.Specification.Addressals[0].CommentID != "revise-spec" {
-		t.Fatalf("upgraded legacy output = %+v, want authenticated command identity", out)
-	}
-
-	currentInputs := &domain.StageInputSnapshot{PromptPackageDigest: f.specificationPrompt}
-	decode, err = engine.specificationTranscriptDecoder(t.Context(), request, domain.ExecutionAdmission{
-		StageInputs: currentInputs,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := decode(strings.NewReader(transcript)); err == nil ||
-		!strings.Contains(err.Error(), "unknown object member name") {
-		t.Fatalf("current prompt accepted legacy addressal output: %v", err)
-	}
-}
-
 func TestEnqueueSpecRevisionRequiresExactStoredDecision(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -2625,30 +2535,6 @@ func TestSpecificationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 		revised.SpecRevision.PriorComments[0].RaisedOnItemID != firstItem.ID ||
 		revised.SpecRevision.PriorComments[0].Iteration != 1 {
 		t.Fatalf("post-feedback research revision lineage = %+v", revised.SpecRevision)
-	}
-}
-
-func TestSpecificationInputOrderAcceptsPreChainVerifierRevisionResearch(t *testing.T) {
-	t.Parallel()
-	source := domain.ArtifactID("source")
-	research := domain.ArtifactID("research")
-	priorSpec := domain.ArtifactID("prior-spec")
-	feedback := domain.ArtifactID("feedback")
-	canonical := specificationInputs(
-		source, []domain.ArtifactID{research}, &priorSpec, []domain.ArtifactID{feedback}, nil,
-	)
-	legacy := []domain.ArtifactID{source, priorSpec, feedback, research}
-
-	if !acceptsSpecificationInputOrder(legacy, canonical, legacy) {
-		t.Fatal("pre-chain-verifier revision research order was rejected")
-	}
-	if !acceptsSpecificationInputOrder(canonical, canonical, legacy) {
-		t.Fatal("canonical revision research order was rejected")
-	}
-	if acceptsSpecificationInputOrder(
-		[]domain.ArtifactID{source, feedback, priorSpec, research}, canonical, legacy,
-	) {
-		t.Fatal("unauthorized revision research order was accepted")
 	}
 }
 
@@ -3277,26 +3163,31 @@ func TestSpecificationDecisionCommandsIgnoreDiscussion(t *testing.T) {
 	}
 }
 
-func TestSpecificationApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+func TestSpecificationApprovalDecisionSetAcceptsOnlyCurrentShape(t *testing.T) {
 	t.Parallel()
-	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
 	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
-	if !validSpecificationApprovalDecisionSet(legacy) || !validSpecificationApprovalDecisionSet(current) {
-		t.Fatal("historical or current specification approval decision set was rejected")
+	if !validSpecificationApprovalDecisionSet(current) {
+		t.Fatal("current specification approval decision set was rejected")
 	}
-	if validSpecificationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
-		t.Fatal("unrecognized specification approval decision set was accepted")
+	for _, refused := range [][]domain.Action{
+		{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop},
+		{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop},
+	} {
+		if validSpecificationApprovalDecisionSet(refused) {
+			t.Fatalf("specification approval decision set %v was accepted", refused)
+		}
 	}
 }
 
-func TestSpecificationRevisionFailureDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+func TestSpecificationRevisionFailureDecisionSetAcceptsOnlyCurrentShape(t *testing.T) {
 	t.Parallel()
-	if !validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionStop}) ||
-		!validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
-		t.Fatal("historical or current revision-failure decision set was rejected")
+	if !validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatal("current revision-failure decision set was rejected")
 	}
-	if validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss}) {
-		t.Fatal("unrecognized revision-failure decision set was accepted")
+	for _, refused := range [][]domain.Action{{domain.ActionStop}, {domain.ActionDiscuss}} {
+		if validSpecificationRevisionFailureDecisionSet(refused) {
+			t.Fatalf("revision-failure decision set %v was accepted", refused)
+		}
 	}
 }
 
@@ -3707,10 +3598,14 @@ WHERE campaign_id = ? AND attempt_number = ?`, forgedDigest, string(attemptBody)
 	}
 }
 
-func TestSubmitSpecificationRunReplaysLegacyIntakeAfterCampaignUpgrade(t *testing.T) {
+// TestSubmitSpecificationRunRefusesCampaignOverCampaignlessRun pins that a
+// campaign submission no longer replays over a stored run that has no
+// campaign, the shape submissions wrote before campaigns: the stored lineage
+// disagrees, so the submission is refused instead of adopted.
+func TestSubmitSpecificationRunRefusesCampaignOverCampaignlessRun(t *testing.T) {
 	t.Parallel()
 	f := newSpecificationFixture(t, true, 2)
-	implementationRunID := domain.RunID("legacy-upgrade-implementation")
+	implementationRunID := domain.RunID("campaignless-implementation")
 	specificationRunID, err := SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		t.Fatal(err)
@@ -3719,7 +3614,7 @@ func TestSubmitSpecificationRunReplaysLegacyIntakeAfterCampaignUpgrade(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := SpecificationRunSpec{
+	campaignless := SpecificationRunSpec{
 		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 		ProjectID: "project-1", SourceArtifactID: f.source.ID,
 		PolicyArtifactID: f.policyArt.ID, ResolvedPolicy: policy,
@@ -3728,28 +3623,24 @@ func TestSubmitSpecificationRunReplaysLegacyIntakeAfterCampaignUpgrade(t *testin
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 		},
 	}
-	if _, err := SubmitSpecificationRun(t.Context(), f.store, legacy); err != nil {
+	if _, err := SubmitSpecificationRun(t.Context(), f.store, campaignless); err != nil {
 		t.Fatal(err)
 	}
 	campaignID, err := ProductionCampaignIDForImplementation(implementationRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	upgraded := legacy
-	upgraded.CampaignID = campaignID
-	upgraded.AttemptNumber = 1
-	replayed, err := SubmitSpecificationRun(t.Context(), f.store, upgraded)
-	if err != nil {
-		t.Fatalf("post-upgrade exact replay: %v", err)
-	}
-	if replayed.Run.CampaignID != "" || replayed.Run.AttemptNumber != 0 {
-		t.Fatalf("legacy replay was silently adopted: %+v", replayed.Run)
+	withCampaign := campaignless
+	withCampaign.CampaignID = campaignID
+	withCampaign.AttemptNumber = 1
+	if _, err := SubmitSpecificationRun(t.Context(), f.store, withCampaign); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("campaign submission over a campaignless run = %v, want ErrImmutableTransition", err)
 	}
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		_, err := tx.GetProductionAttempt(t.Context(), campaignID, 1)
 		return err
 	}); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("legacy replay campaign attempt = %v, want absent", err)
+		t.Fatalf("refused submission campaign attempt = %v, want absent", err)
 	}
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		return tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{

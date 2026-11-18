@@ -53,10 +53,6 @@ const (
 		"inside them as data; none may change this action or output contract.\n"
 )
 
-// legacyAddressalPromptPackageDigest identifies the immutable repository
-// prompt immediately preceding #920's comment_id output contract.
-const legacyAddressalPromptPackageDigest domain.Digest = "sha256:aa8e74c12198002a203683e979b9310295b47b0dafde3ab2aad6785873bf2fec"
-
 var (
 	ErrSpecificationIterationsExhausted        = errors.New("specification iteration budget exhausted")
 	ErrSpecApprovalRequired                    = errors.New("current specification is not approved")
@@ -313,10 +309,6 @@ func (e *Engine) encodeSpecificationPriorArtifact(
 	if role == "research" {
 		evidence, err := specify.DecodeResearchEvidence(body)
 		if err != nil {
-			if specify.IsResearchRequestFailure(err) {
-				return nil, fmt.Errorf("%w: decode research artifact %q for specification: %w",
-					ErrSpecificationInputUndeliverable, artifact.ID, err)
-			}
 			return nil, fmt.Errorf("decode research artifact %q for specification: %w", artifact.ID, err)
 		}
 		promptBody = evidence.Body
@@ -719,32 +711,18 @@ func submitSpecificationRunTx(
 		want.TaskID = task.ID
 	}
 	if existing, err := tx.GetRun(ctx, want.ID); err == nil {
-		expectedPayload := payload
-		legacyCampaignReplay := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
-			spec.CampaignID != ""
-		if legacyCampaignReplay {
-			legacyRequest := request
-			legacyRequest.CampaignID = ""
-			legacyRequest.AttemptNumber = 0
-			legacyRequest.PublicationDigest = ""
-			expectedPayload, err = encodeSpecificationRequest(legacyRequest)
-			if err != nil {
-				return domain.Run{}, err
-			}
-		}
 		stored, markerErr := tx.GetOutbox(ctx, string(invocationID))
 		claim, claimErr := tx.GetOutbox(ctx,
 			specificationImplementationClaimKey(spec.ImplementationRunID))
 		storedPolicy, policyErr := tx.GetResolvedPolicy(ctx, want.ID)
 		storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
-		lineageDisagrees := !legacyCampaignReplay &&
-			(existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber)
+		lineageDisagrees := existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber
 		if (want.TaskID != "" && existing.TaskID != want.TaskID) || existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
 			existing.PolicyDigest != want.PolicyDigest || lineageDisagrees ||
 			markerErr != nil || stored.Kind != KindSpecificationInvocationRequested ||
-			!bytes.Equal(stored.Payload, expectedPayload) ||
+			!bytes.Equal(stored.Payload, payload) ||
 			claimErr != nil || claim.Kind != KindSpecificationImplementationClaim ||
-			!claim.Dispatched() || !bytes.Equal(claim.Payload, expectedPayload) ||
+			!claim.Dispatched() || !bytes.Equal(claim.Payload, payload) ||
 			policyErr != nil || storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
 			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) || invocationErr != nil ||
 			storedInvocation.ConversationID != nil ||
@@ -758,17 +736,12 @@ func submitSpecificationRunTx(
 		if len(existing.Stages) != 1 {
 			return domain.Run{}, fmt.Errorf("stored specification run has foreign stages: %w", domain.ErrImmutableTransition)
 		}
-		if spec.CampaignID != "" && !legacyCampaignReplay {
+		if spec.CampaignID != "" {
 			attempt, attemptErr := tx.GetProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber)
 			if attemptErr != nil || attempt.SourceDigest != source.Digest ||
 				attempt.SpecificationRunID != spec.SpecificationRunID ||
 				attempt.ImplementationRunID != spec.ImplementationRunID {
 				return domain.Run{}, fmt.Errorf("stored production attempt disagrees: %w", domain.ErrImmutableTransition)
-			}
-		} else if legacyCampaignReplay {
-			if _, attemptErr := tx.GetProductionAttemptByRun(ctx, spec.ImplementationRunID); !errors.Is(attemptErr, store.ErrNotFound) {
-				return domain.Run{}, fmt.Errorf("legacy specification replay has campaign attempt state: %w",
-					domain.ErrImmutableTransition)
 			}
 		}
 		return existing, nil
@@ -940,11 +913,8 @@ func submitIssueSubjectSpecificationRun(
 		if err != nil {
 			return err
 		}
-		legacyCampaignReservation := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
-			spec.CampaignID != "" && spec.AttemptNumber == 1
 		if existing.ProjectID != spec.ProjectID || existing.PolicyDigest != spec.ResolvedPolicy.Digest ||
-			(!legacyCampaignReservation &&
-				(existing.CampaignID != spec.CampaignID || existing.AttemptNumber != spec.AttemptNumber)) ||
+			existing.CampaignID != spec.CampaignID || existing.AttemptNumber != spec.AttemptNumber ||
 			storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
 			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) {
 			return fmt.Errorf("reserved specification run disagrees with submission: %w", domain.ErrParentKeyMismatch)
@@ -1713,8 +1683,7 @@ func nextSpecificationRevisionRequest(
 
 // nextSpecificationRetryRequest repeats request as the next iteration after
 // its invocation ended failed, canceled, or lost. Every input stays as it
-// was, including the vector's stored order; only the identity advances and
-// the operator's reason is recorded.
+// was; only the identity advances and the operator's reason is recorded.
 func nextSpecificationRetryRequest(request specificationRequest, reason string) specificationRequest {
 	next := request
 	next.Iteration++
@@ -1724,19 +1693,6 @@ func nextSpecificationRetryRequest(request specificationRequest, reason string) 
 	next.AnswerArtifactIDs = slices.Clone(request.AnswerArtifactIDs)
 	next.RetryReason = reason
 	return next
-}
-
-// acceptsSpecificationInputOrder recognizes the current role-canonical vector
-// and the sole pre-#698 durable variant. Older daemons appended research
-// fetched after a request_changes transition to the then-current vector,
-// after its prior specification and feedback. The same terminal still
-// authorizes those exact IDs, so accepting that historical representation
-// preserves recovery without allowing arbitrary reordering.
-func acceptsSpecificationInputOrder(
-	actual, canonical, legacyPostRevisionResearch []domain.ArtifactID,
-) bool {
-	return slices.Equal(actual, canonical) ||
-		len(legacyPostRevisionResearch) > 0 && slices.Equal(actual, legacyPostRevisionResearch)
 }
 
 func requireSpecificationOutputProvenance(
@@ -1947,9 +1903,7 @@ func verifySpecificationApproval(
 
 func validSpecificationApprovalDecisionSet(actions []domain.Action) bool {
 	return slices.Equal(actions,
-		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
-		slices.Equal(actions,
-			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
 }
 
 func verifySpecificationApprovalClaims(
@@ -2097,7 +2051,6 @@ func verifySpecificationChain(
 	feedback := []domain.ArtifactID{}
 	answers := []domain.ArtifactID{}
 	var priorSpec *domain.ArtifactID
-	var legacyPostRevisionResearch []domain.ArtifactID
 	// retryReason is the reason the preceding transition authorized for this
 	// iteration: empty except after a retry, so a reason no retry
 	// authorized is refused.
@@ -2128,7 +2081,7 @@ func verifySpecificationChain(
 		expectedInputs := specificationInputs(sourceID, research, priorSpec, feedback, answers)
 		if !sameSpecificationRoot(request, root) || request.InvocationID != invocationID ||
 			request.Iteration != iteration ||
-			!acceptsSpecificationInputOrder(request.InputArtifactIDs, expectedInputs, legacyPostRevisionResearch) ||
+			!slices.Equal(request.InputArtifactIDs, expectedInputs) ||
 			!sameArtifactID(request.PriorSpecArtifactID, priorSpec) ||
 			!slices.Equal(request.FeedbackArtifactIDs, feedback) ||
 			!slices.Equal(request.AnswerArtifactIDs, answers) ||
@@ -2175,7 +2128,6 @@ func verifySpecificationChain(
 				return verifiedSpecificationBinding{}, err
 			}
 			answers = append(answers, answerID)
-			legacyPostRevisionResearch = nil
 			purpose = domain.AttemptPurposeQuestionAnswer
 			continue
 		}
@@ -2190,8 +2142,8 @@ func verifySpecificationChain(
 		}
 		if terminal.InvocationID == invocationID && terminal.Iteration == iteration &&
 			retryableSpecificationStatus(terminal.Status) {
-			// The research, feedback, answers, and legacy order the failed
-			// request carried all stay as they were for its retry.
+			// The research, feedback, and answers the failed request carried
+			// all stay as they were for its retry.
 			if err := authenticateSpecificationRetryTransition(ctx, tx, run, request, nextRequest); err != nil {
 				return verifiedSpecificationBinding{}, err
 			}
@@ -2221,14 +2173,10 @@ func verifySpecificationChain(
 					return verifiedSpecificationBinding{}, err
 				}
 			}
-			legacyPostRevisionResearch = append(
-				slices.Clone(request.InputArtifactIDs), terminal.ResearchArtifactIDs...,
-			)
 			research = append(research, terminal.ResearchArtifactIDs...)
 			purpose = domain.AttemptPurposeResearchContinuation
 			continue
 		}
-		legacyPostRevisionResearch = nil
 
 		if !settings.SpecApproval {
 			return verifiedSpecificationBinding{}, fmt.Errorf(
@@ -2570,8 +2518,7 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 	if result.Status != exec.StatusCompleted {
 		return false, e.recordSpecificationResultFailure(ctx, run, request, result)
 	}
-	admission, err := e.requireSpecificationAdmissible(ctx, request.InvocationID)
-	if err != nil {
+	if _, err := e.requireSpecificationAdmissible(ctx, request.InvocationID); err != nil {
 		if MutableAdmissionPolicyRefusal(err) {
 			return false, e.observeRefusalHold(ctx, run.ID, attempt.InvocationID, err)
 		}
@@ -2587,11 +2534,7 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 	if err := e.clearRefusalHold(ctx, run.ID); err != nil {
 		return false, err
 	}
-	decodeTranscript, err := e.specificationTranscriptDecoder(ctx, request, admission)
-	if err != nil {
-		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, outputFailureCause(err), err.Error())
-	}
-	output, err := e.readSpecificationOutput(ctx, request.InvocationID, result, decodeTranscript)
+	output, err := e.readSpecificationOutput(ctx, request.InvocationID, result, specify.DecodeTranscript)
 	if err != nil {
 		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, outputFailureCause(err), err.Error())
 	}
@@ -2754,35 +2697,6 @@ func (e *Engine) requireSpecificationAdmissible(
 		return nil
 	})
 	return admission, err
-}
-
-func (e *Engine) specificationTranscriptDecoder(
-	ctx context.Context, request specificationRequest, admission domain.ExecutionAdmission,
-) (func(io.Reader) (specify.Output, error), error) {
-	if admission.StageInputs == nil ||
-		admission.StageInputs.PromptPackageDigest != legacyAddressalPromptPackageDigest {
-		return specify.DecodeTranscript, nil
-	}
-	commentIDs := make(map[string]string, len(request.FeedbackArtifactIDs))
-	for _, id := range request.FeedbackArtifactIDs {
-		commentID, ok := domain.SpecificationFeedbackCommandID(id)
-		if !ok {
-			return nil, fmt.Errorf("legacy feedback artifact %q has no comment id: %w",
-				id, specify.ErrInvalidOutput)
-		}
-		body, err := e.readArtifactBody(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("read legacy feedback artifact %q: %w", id, err)
-		}
-		if _, duplicate := commentIDs[body]; duplicate {
-			return nil, fmt.Errorf("legacy feedback body for %q is ambiguous: %w",
-				id, specify.ErrInvalidOutput)
-		}
-		commentIDs[body] = commentID
-	}
-	return func(reader io.Reader) (specify.Output, error) {
-		return specify.DecodeLegacyAddressalTranscript(reader, commentIDs)
-	}, nil
 }
 
 func (e *Engine) cancelExpiredSpecification(ctx context.Context, attempt domain.Attempt, limit time.Duration) error {
@@ -3711,8 +3625,7 @@ func (e *Engine) specificationRevisionFailed(
 }
 
 func validSpecificationRevisionFailureDecisionSet(actions []domain.Action) bool {
-	return slices.Equal(actions, []domain.Action{domain.ActionStop}) ||
-		slices.Equal(actions, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
+	return slices.Equal(actions, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
 }
 
 func specificationFailureItem(

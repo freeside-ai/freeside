@@ -22,15 +22,19 @@ func testInitialProductionAttempt() domain.ProductionAttempt {
 	}
 }
 
-func TestProductionAttemptApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+func TestProductionAttemptApprovalDecisionSetAcceptsOnlyCurrentShape(t *testing.T) {
 	t.Parallel()
-	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
 	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
-	if !authenticSpecificationApprovalDecisionSet(legacy) || !authenticSpecificationApprovalDecisionSet(current) {
-		t.Fatal("historical or current specification approval decision set was rejected")
+	if !authenticSpecificationApprovalDecisionSet(current) {
+		t.Fatal("current specification approval decision set was rejected")
 	}
-	if authenticSpecificationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
-		t.Fatal("unrecognized specification approval decision set was accepted")
+	for _, refused := range [][]domain.Action{
+		{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop},
+		{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop},
+	} {
+		if authenticSpecificationApprovalDecisionSet(refused) {
+			t.Fatalf("specification approval decision set %v was accepted", refused)
+		}
 	}
 }
 

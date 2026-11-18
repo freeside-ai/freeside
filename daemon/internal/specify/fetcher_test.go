@@ -21,25 +21,35 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
-func TestDecodeResearchEvidenceClassifiesLegacyContentTypeLimit(t *testing.T) {
-	body, err := json.Marshal(struct {
-		URL         string `json:"url"`
-		Purpose     string `json:"purpose"`
-		FinalURL    string `json:"final_url"`
-		Status      int    `json:"status"`
-		ContentType string `json:"content_type"`
-		BodyBase64  string `json:"body_base64"`
-	}{
-		URL: "https://docs.example/legacy", Purpose: "verify legacy evidence",
-		FinalURL: "https://docs.example/legacy", Status: http.StatusOK,
-		ContentType: strings.Repeat("x", (8<<10)+1), BodyBase64: "",
-	})
-	if err != nil {
-		t.Fatal(err)
+// TestDecodeResearchEvidenceRefusesOversizedContentType pins the stored
+// envelope's content-type bound: an envelope over it is refused as bad
+// metadata, and the refusal is an operational error, not a research request
+// failure, because the fetch never stores such an envelope.
+func TestDecodeResearchEvidenceRefusesOversizedContentType(t *testing.T) {
+	envelope := func(contentType string) []byte {
+		body, err := json.Marshal(struct {
+			URL         string `json:"url"`
+			Purpose     string `json:"purpose"`
+			FinalURL    string `json:"final_url"`
+			Status      int    `json:"status"`
+			ContentType string `json:"content_type"`
+			BodyBase64  string `json:"body_base64"`
+		}{
+			URL: "https://docs.example/oversized", Purpose: "verify stored evidence",
+			FinalURL: "https://docs.example/oversized", Status: http.StatusOK,
+			ContentType: contentType, BodyBase64: "",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
 	}
-	_, err = specify.DecodeResearchEvidence(body)
-	if !errors.Is(err, specify.ErrResearchTooLarge) || !specify.IsResearchRequestFailure(err) {
-		t.Fatalf("legacy oversized content type = %v, want research-size request failure", err)
+	if _, err := specify.DecodeResearchEvidence(envelope(strings.Repeat("x", 8<<10))); err != nil {
+		t.Fatalf("content type at the bound = %v, want accepted", err)
+	}
+	_, err := specify.DecodeResearchEvidence(envelope(strings.Repeat("x", (8<<10)+1)))
+	if !errors.Is(err, domain.ErrParentKeyMismatch) || specify.IsResearchRequestFailure(err) {
+		t.Fatalf("oversized content type = %v, want ErrParentKeyMismatch and no research request failure", err)
 	}
 }
 
