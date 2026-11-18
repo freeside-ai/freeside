@@ -729,19 +729,10 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	task productionPublicationTask,
 	binding productionBinding,
 ) (productionVerificationCheckpoint, bool, error) {
-	var (
-		entry  store.QueueEntry
-		legacy bool
-	)
+	var entry store.QueueEntry
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		entry, err = tx.GetInbox(ctx, task.verificationCheckpointKey())
-		if errors.Is(err, store.ErrNotFound) &&
-			task.reevaluation == nil &&
-			task.ProducingInvocationID == productionInvocationID(task.RunID) {
-			entry, err = tx.GetInbox(ctx, "production-verification/"+string(task.RunID))
-			legacy = err == nil
-		}
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -777,11 +768,8 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		return productionVerificationCheckpoint{}, false, err
 	}
 	authorization := checkpoint.Authorization
-	versionMatches := !legacy && checkpoint.Version == productionVerificationVersion &&
+	versionMatches := checkpoint.Version == productionVerificationVersion &&
 		checkpoint.HeadSHA == task.HeadSHA
-	if legacy {
-		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
-	}
 	authorizingTaskKey := task.intentKey()
 	if task.AuthorizingTaskKey != "" {
 		authorizingTaskKey = task.AuthorizingTaskKey

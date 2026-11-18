@@ -5278,64 +5278,6 @@ func TestReadyProductionPublicationWinsOverLaterExternalConflict(t *testing.T) {
 	}
 }
 
-func TestReadyProductionPublicationRecoversLegacyVerificationCheckpoint(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	p.workflow = p.newEngine(t, productionCrashSeams{
-		afterReady: func() error { return errors.New("stop after durable ready item") },
-	}, true)
-	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("ready-item seam did not interrupt reconciliation")
-	}
-
-	currentKey := "production-verification/" + string(p.runID) + "/" + p.replay.HeadSHA
-	legacyKey := "production-verification/" + string(p.runID)
-	raw, err := sql.Open("sqlite", p.dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var payload []byte
-	if err := raw.QueryRowContext(
-		p.ctx, "SELECT payload FROM inbox WHERE idempotency_key = ?", currentKey,
-	).Scan(&payload); err != nil {
-		_ = raw.Close()
-		t.Fatal(err)
-	}
-	var legacy map[string]any
-	if err := json.Unmarshal(payload, &legacy); err != nil {
-		_ = raw.Close()
-		t.Fatal(err)
-	}
-	legacy["version"] = "freeside.production-verification/v1"
-	delete(legacy, "head_sha")
-	legacyPayload, err := json.Marshal(legacy)
-	if err != nil {
-		_ = raw.Close()
-		t.Fatal(err)
-	}
-	result, updateErr := raw.ExecContext(
-		p.ctx,
-		"UPDATE inbox SET idempotency_key = ?, payload = ? WHERE idempotency_key = ?",
-		legacyKey, legacyPayload, currentKey,
-	)
-	closeErr := raw.Close()
-	if updateErr != nil || closeErr != nil {
-		t.Fatal(errors.Join(updateErr, closeErr))
-	}
-	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
-		t.Fatalf("legacy checkpoint rows changed = %d, %v, want 1", changed, err)
-	}
-
-	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	resultState, err := p.reconcileLanes()
-	if err != nil || resultState.PublicationTasksCompleted != 1 ||
-		resultState.ReadyItemsCreated != 1 {
-		t.Fatalf("legacy checkpoint recovery = %#v, %v", resultState, err)
-	}
-	p.assertReady(t)
-}
-
 func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

@@ -42,7 +42,6 @@ const (
 	// exact replay through verification and execution-bound publication.
 	KindProductionPublicationRequested   = "production_publication_requested"
 	productionPublicationTaskVersion     = "freeside.production-publication/v1"
-	productionVerificationVersionV1      = "freeside.production-verification/v1"
 	productionVerificationVersion        = "freeside.production-verification/v2"
 	productionVerificationCheckpointKind = "production_verification_checkpoint"
 	productionPublicationSupersedingKind = "production_publication_superseding"
