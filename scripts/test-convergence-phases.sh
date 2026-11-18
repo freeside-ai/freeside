@@ -4,7 +4,7 @@
 # --all-branches, --created, and job_id column, with a stand-in gh; no network.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-PYTHONDONTWRITEBYTECODE=1 python3 -I - "$root" <<'PY'
+python3 -I -B - "$root" <<'PY'
 import importlib.util
 import json
 import os
