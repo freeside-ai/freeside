@@ -51,8 +51,7 @@ const (
 
 // intent is the driver's durable per-invocation record. It pins every value
 // a replayed pipeline must reproduce byte-identically (Export.RecordedAt for
-// the export row, with RecordedAt as the legacy fallback, and CommitDate for
-// the importer's commit), because a crash between the export write and the
+// the export row and CommitDate for the importer's commit), because a crash between the export write and the
 // result commit replays the pipeline and the write-once store rows must
 // converge rather than collide.
 type intent struct {
@@ -184,13 +183,6 @@ func providerHandoffInputFrom(in intent) ProviderHandoffInput {
 	}
 }
 
-func (i intent) exportRecordedAt() time.Time {
-	if i.Export != nil && !i.Export.RecordedAt.IsZero() {
-		return i.Export.RecordedAt
-	}
-	return i.RecordedAt
-}
-
 func (i intent) validate() error {
 	switch {
 	case !i.PromptDelivery.valid():
@@ -203,6 +195,8 @@ func (i intent) validate() error {
 		return fmt.Errorf("driver intent phase %q is invalid", i.Phase)
 	case (i.Phase == phaseExported || i.Phase == phaseImportPending) && i.Export == nil:
 		return fmt.Errorf("driver intent %q is exported without its released facts", i.InvocationID)
+	case i.Export != nil && i.Export.RecordedAt.IsZero():
+		return fmt.Errorf("driver intent %q export has no recorded_at", i.InvocationID)
 	case i.RecordedAt.IsZero() || i.CommitDate.IsZero():
 		return fmt.Errorf("driver intent %q: pinned instants are required", i.InvocationID)
 	case i.Phase == phaseCommitted && i.Result == nil:
@@ -262,9 +256,9 @@ func (p phase) valid() bool {
 // releasedExport is the durable form of one gate release: enough to finish
 // the pipeline after a restart without calling the gate again.
 type releasedExport struct {
-	// RecordedAt pins the first attempt to persist the gate's return. Retries
-	// retain this stamp; records written before it existed have a zero value.
-	RecordedAt        time.Time               `json:"recorded_at,omitzero"`
+	// RecordedAt pins the first attempt to persist the gate's return; retries
+	// retain this stamp.
+	RecordedAt        time.Time               `json:"recorded_at"`
 	Dir               string                  `json:"dir"`
 	Manifest          export.Manifest         `json:"manifest"`
 	Evidence          export.EvidenceManifest `json:"evidence"`

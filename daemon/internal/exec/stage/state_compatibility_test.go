@@ -1,9 +1,7 @@
 package stage
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,35 +57,31 @@ func TestDecodeRefusesRemovedPromptDeliveries(t *testing.T) {
 	}
 }
 
-func TestDecodeLegacyExportRecordedAt(t *testing.T) {
+// TestDecodeRefusesExportWithoutRecordedAt proves an exported state file with
+// no export stamp fails to decode instead of falling back to the start time.
+// The case removes only the stamp from a current exported intent, so the
+// refusal has that one cause.
+func TestDecodeRefusesExportWithoutRecordedAt(t *testing.T) {
 	t.Parallel()
-	body, err := os.ReadFile("testdata/pre-extraction-intent.json")
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	in := testHandoffIntent(t, d)
+	in.Phase = phaseExported
+	in.Export = &releasedExport{RecordedAt: in.RecordedAt, Dir: "export"}
+	fields := intentFields(t, in)
+	if err := decodeFields(t, fields); err != nil {
+		t.Fatalf("current exported intent refused: %v", err)
+	}
+	var export map[string]json.RawMessage
+	if err := json.Unmarshal(fields["export"], &export); err != nil {
+		t.Fatal(err)
+	}
+	delete(export, "recorded_at")
+	body, err := json.Marshal(export)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		t.Fatal(err)
-	}
-	fields["prompt_delivery"] = json.RawMessage(`"file_v8"`)
-	fields["phase"] = json.RawMessage(`"exported"`)
-	fields["export"] = json.RawMessage(`{"dir":"legacy-export"}`)
-	body, err = json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	in, err := decodeIntent(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !in.Export.RecordedAt.IsZero() || !in.exportRecordedAt().Equal(in.RecordedAt) {
-		t.Fatalf("legacy export time = %v, want start time %v", in.exportRecordedAt(), in.RecordedAt)
-	}
-	exportBody, err := json.Marshal(in.Export)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(exportBody, []byte(`"recorded_at"`)) {
-		t.Fatal("zero export timestamp must remain omitted on legacy records")
+	fields["export"] = body
+	if err := decodeFields(t, fields); err == nil || !strings.Contains(err.Error(), "recorded_at") {
+		t.Fatalf("export without recorded_at = %v, want refused for its stamp", err)
 	}
 }

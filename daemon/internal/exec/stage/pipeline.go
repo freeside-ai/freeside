@@ -447,7 +447,7 @@ func (d *Driver) finish(
 		ManifestDigest:         manifestDigest,
 		EvidenceManifestDigest: evidenceDigest,
 		CommitPlanPresent:      out.commitPlanPresent,
-		RecordedAt:             in.exportRecordedAt(),
+		RecordedAt:             in.Export.RecordedAt,
 	})
 	if err != nil {
 		return exec.StageResult{}, err
@@ -699,7 +699,7 @@ func (d *Driver) completeReleasedExportWithOptions(
 	// time is the pinned export stamp, not the clock: a crash after the export
 	// write replays this import, and the usage rows written with the export
 	// must converge rather than conflict on a fresh observed_at.
-	usage, capture := d.extractUsage(in, out, in.exportRecordedAt())
+	usage, capture := d.extractUsage(in, out, in.Export.RecordedAt)
 	result, err := d.finish(ctx, in, out, importOptions, usage, capture)
 	if err != nil {
 		result.Usage = usage
