@@ -8,7 +8,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-func TestPromptDeliveryModesAndLegacyRecord(t *testing.T) {
+func TestPromptDeliveryModes(t *testing.T) {
 	for _, mode := range AllPromptDeliveries {
 		if !mode.valid() {
 			t.Fatalf("registered mode %q is invalid", mode)
@@ -19,9 +19,6 @@ func TestPromptDeliveryModesAndLegacyRecord(t *testing.T) {
 	}
 	d := newTestDriver(t, &stubGate{}, newStubExports())
 	in := testHandoffIntent(t, d)
-	if in.delivery() != PromptArgument {
-		t.Fatal("legacy record changed delivery")
-	}
 	for _, mode := range AllPromptDeliveries {
 		in.PromptDelivery = mode
 		body, err := json.Marshal(in)
@@ -32,7 +29,7 @@ func TestPromptDeliveryModesAndLegacyRecord(t *testing.T) {
 		if err := json.Unmarshal(body, &restored); err != nil {
 			t.Fatal(err)
 		}
-		if restored.delivery() != mode || providerHandoffInputFrom(restored).PromptDelivery != mode {
+		if restored.PromptDelivery != mode || providerHandoffInputFrom(restored).PromptDelivery != mode {
 			t.Fatal("durable mode did not reach reconstruction")
 		}
 	}
@@ -42,30 +39,21 @@ func TestPromptDeliveryModesAndLegacyRecord(t *testing.T) {
 	}
 }
 
-// Every file protocol binds the provider's prompt file to the durable prompt,
-// and the argument protocol refuses one. Stored protocols must keep passing
-// after file_v8 becomes what new launches select.
+// Every protocol binds the provider's prompt file to the durable prompt.
 func TestProviderCannotSubstitutePromptFile(t *testing.T) {
-	for _, mode := range []PromptDelivery{
-		PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6, PromptFileV7, PromptFileV8,
-	} {
-		for _, change := range []string{"none", "missing", "wrong_bytes", "wrong_digest", "legacy_mode"} {
+	for _, mode := range AllPromptDeliveries {
+		for _, change := range []string{"none", "missing", "wrong_bytes", "wrong_digest"} {
 			t.Run(string(mode)+"/"+change, func(t *testing.T) {
 				d := newTestDriver(t, &stubGate{}, newStubExports())
 				in := testHandoffIntent(t, d)
 				in.PromptDelivery = mode
-				if change == "legacy_mode" {
-					in.PromptDelivery = ""
-				}
 				d.provider = testProvider{handoffMutate: func(hs *ward.HandoffSpec) {
-					if change == "missing" {
-						return
-					}
-					hs.Agent.PromptFile = ward.NewPromptFile([]byte(in.Prompt))
-					if change == "wrong_bytes" {
+					switch change {
+					case "missing":
+						hs.Agent.PromptFile = nil
+					case "wrong_bytes":
 						hs.Agent.PromptFile = ward.NewPromptFile([]byte("other prompt"))
-					}
-					if change == "wrong_digest" {
+					case "wrong_digest":
 						hs.Agent.PromptFile.Digest = "sha256:bad"
 					}
 				}}

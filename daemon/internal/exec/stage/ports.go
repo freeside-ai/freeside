@@ -22,68 +22,29 @@ type Provider interface {
 	PrepareFailedStatus() int
 }
 
-// PromptDelivery selects a durable launch protocol. Missing legacy intent
-// fields are translated to PromptArgument only at reconstruction.
+// PromptDelivery selects a durable launch protocol. Every member delivers
+// the prompt through ward's protected prompt file, which the driver binds to
+// the durable prompt; PromptFileV8 is the only member.
 //
 // A member names a whole launch command, not only how the prompt travels:
 // recovery rebuilds a running launch's command from its stored member and
 // ward refuses a rebuilt spec whose digest differs. So a provider changes its
 // command by adding a member, never by changing what an existing one builds.
-// PromptFileV2 carries the prompt as PromptFileV1 does and differs only in
-// the provider's launch command. PromptFileV3 carries it as PromptFileV2 does
-// and differs only in the Claude launch command's handling of the CLI's
-// stderr. PromptFileV4 carries it as PromptFileV3 does and differs only in
-// passing the specifier output schema to the CLI on a specification stage.
-// PromptFileV5 also disables Claude's bundled agents-md plugin explicitly;
-// safe mode alone leaves built-in plugins enabled. PromptFileV6 carries the
-// prompt as PromptFileV5 does and differs only in the Claude launch command
-// off a specification stage: an in-container driver sends the prompt over
-// the CLI's stream-json input and asks for its usage answer after the turn.
-// PromptFileV7 carries the prompt as PromptFileV6 does and differs only in
-// the Claude launch command declaring one more reserved evidence source, the
-// review guide. PromptFileV8 carries the prompt as PromptFileV7 does and
-// differs only in the Claude launch command's settings, which also turn off
-// the CLI's commit and PR attribution.
 type PromptDelivery string
 
 const (
-	PromptArgument PromptDelivery = "argument"
-	PromptFileV1   PromptDelivery = "file_v1"
-	PromptFileV2   PromptDelivery = "file_v2"
-	PromptFileV3   PromptDelivery = "file_v3"
-	PromptFileV4   PromptDelivery = "file_v4"
-	PromptFileV5   PromptDelivery = "file_v5"
-	PromptFileV6   PromptDelivery = "file_v6"
-	PromptFileV7   PromptDelivery = "file_v7"
-	PromptFileV8   PromptDelivery = "file_v8"
+	PromptFileV8 PromptDelivery = "file_v8"
 )
 
-var AllPromptDeliveries = []PromptDelivery{
-	PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6,
-	PromptFileV7, PromptFileV8,
-}
+var AllPromptDeliveries = []PromptDelivery{PromptFileV8}
 
 func (d PromptDelivery) valid() bool {
 	switch d {
-	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6,
-		PromptFileV7, PromptFileV8:
+	case PromptFileV8:
 		return true
 	default:
 		return false
 	}
-}
-
-// usesPromptFile reports whether the protocol delivers the prompt through
-// ward's protected prompt file instead of the launch argv.
-func (d PromptDelivery) usesPromptFile() bool {
-	switch d {
-	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6, PromptFileV7,
-		PromptFileV8:
-		return true
-	case PromptArgument:
-		return false
-	}
-	return false
 }
 
 // UsageExtractor is the optional provider hook for numbers-only telemetry in

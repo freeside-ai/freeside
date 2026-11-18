@@ -1,5 +1,5 @@
 // Networkless probe of a writer launch's init event (#2922): the production
-// file_v7 agent line, run against the pinned CLI on the agent image with a
+// agent line, run against the pinned CLI on the agent image with a
 // mock API on loopback, so the image's own managed settings decide which
 // built-in plugins load. It prints the launch's stdout, the transcript the
 // conformance judge reads, as base64 on one JSON line; the Go test runs the

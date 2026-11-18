@@ -63,8 +63,9 @@ func testProviderHandoffInput() stage.ProviderHandoffInput {
 				"127.0.0.1:5014/freeside-agent-claude@sha256:" + strings.Repeat("ab", 32),
 			),
 		},
-		Seed:   "/daemon/seeds/" + RunIDFor(id),
-		Prompt: "do the work",
+		Seed:           "/daemon/seeds/" + RunIDFor(id),
+		Prompt:         "do the work",
+		PromptDelivery: stage.PromptFileV8,
 		Instructions: ward.VendorInstructions{
 			Vendor: domain.AgentVendorClaude,
 		},
@@ -193,7 +194,6 @@ type handoffCommandCase struct {
 	name          string
 	delivery      stage.PromptDelivery
 	prepare       []string
-	redirect      string
 	specification bool
 }
 
@@ -207,49 +207,28 @@ func (tc handoffCommandCase) input() stage.ProviderHandoffInput {
 	return in
 }
 
-// handoffCommandCases are every launch protocol, each with and without the
-// preparation command, and file_v4 on a specification stage, the one start
-// whose command differs from file_v3's.
+// handoffCommandCases are the launch command with and without the
+// preparation command, on an ordinary and on a specification stage.
 var handoffCommandCases = []handoffCommandCase{
-	{"argument", stage.PromptArgument, nil, inWorkspaceRedirect, false},
-	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect, false},
-	{"prompt-file", stage.PromptFileV1, nil, inWorkspaceRedirect, false},
-	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect, false},
-	{"file-v2", stage.PromptFileV2, nil, deferredRedirect, false},
-	{"file-v2-prepare", stage.PromptFileV2, []string{"/usr/local/bin/freeside-project-prepare"}, deferredRedirect, false},
-	{"file-v3", stage.PromptFileV3, nil, deferredStderrRedirect, false},
-	{"file-v3-prepare", stage.PromptFileV3, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
-	{"file-v4-specification", stage.PromptFileV4, nil, deferredStderrRedirect, true},
-	{"file-v4-specification-prepare", stage.PromptFileV4, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
-	{"file-v5", stage.PromptFileV5, nil, deferredStderrRedirect, false},
-	{"file-v5-prepare", stage.PromptFileV5, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
-	{"file-v5-specification", stage.PromptFileV5, nil, deferredStderrRedirect, true},
-	{"file-v5-specification-prepare", stage.PromptFileV5, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
-	{"file-v6", stage.PromptFileV6, nil, deferredStderrRedirect, false},
-	{"file-v6-prepare", stage.PromptFileV6, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
-	{"file-v6-specification", stage.PromptFileV6, nil, deferredStderrRedirect, true},
-	{"file-v6-specification-prepare", stage.PromptFileV6, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
-	{"file-v7", stage.PromptFileV7, nil, deferredStderrRedirect, false},
-	{"file-v7-prepare", stage.PromptFileV7, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
-	{"file-v7-specification", stage.PromptFileV7, nil, deferredStderrRedirect, true},
-	{"file-v7-specification-prepare", stage.PromptFileV7, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
-	{"file-v8", stage.PromptFileV8, nil, deferredStderrRedirect, false},
-	{"file-v8-prepare", stage.PromptFileV8, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
-	{"file-v8-specification", stage.PromptFileV8, nil, deferredStderrRedirect, true},
-	{"file-v8-specification-prepare", stage.PromptFileV8, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
+	{"file-v8", stage.PromptFileV8, nil, false},
+	{"file-v8-prepare", stage.PromptFileV8, []string{"/usr/local/bin/freeside-project-prepare"}, false},
+	{"file-v8-specification", stage.PromptFileV8, nil, true},
+	{"file-v8-specification-prepare", stage.PromptFileV8, []string{"/usr/local/bin/freeside-project-prepare"}, true},
 }
 
-var (
-	inWorkspaceRedirect    = "> " + shellQuote(transcriptPath) + " 2>&1"
-	deferredRedirect       = "> " + shellQuote(launchTranscriptPath) + " 2>&1"
-	deferredStderrRedirect = "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
-)
+// transcriptRedirect sends the CLI's stdout to the in-flight transcript and
+// its stderr beside it.
+var transcriptRedirect = "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
+
+// linuxMaxArgumentBytes is Linux's single-argument limit, which the whole sh
+// -c script must stay under.
+const linuxMaxArgumentBytes = 128 << 10
 
 // deferredCommand is the launch script new launches run: the prompt file on
 // stdin and the launcher's own files kept out of the workspace.
 func deferredCommand(prepare []string) string {
 	return agentCommandWithInput(
-		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", "", launcherFilesDeferredStderr)[2]
+		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", "")[2]
 }
 
 // TestHandoffSpecCommandGolden pins the whole launch command of a start that
@@ -275,47 +254,31 @@ func TestHandoffSpecCommandGolden(t *testing.T) {
 	}
 }
 
-// TestHandoffSpecSchemaOnlyOnFileV4Specification proves file_v4 differs from
-// file_v3 only on a specification run's stage, where it adds the specifier
-// output schema, and that no older protocol changes on that stage.
-func TestHandoffSpecSchemaOnlyOnFileV4Specification(t *testing.T) {
+// TestHandoffSpecSchemaOnlyOnSpecificationStage proves the stage, not the
+// run, selects the specification command: an implementation stage of a
+// specification run builds the ordinary stage's command, without the
+// specifier schema and with the usage driver.
+func TestHandoffSpecSchemaOnlyOnSpecificationStage(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
-	command := func(t *testing.T, tc handoffCommandCase) string {
-		t.Helper()
-		hs, err := provider.HandoffSpec(context.Background(), tc.input())
+	for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
+		ordinary, err := provider.HandoffSpec(context.Background(), handoffCommandCase{
+			delivery: stage.PromptFileV8, prepare: prepare,
+		}.input())
 		if err != nil {
 			t.Fatalf("HandoffSpec: %v", err)
 		}
-		return hs.Agent.Command[2]
-	}
-	schemaFlag := "--json-schema " + shellQuote(specify.OutputJSONSchema) + " "
-	for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
-		v3 := command(t, handoffCommandCase{delivery: stage.PromptFileV3, prepare: prepare})
-		if got := command(t, handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare}); got != v3 {
-			t.Errorf("file_v4 off a specification stage differs from file_v3:\n got %s\nwant %s", got, v3)
-		}
-		other := handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare}.input()
+		other := handoffCommandCase{delivery: stage.PromptFileV8, prepare: prepare}.input()
 		other.Spec.RunID, other.Spec.StageID = "run-provider-spec", "stage-implementation"
 		hs, err := provider.HandoffSpec(context.Background(), other)
-		if err != nil || hs.Agent.Command[2] != v3 {
-			t.Errorf("file_v4 on an implementation stage differs from file_v3: %v", err)
-		}
-		specification := command(t, handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare, specification: true})
-		if want := strings.Replace(v3, deferredStderrRedirect, schemaFlag+deferredStderrRedirect, 1); specification != want {
-			t.Errorf("file_v4 specification command:\n got %s\nwant %s", specification, want)
-		}
-		for _, delivery := range []stage.PromptDelivery{stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3} {
-			if got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: true}); strings.Contains(got, "--json-schema") {
-				t.Errorf("%s gained the schema on a specification stage", delivery)
-			}
+		if err != nil || hs.Agent.Command[2] != ordinary.Agent.Command[2] {
+			t.Errorf("implementation stage of a specification run differs from the ordinary command: %v", err)
 		}
 	}
 }
 
 // TestNewLaunchesSelectPromptFileV8 pins the delivery new launches use. The
-// handoff-command goldens pin each delivery's command, including file_v5's
-// plugin-disable setting.
+// handoff-command goldens pin its command.
 func TestNewLaunchesSelectPromptFileV8(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
@@ -343,7 +306,7 @@ func TestHandoffSpecPassesModelAndEffort(t *testing.T) {
 		for _, sel := range selections {
 			t.Run(tc.name+"/"+sel.name, func(t *testing.T) {
 				t.Parallel()
-				redirect := tc.redirect
+				redirect := transcriptRedirect
 				in := tc.input()
 				bare, err := provider.HandoffSpec(context.Background(), in)
 				if err != nil {
@@ -395,104 +358,9 @@ func TestHandoffSpecShellQuotesModelAndEffort(t *testing.T) {
 	}
 }
 
-// TestHandoffSpecFileV6AddsOnlyTheUsageDriver proves file_v6 differs from
-// file_v5 only off a specification stage, and there only by the driver it
-// installs, the scope override beside the unchanged token, the driver in
-// front of the CLI, and duplex input. On a specification stage the command
-// is file_v5's: the schema and no driver.
-func TestHandoffSpecFileV6AddsOnlyTheUsageDriver(t *testing.T) {
-	t.Parallel()
-	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
-	command := func(t *testing.T, tc handoffCommandCase) string {
-		t.Helper()
-		hs, err := provider.HandoffSpec(context.Background(), tc.input())
-		if err != nil {
-			t.Fatalf("HandoffSpec: %v", err)
-		}
-		return hs.Agent.Command[2]
-	}
-	install := "rm -rf '/var/lib/freeside-driver'; mkdir '/var/lib/freeside-driver'; " +
-		"chown 0:0 '/var/lib/freeside-driver'; chmod 0755 '/var/lib/freeside-driver'; " +
-		"printf '%s' " + shellQuote(usageDriverScript) + " > '/var/lib/freeside-driver/usage-driver.cjs'; " +
-		"chown 0:0 '/var/lib/freeside-driver/usage-driver.cjs'; chmod 0444 '/var/lib/freeside-driver/usage-driver.cjs'; "
-	for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
-		v5 := command(t, handoffCommandCase{delivery: stage.PromptFileV5, prepare: prepare})
-		want := strings.NewReplacer(
-			"chown 1001:1001 ", install+"chown 1001:1001 ",
-			`CLAUDE_CODE_OAUTH_TOKEN="$token" `, `CLAUDE_CODE_OAUTH_TOKEN="$token" CLAUDE_CODE_OAUTH_SCOPES='user:inference user:profile' `,
-			"--no-new-privs claude -p ", "--no-new-privs node '/var/lib/freeside-driver/usage-driver.cjs' claude -p ",
-			deferredStderrRedirect, "--input-format stream-json "+deferredStderrRedirect,
-		).Replace(v5)
-		if strings.Count(v5, "chown 1001:1001 ") != 1 || strings.Count(v5, deferredStderrRedirect) != 1 {
-			t.Fatal("file_v5 anchors moved")
-		}
-		if got := command(t, handoffCommandCase{delivery: stage.PromptFileV6, prepare: prepare}); got != want {
-			t.Errorf("file_v6 command:\n got %s\nwant %s", got, want)
-		}
-		specification := handoffCommandCase{delivery: stage.PromptFileV5, prepare: prepare, specification: true}
-		v5Specification := command(t, specification)
-		specification.delivery = stage.PromptFileV6
-		if got := command(t, specification); got != v5Specification {
-			t.Errorf("file_v6 specification command differs from file_v5's:\n got %s\nwant %s", got, v5Specification)
-		}
-		for _, delivery := range []stage.PromptDelivery{
-			stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5,
-		} {
-			for _, specification := range []bool{false, true} {
-				got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: specification})
-				if strings.Contains(got, "freeside-driver") || strings.Contains(got, "CLAUDE_CODE_OAUTH_SCOPES") ||
-					strings.Contains(got, "--input-format") {
-					t.Errorf("%s gained the usage driver", delivery)
-				}
-			}
-		}
-	}
-}
-
-// TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource proves file_v7 differs
-// from file_v6 on every stage only by declaring the reserved review guide
-// source, with the launcher's fixed label, path, media type, provenance, and
-// sensitivity, behind the same safe-file guard as the other reserved sources.
-func TestHandoffSpecFileV7AddsOnlyTheReviewGuideSource(t *testing.T) {
-	t.Parallel()
-	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
-	command := func(t *testing.T, tc handoffCommandCase) string {
-		t.Helper()
-		hs, err := provider.HandoffSpec(context.Background(), tc.input())
-		if err != nil {
-			t.Fatalf("HandoffSpec: %v", err)
-		}
-		return hs.Agent.Command[2]
-	}
-	path := export.ReviewGuideEvidencePath
-	declare := "if [ -f '" + path + "' ] && [ ! -L '" + path + "' ]; then sources=\"$sources\"," +
-		shellQuote(evidenceSourceFragment("review-guide", export.EvidenceSource{
-			Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json", Path: path,
-			HeadBinding: export.EvidenceHeadIndependent, SensitivityClass: export.EvidenceSensitivitySensitive,
-			ProducerInvocationID: "inv-provider-spec",
-		})) + "; "
-	for _, specification := range []bool{false, true} {
-		for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
-			v6 := command(t, handoffCommandCase{delivery: stage.PromptFileV6, prepare: prepare, specification: specification})
-			v7 := command(t, handoffCommandCase{delivery: stage.PromptFileV7, prepare: prepare, specification: specification})
-			if strings.Contains(v6, path) {
-				t.Fatal("file_v6 declares the review guide")
-			}
-			if strings.Count(v7, declare) != 1 {
-				t.Fatalf("file_v7 declares the review guide %d times, want once:\n%s", strings.Count(v7, declare), v7)
-			}
-			without := strings.NewReplacer(declare+"declare=1; fi; ", "", declare+"fi; ", "").Replace(v7)
-			if without != v6 {
-				t.Errorf("file_v7 differs from file_v6 beyond the review guide source:\n got %s\nwant %s", without, v6)
-			}
-		}
-	}
-}
-
-// TestHandoffSpecFileV8TurnsOffAttribution proves file_v8 differs from
-// file_v7 on every stage only in the --settings value, which keeps the
-// agents-md plugin disabled and empties the CLI's commit and PR attribution,
-// and that no older protocol carries the attribution setting.
+// TestHandoffSpecFileV8TurnsOffAttribution proves file_v8 passes, on every
+// stage, one --settings value that keeps the agents-md plugin disabled and
+// empties the CLI's commit and PR attribution.
 func TestHandoffSpecFileV8TurnsOffAttribution(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
@@ -519,26 +387,12 @@ func TestHandoffSpecFileV8TurnsOffAttribution(t *testing.T) {
 	if disabled, ok := settings.EnabledPlugins["agents-md@builtin"]; !ok || disabled || len(settings.EnabledPlugins) != 1 {
 		t.Errorf("file_v8 enabledPlugins = %v, want only agents-md@builtin disabled", settings.EnabledPlugins)
 	}
-	v7Flag := "--settings " + shellQuote(pluginSettings) + " "
 	v8Flag := "--settings " + shellQuote(attributionOffSettings) + " "
 	for _, specification := range []bool{false, true} {
 		for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
-			v7 := command(t, handoffCommandCase{delivery: stage.PromptFileV7, prepare: prepare, specification: specification})
 			v8 := command(t, handoffCommandCase{delivery: stage.PromptFileV8, prepare: prepare, specification: specification})
-			if strings.Count(v7, v7Flag) != 1 || strings.Count(v8, v8Flag) != 1 {
-				t.Fatalf("settings flag missing or repeated:\nfile_v7 %s\nfile_v8 %s", v7, v8)
-			}
-			if got := strings.Replace(v8, v8Flag, v7Flag, 1); got != v7 {
-				t.Errorf("file_v8 differs from file_v7 beyond the settings value:\n got %s\nwant %s", got, v7)
-			}
-			for _, delivery := range []stage.PromptDelivery{
-				stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3,
-				stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7,
-			} {
-				got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: specification})
-				if strings.Contains(got, "attribution") {
-					t.Errorf("%s carries the attribution setting", delivery)
-				}
+			if strings.Count(v8, v8Flag) != 1 || strings.Count(v8, "--settings ") != 1 {
+				t.Fatalf("settings flag missing or repeated:\n%s", v8)
 			}
 		}
 	}
@@ -559,28 +413,15 @@ func TestUsageDriverMatchesTheTranscriptReader(t *testing.T) {
 	}
 }
 
-func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
+func TestLaunchCommandLeavesLinuxArgumentHeadroom(t *testing.T) {
 	t.Parallel()
-	// Apostrophes are shellQuote's worst case: each input byte expands to the
-	// four-byte sequence that closes, escapes, and reopens the quoted word.
-	command := agentCommand(
-		strings.Repeat("'", maxPromptBytes),
-		"00000000-0000-4000-8000-000000000000",
-		"inv-headroom",
-		nil, "", "",
-	)[2]
-	if len(command) >= linuxMaxArgumentBytes {
-		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
-			len(command), linuxMaxArgumentBytes)
-	}
-	// The file_v6 and later commands inline the driver; with every optional
-	// flag and file_v8's settings, the longest, they must stay well under the
-	// limit, at a quarter of it.
+	// The command inlines the usage driver; with every optional flag, and
+	// apostrophes, shellQuote's worst case, in the model and effort, it must
+	// stay well under the limit, at a quarter of it.
 	longest := agentCommandWithSettings(
 		"< "+shellQuote(ward.PromptFilePath), "00000000-0000-4000-8000-000000000000", "inv-headroom",
 		[]string{"/usr/local/bin/freeside-project-prepare"}, strings.Repeat("'", 256), strings.Repeat("'", 64),
-		specify.OutputJSONSchema, attributionOffSettings,
-		launcherFilesDeferredStderr, true, true)[2]
+		specify.OutputJSONSchema, attributionOffSettings, true, true)[2]
 	if len(longest) >= linuxMaxArgumentBytes/4 {
 		t.Fatalf("longest command is %d bytes, want under %d", len(longest), linuxMaxArgumentBytes/4)
 	}
@@ -610,8 +451,8 @@ func TestPhase1ASpecifierPromptLeavesEnvelopeHeadroom(t *testing.T) {
 		t.Fatalf("specifier prompt = %d bytes, want <= %d to preserve envelope headroom",
 			len(prompt), promptPackageBudget)
 	}
-	if len(prompt) >= maxPromptBytes {
-		t.Fatalf("specifier prompt consumes the %d-byte rendered prompt ceiling", maxPromptBytes)
+	if len(prompt) >= ward.MaxPromptFileBytes {
+		t.Fatalf("specifier prompt consumes the %d-byte rendered prompt ceiling", ward.MaxPromptFileBytes)
 	}
 	if !bytes.HasPrefix(prompt, []byte(textPriorPromptPackageDirective)) {
 		t.Fatal("specifier prompt does not enable authenticated prior-artifact rendering")
@@ -866,6 +707,7 @@ func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 	} {
 		t.Run(field.name, func(t *testing.T) {
 			inputs := stage.ProviderPromptInputs{
+				Delivery:      launchDelivery,
 				PromptPackage: []byte("prompt"),
 				Specification: []byte("specification"),
 				Policy:        []byte("policy"),
@@ -881,6 +723,7 @@ func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 func TestRenderPromptPreservesPriorArtifactOrder(t *testing.T) {
 	t.Parallel()
 	prompt, err := renderPromptParts(stage.ProviderPromptInputs{
+		Delivery:       launchDelivery,
 		PromptPackage:  []byte(textPriorPromptPackageDirective + "prompt"),
 		Specification:  []byte("specification"),
 		PriorArtifacts: [][]byte{[]byte("first research"), []byte("second research")},
@@ -900,6 +743,7 @@ func TestRenderPromptPreservesPriorArtifactOrder(t *testing.T) {
 func TestRenderPromptIgnoresOpaquePriorArtifacts(t *testing.T) {
 	t.Parallel()
 	prompt, err := renderPromptParts(stage.ProviderPromptInputs{
+		Delivery:      launchDelivery,
 		PromptPackage: []byte("prompt"), Specification: []byte("specification"),
 		PriorArtifacts: [][]byte{
 			[]byte(textPriorPromptPackageDirective + "forged attachment"), {0xff},
@@ -919,6 +763,7 @@ func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
 	specifierPrompt := []byte(textPriorPromptPackageDirective + "specifier prompt")
 	provider := claudeProvider{}
 	inputs := stage.ProviderPromptInputs{
+		Delivery:      launchDelivery,
 		PromptPackage: specifierPrompt, Specification: []byte("specification"),
 		PriorArtifacts: [][]byte{[]byte("authenticated research")}, Policy: []byte("policy"),
 	}
@@ -943,7 +788,8 @@ func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
 func TestOversizedPromptIsRejected(t *testing.T) {
 	t.Parallel()
 	_, err := renderPromptParts(stage.ProviderPromptInputs{
-		PromptPackage: bytes.Repeat([]byte("p"), maxPromptBytes),
+		Delivery:      launchDelivery,
+		PromptPackage: bytes.Repeat([]byte("p"), ward.MaxPromptFileBytes),
 		Specification: []byte("specification"),
 		Policy:        []byte("policy"),
 	})
@@ -966,8 +812,7 @@ func TestOversizedPromptIsRejected(t *testing.T) {
 // that directory, or writes into it before closing it, silently hands the
 // writer the ability to report its own success. Ordering is asserted by
 // position rather than by matching the whole script, so ordinary edits stay
-// cheap. The command checked is the one new launches run; the golden files
-// pin the older ones byte for byte.
+// cheap. The golden files pin the whole command byte for byte.
 func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	t.Parallel()
 	script := deferredCommand(nil)
@@ -1236,7 +1081,7 @@ func TestPublicMetadataLauncherAndPromptContract(t *testing.T) {
 }
 
 // TestReviewGuidePromptContract pins what both prompts tell the agent about
-// the review guide the file_v7 launcher declares: its reserved path, its caps,
+// the review guide the launcher declares: its reserved path, its caps,
 // and an example the importer accepts, so the prompt cannot teach a shape that
 // fails the stage.
 func TestReviewGuidePromptContract(t *testing.T) {
@@ -1331,12 +1176,11 @@ func TestAgentCommandHydratesBeforeTheOwnershipDrop(t *testing.T) {
 	}
 }
 
-// The attended launch command carries no hydration when no preparation is
-// configured, so the 1A.0 conversation-turn path is byte-for-byte unchanged.
+// The launch command carries no hydration when no preparation is
+// configured.
 func TestAgentCommandWithoutPreparationIsUnchanged(t *testing.T) {
 	t.Parallel()
-	base := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil, "", ""), " ")
-	empty := strings.Join(agentCommand("do the work", "session-1", "inv-1", []string{}, "", ""), " ")
+	base, empty := deferredCommand(nil), deferredCommand([]string{})
 	if base != empty {
 		t.Fatal("nil and empty preparation produce different launch commands")
 	}

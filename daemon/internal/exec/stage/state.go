@@ -51,8 +51,7 @@ const (
 
 // intent is the driver's durable per-invocation record. It pins every value
 // a replayed pipeline must reproduce byte-identically (Export.RecordedAt for
-// the export row, with RecordedAt as the legacy fallback, and CommitDate for
-// the importer's commit), because a crash between the export write and the
+// the export row and CommitDate for the importer's commit), because a crash between the export write and the
 // result commit replays the pipeline and the write-once store rows must
 // converge rather than collide.
 type intent struct {
@@ -64,9 +63,9 @@ type intent struct {
 	// recovery rebuilds the identical handoff spec.
 	Seed   string `json:"seed"`
 	Prompt string `json:"prompt"`
-	// Omission preserves old records and their argument transport, including
-	// deterministic refusals recorded under its smaller size limit.
-	PromptDelivery PromptDelivery `json:"prompt_delivery,omitempty"`
+	// PromptDelivery is the launch protocol the provider selected at start;
+	// recovery rebuilds the launch command from it.
+	PromptDelivery PromptDelivery `json:"prompt_delivery"`
 	// Inputs are the immutable bodies used to render Prompt. Their
 	// digests are re-checked against Spec on every reconstruction, so the
 	// exported state file cannot substitute a prompt or policy while the
@@ -96,9 +95,9 @@ type intent struct {
 	// then. Ward binds RegistryHosts into SpecDigest, so recovery replays this
 	// record rather than re-reading adoptions, the same byte-identical-replay
 	// reason as Preparation. handoffRegistryHosts re-gates it on every
-	// rebuild. Empty under provider_only and on any record written before this
-	// field existed (omitempty preserves the old encoding). Old registry
-	// intents carry the declared set.
+	// rebuild, which refuses an empty set under provider_registry. Empty under
+	// provider_only, and on a start refused for its registry set, which commits
+	// before any launch.
 	RegistryHosts []string `json:"registry_hosts,omitempty"`
 	// Export carries what the gate released, recorded the moment Handoff
 	// returns. The gate closes its journal at that point and refuses to
@@ -178,29 +177,15 @@ func providerHandoffInputFrom(in intent) ProviderHandoffInput {
 		Spec:           in.Spec.Clone(),
 		Seed:           in.Seed,
 		Prompt:         in.Prompt,
-		PromptDelivery: in.delivery(),
+		PromptDelivery: in.PromptDelivery,
 		Instructions:   instructions,
 		Preparation:    slices.Clone(in.Preparation),
 	}
 }
 
-func (i intent) exportRecordedAt() time.Time {
-	if i.Export != nil && !i.Export.RecordedAt.IsZero() {
-		return i.Export.RecordedAt
-	}
-	return i.RecordedAt
-}
-
-func (i intent) delivery() PromptDelivery {
-	if i.PromptDelivery == "" {
-		return PromptArgument
-	}
-	return i.PromptDelivery
-}
-
 func (i intent) validate() error {
 	switch {
-	case !i.delivery().valid():
+	case !i.PromptDelivery.valid():
 		return fmt.Errorf("driver intent has invalid prompt delivery %q", i.PromptDelivery)
 	case i.InvocationID == "":
 		return fmt.Errorf("driver intent invocation_id: %w", domain.ErrEmptyID)
@@ -210,6 +195,8 @@ func (i intent) validate() error {
 		return fmt.Errorf("driver intent phase %q is invalid", i.Phase)
 	case (i.Phase == phaseExported || i.Phase == phaseImportPending) && i.Export == nil:
 		return fmt.Errorf("driver intent %q is exported without its released facts", i.InvocationID)
+	case i.Export != nil && i.Export.RecordedAt.IsZero():
+		return fmt.Errorf("driver intent %q export has no recorded_at", i.InvocationID)
 	case i.RecordedAt.IsZero() || i.CommitDate.IsZero():
 		return fmt.Errorf("driver intent %q: pinned instants are required", i.InvocationID)
 	case i.Phase == phaseCommitted && i.Result == nil:
@@ -269,9 +256,9 @@ func (p phase) valid() bool {
 // releasedExport is the durable form of one gate release: enough to finish
 // the pipeline after a restart without calling the gate again.
 type releasedExport struct {
-	// RecordedAt pins the first attempt to persist the gate's return. Retries
-	// retain this stamp; records written before it existed have a zero value.
-	RecordedAt        time.Time               `json:"recorded_at,omitzero"`
+	// RecordedAt pins the first attempt to persist the gate's return; retries
+	// retain this stamp.
+	RecordedAt        time.Time               `json:"recorded_at"`
 	Dir               string                  `json:"dir"`
 	Manifest          export.Manifest         `json:"manifest"`
 	Evidence          export.EvidenceManifest `json:"evidence"`
@@ -625,25 +612,24 @@ func (d *Driver) regateWithCurrentPolicy(
 				ErrUnsupportedStart, i.InvocationID, check.name, got, check.digest)
 		}
 	}
-	// Historical durable intents predate prior-artifact body persistence. The
-	// explicit marker lets them reproduce the old no-prior prompt without
-	// making removal of bodies from a new intent authenticate as history.
-	if i.Inputs.PriorArtifactsPersisted {
-		if len(i.Inputs.PriorArtifacts) != len(snapshot.PriorArtifactDigests) {
-			return fmt.Errorf("%w: intent %s materialized %d prior artifacts, admission names %d",
-				ErrUnsupportedStart, i.InvocationID, len(i.Inputs.PriorArtifacts), len(snapshot.PriorArtifactDigests))
-		}
-		for index, body := range i.Inputs.PriorArtifacts {
-			sum := sha256.Sum256(body)
-			got := domain.Digest(contentaddr.Format(sum[:]))
-			if got != snapshot.PriorArtifactDigests[index] {
-				return fmt.Errorf("%w: intent %s prior artifact %d hashes to %s, admission names %s",
-					ErrUnsupportedStart, i.InvocationID, index, got, snapshot.PriorArtifactDigests[index])
-			}
-		}
-	} else if i.Inputs.PriorArtifacts != nil {
-		return fmt.Errorf("%w: intent %s has unmarked prior artifact bodies",
+	// Every start persists the prior-artifact bodies with the marker, so an
+	// intent without it was written before the bodies were persisted and
+	// cannot reproduce the prompt its writer received.
+	if !i.Inputs.PriorArtifactsPersisted {
+		return fmt.Errorf("%w: intent %s does not carry its prior artifact bodies",
 			ErrUnsupportedStart, i.InvocationID)
+	}
+	if len(i.Inputs.PriorArtifacts) != len(snapshot.PriorArtifactDigests) {
+		return fmt.Errorf("%w: intent %s materialized %d prior artifacts, admission names %d",
+			ErrUnsupportedStart, i.InvocationID, len(i.Inputs.PriorArtifacts), len(snapshot.PriorArtifactDigests))
+	}
+	for index, body := range i.Inputs.PriorArtifacts {
+		sum := sha256.Sum256(body)
+		got := domain.Digest(contentaddr.Format(sum[:]))
+		if got != snapshot.PriorArtifactDigests[index] {
+			return fmt.Errorf("%w: intent %s prior artifact %d hashes to %s, admission names %s",
+				ErrUnsupportedStart, i.InvocationID, index, got, snapshot.PriorArtifactDigests[index])
+		}
 	}
 	vendor := snapshot.VendorInstructions
 	if vendor == nil || vendor.Vendor != i.Instructions.Vendor {
@@ -673,12 +659,12 @@ func (d *Driver) regateWithCurrentPolicy(
 		}
 	}
 	promptInputs := providerPromptInputsFrom(i.Inputs, i.Spec)
-	promptInputs.Delivery = i.delivery()
+	promptInputs.Delivery = i.PromptDelivery
 	wantPrompt, promptErr := d.provider.RenderPrompt(promptInputs)
 	if promptErr != nil {
 		if i.Phase != phaseCommitted || i.Result == nil ||
 			i.Result.Status != exec.StatusFailed || i.Prompt != "" ||
-			!isPromptRefusalSummary(i.Result.Summary, promptErr) {
+			i.Result.Summary != truncateFailureSummary(promptErr.Error()) {
 			return fmt.Errorf("%w: intent %s does not carry the authenticated refusal",
 				ErrUnsupportedStart, i.InvocationID)
 		}
@@ -798,18 +784,6 @@ func (d *Driver) saveIntent(in intent) error {
 		return fmt.Errorf("save driver intent %s: %w", in.InvocationID, err)
 	}
 	return nil
-}
-
-// isPromptRefusalSummary reports whether summary is the one Start commits
-// for a prompt refusal, which it bounds with truncateFailureSummary. A
-// refusal committed before failure summaries kept their tail stored the
-// head-only exec.TruncateSummary form instead, and the two differ for an
-// over-cap error. Both are derived from the same re-rendered error, so
-// accepting either authenticates the same refusal; refusing the old form
-// would leave such an intent unreconstructable after an upgrade.
-func isPromptRefusalSummary(summary string, promptErr error) bool {
-	text := promptErr.Error()
-	return summary == truncateFailureSummary(text) || summary == exec.TruncateSummary(text)
 }
 
 // intentListingFailure is one intent-directory entry listIntents could not

@@ -16,7 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// TestPinnedClaudeUsageDriverLive runs the production file_v6 agent line,
+// TestPinnedClaudeUsageDriverLive runs the production agent line,
 // driver and all, against the pinned CLI with only synthetic input and an
 // in-container mock API. It is the fixture run that shows the usage read
 // adds no request beyond the turn. Register its single container with the
@@ -32,7 +32,7 @@ func TestPinnedClaudeUsageDriverLive(t *testing.T) {
 	prompt := []byte(strings.Repeat("Synthetic UTF-8 α ' $() \\n\n", 2500) + "end")
 	sum := sha256.Sum256(prompt)
 	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}).
-		HandoffSpec(context.Background(), handoffCommandCase{delivery: stage.PromptFileV6}.input())
+		HandoffSpec(context.Background(), handoffCommandCase{delivery: stage.PromptFileV8}.input())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestPinnedClaudeUsageDriverLive(t *testing.T) {
 }
 
 // TestLiveClaudeWriterUsage makes one provider-backed writer turn, the
-// conformance launch on file_v6, under an enrolled setup token against the
+// conformance launch, under an enrolled setup token against the
 // pinned agent image, and reads the usage capture from its exported
 // transcript as the stage pipeline does. A refresh or any other auth-store
 // write would change the credential volume's tree, so the tree digest is

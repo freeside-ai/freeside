@@ -1,4 +1,4 @@
-// Networkless probe of an operator input file read by the file_v6 launch: the
+// Networkless probe of an operator input file read by the writer launch: the
 // production usage driver and CLI command, a root-owned read-only image under
 // Ward's input target (outside the working directory), and a mock API on
 // loopback. The mock's first answer asks the CLI's Read tool for the image;

@@ -52,23 +52,16 @@ func TestPromptInputsCarryAdmittedAttachments(t *testing.T) {
 
 func TestProviderCannotChangeAdmittedInputFiles(t *testing.T) {
 	t.Parallel()
-	for _, change := range []string{"none", "missing", "extra", "reordered", "renamed", "resized", "redigested", "argument_delivery", "without_attachments"} {
+	for _, change := range []string{"none", "missing", "extra", "reordered", "renamed", "resized", "redigested", "without_attachments"} {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			d := newTestDriver(t, &stubGate{}, newStubExports())
 			in := withAttachments(testHandoffIntent(t, d), testAttachments())
-			in.PromptDelivery = PromptFileV6
-			if change == "argument_delivery" {
-				in.PromptDelivery = PromptArgument
-			}
 			if change == "without_attachments" {
 				in = withAttachments(in, nil)
 			}
 			admitted := InputFilesFor(in.Spec)
 			d.provider = testProvider{handoffMutate: func(hs *ward.HandoffSpec) {
-				if in.PromptDelivery != PromptArgument {
-					hs.Agent.PromptFile = ward.NewPromptFile([]byte(in.Prompt))
-				}
 				files := slices.Clone(InputFilesFor(in.Spec))
 				switch change {
 				case "missing":

@@ -447,7 +447,7 @@ func (d *Driver) finish(
 		ManifestDigest:         manifestDigest,
 		EvidenceManifestDigest: evidenceDigest,
 		CommitPlanPresent:      out.commitPlanPresent,
-		RecordedAt:             in.exportRecordedAt(),
+		RecordedAt:             in.Export.RecordedAt,
 	})
 	if err != nil {
 		return exec.StageResult{}, err
@@ -616,8 +616,8 @@ func (d *Driver) finishBlocked(
 // its usage capture. Missing telemetry never fails the export, but it leaves
 // the run's billable cost incomplete, so each way of finding none is logged
 // rather than dropped silently. A missing capture is not logged: only a
-// file_v6 writer asks for the usage answer, and any other Claude transcript
-// gives at most its rate-limit events.
+// writer under the usage driver asks for the usage answer, and any other
+// Claude transcript gives at most its rate-limit events.
 func (d *Driver) extractUsage(
 	in intent, out exportOutcome, observedAt time.Time,
 ) ([]exec.UsageMeasurement, *exec.ClaudeUsageCapture) {
@@ -699,7 +699,7 @@ func (d *Driver) completeReleasedExportWithOptions(
 	// time is the pinned export stamp, not the clock: a crash after the export
 	// write replays this import, and the usage rows written with the export
 	// must converge rather than conflict on a fresh observed_at.
-	usage, capture := d.extractUsage(in, out, in.exportRecordedAt())
+	usage, capture := d.extractUsage(in, out, in.Export.RecordedAt)
 	result, err := d.finish(ctx, in, out, importOptions, usage, capture)
 	if err != nil {
 		result.Usage = usage

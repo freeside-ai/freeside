@@ -26,7 +26,7 @@ func testDigest(body []byte) domain.Digest {
 func TestRenderPromptListsInputFiles(t *testing.T) {
 	t.Parallel()
 	inputs := stage.ProviderPromptInputs{
-		Delivery:      stage.PromptFileV6,
+		Delivery:      stage.PromptFileV8,
 		PromptPackage: []byte("prompt"), Specification: []byte("specification"), Policy: []byte("policy"),
 	}
 	without, err := renderPromptParts(inputs)
@@ -136,9 +136,8 @@ func TestHandoffSpecCarriesAdmittedInputFiles(t *testing.T) {
 		list     []domain.StageInputAttachment
 		want     bool
 	}{
-		{"file-v6", stage.PromptFileV6, list, true},
-		{"file-v6-without", stage.PromptFileV6, nil, false},
-		{"argument", stage.PromptArgument, list, false},
+		{"file-v8", stage.PromptFileV8, list, true},
+		{"file-v8-without", stage.PromptFileV8, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

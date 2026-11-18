@@ -155,33 +155,36 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v8`. The renderer accepts at most 1 MiB
-of complete UTF-8 input. Ward verifies its digest on a separate protected
-volume before writer creation, journals the volume binding with launch state,
-and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
-the prompt exactly as `file_v1` does; it differs in keeping the launcher's own
-files out of the workspace while the agent runs. `file_v3` delivers it as
-`file_v2` does and differs only in where the CLI's stderr goes: to a root-only
-file beside the in-flight transcript, so a CLI warning cannot break the
+New Claude stage intents select `file_v8`, the only prompt delivery the daemon
+reads. The renderer accepts at most 1 MiB of complete UTF-8 input. Ward
+verifies its digest on a separate protected volume before writer creation,
+journals the volume binding with launch state, and supplies the root-opened
+file as Claude's user stdin. The launcher keeps its own files out of the
+workspace while the agent runs, and sends the CLI's stderr to a root-only file
+beside the in-flight transcript, so a CLI warning cannot break the
 transcript's JSONL at import. When the CLI exits nonzero, the launcher appends
 that file to the transcript, which a failed writer retains as plain text; a
-successful run's stderr is discarded with the container. `file_v4` delivers
-it as `file_v3` does and differs only on a specification run's stage, where it
-passes the specifier output schema with `--json-schema`: the model's decision
-arrives in the result record's `structured_output`, so a prose preamble no
-longer fails the stage, and the decoder still gates every byte of it. `file_v5`
-also explicitly disables the pinned CLI's bundled `agents-md` plugin through
-`--settings`: `--safe-mode` leaves built-in plugins enabled, and this plugin
-can load repository instructions outside the daemon's instruction bundle.
-The conformance transcript must still report no plugins. From 2.1.319 the
-agent image's managed settings disable every built-in plugin the pinned CLI
-registers, because the policy-only `cc-plugin-sec-default` ignores
+successful run's stderr is discarded with the container. On a specification
+run's stage the launch passes the specifier output schema with
+`--json-schema`: the model's decision arrives in the result record's
+`structured_output`, so a prose preamble no longer fails the stage, and the
+decoder still gates every byte of it.
+
+The launch passes one `--settings` value. It disables the pinned CLI's bundled
+`agents-md` plugin: `--safe-mode` leaves built-in plugins enabled, and this
+plugin can load repository instructions outside the daemon's instruction
+bundle. The conformance transcript must still report no plugins. From 2.1.319
+the agent image's managed settings disable every built-in plugin the pinned
+CLI registers, because the policy-only `cc-plugin-sec-default` ignores
 `--settings` (#2922; `images/agent-claude/README.md`). The plugin setting
-stays, now redundant, so every delivery's command stays byte-identical; from
-`file_v8` the same flag also carries the attribution setting, which nothing
-else sets. `file_v6` delivers
-it as `file_v5` does and, off a specification run's stage, also asks the CLI
-for its usage answer after the turn (#2543). The root shell installs a small
+stays, now redundant, so the command stays byte-identical. The same value
+empties the CLI's commit and PR attribution
+(`"attribution":{"commit":"","pr":""}`): the CLI's default attribution tells
+the writer to add a `Co-Authored-By` trailer, which commit plans refuse
+(#3028).
+
+Off a specification run's stage the launch also asks the CLI for its usage
+answer after the turn (#2543). The root shell installs a small
 Node driver, `usage_driver.cjs`, in a root-owned, world-readable directory
 outside the workspace and the launch directory, and starts it under the same
 privilege drop in front of the CLI, which now takes `--input-format
@@ -191,22 +194,20 @@ message, sends one `get_usage` after the turn's result, closes the CLI's stdin
 on the answer or after 15 seconds, and exits with the CLI's status; the CLI's
 stdout is the transcript, unchanged. The stage pipeline reads the answer from
 the transcript into the stage result's `claude_usage`, nil whenever any part
-of it is in doubt, and nothing about the stage's outcome depends on it. On a
-specification run's stage the command is `file_v5`'s. `file_v7` delivers it
-as `file_v6` does and differs only in declaring one more reserved evidence
-source on every stage, the review guide at
-`.freeside-evidence/review-guide.json` (#2750). `file_v8` delivers it as
-`file_v7` does and differs only in its `--settings` value, which also empties
-the CLI's commit and PR attribution (`"attribution":{"commit":"","pr":""}`)
-on every stage: the CLI's default attribution tells the writer to add a
-`Co-Authored-By` trailer, which commit plans refuse (#3028). Conformance
-launches use `file_v8` too. Existing intents retain the protocol they started
-under: `file_v1` through `file_v7` their launch commands, and argument
-delivery its original 31-KiB limit. This changes transport; it neither retries
-a failed invocation nor grants successor publication.
+of it is in doubt, and nothing about the stage's outcome depends on it.
+On a specification run's stage the command runs no driver. On every stage the
+launch declares one more reserved evidence source, the review guide at
+`.freeside-evidence/review-guide.json` (#2750). Conformance launches use
+`file_v8` too.
+
+Recovery rebuilds a running launch's command from its intent, and Ward refuses
+a rebuilt spec whose digest differs, so a changed launch command is a new
+`PromptDelivery` member, never a change to what `file_v8` builds. An intent
+file with no delivery, or one the daemon no longer launches, fails to decode,
+and restart recovery reports it as an intent it could not read (#3327).
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
-Claude image, synthetic text larger than the argument limit, and a mock
+Claude image, about 68 KiB of synthetic text, and a mock
 API on loopback inside a network-disabled container. It checks that the exact
 text reaches a user-message block after privilege drop, and that the dropped
 user cannot independently open the protected file. It uses no real provider
@@ -222,8 +223,8 @@ The probe registers one fresh container under the held rig, then verifies
 ownership before cleanup. Do not borrow an active exercise's rig without
 authorization. Its token stays in process memory and must not be printed.
 
-`TestPinnedClaudeUsageDriverLive` runs the `file_v6` agent line, which
-`file_v7` changes only in its evidence descriptor, driver included, the same way and under the same variables, with
+`TestPinnedClaudeUsageDriverLive` runs the agent line new launches select,
+driver included, the same way and under the same variables, with
 `FREESIDE_USAGE_DRIVER_LIVE=1` in place of `FREESIDE_PROMPT_STDIN_LIVE=1`. It
 checks the image's CLI is the pinned build, that the turn makes exactly one
 `POST /v1/messages` with the prompt as one exact user text block, that the
@@ -248,7 +249,7 @@ the image's managed settings or CLI pin:
 go test ./internal/exec/claude -run '^TestPinnedClaudeInitSeveranceLive$' -count=1 -v
 ```
 
-`TestPinnedClaudeInputReadLive` runs the same `file_v6` lines, implementation
+`TestPinnedClaudeInputReadLive` runs the same lines, implementation
 and specification, with `FREESIDE_INPUT_READ_LIVE=1`. It places a synthetic
 PNG root-owned and read-only under Ward's input directory,
 `/var/lib/freeside/inputs`, outside the working directory, and has the mock API
@@ -272,8 +273,8 @@ exporter image's base changes:
 go test ./internal/ward -run '^TestExporterInputScriptsLive$' -count=1 -v
 ```
 
-`TestLiveClaudeWriterUsage` makes one real writer turn, the conformance launch
-on `file_v6`, under the setup token in `CLAUDE_CODE_OAUTH_TOKEN`, enrolled into
+`TestLiveClaudeWriterUsage` makes one real writer turn, the conformance launch,
+under the setup token in `CLAUDE_CODE_OAUTH_TOKEN`, enrolled into
 a disposable credential volume as `TestLiveClaudeAdapterConformance` does. It
 spends real subscription usage, so run it only with the owner's consent. It
 fails unless the transcript yields a capture with a `seven_day` window, and

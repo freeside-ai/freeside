@@ -253,20 +253,14 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 	// Detach before checking so provider-retained references cannot change the
 	// policy decision in the gap before ward freezes its own request.
 	hs = detachProviderHandoffSpec(hs)
-	if in.delivery().usesPromptFile() {
-		if hs.Agent.PromptFile == nil ||
-			!bytes.Equal(hs.Agent.PromptFile.Body, []byte(in.Prompt)) ||
-			hs.Agent.PromptFile.Validate() != nil {
-			return ward.HandoffSpec{}, fmt.Errorf("%w: provider prompt file differs from durable input", ErrUnsupportedStart)
-		}
-	} else if hs.Agent.PromptFile != nil {
-		return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt cannot acquire file delivery", ErrUnsupportedStart)
+	if hs.Agent.PromptFile == nil ||
+		!bytes.Equal(hs.Agent.PromptFile.Body, []byte(in.Prompt)) ||
+		hs.Agent.PromptFile.Validate() != nil {
+		return ward.HandoffSpec{}, fmt.Errorf("%w: provider prompt file differs from durable input", ErrUnsupportedStart)
 	}
-	// Input files ride only on file delivery, where the prompt names them, and
-	// must be exactly the admitted attachments: a provider can neither add,
-	// drop, rename, nor reorder one.
-	if want := InputFilesFor(in.Spec); !slices.Equal(hs.Agent.Inputs, want) ||
-		(len(want) > 0 && !in.delivery().usesPromptFile()) {
+	// Input files, which the prompt names, must be exactly the admitted
+	// attachments: a provider can neither add, drop, rename, nor reorder one.
+	if want := InputFilesFor(in.Spec); !slices.Equal(hs.Agent.Inputs, want) {
 		return ward.HandoffSpec{}, fmt.Errorf("%w: provider input files differ from admitted attachments", ErrUnsupportedStart)
 	}
 	// The provider chooses vendor-specific containment details, but it cannot
@@ -386,10 +380,9 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 // carries. The declared set comes from the run's durable policy, read
 // strictly: the profile was admitted against this policy, and a set that is
 // missing or malformed refuses the start instead of narrowing to
-// provider_only. An intent written before adopted hosts existed records no
-// set and carries the declared one.
+// provider_only.
 //
-// Otherwise the handoff carries the set recorded at start, never a live read:
+// The handoff carries the set recorded at start, never a live read:
 // ward binds RegistryHosts into the journaled spec digest, so a host adopted
 // mid-run must not change a recovery's rebuild. The record is decoded from
 // the state file, so it is re-gated here: it must hold every declared host,
@@ -404,8 +397,11 @@ func (d *Driver) handoffRegistryHosts(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
 	}
+	// Every launched provider_registry start records its set, so an empty
+	// record was written before adopted hosts existed.
 	if len(in.RegistryHosts) == 0 {
-		return declared.Hosts, nil
+		return nil, fmt.Errorf("%w: provider_registry intent records no registry set",
+			ErrUnsupportedStart)
 	}
 	for _, host := range declared.Hosts {
 		if !slices.Contains(in.RegistryHosts, host) {

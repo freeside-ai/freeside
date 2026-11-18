@@ -202,8 +202,8 @@ func TestConformanceHandoffUsesWriterLaunch(t *testing.T) {
 	}
 }
 
-// duplexTranscript wraps a transcript in the control records a file_v6
-// launch adds: the initialize answer first, an event, and the get_usage
+// duplexTranscript wraps a transcript in the control records the usage
+// driver adds: the initialize answer first, an event, and the get_usage
 // answer last.
 func duplexTranscript(body []byte) []byte {
 	return slices.Concat(
@@ -215,7 +215,7 @@ func duplexTranscript(body []byte) []byte {
 }
 
 // The conformance launch is the writer launch, so its judge reads a duplex
-// transcript under file_v6 and must ignore the control records.
+// transcript and must ignore the control records.
 func TestConformanceJudgeReadsADuplexTranscript(t *testing.T) {
 	t.Parallel()
 	severed, completed, err := judgeConformanceTranscript(
@@ -225,7 +225,7 @@ func TestConformanceJudgeReadsADuplexTranscript(t *testing.T) {
 	}
 }
 
-// The specification stage keeps file_v5's command, so the specifier never
+// The specification stage runs no usage driver, so the specifier never
 // reads a duplex transcript; this pins that it would still decode one.
 func TestSpecifierDecodesADuplexTranscript(t *testing.T) {
 	t.Parallel()

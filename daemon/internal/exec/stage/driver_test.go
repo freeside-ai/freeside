@@ -104,7 +104,7 @@ func (p testProvider) Workspace(id domain.InvocationID) string {
 
 func (testProvider) PrepareFailedStatus() int { return testPrepareFailedStatus }
 
-func (testProvider) PromptDelivery() PromptDelivery { return PromptArgument }
+func (testProvider) PromptDelivery() PromptDelivery { return PromptFileV8 }
 
 func (testProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
 	return renderPromptParts(durableInputs{
@@ -212,6 +212,7 @@ func (p testProvider) HandoffSpec(
 				Manifest: ward.CredentialManifestSetupToken,
 			}},
 			VendorInstructions: in.Instructions,
+			PromptFile:         ward.NewPromptFile([]byte(in.Prompt)),
 		},
 		AuthStoreLease: &ward.AuthStoreLeaseClaim{
 			AuthIdentityID: spec.AuthIdentityID, Holder: in.InvocationID,
@@ -788,11 +789,10 @@ func (p refusingProvider) RenderPrompt(ProviderPromptInputs) (string, error) {
 }
 
 // A prompt refusal longer than the summary cap keeps its cause in the
-// committed summary, and an intent an older daemon committed with the
-// head-only summary of the same refusal still reconstructs: reconstruction
-// re-renders the prompt and accepts either bound of its error, and nothing
-// else.
-func TestOverCapPromptRefusalKeepsItsCauseAndReconstructsTheHeadOnlyForm(t *testing.T) {
+// committed summary, and reconstruction accepts only that bound of the
+// re-rendered error: the head-only summary an older daemon committed for
+// the same refusal is refused.
+func TestOverCapPromptRefusalKeepsItsCauseAndRefusesTheHeadOnlyForm(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	records := newStubExports()
@@ -845,17 +845,8 @@ func TestOverCapPromptRefusalKeepsItsCauseAndReconstructsTheHeadOnlyForm(t *test
 	}
 
 	commitSummary(legacy)
-	in, err := d.loadIntent(ctx, testInvoke)
-	if err != nil {
-		t.Fatalf("head-only refusal summary from an older daemon failed reconstruction: %v", err)
-	}
-	if in.Result.Summary != legacy {
-		t.Fatalf("reconstructed summary = %q, want the stored head-only form", in.Result.Summary)
-	}
-
-	commitSummary(legacy + "x")
 	if _, err := d.loadIntent(ctx, testInvoke); !errors.Is(err, ErrUnsupportedStart) {
-		t.Fatalf("summary derived from neither bound loaded with err %v, want ErrUnsupportedStart", err)
+		t.Fatalf("head-only refusal summary loaded with err %v, want ErrUnsupportedStart", err)
 	}
 }
 
@@ -1668,7 +1659,7 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 
@@ -1748,8 +1739,8 @@ func testHandoffIntent(t *testing.T, d *Driver) intent {
 	return intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs), Instructions: instructions,
-		RecordedAt: fixedNow, CommitDate: fixedNow,
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
+		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 }
 
@@ -1948,7 +1939,7 @@ func TestHandoffSpecCommandTracksTheRecordNotComposition(t *testing.T) {
 		return intent{
 			InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 			Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-			Prompt: prompt, Inputs: durableInputsFrom(inputs),
+			Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 			Instructions: instructions, Preparation: prep,
 			RecordedAt: fixedNow, CommitDate: fixedNow,
 		}
@@ -2031,7 +2022,7 @@ func TestDecodeIntentReGatesPreparation(t *testing.T) {
 	}
 	valid := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
-		Spec: spec, Seed: "seed", Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Spec: spec, Seed: "seed", Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, Preparation: []string{projectimage.PreparationPath},
 		RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
@@ -2090,7 +2081,8 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 	base := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)), Prompt: prompt,
-		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
+		PromptDelivery: PromptFileV8,
+		Instructions:   instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	tests := []struct {
 		name string
@@ -2966,7 +2958,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durable,
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durable,
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	if err := d.saveIntent(in); err != nil {
@@ -3008,12 +3000,15 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 		})
 	}
 
-	historical := in
-	historical.Inputs.PriorArtifacts = nil
-	historical.Inputs.PriorArtifactsPersisted = false
-	historical.Prompt, _ = renderPromptParts(historical.Inputs)
-	if err := d.regate(context.Background(), historical, false); err != nil {
-		t.Fatalf("historical intent without persisted prior bodies = %v", err)
+	// An intent from before prior bodies were persisted carries neither the
+	// bodies nor the marker, and a prompt rendered without them. It is refused
+	// rather than read as a start with no prior artifacts.
+	unpersisted := in
+	unpersisted.Inputs.PriorArtifacts = nil
+	unpersisted.Inputs.PriorArtifactsPersisted = false
+	unpersisted.Prompt, _ = renderPromptParts(unpersisted.Inputs)
+	if err := d.regate(context.Background(), unpersisted, false); !errors.Is(err, ErrUnsupportedStart) {
+		t.Fatalf("intent without persisted prior bodies = %v, want %v", err, ErrUnsupportedStart)
 	}
 
 	if err := d.saveIntent(in); err != nil {
@@ -3073,7 +3068,7 @@ func TestRecoveryOfLostHandoffReportsNoResult(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	if err := d.saveIntent(in); err != nil {
