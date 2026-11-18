@@ -675,7 +675,7 @@ func TestLiveImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatalf("restore driver intent record: %v", err)
 	}
-	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
+	if _, err := inspectChecked(t, ctx, d, testInvoke); !errors.Is(err, drift) {
 		t.Fatalf("Inspect after phase-write retry = %v, want current-policy refusal", err)
 	}
 	persisted, err := d.loadIntentAdmission(ctx, testInvoke)
@@ -754,7 +754,7 @@ func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T)
 	if failed, err := decodeIntent(body); err != nil || failed.Phase == phaseImportPending {
 		t.Fatalf("intent after failed phase write = %#v, %v; want the import phase unpersisted", failed, err)
 	}
-	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
+	if _, err := inspectChecked(t, ctx, d, testInvoke); !errors.Is(err, drift) {
 		t.Fatalf("Inspect after recovered phase-write retry = %v, want current-policy refusal", err)
 	}
 	persisted, err := d.loadIntentAdmission(ctx, testInvoke)
@@ -1101,7 +1101,7 @@ func TestLiveImportRefusalRemainsBoundToCurrentPolicy(t *testing.T) {
 	if err := d.saveIntent(persisted); err != nil {
 		t.Fatalf("tamper import phase: %v", err)
 	}
-	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
+	if _, err := inspectChecked(t, ctx, d, testInvoke); !errors.Is(err, drift) {
 		t.Fatalf("Inspect after private phase rollback = %v, want same current refusal", err)
 	}
 	if currentImportCalls != 1 {
