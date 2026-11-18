@@ -1455,10 +1455,13 @@ struct TaskPageView: View {
         {
             TaskTimeStripView(
                 strip: strip,
-                titles: Dictionary(
-                    timeline.sections.flatMap(\.runs).map { ($0.run_id, TaskTimelinePresentation.runTitle($0)) },
-                    uniquingKeysWith: { first, _ in first }),
-                onOpenRun: onOpenRun
+                // The outline row's Runs popup lists the same runs.
+                runs: timeline.sections.flatMap(\.runs).map {
+                    .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
+                },
+                onChooseRun: { jump(toRun: $0, in: timeline) },
+                onOpenRun: onOpenRun,
+                rendersInteractiveControls: screenshotTimeline == nil
             )
         }
     }

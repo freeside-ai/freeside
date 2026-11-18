@@ -44,6 +44,42 @@ import Testing
                 + "waiting on you 26 minutes, held 20 minutes, other 5 minutes.")
     }
 
+    /// One run's strip cut into `segments`, each `(kind, seconds)` in turn.
+    private func oneRun(_ segments: [(RunTimeStrip.Kind, TimeInterval)]) -> TaskTimeStrip.Strip {
+        let start = RunFixtures.taskStripNow
+        var cuts: [RunTimeStrip.Segment] = []
+        var at = start
+        for (kind, seconds) in segments {
+            cuts.append(.init(kind: kind, start: at, end: at.addingTimeInterval(seconds)))
+            at = at.addingTimeInterval(seconds)
+        }
+        return TaskTimeStrip.Strip(parts: [
+            .run(.init(runID: RunFixtures.taskStripRetryRunID, start: start, end: at, segments: cuts))
+        ])
+    }
+
+    /// The legend names a kind only when its total shows as more than
+    /// `0m` (#3373): a kind with no time, or with 20 seconds, which the
+    /// legend would draw as `0m`, is left out, and 40 seconds, drawn as
+    /// `1m`, stays.
+    @Test func theLegendNamesOnlyTheKindsWhoseTotalShowsAsMoreThanNothing() throws {
+        #expect(TaskTimeStripView.legendKinds(try strip(), locale: enUS) == RunTimeStrip.Kind.allCases)
+        let strip = oneRun([(.agentWorking, 1_800), (.waitingOnYou, 20), (.held, 40)])
+        #expect(TaskTimeStripView.legendKinds(strip, locale: enUS) == [.agentWorking, .held])
+    }
+
+    /// A strip whose every kind shows as `0m` keeps `Other`, so the legend
+    /// is never empty.
+    @Test func aStripWithNoTimeToShowKeepsOther() {
+        #expect(TaskTimeStripView.legendKinds(oneRun([(.agentWorking, 20)]), locale: enUS) == [.other])
+    }
+
+    /// `Between runs` follows the same rule: one run has none to name.
+    @Test func betweenRunsShowsOnlyWithTimeBetweenRuns() throws {
+        #expect(TaskTimeStripView.showsBetweenRuns(try strip(), locale: enUS))
+        #expect(!TaskTimeStripView.showsBetweenRuns(oneRun([(.agentWorking, 1_800)]), locale: enUS))
+    }
+
     /// Each run's part opens that run and says its title, length, and span;
     /// the time between runs opens nothing.
     @Test func eachRunsPartOpensItsRunAndBetweenRunsOpensNothing() throws {

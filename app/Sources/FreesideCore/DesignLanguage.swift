@@ -530,6 +530,9 @@ enum FreesideFont {
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", ladder.actionLabel, relativeTo: .body) }
     /// A text action: the link's size, medium.
     static var noticeAction: Font { fixed("IBMPlexSans-Medm", ladder.link, relativeTo: .body) }
+    /// A menu drawn as its text, such as the Elapsed line's runs menu: the
+    /// fact label's size, semibold.
+    static var textMenu: Font { fixed("IBMPlexSans-SmBld", ladder.label, relativeTo: .callout) }
     /// A rail entry's title: the fact label's size, semibold on the entry
     /// the rail stands on.
     static func railTitle(emphasized: Bool) -> Font {
