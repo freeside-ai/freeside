@@ -233,7 +233,7 @@ func TestSubmitBindsLaunchCompositionManifest(t *testing.T) {
 		"no project":            {func(m *compositionManifest) { m.Project = "" }, "binds no submission and no launch"},
 		"failed launch":         {func(m *compositionManifest) { m.Status = compositionFailed }, "is not a passing"},
 		"v1 launch": {func(m *compositionManifest) {
-			m.Version = legacyCompositionManifestVersion
+			m.Version = "freeside-production-composition-v1"
 		}, "is not a passing"},
 	}
 	for name, tc := range cases {
@@ -457,15 +457,15 @@ func launchSubmitConfig(t *testing.T, root, dbPath string) submitCommandConfig {
 	}
 }
 
-// TestSubmitReplaysAV1Manifest keeps a submission bound to a per-submission
-// manifest from before launch manifests: the v1 shape is v2's without the
-// launch fields.
-func TestSubmitReplaysAV1Manifest(t *testing.T) {
+// TestSubmitRefusesAV1Manifest pins that a per-submission manifest from
+// before launch manifests no longer binds a submission: no current preflight
+// writes the v1 shape, so it is refused rather than read as v2.
+func TestSubmitRefusesAV1Manifest(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	manifest, _ := submissionCompositionManifest(t, "proj-submit", taskPath, policyPath, publicationPath)
-	legacy := bytes.Replace(manifest, []byte(compositionManifestVersion), []byte(legacyCompositionManifestVersion), 1)
+	legacy := bytes.Replace(manifest, []byte(compositionManifestVersion), []byte("freeside-production-composition-v1"), 1)
 	manifestPath := filepath.Join(root, "composition.json")
 	if err := os.WriteFile(manifestPath, legacy, 0o600); err != nil {
 		t.Fatal(err)
@@ -476,8 +476,8 @@ func TestSubmitReplaysAV1Manifest(t *testing.T) {
 		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		CompositionPath: manifestPath, RequireComposition: true, SubmissionID: "composition-test",
 		ProjectID: "proj-submit",
-	}); err != nil {
-		t.Fatalf("v1 manifest submit: %v", err)
+	}); err == nil || !strings.Contains(err.Error(), "is not a passing "+compositionManifestVersion) {
+		t.Fatalf("v1 manifest submit = %v, want the version refusal", err)
 	}
 }
 

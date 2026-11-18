@@ -44,7 +44,6 @@ import (
 
 const (
 	compositionManifestVersion              = "freeside-production-composition-v2"
-	legacyCompositionManifestVersion        = "freeside-production-composition-v1"
 	preflightMaxSeedEntries                 = 100_000
 	preflightMaxShadowReviewCredentialBytes = 1 << 20
 )
@@ -470,7 +469,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags := flag.NewFlagSet("freesided preflight", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var cfg preflightConfig
-	flags.StringVar(&cfg.SubmissionID, "submission-id", "", "saved submission identity (omit only to inspect a retained legacy run)")
+	flags.StringVar(&cfg.SubmissionID, "submission-id", "", "saved submission identity (required outside -launch)")
 	flags.StringVar(&cfg.RigTokenFile, "rig-token-file", "", "rig hold acquisition JSON (required)")
 	flags.StringVar(&cfg.ServerURL, "server-url", "", "operator client URL for the leased listener (required)")
 	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "Apple container CLI path")
@@ -1191,6 +1190,9 @@ func agentSelectionMarkedFix(enrollment domain.ClientEnrollmentID) string {
 }
 
 func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compositionIdentity, error) {
+	if cfg.SubmissionID == "" {
+		return compositionIdentity{}, errors.New("-submission-id is required outside -launch")
+	}
 	spec, err := readSubmissionFile(cfg.TaskPath)
 	if err != nil {
 		return compositionIdentity{}, err
@@ -1230,21 +1232,17 @@ func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compo
 		return compositionIdentity{}, err
 	}
 	// The same refusal submit makes, raised here so the harness stops before
-	// it starts a daemon. An empty identity only inspects a retained legacy
-	// run, and a session that submitted before the rule resumes through this
-	// check with the inputs its journal saved.
-	if cfg.SubmissionID != "" {
-		if _, err := submittedSourceReference(spec.body, publication); err != nil &&
-			!retainedSubmissionHolds(cfg.DBPath, cfg.SubmissionID, spec.body, publicationFile.body) {
-			return compositionIdentity{}, err
-		}
+	// it starts a daemon. A session that submitted before the rule resumes
+	// through this check with the inputs its journal saved.
+	if _, err := submittedSourceReference(spec.body, publication); err != nil &&
+		!retainedSubmissionHolds(cfg.DBPath, cfg.SubmissionID, spec.body, publicationFile.body) {
+		return compositionIdentity{}, err
 	}
 	publicationBody, err := json.Marshal(publication)
 	if err != nil {
 		return compositionIdentity{}, err
 	}
-	publicationDigest := publicationFile.digest
-	publicationIdentityDigest := submissionBytes(publicationBody).digest
+	publicationDigest := submissionBytes(publicationBody).digest
 	var (
 		workUnit       *domain.WorkUnitDeclarationInput
 		workUnitDigest domain.Digest
@@ -1278,26 +1276,17 @@ func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compo
 			return compositionIdentity{}, err
 		}
 		workUnitDigest = submissionBytes(canonicalBody).digest
-	} else if cfg.SubmissionID != "" &&
-		!retainedUndeclaredSubmissionHolds(cfg.DBPath, cfg.SubmissionID, spec.body, publicationFile.body) {
-		// Submit's declaration refusal, with the exceptions the source rule
-		// above has: legacy inspection, and a session that submitted without
-		// a declaration before one was required.
+	} else if !retainedUndeclaredSubmissionHolds(cfg.DBPath, cfg.SubmissionID, spec.body, publicationFile.body) {
+		// Submit's declaration refusal, with the exception the source rule
+		// above has: a session that submitted without a declaration before
+		// one was required.
 		return compositionIdentity{}, errWorkUnitRequired
 	}
-	runID := engine.SubmissionRunID(
-		cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest,
-	)
-	// An empty identity is the documented retained-legacy inspection mode; it
-	// cannot authorize a new submission, so preserve its immutable policy.
-	if cfg.SubmissionID != "" {
-		if !validSubmissionID(cfg.SubmissionID) {
-			return compositionIdentity{}, errors.New("invalid submission identity")
-		}
-		publicationDigest = publicationIdentityDigest
-		runID = engine.ManualSubmissionRunID("cli:"+cfg.SubmissionID,
-			cfg.ProjectID, spec.digest, policyDigest, publicationIdentityDigest, workUnitDigest)
+	if !validSubmissionID(cfg.SubmissionID) {
+		return compositionIdentity{}, errors.New("invalid submission identity")
 	}
+	runID := engine.ManualSubmissionRunID("cli:"+cfg.SubmissionID,
+		cfg.ProjectID, spec.digest, policyDigest, publicationDigest, workUnitDigest)
 	specificationRunID, err := engine.SpecificationRunIDForImplementation(runID)
 	if err != nil {
 		return compositionIdentity{}, err
@@ -1309,11 +1298,9 @@ func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compo
 	if err := engine.SubmittedPathBoundary(resolvedPolicy); err != nil {
 		return compositionIdentity{}, err
 	}
-	if cfg.SubmissionID != "" {
-		if err := engine.SubmittedEgressPolicy(resolvedPolicy); err != nil {
-			if !retainedPreflightPolicyMatches(ctx, cfg, resolvedPolicy) {
-				return compositionIdentity{}, err
-			}
+	if err := engine.SubmittedEgressPolicy(resolvedPolicy); err != nil {
+		if !retainedPreflightPolicyMatches(ctx, cfg, resolvedPolicy) {
+			return compositionIdentity{}, err
 		}
 	}
 	if _, err := admissionauth.ResolvedPathAllowlist(resolvedPolicy, resolvedPolicy.Digest, cfg.AllowedPaths); err != nil {

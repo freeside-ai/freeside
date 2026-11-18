@@ -1003,12 +1003,7 @@ func validateSubmissionComposition(
 		return false, err
 	}
 	launch = manifest.Identity == (compositionIdentity{})
-	// A v1 manifest is a per-submission one written before launch manifests
-	// existed; its shape is v2's without the launch fields, so a retained
-	// submission bound to one still replays.
-	version := manifest.Version == compositionManifestVersion ||
-		manifest.Version == legacyCompositionManifestVersion && !launch
-	if !version || manifest.Status != compositionPassed {
+	if manifest.Version != compositionManifestVersion || manifest.Status != compositionPassed {
 		return false, fmt.Errorf("manifest is not a passing %s composition: %w", compositionManifestVersion, domain.ErrParentKeyMismatch)
 	}
 	if launch {

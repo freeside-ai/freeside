@@ -149,11 +149,11 @@ func TestRetainedUndeclaredSubmissionDoesNotCreateWork(t *testing.T) {
 }
 
 // undeclaredPreflight is the preflight invocation for undeclaredSubmission
-// under a submission identity, with no -work-unit.
+// under a submission identity, with the fixture's -work-unit cleared.
 func undeclaredPreflight(t *testing.T, submissionID string) ([]string, *fakePreflightEnvironment, preflightConfig) {
 	t.Helper()
 	args, env := preflightFixture(t)
-	args = append(args, "-submission-id", submissionID)
+	args = append(args, "-work-unit", "", "-submission-id", submissionID)
 	cfg, err := parsePreflightConfig(args, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
@@ -192,16 +192,6 @@ func TestPreflightRequiresWorkUnit(t *testing.T) {
 	manifest, err = runSourcePreflight(t, declared, env)
 	if check := sourceIdentityCheck(t, manifest); err != nil || check.Status != compositionPassed {
 		t.Fatalf("declared preflight = %v, identity check %s (%s), want passed", err, check.Status, check.Evidence)
-	}
-
-	// With no submission identity preflight only inspects a retained legacy
-	// run, which the rule does not reach.
-	legacy, err := parsePreflightConfig(args[:len(args)-2], &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := inspectCompositionIdentity(t.Context(), legacy); err != nil {
-		t.Fatalf("legacy inspection = %v", err)
 	}
 }
 
