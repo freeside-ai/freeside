@@ -396,10 +396,10 @@ func TestProductionDeliveryRefusalReplayConvergesAfterDelivery(t *testing.T) {
 	assertSameItemJSON(t, before, after)
 }
 
-// TestProductionDeliveryRefusalReplayConvergesOnLegacyItem: an item raised
-// before #979 carries no admitted facts. A replay drops them before comparing,
-// and must still converge on that stored body.
-func TestProductionDeliveryRefusalReplayConvergesOnLegacyItem(t *testing.T) {
+// TestProductionDeliveryRefusalReplayRefusesItemWithoutAdmittedFacts: an
+// admitted delivery refusal has recorded its admitted facts since #979, so a
+// stored item without them is not the replay's and the replay refuses (#3323).
+func TestProductionDeliveryRefusalReplayRefusesItemWithoutAdmittedFacts(t *testing.T) {
 	t.Parallel()
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	stage, ok := findProductionStage(f.run)
@@ -441,11 +441,9 @@ func TestProductionDeliveryRefusalReplayConvergesOnLegacyItem(t *testing.T) {
 	}
 	if err := f.engine.recordProductionDeliveryRefusal(
 		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
-	); err != nil {
-		t.Fatalf("replayed delivery refusal over a legacy item = %v, want nil", err)
+	); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("replayed delivery refusal over an item without admitted facts = %v, want ErrImmutableTransition", err)
 	}
-	after, _ := f.item(t, f.failureItemID())
-	assertSameItemJSON(t, before, after)
 }
 
 // TestProductionDeliveryRefusalReplayConvergesAfterProjectRename: the store
