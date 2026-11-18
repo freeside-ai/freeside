@@ -16,6 +16,16 @@ import (
 // own once an image serves the base.
 var ErrProjectImageUnserved = errors.New("no admitted project image serves the run's base")
 
+// ErrRunBaseLeftBranch is what image selection returns when the base it
+// selects at is no longer on its base branch, as after a force-push past it.
+// When that base is the one the run recorded at its first admission, no
+// later pass can admit the attempt, since a run's base is set once (#3203):
+// the dispatch lanes with a terminal pre-start path stop it with an
+// operator-visible failure (runBaseLeftBranch), and the operator recovers by
+// retrying, which admits a new run at the current tip. Otherwise it holds as
+// input_unavailable (holdClasses).
+var ErrRunBaseLeftBranch = errors.New("the run's base is no longer on its branch")
+
 // ProjectImageSelection is what selecting the writer image reads. Every
 // image here is decoded store state, so SelectProjectImage trusts none of
 // it: each candidate is re-gated before it is chosen.

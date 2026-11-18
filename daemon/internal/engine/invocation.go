@@ -344,6 +344,15 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			namingRuns = append(namingRuns, binding.run)
 		}
 		if err != nil {
+			if runBaseLeftBranch(binding.run, err) {
+				if err := e.endBaseHold(ctx, binding.run.ID); err != nil {
+					return started, err
+				}
+				if err := e.recordSpecificationFailure(ctx, binding.run, request, exec.StatusFailed, err.Error()); err != nil {
+					return started, err
+				}
+				continue
+			}
 			if reason, ok := dispatchHoldReason(err); ok {
 				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
@@ -418,6 +427,15 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
+			if runBaseLeftBranch(binding.run, err) {
+				if err := e.endBaseHold(ctx, binding.run.ID); err != nil {
+					return started, err
+				}
+				if err := e.acceptSpecDiscussionReply(ctx, request, unavailableSpecDiscussionReply); err != nil {
+					return started, err
+				}
+				continue
+			}
 			if reason, ok := dispatchHoldReason(err); ok {
 				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
@@ -471,7 +489,12 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
-			if errors.Is(err, ErrRemediationInputUndeliverable) {
+			if runBaseLeftBranch(binding.run, err) {
+				if holdErr := e.endBaseHold(ctx, binding.run.ID); holdErr != nil {
+					return started, holdErr
+				}
+			}
+			if errors.Is(err, ErrRemediationInputUndeliverable) || runBaseLeftBranch(binding.run, err) {
 				if failureErr := e.recordProductionDeliveryRefusal(
 					ctx, binding.run, stage, request.InvocationID, err.Error(),
 				); failureErr != nil {
@@ -569,7 +592,12 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			namingRuns = append(namingRuns, binding.run)
 		}
 		if err != nil {
-			if errors.Is(err, ErrProductionInputUndeliverable) {
+			if runBaseLeftBranch(binding.run, err) {
+				if holdErr := e.endBaseHold(ctx, binding.run.ID); holdErr != nil {
+					return started, holdErr
+				}
+			}
+			if errors.Is(err, ErrProductionInputUndeliverable) || runBaseLeftBranch(binding.run, err) {
 				if failureErr := e.recordProductionDeliveryRefusal(
 					ctx, binding.run, stage, request.InvocationID, err.Error(),
 				); failureErr != nil {
@@ -633,7 +661,12 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
-			if errors.Is(err, ErrProductionInputUndeliverable) {
+			if runBaseLeftBranch(binding.run, err) {
+				if holdErr := e.endBaseHold(ctx, binding.run.ID); holdErr != nil {
+					return started, holdErr
+				}
+			}
+			if errors.Is(err, ErrProductionInputUndeliverable) || runBaseLeftBranch(binding.run, err) {
 				if failureErr := e.recordProductionDeliveryRefusal(
 					ctx, binding.run, stage, request.InvocationID, err.Error(),
 				); failureErr != nil {
@@ -659,6 +692,30 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 	}
 	return started, nil
+}
+
+// runBaseLeftBranch reports whether err stops run's attempt instead of
+// holding it: image selection found the run's base off its branch
+// (ErrRunBaseLeftBranch), and that base is the one the run recorded at its
+// first admission, so no later pass can admit the attempt. A run with no
+// recorded base selected at the stored tip, which the tip watch may not have
+// reread since a force-push; its refusal holds as input_unavailable
+// (holdClasses) until the next pass admits it at the new tip. A run admitted
+// before #3203 recorded no base either, and holds as it did.
+func runBaseLeftBranch(run domain.Run, err error) bool {
+	return run.Base != nil && errors.Is(err, ErrRunBaseLeftBranch)
+}
+
+// endBaseHold clears the input_unavailable hold an earlier pass may have
+// recorded for run while its base could not be read, before its attempt is
+// stopped (runBaseLeftBranch). The held-work notice reads the hold, so left
+// in place it would keep reporting the stopped run as waiting. It runs
+// before the stop is recorded: a pass that fails between the two stops the
+// attempt again.
+func (e *Engine) endBaseHold(ctx context.Context, runID domain.RunID) error {
+	return e.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ClearRunHoldCause(ctx, runID, domain.HoldInputUnavailable)
+	})
 }
 
 // dispatchIntent runs the lane-independent half of one dispatch: admit if no

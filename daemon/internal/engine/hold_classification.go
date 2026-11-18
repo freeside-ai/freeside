@@ -75,6 +75,16 @@ var holdClasses = []holdClass{
 		sentinel: exec.ErrInputUnavailable, action: holdActionInvocation,
 		reason: domain.HoldInputUnavailable,
 	},
+	// A run's recorded base off its branch stops the attempt in every lane
+	// with a terminal pre-start path (runBaseLeftBranch) before this row is
+	// read. It holds the rest: a run with no recorded base, whose stored
+	// tip the tip watch has not yet reread, and the generic discuss lane,
+	// which has no such path. Either way it holds as it did before image
+	// selection told this case apart, rather than failing the pass.
+	{
+		sentinel: ErrRunBaseLeftBranch, action: holdActionInvocation,
+		reason: domain.HoldInputUnavailable,
+	},
 	// An update drain holds each new launch on its own, not the pass: an
 	// intent whose admission was recorded before the drain is running work
 	// and must still start, or its held slot would keep the restart from
