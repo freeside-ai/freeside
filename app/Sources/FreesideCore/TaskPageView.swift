@@ -129,6 +129,9 @@ struct TaskPageView: View {
         /// meanwhile, and holds nothing, so the layout the change first
         /// draws isn't taken for the reader's place.
         var pendingMove: PendingMove?
+        /// The lead as `onChange` last reported it, which it does only after
+        /// the layout of the update that changed it.
+        var lead: String?
         /// Each hold point's top in the page's own space, which layout moves
         /// and scrolling never does, and the marker that last reported it.
         /// A point that stops drawing leaves.
@@ -343,16 +346,19 @@ struct TaskPageView: View {
                 }
             }
             .id(PageTop.top)
+            // Seeded as the page appears, not from the restoring task, which
+            // starts later and would hold the view of the update that
+            // started it.
+            .onAppear { place.lead = leadingItemID }
             .task { await restorePlace() }
             .onChange(of: chosenSection) { held?.chosenSection = chosenSection }
             .onChange(of: memory?.cardOpenings) { moveToOpenedCard() }
-            // `repairSelection` moves the lead only off a card that closed,
-            // and never seats one, so a lead arriving where none was, or
-            // moving off a card still open, is the operator choosing it.
             .onChange(of: leadingItemID) { previous, current in
-                let chosen = previous.map(openItemIDs.contains) ?? (current != nil)
+                place.lead = current
                 // An open the memory counted has already started the move.
-                if chosen, place.pendingMove != .toCard {
+                if Self.operatorChose(from: previous, to: current, open: openItemIDs),
+                    place.pendingMove != .toCard
+                {
                     moveToOpenedCard()
                 }
             }
@@ -571,11 +577,33 @@ struct TaskPageView: View {
     /// Records the reader's place when it changes, and writes it through to
     /// the memory for a later mount.
     private func recordPlace() {
-        guard place.restored, place.pendingMove == nil else { return }
+        guard place.restored, !moveAwaited else { return }
         let anchor = TaskPageAnchor.reading(offsets: place.targetTops.mapValues { $0 - place.rowTop })
         guard anchor != place.anchor else { return }
         place.anchor = anchor
         held?.anchor = anchor
+    }
+
+    /// Whether an operator's move is on its way, so the layout drawn
+    /// meanwhile is neither held nor read as the reader's place. That
+    /// includes a card the operator chose that `onChange` hasn't started
+    /// the move to yet: the host seats it in the update that changes the
+    /// lead, and its tops report during that update's layout, before
+    /// `onChange` runs. Holding the reader there scrolled the page past
+    /// the card and recorded Decisions before the move began, and under
+    /// load the move that followed didn't scroll (#3317).
+    private var moveAwaited: Bool {
+        if place.pendingMove != nil { return true }
+        guard let leadingItemID, leadingItemID != place.lead else { return false }
+        return Self.operatorChose(from: place.lead, to: leadingItemID, open: openItemIDs)
+    }
+
+    /// Whether a lead change is the operator choosing a card.
+    /// `repairSelection` moves the lead only off a card that closed, and
+    /// never seats one, so a lead arriving where none was, or moving off a
+    /// card still open, is the operator choosing it.
+    private static func operatorChose(from previous: String?, to current: String?, open: Set<String>) -> Bool {
+        previous.map(open.contains) ?? (current != nil)
     }
 
     /// Holds the reader's place when layout above it changes: a card
@@ -613,7 +641,7 @@ struct TaskPageView: View {
     /// Scrolls by the distance the reader's content moved, unless the page
     /// is still returning to its place or the operator is moving it.
     private func correct(by moved: CGFloat) {
-        guard place.restored, place.pendingMove == nil, abs(moved) >= 0.5, let scrollBy else { return }
+        guard place.restored, !moveAwaited, abs(moved) >= 0.5, let scrollBy else { return }
         place.correctedPageTops.append((place.correctedPageTops.last ?? place.pageTop) - moved)
         scrollBy(moved)
     }

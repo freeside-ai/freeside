@@ -823,13 +823,18 @@ import Testing
             defer { page.close() }
             try await page.refresh { $0.items += [Page.question] }
 
-            // From its one-line row.
+            // From its one-line row. The card seats above the reader, and the
+            // page goes up to it without first holding the reader below it
+            // (#3317).
             try await page.scrollIntoTheRail()
+            let readingOffset = page.offset
+            page.samples = []
             Page.openItem(Page.question.item.id, memory: page.memory, navigation: page.navigation)
             try await page.settle(until: { page.memory.anchor == .section(.decisions) })
             #expect(page.lead == Page.question.item.id)
             #expect(page.memory.anchor == .section(.decisions))
             #expect(page.probe.selectedSection == .decisions)
+            #expect(page.samples.allSatisfy { $0 <= readingOffset + 0.5 }, "no hold past the card")
 
             // From the Decisions chip, with no card seated.
             page.navigation.route(to: .task(page.task.task.id))
