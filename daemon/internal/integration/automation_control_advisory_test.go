@@ -55,7 +55,7 @@ func TestProductionWorkflowEditPublishesAsAdvisoryUnderAdvisoryProfile(t *testin
 	for _, want := range []string{
 		"## Freeside Control-Plane Advisories",
 		"Workflow edits act before review",
-		"- workflow configuration: <code>" + advisoryWorkflowPath + "</code> (<code>automation_control_path</code>",
+		"- workflow configuration: <code>" + advisoryWorkflowPath + "</code> (<code>automation&#95;control&#95;path</code>",
 	} {
 		if !strings.Contains(prs[0].Body, want) {
 			t.Errorf("PR body lacks %q:\n%s", want, prs[0].Body)

@@ -2,6 +2,7 @@ package publish
 
 import (
 	"fmt"
+	"html"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,6 +20,12 @@ func TestScopeDecisionRenderBoundsAndEscaping(t *testing.T) {
 	}
 	if strings.Contains(body, "<script>") || strings.Count(body, "<!-- /freeside:scope-decision -->") != 1 || !strings.Contains(body, "remains unmet") {
 		t.Fatalf("unsafe section: %s", body)
+	}
+	// Declared paths and the operator answer render as inert claims (#3054).
+	for _, want := range []string{"<code>src/&#42;.ts</code>", "&lt;!-- /freeside&#58;scope-decision --&gt;</code>"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("section lacks inert claim %q: %s", want, body)
+		}
 	}
 	for _, marker := range []string{scopeDecisionMarkerName, scopeDecisionHeading, strings.ToUpper(scopeDecisionHeading)} {
 		if err := ValidateCandidateBody("prose " + marker); err == nil {
@@ -57,7 +64,8 @@ func TestScopeDecisionRedactsCommandCredentialsBeforeTruncation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(body, "ghp_") || !strings.Contains(body, "[redacted: credential detected]") || !strings.Contains(body, "remains unmet") {
+				// Unescape first: an inert claim would show "ghp_" as "ghp&#95;".
+				if strings.Contains(html.UnescapeString(body), "ghp_") || !strings.Contains(body, "[redacted: credential detected]") || !strings.Contains(body, "remains unmet") {
 					t.Fatal("scope section leaked command material or lost the recorded obligation")
 				}
 				if !reflect.DeepEqual(f, before) {

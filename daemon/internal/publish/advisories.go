@@ -47,9 +47,9 @@ func AdvisoryFindings(findings []domain.CandidateFinding) []domain.CandidateFind
 }
 
 // renderAdvisories renders the deterministic advisories section. Path,
-// kind, and detail are candidate-derived data: each renders through the
-// same escaping code span as a disposition-history claim, under a tighter
-// per-claim bound so eight entries stay a small fraction of the body.
+// kind, and detail are candidate-derived data: each renders as an inert
+// claim (boundedInertClaim), under a tighter per-claim bound so eight
+// entries stay a small fraction of the body.
 func renderAdvisories(findings []domain.CandidateFinding) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%s\n\n%s\n\n", advisoriesOpenMarker, advisoriesHeading)
@@ -61,7 +61,8 @@ func renderAdvisories(findings []domain.CandidateFinding) string {
 	// A workflow edit is advisory only under a profile that opts in (plan
 	// §5.5), and unlike an instruction edit it acts before review, so the
 	// section says so whenever one is present. Without one the section keeps
-	// the bytes it had, so an earlier candidate replays byte-identically.
+	// its earlier wording. Nothing binds the section's bytes: a claim that
+	// renders differently since #3054 changes only a recomposed body.
 	if slices.ContainsFunc(findings, isWorkflowAdvisory) {
 		out.WriteString("Workflow edits act before review: GitHub runs this candidate's workflows " +
 			"when the pull request opens, with a same-repository pull-request job's " +
@@ -77,13 +78,13 @@ func renderAdvisories(findings []domain.CandidateFinding) string {
 		if finding.Category != nil {
 			label = dispositionLabel(string(*finding.Category))
 		}
-		location := "path bytes " + boundedClaim(finding.PathHex, maxRenderedAdvisoryClaimBytes)
+		location := "path bytes " + boundedInertClaim(finding.PathHex, maxRenderedAdvisoryClaimBytes)
 		if finding.Path != "" {
-			location = boundedClaim(finding.Path, maxRenderedAdvisoryClaimBytes)
+			location = boundedInertClaim(finding.Path, maxRenderedAdvisoryClaimBytes)
 		}
-		fmt.Fprintf(&out, "- %s: %s (%s", label, location, boundedClaim(finding.Kind, maxRenderedAdvisoryClaimBytes))
+		fmt.Fprintf(&out, "- %s: %s (%s", label, location, boundedInertClaim(finding.Kind, maxRenderedAdvisoryClaimBytes))
 		if finding.Detail != "" {
-			fmt.Fprintf(&out, "; %s", boundedClaim(finding.Detail, maxRenderedAdvisoryClaimBytes))
+			fmt.Fprintf(&out, "; %s", boundedInertClaim(finding.Detail, maxRenderedAdvisoryClaimBytes))
 		}
 		out.WriteString(")\n")
 	}

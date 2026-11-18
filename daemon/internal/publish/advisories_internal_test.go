@@ -61,8 +61,8 @@ func TestDesiredPRContentRendersAdvisoriesBetweenProseAndHistory(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Freeside Control-Plane Advisories",
-		"- reviewer instructions: <code>docs/AGENTS.md</code> (<code>reviewer_instruction_path</code>)",
-		"- reviewer instructions: path bytes <code>6261</code> (<code>reviewer_instruction_path</code>; <code>deleted &lt;script&gt;</code>)",
+		"- reviewer instructions: <code>docs/AGENTS.md</code> (<code>reviewer&#95;instruction&#95;path</code>)",
+		"- reviewer instructions: path bytes <code>6261</code> (<code>reviewer&#95;instruction&#95;path</code>; <code>deleted &lt;script&gt;</code>)",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body lacks %q:\n%s", want, body)
@@ -95,8 +95,8 @@ func TestRenderAdvisoriesExplainsWorkflowEdits(t *testing.T) {
 	section := renderAdvisories([]domain.CandidateFinding{advisoryFinding("AGENTS.md"), workflow})
 	for _, want := range []string{
 		before,
-		"- workflow configuration: <code>.github/workflows/ci.yml</code> (<code>automation_control_path</code>)",
-		"- reviewer instructions: <code>AGENTS.md</code> (<code>reviewer_instruction_path</code>)",
+		"- workflow configuration: <code>.github/workflows/ci.yml</code> (<code>automation&#95;control&#95;path</code>)",
+		"- reviewer instructions: <code>AGENTS.md</code> (<code>reviewer&#95;instruction&#95;path</code>)",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("section lacks %q:\n%s", want, section)

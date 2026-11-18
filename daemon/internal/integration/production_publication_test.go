@@ -1538,7 +1538,7 @@ func TestProductionReviewerInstructionEditPublishesAsAdvisory(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Freeside Control-Plane Advisories",
-		"- reviewer instructions: <code>AGENTS.md</code> (<code>reviewer_instruction_path</code>",
+		"- reviewer instructions: <code>AGENTS.md</code> (<code>reviewer&#95;instruction&#95;path</code>",
 	} {
 		if !strings.Contains(prs[0].Body, want) {
 			t.Errorf("PR body lacks %q:\n%s", want, prs[0].Body)
