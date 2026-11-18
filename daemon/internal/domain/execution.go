@@ -714,6 +714,13 @@ func (a ExecutionAdmission) Validate() error {
 		return fmt.Errorf("execution admission %s operating_mode %q: %w",
 			a.InvocationID, a.OperatingMode, ErrInvalidOperatingMode)
 	}
+	// The rule NewExecutionAdmission applies: an unattended admission names
+	// its backend configuration. One written before that binding is no
+	// longer read.
+	if a.OperatingMode == ModeUnattended && a.BackendConfigurationDigest == "" {
+		return fmt.Errorf("execution admission %s under mode %q backend configuration: %w",
+			a.InvocationID, a.OperatingMode, ErrConformanceConfigurationUnbound)
+	}
 	if !a.CredentialMode.valid() {
 		return fmt.Errorf("execution admission %s credential_mode %q: %w",
 			a.InvocationID, a.CredentialMode, ErrInvalidCredentialMode)

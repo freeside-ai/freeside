@@ -415,7 +415,10 @@ func TestAdmissionSettingsRevisionsEncoding(t *testing.T) {
 	}
 }
 
-func TestLegacyUnboundUnattendedAdmissionRemainsReconstructable(t *testing.T) {
+// TestUnboundUnattendedAdmissionIsRefused covers the decode path the
+// constructor refuses: an unattended admission with no backend-configuration
+// digest, the shape written before that binding, no longer validates.
+func TestUnboundUnattendedAdmissionIsRefused(t *testing.T) {
 	t.Parallel()
 	in := admissionInput()
 	in.OperatingMode = domain.ModeUnattended
@@ -423,17 +426,14 @@ func TestLegacyUnboundUnattendedAdmissionRemainsReconstructable(t *testing.T) {
 	in.TrustProfileDigest = &profile
 	admission := mustAdmission(t, in)
 
-	// Admissions written before the configuration-binding encoding have no
-	// field and resolve under v2. They remain readable audit history, but the
-	// constructor above still refuses to mint another one.
 	admission.BackendConfigurationDigest = ""
 	id, err := admission.ComputeID()
 	if err != nil {
-		t.Fatalf("legacy ComputeID: %v", err)
+		t.Fatalf("unbound ComputeID: %v", err)
 	}
 	admission.ID = id
-	if err := admission.Validate(); err != nil {
-		t.Fatalf("legacy unattended admission is not reconstructable: %v", err)
+	if err := admission.Validate(); !errors.Is(err, domain.ErrConformanceConfigurationUnbound) {
+		t.Fatalf("Validate() = %v, want %v", err, domain.ErrConformanceConfigurationUnbound)
 	}
 }
 
