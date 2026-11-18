@@ -604,6 +604,26 @@ func TestRenderAuthoredPublicationLiveMarkdownStaysInert(t *testing.T) {
 	}
 }
 
+// GitHub's renderer is the oracle for the delimiter-row escape: without it,
+// each body opens a one-column table and the split code span leaves the
+// mention live (#3073).
+func TestRenderAuthoredBodyProseLiveDelimiterRowsStayInert(t *testing.T) {
+	t.Parallel()
+	liveMarkdownEnabled(t)
+	for _, body := range []string{
+		"x\n-:\n`a @octocat|`",
+		"- x\n  -:\n  `a @octocat|`",
+		"x\n[-:](https://example.com)\n`a @octocat|`",
+	} {
+		htmlOut := renderMarkdownViaGitHub(t, renderAuthoredBodyProse(body))
+		for _, forbidden := range []string{"<table", "user-mention"} {
+			if strings.Contains(htmlOut, forbidden) {
+				t.Errorf("body %q produced %q in GitHub-rendered HTML:\n%s", body, forbidden, htmlOut)
+			}
+		}
+	}
+}
+
 // adversarialSecretCorpus builds authored bodies that split a valid-format PAT
 // with a construct GitHub collapses out of its visible text. Every entry is
 // designed to reconstruct once GitHub renders it; the screen must refuse them
