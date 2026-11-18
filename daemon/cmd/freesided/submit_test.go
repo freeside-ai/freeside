@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +18,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
-	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -114,12 +112,14 @@ func TestSubmitUsageDocumentsResultLanes(t *testing.T) {
 		"task_id is the input freesided inspect task -task takes",
 		"run_id, invocation_id, stage_id, and work_unit_id are",
 		"No deprecated\ndigest or artifact aliases are emitted",
-		"legacy production-only replay leaves\nthe specification fields empty",
 		"spec_digest field returned by GET /runs/{implementation_run_id}",
 	} {
 		if !strings.Contains(output.String(), phrase) {
 			t.Errorf("submit help missing %q:\n%s", phrase, output.String())
 		}
+	}
+	if strings.Contains(output.String(), "-run-id") {
+		t.Errorf("submit help still documents the removed -run-id flag:\n%s", output.String())
 	}
 }
 
@@ -495,16 +495,6 @@ func TestSubmitRequiresTheDefaultManifestToExist(t *testing.T) {
 	}
 }
 
-func TestSubmitCommandRejectsCompositionRunOverride(t *testing.T) {
-	t.Parallel()
-	_, err := runSubmitCommand(t.Context(), submitCommandConfig{
-		CompositionPath: "previously-attested.json", RunID: "override",
-	})
-	if err == nil || !strings.Contains(err.Error(), "cannot override production composition identity") {
-		t.Fatalf("composition run override error = %v, want override refusal", err)
-	}
-}
-
 func submissionCompositionManifest(
 	t *testing.T, projectID domain.ProjectID, taskPath, policyPath, publicationPath string,
 ) ([]byte, compositionIdentity) {
@@ -768,171 +758,6 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("read submitted state: %v", err)
-	}
-}
-
-func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	root := t.TempDir()
-	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
-	cfg := submitCommandConfig{
-		DBPath:   filepath.Join(root, "freeside.db"),
-		TaskPath: taskPath, PolicyPath: policyPath, PublicationPath: publicationPath,
-		ProjectID: "proj-submit",
-	}
-	// This row predates the source-reference rule too: its task is one issue
-	// URL and its publication names none. The run-id lookup must still answer.
-	if err := os.WriteFile(taskPath, []byte("https://github.com/example/project/issues/82\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	spec, err := readSubmissionFile(taskPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyFile, err := readSubmissionFile(policyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var keys []domain.PolicyKey
-	if err := json.Unmarshal(policyFile.body, &keys); err != nil {
-		t.Fatal(err)
-	}
-	// A production-only legacy run predates the specification policy gate.
-	keys = slices.DeleteFunc(keys, func(key domain.PolicyKey) bool {
-		return key.Key == "specification.max_iterations"
-	})
-	// This row predates the intake egress gate. Its lookup must remain readable
-	// even though new submissions with the same declaration are refused.
-	keys = append(keys, domain.PolicyKey{Key: domain.EgressProfilePolicyKey, Value: "provider_unknown", Provenance: keys[0].Provenance})
-	legacyPolicy, err := json.Marshal(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(policyPath, legacyPolicy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	policyDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	publication := engine.ProductionPublication{
-		Title: "Test the task", Body: "## Why\n\nCloses #123.\n",
-		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
-	}
-	publicationBody, err := json.Marshal(publication)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicationDigest := submissionBytes(publicationBody).digest
-	runID := engine.SubmissionRunID(cfg.ProjectID, spec.digest, policyDigest, publicationDigest, "")
-	resolved, err := domain.NewResolvedPolicy(runID, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyBody, err := json.Marshal(resolved.Keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy := submissionBytes(policyBody)
-	specArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadOrCreateTopicKey(cfg.DBPath, false); err != nil {
-		t.Fatal(err)
-	}
-	st := storetest.Open(t, cfg.DBPath, store.Options{})
-	defer func() { _ = st.Close() }()
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := blobs.Put(spec.digest, strings.NewReader(string(spec.body))); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := blobs.Put(policy.digest, strings.NewReader(string(policy.body))); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutArtifact(ctx, specArtifact); err != nil {
-			return err
-		}
-		return tx.PutArtifact(ctx, policyArtifact)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
-		RunID: runID, ProjectID: cfg.ProjectID, SpecArtifactID: specArtifact.ID,
-		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
-	}); err != nil {
-		t.Fatalf("seed pre-specification production run: %v", err)
-	}
-
-	cfg.RunID = runID
-	replay, err := runSubmitCommand(ctx, cfg)
-	if err != nil {
-		t.Fatalf("replay pre-specification production run: %v", err)
-	}
-	if replay.RunID != runID || replay.ImplementationRunID != runID ||
-		replay.SpecificationRunID != "" || replay.SpecificationInvocationID != "" ||
-		replay.SpecificationStageID != "" || replay.SourceDigest != specArtifact.Digest ||
-		replay.SourceArtifactID != specArtifact.ID ||
-		replay.SpecificationPolicyDigest != "" || replay.SpecificationPolicyArtifactID != "" ||
-		replay.SourceIssue != "" || replay.SourceReferenceOmitted != sourceOmittedBeforeRule {
-		t.Fatalf("legacy replay result = %+v", replay)
-	}
-	var seededTask domain.TaskID
-	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		seeded, err := tx.GetRun(ctx, runID)
-		if err != nil {
-			return err
-		}
-		seededTask = seeded.TaskID
-		specificationRunID, err := engine.SpecificationRunIDForImplementation(runID)
-		if err != nil {
-			return err
-		}
-		_, err = tx.GetRun(ctx, specificationRunID)
-		if !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("legacy replay created specification run: %w", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if seededTask == "" || replay.TaskID != seededTask {
-		t.Fatalf("legacy replay task id = %q, want the seeded run's %q", replay.TaskID, seededTask)
-	}
-	issue := 123
-	workUnit := &domain.WorkUnitDeclarationInput{
-		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
-		BoundIssue:          &issue,
-		DeclaredPaths:       engine.DeclaredPathScope(keys),
-	}
-	declaration, err := domain.NewWorkUnitDeclaration(*workUnit, runID, cfg.ProjectID, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.RecordWorkUnitDeclaration(ctx, declaration)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	legacy, found, err := legacyProductionReplay(ctx, st, runID, cfg.ProjectID,
-		specArtifact, policyArtifact, keys, publication, workUnit, publicationDigest)
-	if err != nil || !found {
-		t.Fatalf("legacy work-unit replay = %#v, found=%t, err=%v", legacy, found, err)
-	}
-	if legacy.WorkUnitID != domain.WorkUnitIDForRun(runID) {
-		t.Fatalf("legacy work-unit id = %q, want %q", legacy.WorkUnitID, domain.WorkUnitIDForRun(runID))
-	}
-	if legacy.TaskID != seededTask {
-		t.Fatalf("legacy work-unit task id = %q, want %q", legacy.TaskID, seededTask)
 	}
 }
 

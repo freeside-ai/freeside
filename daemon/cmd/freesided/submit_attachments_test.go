@@ -216,10 +216,6 @@ func TestSubmitCommandRefusesBadAttachments(t *testing.T) {
 	}
 
 	attach := []string{plain}
-	if _, err := runSubmitCommand(ctx, submitCommandConfig{DBPath: base.DBPath, RunID: "run-legacy", AttachPaths: attach}); err == nil ||
-		!strings.Contains(err.Error(), "takes no --attach") {
-		t.Fatalf("lookup with attachments: error = %v, want the lookup-only refusal", err)
-	}
 	if _, err := runSubmitCommand(ctx, submitCommandConfig{DBPath: base.DBPath, RetrySubmissionID: "saved", AttachPaths: attach}); err == nil ||
 		!strings.Contains(err.Error(), "manual retry takes only") {
 		t.Fatalf("retry with attachments: error = %v, want the saved-inputs refusal", err)
@@ -312,10 +308,5 @@ func TestValidateSubmitApplyChecksAttachments(t *testing.T) {
 		}); !errors.Is(err, signet.ErrInvalidSubmitTaskPayload) {
 			t.Fatalf("%s: error = %v, want ErrInvalidSubmitTaskPayload", name, err)
 		}
-	}
-	if err := validateSubmitApply(submitApplyRequest{
-		LegacyRunID: "run-legacy", Attachments: []signet.TaskAttachmentInput{good},
-	}); err == nil || !strings.Contains(err.Error(), "legacy run lookup carries no attachments") {
-		t.Fatalf("legacy lookup with attachments: error = %v, want the legacy refusal", err)
 	}
 }

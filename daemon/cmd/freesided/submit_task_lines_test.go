@@ -252,10 +252,6 @@ func TestSubmitCommandRefusesBadTaskLines(t *testing.T) {
 	}
 
 	chosen := []domain.TaskLineChoice{{Role: domain.RoleReviewer, Agent: "codex"}}
-	if _, err := runSubmitCommand(ctx, submitCommandConfig{DBPath: base.DBPath, RunID: "run-legacy", TaskLines: chosen}); err == nil ||
-		!strings.Contains(err.Error(), "--run-id is lookup-only") {
-		t.Fatalf("lookup with lines: error = %v, want the lookup-only refusal", err)
-	}
 	if _, err := runSubmitCommand(ctx, submitCommandConfig{DBPath: base.DBPath, RetrySubmissionID: "saved", TaskLines: chosen}); err == nil ||
 		!strings.Contains(err.Error(), "manual retry takes only") {
 		t.Fatalf("retry with lines: error = %v, want the saved-inputs refusal", err)
@@ -310,11 +306,6 @@ func TestValidateSubmitApplyChecksTaskLines(t *testing.T) {
 		TaskLines: []domain.TaskLineChoice{reviewer, implementer},
 	}); err == nil || !strings.Contains(err.Error(), "canonical role order") {
 		t.Fatalf("unordered lines: error = %v, want the canonical-order refusal", err)
-	}
-	if err := validateSubmitApply(submitApplyRequest{
-		LegacyRunID: "run-legacy", TaskLines: []domain.TaskLineChoice{implementer, reviewer},
-	}); err == nil || !strings.Contains(err.Error(), "legacy run lookup") {
-		t.Fatalf("legacy lookup with lines: error = %v, want the legacy refusal", err)
 	}
 }
 

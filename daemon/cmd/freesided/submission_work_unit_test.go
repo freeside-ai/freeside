@@ -116,10 +116,6 @@ func TestHistoricalUndeclaredSubmissionStillReplays(t *testing.T) {
 	check("manual retry", replayed, err)
 	replayed, err = runSubmitCommand(t.Context(), cfg)
 	check("repeated identity", replayed, err)
-	legacy := req
-	legacy.LegacyRunID, legacy.SubmissionID = req.ImplementationRunID, ""
-	replayed, err = applySubmission(t.Context(), st, blobs, legacy)
-	check("legacy run lookup", replayed, err)
 
 	// The accepted identity names its undeclared inputs and nothing else, so
 	// a different task under it is still refused, as a conflict.

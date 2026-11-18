@@ -81,11 +81,6 @@ func TestHistoricalManualEgressReplay(t *testing.T) {
 			if _, err := applySubmission(t.Context(), st, blobs, req); err != nil {
 				t.Fatalf("historical replay = %v", err)
 			}
-			legacy := req
-			legacy.LegacyRunID, legacy.SubmissionID = req.ImplementationRunID, ""
-			if _, err := applySubmission(t.Context(), st, blobs, legacy); err != nil {
-				t.Fatalf("specification-backed legacy replay = %v", err)
-			}
 		})
 	}
 }
@@ -136,36 +131,6 @@ func TestHistoricalManualEgressCLIRetry(t *testing.T) {
 				t.Fatalf("retry = %+v, want seeded identities", replayed)
 			}
 		})
-	}
-}
-
-func TestSpecificationBackedLegacyMalformedPolicyDoesNotWriteBlob(t *testing.T) {
-	t.Parallel()
-	seed := egressApplyRequest(t, map[string]string{domain.EgressProfilePolicyKey: "provider_only"})
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "state.db"), store.Options{})
-	blobs, err := signet.NewBlobStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedHistoricalManualSubmission(t, st, blobs, seed)
-	request := seed
-	request.LegacyRunID = seed.ImplementationRunID
-	request.SubmissionID = ""
-	request.Keys = withSubmissionEgress(seed.Keys, map[string]string{domain.RegistrySetPolicyKey: "[]"})
-	request.ResolvedPolicy, err = domain.NewResolvedPolicy(request.SpecificationRunID, request.Keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.PolicyDigest = request.ResolvedPolicy.Digest
-	request.PolicyBody, err = json.Marshal(request.ResolvedPolicy.Keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := applySubmission(t.Context(), st, blobs, request); !errors.Is(err, domain.ErrRegistrySetInvalid) {
-		t.Fatalf("mismatched legacy request = %v, want invalid registry set", err)
-	}
-	if found, err := blobs.Has(request.PolicyDigest); err != nil || found {
-		t.Fatalf("mismatched legacy request stored policy blob: found=%t err=%v", found, err)
 	}
 }
 

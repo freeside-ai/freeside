@@ -23,18 +23,6 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 	if cfg.DBPath == "" {
 		return cfg, errors.New("submit: -db is required")
 	}
-	if cfg.RunID != "" {
-		if cfg.SubmissionID != "" || cfg.RetrySubmissionID != "" {
-			return cfg, errors.New("submit: --run-id is lookup-only and cannot name a new submission")
-		}
-		if len(cfg.TaskLines) != 0 {
-			return cfg, errors.New("submit: --run-id is lookup-only and takes no --task-line")
-		}
-		if len(cfg.AttachPaths) != 0 {
-			return cfg, errors.New("submit: --run-id is lookup-only and takes no --attach")
-		}
-		return cfg, nil
-	}
 	if cfg.RetrySubmissionID != "" {
 		if cfg.SubmissionID != "" || cfg.TaskPath != "" || cfg.PolicyPath != "" || cfg.PublicationPath != "" ||
 			cfg.WorkUnitPath != "" || cfg.CompositionPath != "" || cfg.ProjectID != "" || cfg.RequireComposition ||
@@ -52,7 +40,7 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 		if err := json.Unmarshal(body, &saved); err != nil {
 			return cfg, err
 		}
-		if saved.SubmissionID != cfg.RetrySubmissionID || saved.DBPath != cfg.DBPath || saved.SavedInputs == nil || saved.RunID != "" {
+		if saved.SubmissionID != cfg.RetrySubmissionID || saved.DBPath != cfg.DBPath || saved.SavedInputs == nil {
 			return cfg, errors.New("submit: saved submission ownership disagrees")
 		}
 		return saved, nil
@@ -99,9 +87,6 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 // A manual retry always keeps the original bytes, even when a repeated request
 // supplies equivalent JSON with different formatting.
 func retainSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
-	if cfg.RunID != "" {
-		return cfg, nil
-	}
 	path := submissionJournalPath(cfg.DBPath, cfg.SubmissionID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return cfg, err

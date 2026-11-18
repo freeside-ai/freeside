@@ -388,41 +388,6 @@ func ProductionAttemptRunID(campaignID domain.CampaignID, attemptNumber int) (do
 	return domain.RunID("run-" + hex.EncodeToString(sum[:])), nil
 }
 
-// HasSpecificationIntakeState prevents compatibility replay from treating a
-// current specification-owned implementation as a pre-specification production
-// run. Any partial deterministic state counts as current so SubmitSpecificationRun
-// can authenticate it and fail closed instead of falling back to legacy shape.
-func HasSpecificationIntakeState(
-	ctx context.Context, st *store.Store, specificationRunID, implementationRunID domain.RunID,
-) (bool, error) {
-	if st == nil || specificationRunID == "" || implementationRunID == "" ||
-		specificationRunID == implementationRunID {
-		return false, errors.New("inspect specification intake: store and distinct run IDs are required")
-	}
-	present := false
-	err := st.Read(ctx, func(tx *store.ReadTx) error {
-		if _, err := tx.GetRun(ctx, specificationRunID); err == nil {
-			present = true
-			return nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("inspect specification intake: %w", err)
-		}
-		for _, key := range []string{
-			string(specificationInvocationID(specificationRunID, 1)),
-			specificationImplementationClaimKey(implementationRunID),
-		} {
-			if _, err := tx.GetOutbox(ctx, key); err == nil {
-				present = true
-				return nil
-			} else if !errors.Is(err, store.ErrNotFound) {
-				return fmt.Errorf("inspect specification intake: %w", err)
-			}
-		}
-		return nil
-	})
-	return present, err
-}
-
 // SpecificationDispatchMarkerKey is the outbox key of a reserved specification run's
 // iteration-1 dispatch marker. A caller with an open transaction (the
 // label-intake departure retire) uses it to check start atomically alongside its

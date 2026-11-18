@@ -4539,8 +4539,7 @@ code as the reason of a failure), and whether the specifier escalates.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input
-values is refused. Legacy `--run-id` is lookup-only: it may recover an existing
-historical run but cannot create work.
+values is refused.
 
 `freesided preflight` is the pre-start production-composition gate;
 `freesided deputy` runs the same composition once per start (Run Real Work
