@@ -273,7 +273,9 @@ func TestCompatibleTerminalItemIgnoresSameVersionPersistenceProjections(t *testi
 	}
 }
 
-func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
+// A ready item has carried its readiness summary since the summary existed,
+// so a stored one without it no longer reads as the rebuilt item (#3323).
+func TestCompatibleTerminalItemRefusesReadyItemWithoutReadiness(t *testing.T) {
 	t.Parallel()
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)
@@ -281,10 +283,9 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
 	expected.Readiness = &domain.ReadinessSummary{
 		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
 	}
-	if !compatibleTerminalItem(expected, current) {
-		t.Fatal("legacy nil readiness rejected during recovery compatibility")
+	if compatibleTerminalItem(expected, current) {
+		t.Fatal("stored ready item without readiness accepted during recovery compatibility")
 	}
-
 	foreign := current
 	foreign.Readiness = &domain.ReadinessSummary{
 		Class: domain.ReadinessReadyDegraded, EvaluationSetDigest: "sha256:foreign",
@@ -294,106 +295,17 @@ func TestCompatibleTerminalItemAcceptsLegacyNilReadinessOnly(t *testing.T) {
 	}
 }
 
-// TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly: a ready item
-// persisted before the detail existed recovers against the freshly derived
-// shape, while a persisted detail that disagrees with it is foreign.
-func TestCompatibleTerminalItemAcceptsLegacyNilReadinessDetailOnly(t *testing.T) {
-	t.Parallel()
-	st := watchTestStore(t)
-	current := watchTestItem(t, st, domain.StatusOpen)
-	recipe := domain.Digest("sha256:recipe")
-	detail := domain.ReadinessDetail{
-		EvaluationSetDigest: "sha256:evaluation", CandidateHead: current.PRHeadSHA,
-		Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
-		Requirements: []domain.ReadinessRequirement{{
-			RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
-			Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
-			ProofRecipeDigest: &recipe,
-		}},
-	}
-	expected := current
-	expected.Readiness = &domain.ReadinessSummary{
-		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
-	}
-	expected.ReadinessDetail = &detail
-	if !compatibleTerminalItem(expected, current) {
-		t.Fatal("legacy nil readiness detail rejected during recovery compatibility")
-	}
-
-	foreign := expected
-	foreignDetail := detail
-	foreignDetail.Base.BaseSHA = "other-base"
-	foreign.ReadinessDetail = &foreignDetail
-	if compatibleTerminalItem(expected, foreign) {
-		t.Fatal("conflicting persisted readiness detail accepted during recovery compatibility")
-	}
-}
-
-// TestCompatibleTerminalItemAcceptsLegacyHandoffTipOnly: a ready item stored
-// before the detail named its handoff tip (#1735) recovers against a rebuilt
-// detail that names one, while a stored tip or merge that disagrees with the
-// rebuilt one is foreign.
-func TestCompatibleTerminalItemAcceptsLegacyHandoffTipOnly(t *testing.T) {
-	t.Parallel()
-	st := watchTestStore(t)
-	current := watchTestItem(t, st, domain.StatusOpen)
-	recipe := domain.Digest("sha256:recipe")
-	legacy := domain.ReadinessDetail{
-		EvaluationSetDigest: "sha256:evaluation", CandidateHead: current.PRHeadSHA,
-		Base: domain.ReadinessBoundBase{BaseRef: "main", BaseSHA: "base"},
-		Requirements: []domain.ReadinessRequirement{{
-			RequirementKey: "clean-verification", CheckClass: domain.CheckClassCleanVerification,
-			Kind: domain.RequirementRequired, State: domain.ReadinessRequirementPassed,
-			ProofRecipeDigest: &recipe,
-		}},
-	}
-	current.Readiness = &domain.ReadinessSummary{
-		Class: domain.ReadinessReadyClean, EvaluationSetDigest: "sha256:evaluation",
-	}
-	current.ReadinessDetail = &legacy
-	moved := legacy
-	moved.HandoffTip = "tip"
-	moved.HandoffMerge = &domain.ProspectiveMergeIdentity{
-		BaseSHA: "tip", HeadSHA: current.PRHeadSHA, MergeSHA: "merge",
-	}
-	expected := current
-	expected.ReadinessDetail = &moved
-	if !compatibleTerminalItem(expected, current) {
-		t.Fatal("legacy detail without a handoff tip rejected during recovery compatibility")
-	}
-	if expected.ReadinessDetail.HandoffTip != "tip" || current.ReadinessDetail.HandoffTip != "" {
-		t.Fatal("recovery compatibility mutated a caller's detail")
-	}
-
-	stored := current
-	storedDetail := legacy
-	storedDetail.HandoffTip = "base"
-	stored.ReadinessDetail = &storedDetail
-	if compatibleTerminalItem(expected, stored) {
-		t.Fatal("stored handoff tip that disagrees with the rebuilt one accepted during recovery compatibility")
-	}
-	foreignMerge := moved
-	foreignMerge.HandoffMerge = &domain.ProspectiveMergeIdentity{
-		BaseSHA: "tip", HeadSHA: current.PRHeadSHA, MergeSHA: "other-merge",
-	}
-	stored.ReadinessDetail = &foreignMerge
-	if compatibleTerminalItem(expected, stored) {
-		t.Fatal("stored handoff merge that disagrees with the rebuilt one accepted during recovery compatibility")
-	}
-}
-
-func TestCompatibleTerminalItemAcceptsLegacyNilCardPresentation(t *testing.T) {
+// A shadow-review stop writes its block without facts, and recovery rebuilds
+// the definitive reason's facts, so the stored item still converges.
+func TestCompatibleTerminalItemAcceptsBlockWithoutFacts(t *testing.T) {
 	t.Parallel()
 	st := watchTestStore(t)
 	current := watchTestItem(t, st, domain.StatusOpen)
 	expected := current
-	expected.DisplayNames = &domain.DisplayNames{
-		Project: domain.DisplayName{Text: "owner/repo", Source: domain.DisplayNameSourceName},
-	}
-	rule := domain.TrustRuleVerificationFailed
+	rule := domain.TrustRuleTrustProfileDrift
 	expected.PublishBlock = &domain.PublishBlockFacts{TrustRule: &rule}
 	if !compatibleTerminalItem(expected, current) {
-		t.Fatal("legacy nil card presentation rejected during recovery compatibility")
+		t.Fatal("stored block without facts rejected during recovery compatibility")
 	}
 }
 
