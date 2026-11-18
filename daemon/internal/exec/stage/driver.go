@@ -177,10 +177,35 @@ type Driver struct {
 	// recoveryFailures holds, per invocation, the error a recovery Inspect
 	// started returned, for the next Inspect to report. Guarded by mu.
 	recoveryFailures map[domain.InvocationID]error
-	// recoveries counts the recoveries Inspect started; Close waits for
-	// them.
+	// currentChecks holds, per invocation, the current-policy re-check
+	// Inspect runs off the lock before it recovers a preterminal intent with
+	// no live session (#3268). Guarded by mu. A passed check only schedules:
+	// it lets one Inspect take the locked reconstruction, which runs the full
+	// re-check again before any recovery, so the mark grants nothing on its
+	// own. That Inspect consumes the mark when it launches recovery.
+	currentChecks map[domain.InvocationID]currentCheck
+	// recoveries counts the recoveries and current-policy checks Inspect
+	// started; Close waits for them.
 	recoveries sync.WaitGroup
 }
+
+// currentCheck is one invocation's current-policy re-check in this process.
+type currentCheck struct {
+	state currentCheckState
+	// phase is the durable phase the check was started for. A refusal is
+	// reported only while the intent is still in it.
+	phase phase
+	// err is the refusal a failed check left for the next Inspect.
+	err error
+}
+
+type currentCheckState int
+
+const (
+	currentCheckRunning currentCheckState = iota + 1
+	currentCheckPassed
+	currentCheckFailed
+)
 
 // recoveryDeferral records the running state of one released export's bounded
 // recovery retry (issue #1181): when it first started failing, the durable
@@ -577,6 +602,7 @@ func New(cfg Config) (*Driver, error) {
 		recovering:        map[domain.InvocationID]struct{}{},
 		deferred:          map[domain.InvocationID]recoveryDeferral{},
 		recoveryFailures:  map[domain.InvocationID]error{},
+		currentChecks:     map[domain.InvocationID]currentCheck{},
 		seedCleanupWarned: map[domain.InvocationID]string{},
 	}, nil
 }
@@ -804,9 +830,9 @@ func WithTaskCancellation(ctx, task context.Context) context.Context {
 }
 
 // Close prevents new starts, cancels every in-process session, and waits for
-// each pipeline to finish ward teardown and for each recovery Inspect
-// started to return. Durable preterminal intent remains
-// recoverable if terminal persistence cannot complete during shutdown.
+// each pipeline to finish ward teardown and for each recovery and
+// current-policy check Inspect started to return. Durable preterminal intent
+// remains recoverable if terminal persistence cannot complete during shutdown.
 func (d *Driver) Close(ctx context.Context) error {
 	type sessionRef struct {
 		id    domain.InvocationID
@@ -906,7 +932,7 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 	if failed {
 		return exec.Inspection{}, fmt.Errorf("reconcile invocation %s: %w", id, recoveryErr)
 	}
-	in, live, err := d.inspectIntent(ctx, id)
+	in, live, checking, err := d.inspectIntent(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
 			d.logger.Debug("inspect maps retryable recovery to running",
@@ -914,6 +940,11 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Insp
 			return exec.Inspection{Status: exec.StatusRunning}, nil
 		}
 		return exec.Inspection{}, err
+	}
+	if checking {
+		// Recovery waits for the current-policy check, which runs outside
+		// this pass as recovery does; a later Inspect reads its answer.
+		return exec.Inspection{Status: exec.StatusRunning}, nil
 	}
 	switch in.Phase {
 	case phaseCommitted:
@@ -959,6 +990,10 @@ func (d *Driver) startRecovery(ctx context.Context, in intent) {
 	if d.closed {
 		return
 	}
+	// Recovery can drop the authority's cached commit-author answer (import
+	// forgets it), so the next recovery waits for another check off the
+	// lock rather than re-checking under it on a cache miss (#3268).
+	delete(d.currentChecks, in.InvocationID)
 	recoverCtx, cancel := context.WithCancel(ctx)
 	stopLifetime := context.AfterFunc(d.lifetime, cancel)
 	d.recoveries.Go(func() {
@@ -978,32 +1013,112 @@ func (d *Driver) startRecovery(ctx context.Context, in intent) {
 	})
 }
 
+// startCurrentCheckLocked runs the full current-policy reconstruction of id
+// (loadIntent) outside mu and outside the caller, under a context that keeps
+// the caller's values and ends with the caller's or the driver's lifetime.
+// After a restart its commit-author check can reach GitHub, which must hold
+// neither the driver's lock nor the engine's pass (#3268, as #3215 did for
+// recovery). It only reads, and its success warms the authority's cache. A
+// pass marks id checked, so the next Inspect takes the locked path, which
+// runs the same re-check again before any recovery; a refusal is kept for the
+// next Inspect to return; a retryable failure, or a check whose context
+// ended, records nothing, so the next Inspect starts another. Callers hold
+// mu.
+func (d *Driver) startCurrentCheckLocked(ctx context.Context, id domain.InvocationID, ph phase) {
+	if d.closed {
+		return
+	}
+	d.currentChecks[id] = currentCheck{state: currentCheckRunning, phase: ph}
+	checkCtx, cancel := context.WithCancel(ctx)
+	stopLifetime := context.AfterFunc(d.lifetime, cancel)
+	d.recoveries.Go(func() {
+		defer cancel()
+		defer stopLifetime()
+		_, err := d.loadIntent(checkCtx, id)
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.currentChecks[id].state != currentCheckRunning {
+			// Terminal cleanup dropped the entry; a terminal needs no check.
+			return
+		}
+		switch {
+		case err == nil:
+			d.currentChecks[id] = currentCheck{state: currentCheckPassed, phase: ph}
+		case checkCtx.Err() != nil:
+			delete(d.currentChecks, id)
+		case errors.Is(err, ErrRecoveryRetryable):
+			d.logger.Debug("inspect maps retryable current check to running",
+				"invocation", string(id), "error", err.Error())
+			delete(d.currentChecks, id)
+		default:
+			d.currentChecks[id] = currentCheck{state: currentCheckFailed, phase: ph, err: err}
+		}
+	})
+}
+
+// inspectIntent reconstructs id under mu for Inspect. A preterminal intent
+// with no live session is first reconstructed against its admission only,
+// which reaches no network. Unless a current-policy check passed for its
+// present phase since Inspect last launched its recovery, as after a
+// restart, inspectIntent then starts that check in the background
+// (startCurrentCheckLocked), or returns the refusal it left for the same
+// phase, and reports checking while it runs, so Inspect starts no recovery
+// (#3268). A live session needs no detour: Start or recovery ran the full
+// check before creating it.
 func (d *Driver) inspectIntent(
 	ctx context.Context, id domain.InvocationID,
-) (intent, bool, error) {
+) (in intent, live, checking bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.retryPendingIntentLocked(id); err != nil {
-		return intent{}, false, err
+		return intent{}, false, false, err
 	}
 	if err := d.retryPendingResultLocked(id); err != nil {
-		return intent{}, false, fmt.Errorf("invocation %s terminal commit: %w", id, err)
+		return intent{}, false, false, fmt.Errorf("invocation %s terminal commit: %w", id, err)
 	}
-	in, err := d.loadIntent(ctx, id)
+	_, live = d.running[id]
+	if !live {
+		admitted, err := d.loadIntentAdmission(ctx, id)
+		if err != nil {
+			return intent{}, false, false, err
+		}
+		switch admitted.Phase {
+		case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:
+			check, found := d.currentChecks[id]
+			switch {
+			case !found:
+				d.startCurrentCheckLocked(ctx, id, admitted.Phase)
+				return admitted, false, true, nil
+			case check.state == currentCheckRunning:
+				return admitted, false, true, nil
+			case check.phase != admitted.Phase:
+				// The phase moved since the check (a cancellation, say), so
+				// its answer covers another gate: check the intent as it is.
+				d.startCurrentCheckLocked(ctx, id, admitted.Phase)
+				return admitted, false, true, nil
+			case check.state == currentCheckFailed:
+				delete(d.currentChecks, id)
+				return intent{}, false, false, check.err
+			}
+			// A check passed for this phase: take the locked path below.
+		case phaseCommitted, phaseLost:
+		}
+	}
+	in, err = d.loadIntent(ctx, id)
 	if err != nil {
-		return intent{}, false, err
+		return intent{}, false, false, err
 	}
 	if in.Phase == phaseCommitted || in.Phase == phaseLost {
 		// A terminal reconstructed here from a durable outcome (for example when
 		// an abandoned recovery's outcome write landed but its intent-file write
 		// failed) never re-enters reconcileIntent, so drop any lingering recovery
-		// deferral at the same terminal-cleanup point rather than leaking the map
-		// entry for the daemon's lifetime.
+		// deferral and current-policy check at the same terminal-cleanup point
+		// rather than leaking the map entries for the daemon's lifetime.
 		delete(d.deferred, in.InvocationID)
+		delete(d.currentChecks, in.InvocationID)
 		d.reportTerminalSeedCleanup(in)
 	}
-	_, live := d.running[id]
-	return in, live, nil
+	return in, live, false, nil
 }
 
 // Stream returns an empty transcript for a known invocation. The writer's

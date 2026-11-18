@@ -3,12 +3,18 @@ package stage
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -34,6 +40,29 @@ func (a *stallingStartAuthority) AuthenticateStart(
 		}
 	}
 	return a.stubAuthority.AuthenticateStart(ctx, id, spec)
+}
+
+// stallingImportAuthority is stallingStartAuthority for AuthenticateImport,
+// the check a restarted exported intent with a current import start runs.
+type stallingImportAuthority struct {
+	stubAuthority
+	id               domain.InvocationID
+	reached, release chan struct{}
+	once             sync.Once
+}
+
+func (a *stallingImportAuthority) AuthenticateImport(
+	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
+) error {
+	if id == a.id {
+		held := false
+		a.once.Do(func() { held = true })
+		if held {
+			close(a.reached)
+			<-a.release
+		}
+	}
+	return a.stubAuthority.AuthenticateImport(ctx, id, spec)
 }
 
 // returnsWithin fails t when call does not return within ten seconds.
@@ -107,6 +136,12 @@ func TestInspectRecoversOutsideTheCaller(t *testing.T) {
 		t.Fatalf("StartWithInputs: %v", err)
 	}
 	waitSessionDone(t, d, testInvoke)
+	// With its session gone, the first Inspect runs the current-policy check
+	// off the lock (#3268); the one after it starts recovery.
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect starting the check = %+v, %v; want running", status, err)
+	}
+	d.recoveries.Wait()
 	returnsWithin(t, "Inspect", func() {
 		if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
 			t.Errorf("Inspect while recovery runs = %+v, %v; want running", status, err)
@@ -150,5 +185,264 @@ func TestAuthenticateStartRunsTheStartCheckAlone(t *testing.T) {
 	}
 	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, exec.ErrUnknownInvocation) {
 		t.Fatalf("Inspect after the check = %v, want ErrUnknownInvocation: the check commits nothing", err)
+	}
+}
+
+// countRecoveryLaunches makes d's recovery launcher count each recovery it is
+// asked to run and suppress it as workflow closure would, so the durable
+// intent stays as it is and the count shows whether recovery started.
+func countRecoveryLaunches(d *Driver) *atomic.Int32 {
+	var launched atomic.Int32
+	d.SetRecoveryLauncher(func(context.Context, domain.RunID, func(context.Context) error) error {
+		launched.Add(1)
+		return ErrWorkflowClosed
+	})
+	return &launched
+}
+
+// TestRestartCurrentCheckHoldsNoDriverLock: after a restart, while one
+// preterminal invocation's current-policy re-check hangs, its own Inspect
+// reports running, another invocation's Inspect still answers, and recovery
+// waits for the check; once released, a later Inspect recovers (#3268).
+func TestRestartCurrentCheckHoldsNoDriverLock(t *testing.T) {
+	t.Parallel()
+	for _, ph := range []phase{phaseSeeding, phaseRunning} {
+		t.Run(string(ph), func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			d := newTestDriver(t, &stubGate{}, newStubExports())
+			launched := countRecoveryLaunches(d)
+			orphan(t, d, ph, nil)
+			orphanInvocation(t, d, quarantineSecond, phaseRunning, nil, specFor(quarantineSecond))
+			authority := &stallingStartAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+			d.authority = authority
+
+			returnsWithin(t, "the restarted invocation's Inspect", func() {
+				if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+					t.Errorf("Inspect while its check starts = %+v, %v; want running", status, err)
+				}
+			})
+			<-authority.reached
+			returnsWithin(t, "another invocation's Inspect", func() {
+				if _, err := d.Inspect(ctx, quarantineSecond); err != nil {
+					t.Errorf("Inspect of another invocation = %v", err)
+				}
+			})
+			returnsWithin(t, "the stalled invocation's Inspect", func() {
+				if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+					t.Errorf("Inspect while its check hangs = %+v, %v; want running", status, err)
+				}
+			})
+			if got := launched.Load(); got != 0 {
+				t.Fatalf("recoveries launched while the check hangs = %d, want none", got)
+			}
+
+			close(authority.release)
+			if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
+				t.Fatalf("Inspect after the check = %+v, %v; want running", status, err)
+			}
+			if got := launched.Load(); got != 1 {
+				t.Fatalf("recoveries launched after the check = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// TestRestartCurrentCheckRefusalBlocksRecovery is a Tier A gate test: the
+// background re-check of a restarted invocation still refuses one whose
+// current authority the authority refuses. A later Inspect returns that
+// refusal as the locked re-check did, and recovery never starts (#3268).
+func TestRestartCurrentCheckRefusalBlocksRecovery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	refusal := errors.New("commit author is not the App bot")
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	launched := countRecoveryLaunches(d)
+	orphan(t, d, phaseRunning, nil)
+	d.authority = stubAuthority{startErr: refusal}
+
+	for range 2 {
+		_, err := inspectChecked(t, ctx, d, testInvoke)
+		if !errors.Is(err, refusal) || !strings.Contains(err.Error(), "authenticate current intent "+string(testInvoke)+": ") {
+			t.Fatalf("Inspect after the refused check = %v, want the authority's refusal as the current intent check", err)
+		}
+	}
+	if got := launched.Load(); got != 0 {
+		t.Fatalf("recoveries launched for a refused invocation = %d, want none", got)
+	}
+}
+
+// TestRestartImportCheckHoldsNoDriverLock: a restarted exported intent with
+// a current import start re-checks its import authority, and while that
+// check hangs another invocation's Inspect still answers (#3268).
+func TestRestartImportCheckHoldsNoDriverLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	exports := newStubExports()
+	d := newTestDriver(t, &stubGate{}, exports)
+	launched := countRecoveryLaunches(d)
+	in := orphan(t, d, phaseExported, &releasedExport{
+		Dir: filepath.Join(os.TempDir(),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-restart-import-check"),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+	exports.importStarts[testInvoke] = domain.CurrentImportStart{
+		InvocationID: testInvoke, AdmissionID: in.Spec.AdmissionID,
+	}
+	orphanInvocation(t, d, quarantineSecond, phaseRunning, nil, specFor(quarantineSecond))
+	authority := &stallingImportAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+	d.authority = authority
+
+	returnsWithin(t, "the restarted invocation's Inspect", func() {
+		if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+			t.Errorf("Inspect while its import check starts = %+v, %v; want running", status, err)
+		}
+	})
+	<-authority.reached
+	returnsWithin(t, "another invocation's Inspect", func() {
+		if _, err := d.Inspect(ctx, quarantineSecond); err != nil {
+			t.Errorf("Inspect of another invocation = %v", err)
+		}
+	})
+	if got := launched.Load(); got != 0 {
+		t.Fatalf("recoveries launched while the import check hangs = %d, want none", got)
+	}
+	close(authority.release)
+	d.recoveries.Wait()
+	d.mu.Lock()
+	check := d.currentChecks[testInvoke]
+	d.mu.Unlock()
+	if check.state != currentCheckPassed || check.phase != phaseExported {
+		t.Fatalf("import check after release = %+v, want passed for the exported phase", check)
+	}
+}
+
+// TestCloseWaitsForRestartCurrentCheck: Close returns only after a held
+// current-policy check returns.
+func TestCloseWaitsForRestartCurrentCheck(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newTestDriver(t, &stubGate{}, newStubExports())
+		orphan(t, d, phaseRunning, nil)
+		authority := &stallingStartAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+		d.authority = authority
+		if status, err := d.Inspect(t.Context(), testInvoke); err != nil || status.Status != exec.StatusRunning {
+			t.Fatalf("Inspect = %+v, %v; want running", status, err)
+		}
+		<-authority.reached
+		closed := make(chan error, 1)
+		go func() { closed <- d.Close(context.Background()) }()
+		synctest.Wait()
+		select {
+		case err := <-closed:
+			t.Fatalf("Close returned while a check is held: %v", err)
+		default:
+		}
+		close(authority.release)
+		if err := <-closed; err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+}
+
+// TestRestartCurrentCheckWithEndedContextRecordsNothing: a refusal from a
+// check whose context ended is not kept for the next Inspect, which starts a
+// new check instead of reporting it (#3268).
+func TestRestartCurrentCheckWithEndedContextRecordsNothing(t *testing.T) {
+	t.Parallel()
+	refusal := errors.New("commit author is not the App bot")
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	orphan(t, d, phaseRunning, nil)
+	authority := &stallingStartAuthority{
+		stubAuthority: stubAuthority{startErr: refusal},
+		id:            testInvoke, reached: make(chan struct{}), release: make(chan struct{}),
+	}
+	d.authority = authority
+	ctx, cancel := context.WithCancel(context.Background())
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect = %+v, %v; want running", status, err)
+	}
+	<-authority.reached
+	cancel()
+	close(authority.release)
+	d.recoveries.Wait()
+	if status, err := d.Inspect(context.Background(), testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect after the ended check = %+v, %v; want running from a new check", status, err)
+	}
+	d.recoveries.Wait()
+	if _, err := d.Inspect(context.Background(), testInvoke); !errors.Is(err, refusal) {
+		t.Fatalf("Inspect after the new check = %v, want its refusal", err)
+	}
+}
+
+// TestRecoveryAttemptRechecksOffTheLock: launching recovery consumes the
+// passed check, because recovery can drop the authority's cached answer
+// (import forgets it). The next Inspect re-checks off the lock, so a
+// re-check that then hangs holds neither that Inspect nor another
+// invocation's (#3268).
+func TestRecoveryAttemptRechecksOffTheLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	launched := countRecoveryLaunches(d)
+	orphan(t, d, phaseRunning, nil)
+	orphanInvocation(t, d, quarantineSecond, phaseRunning, nil, specFor(quarantineSecond))
+	for _, step := range []string{"the restart check", "the first recovery"} {
+		if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+			t.Fatalf("Inspect starting %s = %+v, %v; want running", step, status, err)
+		}
+		d.recoveries.Wait()
+	}
+	if got := launched.Load(); got != 1 {
+		t.Fatalf("recoveries launched = %d, want 1", got)
+	}
+	authority := &stallingStartAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+	d.authority = authority
+	returnsWithin(t, "Inspect after a recovery attempt", func() {
+		if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+			t.Errorf("Inspect after a recovery attempt = %+v, %v; want running", status, err)
+		}
+	})
+	<-authority.reached
+	returnsWithin(t, "another invocation's Inspect", func() {
+		if _, err := d.Inspect(ctx, quarantineSecond); err != nil {
+			t.Errorf("Inspect of another invocation = %v", err)
+		}
+	})
+	close(authority.release)
+	d.recoveries.Wait()
+}
+
+// TestRestartCurrentCheckRefusalIsBoundToItsPhase: a refusal is reported
+// only while the intent stays in the phase its check examined. Once the
+// phase moves to one whose gate the refusal does not apply to, here a
+// released export with no current import start, the next Inspect checks
+// the intent as it is instead of reporting the stale refusal (#3268).
+func TestRestartCurrentCheckRefusalIsBoundToItsPhase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	refusal := errors.New("commit author is not the App bot")
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	orphan(t, d, phaseRunning, nil)
+	d.authority = stubAuthority{startErr: refusal}
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect = %+v, %v; want running", status, err)
+	}
+	d.recoveries.Wait()
+	orphan(t, d, phaseExported, &releasedExport{
+		Dir: filepath.Join(os.TempDir(),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-phase-moved"),
+		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+		ObservedBaseSHA: testBase.BaseSHA,
+	})
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect after the phase moved = %+v, %v; want running from a new check", status, err)
+	}
+	d.recoveries.Wait()
+	d.mu.Lock()
+	check := d.currentChecks[testInvoke]
+	d.mu.Unlock()
+	if check.state != currentCheckPassed || check.phase != phaseExported {
+		t.Fatalf("check after the phase moved = %+v, want passed for the exported phase", check)
 	}
 }
