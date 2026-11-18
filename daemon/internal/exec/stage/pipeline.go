@@ -1965,6 +1965,16 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 		d.mu.Unlock()
 		return nil
 	}
+	// in may be a copy read before a Cancel that finished since made the
+	// intent terminal. Recovering that copy would rewrite the terminal record
+	// and could rerun the handoff under names its terminal release withdrew.
+	// The read and the registration below share one hold of mu, and a Cancel
+	// of a non-live intent registers too, so no commit lands in between.
+	if current, err := d.loadIntentAdmission(ctx, in.InvocationID); err == nil &&
+		(current.Phase == phaseCommitted || current.Phase == phaseLost) {
+		d.mu.Unlock()
+		return nil
+	}
 	d.recovering[in.InvocationID] = struct{}{}
 	d.mu.Unlock()
 	defer func() {
