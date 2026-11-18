@@ -352,16 +352,7 @@ type reviewLaunch struct {
 // request that passed Validate, so the snapshot is always present. The
 // configuration digest stays the composed one: the snapshot records the
 // selected agent's values, and they are not re-approved.
-//
-// A request recorded before review stopped covering a prospective merge
-// (#2660) names one, and no launch runs it: review covers the head only, so
-// the refusal is a configuration failure that never retries.
 func (s *CodexReviewSource) requestLaunch(ctx context.Context, req exec.ReviewRequest) (reviewLaunch, error) {
-	if req.LegacyEvaluatedSHA != "" {
-		return reviewLaunch{}, fmt.Errorf(
-			"%w: the request names prospective merge %s, and review covers only the head",
-			ErrInvalidCodexReviewSpec, req.LegacyEvaluatedSHA)
-	}
 	launch := reviewLaunch{review: s.cfg.Review, identity: s.cfg.AuthIdentityID, snapshot: s.cfg.AuthSnapshot}
 	admission := req.Admission
 	launch.review.Model = admission.AgentBinding.RouteModelID

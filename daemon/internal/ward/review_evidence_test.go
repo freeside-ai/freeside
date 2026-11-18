@@ -227,10 +227,11 @@ func testReviewJournalBinding(t *testing.T, topologyVersion string, runID domain
 
 // TestDecodeRetainedCodexReviewRequestFacts covers the journal a pre-0067
 // in-flight review leaves behind: the decoder recovers its request time only
-// for the exact candidate, and a request from before instruction binding still
-// reads, as does one naming the prospective merge a pre-#2660 re-entry
-// reviewed. TestProductionReviewUpgradePreservesRequestTime runs the upgrade
-// end to end on an intact and a damaged journal.
+// for the exact candidate. A request from before instruction binding still
+// yields its facts, which grant nothing, but one naming the prospective merge
+// a pre-#2660 re-entry reviewed fails the strict decode: the request no longer
+// declares evaluated_sha. TestProductionReviewUpgradePreservesRequestTime runs
+// the upgrade end to end on an intact and a damaged journal.
 func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 	t.Parallel()
 	for _, corruption := range []string{"none", "legacy", "evaluated", "run", "round", "base", "head", "time", "digest"} {
@@ -247,8 +248,6 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 				BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
 			}
 			switch corruption {
-			case "evaluated":
-				request.LegacyEvaluatedSHA = strings.Repeat("c", 40)
 			case "run":
 				request.RunID = "other-run"
 			case "round":
@@ -264,12 +263,16 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if corruption == "legacy" {
+			if corruption == "legacy" || corruption == "evaluated" {
 				var fields map[string]json.RawMessage
 				if err := json.Unmarshal(body, &fields); err != nil {
 					t.Fatal(err)
 				}
-				delete(fields, "instructions")
+				if corruption == "legacy" {
+					delete(fields, "instructions")
+				} else {
+					fields["evaluated_sha"] = json.RawMessage(`"` + strings.Repeat("c", 40) + `"`)
+				}
 				if body, err = json.Marshal(fields); err != nil {
 					t.Fatal(err)
 				}
@@ -280,7 +283,12 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 			}
 			got, err := DecodeRetainedCodexReviewRequestFacts(binding, body, digest)
 			switch corruption {
-			case "none", "legacy", "evaluated":
+			case "none", "legacy":
+			case "evaluated":
+				if err == nil || !strings.Contains(err.Error(), "evaluated_sha") {
+					t.Fatalf("journal naming evaluated_sha = %v, want the strict decode's refusal", err)
+				}
+				return
 			case "time":
 				if err == nil {
 					t.Fatalf("journal without a request time decoded: %+v", got)

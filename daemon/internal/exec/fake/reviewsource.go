@@ -178,15 +178,6 @@ func (s *ReviewSource) RequestReview(_ context.Context, id domain.InvocationID, 
 	if !ok {
 		return fmt.Errorf("fake review source request %s: %w", id, ErrUnscripted)
 	}
-	// A retained request that names a prospective merge predates review
-	// covering the head only (#2660); like a real source, the fake never
-	// runs one.
-	if req.LegacyEvaluatedSHA != "" {
-		return &exec.ReviewSourceFailure{
-			Class: domain.ReviewFailureConfiguration,
-			Err:   fmt.Errorf("fake review source request %s: legacy request names evaluated commit %q", id, req.LegacyEvaluatedSHA),
-		}
-	}
 	s.sessions[id] = &reviewSession{
 		script:   script,
 		inspects: script.PendingInspects,

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -175,14 +176,13 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 			r.RunID = "run-2"
 			r.Admission = testReviewAdmission("run-2")
 		}},
-		"Round":              {func(r *ReviewRequest) { r.Round = 2 }},
-		"Repo":               {func(r *ReviewRequest) { r.Repo = "other/repo" }},
-		"RepositoryID":       {func(r *ReviewRequest) { r.RepositoryID = 43 }},
-		"BaseRef":            {func(r *ReviewRequest) { r.BaseRef = "release" }},
-		"BaseSHA":            {func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) }},
-		"HeadSHA":            {func(r *ReviewRequest) { r.HeadSHA = strings.Repeat("8", 40) }},
-		"LegacyEvaluatedSHA": {func(r *ReviewRequest) { r.LegacyEvaluatedSHA = strings.Repeat("9", 40) }},
-		"Workspace":          {func(r *ReviewRequest) { r.Workspace = "/other-candidate" }},
+		"Round":        {func(r *ReviewRequest) { r.Round = 2 }},
+		"Repo":         {func(r *ReviewRequest) { r.Repo = "other/repo" }},
+		"RepositoryID": {func(r *ReviewRequest) { r.RepositoryID = 43 }},
+		"BaseRef":      {func(r *ReviewRequest) { r.BaseRef = "release" }},
+		"BaseSHA":      {func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) }},
+		"HeadSHA":      {func(r *ReviewRequest) { r.HeadSHA = strings.Repeat("8", 40) }},
+		"Workspace":    {func(r *ReviewRequest) { r.Workspace = "/other-candidate" }},
 		"Verification": {
 			func(r *ReviewRequest) { r.Verification.RecipeDigest = digest("3") },
 			func(r *ReviewRequest) { r.Verification.EvidenceSnapshotDigest = digest("4") },
@@ -356,45 +356,6 @@ func testReviewAdmission(runID domain.RunID) domain.ReviewAdmission {
 	}
 }
 
-// TestReviewRequestLegacyEvaluatedCommit pins the validation a retained
-// request naming a prospective merge still gets: no source runs one, but its
-// identity check and authority digest are unchanged.
-func TestReviewRequestLegacyEvaluatedCommit(t *testing.T) {
-	_, instructions, err := ComposeCodexReviewInstructions(ReviewHostInstructionInput{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, head, merge := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
-	request := ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
-		BaseRef: "main", BaseSHA: base, HeadSHA: head,
-		Workspace: "/candidate", Instructions: instructions,
-		Admission: testReviewAdmission("run-1"),
-		Verification: ReviewVerificationEvidence{
-			Outcome:                domain.VerificationPassed,
-			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
-			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		},
-		RequestedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
-	}
-	request.LegacyEvaluatedSHA = merge
-	if err := request.Validate(); err != nil {
-		t.Fatalf("request naming a distinct evaluated commit: %v", err)
-	}
-	// An evaluated commit equal to either parent is not their merge, so the
-	// request and its authority digest both fail closed.
-	for name, evaluated := range map[string]string{"head": head, "base": base} {
-		refused := request
-		refused.LegacyEvaluatedSHA = evaluated
-		if err := refused.Validate(); !errors.Is(err, domain.ErrProspectiveMergeIdentityInconsistent) {
-			t.Fatalf("evaluated commit equal to the %s: %v, want ErrProspectiveMergeIdentityInconsistent", name, err)
-		}
-		if _, err := refused.AuthorityDigest(); err == nil {
-			t.Fatalf("evaluated commit equal to the %s produced an authority digest", name)
-		}
-	}
-}
-
 func assertReviewInstructionBlocksIsolated(t *testing.T, bundle []byte, wantBlocks int) {
 	t.Helper()
 	insideFence := false
@@ -489,33 +450,29 @@ func TestCurrentReviewRequestAuthorityDigestIsPinned(t *testing.T) {
 	}
 }
 
-// TestRetainedLegacyReviewRequestReads pins that a request a daemon stored
-// before #2660, naming a prospective merge, still decodes strictly, still
-// validates as retained, and keeps the authority digest it was recorded under
-// (captured before the field was renamed LegacyEvaluatedSHA).
-func TestRetainedLegacyReviewRequestReads(t *testing.T) {
+// TestStoredReviewRequestNamingAnEvaluatedCommitIsRefused: a request a
+// daemon stored before #2660 names the prospective merge it reviewed under
+// evaluated_sha. The request no longer declares that field, so the strict
+// decode every stored-request reader uses refuses the body instead of
+// reading it as a request for the head alone.
+func TestStoredReviewRequestNamingAnEvaluatedCommitIsRefused(t *testing.T) {
 	t.Parallel()
-	body, err := os.ReadFile("testdata/review_request_prospective_merge.golden")
+	body, err := os.ReadFile("testdata/review_request.golden")
 	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["evaluated_sha"] = json.RawMessage(`"` + strings.Repeat("c", 40) + `"`)
+	if body, err = json.Marshal(fields); err != nil {
 		t.Fatal(err)
 	}
 	var request ReviewRequest
-	if err := strictjson.Decode(body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
-		t.Fatalf("strict decode of a retained legacy request: %v", err)
-	}
-	if request.LegacyEvaluatedSHA != "merge-sha-1" {
-		t.Fatalf("LegacyEvaluatedSHA = %q, want the stored evaluated_sha", request.LegacyEvaluatedSHA)
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	digest, err := request.AuthorityDigest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	const recorded = domain.Digest("sha256:66d11f8107b5c31782fee83d3ad9ebedeebb4a753cfdb8fe68cb2cd191fdbd5b")
-	if digest != recorded {
-		t.Fatalf("AuthorityDigest = %s, want the recorded %s", digest, recorded)
+	err = strictjson.Decode(body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit)
+	if err == nil || !strings.Contains(err.Error(), "evaluated_sha") {
+		t.Fatalf("strict decode of a request naming evaluated_sha = %v, want a refusal naming it", err)
 	}
 }
 

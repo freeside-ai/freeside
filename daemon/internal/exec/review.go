@@ -106,14 +106,6 @@ type ReviewRequestSupersessionVerifier interface {
 // HeadSHA is always the head the forge shows, and the review record binds it;
 // the workspace holds it, and review covers it (plan revision 110).
 //
-// LegacyEvaluatedSHA is set only on a request a daemon wrote before #2660,
-// when a base-advance re-entry had the unpushed merge of HeadSHA into BaseSHA
-// reviewed in place of the head. It stays, under its stored JSON name, so a
-// retained request still decodes under the strict history readers and its
-// authority digest still recomputes
-// (devlog/2026-11-05-2315-retire-review-merge-path.md).
-// Nothing builds a request that sets it, and every source refuses to run one.
-//
 // Admission is the snapshot the engine admitted the invocation under before
 // it asked the source (plan §5.4): the agent the lineup selected, the identity
 // it runs under, and its launch values. The source returns it unchanged on
@@ -127,20 +119,19 @@ type ReviewRequestSupersessionVerifier interface {
 // for a task without attachments in the shape and digest it had before
 // reviewers received inputs.
 type ReviewRequest struct {
-	RunID              domain.RunID                  `json:"run_id"`
-	Round              int                           `json:"round"`
-	Repo               string                        `json:"repo"`
-	RepositoryID       int64                         `json:"repository_id"`
-	BaseRef            string                        `json:"base_ref"`
-	BaseSHA            string                        `json:"base_sha"`
-	HeadSHA            string                        `json:"head_sha"`
-	LegacyEvaluatedSHA string                        `json:"evaluated_sha,omitempty"`
-	Workspace          string                        `json:"workspace"`
-	Verification       ReviewVerificationEvidence    `json:"verification"`
-	Instructions       ReviewInstructionBinding      `json:"instructions"`
-	Admission          domain.ReviewAdmission        `json:"admission"`
-	Inputs             []domain.StageInputAttachment `json:"inputs,omitempty"`
-	RequestedAt        time.Time                     `json:"requested_at"`
+	RunID        domain.RunID                  `json:"run_id"`
+	Round        int                           `json:"round"`
+	Repo         string                        `json:"repo"`
+	RepositoryID int64                         `json:"repository_id"`
+	BaseRef      string                        `json:"base_ref"`
+	BaseSHA      string                        `json:"base_sha"`
+	HeadSHA      string                        `json:"head_sha"`
+	Workspace    string                        `json:"workspace"`
+	Verification ReviewVerificationEvidence    `json:"verification"`
+	Instructions ReviewInstructionBinding      `json:"instructions"`
+	Admission    domain.ReviewAdmission        `json:"admission"`
+	Inputs       []domain.StageInputAttachment `json:"inputs,omitempty"`
+	RequestedAt  time.Time                     `json:"requested_at"`
 }
 
 // ReviewVerificationEvidence is the compact, content-addressed account of
@@ -212,14 +203,6 @@ func (r ReviewRequest) Validate() error {
 	case r.RequestedAt.Location() != time.UTC:
 		return fmt.Errorf("review request requested_at: %w", domain.ErrTimestampNotUTC)
 	}
-	if r.LegacyEvaluatedSHA != "" {
-		merge := domain.ProspectiveMergeIdentity{
-			BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, MergeSHA: r.LegacyEvaluatedSHA,
-		}
-		if err := merge.Validate(); err != nil {
-			return fmt.Errorf("review request evaluated_sha: %w", err)
-		}
-	}
 	if err := errors.Join(
 		r.Verification.Validate(), r.Instructions.Validate(), validateReviewInputs(r.Inputs),
 	); err != nil {
@@ -273,7 +256,6 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 		BaseRef      string                        `json:"base_ref"`
 		BaseSHA      string                        `json:"base_sha"`
 		HeadSHA      string                        `json:"head_sha"`
-		EvaluatedSHA string                        `json:"evaluated_sha,omitempty"`
 		Workspace    string                        `json:"workspace"`
 		Verification ReviewVerificationEvidence    `json:"verification"`
 		Instructions ReviewInstructionBinding      `json:"instructions"`
@@ -282,8 +264,7 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 	}{
 		Version: "review-request-authority-v4", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
-		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.LegacyEvaluatedSHA,
-		Workspace:    r.Workspace,
+		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, Workspace: r.Workspace,
 		Verification: r.Verification, Instructions: r.Instructions,
 		Admission: r.Admission, Inputs: r.Inputs,
 	})

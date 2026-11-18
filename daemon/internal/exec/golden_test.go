@@ -141,11 +141,6 @@ func TestGolden(t *testing.T) {
 		Artifacts:    []domain.Digest{"sha256:blocked"},
 		Summary:      "Which retention period applies to exported logs?",
 	}
-	// A request stored before #2660 named the prospective merge a base-advance
-	// re-entry had reviewed. Nothing writes one now; the golden pins that its
-	// encoding, which retained rows carry, did not move.
-	mergeRequest := request
-	mergeRequest.LegacyEvaluatedSHA = "merge-sha-1"
 	// A task's attachments reach the reviewer as task/<name> in submitted
 	// order; a request without them keeps the review_request shape.
 	inputsRequest := request
@@ -195,7 +190,6 @@ func TestGolden(t *testing.T) {
 		}},
 		{"review_result", review},
 		{"review_request", request},
-		{"review_request_prospective_merge", mergeRequest},
 		{"review_request_inputs", inputsRequest},
 		{"start_spec", exec.StartSpecFromAdmission(admission)},
 	}
