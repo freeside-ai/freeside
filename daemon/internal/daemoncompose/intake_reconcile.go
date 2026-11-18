@@ -513,7 +513,7 @@ func (r *intakeReconciler) decide(ctx context.Context, init IntakeInitiator, occ
 		// An operator decided start on a propose card, or a prior pass recorded
 		// the auto_start decision but crashed before launching: launch now
 		// (SubmitSpecificationRun converges).
-		return r.launch(ctx, init, occurrence)
+		return r.launch(ctx, occurrence)
 	}
 	// The card is open and undecided. A prior durable refusal leaves it an
 	// ordinary propose card; do not re-decide it. A refusal recorded before
@@ -668,7 +668,7 @@ func (r *intakeReconciler) autoStart(
 		}
 		return nil
 	}
-	return r.launch(ctx, init, occurrence)
+	return r.launch(ctx, occurrence)
 }
 
 // originEvidence reads what the filing ledger records about the occurrence's
@@ -699,8 +699,8 @@ func countProjectWIPTasks(
 	return tx.CountProjectWIPTasks(ctx, projectID, exclude)
 }
 
-func (r *intakeReconciler) launch(ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence) error {
-	spec, err := r.startSpec(ctx, init, occurrence)
+func (r *intakeReconciler) launch(ctx context.Context, occurrence domain.IntakeOccurrence) error {
+	spec, err := r.startSpec(ctx, occurrence)
 	if err != nil {
 		return err
 	}
@@ -712,11 +712,11 @@ func (r *intakeReconciler) launch(ctx context.Context, init IntakeInitiator, occ
 
 // startSpec reconstructs the issue-subject SpecificationRunSpec from the admitted
 // occurrence, deterministically, so a launch and its replays submit identical
-// bytes. The work-item artifact id and the publication are pure functions of the
-// occurrence coordinates and the initiator identity; the resolved policy is the
-// one persisted at admission.
+// bytes. The work-item artifact id is a pure function of the occurrence
+// coordinates; the publication is the one frozen on the first attempt and the
+// resolved policy the one persisted at admission.
 func (r *intakeReconciler) startSpec(
-	ctx context.Context, init IntakeInitiator, occurrence domain.IntakeOccurrence,
+	ctx context.Context, occurrence domain.IntakeOccurrence,
 ) (engine.SpecificationRunSpec, error) {
 	specificationRunID := occurrence.Admission.Subject.SpecificationRunID
 	implementationRunID := intakeImplementationRunID(occurrence)
@@ -740,39 +740,21 @@ func (r *intakeReconciler) startSpec(
 	}
 	issue := occurrence.IssueNumber
 	var attempt domain.ProductionAttempt
-	attemptErr := r.store.Read(ctx, func(tx *store.ReadTx) error {
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		attempt, err = tx.GetProductionAttempt(ctx, campaignID, 1)
 		return err
-	})
-	publication := intakeLegacyLiteralPublication(init, occurrence)
-	publicationDigest := domain.Digest("")
-	publicationBytes := json.RawMessage(nil)
-	if attemptErr == nil {
-		if err := json.Unmarshal(attempt.Publication, &publication); err != nil {
-			return engine.SpecificationRunSpec{}, fmt.Errorf("decode admitted publication: %w", err)
-		}
-		if attempt.PublicationDigest == "" || domain.Digest(contentaddr.Sum(attempt.Publication)) != attempt.PublicationDigest {
-			return engine.SpecificationRunSpec{}, fmt.Errorf("admitted publication disagrees with attempt: %w", domain.ErrParentKeyMismatch)
-		}
-		publicationDigest, publicationBytes = attempt.PublicationDigest, attempt.Publication
-	} else if !errors.Is(attemptErr, store.ErrNotFound) {
-		return engine.SpecificationRunSpec{}, attemptErr
-	} else {
-		var reserved domain.Run
-		if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			reserved, err = tx.GetRun(ctx, specificationRunID)
-			return err
-		}); err != nil || reserved.CampaignID != "" || reserved.AttemptNumber != 0 {
-			return engine.SpecificationRunSpec{}, fmt.Errorf("legacy reservation lookup: %w", attemptErr)
-		}
-		body, err := json.Marshal(publication)
-		if err != nil {
-			return engine.SpecificationRunSpec{}, fmt.Errorf("encode legacy publication: %w", err)
-		}
-		publicationDigest = domain.Digest(contentaddr.Sum(body))
+	}); err != nil {
+		return engine.SpecificationRunSpec{}, fmt.Errorf("read admitted production attempt: %w", err)
 	}
+	var publication engine.ProductionPublication
+	if err := json.Unmarshal(attempt.Publication, &publication); err != nil {
+		return engine.SpecificationRunSpec{}, fmt.Errorf("decode admitted publication: %w", err)
+	}
+	if attempt.PublicationDigest == "" || domain.Digest(contentaddr.Sum(attempt.Publication)) != attempt.PublicationDigest {
+		return engine.SpecificationRunSpec{}, fmt.Errorf("admitted publication disagrees with attempt: %w", domain.ErrParentKeyMismatch)
+	}
+	publicationDigest, publicationBytes := attempt.PublicationDigest, attempt.Publication
 	if err := publication.Validate(); err != nil {
 		return engine.SpecificationRunSpec{}, fmt.Errorf("validate publication: %w", err)
 	}
@@ -1095,7 +1077,7 @@ func (r *intakeReconciler) launchDecidedDeparture(
 	if err != nil || !decidedStart {
 		return false, err
 	}
-	if err := r.launch(ctx, init, occurrence); err != nil {
+	if err := r.launch(ctx, occurrence); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1168,20 +1150,6 @@ func intakeLiteralPublication(init IntakeInitiator, occurrence domain.IntakeOccu
 			"Automated resolution of issue #%d in %s, initiated by a repository label. "+
 				"The implementation is derived from the specified specification, not the issue text.",
 			occurrence.IssueNumber, occurrence.Repo),
-		CommitAuthor: init.CommitAuthor,
-	}
-}
-
-// intakeLegacyLiteralPublication rebuilds the pre-#1491 text that a legacy
-// reservation with no admitted attempt froze. Keep these bytes unchanged so
-// startSpec can replay that reservation without changing its publication.
-func intakeLegacyLiteralPublication(init IntakeInitiator, occurrence domain.IntakeOccurrence) engine.ProductionPublication {
-	return engine.ProductionPublication{
-		Title: fmt.Sprintf("Resolve %s#%d", occurrence.Repo, occurrence.IssueNumber),
-		Body: fmt.Sprintf(
-			"Automated resolution of issue #%d in %s, initiated by the %q label. "+
-				"The implementation is derived from the specified specification, not the issue text.",
-			occurrence.IssueNumber, occurrence.Repo, occurrence.Label),
 		CommitAuthor: init.CommitAuthor,
 	}
 }

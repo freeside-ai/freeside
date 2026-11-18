@@ -224,18 +224,3 @@ func TestIntakePreChangeOccurrenceReplaysLiteralRecord(t *testing.T) {
 		t.Fatalf("started publication = %+v, want the literal record %+v", started, frozen)
 	}
 }
-
-func TestIntakeLegacyLiteralPublication(t *testing.T) {
-	t.Parallel()
-	init := intakeInitiatorFor(t, domain.InitiatorModeAutoStart, domain.ProvenanceOverride, 1)
-	occurrence := domain.IntakeOccurrence{
-		Repo: intakeTestRepo, IssueNumber: 7, Label: intakeTestLabel,
-	}
-	publication := intakeLegacyLiteralPublication(init, occurrence)
-	wantTitle := "Resolve freeasinbird/freeside#7"
-	wantBody := "Automated resolution of issue #7 in freeasinbird/freeside, initiated by the \"freeside\" label. " +
-		"The implementation is derived from the specified specification, not the issue text."
-	if publication.Title != wantTitle || publication.Body != wantBody || publication.CommitAuthor != init.CommitAuthor {
-		t.Fatalf("legacy publication = %+v, want title %q and body %q", publication, wantTitle, wantBody)
-	}
-}
