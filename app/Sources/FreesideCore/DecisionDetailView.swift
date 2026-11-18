@@ -1576,9 +1576,39 @@ struct DecisionDetailView: View {
                     }
                 }
             }
+            ForEach(placement.folds) { fold in
+                placedFold(fold)
+            }
             if drawsFold {
                 foldedFacts(placement)
             }
+        }
+    }
+
+    /// A fold `DecisionFactPlacement` draws after the visible facts, closed
+    /// on its summary line until opened in place.
+    private func placedFold(_ fold: DecisionFactPlacement.Fold) -> some View {
+        SentenceDisclosure(
+            label: fold.title, summary: fold.summary, isExpanded: disclosure(fold.disclosure)
+        ) {
+            Group {
+                switch fold.content {
+                case .facts(let rows):
+                    FactGroup(spacing: 8) {
+                        ForEach(rows) { fact in
+                            factRow(fact)
+                        }
+                    }
+                case .offers(let offers):
+                    offerBlocks(offers)
+                }
+            }
+            .font(FreesideFont.callout)
+            .foregroundStyle(Color.ink)
+            // A stacked row hugs its text, and a disclosure centers
+            // content narrower than itself.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
         }
     }
 
@@ -3511,21 +3541,31 @@ struct DecisionDetailView: View {
                     .foregroundStyle(Color.ink)
             }
         case .offers(let offers):
-            // One block per offer, the enrollment over its reading, so a
-            // reading that wraps on the phone stays with its own offer.
             StackedFact(label: fact.label) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(offers.indices, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(offers[index].enrollment)
-                                .font(FreesideFont.monoValue)
-                            Text(offers[index].reading)
-                                .font(FreesideFont.cardBody)
-                        }
-                        .foregroundStyle(Color.ink)
-                        .accessibilityElement(children: .combine)
-                    }
+                offerBlocks(offers)
+            }
+        }
+    }
+
+    /// One block per offer, the enrollment over its reading, so a reading
+    /// that wraps on the phone stays with its own offer. Each block reads
+    /// aloud as one static-text element under an explicit label: the words
+    /// a combined element would speak, but one an assistive client can
+    /// read back in a test host, where a combined one answers nothing.
+    private func offerBlocks(_ offers: [AttentionDisplay.FactRow.Offer]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(offers.indices, id: \.self) { index in
+                let offer = offers[index]
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(offer.enrollment)
+                        .font(FreesideFont.monoValue)
+                    Text(offer.reading)
+                        .font(FreesideFont.cardBody)
                 }
+                .foregroundStyle(Color.ink)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("\(offer.enrollment), \(offer.reading)"))
+                .accessibilityAddTraits(.isStaticText)
             }
         }
     }
