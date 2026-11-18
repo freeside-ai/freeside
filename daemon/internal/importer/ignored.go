@@ -27,7 +27,9 @@ func ignoredAdditions(ctx context.Context, g *gitRunner, base map[string]treeEnt
 	eligible := make(map[string]bool)
 	var input bytes.Buffer
 	for _, c := range changes {
-		if c.kind == ChangeAdded && c.mode != "" && opts.Policy.Allowlist != nil && !MatchesAllowlist(opts.Policy.Allowlist, c.path) {
+		// check-ignore reads its input as pathspecs: a leading ':' is magic
+		// that would match a different path than the candidate's.
+		if c.kind == ChangeAdded && c.mode != "" && !strings.HasPrefix(c.path, ":") && opts.Policy.Allowlist != nil && !MatchesAllowlist(opts.Policy.Allowlist, c.path) {
 			eligible[c.path] = true
 			input.WriteString(c.path)
 			input.WriteByte(0)

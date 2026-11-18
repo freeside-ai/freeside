@@ -336,3 +336,27 @@ func TestIgnoreMatcherRejectsMalformedOutput(t *testing.T) {
 		}
 	}
 }
+
+// check-ignore reads its input as pathspecs, so a candidate spelled with
+// pathspec magic would be matched as a different path. Such a name is never
+// excluded.
+func TestIgnoreMatcherRefusesPathspecMagic(t *testing.T) {
+	t.Parallel()
+	rules := "dist/\n"
+	files := map[string]string{".gitignore": rules, "a.txt": "old"}
+	checkout, base := initBaseRepo(t, files)
+	entries := []export.Entry{
+		regularEntryFor(".gitignore", rules, false),
+		regularEntryFor("a.txt", "new", false),
+		regularEntryFor(":(top)dist/out.js", "generated", false),
+	}
+	opts := testImportOptions(base)
+	opts.Policy.Allowlist = []string{"a.txt"}
+	result, err := Import(t.Context(), handoffFromEntries(t, entries, rules, "new", "generated"), cloneAtBase(t, checkout), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingAllowlistViolation && f.Path == ":(top)dist/out.js" }) {
+		t.Fatalf("pathspec-magic name was excluded: %+v", result)
+	}
+}
