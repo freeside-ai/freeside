@@ -1881,12 +1881,6 @@ func (w *productionPublicationWorkflow) parkReviewConfiguration(
 	}); err != nil {
 		return productionReviewPending, err
 	}
-	if existing != nil && existing.Type == domain.AttentionReviewDispute {
-		// A pre-#611 daemon raised the terminalizing dispute at this identity
-		// and crashed before completing the task. Honor the contract that
-		// item presented rather than failing closed against its shape.
-		return productionReviewEscalated, nil
-	}
 	if existing != nil && existing.Type == domain.AttentionReviewConfiguration &&
 		existing.Status != domain.StatusOpen {
 		// Presence, not effectiveness, separates the operator's two exits: a
