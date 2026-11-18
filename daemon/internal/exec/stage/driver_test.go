@@ -789,11 +789,10 @@ func (p refusingProvider) RenderPrompt(ProviderPromptInputs) (string, error) {
 }
 
 // A prompt refusal longer than the summary cap keeps its cause in the
-// committed summary, and an intent an older daemon committed with the
-// head-only summary of the same refusal still reconstructs: reconstruction
-// re-renders the prompt and accepts either bound of its error, and nothing
-// else.
-func TestOverCapPromptRefusalKeepsItsCauseAndReconstructsTheHeadOnlyForm(t *testing.T) {
+// committed summary, and reconstruction accepts only that bound of the
+// re-rendered error: the head-only summary an older daemon committed for
+// the same refusal is refused.
+func TestOverCapPromptRefusalKeepsItsCauseAndRefusesTheHeadOnlyForm(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	records := newStubExports()
@@ -846,17 +845,8 @@ func TestOverCapPromptRefusalKeepsItsCauseAndReconstructsTheHeadOnlyForm(t *test
 	}
 
 	commitSummary(legacy)
-	in, err := d.loadIntent(ctx, testInvoke)
-	if err != nil {
-		t.Fatalf("head-only refusal summary from an older daemon failed reconstruction: %v", err)
-	}
-	if in.Result.Summary != legacy {
-		t.Fatalf("reconstructed summary = %q, want the stored head-only form", in.Result.Summary)
-	}
-
-	commitSummary(legacy + "x")
 	if _, err := d.loadIntent(ctx, testInvoke); !errors.Is(err, ErrUnsupportedStart) {
-		t.Fatalf("summary derived from neither bound loaded with err %v, want ErrUnsupportedStart", err)
+		t.Fatalf("head-only refusal summary loaded with err %v, want ErrUnsupportedStart", err)
 	}
 }
 
