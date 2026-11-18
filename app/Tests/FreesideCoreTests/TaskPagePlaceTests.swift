@@ -382,6 +382,24 @@ import Testing
                 }
             }
 
+            /// Where the scroll view and the page each put the reader, for a
+            /// failure message: the offset, the page's top as the page last
+            /// saw it, and every hold point's top in the page. Two readings
+            /// taken around a step tell a page that hadn't seen a scroll
+            /// (its top disagrees with the offset) from content that changed
+            /// height above the reader (a top that moved). #3384 failed on
+            /// CI with only the two offsets to go on.
+            var geometry: String {
+                let reading = probe.reading.map { "\($0.key) at \($0.top)" } ?? "none"
+                let tops = probe.holdTops.sorted { $0.value < $1.value }.map { "  \($0.key) = \($0.value)" }
+                return """
+                    offset \(offset) of \(maxOffset), pageTop \(probe.pageTop), rowTop \(probe.rowTop)
+                    reading \(reading)
+                    hold tops in the page:
+                    \(tops.joined(separator: "\n"))
+                    """
+            }
+
             /// Lets the main actor run, which the page's moves wait on, and
             /// samples the offset as it goes.
             func settle(_ seconds: Double = 0.5) async throws {
@@ -498,17 +516,19 @@ import Testing
         }
 
         /// The reader's content stays within 1 pt of where it was, and the
-        /// page stays the one it was.
+        /// page stays the one it was. A `detail` follows each failure's own
+        /// message on lines of its own.
         private func expectHeld(
             _ page: Page, _ reading: (key: String, top: CGFloat), scroll: NSScrollView, document: NSView,
-            _ step: Comment, sourceLocation: SourceLocation = #_sourceLocation
+            _ step: Comment, detail: String? = nil, sourceLocation: SourceLocation = #_sourceLocation
         ) throws {
+            let more = detail.map { "\n\($0)" } ?? ""
             let top = page.probe.viewTops[reading.key]
             #expect(
                 top.map { abs($0 - reading.top) <= 1 } == true,
-                "\(step): \(String(describing: top)) from \(reading.top)", sourceLocation: sourceLocation)
-            #expect(try page.scrollView === scroll, step, sourceLocation: sourceLocation)
-            #expect(scroll.documentView === document, step, sourceLocation: sourceLocation)
+                "\(step): \(String(describing: top)) from \(reading.top)\(more)", sourceLocation: sourceLocation)
+            #expect(try page.scrollView === scroll, "\(step)\(more)", sourceLocation: sourceLocation)
+            #expect(scroll.documentView === document, "\(step)\(more)", sourceLocation: sourceLocation)
         }
 
         @Test func anItemOpeningSeatsNoCardAndHoldsTheReader() async throws {
@@ -535,18 +555,32 @@ import Testing
             try await page.scrollIntoTheRail()
             let reading = try #require(page.probe.reading)
             let readingOffset = page.offset
+            let baseline = page.geometry
             let chip = page.probe.selectedSection
             page.samples = []
             try await page.refresh { $0.items.append(Page.question) }
             try await page.settle(until: {
                 page.probe.oneLineItemIDs == [Page.question.item.id] && page.offset > readingOffset
             })
+            // Each offset the page passed through, a repeat folded into the
+            // one before it, so the report shows the path and not thousands
+            // of samples.
+            let path = page.samples.reduce(into: [CGFloat]()) { path, offset in
+                if path.last != offset { path.append(offset) }
+            }
+            let report = """
+                at the baseline:
+                \(baseline)
+                at the end:
+                \(page.geometry)
+                offsets since the baseline: \(path.map { "\($0)" }.joined(separator: ", "))
+                """
             #expect(page.lead == nil)
             #expect(page.probe.oneLineItemIDs == [Page.question.item.id])
             #expect(page.probe.selectedSection == chip)
-            try expectHeld(page, reading, scroll: scroll, document: document, "after an item opens")
-            #expect(page.offset > readingOffset)
-            #expect(page.samples.allSatisfy { $0 >= readingOffset - 0.5 }, "no trip to the top")
+            try expectHeld(page, reading, scroll: scroll, document: document, "after an item opens", detail: report)
+            #expect(page.offset > readingOffset, Comment(rawValue: report))
+            #expect(page.samples.allSatisfy { $0 >= readingOffset - 0.5 }, "no trip to the top\n\(report)")
         }
 
         @Test func contentArrivingAboveHoldsAReaderInTheRail() async throws {
