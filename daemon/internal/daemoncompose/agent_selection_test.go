@@ -3,8 +3,10 @@ package daemoncompose
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -33,6 +35,54 @@ type conformanceVolumes string
 
 func (v conformanceVolumes) AuthStoreVolume(context.Context, domain.AuthIdentityID, domain.InvocationID) (string, error) {
 	return string(v), nil
+}
+
+// TestAdapterProofPastItsBudgetSaysSo pins #3337: a proof the 3-minute
+// budget ends says so, names the budget to the runtime calls it kills, and
+// keeps the gate's error in the chain; a failure before the budget ends reads
+// as it did.
+func TestAdapterProofPastItsBudgetSaysSo(t *testing.T) {
+	t.Parallel()
+	input := claude.ConformanceInput{
+		Task: claude.ConformanceTask{
+			ReadNonce: "read-nonce", InstructionNonce: "instruction-nonce", Seed: "/unused",
+			Base: domain.BaseRevision{Repo: "freeside-ai/conformance", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		},
+		InvocationID: "adapter-fixture", Identity: "claude-fixture", Volumes: conformanceVolumes("fixture-volume"),
+	}
+	errKilled := errors.New("container start: signal: killed")
+	t.Run("budget ended", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			var cause error
+			gate := conformanceGateFunc(func(ctx context.Context, _ ward.HandoffSpec) (*ward.HandoffResult, error) {
+				<-ctx.Done()
+				cause = context.Cause(ctx)
+				return nil, errKilled
+			})
+			_, err := runAdapterConformance(t.Context(), gate, input, []string{"api.anthropic.com:443"})
+			if !errors.Is(cause, errAdapterProofBudget) {
+				t.Fatalf("runtime calls see cause %v, want the adapter proof budget", cause)
+			}
+			if !errors.Is(err, errKilled) {
+				t.Fatalf("error %v lost the gate's error", err)
+			}
+			if !strings.HasPrefix(fmt.Sprint(err), "adapter proof ran 3m0s and passed its 3m0s budget; ") ||
+				!strings.Contains(fmt.Sprint(err), "once load drops") {
+				t.Fatalf("error %q does not say the proof ran past its budget", err)
+			}
+		})
+	})
+	t.Run("failed in time", func(t *testing.T) {
+		t.Parallel()
+		gate := conformanceGateFunc(func(context.Context, ward.HandoffSpec) (*ward.HandoffResult, error) {
+			return nil, errKilled
+		})
+		_, err := runAdapterConformance(t.Context(), gate, input, nil)
+		if !errors.Is(err, errKilled) || err.Error() != errKilled.Error() {
+			t.Fatalf("error %v, want the gate's error unchanged", err)
+		}
+	})
 }
 
 func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
