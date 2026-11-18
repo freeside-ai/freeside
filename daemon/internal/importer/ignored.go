@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,23 +17,66 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
-// ignoredAdditions identifies content that is neither tracked at the trusted
-// base nor requested by the work unit. Only base-owned ignore rules can exclude
-// it from construction. All returned bytes still pass the ordinary intake and
-// security checks; this is not a finding-profile exemption.
+// ignoredAdditions identifies additions the exact trusted base ignores and
+// does not track: a new regular file, including one whose blob the export caps
+// omitted, or a new nested repository (a submodule entry, such as a package
+// manager's checkout), with nothing tracked at or beneath its path. Only
+// base-owned ignore rules can exclude it from construction. Every returned
+// byte still passes the ordinary intake and security checks first; the caller
+// drops only the findings that describe content no commit will hold
+// (FindingKind.inapplicableToExcludedAddition). Handoffs that must carry no
+// repository change keep every addition, so ignored debris still refuses them.
 func ignoredAdditions(ctx context.Context, g *gitRunner, base map[string]treeEntry, changes []plannedChange, opts Options, scratch string) (map[string]bool, error) {
-	if opts.ExpectNoChanges || (opts.Policy.FindingProfile != nil && *opts.Policy.FindingProfile == FindingProfileSpecification) {
+	if opts.ExpectNoChanges {
 		return nil, nil
 	}
-	eligible := make(map[string]bool)
-	var input bytes.Buffer
+	// An addition over tracked base content (a directory replaced by a file or
+	// a nested repository) is not new untracked content: excluding it would
+	// hide that replacement, and a nested repository's opaque subtree would
+	// retain the tracked files beneath it unseen.
+	var tracked map[string]bool
+	files, directories := make(map[string]bool), make(map[string]bool)
 	for _, c := range changes {
-		if c.kind == ChangeAdded && c.mode != "" && opts.Policy.Allowlist != nil && !MatchesAllowlist(opts.Policy.Allowlist, c.path) {
-			eligible[c.path] = true
-			input.WriteString(c.path)
-			input.WriteByte(0)
+		regular := c.mode == "100644" || c.mode == "100755"
+		// check-ignore reads its input as pathspecs: a leading ':' is magic
+		// that would match a different path than the candidate's.
+		if c.kind != ChangeAdded || (!regular && !c.nestedRepository) || strings.HasPrefix(c.path, ":") {
+			continue
+		}
+		if tracked == nil {
+			tracked = trackedDirectories(base)
+		}
+		if tracked[c.path] {
+			continue
+		}
+		if c.nestedRepository {
+			directories[c.path] = true
+		} else {
+			files[c.path] = true
 		}
 	}
+	ignored, err := matchIgnored(ctx, g, base, files, false, opts, filepath.Join(scratch, "base-ignore-files"))
+	if err != nil {
+		return nil, err
+	}
+	ignoredDirectories, err := matchIgnored(ctx, g, base, directories, true, opts, filepath.Join(scratch, "base-ignore-directories"))
+	if err != nil {
+		return nil, err
+	}
+	if ignored == nil {
+		return ignoredDirectories, nil
+	}
+	maps.Copy(ignored, ignoredDirectories)
+	return ignored, nil
+}
+
+// matchIgnored asks Git which eligible paths the exact base's rules ignore, in
+// a fresh scratch repository under scratch. Git judges a directory by its own
+// name only when that name is a directory on disk, so for nested repositories
+// (directories true) it creates each as an empty directory; files and
+// directories match in separate trees so a created directory never changes
+// how a candidate file is judged.
+func matchIgnored(ctx context.Context, g *gitRunner, base map[string]treeEntry, eligible map[string]bool, directories bool, opts Options, scratch string) (map[string]bool, error) {
 	if len(eligible) == 0 {
 		return nil, nil
 	}
@@ -40,12 +84,12 @@ func ignoredAdditions(ctx context.Context, g *gitRunner, base map[string]treeEnt
 	if len(rules) == 0 {
 		return nil, nil
 	}
-	if err := validateIgnoreSpellings(rules, eligible); err != nil {
+	if err := validateIgnoreSpellings(rules, eligible, directories); err != nil {
 		return nil, err
 	}
-	root := filepath.Join(scratch, "base-ignore-tree")
+	root := filepath.Join(scratch, "tree")
 	matcher, err := gitrun.New(gitrun.Options{
-		GitPath: opts.GitPath, Scratch: filepath.Join(scratch, "base-ignore-control"), Class: ErrGitPlumbing,
+		GitPath: opts.GitPath, Scratch: filepath.Join(scratch, "control"), Class: ErrGitPlumbing,
 		ConfigExtra: []string{"-c", "core.excludesFile=/dev/null", "-c", "core.ignoreCase=false"},
 	})
 	if err != nil {
@@ -59,6 +103,16 @@ func ignoredAdditions(ctx context.Context, g *gitRunner, base map[string]treeEnt
 	if err := materializeIgnoreRules(ctx, g, base, rules, root, opts.Policy); err != nil {
 		return nil, err
 	}
+	var input bytes.Buffer
+	for name := range eligible {
+		if directories {
+			if err := materializeCandidateDirectory(root, name, opts.Policy); err != nil {
+				return nil, err
+			}
+		}
+		input.WriteString(name)
+		input.WriteByte(0)
+	}
 	var out bytes.Buffer
 	err = matcher.RunTo(ctx, &input, &out, "-C", root, "check-ignore", "--stdin", "-z", "--verbose", "--non-matching", "--no-index")
 	if err != nil {
@@ -68,6 +122,38 @@ func ignoredAdditions(ctx context.Context, g *gitRunner, base map[string]treeEnt
 		}
 	}
 	return decodeIgnoredAdditions(out.Bytes(), eligible, rules)
+}
+
+// materializeCandidateDirectory creates an empty directory at a nested
+// repository's path. Its name is untrusted: it must be canonical and free of
+// Git metadata components, and spelling validation has already refused any
+// alias of a rule's directory.
+func materializeCandidateDirectory(root, name string, pol Policy) error {
+	if !export.ValidCanonicalPath(name) || int64(len(name)) > pol.MaxPathBytes {
+		return fmt.Errorf("nested repository path is not representable: %w", ErrUnsupportedRepo)
+	}
+	components := strings.Split(name, "/")
+	if len(components) > pol.MaxPathDepth {
+		return fmt.Errorf("nested repository path exceeds depth cap: %w", ErrUnsupportedRepo)
+	}
+	for _, component := range components {
+		if GitUnsafeComponent(component) {
+			return fmt.Errorf("nested repository path contains Git metadata: %w", ErrUnsupportedRepo)
+		}
+	}
+	return os.MkdirAll(filepath.Join(root, filepath.FromSlash(name)), 0o700)
+}
+
+// trackedDirectories returns every directory that holds a base path, so an
+// addition at one of them is known to sit over tracked content.
+func trackedDirectories(base map[string]treeEntry) map[string]bool {
+	dirs := make(map[string]bool)
+	for name := range base {
+		for dir := parentDir(name); dir != "" && !dirs[dir]; dir = parentDir(dir) {
+			dirs[dir] = true
+		}
+	}
+	return dirs
 }
 
 // Keep only real base rules, never a map of every candidate ancestor. Substring
@@ -101,15 +187,23 @@ func selectIgnoreRules(base map[string]treeEntry, eligible map[string]bool) []st
 	return rules
 }
 
-func validateIgnoreSpellings(rules []string, eligible map[string]bool) error {
+// validateIgnoreSpellings refuses directory spellings that alias on the
+// checkout filesystem. directories adds each eligible name itself, since
+// matching creates it as a directory.
+func validateIgnoreSpellings(rules []string, eligible map[string]bool, directories bool) error {
 	type spelling struct{ raw, folded string }
-	names := make([]spelling, 0, len(rules)+len(eligible))
-	for _, name := range rules {
+	names := make([]spelling, 0, len(rules)+2*len(eligible))
+	add := func(name string) {
 		names = append(names, spelling{name, strings.ReplaceAll(pathfold.FoldPath(name), "/", "\x00")})
 	}
+	for _, name := range rules {
+		add(name)
+	}
 	for name := range eligible {
-		dir := parentDir(name)
-		names = append(names, spelling{dir, strings.ReplaceAll(pathfold.FoldPath(dir), "/", "\x00")})
+		add(parentDir(name))
+		if directories {
+			add(name)
+		}
 	}
 	slices.SortFunc(names, func(a, b spelling) int { return strings.Compare(a.folded, b.folded) })
 	// NUL sorts before every valid path byte, keeping a directory next to its

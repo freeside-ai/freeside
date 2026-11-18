@@ -70,7 +70,7 @@ func deriveChanges(ctx context.Context, g *gitRunner, base map[string]treeEntry,
 			if be, ok := base[e.Path]; ok && be.mode == "160000" {
 				break // the base pointer is retained; workspace-side content is invisible by design
 			}
-			addChange(plannedChange{path: e.Path, kind: changeKindAgainst(base, e.Path)})
+			addChange(plannedChange{path: e.Path, kind: changeKindAgainst(base, e.Path), nestedRepository: true})
 			addFinding(Finding{Path: e.Path, Kind: FindingNonRegularChange, Detail: "submodule"})
 		case export.EntrySpecial:
 			consumed[e.Path] = true

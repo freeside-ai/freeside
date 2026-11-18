@@ -147,6 +147,29 @@ func (k FindingKind) blocksCommit() bool {
 	return false
 }
 
+// inapplicableToExcludedAddition reports whether a finding on a base-ignored
+// addition the importer excludes stops applying once that addition leaves the
+// candidate. Each such kind describes a gap in content no commit will hold:
+// scope, a withheld or unscanned blob, a per-file size, or a nested
+// repository's opaque content. The importer keeps a secret match on scanned
+// content, the path-class and collision findings, and the change set's total
+// size, so excluding debris never hides those. The switch omits default so a
+// new FindingKind must decide; the trailing return keeps the invalid zero value.
+func (k FindingKind) inapplicableToExcludedAddition() bool {
+	switch k {
+	case FindingAllowlistViolation, FindingBlobOmitted, FindingNonRegularChange,
+		FindingSizeViolation, FindingSecretScanSkipped:
+		return true
+	case FindingInvalidPathEntry, FindingCommitPlanSecret, FindingSecret,
+		FindingAutomationControlPath, FindingReviewerInstructionPath,
+		FindingGitMetadataPath, FindingVerificationRecipePath,
+		FindingPromptsPolicyPath, FindingEgressTrustPath,
+		FindingMaterialityRulesPath, FindingPathCollision:
+		return false
+	}
+	return false
+}
+
 // FindingProfile selects how a pipeline dispatches on import findings. It
 // follows the daemon enum convention: every named member is nonempty and the
 // zero value "" is invalid. The *default* (publish-strict) is not a "" member
@@ -259,8 +282,9 @@ func (k FindingKind) fatalForProfile(profile *FindingProfile, stance domain.Auto
 //     control-plane path classes (§5.5/§5.8) or git metadata is plausible
 //     investigation debris — a specifier editing CI, policy, reviewer
 //     instructions, or git metadata is off-contract even unpublished.
-//   - Tolerated debris: gitignored build/test output is out-of-allowlist and
-//     routinely over the size and scan caps. Tolerating secret_scan_skipped
+//   - Tolerated debris: build/test output the base does not ignore (ignored
+//     additions are excluded before dispatch, ignored.go) is out-of-allowlist
+//     and routinely over the size and scan caps. Tolerating secret_scan_skipped
 //     means large debris goes unscanned; accepted because nothing publishes
 //     and a secret match on scanned content stays fatal.
 func (k FindingKind) fatalForSpecification() bool {

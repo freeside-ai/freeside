@@ -65,6 +65,10 @@ type plannedChange struct {
 	// bytes). Its oid comes from the trusted base tree, so construction
 	// neither ingests a handoff blob for it nor cross-checks ingestion.
 	fromBase bool
+	// nestedRepository marks a submodule entry the base does not hold: a
+	// nested repository whose content the export does not descend into. It
+	// never enters a tree; ignore matching may exclude it (ignored.go).
+	nestedRepository bool
 }
 
 // public renders the construction-facing form as the API's Change,
