@@ -66,6 +66,11 @@ type ActiveResourceReconciler struct {
 	evictConcluded      func(domain.ReadyItemPRBinding, *int)
 	evictedConcluded    map[domain.ItemID]bool
 	observationFailures map[domain.ItemID]int
+	// handBackGapSeen records, per ready item, the head the last pass saw
+	// wait under the hand-back label for an admitted comment, so the notice
+	// is raised only when the next pass still sees it (convergeHandBackWait).
+	// Process-local: a restart delays a notice by one pass.
+	handBackGapSeen map[domain.ItemID]string
 	// reactionsRefusalReported records the open ready items whose refused
 	// reactions read (publish.PullReviewObservation.ReactionsUnavailable) a
 	// pass already reported, so the refusal is reported once per item rather
@@ -519,8 +524,16 @@ func (r *ActiveResourceReconciler) Reconcile(
 						return result, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
 					}
 				}
+				var gap *engine.HandBackWait
+				known := true
 				if observation.handBack {
-					r.intakeHandBack(ctx, item.ID, observation, &result)
+					gap, known = r.intakeHandBack(ctx, item.ID, observation, &result)
+				}
+				if known {
+					if err := r.convergeHandBackWait(ctx, snapshots, item, gap); err != nil {
+						result.Failures = append(result.Failures,
+							fmt.Errorf("converge hand-back notice %s: %w", item.ID, err))
+					}
 				}
 				if observation.foreclosure != nil {
 					if err := r.convergeCompletionForeclosure(ctx, item, *observation.foreclosure); err != nil {
@@ -620,14 +633,24 @@ func (r *ActiveResourceReconciler) Reconcile(
 		// intake's and retried on the next pass.
 		// A handed-back pull request starts a hand-back cycle instead: the
 		// comment that hands it back is not a review of the published head.
+		var gap *engine.HandBackWait
+		known := true
 		if observation.handBack && observation.invalidation == nil && !observation.conclude {
-			if err := r.startHandBack(ctx, observation.binding.RunID, observation.binding.Repo, *observation.pull); err != nil {
+			var err error
+			gap, known, err = r.startHandBack(ctx, observation.binding.RunID, observation.binding.Repo, *observation.pull)
+			if err != nil {
 				result.Failures = append(result.Failures, fmt.Errorf("start hand-back %s: %w", item.ID, err))
 			}
 		} else if observation.boundOpen && observation.invalidation == nil && !observation.conclude {
 			if err := r.startExternalReview(ctx, item.ID, observation.pull.ObservedAt); err != nil {
 				result.Failures = append(result.Failures,
 					fmt.Errorf("start external review %s: %w", item.ID, err))
+			}
+		}
+		if known {
+			if err := r.convergeHandBackWait(ctx, snapshots, item, gap); err != nil {
+				result.Failures = append(result.Failures,
+					fmt.Errorf("converge hand-back notice %s: %w", item.ID, err))
 			}
 		}
 	}
@@ -739,11 +762,13 @@ func (r ActiveResourceReconciler) startExternalReview(
 
 // intakeHandBack stores a handed-back pull request's review activity and
 // starts the hand-back cycle for a run whose ready item already ended. Each
-// failure is isolated like the open path's and retried on the next pass.
+// failure is isolated like the open path's and retried on the next pass. It
+// returns startHandBack's gap and whether the pass learned it; a failed
+// store of the activity leaves it unknown.
 func (r *ActiveResourceReconciler) intakeHandBack(
 	ctx context.Context, itemID domain.ItemID, observation activeResourceObservation,
 	result *activeResourceReconcileResult,
-) {
+) (*engine.HandBackWait, bool) {
 	if observation.nativeErr != nil {
 		result.Failures = append(result.Failures, fmt.Errorf("hand-back %s: %w", itemID, observation.nativeErr))
 	}
@@ -752,37 +777,50 @@ func (r *ActiveResourceReconciler) intakeHandBack(
 		if err := r.commitExternalFindings(ctx, observation); err != nil {
 			result.Failures = append(result.Failures, fmt.Errorf("record hand-back review %s: %w", itemID, err))
 			r.dropReviewCache(observation.binding)
-			return
+			return nil, false
 		}
 	}
-	if err := r.startHandBack(ctx, observation.binding.RunID, observation.binding.Repo, *observation.pull); err != nil {
+	gap, known, err := r.startHandBack(ctx, observation.binding.RunID, observation.binding.Repo, *observation.pull)
+	if err != nil {
 		result.Failures = append(result.Failures, fmt.Errorf("start hand-back %s: %w", itemID, err))
 	}
+	return gap, known
 }
 
 // startHandBack starts a hand-back cycle for the run when one is due on the
 // observed head (engine.StartHandBackReentry). Like startExternalReview it
 // opens a write transaction only when a cycle is due, and the supersession
 // of an open ready item, the authority, and the task commit together.
+//
+// When no cycle is due it returns why the head waits for a comment, nil when
+// it does not (engine.HandBackCommentGap). known reports whether the pass
+// learned that: it is false only when the read that decides it failed. A
+// cycle that is due has no gap, whether or not it then starts.
 func (r ActiveResourceReconciler) startHandBack(
 	ctx context.Context, runID domain.RunID, repo string, pull domain.PullMergeFact,
-) error {
+) (gap *engine.HandBackWait, known bool, err error) {
 	var due bool
 	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		due, err = engine.HandBackReentryDue(ctx, tx, runID, pull.HeadSHA)
+		if due, err = engine.HandBackReentryDue(ctx, tx, runID, pull.HeadSHA); err != nil || due {
+			return err
+		}
+		gap, err = engine.HandBackCommentGap(ctx, tx, runID, pull.HeadSHA)
 		return err
-	}); err != nil || !due {
-		return err
+	}); err != nil {
+		return nil, false, err
+	}
+	if !due {
+		return gap, true, nil
 	}
 	if r.mergeBase == nil {
-		return errors.New("hand-back intake has no merge-base reader")
+		return nil, true, errors.New("hand-back intake has no merge-base reader")
 	}
 	base, err := r.mergeBase(ctx, repo, pull.BaseRef, pull.HeadSHA)
 	if err != nil {
-		return fmt.Errorf("read merge base: %w", err)
+		return nil, true, fmt.Errorf("read merge base: %w", err)
 	}
-	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
+	return nil, true, r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		superseded, started, err := engine.StartHandBackReentry(ctx, tx, runID, pull.HeadSHA, base, r.readinessGate)
 		if err != nil || !started || superseded == "" {
 			return err
