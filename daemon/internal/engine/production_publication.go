@@ -1139,7 +1139,10 @@ func (w *productionPublicationWorkflow) loadBinding(
 	if task.reentersInPlace() {
 		return w.loadReentryBinding(ctx, task)
 	}
-	var binding productionBinding
+	var (
+		binding    productionBinding
+		profileErr error
+	)
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		binding.run, err = tx.GetRun(ctx, task.RunID)
@@ -1192,6 +1195,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 			binding.profile, err = tx.LatestTrustProfile(ctx, binding.admission.Base.Repo)
 		} else {
 			binding.profile, err = tx.GetTrustProfile(ctx, *binding.admission.TrustProfileDigest)
+			profileErr, err = admittedProfileUnreadable(err)
 		}
 		if err != nil {
 			return err
@@ -1239,19 +1243,28 @@ func (w *productionPublicationWorkflow) loadBinding(
 		!sameOptionalDigest(binding.replay.EvidenceManifestDigest, binding.export.EvidenceManifestDigest) ||
 		(binding.replay.CommitPlanDigest != nil) != binding.export.CommitPlanPresent ||
 		!productionReplayPrecedesCompletion(binding.replay.ImportOptions.CommitDate, binding.export.RecordedAt) ||
-		(task.reevaluation == nil && binding.admission.TrustProfileDigest != nil &&
+		(profileErr == nil && ((task.reevaluation == nil && binding.admission.TrustProfileDigest != nil &&
 			binding.profile.ProfileDigest != *binding.admission.TrustProfileDigest) ||
-		binding.profile.Repo != binding.admission.Base.Repo ||
-		binding.profile.RepositoryID != binding.admission.Base.RepositoryID ||
+			binding.profile.Repo != binding.admission.Base.Repo ||
+			binding.profile.RepositoryID != binding.admission.Base.RepositoryID)) ||
 		binding.image.Repository != binding.admission.Base.Repo ||
 		binding.image.RepositoryID != binding.admission.Base.RepositoryID {
 		return productionBinding{}, fmt.Errorf("production publication binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
 	}
-	if err := validateProductionReplayOptions(binding, task.Publication); err != nil {
+	// The image and replay policy checks read no profile, so they run before
+	// an unreadable admitted profile is reported: only the profile itself is
+	// left unchecked when that error becomes a per-run outcome.
+	if err := w.resolveVerificationImage(ctx, &binding, task.HeadSHA); err != nil {
 		return productionBinding{}, err
 	}
-	if err := w.resolveVerificationImage(ctx, &binding, task.HeadSHA); err != nil {
+	if _, err := productionReplayAllowedPaths(binding); err != nil {
+		return productionBinding{}, err
+	}
+	if profileErr != nil {
+		return productionBinding{}, profileErr
+	}
+	if err := validateProductionReplayOptions(binding, task.Publication); err != nil {
 		return productionBinding{}, err
 	}
 	return binding, nil
@@ -1303,13 +1316,13 @@ func productionReplayPrecedesCompletion(commitDate, recordedAt time.Time) bool {
 	return !commitDate.IsZero() && !recordedAt.IsZero() && !commitDate.After(recordedAt)
 }
 
-func validateProductionReplayOptions(
-	binding productionBinding,
-	publication ProductionPublication,
-) error {
+// productionReplayAllowedPaths checks that the resolved policy belongs to the
+// run's admission and returns its explicit path boundary. It reads no trust
+// profile.
+func productionReplayAllowedPaths(binding productionBinding) ([]string, error) {
 	if binding.resolvedPolicy.RunID != binding.run.ID ||
 		binding.resolvedPolicy.Digest != binding.admission.PolicyDigest {
-		return fmt.Errorf("production replay policy disagrees with admission: %w",
+		return nil, fmt.Errorf("production replay policy disagrees with admission: %w",
 			domain.ErrParentKeyMismatch)
 	}
 	var allowedPaths []string
@@ -1325,8 +1338,19 @@ func validateProductionReplayOptions(
 		break
 	}
 	if !explicitProductionPaths(allowedPaths) {
-		return fmt.Errorf("production replay policy has no explicit path boundary: %w",
+		return nil, fmt.Errorf("production replay policy has no explicit path boundary: %w",
 			domain.ErrPathBoundaryMismatch)
+	}
+	return allowedPaths, nil
+}
+
+func validateProductionReplayOptions(
+	binding productionBinding,
+	publication ProductionPublication,
+) error {
+	allowedPaths, err := productionReplayAllowedPaths(binding)
+	if err != nil {
+		return err
 	}
 	policy, err := (importer.Policy{Allowlist: allowedPaths}).WithProtectedPaths(binding.profile)
 	if err != nil {
@@ -1418,15 +1442,91 @@ func (w *productionPublicationWorkflow) runAfterVerification(label string) error
 	return nil
 }
 
+// errAdmittedTrustProfileUnreadable marks a publication task whose admitted
+// trust profile row exists but no longer reconstructs under this build, as
+// every row does after a profile encoding bump (#3171). The loaders report it
+// only after the binding's records agree with each other, and loadBinding
+// also after the forward task's image and replay policy check out, so a task
+// that is inconsistent for another reason still fails as a lane error. It wraps
+// publish.ErrTrustProfileDrift, so a block built from it records the drift
+// rule.
+var errAdmittedTrustProfileUnreadable = fmt.Errorf(
+	"admitted trust profile does not reconstruct under this build: %w", publish.ErrTrustProfileDrift)
+
+// admittedProfileUnreadable splits an admitted-profile read error: a row the
+// store reports unreadable becomes the deferred binding error, and any other
+// error (a miss, a query or scan fault) stays the read's own.
+func admittedProfileUnreadable(err error) (deferred, readErr error) {
+	if errors.Is(err, store.ErrTrustProfileUnreadable) {
+		return fmt.Errorf("load production publication authority: %w",
+			errors.Join(errAdmittedTrustProfileUnreadable, err)), nil
+	}
+	return nil, err
+}
+
+// endUnreadableAdmittedProfile ends one task whose admitted trust profile no
+// longer reconstructs, so a profile encoding bump costs that run its
+// publication instead of stopping the daemon (#3171). It publishes,
+// imports, and verifies nothing: the stale profile authorizes no effect.
+//
+// A task whose publication intent is committed, pending or dispatched, may
+// have a forge effect in flight or done, so it holds per run
+// (HoldTrustBlocked) and stays pending. A re-entered cycle stops on its pull
+// request. Any other task completes with the definitive trust block, whose
+// rerun_trust_evaluation rebinds the run to the repository's current profile;
+// that rerun re-gates its whole binding under the new profile.
+func (w *productionPublicationWorkflow) endUnreadableAdmittedProfile(
+	ctx context.Context, task productionPublicationTask, cause error,
+) (productionTaskOutcome, error) {
+	held := importer.Result{CommitSHA: task.HeadSHA}
+	if task.reentersInPlace() {
+		return w.stopReentryCycle(ctx, task, unreadableAdmittedProfileReentryReason, nil)
+	}
+	pending, err := w.hasPendingPublicationIntent(ctx, task.PublicationID)
+	if err != nil {
+		return productionTaskOutcome{}, errors.Join(cause, err)
+	}
+	finalized, err := w.hasFinalizedPublicationIntent(ctx, task.PublicationID)
+	if err != nil {
+		return productionTaskOutcome{}, errors.Join(cause, err)
+	}
+	if pending || finalized {
+		return w.holdBlockedTask(ctx, task, held, unreadableAdmittedProfileHoldReason, domain.HoldTrustBlocked)
+	}
+	var run domain.Run
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		run, err = tx.GetRun(ctx, task.RunID)
+		return err
+	}); err != nil {
+		return productionTaskOutcome{}, errors.Join(cause, err)
+	}
+	outcome, err := w.completeBlockedTask(
+		ctx, task, run, held, nil, productionBlockTrust, productionRerunnableBlockActions,
+		publishBlockFacts(domain.HoldTrustBlocked, cause),
+	)
+	if err != nil {
+		return productionTaskOutcome{}, errors.Join(cause, err)
+	}
+	return outcome, nil
+}
+
+const (
+	unreadableAdmittedProfileHoldReason    = "Publication is durably held because the trust profile this run was admitted under no longer reads under this daemon build, and its publication was already committed. Re-approving the profile does not clear this hold; inspect the trust failure and the pull request."
+	unreadableAdmittedProfileReentryReason = "Readiness re-entry stopped because the trust profile this run was admitted under no longer reads under this daemon build. Re-approve the repository's trust profile and rerun the work."
+)
+
 func (w *productionPublicationWorkflow) reconcileTask(
 	ctx context.Context, task productionPublicationTask,
 ) (outcome productionTaskOutcome, resultErr error) {
 	binding, err := w.loadBinding(ctx, task)
-	if err != nil {
+	unreadableProfile := errors.Is(err, errAdmittedTrustProfileUnreadable)
+	if err != nil && !unreadableProfile {
 		return productionTaskOutcome{}, err
 	}
 	if w.beginTaskWork != nil {
-		workCtx, finish, err := w.beginTaskWork(ctx, binding.run.ID)
+		// The loader proved the run is task.RunID before it reported an
+		// unreadable profile, so the fence keys on the task.
+		workCtx, finish, err := w.beginTaskWork(ctx, task.RunID)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -1457,6 +1557,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
+	}
+	if unreadableProfile {
+		return w.endUnreadableAdmittedProfile(ctx, task, err)
 	}
 	// Scope-conflict recovery writes only task.scopeDecision, which route
 	// doesn't read, so the route computed here holds for the whole pass.

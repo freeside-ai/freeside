@@ -92,8 +92,8 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 		_, err := tx.GetTrustProfile(ctx, profile.ProfileDigest)
 		return err
 	})
-	if !errors.Is(err, domain.ErrProfileDigestMismatch) {
-		t.Fatalf("tampered profile read error = %v, want ErrProfileDigestMismatch", err)
+	if !errors.Is(err, domain.ErrProfileDigestMismatch) || !errors.Is(err, ErrTrustProfileUnreadable) {
+		t.Fatalf("tampered profile read error = %v, want ErrProfileDigestMismatch and ErrTrustProfileUnreadable", err)
 	}
 	err = s.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.ListTrustProfiles(ctx, profile.Repo)
@@ -261,8 +261,20 @@ func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 	if !errors.Is(err, domain.ErrNonPositive) {
 		t.Fatalf("stale v2 row read error = %v, want ErrNonPositive", err)
 	}
+	// The publication lane turns this sentinel into a per-run trust block
+	// (#3171), so a stale row must carry it and a miss must not.
+	if !errors.Is(err, ErrTrustProfileUnreadable) {
+		t.Fatalf("stale v2 row read error = %v, want ErrTrustProfileUnreadable", err)
+	}
 	if errors.Is(err, ErrNotFound) {
 		t.Fatalf("stale v2 row surfaced as ErrNotFound; a stale profile must be a hard error, not a miss: %v", err)
+	}
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetTrustProfile(ctx, domain.Digest("sha256:"+strings.Repeat("0", 64)))
+		return err
+	})
+	if !errors.Is(err, ErrNotFound) || errors.Is(err, ErrTrustProfileUnreadable) {
+		t.Fatalf("missing profile read error = %v, want ErrNotFound only", err)
 	}
 	err = s.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.ListTrustProfiles(ctx, "freeside-ai/candidate-repo")
@@ -785,8 +797,8 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		_, err := tx.LatestTrustProfile(ctx, "freeside-ai/candidate-repo")
 		return err
 	})
-	if !errors.Is(err, domain.ErrNonPositive) {
-		t.Fatalf("latest over only a stale row error = %v, want ErrNonPositive", err)
+	if !errors.Is(err, domain.ErrNonPositive) || !errors.Is(err, ErrTrustProfileUnreadable) {
+		t.Fatalf("latest over only a stale row error = %v, want ErrNonPositive and ErrTrustProfileUnreadable", err)
 	}
 
 	// The owner records the re-approved current profile: same content plus the

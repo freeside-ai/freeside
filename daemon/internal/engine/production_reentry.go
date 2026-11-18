@@ -220,9 +220,10 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 	ctx context.Context, task productionPublicationTask,
 ) (productionBinding, error) {
 	var (
-		binding productionBinding
-		cycle   reentryCycle
-		target  struct {
+		binding    productionBinding
+		profileErr error
+		cycle      reentryCycle
+		target     struct {
 			headSHA  string
 			prNumber int
 		}
@@ -271,6 +272,7 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 			binding.profile, err = tx.LatestTrustProfile(ctx, binding.admission.Base.Repo)
 		} else {
 			binding.profile, err = tx.GetTrustProfile(ctx, *binding.admission.TrustProfileDigest)
+			profileErr, err = admittedProfileUnreadable(err)
 		}
 		if err != nil {
 			return err
@@ -312,15 +314,18 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 		target.prNumber != cycle.predecessor.PRNumber || target.headSHA != task.HeadSHA ||
 		binding.resolvedPolicy.RunID != binding.run.ID ||
 		binding.resolvedPolicy.Digest != binding.admission.PolicyDigest ||
-		(binding.admission.TrustProfileDigest != nil &&
+		(profileErr == nil && ((binding.admission.TrustProfileDigest != nil &&
 			binding.profile.ProfileDigest != *binding.admission.TrustProfileDigest) ||
-		binding.profile.Repo != base.Repo ||
-		binding.profile.RepositoryID != base.RepositoryID ||
+			binding.profile.Repo != base.Repo ||
+			binding.profile.RepositoryID != base.RepositoryID)) ||
 		binding.image.Repository != base.Repo ||
 		binding.image.RepositoryID != base.RepositoryID {
 		return productionBinding{}, fmt.Errorf(
 			"production re-entry binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
+	}
+	if profileErr != nil {
+		return productionBinding{}, profileErr
 	}
 	cycle.admittedBaseSHA = base.BaseSHA
 	// The cycle keeps its producer's image and runs it on the re-entry base,
