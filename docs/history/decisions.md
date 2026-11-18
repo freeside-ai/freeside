@@ -4147,3 +4147,29 @@ decision (revision 78).
 
 (Owner decision of 2026-11-16 splitting #3149, applied as #3264;
 [decision note](../../devlog/2026-11-16-1251-ready-card-outcome-list.md).)
+
+## Revision 129 ("Exclude Ignored Hydration Output at Import"):
+
+1. **Base-ignored additions leave the candidate under every profile**
+   (Section [5.6](../plan.md#56-the-gauntlet-workspace-handoff-import-and-clean-verification)). An addition
+   the exact base ignores and doesn't track, at or beneath its path, is
+   excluded whether or not it is in scope, and under specification imports
+   too. Nested repositories, such as Swift package checkouts, qualify. For an
+   excluded addition, the findings that describe content no commit will hold
+   drop: scope, a withheld or unscanned blob, a per-file size, and the nested
+   repository. A secret match on scanned content, protected-path and
+   collision findings, and the total size still apply, and a handoff that
+   must carry no change still refuses ignored output.
+
+This revises revision 53, which excluded only new regular files out of
+scope and kept specification imports and every other finding unchanged.
+Project-image preparation (`swift package resolve`) leaves nested
+repositories and oversized packs under an ignored `app/.build/`, which
+failed a real specification import on a work unit whose scope covers
+`app/**`. Rejected: hydrating outside the workspace, which needs a
+per-toolchain cache location contract; and tolerating these findings in the
+specification profile alone, which would leave the same debris blocking
+publication.
+
+(Owner decision of 2026-11-17 in the #2382 exit run, applied as #3319;
+[decision note](../../devlog/2026-11-17-1015-ignored-hydration-output.md).)

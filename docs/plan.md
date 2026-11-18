@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 129
+revision: 130
 status: active
 updated: 2026-11-17
 ---
@@ -3420,10 +3420,9 @@ the writer mounts the volume read-only outside the workspace. Its root
 launcher opens stdin before dropping privileges. This does not promote the
 stage prompt into the separate vendor instruction bundle or system role.
 
-Delivery mode is part of the durable stage intent. Historical intents without
-a mode retain argument delivery, its 31-KiB bound, and their original handoff
-identity, including an already-recorded refusal. Recovery never silently
-reinterprets one as file delivery. A new attempt needs its own ordinary
+Delivery mode is part of the durable stage intent. Recovery refuses an intent
+whose mode the daemon no longer launches and never silently reinterprets it as
+the current one. A new attempt needs its own ordinary
 authorization and identity; changing transport does not itself authorize retry.
 
 An initial launch uses a daemon-generated UUID, supplied with `--session-id` and
@@ -7877,31 +7876,21 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 129 ("Exclude Ignored Hydration Output at Import"):
+Revision 130 ("Recovery Refuses Old Stage Intent Shapes"):
 
-1. **Base-ignored additions leave the candidate under every profile**
-   (Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)). An addition
-   the exact base ignores and doesn't track, at or beneath its path, is
-   excluded whether or not it is in scope, and under specification imports
-   too. Nested repositories, such as Swift package checkouts, qualify. For an
-   excluded addition, the findings that describe content no commit will hold
-   drop: scope, a withheld or unscanned blob, a per-file size, and the nested
-   repository. A secret match on scanned content, protected-path and
-   collision findings, and the total size still apply, and a handoff that
-   must carry no change still refuses ignored output.
+1. **A stage intent the daemon no longer writes is refused at recovery**
+   (Section [5.8](#58-control-plane-trust)). An intent with a delivery
+   mode other than the current one is refused and never reinterpreted as the
+   current one; it no longer keeps argument delivery or its original handoff
+   identity. The operator gets an attention item for it, and a new attempt
+   still needs its own authorization.
 
-This revises revision 53, which excluded only new regular files out of
-scope and kept specification imports and every other finding unchanged.
-Project-image preparation (`swift package resolve`) leaves nested
-repositories and oversized packs under an ignored `app/.build/`, which
-failed a real specification import on a work unit whose scope covers
-`app/**`. Rejected: hydrating outside the workspace, which needs a
-per-toolchain cache location contract; and tolerating these findings in the
-specification profile alone, which would leave the same debris blocking
-publication.
+This revises the delivery-mode paragraph, which kept historical intents on
+argument delivery. Rejected: keeping the old readers, since no current writer
+produces those shapes and prod started on a fresh database (#3265).
 
-(Owner decision of 2026-11-17 in the #2382 exit run, applied as #3319;
-[decision note](../devlog/2026-11-17-1015-ignored-hydration-output.md).)
+(Owner decision of 2026-11-16, applied as #3327;
+[decision note](../devlog/2026-11-17-2209-drop-old-stage-intent-shapes.md).)
 
 ## 14. Risks
 
