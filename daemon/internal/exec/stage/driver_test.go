@@ -2985,6 +2985,8 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 		{"prior bytes", func(i *intent) { i.Inputs.PriorArtifacts = [][]byte{[]byte("changed research")} }},
 		{"missing prior bodies", func(i *intent) { i.Inputs.PriorArtifacts = nil }},
 		{"unmarked prior bodies", func(i *intent) { i.Inputs.PriorArtifactsPersisted = false }},
+		// A pre-v3 intent carried no delivery; no default stands in for it.
+		{"implicit instruction delivery", func(i *intent) { i.Instructions.Delivery = "" }},
 	}
 	for _, tc := range tamperings {
 		t.Run(tc.name, func(t *testing.T) {

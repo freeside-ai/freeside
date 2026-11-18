@@ -650,11 +650,7 @@ func (d *Driver) regateWithCurrentPolicy(
 		return fmt.Errorf("%w: intent %s vendor instructions disagree with admission",
 			ErrUnsupportedStart, i.InvocationID)
 	}
-	delivery := exec.EffectiveVendorInstructionDelivery(vendor.Vendor, vendor.Delivery)
-	intentDelivery := exec.EffectiveVendorInstructionDelivery(
-		i.Instructions.Vendor, i.Instructions.Delivery,
-	)
-	if delivery != intentDelivery {
+	if vendor.Delivery != i.Instructions.Delivery {
 		return fmt.Errorf("%w: intent %s vendor-instruction delivery disagrees with admission",
 			ErrUnsupportedStart, i.InvocationID)
 	}

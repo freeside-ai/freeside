@@ -209,22 +209,10 @@ type MaterializedVendorInstructions struct {
 	content  *MaterializedContent
 }
 
-// EffectiveVendorInstructionDelivery resolves the historical Claude v2
-// default used by both materialization and durable driver reconstruction.
-func EffectiveVendorInstructionDelivery(
-	vendor domain.AgentVendor, delivery domain.VendorInstructionDelivery,
-) domain.VendorInstructionDelivery {
-	if delivery == "" && vendor == domain.AgentVendorClaude {
-		return domain.VendorInstructionDeliveryAppendFile
-	}
-	return delivery
-}
-
 // Vendor identifies the native instruction mechanism this input targets.
 func (i MaterializedVendorInstructions) Vendor() domain.AgentVendor { return i.vendor }
 
 // Delivery identifies the conformed native binding for the instruction file.
-// Historical Claude v2 snapshots are normalized to append-file delivery.
 func (i MaterializedVendorInstructions) Delivery() domain.VendorInstructionDelivery {
 	return i.delivery
 }
@@ -344,11 +332,8 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 	var vendorInstructions *MaterializedVendorInstructions
 	if snapshot.VendorInstructions != nil {
 		vendorInstructions = &MaterializedVendorInstructions{
-			vendor: snapshot.VendorInstructions.Vendor,
-			delivery: EffectiveVendorInstructionDelivery(
-				snapshot.VendorInstructions.Vendor,
-				snapshot.VendorInstructions.Delivery,
-			),
+			vendor:   snapshot.VendorInstructions.Vendor,
+			delivery: snapshot.VendorInstructions.Delivery,
 		}
 		if snapshot.VendorInstructions.Digest != nil {
 			content, err := load(
