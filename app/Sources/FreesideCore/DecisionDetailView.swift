@@ -681,12 +681,7 @@ struct DecisionDetailView: View {
             if reasonPlacement == .underAsk {
                 reasonUnderAsk(item, register: register.at(.reason))
             } else if let lead = DecisionCardComposition.reasonLead(for: item) {
-                Text(lead)
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .proseMeasure()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                DecisionReasonLine(text: lead)
             }
 
             outcome(item, rendersInteractiveControls: rendersInteractiveControls)
@@ -1452,24 +1447,21 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The reason as the ask's own second line (R0). An agent-written
+    /// The reason as the answer to the ask above it (R0). An agent-written
     /// reason is quoted under its producer label (plan §9, Summary
-    /// Provenance).
+    /// Provenance), with the same line inside the quote.
     @ViewBuilder
     private func reasonUnderAsk(
         _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
     ) -> some View {
         if let reason = DecisionCardComposition.reason(for: item) {
-            switch DecisionCardComposition.reasonFace(for: item._type) {
-            case .secondLine:
-                reasonText(reason, color: .inkDim, register: register)
-            case .statement:
-                Text(reason.text)
-                    .font(FreesideFont.statement)
-                    .foregroundStyle(Color.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .proseMeasure()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if reason.isAgentWritten {
+                QuoteBlock(
+                    producer: reason.label, carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: register.rendersInteractiveControls
+                ) { DecisionReasonLine(text: reason.text) }
+            } else {
+                DecisionReasonLine(text: reason.text)
             }
         }
     }
@@ -1722,15 +1714,12 @@ struct DecisionDetailView: View {
                                 "Agent question",
                                 unverified: index == 0 ? register : register.withoutInfo)
                         }
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: CardScale.contextGap) {
                             Text(decision.question)
                                 .font(FreesideFont.ask)
                                 .foregroundStyle(Color.ink)
                                 .fixedSize(horizontal: false, vertical: true)
-                            Text(decision.whyBlocking)
-                                .font(FreesideFont.cardBody)
-                                .foregroundStyle(Color.inkDim)
-                                .fixedSize(horizontal: false, vertical: true)
+                            DecisionReasonLine(text: decision.whyBlocking)
                         }
                         .proseMeasure()
                     }
@@ -4955,6 +4944,24 @@ extension View {
             .frame(maxWidth: compact ? nil : CardScale.columnCap, alignment: .topLeading)
             .padding(margin)
             .frame(maxWidth: compact ? nil : .infinity, alignment: CardScale.columnAlignment)
+    }
+}
+
+/// The line that answers a card's ask: the daemon's reason, a finding
+/// card's `Accepting` sentence, or a typed question's context line. Every
+/// decision type draws it in this one face, the card's statement in ink and
+/// in sentence case (`DecisionCardComposition.reasonLine(_:)`); a quote
+/// around an agent-written line is the caller's.
+private struct DecisionReasonLine: View {
+    let text: String
+
+    var body: some View {
+        Text(DecisionCardComposition.reasonLine(text))
+            .font(FreesideFont.statement)
+            .foregroundStyle(Color.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .proseMeasure()
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

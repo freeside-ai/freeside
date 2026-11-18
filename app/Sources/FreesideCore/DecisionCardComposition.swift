@@ -255,6 +255,8 @@ struct DecisionCardComposition: Equatable {
         static let sectionGap = ladder.sectionGap
         /// Between the eyebrow and the ask.
         static let headGap: CGFloat = 10
+        /// Between a typed agent question and its context line.
+        static let contextGap: CGFloat = 14
         static let moduleGap = ladder.moduleGap
         static let controlGap = ladder.controlGap
         static let foldGap: CGFloat = 10
@@ -410,30 +412,21 @@ struct DecisionCardComposition: Equatable {
         case detailsOnly
     }
 
-    /// How the shell sets a reason it draws under the ask.
-    enum ReasonFace: Equatable {
-        /// The ask's dim second line (R0).
-        case secondLine
-        /// The card's own statement, in the serif face and ink.
-        case statement
-    }
-
-    /// A system-health item's reason is the daemon's finding: the sentence
-    /// that says what is wrong, which its diagnostic code and impaired
-    /// capability only classify. It is what the card is about, so it reads
-    /// as the card's statement (survey frame 5.5) and never folds. Every
-    /// other reason the shell draws is context for the ask above it. The
-    /// switch is exhaustive so a new type has to answer the question.
-    static func reasonFace(for type: Components.Schemas.AttentionType) -> ReasonFace {
-        switch type {
-        case .system_health:
-            return .statement
-        case .spec_approval, .execution_failure, .agent_question, .review_diminishing_returns,
-            .review_dispute, .review_contradiction, .review_configuration,
-            .finding_adjudication, .ready_for_final_review, .publish_blocked, .task_proposal,
-            .effect_proposal, .blocked, .unknown:
-            return .secondLine
+    /// The line under the ask as the card draws it: the stored `text` with
+    /// its first letter capitalized when its first word, less one trailing
+    /// `,` `;` `:` or `.`, is only lowercase letters with optional inner
+    /// hyphens or apostrophes, straight or curly. Any other first word (one
+    /// with a digit, underscore, dot, slash, backtick, or capital) may be an
+    /// identifier and is left as written. A presentation rule only:
+    /// `reason(for:)` and Recorded Context keep the stored text. A lowercase
+    /// product name such as `git` reads as a word and is capitalized.
+    static func reasonLine(_ text: String) -> String {
+        var word = text.prefix(while: { !$0.isWhitespace })
+        if let last = word.last, ",;:.".contains(last) {
+            word = word.dropLast()
         }
+        guard word.wholeMatch(of: /[a-z]+([-'’][a-z]+)*/) != nil else { return text }
+        return text.prefix(1).uppercased() + text.dropFirst()
     }
 
     /// Plan §9 (revision 82) places the reason by a per-item test: it folds
