@@ -107,10 +107,6 @@ func (claudeReviewProvider) usageMeasurements(
 
 func (claudeReviewProvider) reviewContainerSuffix() string { return "-" + wardname.Claude }
 
-// legacyTopologyVersions is nil: the Claude review topology has no prior
-// generation to reap.
-func (claudeReviewProvider) legacyTopologyVersions() []string { return nil }
-
 func (claudeReviewProvider) homeTarget() string       { return claudeReviewHome }
 func (claudeReviewProvider) configHomeTarget() string { return claudeReviewConfigTarget }
 

@@ -21,13 +21,8 @@ import (
 )
 
 const (
-	// instructionCompositionVersionV2 is the pre-fencing composition. It
-	// remains valid only so a persisted in-flight binding stays readable
-	// across a binary upgrade: recovery validates it and dispositions the run
-	// against the runtime world, never recomposing or launching it anew.
-	instructionCompositionVersionV2 = "claude_explicit_bundle_v2"
-	instructionCompositionVersion   = "claude_explicit_bundle_v3"
-	instructionSourceAbsent         = "absent"
+	instructionCompositionVersion = "claude_explicit_bundle_v3"
+	instructionSourceAbsent       = "absent"
 )
 
 var errInstructionBudget = errors.New(

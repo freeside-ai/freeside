@@ -3091,6 +3091,20 @@ func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 	if err := empty.validatePrepared(codexReviewProvider{}); err == nil {
 		t.Error("binding accepted an unrecorded workspace .agents entry")
 	}
+	// #591's v2 topology and a binding without instruction provenance were
+	// read for teardown until #3326; neither validates now.
+	v2 := binding
+	v2.TopologyVersion = "codex_review_read_only_v2"
+	if err := v2.validatePrepared(codexReviewProvider{}); err == nil {
+		t.Error("binding accepted the v2 topology")
+	}
+	unversioned := binding
+	unversioned.InstructionCompositionVersion = ""
+	unversioned.HostInstructionDigest = nil
+	unversioned.RepositoryInstructionSources = nil
+	if err := unversioned.validatePrepared(codexReviewProvider{}); err == nil {
+		t.Error("binding accepted instructions without composition provenance")
+	}
 
 	consistent := binding
 	consistent.WorkspaceAgentsEntry = codexWorkspaceAgentsAbsent
@@ -3104,48 +3118,6 @@ func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 	}
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, consistent); err == nil {
 		t.Error("spec validation accepted a binding whose entry disagrees with the observation")
-	}
-}
-
-// TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly pins the upgrade
-// posture: a v2 binding without the observed .agents entry may still
-// authenticate cleanup of a pre-upgrade review, but can never validate for
-// launch or result collection under the v3 contract.
-func TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly(t *testing.T) {
-	t.Parallel()
-	cfg, req := testCodexReview(t)
-	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding.ReviewContainer = codexReviewContainerName(binding.RunID)
-	binding.ReviewContainerFingerprint = "fingerprint"
-	binding.ReviewOwnershipToken = strings.Repeat("b", 32)
-	binding.WorkspacePreStartObserverFingerprint = "pre-start-workspace"
-	binding.SnapshotPreStartObserverFingerprint = "pre-start-snapshot"
-	binding.AgentsShadowPreStartObserverFingerprint = "pre-start-shadow"
-	if err := binding.validateShape(codexReviewProvider{}); err != nil {
-		t.Fatalf("v3 binding shape: %v", err)
-	}
-
-	legacy := binding
-	legacy.TopologyVersion = codexReviewTopologyVersionV2
-	legacy.WorkspaceAgentsEntry = ""
-	if err := legacy.validateForTeardown(codexReviewProvider{}); err != nil {
-		t.Errorf("legacy v2 binding failed teardown authentication: %v", err)
-	}
-	if err := legacy.validateShape(codexReviewProvider{}); err == nil {
-		t.Error("legacy v2 binding validated outside teardown")
-	}
-	downgraded := binding
-	downgraded.TopologyVersion = codexReviewTopologyVersionV2
-	if err := downgraded.validateShape(codexReviewProvider{}); err == nil {
-		t.Error("v2 topology version validated outside teardown")
-	}
-	unversioned := binding
-	unversioned.WorkspaceAgentsEntry = ""
-	if err := unversioned.validateForTeardown(codexReviewProvider{}); err == nil {
-		t.Error("v3 binding without a recorded entry authenticated teardown")
 	}
 }
 

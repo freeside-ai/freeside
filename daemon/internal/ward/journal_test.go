@@ -666,35 +666,28 @@ func testJournalInstructions() *HandoffJournalInstructions {
 	}
 }
 
-// TestHandoffJournalInstructionsAcceptPersistedCompositionVersions proves the
-// #946 upgrade compatibility: the current v3 and the legacy v2 both validate,
-// so an in-flight run journalled before the fencing upgrade still recovers,
-// while any other version is refused. A full record carrying a legacy-v2
-// instruction binding passes the reconstruction re-gate for the same reason;
-// recovery only validates and dispositions such a binding against the runtime
-// world, never recomposing the pre-fencing bundle.
-func TestHandoffJournalInstructionsAcceptPersistedCompositionVersions(t *testing.T) {
+// TestHandoffJournalInstructionsAcceptOnlyTheCurrentCompositionVersion proves
+// a record validates with the current v3 composition and no other: the
+// pre-fencing v2, read until #3326, is refused like an unknown version.
+func TestHandoffJournalInstructionsAcceptOnlyTheCurrentCompositionVersion(t *testing.T) {
 	t.Parallel()
-	for _, version := range []string{
-		instructionCompositionVersionV2,
-		instructionCompositionVersion,
-	} {
-		instructions := testJournalInstructions()
-		instructions.CompositionVersion = version
-		if err := instructions.validate(); err != nil {
-			t.Errorf("validate(%q) = %v, want nil", version, err)
-		}
-		record := testJournalRecord()
-		record.Instructions = instructions
-		if err := record.Validate(); err != nil {
-			t.Errorf("record with %q instructions: Validate() = %v, want nil", version, err)
-		}
+	instructions := testJournalInstructions()
+	instructions.CompositionVersion = instructionCompositionVersion
+	if err := instructions.validate(); err != nil {
+		t.Errorf("validate(%q) = %v, want nil", instructionCompositionVersion, err)
+	}
+	record := testJournalRecord()
+	record.Instructions = instructions
+	if err := record.Validate(); err != nil {
+		t.Errorf("record with current instructions: Validate() = %v, want nil", err)
 	}
 
-	future := testJournalInstructions()
-	future.CompositionVersion = "claude_explicit_bundle_v4"
-	if err := future.validate(); err == nil {
-		t.Fatal("unknown composition version remained valid")
+	for _, version := range []string{"claude_explicit_bundle_v2", "claude_explicit_bundle_v4"} {
+		refused := testJournalInstructions()
+		refused.CompositionVersion = version
+		if err := refused.validate(); err == nil {
+			t.Errorf("composition version %q remained valid", version)
+		}
 	}
 }
 

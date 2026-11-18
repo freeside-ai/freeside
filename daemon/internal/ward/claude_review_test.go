@@ -193,9 +193,6 @@ func TestClaudeReviewProviderConstants(t *testing.T) {
 	if p.vendor() != domain.AgentVendorClaude {
 		t.Errorf("vendor = %q, want claude", p.vendor())
 	}
-	if p.legacyTopologyVersions() != nil {
-		t.Errorf("legacyTopologyVersions = %v, want nil", p.legacyTopologyVersions())
-	}
 	if p.requiresExpiringCredential() {
 		t.Error("requiresExpiringCredential = true, want false for the setup-token strategy")
 	}
@@ -739,36 +736,6 @@ func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
 	}
 	if err := outcome.verifyReturnedAdmission(req); err != nil {
 		t.Errorf("the request's own admission was refused: %v", err)
-	}
-}
-
-func TestClaudeReviewBindingRefusesV2LegacyTopology(t *testing.T) {
-	t.Parallel()
-	cfg, req := testClaudeReview(t)
-	_, binding, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
-	if err != nil {
-		t.Fatalf("buildReviewAgentSpec: %v", err)
-	}
-	// The teardown path enables legacy-topology tolerance (allowLegacy=true). A
-	// well-formed Claude binding validates under it against the current Claude
-	// topology; requirePreStart=false skips the launch-time container ownership
-	// evidence a prepared binding does not yet carry.
-	if err := binding.validate(claudeReviewProvider{}, false, true); err != nil {
-		t.Fatalf("a well-formed Claude binding failed teardown-shape validation: %v", err)
-	}
-	// The Codex v2 legacy topology is never tolerated for a Claude binding: the
-	// Claude provider carries no legacy versions, so even the teardown path
-	// refuses it.
-	v2 := binding
-	v2.TopologyVersion = codexReviewTopologyVersionV2
-	if err := v2.validate(claudeReviewProvider{}, false, true); err == nil {
-		t.Error("Claude binding tolerated the Codex v2 legacy topology under teardown")
-	}
-	// Sanity: the same v2 tolerance the Claude provider refuses is granted to the
-	// Codex provider for its own bindings, so the refusal is provider-scoped, not
-	// a blanket rejection of the constant.
-	if !slices.Contains(codexReviewProvider{}.legacyTopologyVersions(), codexReviewTopologyVersionV2) {
-		t.Error("Codex provider no longer lists its v2 legacy topology")
 	}
 }
 

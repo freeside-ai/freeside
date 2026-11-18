@@ -79,10 +79,6 @@ type reviewProvider interface {
 	// reviewContainerSuffix is the provider-specific review-container name suffix
 	// appended to the shared per-run prefix (Codex: "-codex").
 	reviewContainerSuffix() string
-	// legacyTopologyVersions lists prior topology versions this provider still
-	// accepts for teardown authentication only, never for launch (Codex: the v2
-	// snapshot shape; a provider with no history returns nil).
-	legacyTopologyVersions() []string
 	// homeTarget and configHomeTarget are the container HOME and the writable
 	// per-invocation agent config root the launcher environment binds (Codex:
 	// CodexContainerHomeTarget and CodexHomeTarget). They are recorded in the
@@ -196,10 +192,6 @@ func (codexReviewProvider) usageMeasurements(
 }
 
 func (codexReviewProvider) reviewContainerSuffix() string { return "-" + wardname.Codex }
-
-func (codexReviewProvider) legacyTopologyVersions() []string {
-	return []string{codexReviewTopologyVersionV2}
-}
 
 func (codexReviewProvider) homeTarget() string       { return CodexContainerHomeTarget }
 func (codexReviewProvider) configHomeTarget() string { return CodexHomeTarget }

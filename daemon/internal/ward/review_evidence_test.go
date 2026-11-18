@@ -52,13 +52,13 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 	t.Parallel()
 	reads := map[string]bool{
 		"none": true, "request before admission": true, "claude": true,
-		"codex legacy topology": true, "fence without binding": true,
+		"fence without binding": true,
 	}
 	for _, corruption := range []string{
 		"none", "request before admission", "result before admission", "request admission", "request legacy",
 		"request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation",
 		"collection", "provider", "returned admission", "state",
-		"claude", "codex legacy topology", "claude binding over codex evidence", "codex binding over claude evidence",
+		"claude", "codex v2 topology", "claude binding over codex evidence", "codex binding over claude evidence",
 		"binding unknown topology", "binding digest", "binding run", "binding missing", "fence without binding",
 		"failure evidence without binding",
 	} {
@@ -73,8 +73,9 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 				if corruption == "claude" {
 					topology = claudeReviewTopologyVersion
 				}
-			case "codex legacy topology":
-				topology = codexReviewTopologyVersionV2
+			case "codex v2 topology":
+				// #591's snapshot topology, read until #3326.
+				topology = "codex_review_read_only_v2"
 			case "claude binding over codex evidence":
 				topology = claudeReviewTopologyVersion
 			case "binding unknown topology":

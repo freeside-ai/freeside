@@ -1578,7 +1578,7 @@ func (r *CodexReviewRecovery) reviewProviderForStartedIntent(
 	var matched reviewProvider
 	for _, provider := range allReviewProviders() {
 		if !reviewProviderMatchesIntent(provider, intent, id) ||
-			binding.validateForTeardown(provider) != nil ||
+			binding.validateShape(provider) != nil ||
 			binding.RunID != id || binding.ReviewContainer != intent.ReviewContainer ||
 			binding.ReviewOwnershipToken != intent.OwnershipToken ||
 			binding.WorkspaceSourceRunID != id ||
