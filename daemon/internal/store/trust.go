@@ -354,12 +354,28 @@ func scanTrustProfile(sc scanner, wantDigest domain.Digest) (TrustProfileRecord,
 	return reconstructTrustProfile(row)
 }
 
-// GetTrustProfile reconstructs one profile by its content digest.
+// ErrTrustProfileUnreadable reports a stored trust profile row that exists
+// but does not reconstruct under this build: its body fails to decode or
+// validate, or its key columns disagree with the body. After an
+// encoding-version bump every pre-bump row reads this way, so a caller bound
+// to an old digest can tell "stale under this build" from a missing row or a
+// database fault and fail closed for that one binding. The row is still never
+// trusted: the error carries no profile.
+var ErrTrustProfileUnreadable = errors.New("stored trust profile does not reconstruct under this build")
+
+// GetTrustProfile reconstructs one profile by its content digest. A row that
+// exists but does not reconstruct reports ErrTrustProfileUnreadable joined
+// with the reconstruction error; a missing row reports ErrNotFound, and a
+// query or scan failure keeps its own error.
 func (tx *ReadTx) GetTrustProfile(ctx context.Context, digest domain.Digest) (domain.AutomationTrustProfile, error) {
-	row := tx.tx.QueryRowContext(ctx, getTrustProfileSQL, digest)
-	rec, err := scanTrustProfile(row, digest)
+	row, err := scanTrustProfileRow(tx.tx.QueryRowContext(ctx, getTrustProfileSQL, digest), digest)
 	if err != nil {
 		return domain.AutomationTrustProfile{}, fmt.Errorf("get trust profile %q: %w", digest, notFoundOr(err))
+	}
+	rec, err := reconstructTrustProfile(row)
+	if err != nil {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("get trust profile %q: %w",
+			digest, errors.Join(ErrTrustProfileUnreadable, err))
 	}
 	return rec.Profile, nil
 }
@@ -372,12 +388,17 @@ func (tx *ReadTx) GetTrustProfile(ctx context.Context, digest domain.Digest) (do
 // unreachable (#222 review). The selected row itself still fails closed while
 // it is stale (the re-approval not yet recorded), and a stale historical
 // digest addressed directly (GetTrustProfile, an old authorization's
-// binding) stays fail-closed.
+// binding) stays fail-closed. The selected row's reconstruction failure
+// reports ErrTrustProfileUnreadable, as GetTrustProfile's does.
 func (tx *ReadTx) LatestTrustProfile(ctx context.Context, repo string) (domain.AutomationTrustProfile, error) {
-	row := tx.tx.QueryRowContext(ctx, latestTrustProfileSQL, repo)
-	rec, err := scanTrustProfile(row, "")
+	row, err := scanTrustProfileRow(tx.tx.QueryRowContext(ctx, latestTrustProfileSQL, repo), "")
 	if err != nil {
 		return domain.AutomationTrustProfile{}, fmt.Errorf("latest trust profile %q: %w", repo, notFoundOr(err))
+	}
+	rec, err := reconstructTrustProfile(row)
+	if err != nil {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("latest trust profile %q: %w",
+			repo, errors.Join(ErrTrustProfileUnreadable, err))
 	}
 	return rec.Profile, nil
 }
