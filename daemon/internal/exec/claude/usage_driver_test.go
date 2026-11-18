@@ -30,28 +30,38 @@ type usageDriverRun struct {
 }
 
 // runUsageDriver runs the embedded driver under node with the fake CLI as
-// its child. Its timeouts are shortened so a silent CLI is quick to test;
-// nothing else in the script changes.
-func runUsageDriver(t *testing.T, mode, prompt string) usageDriverRun {
+// its child. Each driver timeout named in shorten drops to 300 ms, so a
+// test of that timeout is quick; the rest keep their production values,
+// and nothing else in the script changes. A test shortens only the
+// timeouts it exercises: a shortened one it doesn't exercise races the
+// fake CLI's node startup, which a loaded runner can stretch past 300 ms.
+func runUsageDriver(t *testing.T, mode, prompt string, shorten ...string) usageDriverRun {
 	t.Helper()
 	node, err := osexec.LookPath("node")
 	if err != nil {
 		t.Skip("node is not on PATH")
 	}
-	shortened := usageDriverScript
-	for _, timeout := range []struct{ old, new string }{
-		{"const ANSWER_TIMEOUT_MS = 15000;", "const ANSWER_TIMEOUT_MS = 300;"},
-		{"const INIT_TIMEOUT_MS = 120000;", "const INIT_TIMEOUT_MS = 300;"},
-		{"const EXIT_GRACE_MS = 2000;", "const EXIT_GRACE_MS = 300;"},
-	} {
-		if strings.Count(shortened, timeout.old) != 1 {
-			t.Fatalf("driver constant %q moved", timeout.old)
+	production := map[string]string{
+		"ANSWER_TIMEOUT_MS": "15000",
+		"INIT_TIMEOUT_MS":   "120000",
+		"EXIT_GRACE_MS":     "2000",
+	}
+	script := usageDriverScript
+	for name, value := range production {
+		if old := "const " + name + " = " + value + ";"; strings.Count(script, old) != 1 {
+			t.Fatalf("driver constant %q moved", old)
 		}
-		shortened = strings.Replace(shortened, timeout.old, timeout.new, 1)
+	}
+	for _, name := range shorten {
+		value, ok := production[name]
+		if !ok {
+			t.Fatalf("no driver timeout %q to shorten", name)
+		}
+		script = strings.Replace(script, "const "+name+" = "+value+";", "const "+name+" = 300;", 1)
 	}
 	dir := t.TempDir()
-	script := filepath.Join(dir, "usage-driver.cjs")
-	if err := os.WriteFile(script, []byte(shortened), 0o600); err != nil {
+	scriptPath := filepath.Join(dir, "usage-driver.cjs")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fake, err := filepath.Abs("testdata/usage_driver_fake_cli.cjs")
@@ -61,7 +71,7 @@ func runUsageDriver(t *testing.T, mode, prompt string) usageDriverRun {
 	record := filepath.Join(dir, "stdin.jsonl")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	command := osexec.CommandContext(ctx, node, script, node, fake, mode, record) //nolint:gosec // fixed test fixtures
+	command := osexec.CommandContext(ctx, node, scriptPath, node, fake, mode, record) //nolint:gosec // fixed test fixtures
 	command.Stdin = strings.NewReader(prompt)
 	var stdout bytes.Buffer
 	command.Stdout = &stdout
@@ -148,7 +158,7 @@ func TestUsageDriverRunsOneTurnAndOneUsageRead(t *testing.T) {
 // exits with its own status.
 func TestUsageDriverClosesStdinWithoutAnAnswer(t *testing.T) {
 	t.Parallel()
-	run := runUsageDriver(t, "silent", "prompt")
+	run := runUsageDriver(t, "silent", "prompt", "ANSWER_TIMEOUT_MS")
 	if run.exitCode != 0 {
 		t.Errorf("exit code = %d, want 0", run.exitCode)
 	}
@@ -189,7 +199,7 @@ func TestUsageDriverKeepsAnEarlyExit(t *testing.T) {
 // directly would, instead of waiting for input until the stage deadline.
 func TestUsageDriverClosesStdinWithoutAnInitAnswer(t *testing.T) {
 	t.Parallel()
-	run := runUsageDriver(t, "mute", "prompt")
+	run := runUsageDriver(t, "mute", "prompt", "INIT_TIMEOUT_MS")
 	if run.exitCode != 0 {
 		t.Errorf("exit code = %d, want the CLI's 0", run.exitCode)
 	}
@@ -205,7 +215,7 @@ func TestUsageDriverClosesStdinWithoutAnInitAnswer(t *testing.T) {
 // driver even while a descendant still holds the CLI's stdout.
 func TestUsageDriverDoesNotWaitForAPipeHolder(t *testing.T) {
 	t.Parallel()
-	run := runUsageDriver(t, "linger", "prompt")
+	run := runUsageDriver(t, "linger", "prompt", "EXIT_GRACE_MS")
 	if run.exitCode != 4 {
 		t.Errorf("exit code = %d, want the CLI's 4", run.exitCode)
 	}
