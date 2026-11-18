@@ -112,15 +112,6 @@ func TestEvaluateReviewConvergencePolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("first snapshot round after legacy rounds resets streak", func(t *testing.T) {
-		state := convergenceFixture(t, []domain.Digest{firstConfig, firstConfig, firstConfig})
-		admitConvergenceRounds(&state, "", "", "a")
-		cause, stop, err := store.EvaluateReviewConvergence(state, state.Records[2])
-		if err != nil || stop || cause != "" {
-			t.Fatalf("evaluate = %q, %v, %v", cause, stop, err)
-		}
-	})
-
 	t.Run("continue grants a fresh policy window", func(t *testing.T) {
 		state := convergenceFixture(t, []domain.Digest{
 			firstConfig, firstConfig, firstConfig, firstConfig, firstConfig,
@@ -220,9 +211,12 @@ func convergenceFixture(t *testing.T, configurations []domain.Digest) store.Revi
 			Location: &domain.FindingLocation{Path: "daemon/a.go", StartLine: round, EndLine: round},
 			Message:  "recurring finding", RawText: "recurring finding", CreatedAt: at,
 		}
+		// Every round shares one reviewer agent until admitConvergenceRounds
+		// names another.
 		records[index] = domain.ReviewRecord{
 			RunID: "run-convergence", Round: round, ConfigurationDigest: configuration,
-			Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{id},
+			Admission: fake.RecordAdmission(domain.RoleReviewer, "run-convergence", ""),
+			Outcome:   domain.ReviewFindings, FindingIDs: []domain.FindingID{id},
 		}
 		history.Rounds[index] = domain.ReviewYieldRound{
 			Round: round, FindingsIngested: 1, RecurringFindings: 1,
@@ -250,18 +244,15 @@ func convergenceFixture(t *testing.T, configurations []domain.Digest) store.Revi
 }
 
 // admitConvergenceRounds names the reviewer agent of each fixture round in
-// order: a letter fills that round's admitted agent digest, and an empty string
-// leaves the round a legacy record. A round whose reviewer differs from the
-// round before it opens a segment, so its finding is new there, as
-// convergenceFixture records for a configuration change.
+// order: a letter fills that round's admitted agent digest. A round whose
+// reviewer differs from the round before it opens a segment, so its finding is
+// new there, as convergenceFixture records for a configuration change.
 func admitConvergenceRounds(state *store.ReviewConvergenceState, agents ...string) {
 	var previous string
 	for index, agent := range agents {
 		record := &state.Records[index]
-		if agent != "" {
-			record.Admission = fake.RecordAdmission(domain.RoleReviewer, record.RunID, record.InvocationID)
-			record.Admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
-		}
+		record.Admission = fake.RecordAdmission(domain.RoleReviewer, record.RunID, record.InvocationID)
+		record.Admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
 		if index > 0 && agent != previous {
 			state.History.Rounds[index].NewFindings = 1
 			state.History.Rounds[index].RecurringFindings = 0

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestDeriveReviewYieldHistoryTracksNewRecurringAndDispositions(t *testing.T)
 		{Round: 2, Disposition: domain.ReviewDispositionDeferred},
 	}
 
-	got, err := deriveReviewYieldHistory(records, dispositions, findings, nil, nil)
+	got, err := deriveReviewYieldHistory(oneReviewer(records), dispositions, findings, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestDeriveReviewYieldHistoryCountsUnfingerprintableFindingsAsNew(t *testing
 		{Round: 2, Disposition: domain.ReviewDispositionDeferred},
 	}
 
-	got, err := deriveReviewYieldHistory(records, dispositions, findings, nil, nil)
+	got, err := deriveReviewYieldHistory(oneReviewer(records), dispositions, findings, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *
 		{Round: 5, ConfigurationDigest: secondConfiguration, Outcome: domain.ReviewClean},
 	}
 
-	got, err := deriveReviewYieldHistory(records, nil, findings, nil, nil)
+	got, err := deriveReviewYieldHistory(oneReviewer(records), nil, findings, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,16 +182,14 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewerConfiguration(t *
 
 // TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer holds the review
 // configuration fixed and moves only who reviewed: a finding the prior reviewer
-// already raised is new on another reviewer's first pass, and on the first
-// pass recorded with a snapshot after legacy rounds.
+// already raised is new on another reviewer's first pass.
 func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	configuration := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	findings := map[domain.FindingID]domain.Finding{}
-	// A letter is the round's admitted agent digest; an empty string leaves the
-	// round a legacy record.
-	agents := []string{"", "", "a", "a", "b", "b"}
+	// A letter is the round's admitted agent digest.
+	agents := []string{"c", "c", "a", "a", "b", "b"}
 	records := make([]domain.ReviewRecord, len(agents))
 	for index, agent := range agents {
 		round := index + 1
@@ -202,14 +201,11 @@ func TestDeriveReviewYieldHistoryResetsRecurrenceForNewReviewer(t *testing.T) {
 			},
 			Message: "unchecked review result", RawText: "unchecked review result", CreatedAt: at,
 		}
+		admission := fake.RecordAdmission(domain.RoleReviewer, "run-1", "review-run-1-1")
+		admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
 		records[index] = domain.ReviewRecord{
-			Round: round, ConfigurationDigest: configuration, Outcome: domain.ReviewFindings,
-			FindingIDs: []domain.FindingID{id},
-		}
-		if agent != "" {
-			admission := fake.RecordAdmission(domain.RoleReviewer, "run-1", "review-run-1-1")
-			admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat(agent, 64))
-			records[index].Admission = admission
+			Round: round, ConfigurationDigest: configuration, Admission: admission,
+			Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{id},
 		}
 	}
 
@@ -322,4 +318,14 @@ func TestReviewYieldHistoryDerivesPersistedMultiRoundHistoryAfterRestart(t *test
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("history after restart = %#v, want %#v", got, want)
 	}
+}
+
+// oneReviewer gives every record the same reviewer's admission, so the rounds
+// form one segment unless their configuration changes.
+func oneReviewer(records []domain.ReviewRecord) []domain.ReviewRecord {
+	admitted := slices.Clone(records)
+	for index := range admitted {
+		admitted[index].Admission = fake.RecordAdmission(domain.RoleReviewer, "run-1", "review-run-1-1")
+	}
+	return admitted
 }

@@ -72,43 +72,38 @@ func ValidateShadowReviewFinding(source ShadowReviewSource, finding Finding) err
 // structurally ineligible for routed-review readiness, round derivation,
 // adjudication, and remediation.
 //
-// It says who reviewed as ReviewRecord does: Admission and no Legacy field,
-// or the three Legacy fields and no Admission.
+// It says who reviewed as ReviewRecord does, through Admission.
 type ShadowReviewRecord struct {
 	InvocationID  InvocationID       `json:"invocation_id"`
 	RunID         RunID              `json:"run_id"`
 	ShadowedRound int                `json:"shadowed_round"`
 	Source        ShadowReviewSource `json:"source"`
 	// Admission is the invocation's admission snapshot: the shadow reviewer
-	// agent, its identity, and its lineage group. Nil only on a legacy record.
-	Admission                *ReviewAdmission `json:"admission,omitempty"`
-	LegacyProvider           string           `json:"provider,omitempty"`
-	LegacyModelConfiguration string           `json:"model_configuration,omitempty"`
-	ConfigurationDigest      Digest           `json:"configuration_digest"`
-	InstructionDigest        Digest           `json:"instruction_digest"`
-	LegacyCostOwner          string           `json:"cost_owner,omitempty"`
-	BaseSHA                  string           `json:"base_sha"`
-	HeadSHA                  string           `json:"head_sha"`
-	CompletedAt              time.Time        `json:"completed_at"`
-	CompletionEvidence       Digest           `json:"completion_evidence"`
-	Outcome                  ReviewOutcome    `json:"outcome"`
-	FindingIDs               []FindingID      `json:"finding_ids"`
+	// agent, its identity, and its lineage group. Required; it stays a
+	// pointer so a record encodes to the bytes it was stored with.
+	Admission           *ReviewAdmission `json:"admission,omitempty"`
+	ConfigurationDigest Digest           `json:"configuration_digest"`
+	InstructionDigest   Digest           `json:"instruction_digest"`
+	BaseSHA             string           `json:"base_sha"`
+	HeadSHA             string           `json:"head_sha"`
+	CompletedAt         time.Time        `json:"completed_at"`
+	CompletionEvidence  Digest           `json:"completion_evidence"`
+	Outcome             ReviewOutcome    `json:"outcome"`
+	FindingIDs          []FindingID      `json:"finding_ids"`
 }
 
 func (r ShadowReviewRecord) attribution() reviewAttribution {
 	return reviewAttribution{
-		admission: r.Admission, provider: r.LegacyProvider,
-		modelConfiguration: r.LegacyModelConfiguration, payer: r.LegacyCostOwner,
-		invocationID: r.InvocationID, runID: r.RunID, role: RoleShadowReviewer,
+		admission: r.Admission, invocationID: r.InvocationID, runID: r.RunID, role: RoleShadowReviewer,
 	}
 }
 
 // Provider is the provider label the record shows: the admitted agent's
-// lineage group, or the string a legacy record stored.
+// lineage group.
 func (r ShadowReviewRecord) Provider() string { return r.attribution().providerLabel() }
 
 // ModelConfiguration is the model configuration the record shows: the
-// admitted agent's model and effort, or the string a legacy record stored.
+// admitted agent's model and effort.
 func (r ShadowReviewRecord) ModelConfiguration() string {
 	return r.attribution().modelConfigurationLabel()
 }

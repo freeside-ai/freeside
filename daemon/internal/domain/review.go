@@ -14,62 +14,49 @@ import (
 // instruction binding; a native forge review is deliberately not representable
 // as a satisfying record.
 //
-// A record says who reviewed in one of two ways (reviewAttribution). A record
-// written since review admission carries Admission and none of the Legacy
-// fields. A legacy record carries the three Legacy fields and no Admission;
-// they omit when empty, as Admission does when nil, so a legacy record encodes
-// to the bytes it was stored with and a new record never renders an empty
-// legacy string. Read the two through Provider and ModelConfiguration.
+// A record says who reviewed through Admission, which every record carries
+// (reviewAttribution). Read it through Provider and ModelConfiguration.
 type ReviewRecord struct {
 	InvocationID InvocationID `json:"invocation_id"`
 	RunID        RunID        `json:"run_id"`
 	Round        int          `json:"round"`
 	// Admission is the invocation's admission snapshot: the reviewer agent,
-	// its identity, and its lineage group. Nil only on a legacy record.
-	Admission                *ReviewAdmission `json:"admission,omitempty"`
-	LegacyProvider           string           `json:"provider,omitempty"`
-	LegacyModelConfiguration string           `json:"model_configuration,omitempty"`
-	ConfigurationDigest      Digest           `json:"configuration_digest"`
-	InstructionDigest        Digest           `json:"instruction_digest"`
-	LegacyCostOwner          string           `json:"cost_owner,omitempty"`
-	BaseSHA                  string           `json:"base_sha"`
-	HeadSHA                  string           `json:"head_sha"`
-	CompletedAt              time.Time        `json:"completed_at"`
-	CompletionEvidence       Digest           `json:"completion_evidence"`
-	Outcome                  ReviewOutcome    `json:"outcome"`
-	FindingIDs               []FindingID      `json:"finding_ids"`
+	// its identity, and its lineage group. Required; it stays a pointer so a
+	// record encodes to the bytes it was stored with.
+	Admission           *ReviewAdmission `json:"admission,omitempty"`
+	ConfigurationDigest Digest           `json:"configuration_digest"`
+	InstructionDigest   Digest           `json:"instruction_digest"`
+	BaseSHA             string           `json:"base_sha"`
+	HeadSHA             string           `json:"head_sha"`
+	CompletedAt         time.Time        `json:"completed_at"`
+	CompletionEvidence  Digest           `json:"completion_evidence"`
+	Outcome             ReviewOutcome    `json:"outcome"`
+	FindingIDs          []FindingID      `json:"finding_ids"`
 }
 
 func (r ReviewRecord) attribution() reviewAttribution {
 	return reviewAttribution{
-		admission: r.Admission, provider: r.LegacyProvider,
-		modelConfiguration: r.LegacyModelConfiguration, payer: r.LegacyCostOwner,
-		invocationID: r.InvocationID, runID: r.RunID, role: RoleReviewer,
+		admission: r.Admission, invocationID: r.InvocationID, runID: r.RunID, role: RoleReviewer,
 	}
 }
 
 // Provider is the provider label the record shows: the admitted agent's
-// lineage group, or the string a legacy record stored.
+// lineage group.
 func (r ReviewRecord) Provider() string { return r.attribution().providerLabel() }
 
 // ModelConfiguration is the model configuration the record shows: the
-// admitted agent's model and effort, or the string a legacy record stored.
+// admitted agent's model and effort.
 func (r ReviewRecord) ModelConfiguration() string { return r.attribution().modelConfigurationLabel() }
 
 // SharesSegment reports whether two review records belong to one convergence
 // segment: the same review configuration and the same reviewer agent. The
 // configuration digest does not cover the reviewer, so a routing change on an
 // unchanged configuration would otherwise count a new reviewer's first pass as
-// the prior reviewer's next round. Two legacy records are told apart by
-// configuration alone, as they were when written. A legacy record and one with
-// a snapshot never share a segment, because nothing says whether the reviewer
-// is the same.
+// the prior reviewer's next round. Both records must be valid, so each
+// carries an admission.
 func (r ReviewRecord) SharesSegment(other ReviewRecord) bool {
 	if r.ConfigurationDigest != other.ConfigurationDigest {
 		return false
-	}
-	if r.Admission == nil || other.Admission == nil {
-		return r.Admission == nil && other.Admission == nil
 	}
 	return r.Admission.AgentBinding.AgentDigest == other.Admission.AgentBinding.AgentDigest
 }

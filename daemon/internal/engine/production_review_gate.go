@@ -506,11 +506,11 @@ func (w *productionPublicationWorkflow) gateReviewConfiguration(
 }
 
 // reconcileCurrentReviewRecord acts on the latest record when it is current.
-// It first holds an admitted record's admission to the one the daemon stored.
+// It first holds the record's admission to the one the daemon stored.
 // A record bound to another candidate passes on only when a remediation
-// supersedes it. A current record (same candidate, admitted, current
-// instructions) runs the remediation reconcile, the shadow review, and
-// external or reentry escalation, then adjudicates its findings or passes
+// supersedes it. A current record (same candidate, current instructions)
+// runs the remediation reconcile, the shadow review, and external or
+// reentry escalation, then adjudicates its findings or passes
 // through passCurrentReviewRecord. The pass continues to a new round only
 // when the record is not current or adjudication asks for another round.
 func (w *productionPublicationWorkflow) reconcileCurrentReviewRecord(
@@ -523,23 +523,13 @@ func (w *productionPublicationWorkflow) reconcileCurrentReviewRecord(
 	sel reviewGateSelection,
 ) (productionReviewGateState, bool, error) {
 	latestRecord, latestFailure := sel.record, sel.failure
-	// A legacy record carries no admission snapshot: it was requested before
-	// review admission was recorded. Its persisted request is a legacy
-	// request the source no longer verifies, so the record cannot be re-gated
-	// and is not current: the next round supersedes it, as it does a record
-	// bound to superseded instructions. Its findings may then never be
-	// dispositioned, so the published disposition lineage leaves out a
-	// legacy round the admitted round reviewed again
-	// (publish.currentDispositionLineage). The record itself stays as
-	// stored, and nothing resolves an agent for it from the current lineup.
-	//
 	// A record's snapshot is a decoded field, so it is held against the
 	// snapshot the daemon stored when it admitted the invocation. A record
 	// that names another agent, or one the daemon never admitted, is a
-	// contradiction, and nothing below acts on it.
+	// contradiction, and nothing below acts on it. The store refuses a record
+	// without a snapshot on read, so every record here carries one.
 	var latestAdmission domain.ReviewAdmission
-	latestAdmitted := latestRecord != nil && latestRecord.Admission != nil
-	if latestAdmitted {
+	if latestRecord != nil {
 		stored, found, err := w.storedReviewAdmission(
 			ctx, domain.RoleReviewer, task.RunID, latestRecord.InvocationID)
 		if err != nil {
@@ -565,7 +555,7 @@ func (w *productionPublicationWorkflow) reconcileCurrentReviewRecord(
 					"latest review record is bound to a different candidate: %w", domain.ErrParentKeyMismatch,
 				)
 			}
-		} else if latestAdmitted && latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
+		} else if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
 			var remediationOutcome remediationReviewOutcome
 			if _, remediated := remediationRoundForInvocation(
 				task.RunID, task.ProducingInvocationID,

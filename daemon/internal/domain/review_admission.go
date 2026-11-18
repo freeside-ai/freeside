@@ -115,35 +115,19 @@ func (a ReviewAdmission) ProviderLabel() string {
 	return a.LineageGroup
 }
 
-// reviewAttribution is how a review record says who reviewed. A record
-// written since review admission carries the invocation's snapshot and none
-// of the three strings. A legacy record carries the three strings as its
-// source reported them and no snapshot; nothing resolves those against a
-// lineup. Carrying both would leave two answers to the same question, and
-// carrying neither would leave none, so both are refused wherever a record
-// is written or read.
+// reviewAttribution is how a review record says who reviewed: the
+// invocation's admission snapshot, bound to the record's invocation, run, and
+// role. A record without one is refused wherever it is written or read.
 type reviewAttribution struct {
-	admission                           *ReviewAdmission
-	provider, modelConfiguration, payer string
-	invocationID                        InvocationID
-	runID                               RunID
-	role                                RoleName
+	admission    *ReviewAdmission
+	invocationID InvocationID
+	runID        RunID
+	role         RoleName
 }
 
 func (a reviewAttribution) validate(kind string) error {
 	if a.admission == nil {
-		switch {
-		case a.provider == "":
-			return fmt.Errorf("%s provider: %w", kind, ErrEmptyField)
-		case a.modelConfiguration == "":
-			return fmt.Errorf("%s model_configuration: %w", kind, ErrEmptyField)
-		case a.payer == "":
-			return fmt.Errorf("%s cost_owner: %w", kind, ErrEmptyField)
-		}
-		return nil
-	}
-	if a.provider != "" || a.modelConfiguration != "" || a.payer != "" {
-		return fmt.Errorf("%s carries an admission and legacy attribution: %w", kind, ErrReviewAttribution)
+		return fmt.Errorf("%s admission: %w", kind, ErrEmptyField)
 	}
 	if err := a.admission.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", kind, err)
@@ -161,18 +145,10 @@ func (a reviewAttribution) validate(kind string) error {
 	return nil
 }
 
-func (a reviewAttribution) providerLabel() string {
-	if a.admission != nil {
-		return a.admission.ProviderLabel()
-	}
-	return a.provider
-}
+func (a reviewAttribution) providerLabel() string { return a.admission.ProviderLabel() }
 
 func (a reviewAttribution) modelConfigurationLabel() string {
-	if a.admission != nil {
-		return a.admission.ModelConfiguration()
-	}
-	return a.modelConfiguration
+	return a.admission.ModelConfiguration()
 }
 
 // detachedReviewAdmission returns a canonical copy a record owns, so a

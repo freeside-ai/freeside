@@ -15,7 +15,7 @@ import (
 // agent-bound one means the task already runs through the lineup and has no
 // flag-era owner. Ownership is read from admissions alone: a review record's
 // admission snapshot names only an identity the lineup selected, never a
-// flag-era one, and a legacy review record names none.
+// flag-era one.
 func LegacyOpenTasks(ctx context.Context, tx *store.ReadTx) (map[domain.AuthIdentityID][]domain.Task, error) {
 	tasks, err := tx.ListTasks(ctx)
 	if err != nil {
