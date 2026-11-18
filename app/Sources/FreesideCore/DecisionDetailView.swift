@@ -4902,17 +4902,6 @@ extension View {
             .freesideCard(cornerRadius: CardScale.cornerRadius)
     }
 
-    /// The task page's body. At regular width it draws in the detail card;
-    /// at compact width on the page's ground, as a timeline does. One chain
-    /// serves both, for the reason `timelinePage` gives.
-    func pageBody(compact: Bool) -> some View {
-        padding(compact ? EdgeInsets() : CardScale.padding(compact: false))
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background {
-                if !compact { Color.clear.freesideCard(cornerRadius: CardScale.cornerRadius) }
-            }
-    }
-
     /// The task page's column: the card's x and width at any pane width.
     func pageColumn(compact: Bool, topMargin: CGFloat? = nil) -> some View {
         var margin = CardScale.paneMargin(compact: compact)
