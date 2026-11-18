@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,154 +18,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/observe"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
-
-func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "freeside.db")
-	seedTemplateStore(t, dbPath)
-	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := h.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
-	if err := os.WriteFile(taskPath, bytes.Repeat([]byte("x"), maxSubmissionFileBytes), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var keys []domain.PolicyKey
-	if err := json.Unmarshal([]byte(submissionPolicyBody("", strings.Repeat("ab", 32))), &keys); err != nil {
-		t.Fatal(err)
-	}
-	emptyPolicy, err := json.Marshal(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The raw file fits easily, but canonical JSON escapes each '&' as six
-	// bytes. The accepted canonical policy and its three other representations
-	// (Keys, ResolvedPolicy.Keys, and declared paths) approach the file cap.
-	keys[0].Value = strings.Repeat("&", (maxSubmissionFileBytes-len(emptyPolicy))/6)
-	var policy bytes.Buffer
-	encoder := json.NewEncoder(&policy)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(keys); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(policyPath, policy.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	canonicalPolicy, err := json.Marshal(keys)
-	if err != nil || len(canonicalPolicy) > maxSubmissionFileBytes || len(canonicalPolicy) < maxSubmissionFileBytes-6 {
-		t.Fatalf("canonical policy size %d: %v", len(canonicalPolicy), err)
-	}
-	declaration := []byte(`{"completion_criterion":"bound_pr_merged","depends_on_issues":[`)
-	for issue := int64(1_000_000_000_000_000_000); len(declaration)+22 < maxSubmissionFileBytes; issue++ {
-		if declaration[len(declaration)-1] != '[' {
-			declaration = append(declaration, ',')
-		}
-		declaration = strconv.AppendInt(declaration, issue, 10)
-	}
-	declaration = append(declaration, ']', '}')
-	workUnitPath := filepath.Join(root, "work-unit.json")
-	if err := os.WriteFile(workUnitPath, declaration, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Even without the envelope or declared paths, these transmitted fields
-	// exceed the old 20 MiB cap. Both request decoding layers must admit them.
-	minimumRequestBytes := 2*4*((maxSubmissionFileBytes-6)/3) + 2*len(canonicalPolicy) + len(declaration)
-	if minimumRequestBytes <= 20<<20 {
-		t.Fatalf("fixture no longer exceeds the old request cap: %d", minimumRequestBytes)
-	}
-	// Legacy production retries remain accepted without the newer 1 MiB
-	// specification-queue contract. Seed through the production constructor,
-	// then prove the same CLI input succeeds offline before trying the socket.
-	spec, err := readSubmissionFile(taskPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := domain.NewResolvedPolicy("run-large-legacy", keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyBody, err := json.Marshal(resolved.Keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	specArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	policyArtifact, err := engine.SubmissionArtifact(domain.ArtifactKindPolicy, resolved.Digest, domain.EvidenceMediaApplicationJSON, int64(len(policyBody)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Store.Write(t.Context(), func(tx *store.WriteTx) error {
-		if err := tx.PutArtifact(t.Context(), specArtifact); err != nil {
-			return err
-		}
-		return tx.PutArtifact(t.Context(), policyArtifact)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	publicationFile, err := readSubmissionFile(publicationPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var publication engine.ProductionPublication
-	if err := json.Unmarshal(publicationFile.body, &publication); err != nil {
-		t.Fatal(err)
-	}
-	var declared submittedWorkUnit
-	if err := json.Unmarshal(declaration, &declared); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.SubmitProductionRun(t.Context(), h.Store, engine.ProductionRunSpec{
-		RunID: resolved.RunID, ProjectID: "project-control", SpecArtifactID: specArtifact.ID,
-		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
-		WorkUnit: &domain.WorkUnitDeclarationInput{
-			CompletionCriterion: declared.CompletionCriterion, DependsOnIssues: declared.DependsOnIssues,
-			DeclaredPaths: engine.DeclaredPathScope(keys),
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Close(); err != nil {
-		t.Fatal(err)
-	}
-	cfg := submitCommandConfig{
-		RunID: resolved.RunID, DBPath: dbPath, TaskPath: taskPath,
-		PolicyPath: policyPath, PublicationPath: publicationPath, WorkUnitPath: workUnitPath,
-		ProjectID: "project-control",
-	}
-	direct, err := runSubmitCommand(t.Context(), cfg)
-	if err != nil {
-		t.Fatalf("offline legacy replay: %v", err)
-	}
-	restarted, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	h = restarted
-	ctx := context.WithValue(t.Context(), directStoreOpenerKey{}, directStoreOpener(func(context.Context, string, store.Options, storeOpenMode) (*store.Store, error) {
-		return nil, errors.New("large live submission attempted a direct store open")
-	}))
-	result, err := runSubmitCommand(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.WorkUnitID == "" || !reflect.DeepEqual(result, direct) {
-		t.Fatalf("socket replay = %+v; direct replay = %+v", result, direct)
-	}
-}
 
 func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	t.Parallel()

@@ -114,6 +114,26 @@ func productionVerificationInvocationIDForProducer(
 	return ""
 }
 
+// ProductionLaneIDs names the stage and invocation the production lane
+// derives for runID. The marker's decode refuses any other pair, so a writer
+// outside the engine (a development fixture) takes them from here.
+func ProductionLaneIDs(runID domain.RunID) (domain.StageID, domain.InvocationID) {
+	return productionStageID(runID), productionInvocationID(runID)
+}
+
+// ProductionInvocationRequestPayload is the canonical outbox payload of
+// runID's production dispatch intent: the exact bytes decodeProductionRequest
+// accepts. It does not validate publication; SubmitProductionRun does that
+// before writing, and the decode re-checks it on every read.
+func ProductionInvocationRequestPayload(runID domain.RunID, publication ProductionPublication) ([]byte, error) {
+	stageID, invocationID := ProductionLaneIDs(runID)
+	return json.Marshal(productionInvocationRequest{
+		Version:      productionInvocationRequestVersion,
+		InvocationID: invocationID, RunID: runID, StageID: stageID,
+		Publication: publication,
+	})
+}
+
 // productionInvocationRequest is the outbox payload for one production
 // dispatch intent. Unlike the conversation lane's request it carries the run
 // and stage directly: there is no attention item to resolve them through.
@@ -123,7 +143,6 @@ type productionInvocationRequest struct {
 	RunID        domain.RunID          `json:"run_id"`
 	StageID      domain.StageID        `json:"stage_id"`
 	Publication  ProductionPublication `json:"publication"`
-	Legacy       bool                  `json:"-"`
 }
 
 type productionInvocationRequestWire struct {
@@ -357,13 +376,8 @@ func submitProductionRunTx(ctx context.Context, tx *store.WriteTx, spec Producti
 			spec.RunID, spec.ResolvedPolicy.RunID, domain.ErrParentKeyMismatch)
 	}
 
-	stageID := productionStageID(spec.RunID)
-	invocationID := productionInvocationID(spec.RunID)
-	payload, err := json.Marshal(productionInvocationRequest{
-		Version:      productionInvocationRequestVersion,
-		InvocationID: invocationID, RunID: spec.RunID, StageID: stageID,
-		Publication: spec.Publication,
-	})
+	stageID, invocationID := ProductionLaneIDs(spec.RunID)
+	payload, err := ProductionInvocationRequestPayload(spec.RunID, spec.Publication)
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
 	}
@@ -468,7 +482,7 @@ func submitProductionRunTx(ctx context.Context, tx *store.WriteTx, spec Producti
 			}
 			// The marker is the production lane's ownership fact and must
 			// already be part of an existing run's atomic creation. Creating
-			// it here would let an explicit --run-id retroactively claim a
+			// it here would let a replayed submission retroactively claim a
 			// structurally compatible run from another workflow.
 			entry, markerErr := tx.GetOutbox(ctx, string(invocationID))
 			if markerErr != nil {
@@ -856,18 +870,15 @@ func ProductionInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain.
 }
 
 // ProductionInvocationPublication reconstructs reviewer and commit-author
-// metadata from the durable production ownership marker. Present is false for
-// a released v1 marker, which owns execution but carries no publication
-// authority.
-func ProductionInvocationPublication(entry store.QueueEntry) (ProductionPublication, bool, error) {
+// metadata from the durable production ownership marker. Every marker that
+// decodes carries publication metadata: the released v1 shape without it is
+// refused.
+func ProductionInvocationPublication(entry store.QueueEntry) (ProductionPublication, error) {
 	request, err := decodeProductionRequest(entry)
 	if err != nil {
-		return ProductionPublication{}, false, err
+		return ProductionPublication{}, err
 	}
-	if request.Legacy {
-		return ProductionPublication{}, false, nil
-	}
-	return request.Publication, true, nil
+	return request.Publication, nil
 }
 
 // errProductionMarkerUnsupportedVersion marks a stored marker written by a
@@ -971,11 +982,15 @@ func decodeProductionRequestWithPublication(
 		return productionInvocationRequest{}, fmt.Errorf(
 			"intent %q has kind %q: %w", entry.IdempotencyKey, entry.Kind, domain.ErrParentKeyMismatch)
 	}
+	// A payload without a version is the released v1 or unversioned preview
+	// shape, which no current writer produces. It is refused as unreadable, not
+	// unsupported: no upgrade repairs it.
+	if len(wire.Version) == 0 {
+		return productionInvocationRequest{}, errors.New("decode payload: version is required")
+	}
 	version := ""
-	if len(wire.Version) > 0 {
-		if err := json.Unmarshal(wire.Version, &version); err != nil || version == "" {
-			return productionInvocationRequest{}, errors.New("decode payload: version must be a non-empty string")
-		}
+	if err := json.Unmarshal(wire.Version, &version); err != nil || version == "" {
+		return productionInvocationRequest{}, errors.New("decode payload: version must be a non-empty string")
 	}
 	request := productionInvocationRequest{
 		Version: version, InvocationID: wire.InvocationID,
@@ -984,27 +999,23 @@ func decodeProductionRequestWithPublication(
 	if request.InvocationID == "" || request.RunID == "" || request.StageID == "" {
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: required identity is empty: %w", domain.ErrEmptyID)
 	}
-	switch {
-	case len(wire.Version) == 0 && len(wire.Publication) == 0:
-		request.Legacy = true
-	case len(wire.Version) == 0 || version == productionInvocationRequestVersion:
-		if len(wire.Publication) == 0 || bytes.Equal(wire.Publication, []byte("null")) {
-			return productionInvocationRequest{}, errors.New("decode payload: publication is required")
-		}
-		if err := strictjson.Decode(
-			wire.Publication, &request.Publication, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
-		); err != nil {
-			if errors.Is(err, strictjson.ErrTrailingData) {
-				return productionInvocationRequest{}, errors.New("decode payload publication: trailing JSON value")
-			}
-			return productionInvocationRequest{}, fmt.Errorf("decode payload publication: %w", err)
-		}
-		if err := validatePublication(request.Publication); err != nil {
-			return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
-		}
-	default:
+	if version != productionInvocationRequestVersion {
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q: %w",
 			version, errProductionMarkerUnsupportedVersion)
+	}
+	if len(wire.Publication) == 0 || bytes.Equal(wire.Publication, []byte("null")) {
+		return productionInvocationRequest{}, errors.New("decode payload: publication is required")
+	}
+	if err := strictjson.Decode(
+		wire.Publication, &request.Publication, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return productionInvocationRequest{}, errors.New("decode payload publication: trailing JSON value")
+		}
+		return productionInvocationRequest{}, fmt.Errorf("decode payload publication: %w", err)
+	}
+	if err := validatePublication(request.Publication); err != nil {
+		return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
 	}
 	if string(request.InvocationID) != entry.IdempotencyKey {
 		return productionInvocationRequest{}, fmt.Errorf(
@@ -1017,44 +1028,15 @@ func decodeProductionRequestWithPublication(
 			"payload identities disagree with lane derivation for run %q: %w",
 			request.RunID, domain.ErrParentKeyMismatch)
 	}
-	canonical, err := canonicalProductionRequestPayload(request)
+	canonical, err := json.Marshal(request)
 	if err != nil {
 		return productionInvocationRequest{}, fmt.Errorf("encode canonical payload: %w", err)
 	}
 	if !bytes.Equal(entry.Payload, canonical) {
 		return productionInvocationRequest{}, fmt.Errorf(
-			"payload is not the canonical %s shape: %w", productionRequestFormat(request), domain.ErrParentKeyMismatch)
+			"payload is not the canonical %s shape: %w", request.Version, domain.ErrParentKeyMismatch)
 	}
 	return request, nil
-}
-
-func canonicalProductionRequestPayload(request productionInvocationRequest) ([]byte, error) {
-	if request.Legacy {
-		return json.Marshal(struct {
-			InvocationID domain.InvocationID `json:"invocation_id"`
-			RunID        domain.RunID        `json:"run_id"`
-			StageID      domain.StageID      `json:"stage_id"`
-		}{request.InvocationID, request.RunID, request.StageID})
-	}
-	if request.Version == "" {
-		return json.Marshal(struct {
-			InvocationID domain.InvocationID   `json:"invocation_id"`
-			RunID        domain.RunID          `json:"run_id"`
-			StageID      domain.StageID        `json:"stage_id"`
-			Publication  ProductionPublication `json:"publication"`
-		}{request.InvocationID, request.RunID, request.StageID, request.Publication})
-	}
-	return json.Marshal(request)
-}
-
-func productionRequestFormat(request productionInvocationRequest) string {
-	if request.Legacy {
-		return "legacy v1"
-	}
-	if request.Version == "" {
-		return "unversioned publication preview"
-	}
-	return request.Version
 }
 
 // ownsProductionRun reports whether this run belongs to the production lane:
@@ -1290,11 +1272,10 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 	}); err != nil {
 		return false, fmt.Errorf("authenticate operator-feedback attempt: %w", err)
 	}
-	request, err := (&productionPublicationWorkflow{store: e.store}).loadProductionRequest(ctx, run)
+	_, err := (&productionPublicationWorkflow{store: e.store}).loadProductionRequest(ctx, run)
 	if err != nil {
 		return false, err
 	}
-	legacy := request.Legacy && attempt.InvocationID == productionInvocationID(run.ID)
 
 	var (
 		recorded        *productionTerminalRecord
@@ -1358,16 +1339,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		return false, nil
 	}
 	if recorded != nil {
-		if legacy && recorded.Status == exec.StatusCompleted {
-			durable, err := e.authenticatesLegacyCompletedTerminal(ctx, run, attempt, *recorded)
-			if err != nil {
-				return false, err
-			}
-			if durable {
-				return false, nil
-			}
-		}
-		if !legacy && e.productionPublication != nil {
+		if e.productionPublication != nil {
 			durable, err := e.productionPublication.authenticatesTerminal(ctx, run, *recorded)
 			if err != nil {
 				return false, err
@@ -1381,7 +1353,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		}
 		return false, nil
 	}
-	if !legacy && e.productionPublication != nil {
+	if e.productionPublication != nil {
 		queued, err := e.productionPublication.hasQueuedCompletion(ctx, run, attempt.InvocationID)
 		if err != nil {
 			return false, err
@@ -1391,7 +1363,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		}
 	}
 
-	accepted, recordedTerminal, err := e.settleProductionAttempt(ctx, run, attempt, legacy, operatorFeedback)
+	accepted, recordedTerminal, err := e.settleProductionAttempt(ctx, run, attempt, operatorFeedback)
 	switch {
 	case MutableAdmissionPolicyRefusal(err):
 		// A transient current-policy refusal holds this attempt for a later
@@ -1434,7 +1406,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 // so the caller must not issue a second, redundant clear whose failure would
 // strand the just-committed completion.
 func (e *Engine) settleProductionAttempt(
-	ctx context.Context, run domain.Run, attempt domain.Attempt, legacy, operatorFeedback bool,
+	ctx context.Context, run domain.Run, attempt domain.Attempt, operatorFeedback bool,
 ) (accepted bool, recordedTerminal bool, err error) {
 	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
 	lost := false
@@ -1468,10 +1440,6 @@ func (e *Engine) settleProductionAttempt(
 		if err != nil {
 			return false, false, err
 		}
-		if legacy {
-			accepted, err = e.recordProductionTerminal(ctx, run, terminal)
-			return accepted, true, err
-		}
 		if operatorFeedback {
 			accepted, err = e.recordProductionTerminal(ctx, run, terminal)
 			return accepted, true, err
@@ -1497,53 +1465,6 @@ func (e *Engine) settleProductionAttempt(
 	}
 	accepted, err = e.recordProductionTerminal(ctx, run, terminal)
 	return accepted, true, err
-}
-
-func (e *Engine) authenticatesLegacyCompletedTerminal(
-	ctx context.Context,
-	run domain.Run,
-	attempt domain.Attempt,
-	recorded productionTerminalRecord,
-) (bool, error) {
-	// A completed export is an independent immutable handoff record. It lets a
-	// released v1 terminal remain inert after private driver state disappears,
-	// without treating the inbox row alone as proof or granting publication.
-	var (
-		marker    store.QueueEntry
-		admission domain.ExecutionAdmission
-		exported  domain.ExecutionExport
-	)
-	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		marker, err = tx.GetOutbox(ctx, string(attempt.InvocationID))
-		if err != nil {
-			return err
-		}
-		admission, err = tx.GetExecutionAdmissionRecord(ctx, attempt.InvocationID)
-		if err != nil {
-			return err
-		}
-		exported, err = tx.GetExecutionExportRecord(ctx, attempt.InvocationID)
-		return err
-	})
-	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	request, err := decodeProductionRequest(marker)
-	if err != nil {
-		return false, err
-	}
-	if !request.Legacy || !marker.Dispatched() ||
-		request.RunID != run.ID || request.InvocationID != attempt.InvocationID ||
-		admission.RunID != run.ID || admission.StageID != attempt.StageID ||
-		exported.InvocationID != attempt.InvocationID || exported.HeadSHA != recorded.HeadSHA {
-		return false, fmt.Errorf("legacy completed terminal disagrees with immutable export history: %w",
-			domain.ErrParentKeyMismatch)
-	}
-	return true, nil
 }
 
 func (e *Engine) authenticateProductionTerminal(

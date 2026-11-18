@@ -39,11 +39,13 @@
   "agent_lineup_revision": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
   "claude_auth_volume": "claude-auth-volume",
   "identity": {
+    "submission_id": "preflight-test",
     "source_digest": "sha256:0ac82fec44c225e7fc5d01b8a9cb91c61b4e86b3676e342c1747fa65a6bfcf8c",
     "policy_digest": "sha256:34e4283fd67b0809b8807b6e2e1af628e0f204ff0d7485f3b71c8a8d8578f745",
     "publication_digest": "sha256:42c2f198e6c55f95ade5d73a58cdbe5dda3284093619020f0ca6a0a3135947c1",
-    "implementation_run_id": "run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e",
-    "implementation_invocation_id": "inv-implement-run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e"
+    "work_unit_digest": "sha256:a9ef1c981b342cd26f5ba619638a7eadf945b20e6df4db3ab98ba5e6e06ea179",
+    "implementation_run_id": "run-d99e418a021b1ec80f4d36f8869b0e7e04a0b6106c928420dd0bc5881bfa1fa5",
+    "implementation_invocation_id": "inv-implement-run-d99e418a021b1ec80f4d36f8869b0e7e04a0b6106c928420dd0bc5881bfa1fa5"
   },
   "images": [
     {
@@ -126,7 +128,7 @@
     {
       "name": "source_implementation_identity",
       "status": "passed",
-      "evidence": "source sha256:0ac82fec44c225e7fc5d01b8a9cb91c61b4e86b3676e342c1747fa65a6bfcf8c deterministically reserves run run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e and invocation inv-implement-run-f802c7b6c24fe8e529b1fdc5d0354afa8540597c9d1180556a50f93b9fd3a82e"
+      "evidence": "source sha256:0ac82fec44c225e7fc5d01b8a9cb91c61b4e86b3676e342c1747fa65a6bfcf8c deterministically reserves run run-d99e418a021b1ec80f4d36f8869b0e7e04a0b6106c928420dd0bc5881bfa1fa5 and invocation inv-implement-run-d99e418a021b1ec80f4d36f8869b0e7e04a0b6106c928420dd0bc5881bfa1fa5"
     },
     {
       "name": "review_instructions",

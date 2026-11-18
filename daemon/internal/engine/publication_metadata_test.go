@@ -196,7 +196,7 @@ func TestPublicationRecipePreservesLiteralEncodingAndCanonicalRecovery(t *testin
 	}
 	for _, p := range []ProductionPublication{legacy, recipePublicationFixture()} {
 		r := productionInvocationRequest{Version: productionInvocationRequestVersion, RunID: "run-1", InvocationID: productionInvocationID("run-1"), StageID: productionStageID("run-1"), Publication: p}
-		payload, err := canonicalProductionRequestPayload(r)
+		payload, err := json.Marshal(r)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -314,10 +314,6 @@ func TestHistoricalSourceSubmissionStillReplays(t *testing.T) {
 			check("manual retry", replayed, err)
 			replayed, err = runSubmitCommand(t.Context(), cfg)
 			check("repeated identity", replayed, err)
-			legacy := req
-			legacy.LegacyRunID, legacy.SubmissionID = req.ImplementationRunID, ""
-			replayed, err = applySubmission(t.Context(), st, blobs, legacy)
-			check("legacy run lookup", replayed, err)
 		})
 	}
 }
@@ -392,15 +388,6 @@ func TestPreflightSourceReference(t *testing.T) {
 			_, submitErr := submittedSourceReference([]byte(tc.task), mustDecodePublication(t, tc.publication))
 			if submitErr == nil || check.Evidence != submitErr.Error() {
 				t.Fatalf("identity check evidence = %q, want submit's refusal %v", check.Evidence, submitErr)
-			}
-			// With no submission identity preflight only inspects a retained
-			// legacy run, which the rule does not reach.
-			legacy, err := parsePreflightConfig(args[:len(args)-2], &bytes.Buffer{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := inspectCompositionIdentity(t.Context(), legacy); err != nil {
-				t.Fatalf("legacy inspection = %v", err)
 			}
 		})
 	}

@@ -378,19 +378,6 @@ func TestAuthorityAuthenticatesInvocationAuthors(t *testing.T) {
 	); !errors.Is(err, publish.ErrAppBotIdentityMismatch) {
 		t.Fatalf("mismatched selected App author = %v, want ErrAppBotIdentityMismatch", err)
 	}
-	legacyID := domain.InvocationID("inv-implement-run-legacy-author")
-	legacyPayload := []byte(`{"invocation_id":"inv-implement-run-legacy-author","run_id":"run-legacy-author","stage_id":"implement-run-legacy-author"}`)
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, _, err := tx.EnqueueOutbox(ctx, string(legacyID), engine.KindProductionInvocationRequested, legacyPayload)
-		return err
-	}); err != nil {
-		t.Fatalf("seed legacy production marker: %v", err)
-	}
-	if author, production, err := authority.authenticateProductionCommitAuthor(
-		ctx, legacyID, domain.ModeUnattended, "example/repo",
-	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
-		t.Fatalf("legacy production author = %#v, production=%v, err=%v", author, production, err)
-	}
 	remediationID, remediationAdmission := seedRemediationAuthorityFixture(
 		t, ctx, st, authorityRunID,
 	)

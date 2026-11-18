@@ -371,8 +371,8 @@ func loadReattemptInputs(
 	if err != nil {
 		return err
 	}
-	publication, present, err := ProductionInvocationPublication(marker)
-	if err != nil || !present {
+	publication, err := ProductionInvocationPublication(marker)
+	if err != nil {
 		return fmt.Errorf("parent run %q publication metadata unavailable: %w",
 			parentRunID, errors.Join(err, domain.ErrParentKeyMismatch))
 	}

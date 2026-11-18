@@ -1401,12 +1401,32 @@ func TestPreflightDatabaseFailureDoesNotPassDependentChecks(t *testing.T) {
 	}
 }
 
+// TestPreflightRequiresSubmissionID pins that preflight outside -launch binds
+// a saved submission identity. The empty-identity mode inspected a retained
+// legacy run, which no current submission creates, so it is refused.
+func TestPreflightRequiresSubmissionID(t *testing.T) {
+	t.Parallel()
+	args, _ := preflightFixture(t)
+	cfg, err := parsePreflightConfig(append(args, "-submission-id", ""), &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectCompositionIdentity(t.Context(), cfg); err == nil ||
+		!strings.Contains(err.Error(), "-submission-id is required outside -launch") {
+		t.Fatalf("empty submission identity = %v, want the required-identity refusal", err)
+	}
+}
+
 func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 	t.Helper()
 	root := t.TempDir()
 	stateRoot := "/var/lib/freeside-test/state"
 	seedRoot := "/var/lib/freeside-test/seed"
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	workUnitPath := filepath.Join(root, "work-unit.json")
+	if err := os.WriteFile(workUnitPath, []byte(smallestWorkUnit), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	rigPath := filepath.Join(root, "rig.json")
 	rig := daemoncompose.RigHoldOutput{
 		Token: strings.Repeat("t", 32),
@@ -1486,6 +1506,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 		"-publication-state-dir", filepath.Join(root, "app-state"),
 		"-publication-credentials-dir", filepath.Join(root, "app-creds"),
 		"-task", taskPath, "-policy", policyPath, "-publication", publicationPath,
+		"-work-unit", workUnitPath, "-submission-id", "preflight-test",
 		"-project", "project-test", "-allowed-paths", "daemon/**",
 	}
 	return args, environment

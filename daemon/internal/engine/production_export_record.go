@@ -113,12 +113,8 @@ func RecordExecutionExport(
 		}); err != nil {
 			return err
 		}
-		request, err := (&productionPublicationWorkflow{store: st}).loadProductionRequest(ctx, run)
-		if err != nil {
+		if _, err := (&productionPublicationWorkflow{store: st}).loadProductionRequest(ctx, run); err != nil {
 			return err
-		}
-		if request.Legacy {
-			return recordExportOnly(ctx, st, executionExport, replay.Usage)
 		}
 		return recordProductionExportAndReportUsage(ctx, st, executionExport, replay, usage, logger)
 	}
@@ -341,10 +337,6 @@ func RecordProductionExecutionExport(
 		request, err := authenticateProductionMarker(entry, run.ID)
 		if err != nil {
 			return err
-		}
-		if request.Legacy {
-			return fmt.Errorf("legacy production invocation %q has no publication authority: %w",
-				executionExport.InvocationID, domain.ErrParentKeyMismatch)
 		}
 		publication = request.Publication
 		return nil

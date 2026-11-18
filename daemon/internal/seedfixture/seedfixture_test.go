@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -118,6 +119,34 @@ func TestRepresentativeSeedsDeclaredInventory(t *testing.T) {
 	}
 	if _, err := service.ListAttentionItems(ctx); err != nil {
 		t.Fatalf("ListAttentionItems: %v", err)
+	}
+}
+
+// TestRepresentativeProductionIntentsDecode pins that every production
+// dispatch intent the fixture writes is one the engine reads, so the seed
+// cannot drift from the engine's canonical request again.
+func TestRepresentativeProductionIntentsDecode(t *testing.T) {
+	ctx := t.Context()
+	st := openFixtureStore(t)
+	if _, err := seedfixture.Seed(ctx, st, seedfixture.Representative); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		entries, err := tx.ListDispatchedOutbox(ctx, string(domain.ProductionInvocationRequestedKind))
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			t.Fatal("dispatched production intents = 0, want the fixture's records")
+		}
+		for _, entry := range entries {
+			if _, err := engine.ProductionInvocationPublication(entry); err != nil {
+				t.Errorf("production intent %s: %v", entry.IdempotencyKey, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

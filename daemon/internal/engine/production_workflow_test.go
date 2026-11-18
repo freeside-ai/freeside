@@ -694,9 +694,15 @@ func productionRequestJSON(fields string) string {
 	return `{` + fields + `,` + testProductionPublicationJSON + `}`
 }
 
+// productionV2RequestJSON is productionRequestJSON under the released version,
+// the only shape the decoder accepts.
+func productionV2RequestJSON(fields string) string {
+	return productionRequestJSON(`"version":"` + productionInvocationRequestVersion + `",` + fields)
+}
+
 func TestDecodeProductionRequestRejectsMalformedPayloads(t *testing.T) {
 	t.Parallel()
-	canonical := productionRequestJSON(
+	canonical := productionV2RequestJSON(
 		`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"`,
 	)
 	tests := []struct {
@@ -706,16 +712,16 @@ func TestDecodeProductionRequestRejectsMalformedPayloads(t *testing.T) {
 	}{
 		{"empty", productionEntry(``), nil},
 		{"trailing value", productionEntry(canonical + ` {}`), nil},
-		{"unknown field", productionEntry(productionRequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1","extra":1`)), nil},
-		{"noncanonical legacy", productionEntry(`{ "invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"}`), domain.ErrParentKeyMismatch},
+		{"unknown field", productionEntry(productionV2RequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1","extra":1`)), nil},
+		{"noncanonical spacing", productionEntry(strings.Replace(canonical, "{", "{ ", 1)), domain.ErrParentKeyMismatch},
 		{"null version", productionEntry(`{"version":null,"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"}`), nil},
 		{"unknown version", productionEntry(productionRequestJSON(`"version":"freeside.production-invocation/v3","invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"`)), nil},
 		{"v2 missing publication", productionEntry(`{"version":"freeside.production-invocation/v2","invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"}`), nil},
-		{"null publication", productionEntry(`{"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1","publication":null}`), nil},
-		{"missing run", productionEntry(productionRequestJSON(`"invocation_id":"inv-implement-run-1","stage_id":"implement-run-1"`)), domain.ErrEmptyID},
-		{"missing stage", productionEntry(productionRequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1"`)), domain.ErrEmptyID},
+		{"null publication", productionEntry(`{"version":"freeside.production-invocation/v2","invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1","publication":null}`), nil},
+		{"missing run", productionEntry(productionV2RequestJSON(`"invocation_id":"inv-implement-run-1","stage_id":"implement-run-1"`)), domain.ErrEmptyID},
+		{"missing stage", productionEntry(productionV2RequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1"`)), domain.ErrEmptyID},
 		{"key mismatch", func() store.QueueEntry {
-			e := productionEntry(productionRequestJSON(`"invocation_id":"inv-implement-run-2","run_id":"run-2","stage_id":"implement-run-2"`))
+			e := productionEntry(productionV2RequestJSON(`"invocation_id":"inv-implement-run-2","run_id":"run-2","stage_id":"implement-run-2"`))
 			return e
 		}(), domain.ErrParentKeyMismatch},
 		{"foreign kind", func() store.QueueEntry {
@@ -724,12 +730,12 @@ func TestDecodeProductionRequestRejectsMalformedPayloads(t *testing.T) {
 			return e
 		}(), domain.ErrParentKeyMismatch},
 		{"underived invocation id", func() store.QueueEntry {
-			e := productionEntry(productionRequestJSON(`"invocation_id":"inv-custom","run_id":"run-1","stage_id":"implement-run-1"`))
+			e := productionEntry(productionV2RequestJSON(`"invocation_id":"inv-custom","run_id":"run-1","stage_id":"implement-run-1"`))
 			e.IdempotencyKey = "inv-custom"
 			return e
 		}(), domain.ErrParentKeyMismatch},
 		{"underived stage id", func() store.QueueEntry {
-			e := productionEntry(productionRequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"feedback-run-1"`))
+			e := productionEntry(productionV2RequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"feedback-run-1"`))
 			return e
 		}(), domain.ErrParentKeyMismatch},
 	}
@@ -812,35 +818,30 @@ func TestDecodeProductionTerminalRejectsForgedRecords(t *testing.T) {
 
 func TestDecodeProductionRequestAcceptsCanonicalPayload(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name        string
-		payload     string
-		wantLegacy  bool
-		wantVersion string
-	}{
-		{
-			name:       "released legacy v1",
-			payload:    `{"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"}`,
-			wantLegacy: true,
-		},
-		{
-			name:    "unversioned publication preview",
-			payload: productionRequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"`),
-		},
-		{
-			name:        "publication v2",
-			payload:     productionRequestJSON(`"version":"freeside.production-invocation/v2","invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"`),
-			wantVersion: productionInvocationRequestVersion,
-		},
+	payload := productionRequestJSON(`"version":"freeside.production-invocation/v2","invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"`)
+	got, err := decodeProductionRequest(productionEntry(payload))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.InvocationID != "inv-implement-run-1" || got.RunID != "run-1" ||
+		got.StageID != "implement-run-1" || got.Version != productionInvocationRequestVersion {
+		t.Fatalf("decoded request = %#v", got)
+	}
+}
+
+// TestDecodeProductionRequestRefusesUnversionedPayload pins the removal of the
+// released v1 and unversioned preview shapes: both are unreadable, never a
+// newer version an upgrade would repair.
+func TestDecodeProductionRequestRefusesUnversionedPayload(t *testing.T) {
+	t.Parallel()
+	for name, payload := range map[string]string{
+		"released legacy v1":              `{"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"}`,
+		"unversioned publication preview": productionRequestJSON(`"invocation_id":"inv-implement-run-1","run_id":"run-1","stage_id":"implement-run-1"`),
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := decodeProductionRequest(productionEntry(tc.payload))
-			if err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if got.InvocationID != "inv-implement-run-1" || got.RunID != "run-1" ||
-				got.StageID != "implement-run-1" || got.Legacy != tc.wantLegacy || got.Version != tc.wantVersion {
-				t.Fatalf("decoded request = %#v", got)
+		t.Run(name, func(t *testing.T) {
+			_, err := decodeProductionRequest(productionEntry(payload))
+			if err == nil || errors.Is(err, errProductionMarkerUnsupportedVersion) {
+				t.Fatalf("decode error = %v, want an unreadable refusal", err)
 			}
 		})
 	}
@@ -858,7 +859,7 @@ func TestProductionOwnershipReGatesTheMarkerPayload(t *testing.T) {
 		{
 			name:  "canonical",
 			runID: "run-owned",
-			payload: productionRequestJSON(`"invocation_id":"inv-implement-run-owned",` +
+			payload: productionV2RequestJSON(`"invocation_id":"inv-implement-run-owned",` +
 				`"run_id":"run-owned","stage_id":"implement-run-owned"`),
 		},
 		{
@@ -870,7 +871,7 @@ func TestProductionOwnershipReGatesTheMarkerPayload(t *testing.T) {
 		{
 			name:  "retargeted",
 			runID: "run-retargeted",
-			payload: productionRequestJSON(`"invocation_id":"inv-implement-run-other",` +
+			payload: productionV2RequestJSON(`"invocation_id":"inv-implement-run-other",` +
 				`"run_id":"run-other","stage_id":"implement-run-other"`),
 			wantReason: productionQuarantineUnreadable,
 		},
