@@ -658,9 +658,12 @@ directory named before it in the same bullet. All under `daemon/`:
   credential scan that refuses a handoff), `internal/credentialpattern/`
   (the credential rules both the export scan and the importer apply),
   `internal/exec/stage/state.go`
-  (the restart reconstruction gate on a decoded intent), and
+  (the restart reconstruction gate on a decoded intent),
   `internal/exec/stage/pipeline.go` (released-export authentication and
-  what restart recovery holds, quarantines, or adopts).
+  what restart recovery holds, quarantines, or adopts), and
+  `internal/exec/stage/driver.go` (decides when recovery may follow the
+  current-authority re-check, and runs that re-check off the driver's
+  lock).
 - **Batch object reads:** `internal/gitrun/objects.go` (carries untrusted
   object bytes into agent-tree admission and the import and verification
   gates).
