@@ -37,6 +37,8 @@ func run(args []string, stderr io.Writer) error {
 		"largest file that still gets a content blob; larger files are recorded blob_omitted; 0 disables the cap")
 	maxTotalBlobBytes := flags.Int64("max-total-blob-bytes", 1<<30,
 		"aggregate bytes written under blobs/ before further blobs are recorded blob_omitted; 0 disables the cap")
+	maxBlobs := flags.Int("max-blobs", export.DefaultMaxBlobs,
+		"distinct blobs written under blobs/ before further files are recorded blob_omitted; 0 disables the cap")
 	maxEntries := flags.Int("max-entries", 1_000_000,
 		"fail the export when the walk touches more names (files and directories) than this; 0 disables the cap")
 	maxEvidenceBlobBytes := flags.Int64("max-evidence-blob-bytes", 100<<20,
@@ -53,6 +55,7 @@ func run(args []string, stderr io.Writer) error {
 	m, err := export.Export(os.DirFS(*workspace), *out, export.Options{
 		MaxBlobBytes:          *maxBlobBytes,
 		MaxTotalBlobBytes:     *maxTotalBlobBytes,
+		MaxBlobs:              *maxBlobs,
 		MaxEntries:            *maxEntries,
 		MaxEvidenceBlobBytes:  *maxEvidenceBlobBytes,
 		MaxEvidenceTotalBytes: *maxEvidenceTotalBytes,

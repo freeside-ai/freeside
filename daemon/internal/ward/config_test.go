@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -19,6 +21,21 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.MaxExportBytes == 0 || cfg.MaxArchiveBytes == 0 || cfg.MaxExportEntries == 0 || cfg.MaxManifestBytes == 0 {
 		t.Error("resource-limit defaults not filled")
+	}
+}
+
+// TestDefaultExportFitsEntryCap pins the exporter's blob-count budget under
+// the ward's handoff entry cap with room for the output's directories,
+// manifest, commit plan, and evidence channel. Without it, a workspace whose
+// build output holds more than the cap's worth of files fails the whole
+// handoff instead of omitting blobs the importer can judge (#3347).
+func TestDefaultExportFitsEntryCap(t *testing.T) {
+	t.Parallel()
+	const reserve = 1_000
+	cfg := Config{}.withDefaults()
+	if export.DefaultMaxBlobs+reserve > cfg.MaxExportEntries {
+		t.Fatalf("export.DefaultMaxBlobs %d + reserve %d > MaxExportEntries %d",
+			export.DefaultMaxBlobs, reserve, cfg.MaxExportEntries)
 	}
 }
 

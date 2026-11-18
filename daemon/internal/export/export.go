@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 )
 
-// Options configures one export. Both caps are pinned by the exporter
+// Options configures one export. The caps are pinned by the exporter
 // image invocation, so they never vary between runs of the same workspace,
 // and entries are processed in manifest (sorted) order, so which blobs a
 // budget omits is deterministic. An omitted-but-needed blob is
 // publish-blocking at the importer, the contained failure direction for a
-// workspace built to exceed the caps. Zero or negative disables either cap.
+// workspace built to exceed the caps. Zero or negative disables a cap.
 //
-// The blob caps bound bytes written to the exporter root filesystem, not
+// The blob caps bound what is written to the exporter root filesystem, not
 // bytes read: an over-cap file is still streamed once through the hash to
 // record its digest (blobless regular entries still bind a digest), so
 // total bytes read equals the workspace size. That is bounded, and with no
@@ -30,6 +30,11 @@ type Options struct {
 	// root filesystem either. Charged by bytes actually written: a dedup
 	// hit costs nothing and never sets blob_omitted.
 	MaxTotalBlobBytes int64
+	// MaxBlobs bounds the distinct blobs written under blobs/, so the
+	// output fits the ward's cap on handoff entries (DefaultMaxBlobs).
+	// Like the byte budget it omits rather than fails: a file past it keeps
+	// its digest and sets blob_omitted, and a dedup hit costs nothing.
+	MaxBlobs int
 	// MaxEntries fails the export closed (ErrTooManyEntries) when the walk
 	// touches more names (files and directories alike) than this, a count
 	// guard on the manifest and the in-memory entry slice: blobless
@@ -57,6 +62,12 @@ type Options struct {
 	// DefaultMaxCommitPlanBytes; negative values are invalid.
 	MaxCommitPlanBytes int64
 }
+
+// DefaultMaxBlobs is the exporter image's blob-count budget. It leaves 1,000
+// of the ward's default 10,000 handoff entries (ward Config.MaxExportEntries)
+// for the output's directories, manifest, commit plan, and evidence channel,
+// so an export within it never trips that cap; a ward test pins the fit.
+const DefaultMaxBlobs = 9_000
 
 // ManifestFilename is the manifest's fixed name under the output
 // directory; blobs live beside it under blobs/sha256/.
@@ -105,7 +116,7 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 		if e.Kind != EntryRegular {
 			continue
 		}
-		store := blobAllowed(*e.Size, written, opts)
+		store := blobAllowed(*e.Size, written, bw.blobs(), opts)
 		res, err := bw.digestAndStore(fsys, e.Path, store)
 		if err != nil {
 			return Manifest{}, err
@@ -146,16 +157,20 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 }
 
 // blobAllowed reports whether a regular file of the given size still gets
-// a content blob, with written bytes already spent from the aggregate
-// budget. The budget check compares against the remaining headroom rather
-// than summing, because written+size can wrap negative for a hostile size
-// near MaxInt64 and slip past the cap; written never exceeds the budget,
-// so the subtraction cannot overflow.
-func blobAllowed(size, written int64, opts Options) bool {
+// a new content blob, with written bytes and stored blobs already spent
+// from the aggregate budgets. The byte check compares against the remaining
+// headroom rather than summing, because written+size can wrap negative for
+// a hostile size near MaxInt64 and slip past the cap; written never exceeds
+// the budget, so the subtraction cannot overflow. A refused file still
+// resolves to a stored blob when identical content already landed one.
+func blobAllowed(size, written int64, blobs int, opts Options) bool {
 	if opts.MaxBlobBytes > 0 && size > opts.MaxBlobBytes {
 		return false
 	}
 	if opts.MaxTotalBlobBytes > 0 && size > opts.MaxTotalBlobBytes-written {
+		return false
+	}
+	if opts.MaxBlobs > 0 && blobs >= opts.MaxBlobs {
 		return false
 	}
 	return true

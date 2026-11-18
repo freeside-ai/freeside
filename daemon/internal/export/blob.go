@@ -37,6 +37,9 @@ func newBlobWriter(outDir, channelDir string) (*blobWriter, error) {
 	return &blobWriter{dir: dir, written: map[Digest]bool{}}, nil
 }
 
+// blobs reports how many distinct blobs this writer has stored.
+func (w *blobWriter) blobs() int { return len(w.written) }
+
 // blobResult reports one digestAndStore pass: the content address, the
 // bytes observed in the stream, whether the blob is present under the
 // store after the call, and how many new bytes the call wrote (zero on a

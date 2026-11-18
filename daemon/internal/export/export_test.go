@@ -313,6 +313,31 @@ func TestExportBudgetChargesWrittenBytes(t *testing.T) {
 	}
 }
 
+// TestExportBlobCountBudget: the count budget charges distinct stored blobs,
+// so a dedup hit is free, and a file past it is recorded blob_omitted with
+// its digest, never dropped.
+func TestExportBlobCountBudget(t *testing.T) {
+	fsys := fstest.MapFS{
+		"a.txt": {Data: []byte("same")},
+		"b.txt": {Data: []byte("same")}, // dedup: free
+		"c.txt": {Data: []byte("other")},
+		"d.txt": {Data: []byte("third")}, // past the budget
+	}
+	out := t.TempDir()
+	m, err := export.Export(fsys, out, export.Options{MaxBlobs: 2})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	for _, e := range m.Entries {
+		if wantOmitted := e.Path == "d.txt"; e.BlobOmitted != wantOmitted || e.Digest == nil {
+			t.Errorf("%s: blob_omitted = %v (digest %v), want %v with a digest", e.Path, e.BlobOmitted, e.Digest, wantOmitted)
+		}
+	}
+	if blobs := listFiles(t, filepath.Join(out, "blobs", "sha256")); len(blobs) != 2 {
+		t.Errorf("stored %d blobs, want 2: %v", len(blobs), blobs)
+	}
+}
+
 // TestExportEntryCap: blobless entries evade the blob budgets, so the
 // entry cap fails the export closed instead of accumulating an unbounded
 // manifest.
