@@ -69,10 +69,6 @@ func TestImportIgnoredOutputKeepsScopeAndSecurityGates(t *testing.T) {
 		},
 		{name: "secret", rules: "dist/\n", path: "dist/out.js", body: "sk-ant-" + strings.Repeat("X", 20), kind: FindingSecret},
 		{
-			name: "scan cap", rules: "dist/\n", path: "dist/out.js", body: strings.Repeat("x", 100), kind: FindingSecretScanSkipped,
-			prepare: func(_ *testing.T, _ string, _ map[string]string, opts *Options) { opts.Policy.SecretMaxScanBytes = 50 },
-		},
-		{
 			name: "size", rules: "dist/\n", path: "dist/out.js", body: strings.Repeat("x", 100), wantErr: ErrBlobTooLarge,
 			prepare: func(_ *testing.T, _ string, _ map[string]string, opts *Options) { opts.Policy.MaxBlobBytes = 50 },
 		},
@@ -125,7 +121,7 @@ func TestImportIgnoredOutputKeepsScopeAndSecurityGates(t *testing.T) {
 	}
 }
 
-func TestImportIgnoredOutputPreservesTrackedAndInScopeFiles(t *testing.T) {
+func TestImportIgnoredOutputPreservesTrackedFiles(t *testing.T) {
 	t.Parallel()
 	baseFiles := map[string]string{".gitignore": "dist/\n", "dist/tracked.js": "old", "dist/deleted.js": "delete"}
 	checkout, _ := initBaseRepo(t, baseFiles)
@@ -139,7 +135,9 @@ func TestImportIgnoredOutputPreservesTrackedAndInScopeFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Changes) != 3 || slices.ContainsFunc(result.Changes, func(c Change) bool { return c.Path == "dist/debris.js" }) {
+	// An in-scope ignored addition is excluded like out-of-scope debris; the
+	// tracked modification and deletion stay.
+	if len(result.Changes) != 2 || slices.ContainsFunc(result.Changes, func(c Change) bool { return c.Path == "dist/debris.js" || c.Path == "dist/allowed.js" }) {
 		t.Fatalf("changes = %+v", result.Changes)
 	}
 	for _, name := range []string{"dist/tracked.js", "dist/deleted.js"} {
@@ -188,7 +186,7 @@ func TestIgnoreMatcherDoesNotInventDirectoryCandidates(t *testing.T) {
 	}
 }
 
-func TestIgnoredOutputDoesNotChangeNoChangesOrSpecificationMode(t *testing.T) {
+func TestIgnoredOutputKeepsNoChangesRefusalAndAppliesToSpecification(t *testing.T) {
 	t.Parallel()
 	for _, specification := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no changes", true: "specification"}[specification], func(t *testing.T) {
@@ -208,8 +206,8 @@ func TestIgnoredOutputDoesNotChangeNoChangesOrSpecificationMode(t *testing.T) {
 				if !errors.Is(err, ErrUnexpectedChanges) {
 					t.Fatalf("no-changes error = %v", err)
 				}
-			} else if err != nil || len(result.Changes) != 1 || len(result.Findings) != 1 {
-				t.Fatalf("specification result changed: %+v, %v", result, err)
+			} else if err != nil || len(result.Changes) != 0 || len(result.Findings) != 0 {
+				t.Fatalf("specification kept ignored output: %+v, %v", result, err)
 			}
 		})
 	}
@@ -267,7 +265,7 @@ func TestIgnoreMatcherRejectsDirectoryAliases(t *testing.T) {
 func TestIgnoreSpellingsKeepAncestorGroupsTogether(t *testing.T) {
 	t.Parallel()
 	eligible := map[string]bool{"Foo/out.js": true, "foo-bridge/out.js": true, "foo/sub/out.js": true}
-	if err := validateIgnoreSpellings([]string{".gitignore"}, eligible); !errors.Is(err, ErrUnsupportedRepo) {
+	if err := validateIgnoreSpellings([]string{".gitignore"}, eligible, false); !errors.Is(err, ErrUnsupportedRepo) {
 		t.Fatalf("ancestor spelling alias was not refused: %v", err)
 	}
 }
@@ -285,7 +283,7 @@ func BenchmarkIgnoreRulesDeepPaths(b *testing.B) {
 		if len(rules) != 1 {
 			b.Fatalf("selected %d rules, want only the root rule", len(rules))
 		}
-		if err := validateIgnoreSpellings(rules, eligible); err != nil {
+		if err := validateIgnoreSpellings(rules, eligible, false); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -337,18 +335,147 @@ func TestIgnoreMatcherRejectsMalformedOutput(t *testing.T) {
 	}
 }
 
+// The run behind #3319: hydrating a Swift package leaves nested repositories,
+// withheld oversized packs, and unscannable blobs under an ignored build
+// directory. Under the publication and specification profiles alike, the
+// exclusion drops them and the findings that only describe their content.
+func TestImportExcludesIgnoredHydrationDebris(t *testing.T) {
+	t.Parallel()
+	for _, specification := range []bool{false, true} {
+		t.Run(map[bool]string{false: "publication", true: "specification"}[specification], func(t *testing.T) {
+			files := map[string]string{".gitignore": "/vendor/\n", "app/.gitignore": ".build/\n", "app/main.swift": "old"}
+			checkout, base := initBaseRepo(t, files)
+			pack, unscanned := strings.Repeat("p", 100), strings.Repeat("u", 40)
+			entries := []export.Entry{
+				regularEntryFor(".gitignore", files[".gitignore"], false),
+				regularEntryFor("app/.gitignore", files["app/.gitignore"], false),
+				regularEntryFor("app/main.swift", "new", false),
+				{Path: "app/.build/checkouts/Yams", Kind: export.EntrySubmodule},
+				{Path: "vendor", Kind: export.EntrySubmodule},
+				regularEntryFor("app/.build/repositories/Yams/objects/pack/big.pack", pack, true),
+				regularEntryFor("app/.build/repositories/Yams/objects/pack/mid.pack", unscanned, false),
+			}
+			opts := testImportOptions(base)
+			opts.Policy.Allowlist = []string{"app/**"}
+			opts.Policy.MaxBlobBytes = 50
+			opts.Policy.SecretMaxScanBytes = 30
+			if specification {
+				profile := FindingProfileSpecification
+				opts.Policy.FindingProfile = &profile
+			}
+			clone := cloneAtBase(t, checkout)
+			result, err := Import(t.Context(), handoffFromEntries(t, entries, files[".gitignore"], files["app/.gitignore"], "new", unscanned), clone, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.CommitSHA == "" || len(result.Findings) != 0 || len(result.Changes) != 1 || result.Changes[0].Path != "app/main.swift" {
+				t.Fatalf("hydration debris was not excluded: %+v", result)
+			}
+			if tree := rungit(t, clone, "ls-tree", "-r", "--name-only", result.CommitSHA); strings.Contains(tree, ".build") || strings.Contains(tree, "vendor") {
+				t.Fatalf("excluded debris reached the commit: %s", tree)
+			}
+		})
+	}
+}
+
+func TestImportExcludedAdditionKeepsSecretAndTotalSize(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{".gitignore": "dist/\n", "src/main.ts": "old"}
+	checkout, base := initBaseRepo(t, files)
+	secret := "sk-ant-" + strings.Repeat("X", 20)
+	entries := []export.Entry{
+		regularEntryFor(".gitignore", files[".gitignore"], false),
+		regularEntryFor("src/main.ts", "new", false),
+		regularEntryFor("dist/out.js", secret, false),
+		// The withheld blob passes intake's stored-byte cap but still counts
+		// toward the change set's total, which exclusion must not shrink.
+		regularEntryFor("dist/big.bin", strings.Repeat("b", 100), true),
+	}
+	opts := testImportOptions(base)
+	opts.Policy.Allowlist = []string{"src/*.ts"}
+	opts.Policy.MaxBlobBytes = 50
+	opts.Policy.MaxTotalBytes = 80
+	result, err := Import(t.Context(), handoffFromEntries(t, entries, files[".gitignore"], "new", secret), cloneAtBase(t, checkout), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingSecret && f.Path == "dist/out.js" }) {
+		t.Fatalf("secret on excluded content was dropped: %+v", result.Findings)
+	}
+	if !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingSizeViolation && f.Path == "" }) {
+		t.Fatalf("total size counting excluded content was dropped: %+v", result.Findings)
+	}
+}
+
+func TestImportIgnoredNestedRepositoryStillBlocks(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		files   map[string]string
+		tracked string
+	}{
+		{name: "not ignored", files: map[string]string{".gitignore": "dist/\n", "a.txt": "old"}},
+		{name: "over tracked content", files: map[string]string{".gitignore": "sub/\n", "a.txt": "old", "sub/inner.txt": "data"}, tracked: "sub/inner.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkout, base := initBaseRepo(t, tc.files)
+			if tc.tracked != "" {
+				rungit(t, checkout, "add", "-f", "--", tc.tracked)
+				rungit(t, checkout, "commit", "-qm", "track beneath ignored directory")
+				base = rungit(t, checkout, "rev-parse", "HEAD")
+			}
+			entries := []export.Entry{
+				regularEntryFor(".gitignore", tc.files[".gitignore"], false),
+				regularEntryFor("a.txt", "new", false),
+				{Path: "sub", Kind: export.EntrySubmodule},
+			}
+			result, err := Import(t.Context(), handoffFromEntries(t, entries, tc.files[".gitignore"], "new"), cloneAtBase(t, checkout), testImportOptions(base))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.CommitSHA != "" || !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingNonRegularChange && f.Path == "sub" }) {
+				t.Fatalf("nested repository lost its gate: %+v", result)
+			}
+		})
+	}
+}
+
+// Git decides a directory's ignore status by its own name as a directory. A
+// trailing-slash query instead tests an empty basename, which "*" matches even
+// when "!sub/" re-includes the directory.
+func TestIgnoreMatcherHonorsReincludedNestedRepository(t *testing.T) {
+	t.Parallel()
+	for _, rules := range []string{"*\n!sub/\n!.gitignore\n!a.txt\n", "*\n!*/\n!.gitignore\n!a.txt\n"} {
+		files := map[string]string{".gitignore": rules, "a.txt": "old"}
+		checkout, base := initBaseRepo(t, files)
+		entries := []export.Entry{
+			regularEntryFor(".gitignore", rules, false),
+			regularEntryFor("a.txt", "new", false),
+			{Path: "sub", Kind: export.EntrySubmodule},
+		}
+		result, err := Import(t.Context(), handoffFromEntries(t, entries, rules, "new"), cloneAtBase(t, checkout), testImportOptions(base))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.CommitSHA != "" || !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingNonRegularChange && f.Path == "sub" }) {
+			t.Fatalf("rules %q: re-included nested repository was excluded: %+v", rules, result)
+		}
+	}
+}
+
 // check-ignore reads its input as pathspecs, so a candidate spelled with
 // pathspec magic would be matched as a different path. Such a name is never
 // excluded.
 func TestIgnoreMatcherRefusesPathspecMagic(t *testing.T) {
 	t.Parallel()
-	rules := "dist/\n"
+	rules := "/vendor/\ndist/\n"
 	files := map[string]string{".gitignore": rules, "a.txt": "old"}
 	checkout, base := initBaseRepo(t, files)
 	entries := []export.Entry{
 		regularEntryFor(".gitignore", rules, false),
 		regularEntryFor("a.txt", "new", false),
 		regularEntryFor(":(top)dist/out.js", "generated", false),
+		{Path: ":(top)vendor", Kind: export.EntrySubmodule},
 	}
 	opts := testImportOptions(base)
 	opts.Policy.Allowlist = []string{"a.txt"}
@@ -356,7 +483,12 @@ func TestIgnoreMatcherRefusesPathspecMagic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingAllowlistViolation && f.Path == ":(top)dist/out.js" }) {
-		t.Fatalf("pathspec-magic name was excluded: %+v", result)
+	for _, want := range []struct {
+		path string
+		kind FindingKind
+	}{{":(top)dist/out.js", FindingAllowlistViolation}, {":(top)vendor", FindingNonRegularChange}} {
+		if !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == want.kind && f.Path == want.path }) {
+			t.Fatalf("pathspec-magic name %s was excluded: %+v", want.path, result)
+		}
 	}
 }

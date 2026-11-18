@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 128
+revision: 129
 status: active
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 # Freeside
@@ -2507,16 +2507,20 @@ agent-written manifests. It enforces the exact base SHA, canonical paths,
 allowlists, size limits, control-plane restrictions, and Section [5.4](#54-credential-modes-egress-profiles-and-concurrency) best-effort
 secret scanning.
 
-For repository publication, a new regular file outside the declared scope may
-be excluded from the constructed candidate only when the exact trusted base's
-`.gitignore` rules ignore it. Tracked changes and explicitly in-scope additions
+An addition may be excluded from the constructed candidate only when the
+exact trusted base's `.gitignore` rules ignore it and the base tracks nothing
+at or beneath its path. That covers a new regular file, in scope or not, and a
+new nested repository, such as a package manager's checkout. Tracked changes
 keep their existing semantics. Candidate ignore rules, workspace Git state,
 checkout-local excludes, and host Git configuration cannot authorize exclusion.
 The full returned content still undergoes the existing integrity, structural,
-secret, size, collision, and control-plane checks. Only the allowlist finding
-for an excluded addition is removed; no such file enters a constructed commit.
-Specification imports and handoffs requiring no repository changes retain their
-existing behavior.
+secret, size, collision, and control-plane checks. A secret match, a
+protected-path or collision finding, and the change set's total size still
+apply to an excluded addition. Only the findings about content no commit will
+hold drop: scope, a withheld or unscanned blob, a per-file size, and a nested
+repository. No excluded content enters a constructed commit. The rule applies
+to specification and publication imports alike; a handoff requiring no
+repository changes keeps every addition and refuses it.
 
 Permanent tests include malicious manifests, commit plans, blobs, and
 evidence. Trusted verification recipes load only from approved control-plane
@@ -7873,24 +7877,31 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 128 ("The Ready Card Shows the Run's Outcome List"):
+Revision 129 ("Exclude Ignored Hydration Output at Import"):
 
-1. **The ready card lists what the run did around its pull request**
-   (Section [9](#9-comprehension), the `ready_for_final_review` row).
-   Below the actions, after the digested review history: each follow-up
-   issue or issue comment the run filed, posted, or proposed and where it
-   stands, a refused, capped, or uncertain one with its reason, and each
-   finding the run declined or deferred with its reason, which renders as
-   a labeled claim. The list reports and decides nothing: it carries no verdict,
-   exception, or restriction on the merge, so it is not a
-   [§9](#9-comprehension) exception and takes no first-viewport space.
+1. **Base-ignored additions leave the candidate under every profile**
+   (Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)). An addition
+   the exact base ignores and doesn't track, at or beneath its path, is
+   excluded whether or not it is in scope, and under specification imports
+   too. Nested repositories, such as Swift package checkouts, qualify. For an
+   excluded addition, the findings that describe content no commit will hold
+   drop: scope, a withheld or unscanned blob, a per-file size, and the nested
+   repository. A secret match on scanned content, protected-path and
+   collision findings, and the total size still apply, and a handoff that
+   must carry no change still refuses ignored output.
 
-Rejected: leading the card with the list ahead of the actions, which would
-spend the first viewport on history that doesn't bear on the merge
-decision (revision 78).
+This revises revision 53, which excluded only new regular files out of
+scope and kept specification imports and every other finding unchanged.
+Project-image preparation (`swift package resolve`) leaves nested
+repositories and oversized packs under an ignored `app/.build/`, which
+failed a real specification import on a work unit whose scope covers
+`app/**`. Rejected: hydrating outside the workspace, which needs a
+per-toolchain cache location contract; and tolerating these findings in the
+specification profile alone, which would leave the same debris blocking
+publication.
 
-(Owner decision of 2026-11-16 splitting #3149, applied as #3264;
-[decision note](../devlog/2026-11-16-1251-ready-card-outcome-list.md).)
+(Owner decision of 2026-11-17 in the #2382 exit run, applied as #3319;
+[decision note](../devlog/2026-11-17-1015-ignored-hydration-output.md).)
 
 ## 14. Risks
 

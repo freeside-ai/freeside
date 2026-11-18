@@ -4128,3 +4128,22 @@ pass, which turns one project's broken image into a stop for all of them.
 (Planned in #3211's contract on tracker #3201 and handed to implementation
 by the owner on 2026-11-16;
 [decision note](../../devlog/2026-11-16-0920-ward-proof-per-configuration.md).)
+
+## Revision 128 ("The Ready Card Shows the Run's Outcome List"):
+
+1. **The ready card lists what the run did around its pull request**
+   (Section [9](../plan.md#9-comprehension), the `ready_for_final_review` row).
+   Below the actions, after the digested review history: each follow-up
+   issue or issue comment the run filed, posted, or proposed and where it
+   stands, a refused, capped, or uncertain one with its reason, and each
+   finding the run declined or deferred with its reason, which renders as
+   a labeled claim. The list reports and decides nothing: it carries no verdict,
+   exception, or restriction on the merge, so it is not a
+   [§9](../plan.md#9-comprehension) exception and takes no first-viewport space.
+
+Rejected: leading the card with the list ahead of the actions, which would
+spend the first viewport on history that doesn't bear on the merge
+decision (revision 78).
+
+(Owner decision of 2026-11-16 splitting #3149, applied as #3264;
+[decision note](../../devlog/2026-11-16-1251-ready-card-outcome-list.md).)
