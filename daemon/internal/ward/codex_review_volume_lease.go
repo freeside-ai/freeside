@@ -162,8 +162,8 @@ func (l *RuntimeCodexReviewVolumeLeaser) reconstructTransferLocked(
 
 // distinctVolumes reports whether the leased set is well-formed: at least two
 // volumes, each nonempty and unique. The lease spans the workspace, the .agents
-// shadow, and (on the #591 shape) the credential snapshot; legacy recovery of a
-// pre-snapshot intent leases just the workspace and shadow.
+// shadow, and the credential snapshot, plus the input volume when a review
+// delivers input files.
 func distinctVolumes(volumes []string) bool {
 	if len(volumes) < 2 {
 		return false

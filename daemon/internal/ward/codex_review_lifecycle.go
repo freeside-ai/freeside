@@ -150,9 +150,8 @@ type CodexReviewLaunchIntent struct {
 	Network         string `json:"network"`
 	ReviewContainer string `json:"review_container"`
 	// SnapshotVolume is the ward-owned read-only credential volume added in #591.
-	// It is empty on the pre-#591 six-resource generation, whose review container
-	// delivered the two files as host binds; an empty value selects the legacy
-	// lease and cleanup shape everywhere it is consumed.
+	// validatedResourceNames requires the current derived name, so an intent
+	// written before #591 without one is refused (#3326).
 	SnapshotVolume string                      `json:"snapshot_volume"`
 	Resources      []CodexReviewIntentResource `json:"resources"`
 	State          CodexReviewIntentState      `json:"state"`
@@ -164,16 +163,12 @@ type CodexReviewLaunchIntent struct {
 	InputsVolume string `json:"inputs_volume,omitempty"`
 }
 
-// codexReviewLeaseVolumes is the exclusive-lease volume set for one review. The
-// snapshot volume joins the workspace and shadow volumes on the #591 shape; a
-// legacy intent with no snapshot volume keeps the original two-volume lease, so
-// the same helper serves both the current launch path and legacy recovery. The
-// input volume joins last, only for a review that delivers input files.
+// codexReviewLeaseVolumes is the exclusive-lease volume set for one review: the
+// workspace, shadow, and snapshot volumes, so the same helper serves the launch
+// path and recovery. The input volume joins last, only for a review that
+// delivers input files.
 func codexReviewLeaseVolumes(workspaceVolume, shadowVolume, snapshotVolume, inputsVolume string) []string {
-	volumes := []string{workspaceVolume, shadowVolume}
-	if snapshotVolume != "" {
-		volumes = append(volumes, snapshotVolume)
-	}
+	volumes := []string{workspaceVolume, shadowVolume, snapshotVolume}
 	if inputsVolume != "" {
 		volumes = append(volumes, inputsVolume)
 	}
@@ -1079,8 +1074,8 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	// intent, so the reconciler retries the whole recovery next cycle and the
 	// intent stays open until the wipe succeeds. A transient FS error can never
 	// close the intent over a surviving credential (the closed-intent path never
-	// revisits this wipe). Idempotent: RemoveAll no-ops when absent, so a legacy
-	// pre-#591 intent is a clean no-op.
+	// revisits this wipe). Idempotent: RemoveAll no-ops when the stage is
+	// absent.
 	if stageErr := os.RemoveAll(codexReviewSnapshotStagePath(b.cfg.ExportRoot, intent.RunID)); stageErr != nil {
 		return codexReviewOperationalCheckf(
 			CheckCredentialSeparation, "remove recovery Codex review snapshot stage: %v", stageErr)
@@ -1197,11 +1192,8 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	} else {
 		// The shadow and snapshot volumes are both ward-owned and part of the
 		// exclusive lease; the candidate workspace is cleaned on its own path and
-		// is never deleted here. A legacy intent carries no snapshot volume.
-		recoveryVolumes := []string{intent.ShadowVolume}
-		if intent.SnapshotVolume != "" {
-			recoveryVolumes = append(recoveryVolumes, intent.SnapshotVolume)
-		}
+		// is never deleted here.
+		recoveryVolumes := []string{intent.ShadowVolume, intent.SnapshotVolume}
 		if intent.InputsVolume != "" {
 			recoveryVolumes = append(recoveryVolumes, intent.InputsVolume)
 		}
@@ -1742,21 +1734,11 @@ func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResour
 		intent.ReviewContainer:  {},
 		intent.ShadowVolume:     {},
 		intent.Network:          {},
+		names.snapshotVolume:    {},
+		names.snapshotSeeder:    {},
+		names.snapshotObserver:  {},
 	}
-	// The snapshot volume is the discriminator between the nine-resource #591
-	// shape and the six-resource host-bind generations. An empty snapshotVolume
-	// (legacy/pre-snapshot) omits all three snapshot resources.
-	if names.snapshotVolume != "" {
-		expected[names.snapshotVolume] = struct{}{}
-		expected[names.snapshotSeeder] = struct{}{}
-		expected[names.snapshotObserver] = struct{}{}
-	}
-	// The input volume rides only on the current snapshot shape, so a
-	// legacy name set (no snapshot volume) never carries input resources.
 	if names.inputsVolume != "" {
-		if names.snapshotVolume == "" {
-			return false
-		}
 		expected[names.inputsVolume] = struct{}{}
 		expected[names.inputsSeeder] = struct{}{}
 		expected[names.inputsObserver] = struct{}{}
@@ -1777,7 +1759,7 @@ func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResour
 		// ward-created, so they must bear the intent owner; snapshotObserver may not.
 		if resource.Name == intent.ShadowVolume || resource.Name == intent.Network ||
 			resource.Name == intent.ReviewContainer || resource.Name == names.shadowInitializer ||
-			(names.snapshotVolume != "" && (resource.Name == names.snapshotVolume || resource.Name == names.snapshotSeeder)) ||
+			resource.Name == names.snapshotVolume || resource.Name == names.snapshotSeeder ||
 			(names.inputsVolume != "" && (resource.Name == names.inputsVolume || resource.Name == names.inputsSeeder)) {
 			if resource.OwnershipToken != intent.OwnershipToken {
 				return false

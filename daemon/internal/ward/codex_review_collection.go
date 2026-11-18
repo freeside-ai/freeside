@@ -378,11 +378,9 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 		return err
 	}
 	// The credential snapshot volume is ward-owned and part of the terminal
-	// lease. A legacy (pre-#591) intent carries none, so this is skipped there.
-	if intent.SnapshotVolume != "" {
-		if err := b.deleteCodexReviewVolume(ctx, intent.SnapshotVolume, claims[intent.SnapshotVolume], owner); err != nil {
-			return err
-		}
+	// lease.
+	if err := b.deleteCodexReviewVolume(ctx, intent.SnapshotVolume, claims[intent.SnapshotVolume], owner); err != nil {
+		return err
 	}
 	if intent.InputsVolume != "" {
 		if err := b.deleteCodexReviewVolume(ctx, intent.InputsVolume, claims[intent.InputsVolume], owner); err != nil {

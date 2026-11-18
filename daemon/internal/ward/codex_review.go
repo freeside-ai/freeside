@@ -1770,12 +1770,9 @@ type codexReviewResourceNames struct {
 	reviewContainer   string
 	shadowVolume      string
 	network           string
-	// snapshot resources are empty on the pre-#591 generation, which delivered
-	// the two files as read-only host binds instead of a seeded volume. An empty
-	// snapshotVolume selects the six-resource legacy shape in resourceNamesMatch.
-	snapshotVolume   string
-	snapshotSeeder   string
-	snapshotObserver string
+	snapshotVolume    string
+	snapshotSeeder    string
+	snapshotObserver  string
 	// input resources exist only for a review that delivers operator files;
 	// validatedResourceNames blanks them for an intent that has none, and
 	// every generation before review inputs leaves them empty.
@@ -1841,13 +1838,9 @@ func codexReviewRuntimeResourceNames(
 	containers := []string{
 		handoff.Seeder, handoff.Observer,
 		review.workspaceObserver, review.shadowInitializer, review.shadowObserver,
-		review.reviewContainer,
+		review.reviewContainer, review.snapshotSeeder, review.snapshotObserver,
 	}
-	volumes := []string{handoff.Workspace, review.shadowVolume}
-	if review.snapshotVolume != "" {
-		containers = append(containers, review.snapshotSeeder, review.snapshotObserver)
-		volumes = append(volumes, review.snapshotVolume)
-	}
+	volumes := []string{handoff.Workspace, review.shadowVolume, review.snapshotVolume}
 	if review.inputsVolume != "" {
 		containers = append(containers, review.inputsSeeder, review.inputsObserver)
 		volumes = append(volumes, review.inputsVolume)
