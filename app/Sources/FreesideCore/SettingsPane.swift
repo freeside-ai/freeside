@@ -342,22 +342,13 @@ struct SettingsPopupLabel: View {
     }
 }
 
-/// A pane's padding inside the window or the pushed page. A hosted view
-/// that draws its own 16pt sheet header and margins takes 16 less on each
-/// side, so its text lines up with the panes drawn in the grammar.
+/// A pane's padding inside the window or the pushed page.
 enum SettingsPaneInsets {
     static func grammar(_ client: SettingsClient) -> EdgeInsets {
         switch client {
         case .mac: EdgeInsets(top: 18, leading: 22, bottom: 22, trailing: 22)
         case .iPhone, .iPad: EdgeInsets(top: 18, leading: 16, bottom: 16, trailing: 16)
         }
-    }
-
-    static func hosted(_ client: SettingsClient) -> EdgeInsets {
-        let insets = grammar(client)
-        return EdgeInsets(
-            top: insets.top - 16, leading: insets.leading - 16, bottom: insets.bottom - 16,
-            trailing: insets.trailing - 16)
     }
 
     /// The space between a pane's sections.
@@ -485,8 +476,8 @@ struct SettingsPaneView: View {
             }
         case .usage:
             if let sync {
-                AccountUsageView(model: sync.usage)
-                    .padding(SettingsPaneInsets.hosted(client))
+                AccountUsageView(model: sync.usage, client: client)
+                    .padding(SettingsPaneInsets.grammar(client))
             } else {
                 unpaired
             }

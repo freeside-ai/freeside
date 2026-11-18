@@ -15,18 +15,18 @@ struct AccountUsageView: View {
     @Environment(\.timeZone) private var timeZone
     @Environment(\.pinnedNow) private var pinnedNow
     let model: AccountUsageModel
+    let client: SettingsClient
     /// The pools whose Collectors fold is open. Nothing persists it: the
     /// fold opens closed.
     @State private var openCollectors: Set<String> = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            FreesideSheetHeader(
-                eyebrow: "Usage",
-                ask: "How much of each account is used",
-                consequence:
-                    "What the daemon last read from each provider. A stale reading is shown as stale, never as replenished.",
-                askLineLimit: nil)
+        VStack(alignment: .leading, spacing: SettingsPaneInsets.sectionSpacing(client)) {
+            SettingsPaneHead(
+                title: "Usage",
+                line:
+                    "What the daemon last read from each provider. A stale reading is shown as stale, never as replenished."
+            )
             // The countdowns move with the clock; a pinned clock (screenshots)
             // holds them still.
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -44,8 +44,6 @@ struct AccountUsageView: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
         }
     }
 
