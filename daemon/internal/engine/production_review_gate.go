@@ -1755,9 +1755,6 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		comparable.Timing = item.Timing
 		comparable.Recommendation = item.Recommendation
 		comparable.DecisionSurface = item.DecisionSurface
-		if comparable.Reason == legacyCodexReviewReason(item.Reason) {
-			comparable.Reason = item.Reason
-		}
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review contradiction item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewRecoveryBindingMismatch)
@@ -2035,9 +2032,6 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		comparable.ConversationID = item.ConversationID
 		comparable.Recommendation = item.Recommendation
 		comparable.DecisionSurface = item.DecisionSurface
-		if comparable.Reason == legacyCodexReviewReason(item.Reason) {
-			comparable.Reason = item.Reason
-		}
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review configuration item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewConfigRecoveryBindingMismatch)
@@ -2514,16 +2508,6 @@ func (w *productionPublicationWorkflow) observeReviewInvocation(ctx context.Cont
 		return err
 	}
 	return nil
-}
-
-// legacyCodexReviewReason is a review item's reason in the wording an
-// earlier daemon wrote, "Codex review ..." where the harness-neutral
-// wording reads "Review ..." (#397). A parked contradiction or configuration
-// item is re-put on every tick while it stays open, so its comparison
-// accepts the earlier wording rather than failing every reconcile after an
-// upgrade.
-func legacyCodexReviewReason(reason string) string {
-	return "Codex review" + strings.TrimPrefix(reason, "Review")
 }
 
 // persistedReviewAuthority is the authority a finished review's persisted
