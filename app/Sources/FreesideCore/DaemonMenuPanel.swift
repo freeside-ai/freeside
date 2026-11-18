@@ -513,10 +513,10 @@
         }
     }
 
-    /// The panel row: body ink on a 34pt line, the hover cut under the pointer,
-    /// accent-wash-soft while pressed, and a 1pt accent ring for the
-    /// keyboard highlight with no fill change. A disabled row keeps its
-    /// place and takes the faint cut.
+    /// The panel row: the label step on a 26pt line, the hover cut under
+    /// the pointer, accent-wash-soft while pressed, and a 1pt accent ring
+    /// for the keyboard highlight with no fill change. A disabled row
+    /// keeps its place and takes the faint cut.
     private struct PanelRowStyle: ButtonStyle {
         let isHovered: Bool
         let isHighlighted: Bool
@@ -524,10 +524,11 @@
 
         func makeBody(configuration: Configuration) -> some View {
             configuration.label
-                .font(FreesideFont.body)
+                .font(FreesideFont.factLabel)
                 .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
                 .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 6).fill(fill(isPressed: configuration.isPressed)))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
