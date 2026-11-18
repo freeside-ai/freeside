@@ -300,28 +300,42 @@ func TestReentryStopReasonsNameTheCommits(t *testing.T) {
 	}
 }
 
-// TestReentryStopsOnlyOnRefusalsTheTreeCauses: a tree the verifier cannot
-// evaluate ends the cycle with a reason, because its pusher controls it. A
-// refusal that contradicts Freeside's own state stays an error.
+// TestReentryStopsOnlyOnRefusalsTheTreeCauses: a tree or head history the
+// verifier cannot evaluate ends the cycle with a reason naming that cause,
+// because its pusher controls it. The .git path refusal, which also wraps the
+// history refusal, keeps its tree wording. A refusal that contradicts
+// Freeside's own state, or a failed git merge-base, stays an error.
 func TestReentryStopsOnlyOnRefusalsTheTreeCauses(t *testing.T) {
 	t.Parallel()
 	task := newReentryTask("project-reentry", reentrySuccessorForTest(
 		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationHeadChanged))
 	base := task.Successor.Reentry.BaseSHA
-	for _, cause := range []error{
-		verify.ErrSymlinkEntrypoint, verify.ErrMalformedTree, verify.ErrWorkspaceMismatch,
+	for _, stop := range []struct {
+		cause error
+		names string
+	}{
+		{verify.ErrSymlinkEntrypoint, "entrypoint is a symbolic link"},
+		{verify.ErrMalformedTree, "paths that cannot be materialized safely"},
+		{verify.ErrWorkspaceMismatch, "did not materialize faithfully"},
+		{verify.ErrHistoryUnavailable, "more than one merge base"},
+		{
+			fmt.Errorf("tree path %q: %w: %w", ".git/config", verify.ErrHistoryUnavailable, verify.ErrMalformedTree),
+			"paths that cannot be materialized safely",
+		},
 	} {
 		err := fmt.Errorf("clean re-entry verification: path %q\n%s: %w",
-			"scripts/verify.sh", strings.Repeat("p", 4096), cause)
-		reason, stop := reentryUnverifiableTreeReason(task, base, err)
-		if !stop || !strings.Contains(reason, task.HeadSHA) || !strings.Contains(reason, base) ||
+			"scripts/verify.sh", strings.Repeat("p", 4096), stop.cause)
+		reason, stopped := reentryUnverifiableTreeReason(task, base, err)
+		if !stopped || !strings.Contains(reason, task.HeadSHA) || !strings.Contains(reason, base) ||
+			!strings.Contains(reason, stop.names) ||
 			strings.Contains(reason, "\n") || len(reason) > 4*reentryQuotedTextLimit {
-			t.Errorf("%v: stop = %t, reason (%d bytes) = %q", cause, stop, len(reason), reason)
+			t.Errorf("%v: stop = %t, reason (%d bytes) = %q", stop.cause, stopped, len(reason), reason)
 		}
 	}
 	for _, cause := range []error{
 		nil, verify.ErrGitPlumbing, verify.ErrRecipeInvalid, verify.ErrHeadMismatch,
 		verify.ErrBaseMismatch, verify.ErrRoomUnavailable, context.Canceled,
+		failedMergeBaseForTest(),
 	} {
 		if reason, stop := reentryUnverifiableTreeReason(task, base, cause); stop || reason != "" {
 			t.Errorf("%v: stop = %t, reason = %q; want an error the lane sees", cause, stop, reason)
@@ -329,15 +343,29 @@ func TestReentryStopsOnlyOnRefusalsTheTreeCauses(t *testing.T) {
 	}
 }
 
-// TestVerificationMissingRoomIsNotRetried: a recipe naming an execution class
-// the engine supplies no room for meets the same refusal on every retry, so
-// both verification call sites must not wrap it as retryable.
-func TestVerificationMissingRoomIsNotRetried(t *testing.T) {
+// TestVerificationStateContradictionsAreNotRetried: a recipe naming an
+// execution class the engine supplies no room for, and a history request a
+// head with several merge bases cannot satisfy, each meet the same refusal on
+// every retry, so both verification call sites must not wrap them as
+// retryable.
+func TestVerificationStateContradictionsAreNotRetried(t *testing.T) {
 	t.Parallel()
-	err := fmt.Errorf("recipe names execution class %q with no room: %w", verify.ClassMacOSHost, verify.ErrRoomUnavailable)
-	if !productionVerificationStateContradiction(err) {
-		t.Fatal("a missing room was classed as retryable")
+	for _, err := range []error{
+		fmt.Errorf("recipe names execution class %q with no room: %w", verify.ClassMacOSHost, verify.ErrRoomUnavailable),
+		fmt.Errorf("%s and %s have 2 merge bases, want exactly one: %w",
+			strings.Repeat("a", 40), strings.Repeat("b", 40), verify.ErrHistoryUnavailable),
+	} {
+		if !productionVerificationStateContradiction(err) {
+			t.Errorf("%v was classed as retryable", err)
+		}
 	}
+}
+
+// failedMergeBaseForTest is the verifier's refusal when git merge-base itself
+// fails: it wraps the history refusal and a git plumbing failure.
+func failedMergeBaseForTest() error {
+	return fmt.Errorf("merge base of %s and %s: %w: %w",
+		strings.Repeat("a", 40), strings.Repeat("b", 40), verify.ErrHistoryUnavailable, verify.ErrGitPlumbing)
 }
 
 // TestReentryStopsOnBaseTheImageCannotServe: an image that cannot serve the
@@ -461,12 +489,13 @@ func TestReentryDiffDescribesTheEvaluatedCommit(t *testing.T) {
 }
 
 // TestHandoffStopsOnCausesTheTipDecides: plan §5.7 at handoff. A rebuild
-// trust refuses, a merged tree the image cannot materialize, and an image that
-// cannot serve the moved tip with nothing pending in image upkeep each end the
+// trust refuses, a merged tree the image cannot materialize, a head that
+// shares more than one merge base with the tip, and an image that cannot
+// serve the moved tip with nothing pending in image upkeep each end the
 // handoff, with evidence whose fixed first line names the cause and whose
 // body names the head and the tip. While upkeep has a resolution pending, the
 // error the verifier returns is the lane's retryable hold, which is no stop.
-// None is a lane failure.
+// A failed git merge-base is a lane error, not a stop. None is a lane failure.
 func TestHandoffStopsOnCausesTheTipDecides(t *testing.T) {
 	t.Parallel()
 	task := newReentryTask("project-handoff", reentrySuccessorForTest(
@@ -507,6 +536,10 @@ func TestHandoffStopsOnCausesTheTipDecides(t *testing.T) {
 			"Handoff merge cannot be verified: its tree did not materialize faithfully on this host (",
 		},
 		{
+			"history unavailable", fmt.Errorf("clean re-entry verification: %w", verify.ErrHistoryUnavailable),
+			"Handoff merge cannot be verified: the head shares more than one merge base with the commit it is verified against, so a verification command cannot be given exactly the head's commits (",
+		},
+		{
 			"unservable tip", fmt.Errorf("verify: %w", image.AdmissibleAt(domain.ProjectImageBaseInputs{CommitSHA: tip}, "")),
 			"Project image cannot serve target tip " + tip + " (",
 		},
@@ -525,7 +558,7 @@ func TestHandoffStopsOnCausesTheTipDecides(t *testing.T) {
 	}
 	pending := productionPublicationRetryableError(fmt.Errorf("no recorded project image serves %s: %w",
 		tip, &ImageUpkeepPendingError{}))
-	for _, cause := range []error{nil, pending, verify.ErrGitPlumbing, context.Canceled} {
+	for _, cause := range []error{nil, pending, verify.ErrGitPlumbing, failedMergeBaseForTest(), context.Canceled} {
 		if account, stopped := handoffStopAccount(task, tip, merge, image.ImageRef, cause); stopped || account != "" {
 			t.Errorf("%v stopped the handoff with %q; want a hold or a lane error", cause, account)
 		}
