@@ -87,7 +87,9 @@ jobs:
           # could let a stale artifact register as a pass, while a mirror
           # cannot (Package.resolved still decides what is checked out and
           # everything is still compiled here). The convergence job's
-          # Swift build cache avoids that by keying on app/'s git tree.
+          # Swift build cache keys on app/'s git tree, and its fallback
+          # relies on restored file times (#3295), a risk this job
+          # doesn't take.
           path: ~/.cache/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
@@ -114,8 +116,8 @@ jobs:
           # app/Package.swift's graph, pruned to the packages the app
           # targets consume, through the same shared cache the swift
           # command line uses; its checkouts land in DerivedData,
-          # which stays uncached, since only a key over the whole tree
-          # makes compiled output safe to reuse (see the linux job).
+          # which stays uncached, since a key over less than the whole
+          # tree can serve a stale artifact (see the linux job).
           path: .swiftpm-mirror
           key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-mirror-v1-
@@ -140,10 +142,10 @@ jobs:
   # then build as before until the next app-path push saves the entry.
   # The entry also carries app/.build/source-times.tsv, each tracked app/
   # file's modification time and SHA-256 as the build saw them, which
-  # scripts/swift-build-times.py writes so a later fallback restore can
-  # give unchanged files their built times back (#3294, #3295). The
-  # prefix went to v3 with the record, so that fallback can only match an
-  # entry that carries one; #3313's v2 entries don't.
+  # scripts/swift-build-times.py writes so the convergence job's fallback
+  # restore can give unchanged files their built times back (#3294,
+  # #3295). The prefix went to v3 with the record, so that fallback can
+  # only match an entry that carries one; #3313's v2 entries don't.
   swift-build-cache:
     name: swift build cache (main)
     runs-on: xcode-27

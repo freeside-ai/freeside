@@ -15,7 +15,10 @@ name: convergence CI
 # Darwin-only suite (FreesideCoreTests, the screenshot regressions) beside
 # the convergence suite, and the swift-format gate runs in the background
 # beside the setup and the build (#3292); the build is the same either
-# way. The job runs only through pull-request.yml: a
+# way. A PR that changes app/ restores the newest Swift build main saved
+# for the same toolchain and gives each unchanged app/ file the time that
+# build saw, so its build recompiles only what the PR changed (#3295).
+# The job runs only through pull-request.yml: a
 # push to main carries a tree its PR tested under the up-to-date rule,
 # and the Go build cache and the convergence harness it restores are
 # saved by daemon-ci.yml's `macos-main` job, the SwiftPM mirror by
@@ -200,7 +203,7 @@ jobs:
           # saved by app-ci.yml's `generate` job on a push to main, which
           # carries the rationale for the shared path and key. Restore-only:
           # a save here would be scoped to this PR. It serves every run the
-          # Swift build cache below misses, which includes every app PR.
+          # Swift build cache below misses.
           path: .swiftpm-mirror
           key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-mirror-v1-
@@ -215,13 +218,49 @@ jobs:
         with:
           # app/.build with the test bundle, saved by app-ci.yml's
           # `swift-build-cache` job on a push to main (#2291). The key
-          # names app/'s git tree, so a hit holds a build of exactly this
-          # tree, and a stale artifact cannot register as a pass: any app/
-          # change misses. No fallback key: an inexact entry is a partial
-          # build SwiftPM must re-scan and partly recompile, which saved
-          # under a minute when #2249 measured it.
+          # names app/'s git tree, so an exact hit holds a build of exactly
+          # this tree. The fallback drops only the tree, so it restores the
+          # newest entry main saved for the same OS, architecture, image OS,
+          # Xcode build, and toolchain, and never one built by another
+          # Xcode or toolchain; the trailing `-` keeps one toolchain token
+          # from matching a longer one. An inexact entry alone would
+          # recompile every module, because the checkout gave every file a
+          # new time (#3294), so the next step gives each unchanged file the
+          # time the entry's build saw, and the full build in the
+          # convergence pass recompiles what changed. Only an exact hit
+          # skips that build.
           path: app/.build
           key: swift-build-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
+          restore-keys: swift-build-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-
+      # Logs which of three cases the restore gave (#3295). An exact hit
+      # and a miss change nothing. An inexact hit gives each tracked app/
+      # file whose SHA-256 matches app/.build/source-times.tsv the time the
+      # entry's build saw; a changed, new, or unrecorded file keeps its
+      # checkout time, so the build treats it as changed. An entry without
+      # a usable record is removed, so the build runs cold as on a miss:
+      # without the times it would recompile every module anyway. Nothing
+      # between this step and the build writes under app/: the
+      # swift-format gate, running in the background, only reads it.
+      - name: Apply the recorded source times
+        env:
+          CACHE_HIT: ${{ steps.swift-build.outputs.cache-hit }}
+          MATCHED_KEY: ${{ steps.swift-build.outputs.cache-matched-key }}
+        run: |
+          if [ "${CACHE_HIT}" = 'true' ]; then
+            echo "swift build: exact hit on ${MATCHED_KEY}"
+          elif [ -z "${MATCHED_KEY}" ]; then
+            echo "swift build: no entry, building cold"
+          else
+            echo "swift build: inexact hit on ${MATCHED_KEY}, applying the recorded source times"
+            status=0
+            python3 scripts/swift-build-times.py apply app app/.build/source-times.tsv || status=$?
+            if [ "${status}" -eq 3 ]; then
+              echo "swift build: the entry has no usable record, removing app/.build and building cold"
+              rm -rf app/.build
+            elif [ "${status}" -ne 0 ]; then
+              exit "${status}"
+            fi
+          fi
       - name: Run the convergence pass (scripts/check.sh)
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
@@ -259,6 +298,7 @@ jobs:
         if: always()
         run: |
           echo "cache-hit=${{ steps.swift-build.outputs.cache-hit }}"
+          echo "cache-matched-key=${{ steps.swift-build.outputs.cache-matched-key }}"
           du -sh app/.build 2>/dev/null || echo "app/.build: absent"
       - name: Record the convergence harness cache result
         if: always()

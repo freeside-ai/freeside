@@ -578,19 +578,25 @@ covers every file's name, mode, and content. The key leaves out
 not. App CI's `swift-build-cache` job writes it on a push to `main` when the
 key is absent. Its entry also holds `app/.build/source-times.tsv`, each
 tracked `app/` file's modification time and SHA-256 as the build saw them,
-which `scripts/swift-build-times.py record` writes after the build. Nothing
-reads it yet: #3295 will restore those times to unchanged files after a
-fallback restore, and the `v3` prefix keeps that fallback from matching an
-entry without the record, such as a `v2` entry #3313's builds saved. The
+which `scripts/swift-build-times.py record` writes after the build. The
 `convergence` job restores the entry, and on an exact hit for a PR without
 the app component runs `swift test --skip-build` (`CONVERGENCE_SKIP_BUILD`,
-`scripts/run-convergence.sh --skip-build`).
-Because the key names the tree of `app/`, a PR that changes `app/` misses by
-construction, so a stale artifact cannot register as a pass; an app PR also
-builds on a hit. There is no fallback key: a partial build still recompiles
-every project module (#2249). After an Xcode or toolchain change every run
-misses until the next push to `main` that touches `app/`, and PRs build as
-before meanwhile. CI builds the bundle without debug info
+`scripts/run-convergence.sh --skip-build`); an app PR builds even on an
+exact hit. A PR that changes `app/` misses the exact key and falls back to
+the key without its tree, which restores the newest entry `main` saved for
+the same OS, architecture, image OS, Xcode build, and toolchain (#3295).
+The `Apply the recorded source times` step then runs
+`scripts/swift-build-times.py apply`, which gives each tracked `app/` file
+whose SHA-256 matches the record the time that build saw. A changed, new,
+or unrecorded file keeps its checkout time, so the full build that follows
+recompiles what the PR changed and the modules that depend on it. An entry
+without a usable record is removed and the job builds cold, as on a miss:
+without the times every module recompiles anyway (#2249, #3294). The `v3`
+prefix keeps the fallback from matching an entry without the record, such
+as a `v2` entry #3313's builds saved. The step logs which case it took:
+exact hit, no entry, or inexact hit with the counts it applied. After an
+Xcode or toolchain change every run misses until the next push to `main`
+that touches `app/`, and PRs build cold meanwhile. CI builds the bundle without debug info
 (`-debug-info-format none`, both in the writer and in the `convergence`
 job's `CONVERGENCE_NO_DEBUG_INFO`, `scripts/run-convergence.sh
 --no-debug-info`), which saves build time (#3292): assertion failures keep

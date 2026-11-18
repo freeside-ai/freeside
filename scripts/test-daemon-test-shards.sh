@@ -402,11 +402,11 @@ class Coverage(unittest.TestCase):
         self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
         convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
         no_debug_info = '-debug-info-format none'
+        swift_build_prefix = ("swift-build-v3-${{ runner.os }}-${{ runner.arch }}-"
+                              "${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-"
+                              "${{ steps.swift-key.outputs.toolchain }}-")
         swift_build_cache = ("          path: app/.build\n"
-                             "          key: swift-build-v3-${{ runner.os }}-${{ runner.arch }}-"
-                             "${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-"
-                             "${{ steps.swift-key.outputs.toolchain }}-"
-                             "${{ steps.swift-key.outputs.tree }}\n")
+                             "          key: " + swift_build_prefix + "${{ steps.swift-key.outputs.tree }}\n")
         self.assertIn('    inputs:\n      app_tests:\n', convergence)
         self.assertNotIn('\n  push:', convergence)
         self.assertNotIn('actions/cache/save', convergence)
@@ -437,18 +437,36 @@ class Coverage(unittest.TestCase):
                         convergence.index('- name: Run the convergence pass'))
         self.assertLess(convergence.index('- name: Run the convergence pass'),
                         convergence.index('- name: Collect the swift-format gate\n'))
-        # The Swift build cache (#2291): an exact key over all of app/ with
-        # no fallback, and the build skipped only on that hit and never for
-        # an app PR, whose --all-tests run must compile its own changes.
-        swift_build = re.search(r'^      - name: Restore the Swift build\n(.*?)(?=^      (?:- |#))',
-                                convergence, re.M | re.S).group(1)
+        # The Swift build cache (#2291): an exact key over all of app/, and
+        # the build skipped only on that hit and never for an app PR, whose
+        # --all-tests run must compile its own changes. The one fallback
+        # (#3295) is the key without its tree, so it matches only an entry
+        # built by the same Xcode and toolchain, and the step right after
+        # the restore gives unchanged files the times that entry's build
+        # saw, with nothing between it and the build.
+        swift_build = step('Restore the Swift build')
         self.assertIn('        id: swift-build\n        uses: actions/cache/restore@v4\n', swift_build)
-        self.assertIn(swift_build_cache, swift_build)
-        self.assertNotIn('restore-keys', swift_build)
+        self.assertIn(swift_build_cache + '          restore-keys: ' + swift_build_prefix + '\n', swift_build)
+        self.assertEqual(swift_build.count('restore-keys'), 1)
         self.assertIn("CONVERGENCE_SKIP_BUILD: ${{ steps.swift-build.outputs.cache-hit == 'true' && "
                       "!inputs.app_tests && '1' || '' }}", convergence)
-        self.assertLess(convergence.index('- name: Restore the Swift build\n'),
-                        convergence.index('- name: Run the convergence pass'))
+        # Every line that starts a step, whatever key it leads with.
+        step_starts = re.findall(r'^      - (.+)$', convergence, re.M)
+        restore_at = step_starts.index('name: Restore the Swift build')
+        self.assertEqual(step_starts[restore_at + 1:restore_at + 3],
+                         ['name: Apply the recorded source times', 'name: Run the convergence pass (scripts/check.sh)'])
+        apply_times = step('Apply the recorded source times')
+        self.assertIn('          CACHE_HIT: ${{ steps.swift-build.outputs.cache-hit }}\n'
+                      '          MATCHED_KEY: ${{ steps.swift-build.outputs.cache-matched-key }}\n', apply_times)
+        self.assertNotIn('        if:', apply_times)
+        self.assertIn('          if [ "${CACHE_HIT}" = \'true\' ]; then\n', apply_times)
+        self.assertIn('          elif [ -z "${MATCHED_KEY}" ]; then\n', apply_times)
+        self.assertIn('            python3 scripts/swift-build-times.py apply app app/.build/source-times.tsv'
+                      ' || status=$?\n'
+                      '            if [ "${status}" -eq 3 ]; then\n', apply_times)
+        self.assertIn('              rm -rf app/.build\n'
+                      '            elif [ "${status}" -ne 0 ]; then\n'
+                      '              exit "${status}"\n', apply_times)
         app = (root / '.github/workflows/app-ci.yml').read_text()
         app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
         self.assertEqual({name for name, body in app_jobs.items() if re.search(r'runs-on: (?:macos|xcode)', body)},
