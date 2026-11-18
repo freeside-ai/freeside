@@ -1,7 +1,6 @@
 package stage
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -197,7 +196,7 @@ func TestHandoffRegistryRecordIsRegated(t *testing.T) {
 		readErr bool
 		wantErr bool
 	}{
-		{name: "legacy record", noHook: true},
+		{name: "no recorded set", noHook: true, wantErr: true},
 		{name: "declared record needs no hook", hosts: []string{"proxy.golang.org", "registry.npmjs.org"}, noHook: true},
 		{name: "adopted host", hosts: []string{"proxy.golang.org", "pypi.org", "registry.npmjs.org"}},
 		{name: "missing declared host", hosts: []string{"pypi.org", "registry.npmjs.org"}, wantErr: true},
@@ -245,15 +244,8 @@ func TestHandoffRegistryRecordIsRegated(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := tc.hosts
-			if len(want) == 0 {
-				if bytes.Contains(body, []byte(`"registry_hosts"`)) {
-					t.Fatal("legacy encoding gained registry_hosts")
-				}
-				want = []string{"proxy.golang.org", "registry.npmjs.org"}
-			}
-			if !slices.Equal(hs.RegistryHosts, want) {
-				t.Fatalf("registries = %v, want %v", hs.RegistryHosts, want)
+			if !slices.Equal(hs.RegistryHosts, tc.hosts) {
+				t.Fatalf("registries = %v, want %v", hs.RegistryHosts, tc.hosts)
 			}
 		})
 	}

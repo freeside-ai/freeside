@@ -95,9 +95,9 @@ type intent struct {
 	// then. Ward binds RegistryHosts into SpecDigest, so recovery replays this
 	// record rather than re-reading adoptions, the same byte-identical-replay
 	// reason as Preparation. handoffRegistryHosts re-gates it on every
-	// rebuild. Empty under provider_only and on any record written before this
-	// field existed (omitempty preserves the old encoding). Old registry
-	// intents carry the declared set.
+	// rebuild, which refuses an empty set under provider_registry. Empty under
+	// provider_only, and on a start refused for its registry set, which commits
+	// before any launch.
 	RegistryHosts []string `json:"registry_hosts,omitempty"`
 	// Export carries what the gate released, recorded the moment Handoff
 	// returns. The gate closes its journal at that point and refuses to
