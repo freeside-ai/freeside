@@ -201,9 +201,12 @@ import Testing
                 state: coordinator.timelineLoadStates[runID],
                 answered: coordinator.answeredRunTimelineIDs.contains(runID), freshness: coordinator.store.freshness)
         }
-        func banner() -> Bool {
-            FreshnessBanner.isShowing(
-                freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt, at: .now)
+        // Asked at the last successful sync, so the real clock can't cross
+        // the staleness threshold during a slow run and show the banner.
+        func banner() throws -> Bool {
+            let updatedAt = try #require(coordinator.lastUpdatedAt)
+            return FreshnessBanner.isShowing(
+                freshness: coordinator.store.freshness, lastUpdatedAt: updatedAt, at: updatedAt)
         }
 
         // The daemon writes, and the review read sees the newer revision.
@@ -215,7 +218,7 @@ import Testing
         #expect(!RunReviewSection.showsRetry(state: coordinator.timelineLoadStates[runID]))
         #expect(coordinator.taskStop.unavailableReason == nil)
         #expect(coordinator.taskStop.prepare(taskID: taskID) != nil)
-        #expect(!banner())
+        #expect(try !banner())
 
         await server.setBeforeRespond { _ in throw InjectedFailure() }
         await coordinator.refresh()
@@ -231,7 +234,7 @@ import Testing
         #expect(coordinator.timelineLoadStates[runID] == .unavailable)
         #expect(!coordinator.answeredRunTimelineIDs.contains(runID))
         #expect(coordinator.taskStop.unavailableReason == "Offline. Connect to the daemon before sending Stop.")
-        #expect(banner())
+        #expect(try banner())
     }
 
     /// What the Timeline and a run's Review section say, sampled while a
@@ -364,16 +367,19 @@ import Testing
                 state: coordinator.timelineLoadStates[runID],
                 answered: coordinator.answeredRunTimelineIDs.contains(runID), freshness: coordinator.store.freshness)
         }
-        func banner() -> Bool {
-            FreshnessBanner.isShowing(
-                freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt, at: .now)
+        // Asked at the last successful sync, so the answer never depends on
+        // the real clock.
+        func banner() throws -> Bool {
+            let updatedAt = try #require(coordinator.lastUpdatedAt)
+            return FreshnessBanner.isShowing(
+                freshness: coordinator.store.freshness, lastUpdatedAt: updatedAt, at: updatedAt)
         }
-        func expectFailureShown() {
+        func expectFailureShown() throws {
             #expect(coordinator.store.freshness == .unreachable)
             #expect(history() == "Saved task history. Freshness unconfirmed.")
             #expect(review() == "Saved review details. Freshness unconfirmed.")
             #expect(coordinator.taskStop.unavailableReason == "Offline. Connect to the daemon before sending Stop.")
-            #expect(banner())
+            #expect(try banner())
         }
 
         // Only the sync reads fail, so the review read below succeeds.
@@ -381,12 +387,12 @@ import Testing
             if operation == "getSyncRevision" || operation == "getSyncBootstrap" { throw InjectedFailure() }
         }
         await coordinator.refresh()
-        expectFailureShown()
+        try expectFailureShown()
 
         await server.advanceRun(id: runID)
         await coordinator.refreshTimeline(for: runID)
         #expect(coordinator.timelineLoadStates[runID] == .loaded)
-        expectFailureShown()
+        try expectFailureShown()
     }
 
     @Test func overlappingRequestsCoalesceAndCancelledNavigationDoesNotAdopt() async throws {
