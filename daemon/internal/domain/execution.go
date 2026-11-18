@@ -294,13 +294,6 @@ type AdmissionAgentBinding struct {
 	// EffectiveEgress is the canonical (sorted, deduplicated) allowlist of
 	// authorities the writer's proxy admitted for this attempt.
 	EffectiveEgress []string `json:"effective_egress"`
-	// LegacyAttended is the attended flag a binding recorded before plan
-	// revision 97 removed the attended first run. Admission no longer sets
-	// it, nothing reads it, and Validate does not check it. It stays,
-	// omitted when nil, so a stored binding re-encodes to the bytes its
-	// admission id, review digests, and completion evidence were computed
-	// over.
-	LegacyAttended *bool `json:"attended,omitempty"`
 	// RouteModelID, RequestedEffort, and NativeEffort are the model and
 	// effort the launch passes (derived from the agent's offer under an
 	// agent, AgentSelection.LaunchValues under a selection), recorded so
