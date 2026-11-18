@@ -1907,9 +1907,7 @@ func verifySpecificationApproval(
 
 func validSpecificationApprovalDecisionSet(actions []domain.Action) bool {
 	return slices.Equal(actions,
-		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
-		slices.Equal(actions,
-			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
+		[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop})
 }
 
 func verifySpecificationApprovalClaims(
@@ -3631,8 +3629,7 @@ func (e *Engine) specificationRevisionFailed(
 }
 
 func validSpecificationRevisionFailureDecisionSet(actions []domain.Action) bool {
-	return slices.Equal(actions, []domain.Action{domain.ActionStop}) ||
-		slices.Equal(actions, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
+	return slices.Equal(actions, []domain.Action{domain.ActionDiscuss, domain.ActionStop})
 }
 
 func specificationFailureItem(

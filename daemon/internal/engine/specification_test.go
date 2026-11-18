@@ -3198,26 +3198,31 @@ func TestSpecificationDecisionCommandsIgnoreDiscussion(t *testing.T) {
 	}
 }
 
-func TestSpecificationApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+func TestSpecificationApprovalDecisionSetAcceptsOnlyCurrentShape(t *testing.T) {
 	t.Parallel()
-	legacy := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}
 	current := []domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionDiscuss, domain.ActionStop}
-	if !validSpecificationApprovalDecisionSet(legacy) || !validSpecificationApprovalDecisionSet(current) {
-		t.Fatal("historical or current specification approval decision set was rejected")
+	if !validSpecificationApprovalDecisionSet(current) {
+		t.Fatal("current specification approval decision set was rejected")
 	}
-	if validSpecificationApprovalDecisionSet([]domain.Action{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop}) {
-		t.Fatal("unrecognized specification approval decision set was accepted")
+	for _, refused := range [][]domain.Action{
+		{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop},
+		{domain.ActionApprove, domain.ActionDiscuss, domain.ActionStop},
+	} {
+		if validSpecificationApprovalDecisionSet(refused) {
+			t.Fatalf("specification approval decision set %v was accepted", refused)
+		}
 	}
 }
 
-func TestSpecificationRevisionFailureDecisionSetAcceptsHistoricalAndCurrentShapes(t *testing.T) {
+func TestSpecificationRevisionFailureDecisionSetAcceptsOnlyCurrentShape(t *testing.T) {
 	t.Parallel()
-	if !validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionStop}) ||
-		!validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
-		t.Fatal("historical or current revision-failure decision set was rejected")
+	if !validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
+		t.Fatal("current revision-failure decision set was rejected")
 	}
-	if validSpecificationRevisionFailureDecisionSet([]domain.Action{domain.ActionDiscuss}) {
-		t.Fatal("unrecognized revision-failure decision set was accepted")
+	for _, refused := range [][]domain.Action{{domain.ActionStop}, {domain.ActionDiscuss}} {
+		if validSpecificationRevisionFailureDecisionSet(refused) {
+			t.Fatalf("revision-failure decision set %v was accepted", refused)
+		}
 	}
 }
 
