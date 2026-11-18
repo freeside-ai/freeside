@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -235,6 +236,8 @@ type stubGate struct {
 	quiescentFn    func(string) error
 	recoverFn      func(string, ward.HandoffSpec) (*ward.RecoveryResult, error)
 	authenticateFn func(string, string) error
+	// releases records each ReleaseFinishedHandoffs call's run IDs.
+	releases [][]string
 }
 
 func (g *stubGate) Handoff(ctx context.Context, hs ward.HandoffSpec) (*ward.HandoffResult, error) {
@@ -285,6 +288,25 @@ func (g *stubGate) AuthenticateReleasedExport(
 		return nil
 	}
 	return g.authenticateFn(runID, exportDir)
+}
+
+func (g *stubGate) ReleaseFinishedHandoffs(_ context.Context, runIDs []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.releases = append(g.releases, slices.Clone(runIDs))
+}
+
+// released lists every run ID the driver asked the gate to release.
+func (g *stubGate) released() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Concat(g.releases...)
+}
+
+func (g *stubGate) releaseCalls() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.releases)
 }
 
 func (g *stubGate) lastSpec(t *testing.T) ward.HandoffSpec {

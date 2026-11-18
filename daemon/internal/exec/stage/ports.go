@@ -134,6 +134,15 @@ type Gate interface {
 	RequestCancellation(ctx context.Context, runID string) error
 	Recover(ctx context.Context, runID string, hs ward.HandoffSpec) (*ward.RecoveryResult, error)
 	AuthenticateReleasedExport(ctx context.Context, runID, exportDir string) error
+	// ReleaseFinishedHandoffs withdraws the rig names of each run whose
+	// journal record is absent or closed. The caller guarantees that no
+	// Handoff or Recover for a named run creates under its names without
+	// binding them again: either it holds a terminal intent for the run, or
+	// no intent exists and it holds the driver lock, so the next start runs
+	// the pre-job hook that binds them. It is best effort and returns
+	// nothing: a failed release leaves names bound, the safe direction, for
+	// the next startup reconcile.
+	ReleaseFinishedHandoffs(ctx context.Context, runIDs []string)
 }
 
 // Seeder materializes daemon-owned checkouts at exactly base (production:

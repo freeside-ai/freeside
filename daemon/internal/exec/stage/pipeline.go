@@ -74,6 +74,7 @@ var errExportAuthorityConflict = errors.New("released export conflicts with dura
 // remain in an exported preterminal phase so Inspect can retry them without
 // discarding work.
 func (d *Driver) runPipeline(ctx context.Context, in intent) {
+	defer d.releaseTerminalHandoff(in.InvocationID)
 	log := d.logger.With("invocation", string(in.InvocationID), "run", in.RunID)
 	log.Debug("pipeline started", "phase", string(in.Phase))
 	result, err := d.handoffAndImport(ctx, in)
@@ -143,6 +144,24 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 		Summary: truncateFailureSummary(err.Error()), Cause: cause, Usage: result.Usage, Artifacts: result.Artifacts,
 		ClaudeUsage: result.ClaudeUsage,
 	})
+}
+
+// releaseTerminalHandoff releases the invocation's handoff namespace once its
+// intent is durably terminal. A terminal intent is never resumed and a new
+// start of it is a duplicate, so the driver never calls Handoff or Recover
+// for its run again, which is the gate's precondition. That covers a handoff
+// ward refused before opening its journal, whose close never released. An
+// intent still short of terminal, such as one whose terminal write failed
+// and is retained for retry, keeps its names until startup reconcile.
+// It runs outside mu: once terminal, nothing races a create under the names.
+func (d *Driver) releaseTerminalHandoff(id domain.InvocationID) {
+	d.mu.Lock()
+	in, err := d.loadIntentAdmission(context.Background(), id)
+	d.mu.Unlock()
+	if err != nil || (in.Phase != phaseCommitted && in.Phase != phaseLost) {
+		return
+	}
+	d.gate.ReleaseFinishedHandoffs(context.Background(), []string{in.RunID})
 }
 
 // handoffSpecRefusal marks a handoff spec the driver refused to build for an
@@ -1635,6 +1654,9 @@ func (d *Driver) retryPendingResultLocked(id domain.InvocationID) error {
 	sess.commitErr = nil
 	sess.preJournalCancellation = false
 	delete(d.running, id)
+	// The intent is terminal now, so nothing resumes it under these names;
+	// without this, a retried write would keep them bound until startup.
+	d.gate.ReleaseFinishedHandoffs(context.Background(), []string{d.provider.RunID(id)})
 	return nil
 }
 
@@ -1900,9 +1922,11 @@ func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (Recovery
 			Cause: failure.cause, Err: failure.err,
 		})
 	}
+	var terminal []string
 	for _, in := range intents {
 		if in.Phase == phaseCommitted || in.Phase == phaseLost {
 			d.reportTerminalSeedCleanup(in)
+			terminal = append(terminal, in.RunID)
 			continue
 		}
 		d.mu.Lock()
@@ -1922,6 +1946,10 @@ func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (Recovery
 			})
 		}
 	}
+	// A terminal intent's names may still be bound after a crash between its
+	// close and release, or after a release that failed. One batched call
+	// releases them all; the gate keeps any run whose journal is still open.
+	d.gate.ReleaseFinishedHandoffs(ctx, terminal)
 	quarantined := make(map[string]struct{}, len(report.Quarantined))
 	for _, failure := range report.Quarantined {
 		quarantined[failure.Entry] = struct{}{}

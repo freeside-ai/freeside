@@ -302,3 +302,70 @@ func TestReviewCleanupCloseReleasesItsNamespace(t *testing.T) {
 	requireReleased(t, recorder.released(),
 		reviewRuntimeResourceNamesFor(lifecycle.reviewProvider(), launchSpec.RunID))
 }
+
+// getFailJournal fails the journal read of one run.
+type getFailJournal struct {
+	*fakeJournal
+	failRun string
+}
+
+func (j getFailJournal) Get(ctx context.Context, runID string) (HandoffJournalRecord, error) {
+	if runID == j.failRun {
+		return HandoffJournalRecord{}, errors.New("fixture: journal read failed")
+	}
+	return j.fakeJournal.Get(ctx, runID)
+}
+
+// requireNotReleased fails if any name in names was released.
+func requireNotReleased(t *testing.T, got, names RuntimeResourceNames) {
+	t.Helper()
+	for _, pair := range [][2][]string{
+		{got.Containers, names.Containers}, {got.Volumes, names.Volumes}, {got.Networks, names.Networks},
+	} {
+		for _, name := range pair[1] {
+			if slices.Contains(pair[0], name) {
+				t.Errorf("%q was released", name)
+			}
+		}
+	}
+}
+
+func TestReleaseFinishedHandoffsReleasesOnlyAbsentOrClosedRecords(t *testing.T) {
+	t.Parallel()
+	fx := newRecoveryFixture(t)
+	var recorder releaseRecorder
+	fx.cfg.ReleaseRuntimeResources = recorder.release
+	specFor := func(runID string) HandoffSpec {
+		hs := testHandoffSpec()
+		hs.RunID = runID
+		return hs
+	}
+	const absent, closed, open, unreadable = "run-absent", "run-closed", "run-open", "run-unreadable"
+	fx.openRecord(t, specFor(closed))
+	if err := fx.j.Close(context.Background(), closed, HandoffLoss); err != nil {
+		t.Fatal(err)
+	}
+	fx.openRecord(t, specFor(open))
+	fx.openRecord(t, specFor(unreadable))
+	fx.cfg.Journal = getFailJournal{fakeJournal: fx.j, failRun: unreadable}
+
+	fx.backend(t).ReleaseFinishedHandoffs(context.Background(), []string{absent, closed, open, unreadable})
+	if calls := recorder.callCount(); calls != 1 {
+		t.Fatalf("release calls = %d, want one batch", calls)
+	}
+	got := recorder.released()
+	requireReleased(t, got, concatRuntimeResourceNames(RuntimeResourceNamesFor(absent), RuntimeResourceNamesFor(closed)))
+	requireNotReleased(t, got, concatRuntimeResourceNames(RuntimeResourceNamesFor(open), RuntimeResourceNamesFor(unreadable)))
+}
+
+func TestReleaseFinishedHandoffsWithoutRigReadsNothing(t *testing.T) {
+	t.Parallel()
+	fx := newRecoveryFixture(t)
+	fx.backend(t).ReleaseFinishedHandoffs(context.Background(), []string{"run-absent"})
+	if calls := fx.j.calls; len(calls) != 0 {
+		t.Fatalf("journal calls without a releaser = %v, want none", calls)
+	}
+	if calls := fx.rt.calls; len(calls) != 0 {
+		t.Fatalf("runtime calls without a releaser = %v, want none", calls)
+	}
+}
