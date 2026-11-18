@@ -212,7 +212,11 @@ func seedScenarioRecords(
 		return fmt.Errorf("seed scenario conformance: %w", err)
 	}
 	err = st.Write(ctx, func(tx *store.WriteTx) error {
-		if _, err := tx.LatestTrustProfile(ctx, scenarioRepo); err == nil {
+		// A profile row this build can't read was still seeded: after a
+		// profile encoding bump the owner re-approves it, and seeding again
+		// would conflict with the records already in place.
+		if _, err := tx.LatestTrustProfile(ctx, scenarioRepo); err == nil ||
+			errors.Is(err, store.ErrTrustProfileUnreadable) {
 			return nil
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
