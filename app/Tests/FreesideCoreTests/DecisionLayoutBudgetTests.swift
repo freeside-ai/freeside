@@ -86,8 +86,10 @@
         /// use on every finding (#2068). Evidence moved above the actions
         /// (#2607) puts it at 836pt (measured 2026-11-04), rounded up to the
         /// next 10pt; the owner chose to record it over keeping Evidence
-        /// below the actions on this card alone.
-        private let disputeActionRowBudget: CGFloat = 840
+        /// below the actions on this card alone. The reason drawn as the
+        /// serif statement (#3357) puts it at 842pt (measured 2026-11-18),
+        /// rounded up the same way; the owner chose to record it.
+        private let disputeActionRowBudget: CGFloat = 850
 
         @Test func twoRoutedDisputeFindingsWithRealisticMessagesKeepTheirRecordedBudget() throws {
             let snapshot = AttentionFixtures.routedReviewDisputeRealisticMessages()

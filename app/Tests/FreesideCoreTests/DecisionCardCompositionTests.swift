@@ -624,17 +624,31 @@ import Testing
         #expect(DecisionCardComposition.reasonPlacement(for: item) == .underAsk)
     }
 
-    /// Survey frame 5.5: a system-health item's reason is the daemon's
-    /// finding, so it reads as the card's statement and stays ahead of the
-    /// actions. Every other reason the shell draws is the ask's second line.
-    @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func onlyTheSystemHealthReasonReadsAsTheCardsStatement(
-        type: Components.Schemas.AttentionType
-    ) {
-        #expect(
-            DecisionCardComposition.reasonFace(for: type)
-                == (type == .system_health ? .statement : .secondLine))
-        #expect(DecisionCardComposition.reasonPlacement(for: .system_health) == .underAsk)
+    /// The line under the ask reads in sentence case: a first word that is
+    /// only lowercase letters, with optional inner hyphens or apostrophes
+    /// and one trailing `,` `;` `:` or `.`, gains its capital. A first word
+    /// that may be an identifier is drawn as written. The stored reason is
+    /// unchanged (`detailsCarryTheFullReasonOnEveryType`).
+    @Test(arguments: [
+        ("the agent disputes a review finding as contrived", "The agent disputes a review finding as contrived"),
+        ("active-resource observation failed", "Active-resource observation failed"),
+        ("however, the run stopped", "However, the run stopped"),
+        ("don't retry yet", "Don't retry yet"),
+        ("don’t retry yet", "Don’t retry yet"),
+        ("a run stopped", "A run stopped"),
+        (" the run stopped", " the run stopped"),
+        ("stopped.", "Stopped."),
+        ("freeside_x is unset", "freeside_x is unset"),
+        ("go.mod changed", "go.mod changed"),
+        ("daemon/internal/engine failed", "daemon/internal/engine failed"),
+        ("`code` is missing", "`code` is missing"),
+        ("v2 of the schema", "v2 of the schema"),
+        ("iOS rendering failed", "iOS rendering failed"),
+        ("The run stopped", "The run stopped"),
+        ("", ""),
+    ])
+    func theReasonLineCapitalizesOnlyAPlainFirstWord(stored: String, drawn: String) {
+        #expect(DecisionCardComposition.reasonLine(stored) == drawn)
     }
 
     /// The finding card's reason says what accepting does. It may fold only
