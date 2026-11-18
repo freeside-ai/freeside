@@ -3671,7 +3671,7 @@ func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T
 	}
 }
 
-func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testing.T) {
+func TestCodexReviewRestartRecoversRoundAndRelaunchesSameRequest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
@@ -3728,15 +3728,15 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 		t.Fatal(err)
 	}
 	owner := testOwnershipLabel()
-	journal.intent = legacyCodexReviewIntentForTest(string(id), digest, owner.Value)
-	legacyObserver := legacyCodexReviewNames(string(id)).workspaceObserver
+	journal.intent = currentCodexReviewIntentForTest(string(id), digest, owner.Value)
+	observer := codexReviewWorkspaceObserverName(string(id))
 	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
 	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, legacyObserver, observerOwner.Value, "legacy-observer",
+		t, journal.intent, observer, observerOwner.Value, "observer",
 	)
-	fx.rt.ctrs[legacyObserver] = &fakeCtr{
-		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(string(id)), observerOwner)},
-		created: "legacy-observer",
+	fx.rt.ctrs[observer] = &fakeCtr{
+		spec:    ContainerSpec{Name: observer, Labels: append(runLabels(string(id)), observerOwner)},
+		created: "observer",
 	}
 	recovery, err := NewCodexReviewRecovery(
 		backend, journal, sourceConfig.Review.VolumeLifecycleLeaser, sourceConfig.Review.InputRoot,
@@ -3754,8 +3754,8 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 	if err != nil || !reflect.DeepEqual(persisted, request) {
 		t.Fatalf("recovery changed persisted round-2 request: %#v, %v", persisted, err)
 	}
-	if _, exists := fx.rt.ctrs[legacyObserver]; exists {
-		t.Fatal("restart recovery left the authenticated legacy observer")
+	if _, exists := fx.rt.ctrs[observer]; exists {
+		t.Fatal("restart recovery left the authenticated observer")
 	}
 	restarted, err := NewCodexReviewSource(sourceConfig)
 	if err != nil {

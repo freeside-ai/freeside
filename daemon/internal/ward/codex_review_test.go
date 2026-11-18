@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 type fakeCodexReviewJournal struct {
@@ -829,25 +830,6 @@ func retargetCodexReviewLifecycle(
 	}
 }
 
-func legacyCodexReviewIntentForTest(
-	runID, digest, owner string,
-) *CodexReviewLaunchIntent {
-	names := legacyCodexReviewNames(runID)
-	return &CodexReviewLaunchIntent{
-		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
-		ShadowVolume: names.shadowVolume, Network: names.network,
-		ReviewContainer: names.reviewContainer, State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: names.workspaceObserver},
-			{Name: names.shadowInitializer, OwnershipToken: owner},
-			{Name: names.shadowObserver},
-			{Name: names.reviewContainer, OwnershipToken: owner},
-			{Name: names.shadowVolume, OwnershipToken: owner},
-			{Name: names.network, OwnershipToken: owner},
-		},
-	}
-}
-
 func TestCodexReviewResourceNamesFitReferenceRuntime(t *testing.T) {
 	t.Parallel()
 	maximumID := strings.Repeat("a", 32)
@@ -910,35 +892,6 @@ func TestCodexReviewRuntimeResourceNamesAreComplete(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Codex review runtime resources = %#v, want %#v", got, want)
-	}
-}
-
-func TestRecoverCodexReviewAuthorizesExactLegacyTopologyBeforeRuntime(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
-	owner := testOwnershipLabel()
-	intent := legacyCodexReviewIntentForTest(launch.RunID, "legacy-digest", owner.Value)
-	journal.intent = intent
-	want := codexReviewRuntimeResourceNames(launch.RunID, legacyCodexReviewNames(launch.RunID))
-	bindFailure := errors.New("rig authority unavailable")
-	var authorized RuntimeResourceNames
-	backend.authorizeRuntimeResources = func(_ context.Context, resources RuntimeResourceNames) error {
-		authorized = resources
-		return bindFailure
-	}
-	beforeCalls := len(rt.calls)
-	err := backend.recoverCodexReviewIntent(t.Context(), cfg, *intent, true)
-	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
-		t.Fatalf("recovery authorization error = %v, want %v", err, bindFailure)
-	}
-	if !reflect.DeepEqual(authorized, want) {
-		t.Fatalf("legacy recovery resources = %#v, want %#v", authorized, want)
-	}
-	if len(rt.calls) != beforeCalls {
-		t.Fatalf("runtime calls after refused recovery authorization = %v", rt.calls[beforeCalls:])
-	}
-	if journal.intent.State != CodexReviewIntentPreparing {
-		t.Fatalf("intent state = %q, want preserved preparing", journal.intent.State)
 	}
 }
 
@@ -1026,104 +979,6 @@ func TestBackendCodexReviewRefusesNonDirectoryWorkspaceAgents(t *testing.T) {
 	}
 }
 
-func TestBackendCodexReviewReapsAuthenticatedLegacyOversizedObserverBeforeRelaunch(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
-	const runID = "review-0dcd5c691adcaec0c353993a"
-	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
-	digest, err := codexReviewIntentDigest(cfg, launchSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := testOwnershipLabel()
-	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
-	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
-	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
-	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, legacyObserver, observerOwner.Value, "legacy-observer",
-	)
-	if err := validateRuntimeResourceName(legacyObserver); err == nil {
-		t.Fatal("production regression fixture is not oversized")
-	}
-	rt.ctrs[legacyObserver] = &fakeCtr{
-		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(runID), observerOwner)},
-		created: "legacy-observer",
-	}
-	launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
-	if err != nil {
-		t.Fatalf("same-invocation relaunch after legacy recovery: %v", err)
-	}
-	t.Cleanup(func() { _ = launch.Close() })
-	if _, exists := rt.ctrs[legacyObserver]; exists {
-		t.Fatal("authenticated legacy oversized observer survived recovery")
-	}
-	if journal.intent.State != CodexReviewIntentStarted ||
-		journal.intent.Resources[0].Name != codexReviewWorkspaceObserverName(runID) {
-		t.Fatalf("relaunch intent = %#v, want current started topology", journal.intent)
-	}
-}
-
-func TestRecoverCodexReviewRefusesForeignLegacyOversizedObserver(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
-	const runID = "review-0dcd5c691adcaec0c353993a"
-	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
-	digest, err := codexReviewIntentDigest(cfg, launchSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := testOwnershipLabel()
-	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
-	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
-	rt.ctrs[legacyObserver] = &fakeCtr{
-		spec: ContainerSpec{Name: legacyObserver, Labels: []Label{{
-			Key: ownershipLabelKey, Value: strings.Repeat("f", 32),
-		}}},
-		created: "foreign-observer",
-	}
-	if err := backend.RecoverCodexReview(context.Background(), cfg, launchSpec); err == nil ||
-		!errors.Is(err, ErrConformance) {
-		t.Fatalf("foreign legacy recovery = %v, want conformance refusal", err)
-	}
-	if _, exists := rt.ctrs[legacyObserver]; !exists {
-		t.Fatal("recovery deleted a foreign legacy oversized observer")
-	}
-	if journal.intent.State != CodexReviewIntentPreparing {
-		t.Fatalf("foreign legacy recovery closed intent: %q", journal.intent.State)
-	}
-}
-
-func TestCodexReviewIntentRejectsMixedResourceNameGenerations(t *testing.T) {
-	t.Parallel()
-	runID := strings.Repeat("a", 32)
-	owner := strings.Repeat("1", 32)
-	intent := legacyCodexReviewIntentForTest(runID, strings.Repeat("a", 64), owner)
-	intent.Resources[0].Name = codexReviewNames(runID).workspaceObserver
-	if err := intent.validateIdentity(runID); err == nil {
-		t.Fatal("intent accepted a mixed legacy/current resource topology")
-	}
-}
-
-// preSnapshotCodexReviewIntentForTest builds the #587..#590 host-bind
-// generation: the current short names, six resources, and no snapshot volume,
-// exactly the shape run 482 persisted at its round-2 pause before #591.
-func preSnapshotCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLaunchIntent {
-	names := preSnapshotCodexReviewNames(runID)
-	return &CodexReviewLaunchIntent{
-		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
-		ShadowVolume: names.shadowVolume, Network: names.network,
-		ReviewContainer: names.reviewContainer, State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: names.workspaceObserver},
-			{Name: names.shadowInitializer, OwnershipToken: owner},
-			{Name: names.shadowObserver},
-			{Name: names.reviewContainer, OwnershipToken: owner},
-			{Name: names.shadowVolume, OwnershipToken: owner},
-			{Name: names.network, OwnershipToken: owner},
-		},
-	}
-}
-
 // intentResource returns the intent's resource named name, so a test can set
 // the creation fingerprint or owner it recorded.
 func intentResource(t *testing.T, intent *CodexReviewLaunchIntent, name string) *CodexReviewIntentResource {
@@ -1158,31 +1013,15 @@ func currentCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLa
 	}
 }
 
-// TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup pins the #591
-// restart-safety criterion: run 482's persisted six-resource, host-bind intent
-// authenticates as a cleanup-only legacy generation (no snapshot resources),
-// while the current generation carries nine resources and the snapshot volume,
-// and a six-resource intent claiming a snapshot volume is rejected.
-func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
+// TestCodexReviewIntentRefusesSixResourceGenerations pins #3326: the
+// six-resource, host-bind intents written before #591, under the current
+// observer names or the long pre-#587 ones, no longer authenticate, while the
+// current nine-resource generation does and a truncated one stays refused.
+func TestCodexReviewIntentRefusesSixResourceGenerations(t *testing.T) {
 	t.Parallel()
 	runID := strings.Repeat("a", 32)
 	owner := strings.Repeat("1", 32)
 	digest := strings.Repeat("a", 64)
-
-	preSnapshot := preSnapshotCodexReviewIntentForTest(runID, digest, owner)
-	names, err := preSnapshot.validatedResourceNames(runID)
-	if err != nil {
-		t.Fatalf("pre-snapshot intent rejected: %v", err)
-	}
-	if names.snapshotVolume != "" || names.snapshotSeeder != "" || names.snapshotObserver != "" {
-		t.Fatalf("pre-snapshot generation carried snapshot resources: %#v", names)
-	}
-
-	poisoned := preSnapshotCodexReviewIntentForTest(runID, digest, owner)
-	poisoned.SnapshotVolume = codexReviewSnapshotVolumeName(runID)
-	if err := poisoned.validateIdentity(runID); err == nil {
-		t.Fatal("six-resource intent accepted a snapshot volume")
-	}
 
 	current := currentCodexReviewIntentForTest(runID, digest, owner)
 	currentNames, err := current.validatedResourceNames(runID)
@@ -1191,6 +1030,23 @@ func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
 	}
 	if currentNames.snapshotVolume != codexReviewSnapshotVolumeName(runID) {
 		t.Fatalf("current generation missing snapshot volume: %#v", currentNames)
+	}
+
+	sixResource := func() *CodexReviewLaunchIntent {
+		intent := currentCodexReviewIntentForTest(runID, digest, owner)
+		intent.SnapshotVolume = ""
+		intent.Resources = intent.Resources[:6]
+		return intent
+	}
+	if _, err := sixResource().validatedResourceNames(runID); err == nil {
+		t.Error("pre-#591 six-resource intent authenticated")
+	}
+	longNames := sixResource()
+	longName := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
+	intentResource(t, longNames, codexReviewWorkspaceObserverName(runID)).Name = longName("workspace-observer")
+	intentResource(t, longNames, codexReviewShadowObserverName(runID)).Name = longName("agents-observer")
+	if _, err := longNames.validatedResourceNames(runID); err == nil {
+		t.Error("pre-#587 long-name intent authenticated")
 	}
 
 	truncated := currentCodexReviewIntentForTest(runID, digest, owner)
@@ -1313,6 +1169,37 @@ func TestBackendCodexReviewPreservesResourceMutationConformance(t *testing.T) {
 	if got, err := backend.CodexReview(context.Background(), cfg, launch); got != nil ||
 		!errors.Is(err, ErrConformance) || errors.Is(err, ErrCodexReviewOperational) {
 		t.Fatalf("CodexReview = (%v, %v), want non-operational conformance refusal", got, err)
+	}
+}
+
+func TestRecoverCodexReviewAuthorizesExactTopologyBeforeRuntime(t *testing.T) {
+	t.Parallel()
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	owner := testOwnershipLabel()
+	intent := currentCodexReviewIntentForTest(launch.RunID, "intent-digest", owner.Value)
+	journal.intent = intent
+	names := reviewNames(codexReviewProvider{}, launch.RunID)
+	names.inputsVolume, names.inputsSeeder, names.inputsObserver = "", "", ""
+	want := codexReviewRuntimeResourceNames(launch.RunID, names)
+	bindFailure := errors.New("rig authority unavailable")
+	var authorized RuntimeResourceNames
+	backend.authorizeRuntimeResources = func(_ context.Context, resources RuntimeResourceNames) error {
+		authorized = resources
+		return bindFailure
+	}
+	beforeCalls := len(rt.calls)
+	err := backend.recoverCodexReviewIntent(t.Context(), cfg, *intent, true)
+	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
+		t.Fatalf("recovery authorization error = %v, want %v", err, bindFailure)
+	}
+	if !reflect.DeepEqual(authorized, want) {
+		t.Fatalf("recovery resources = %#v, want %#v", authorized, want)
+	}
+	if len(rt.calls) != beforeCalls {
+		t.Fatalf("runtime calls after refused recovery authorization = %v", rt.calls[beforeCalls:])
+	}
+	if journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("intent state = %q, want preserved preparing", journal.intent.State)
 	}
 }
 
@@ -1746,62 +1633,6 @@ func TestRecoverCodexReviewReapsPartialPreparationAttachmentsForRelaunch(t *test
 			t.Cleanup(func() { _ = relaunched.Close() })
 		})
 	}
-}
-
-func TestRecoverCodexReviewReapsLegacyPartialPreparationAttachmentForRelaunch(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
-	digest, err := codexReviewIntentDigest(cfg, launch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := testOwnershipLabel()
-	names := preSnapshotCodexReviewNames(launch.RunID)
-	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
-	journal.intent = preSnapshotCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
-	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, names.workspaceObserver, observerOwner.Value, "legacy-prep-created",
-	)
-	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, names.shadowVolume, owner.Value, "legacy-shadow-created",
-	)
-	rt.vols[names.shadowVolume] = &fakeVol{
-		labels: append(runLabels(launch.RunID), owner), created: "legacy-shadow-created",
-	}
-	rt.ctrs[names.workspaceObserver] = &fakeCtr{
-		spec: ContainerSpec{
-			Name:   names.workspaceObserver,
-			Labels: append(runLabels(launch.RunID), observerOwner),
-			Mounts: []Mount{{
-				Type: MountVolume, Source: launch.WorkspaceVolume, Target: "/legacy-prep", ReadOnly: true,
-			}},
-		},
-		created: "legacy-prep-created",
-	}
-	leaser, err := NewRuntimeCodexReviewVolumeLeaser(rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.VolumeLifecycleLeaser = leaser
-
-	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
-		t.Fatalf("legacy partial preparation recovery = %v, want convergence", err)
-	}
-	if _, exists := rt.ctrs[names.workspaceObserver]; exists {
-		t.Fatal("legacy recovery left the workspace-only observer")
-	}
-	if _, exists := rt.vols[names.shadowVolume]; exists {
-		t.Fatal("legacy recovery left the owned shadow volume")
-	}
-	if journal.intent.State != CodexReviewIntentClosed || len(leaser.holders) != 0 {
-		t.Fatalf("legacy recovery did not close and release: state=%q holders=%v",
-			journal.intent.State, leaser.holders)
-	}
-	relaunched, err := backend.CodexReview(context.Background(), cfg, launch)
-	if err != nil {
-		t.Fatalf("relaunch after legacy partial preparation recovery = %v", err)
-	}
-	t.Cleanup(func() { _ = relaunched.Close() })
 }
 
 func TestRecoverCodexReviewLeavesUnauthenticatedPartialPreparationAttachments(t *testing.T) {

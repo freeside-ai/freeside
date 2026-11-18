@@ -1601,14 +1601,7 @@ func (r *CodexReviewRecovery) reviewProviderForStartedIntent(
 func reviewProviderMatchesIntent(
 	provider reviewProvider, intent CodexReviewLaunchIntent, runID string,
 ) bool {
-	if intent.resourceNamesMatch(reviewNames(provider, runID)) {
-		return true
-	}
-	if provider.sourceLabel() != (codexReviewProvider{}).sourceLabel() {
-		return false
-	}
-	return intent.resourceNamesMatch(preSnapshotCodexReviewNames(runID)) ||
-		intent.resourceNamesMatch(legacyCodexReviewNames(runID))
+	return intent.resourceNamesMatch(reviewNames(provider, runID))
 }
 
 func (r *CodexReviewRecovery) removeInstructionSnapshot(id string) error {
@@ -1702,10 +1695,10 @@ func (intent CodexReviewLaunchIntent) validateIdentity(runID string) error {
 	return err
 }
 
-// validatedResourceNames authenticates both the current topology and the one
-// exact legacy topology that an upgrade may need to reap. Matching individual
-// legacy names is insufficient: the complete stored set must be one coherent
-// generation, preventing a rewritten row from composing teardown targets.
+// validatedResourceNames authenticates the stored resource set against the
+// current topology. The complete stored set must match one provider's
+// derived names, preventing a rewritten row from composing teardown targets.
+// The six-resource sets written before #591 are refused (#3326).
 func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (codexReviewResourceNames, error) {
 	if intent.RunID != runID ||
 		!codexReviewOwnershipLabelValid(Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}) {
@@ -1714,21 +1707,12 @@ func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (code
 	if !intent.State.valid() {
 		return codexReviewResourceNames{}, errors.New("launch state is invalid")
 	}
-	// Order matters only for disambiguating the two six-resource generations by
-	// their observer names; resourceNamesMatch keys the current nine-resource
-	// shape off a non-empty snapshot volume, so a persisted pre-#591 intent
-	// (run 482's round-2 record) is authenticated as cleanup-only legacy. The
-	// current-topology set is enumerated per provider: only the review-container
-	// suffix differs, so the persisted intent's own container name selects which
-	// provider actually ran. Teardown/recovery must authenticate a Claude review
-	// (-claude container) as readily as a Codex one; the two legacy shapes are
-	// Codex-only and a Claude intent never matches them.
-	candidates := make([]codexReviewResourceNames, 0, len(allReviewProviders())+2)
+	// The topology is enumerated per provider: only the review-container
+	// suffix differs, so the persisted intent's own container name selects
+	// which provider actually ran. Teardown/recovery must authenticate a
+	// Claude review (-claude container) as readily as a Codex one.
 	for _, p := range allReviewProviders() {
-		candidates = append(candidates, reviewNames(p, runID))
-	}
-	candidates = append(candidates, preSnapshotCodexReviewNames(runID), legacyCodexReviewNames(runID))
-	for _, names := range candidates {
+		names := reviewNames(p, runID)
 		if !intent.resourceNamesMatch(names) {
 			continue
 		}

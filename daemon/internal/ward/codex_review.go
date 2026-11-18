@@ -1867,39 +1867,6 @@ func codexReviewWorkspaceRuntimeResourceNames(runID string) RuntimeResourceNames
 	}
 }
 
-// legacyCodexReviewNames re-derives the exact topology persisted before #587.
-// It is accepted only while authenticating existing intents for cleanup; no
-// new resource is ever created with these names. It carries no snapshot
-// resources: pre-#587 launches used host binds, so their intents have the
-// six-resource shape.
-func legacyCodexReviewNames(runID string) codexReviewResourceNames {
-	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
-	return codexReviewResourceNames{
-		workspaceObserver: name(wardname.LegacyWorkspaceObserver),
-		shadowInitializer: name(wardname.AgentsInit),
-		shadowObserver:    name(wardname.LegacyAgentsObserver),
-		reviewContainer:   name(wardname.Codex),
-		shadowVolume:      name(wardname.Agents),
-		network:           name(wardname.Egress),
-	}
-}
-
-// preSnapshotCodexReviewNames re-derives the #587..#590 topology: the current
-// short names but still the six-resource, host-bind shape from before the
-// snapshot volume (#591). It authenticates the round-2 intent persisted by
-// run 482 for cleanup only; no new resource is created with this shape.
-func preSnapshotCodexReviewNames(runID string) codexReviewResourceNames {
-	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
-	return codexReviewResourceNames{
-		workspaceObserver: name(wardname.WorkspaceObs),
-		shadowInitializer: name(wardname.AgentsInit),
-		shadowObserver:    name(wardname.AgentsObs),
-		reviewContainer:   name(wardname.Codex),
-		shadowVolume:      name(wardname.Agents),
-		network:           name(wardname.Egress),
-	}
-}
-
 func codexReviewShadowObserverName(runID string) string {
 	return codexReviewNames(runID).shadowObserver
 }

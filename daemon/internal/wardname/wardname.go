@@ -48,21 +48,17 @@ const (
 	Egress = "egress"
 )
 
-// Review roles. LegacyWorkspaceObserver and LegacyAgentsObserver are the
-// pre-#587 names, admitted only so teardown can reap a persisted intent.
-// Inputs is shared with the handoff volumes.
+// Review roles. Inputs is shared with the handoff volumes.
 const (
-	WorkspaceObs            = "ws-obs"
-	LegacyWorkspaceObserver = "workspace-observer"
-	AgentsInit              = "agents-init"
-	AgentsObs               = "agents-obs"
-	LegacyAgentsObserver    = "agents-observer"
-	SnapInit                = "snap-init"
-	SnapObs                 = "snap-obs"
-	InputsInit              = "inputs-init"
-	InputsObs               = "inputs-obs"
-	Codex                   = "codex"
-	Claude                  = "claude"
+	WorkspaceObs = "ws-obs"
+	AgentsInit   = "agents-init"
+	AgentsObs    = "agents-obs"
+	SnapInit     = "snap-init"
+	SnapObs      = "snap-obs"
+	InputsInit   = "inputs-init"
+	InputsObs    = "inputs-obs"
+	Codex        = "codex"
+	Claude       = "claude"
 
 	Agents = "agents"
 	Snap   = "snap"
@@ -160,7 +156,7 @@ func RigShapes() []Shape {
 		{
 			Prefix: ReviewPrefix, RunID: reviewRunID,
 			Containers: []string{
-				WorkspaceObs, LegacyWorkspaceObserver, AgentsInit, AgentsObs, LegacyAgentsObserver,
+				WorkspaceObs, AgentsInit, AgentsObs,
 				SnapInit, SnapObs, InputsInit, InputsObs, Codex, Claude,
 			},
 			Volumes:  []string{Agents, Snap, Inputs},
