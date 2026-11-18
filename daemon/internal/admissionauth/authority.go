@@ -707,12 +707,9 @@ func (a Authority) productionCommitAuthor(
 			id, domain.ErrParentKeyMismatch,
 		)
 	}
-	publication, present, err := engine.ProductionInvocationPublication(entry)
+	publication, err := engine.ProductionInvocationPublication(entry)
 	if err != nil {
 		return engine.ProductionCommitAuthor{}, false, fmt.Errorf("authenticate production commit author: %w", err)
-	}
-	if !present {
-		return engine.ProductionCommitAuthor{}, false, nil
 	}
 	return publication.CommitAuthor, true, nil
 }

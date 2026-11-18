@@ -1258,7 +1258,7 @@ func authenticateOperatorFeedbackTransition(
 		return operatorFeedbackRequest{}, ProductionPublication{}, err
 	}
 	rootMarker, err := authenticateProductionMarker(rootEntry, runID)
-	if err != nil || rootMarker.Legacy {
+	if err != nil {
 		return operatorFeedbackRequest{}, ProductionPublication{}, errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	if command.Action == domain.ActionReturnToAgent {

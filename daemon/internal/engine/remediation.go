@@ -693,12 +693,9 @@ func authenticateRemediationInvocationTransition(
 	if err != nil {
 		return authenticatedRemediationTransition{}, err
 	}
-	verified.publication, ok, err = ProductionInvocationPublication(initialMarker)
+	verified.publication, err = ProductionInvocationPublication(initialMarker)
 	if err != nil {
 		return authenticatedRemediationTransition{}, err
-	}
-	if !ok {
-		return authenticatedRemediationTransition{}, domain.ErrParentKeyMismatch
 	}
 	return verified, nil
 }

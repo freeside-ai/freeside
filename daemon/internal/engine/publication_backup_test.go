@@ -50,7 +50,7 @@ func publicationBackupCases(t *testing.T, publication ProductionPublication) []p
 		InvocationID: productionInvocationID("run-backup"), StageID: productionStageID("run-backup"),
 		Publication: publication,
 	}
-	productionPayload, err := canonicalProductionRequestPayload(request)
+	productionPayload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}

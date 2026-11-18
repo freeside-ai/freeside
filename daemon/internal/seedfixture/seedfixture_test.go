@@ -140,8 +140,8 @@ func TestRepresentativeProductionIntentsDecode(t *testing.T) {
 			t.Fatal("dispatched production intents = 0, want the fixture's records")
 		}
 		for _, entry := range entries {
-			if _, present, err := engine.ProductionInvocationPublication(entry); err != nil || !present {
-				t.Errorf("production intent %s: publication present %v, error %v", entry.IdempotencyKey, present, err)
+			if _, err := engine.ProductionInvocationPublication(entry); err != nil {
+				t.Errorf("production intent %s: %v", entry.IdempotencyKey, err)
 			}
 		}
 		return nil
