@@ -122,6 +122,11 @@ func TestStageInputSnapshotValidate(t *testing.T) {
 		{"missing binding", func(s *domain.StageInputSnapshot) {
 			s.VendorInstructions.Delivery = ""
 		}, domain.ErrUnsupportedVendorInstructionBinding},
+		// The removed v2 encoding: Claude with an implicit delivery.
+		{"missing Claude binding", func(s *domain.StageInputSnapshot) {
+			s.VendorInstructions.Vendor = domain.AgentVendorClaude
+			s.VendorInstructions.Delivery = ""
+		}, domain.ErrUnsupportedVendorInstructionBinding},
 		{"replace-authority binding", func(s *domain.StageInputSnapshot) {
 			s.VendorInstructions.Delivery = "instructions_key"
 		}, domain.ErrUnsupportedVendorInstructionBinding},
@@ -190,15 +195,6 @@ func TestVendorInstructionBindingConformance(t *testing.T) {
 				t.Fatalf("ValidateVendorInstructionBinding() = %v, want typed refusal", err)
 			}
 		})
-	}
-}
-
-func TestLegacyClaudeVendorInstructionSnapshotRemainsValid(t *testing.T) {
-	in := stageInputSnapshotInput()
-	in.VendorInstructions.Vendor = domain.AgentVendorClaude
-	in.VendorInstructions.Delivery = ""
-	if _, err := domain.NewStageInputSnapshot(in); err != nil {
-		t.Fatalf("legacy Claude v2 snapshot = %v, want valid reconstruction", err)
 	}
 }
 

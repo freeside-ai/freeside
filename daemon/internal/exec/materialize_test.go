@@ -346,32 +346,6 @@ func TestMaterializeExplicitVendorInstructionAbsence(t *testing.T) {
 	}
 }
 
-func TestMaterializeLegacyClaudeBindingAsAppendFile(t *testing.T) {
-	fixture := newMaterializeFixture(t)
-	snapshot := *fixture.spec.StageInputs
-	vendor := *snapshot.VendorInstructions
-	vendor.Delivery = ""
-	snapshot.VendorInstructions = &vendor
-	id, err := snapshot.ComputeID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot.ID = id
-	fixture.spec.StageInputs = &snapshot
-
-	bundle, err := newTestMaterializer(t, fixture.source).Materialize(
-		t.Context(), fixture.spec,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	instructions, ok := bundle.VendorInstructions()
-	if !ok || instructions.Delivery() != domain.VendorInstructionDeliveryAppendFile {
-		t.Fatalf("legacy delivery = %q, want append_file",
-			instructions.Delivery())
-	}
-}
-
 func TestMaterializeMissingContentFailsClosed(t *testing.T) {
 	fixture := newMaterializeFixture(t)
 	delete(fixture.source, fixture.spec.StageInputs.PromptPackageDigest)

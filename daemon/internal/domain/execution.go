@@ -775,11 +775,11 @@ func (a ExecutionAdmission) Validate() error {
 		// Unlike the historical nil shapes the legacy reader preserves, a v4
 		// admission is newly written and derives its instruction delivery
 		// from the adapter (§5.4 admission step 5): an agent-bound record
-		// with no explicit vendor-instruction snapshot has lost the
-		// provenance of what the attempt received, so it is an incoherent
-		// record, not history.
-		if a.StageInputs == nil || a.StageInputs.VendorInstructions == nil ||
-			a.StageInputs.VendorInstructions.Delivery == "" {
+		// with no vendor-instruction snapshot has lost the provenance of
+		// what the attempt received, so it is an incoherent record, not
+		// history. StageInputs.Validate above already refuses a snapshot
+		// with no explicit delivery.
+		if a.StageInputs == nil || a.StageInputs.VendorInstructions == nil {
 			return fmt.Errorf(
 				"execution admission %s carries an agent binding without an explicit vendor-instruction snapshot: %w",
 				a.InvocationID, ErrAdmissionInconsistent)

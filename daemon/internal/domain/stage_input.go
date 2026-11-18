@@ -11,7 +11,6 @@ import (
 
 const (
 	stageInputEncodingVersion            = "freeside.stage.inputs/v1"
-	vendorStageInputEncodingVersion      = "freeside.stage.inputs/v2"
 	boundVendorStageInputEncodingVersion = "freeside.stage.inputs/v3"
 	// MaxVendorInstructionBytes is the admission and ward ceiling for one
 	// vendor-native host instruction file.
@@ -21,10 +20,9 @@ const (
 // VendorInstructionSnapshot binds one vendor-native instruction input and its
 // conformed delivery mechanism. A nil Digest is explicit absence: admission
 // looked at the configured host path and found no file. That differs from a nil
-// *VendorInstructionSnapshot, which is a historical pre-v2 stage-input record
-// that made no vendor-instruction claim. A zero Delivery is accepted only when
-// reconstructing the implicit append-file binding of a historical Claude v2
-// record; new admissions always write the explicit v3 binding.
+// *VendorInstructionSnapshot, which is a historical stage-input record that
+// made no vendor-instruction claim. Delivery is always explicit: a zero
+// Delivery is refused, so the implicit-binding v2 encoding is gone.
 type VendorInstructionSnapshot struct {
 	Vendor   AgentVendor               `json:"vendor"`
 	Delivery VendorInstructionDelivery `json:"delivery,omitempty"`
@@ -32,16 +30,7 @@ type VendorInstructionSnapshot struct {
 }
 
 func (s VendorInstructionSnapshot) validate() error {
-	// v2 records predate an explicit delivery binding. Claude was their only
-	// valid vendor and append-file delivery was the contract they implemented,
-	// so only that exact historical shape remains reconstructable.
-	if s.Delivery == "" {
-		if s.Vendor != AgentVendorClaude {
-			return fmt.Errorf("vendor instruction snapshot binding (%q, %q): %w",
-				s.Vendor, s.Delivery,
-				errors.Join(ErrStageInputsNotCanonical, ErrUnsupportedVendorInstructionBinding))
-		}
-	} else if err := ValidateVendorInstructionBinding(s.Vendor, s.Delivery); err != nil {
+	if err := ValidateVendorInstructionBinding(s.Vendor, s.Delivery); err != nil {
 		return fmt.Errorf("vendor instruction snapshot: %w",
 			errors.Join(ErrStageInputsNotCanonical, err))
 	}
@@ -172,19 +161,6 @@ type canonicalStageInputSnapshot struct {
 	Attachments []StageInputAttachment `json:"attachments,omitempty"`
 }
 
-type canonicalVendorStageInputSnapshot struct {
-	Version              string                    `json:"version"`
-	InputDigest          Digest                    `json:"input_digest"`
-	SpecificationDigest  Digest                    `json:"specification_digest"`
-	PromptPackageDigest  Digest                    `json:"prompt_package_digest"`
-	PolicyDigest         Digest                    `json:"policy_digest"`
-	VendorInstructions   VendorInstructionSnapshot `json:"vendor_instructions"`
-	ConversationDigest   *Digest                   `json:"conversation_digest,omitempty"`
-	PriorArtifactDigests []Digest                  `json:"prior_artifact_digests"`
-	ImageInputDigests    []Digest                  `json:"image_input_digests"`
-	Attachments          []StageInputAttachment    `json:"attachments,omitempty"`
-}
-
 type canonicalBoundVendorStageInputSnapshot struct {
 	Version              string                    `json:"version"`
 	InputDigest          Digest                    `json:"input_digest"`
@@ -239,19 +215,6 @@ func (s StageInputSnapshot) ComputeID() (Digest, error) {
 			SpecificationDigest:  s.SpecificationDigest,
 			PromptPackageDigest:  s.PromptPackageDigest,
 			PolicyDigest:         s.PolicyDigest,
-			ConversationDigest:   clonePtr(s.ConversationDigest),
-			PriorArtifactDigests: s.PriorArtifactDigests,
-			ImageInputDigests:    s.ImageInputDigests,
-			Attachments:          s.Attachments,
-		}
-	} else if s.VendorInstructions.Delivery == "" {
-		canonical = canonicalVendorStageInputSnapshot{
-			Version:              vendorStageInputEncodingVersion,
-			InputDigest:          s.InputDigest,
-			SpecificationDigest:  s.SpecificationDigest,
-			PromptPackageDigest:  s.PromptPackageDigest,
-			PolicyDigest:         s.PolicyDigest,
-			VendorInstructions:   s.VendorInstructions.clone(),
 			ConversationDigest:   clonePtr(s.ConversationDigest),
 			PriorArtifactDigests: s.PriorArtifactDigests,
 			ImageInputDigests:    s.ImageInputDigests,
