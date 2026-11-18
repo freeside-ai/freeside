@@ -18,8 +18,6 @@ import (
 const (
 	IntentKindPublication = "publish.publication"
 	IntentKindOutcome     = "publish.outcome"
-	IntentFormatLegacy    = 1
-	IntentFormatHistory   = 2
 	IntentFormatCurrent   = 3
 	IntentFormatSuccessor = 4
 	branchPrefix          = "freeside/publish/"
@@ -62,11 +60,10 @@ type Intent struct {
 }
 
 func (i Intent) Validate() error {
-	if i.FormatVersion != IntentFormatLegacy && i.FormatVersion != IntentFormatHistory && i.FormatVersion != IntentFormatCurrent && i.FormatVersion != IntentFormatSuccessor {
+	// Formats 1 and 2 named no branch and predate declared branches; no
+	// writer has produced either since 2026-09-07 (#3323).
+	if i.FormatVersion != IntentFormatCurrent && i.FormatVersion != IntentFormatSuccessor {
 		return fmt.Errorf("intent: unsupported format version %d", i.FormatVersion)
-	}
-	if i.FormatVersion == IntentFormatLegacy && i.DispositionHistoryDigest != "" {
-		return errors.New("intent: legacy format carries disposition history")
 	}
 	if !contentaddr.Valid(string(i.Identity)) {
 		return fmt.Errorf("intent identity %q is not a publication identity digest", i.Identity)
@@ -78,12 +75,8 @@ func (i Intent) Validate() error {
 		}
 	} else if i.Successor != nil {
 		return domain.ErrParentKeyMismatch
-	} else if i.FormatVersion == IntentFormatCurrent {
-		if err := validateResolvedBranch(i.Identity, i.Branch, i.BaseRef); err != nil {
-			return fmt.Errorf("intent: %w", err)
-		}
-	} else if i.Branch != "" {
-		return errors.New("intent: old format carries branch")
+	} else if err := validateResolvedBranch(i.Identity, i.Branch, i.BaseRef); err != nil {
+		return fmt.Errorf("intent: %w", err)
 	}
 	if i.InvocationID == "" {
 		return errors.New("intent: empty invocation id")
@@ -217,12 +210,8 @@ func BranchName(identity domain.Digest) string {
 }
 
 // ExpectedBranch returns the branch bound by a validated durable intent.
-// Old formats retain the identity-derived name without rewriting their rows.
 func ExpectedBranch(intent Intent) string {
-	if intent.FormatVersion == IntentFormatCurrent || intent.FormatVersion == IntentFormatSuccessor {
-		return intent.Branch
-	}
-	return BranchName(intent.Identity)
+	return intent.Branch
 }
 
 func validateResolvedBranch(identity domain.Digest, branch, baseRef string) error {

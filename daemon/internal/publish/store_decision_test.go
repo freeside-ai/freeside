@@ -1194,16 +1194,13 @@ func TestPublishExecutionRevalidatesReadinessProofsOnCommittedRetry(t *testing.T
 	}
 }
 
-func TestPublishExecutionRejectsModernIntentDowngrade(t *testing.T) {
+// A format 3 payload under an outbox marker raised to 4 claims a format its
+// bytes don't carry, so the stored intent is refused before any effect.
+func TestPublishExecutionRejectsIntentFormatMismatch(t *testing.T) {
 	t.Parallel()
 	testPublishExecutionRejectsModernIntentMutation(
 		t,
-		`UPDATE outbox
-		 SET payload = CAST(json_set(
-			json_remove(payload, '$.disposition_history_digest', '$.branch'),
-			'$.format_version', 1
-		 ) AS BLOB)
-		 WHERE idempotency_key = ?`,
+		`UPDATE outbox SET payload_version = 4 WHERE idempotency_key = ?`,
 		"disagrees with outbox format",
 	)
 }
@@ -1233,10 +1230,6 @@ func TestValidateIntentDispositionHistoryRejectsCurrentFormatWithoutDigest(t *te
 	intent := publish.Intent{FormatVersion: publish.IntentFormatCurrent}
 	if err := publish.ValidateIntentDispositionHistory(intent, candidate); !errors.Is(err, publish.ErrPublicationConflict) {
 		t.Fatalf("current intent without disposition digest = %v, want ErrPublicationConflict", err)
-	}
-	intent.FormatVersion = publish.IntentFormatLegacy
-	if err := publish.ValidateIntentDispositionHistory(intent, candidate); err != nil {
-		t.Fatalf("legacy intent without disposition digest = %v, want compatibility", err)
 	}
 }
 

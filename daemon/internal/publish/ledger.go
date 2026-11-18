@@ -14,8 +14,6 @@ import (
 // publication intents are recorded (and later scanned for recovery).
 const (
 	IntentKindPublication = publicationrecord.IntentKindPublication
-	IntentFormatLegacy    = publicationrecord.IntentFormatLegacy
-	IntentFormatHistory   = publicationrecord.IntentFormatHistory
 	IntentFormatCurrent   = publicationrecord.IntentFormatCurrent
 )
 
@@ -109,10 +107,9 @@ func intentForCandidate(
 }
 
 // ValidateIntentDispositionHistory binds recovery to the exact publisher-owned
-// section frozen by the durable intent. Only authenticated legacy-format
-// intents may omit the digest for a candidate that now carries disposition
-// history; a current-format intent cannot gain that compatibility by losing
-// one field.
+// section frozen by the durable intent: an intent's digest must match the
+// candidate's history, and an intent without one matches only a candidate
+// without history.
 func ValidateIntentDispositionHistory(intent Intent, c Candidate) error {
 	if c.DispositionHistory == nil {
 		if intent.DispositionHistoryDigest != "" {
@@ -124,27 +121,13 @@ func ValidateIntentDispositionHistory(intent Intent, c Candidate) error {
 	if err != nil {
 		return err
 	}
-	if intent.FormatVersion >= IntentFormatHistory && intent.DispositionHistoryDigest != digest {
+	if intent.DispositionHistoryDigest != digest {
 		return fmt.Errorf("intent disposition history changed: %w", ErrPublicationConflict)
 	}
 	return nil
 }
 
 func intentsCompatible(committed, proposed Intent) bool {
-	if reflect.DeepEqual(committed, proposed) {
-		return true
-	}
-	if proposed.FormatVersion == IntentFormatCurrent && committed.FormatVersion < IntentFormatCurrent {
-		if proposed.Branch != publicationrecord.ExpectedBranch(committed) {
-			return false
-		}
-		proposed.Branch = ""
-		proposed.FormatVersion = IntentFormatHistory
-	}
-	if committed.FormatVersion == IntentFormatLegacy && proposed.FormatVersion == IntentFormatHistory {
-		proposed.FormatVersion = IntentFormatLegacy
-		proposed.DispositionHistoryDigest = ""
-	}
 	return reflect.DeepEqual(committed, proposed)
 }
 
