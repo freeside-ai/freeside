@@ -612,25 +612,24 @@ func (d *Driver) regateWithCurrentPolicy(
 				ErrUnsupportedStart, i.InvocationID, check.name, got, check.digest)
 		}
 	}
-	// Historical durable intents predate prior-artifact body persistence. The
-	// explicit marker lets them reproduce the old no-prior prompt without
-	// making removal of bodies from a new intent authenticate as history.
-	if i.Inputs.PriorArtifactsPersisted {
-		if len(i.Inputs.PriorArtifacts) != len(snapshot.PriorArtifactDigests) {
-			return fmt.Errorf("%w: intent %s materialized %d prior artifacts, admission names %d",
-				ErrUnsupportedStart, i.InvocationID, len(i.Inputs.PriorArtifacts), len(snapshot.PriorArtifactDigests))
-		}
-		for index, body := range i.Inputs.PriorArtifacts {
-			sum := sha256.Sum256(body)
-			got := domain.Digest(contentaddr.Format(sum[:]))
-			if got != snapshot.PriorArtifactDigests[index] {
-				return fmt.Errorf("%w: intent %s prior artifact %d hashes to %s, admission names %s",
-					ErrUnsupportedStart, i.InvocationID, index, got, snapshot.PriorArtifactDigests[index])
-			}
-		}
-	} else if i.Inputs.PriorArtifacts != nil {
-		return fmt.Errorf("%w: intent %s has unmarked prior artifact bodies",
+	// Every start persists the prior-artifact bodies with the marker, so an
+	// intent without it was written before the bodies were persisted and
+	// cannot reproduce the prompt its writer received.
+	if !i.Inputs.PriorArtifactsPersisted {
+		return fmt.Errorf("%w: intent %s does not carry its prior artifact bodies",
 			ErrUnsupportedStart, i.InvocationID)
+	}
+	if len(i.Inputs.PriorArtifacts) != len(snapshot.PriorArtifactDigests) {
+		return fmt.Errorf("%w: intent %s materialized %d prior artifacts, admission names %d",
+			ErrUnsupportedStart, i.InvocationID, len(i.Inputs.PriorArtifacts), len(snapshot.PriorArtifactDigests))
+	}
+	for index, body := range i.Inputs.PriorArtifacts {
+		sum := sha256.Sum256(body)
+		got := domain.Digest(contentaddr.Format(sum[:]))
+		if got != snapshot.PriorArtifactDigests[index] {
+			return fmt.Errorf("%w: intent %s prior artifact %d hashes to %s, admission names %s",
+				ErrUnsupportedStart, i.InvocationID, index, got, snapshot.PriorArtifactDigests[index])
+		}
 	}
 	vendor := snapshot.VendorInstructions
 	if vendor == nil || vendor.Vendor != i.Instructions.Vendor {

@@ -3010,12 +3010,15 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 		})
 	}
 
-	historical := in
-	historical.Inputs.PriorArtifacts = nil
-	historical.Inputs.PriorArtifactsPersisted = false
-	historical.Prompt, _ = renderPromptParts(historical.Inputs)
-	if err := d.regate(context.Background(), historical, false); err != nil {
-		t.Fatalf("historical intent without persisted prior bodies = %v", err)
+	// An intent from before prior bodies were persisted carries neither the
+	// bodies nor the marker, and a prompt rendered without them. It is refused
+	// rather than read as a start with no prior artifacts.
+	unpersisted := in
+	unpersisted.Inputs.PriorArtifacts = nil
+	unpersisted.Inputs.PriorArtifactsPersisted = false
+	unpersisted.Prompt, _ = renderPromptParts(unpersisted.Inputs)
+	if err := d.regate(context.Background(), unpersisted, false); !errors.Is(err, ErrUnsupportedStart) {
+		t.Fatalf("intent without persisted prior bodies = %v, want %v", err, ErrUnsupportedStart)
 	}
 
 	if err := d.saveIntent(in); err != nil {
