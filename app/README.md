@@ -569,16 +569,22 @@ delete each `swiftpm-mirror-` key that
 CI's Swift build cache holds `app/.build`, test bundle included, so a PR
 that leaves `app/` alone skips the Swift build in the `convergence` job
 (#2291). Its key is
-`swift-build-v2-<os>-<arch>-<image OS>-<Xcode build>-<toolchain>-<app/ tree>`.
+`swift-build-v3-<os>-<arch>-<image OS>-<Xcode build>-<toolchain>-<app/ tree>`.
 The image OS is `$ImageOS`; the Xcode build is the pinned Xcode's
 `xcodebuild -version` build number; the toolchain is the `swiftlang-` token
 of its `swift --version`; and the tree is `git rev-parse HEAD:app`, which
 covers every file's name, mode, and content. The key leaves out
 `$ImageVersion`, which changes with every weekly image even when Xcode does
 not. App CI's `swift-build-cache` job writes it on a push to `main` when the
-key is absent. The `convergence` job restores it, and on an exact hit for a
-PR without the app component runs `swift test --skip-build`
-(`CONVERGENCE_SKIP_BUILD`, `scripts/run-convergence.sh --skip-build`).
+key is absent. Its entry also holds `app/.build/source-times.tsv`, each
+tracked `app/` file's modification time and SHA-256 as the build saw them,
+which `scripts/swift-build-times.py record` writes after the build. Nothing
+reads it yet: #3295 will restore those times to unchanged files after a
+fallback restore, and the `v3` prefix keeps that fallback from matching an
+entry without the record, such as a `v2` entry #3313's builds saved. The
+`convergence` job restores the entry, and on an exact hit for a PR without
+the app component runs `swift test --skip-build` (`CONVERGENCE_SKIP_BUILD`,
+`scripts/run-convergence.sh --skip-build`).
 Because the key names the tree of `app/`, a PR that changes `app/` misses by
 construction, so a stale artifact cannot register as a pass; an app PR also
 builds on a hit. There is no fallback key: a partial build still recompiles
@@ -592,7 +598,7 @@ their source locations, which Swift Testing records through macros, but a
 crash backtrace in CI loses its line numbers. Local runs keep debug info.
 A new build flag in either place needs the same flag in the other and a
 prefix bump, or a hit would run a bundle built with other flags. To retire
-every entry, bump the `swift-build-v2` prefix in both workflows and in
+every entry, bump the `swift-build-v3` prefix in both workflows and in
 `scripts/test-daemon-test-shards.sh`.
 
 CI's convergence harness cache holds the `freeside-signet-dev` binary the

@@ -138,6 +138,12 @@ jobs:
   # when app/ changed, against the per-PR saving measured on #2291.
   # `cancel-in-progress` may cancel it on a quick second merge; daemon PRs
   # then build as before until the next app-path push saves the entry.
+  # The entry also carries app/.build/source-times.tsv, each tracked app/
+  # file's modification time and SHA-256 as the build saw them, which
+  # scripts/swift-build-times.py writes so a later fallback restore can
+  # give unchanged files their built times back (#3294, #3295). The
+  # prefix went to v3 with the record, so that fallback can only match an
+  # entry that carries one; #3313's v2 entries don't.
   swift-build-cache:
     name: swift build cache (main)
     runs-on: xcode-27
@@ -173,7 +179,7 @@ jobs:
           # rationale. Lookup only: a hit means this tree's entry exists and
           # there is nothing to build.
           path: app/.build
-          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
+          key: swift-build-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
           lookup-only: true
       # The flags of scripts/run-convergence.sh's build under
       # CONVERGENCE_NO_DEBUG_INFO, which convergence-ci.yml sets; the
@@ -183,6 +189,9 @@ jobs:
         if: steps.swift-build.outputs.cache-hit != 'true'
         working-directory: app
         run: swift build --only-use-versions-from-resolved-file --build-tests -debug-info-format none
+      - name: Record the source file times
+        if: steps.swift-build.outputs.cache-hit != 'true'
+        run: python3 scripts/swift-build-times.py record app app/.build/source-times.tsv
       - name: Record the Swift build size
         if: steps.swift-build.outputs.cache-hit != 'true'
         run: du -sh app/.build

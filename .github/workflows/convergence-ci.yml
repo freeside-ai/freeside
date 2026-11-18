@@ -221,7 +221,7 @@ jobs:
           # build SwiftPM must re-scan and partly recompile, which saved
           # under a minute when #2249 measured it.
           path: app/.build
-          key: swift-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
+          key: swift-build-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
       - name: Run the convergence pass (scripts/check.sh)
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
