@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
@@ -79,6 +81,19 @@ func historyBase(t *testing.T, files map[string]string) (dir, base string) {
 	}
 	dir, root := initRepo(t, all)
 	return dir, commitChain(t, dir, root, []candidateCommit{{"Advance the base", map[string]string{"restored.txt": "new\n"}}})[0]
+}
+
+// commitTree builds a commit of tree with message and exactly the given
+// parents, in order, and anchors it against gc.
+func commitTree(t *testing.T, dir, tree, message string, parents ...string) string {
+	t.Helper()
+	args := []string{"commit-tree", tree, "-m", message}
+	for _, p := range parents {
+		args = append(args, "-p", p)
+	}
+	sha := runGit(t, dir, args...)
+	runGit(t, dir, "update-ref", "refs/freeside/fixture-"+sha, sha)
+	return sha
 }
 
 func historyOptions(head, base, recipe string, room Room) Options {
@@ -338,20 +353,11 @@ func TestVerifyHistoryOnReentryExportsTheHeadsOwnBase(t *testing.T) {
 }
 
 // TestVerifyHistoryRefusesWhatItCantGiveExactly pins the fail-closed
-// refusals: no single merge base, a tree path the written .git would
-// collide with, and a room that can't pass the environment. Nothing runs.
+// refusals: no single merge base, merged-in history that shares no
+// ancestor with the base, a tree path the written .git would collide
+// with, and a room that can't pass the environment. Nothing runs.
 func TestVerifyHistoryRefusesWhatItCantGiveExactly(t *testing.T) {
 	t.Parallel()
-	commitTree := func(t *testing.T, dir, tree, message string, parents ...string) string {
-		t.Helper()
-		args := []string{"commit-tree", tree, "-m", message}
-		for _, p := range parents {
-			args = append(args, "-p", p)
-		}
-		sha := runGit(t, dir, args...)
-		runGit(t, dir, "update-ref", "refs/freeside/fixture-"+sha, sha)
-		return sha
-	}
 	treeWith := func(t *testing.T, dir, commit, name string) string {
 		t.Helper()
 		blob := runGitStdin(t, dir, []byte("x\n"), "hash-object", "-w", "--stdin")
@@ -376,6 +382,17 @@ func TestVerifyHistoryRefusesWhatItCantGiveExactly(t *testing.T) {
 		{"no merge base", func(t *testing.T, dir, base string) (string, string) {
 			tree := runGit(t, dir, "rev-parse", base+"^{tree}")
 			return commitTree(t, dir, tree, "unrelated root"), base
+		}, ErrHistoryUnavailable, false},
+		{"merged-in histories with no common ancestor", func(t *testing.T, dir, base string) (string, string) {
+			tree := runGit(t, dir, "rev-parse", base+"^{tree}")
+			root := runGit(t, dir, "rev-parse", base+"^")
+			unrelated := commitTree(t, dir, tree, "unrelated root")
+			enforced := commitTree(t, dir, tree, "Land unrelated history", base, unrelated)
+			// Both of the head's merged-in parents are older than the
+			// enforced base, and they come from different roots.
+			c1 := commitTree(t, dir, tree, "Add feature one", enforced)
+			c2 := commitTree(t, dir, tree, "Merge unrelated", c1, unrelated)
+			return commitTree(t, dir, tree, "Merge root", c2, root), enforced
 		}, ErrHistoryUnavailable, false},
 		{"dot-git case variant in the tree", func(t *testing.T, dir, base string) (string, string) {
 			return commitTree(t, dir, treeWith(t, dir, base, ".GIT"), "plant a git dir", base), base
@@ -417,12 +434,11 @@ func TestVerifyHistoryRefusesWhatItCantGiveExactly(t *testing.T) {
 	})
 }
 
-// TestVerifyHistoryRunsTheRepositoryChecks runs #3121's two scripts, as
-// the repository holds them, through Verify in the process room: a good
-// candidate passes both, a bad commit message fails the commit-message
-// check, and deleting a migration fails the migration-history check.
-func TestVerifyHistoryRunsTheRepositoryChecks(t *testing.T) {
-	t.Parallel()
+// repositoryCheckFiles returns a base tree holding #3121's two scripts as
+// the repository holds them, run-check.sh to call one over the exported
+// range, and a migration for the migration-history check to guard.
+func repositoryCheckFiles(t *testing.T) map[string]string {
+	t.Helper()
 	files := map[string]string{
 		"run-check.sh":                    "#!/usr/bin/env bash\nset -euo pipefail\nexec bash \"$1\" \"$FREESIDE_VERIFY_BASE_SHA\" \"$FREESIDE_VERIFY_HEAD_SHA\"\n",
 		"daemon/migrations/0001_init.sql": "CREATE TABLE t (id INTEGER);\n",
@@ -434,6 +450,16 @@ func TestVerifyHistoryRunsTheRepositoryChecks(t *testing.T) {
 		}
 		files["scripts/"+script] = string(body)
 	}
+	return files
+}
+
+// TestVerifyHistoryRunsTheRepositoryChecks runs #3121's two scripts, as
+// the repository holds them, through Verify in the process room: a good
+// candidate passes both, a bad commit message fails the commit-message
+// check, and deleting a migration fails the migration-history check.
+func TestVerifyHistoryRunsTheRepositoryChecks(t *testing.T) {
+	t.Parallel()
+	files := repositoryCheckFiles(t)
 	recipe := `{"commands": [` +
 		`{"argv": ["bash", "run-check.sh", "scripts/check-commit-messages.sh"], "room": "project_image", "history": true}, ` +
 		`{"argv": ["bash", "run-check.sh", "scripts/check-migration-history.sh"], "room": "project_image", "history": true}` +
@@ -475,6 +501,112 @@ func TestVerifyHistoryRunsTheRepositoryChecks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVerifyHistoryMatchesAFullCloneOnMerges pins that a candidate
+// merging history older than its base gets CI's commit range: the
+// commit-message check, run through Verify, gives the exit code, checked
+// count, and violations the same script gives in the fixture's full
+// checkout. Mainline lands side branches as title-only "Land" merges, as
+// Freeside's own do, so a boundary commit leaking into the range fails it.
+func TestVerifyHistoryMatchesAFullCloneOnMerges(t *testing.T) {
+	t.Parallel()
+	const body = "\n\nThe fixture needs a commit with a body."
+	recipe := `{"commands": [` +
+		`{"argv": ["bash", "history-probe.sh"], "room": "project_image", "history": true}, ` +
+		`{"argv": ["bash", "run-check.sh", "scripts/check-commit-messages.sh"], "room": "project_image", "history": true}` +
+		`], "capture": "none"}`
+	// mainline returns the checkout, the commit the side branches fork
+	// from (a), and two landing merges on top of it: m1 lands a side
+	// branch forked at a, and m2 one forked at m1.
+	mainline := func(t *testing.T) (dir, a, m1, m2 string) {
+		t.Helper()
+		dir, a = historyBase(t, repositoryCheckFiles(t))
+		land := func(onto, file, subject string) string {
+			side := commitChain(t, dir, onto, []candidateCommit{{"Add " + file + body, map[string]string{file: "side\n"}}})[0]
+			return commitTree(t, dir, mergedTree(t, dir, onto, side), subject, onto, side)
+		}
+		m1 = land(a, "side-one.txt", "Land side one (#1)")
+		m2 = land(m1, "side-two.txt", "Land side two (#2)")
+		return dir, a, m1, m2
+	}
+	// commit adds one good commit on parent; merge merges the second
+	// parent into the first.
+	commit := func(t *testing.T, dir, parent, file string) string {
+		t.Helper()
+		return commitChain(t, dir, parent, []candidateCommit{{"Add " + file + body, map[string]string{file: file + "\n"}}})[0]
+	}
+	merge := func(t *testing.T, dir, subject, first, second string) string {
+		t.Helper()
+		return commitTree(t, dir, mergedTree(t, dir, first, second), subject, first, second)
+	}
+	cases := []struct {
+		name string
+		// candidate builds the head; the enforced base is m2.
+		candidate func(t *testing.T, dir, a, m1, m2 string) string
+		exit      int
+	}{
+		{"merged side branch forked before the base", func(t *testing.T, dir, _, m1, m2 string) string {
+			c1 := commit(t, dir, m2, "candidate-one.txt")
+			branch := commit(t, dir, m1, "branch.txt")
+			return commit(t, dir, merge(t, dir, "Merge the branch", c1, branch), "candidate-two.txt")
+		}, 0},
+		{"merged the base twice", func(t *testing.T, dir, a, m1, m2 string) string {
+			c1 := commit(t, dir, a, "candidate-one.txt")
+			c2 := commit(t, dir, merge(t, dir, "Merge main", c1, m1), "candidate-two.txt")
+			return merge(t, dir, "Merge main again", c2, m2)
+		}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkout, a, m1, m2 := mainline(t)
+			head := tc.candidate(t, checkout, a, m1, m2)
+
+			cmd := exec.Command("bash", "scripts/check-commit-messages.sh", m2, head) //nolint:gosec // G204: the fixture's own SHAs over a test-owned checkout
+			cmd.Dir = checkout
+			cmd.Env = append(gitenv.Scrubbed(), "HOME="+t.TempDir(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+			fullOut, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if err != nil && !errors.As(err, &exitErr) {
+				t.Fatalf("check in the full checkout: %v\n%s", err, fullOut)
+			}
+			if got := cmd.ProcessState.ExitCode(); got != tc.exit {
+				t.Fatalf("full checkout exit = %d, want %d (fixture drifted); output:\n%s", got, tc.exit, fullOut)
+			}
+
+			fullLog := runGit(t, checkout, "log", "--reverse", "--format=%H %s", m2+".."+head)
+
+			res, err := Verify(context.Background(), checkout, historyOptions(head, m2, recipe, &ProcRoom{Home: t.TempDir()}))
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			// The probe exits 0 only if fsck --connectivity-only passes.
+			if len(res.Steps) != 2 || res.Steps[0].ExitCode != 0 || res.Steps[1].ExitCode != tc.exit {
+				t.Fatalf("steps = %+v, want the probe exiting 0 and the check %d; transcript:\n%s", res.Steps, tc.exit, res.Evidence[1].Content)
+			}
+			for key, want := range map[string][]string{"merge-base": {m2}, "log": strings.Split(fullLog, "\n")} {
+				if got := probeOutput(res, key); !slices.Equal(got, want) {
+					t.Errorf("%s = %q, want %q", key, got, want)
+				}
+			}
+			if got, want := checkResultLines(res.Evidence[1].Content), checkResultLines(fullOut); !slices.Equal(got, want) {
+				t.Errorf("verifier's check reported\n%s\nfull checkout's reported\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+		})
+	}
+}
+
+// checkResultLines returns check-commit-messages.sh's violation and
+// summary lines from its output, in order.
+func checkResultLines(out []byte) []string {
+	var lines []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, `": [`) || strings.HasPrefix(line, "PASS: ") || strings.HasPrefix(line, "FAIL: ") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // TestVerifyHistoryReportGolden pins the report shape a history step adds:
