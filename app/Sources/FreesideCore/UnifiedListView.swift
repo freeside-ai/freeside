@@ -979,7 +979,7 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     /// Agent mark sits beside it where both fit on one line and under it
     /// otherwise, so a long status wraps at its words, never inside one.
     private var keywordLine: some View {
-        let word = KeywordLabel(text: keyword.text, color: keyword.color)
+        let word = KeywordLabel(text: keyword.text, color: keyword.color, isStrong: keyword.isStrong)
             .fixedSize(horizontal: false, vertical: true)
         return Group {
             if keyword.marksAgent {
@@ -1041,6 +1041,8 @@ struct UnviewedDot: View {
 struct SidebarRowKeyword {
     let text: String
     var color: Color = .inkDim
+    /// True draws the word in the keyword's semibold face.
+    var isStrong = false
     var marksAgent = false
     /// False where the row speaks this line elsewhere, in its own order.
     var isSpoken = true

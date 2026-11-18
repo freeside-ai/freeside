@@ -97,3 +97,21 @@ struct FindingRowContextTests {
         #expect(FindingRow.context(item) != item.health_diagnostic?.value1.code)
     }
 }
+
+/// Only an open finding the pane counts as blocking takes the wax mark
+/// (#3356): an unknown posture counts, and a closed one never does,
+/// whatever posture it had.
+struct FindingRowMarkTests {
+    @Test func onlyAnOpenBlockingFindingIsMarked() {
+        let blocking = AttentionFixtures.blockingSystemHealth().item
+        var unknown = blocking
+        unknown.posture = .init(value1: .unknown)
+        var closedBlocking = AttentionFixtures.resolvedSystemHealth().item
+        closedBlocking.posture = .init(value1: .blocking)
+
+        #expect(FindingRow.isMarkedBlocking(blocking))
+        #expect(FindingRow.isMarkedBlocking(unknown))
+        #expect(!FindingRow.isMarkedBlocking(AttentionFixtures.heldWorkSystemHealth().item))
+        #expect(!FindingRow.isMarkedBlocking(closedBlocking))
+    }
+}
