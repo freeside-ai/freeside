@@ -1160,8 +1160,13 @@ func evaluateProdExecution(
 ) bool {
 	mode, running, err := environment.ProdExecution(ctx, filepath.Join(cfg.PublicationStateDir, "freeside.db"))
 	switch {
+	case errors.Is(err, errProdExecutionUnanswered):
+		failCheck(manifest, "prod_execution",
+			fmt.Sprintf("prod's control socket did not answer within %s: %v", prodExecutionProbeTimeout, err),
+			"the machine may be overloaded: rerun prelaunch once load drops, and restart prod only if it stays unresponsive")
+		return false
 	case err != nil:
-		failCheck(manifest, "prod_execution", "prod advertises a control socket that did not report its execution mode",
+		failCheck(manifest, "prod_execution", "prod advertises a control socket that did not report its execution mode: "+err.Error(),
 			"start prod so it rewrites its control advertisement, or update the installed build so it serves the execution read")
 		return false
 	case !running:

@@ -646,6 +646,54 @@ func TestControlServesExecutionMode(t *testing.T) {
 	}
 }
 
+// TestProdExecutionReadErrorNamesItsOwnTimeout pins that only the probe's own
+// budget marks a failed read as unanswered: a caller's deadline that ended
+// first keeps today's error. Either way the error stays a deadline error.
+// The read goes through the real control client, because net/http reports a
+// context's cause rather than ctx.Err(); an already-past deadline stands in
+// for the 5s wait.
+func TestProdExecutionReadErrorNamesItsOwnTimeout(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	advertisement := `{"socket_path":"` + filepath.Join(t.TempDir(), "unanswered.sock") + `"}` + "\n"
+	if err := os.WriteFile(dbPath+".control.json", []byte(advertisement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read := func(ctx context.Context) error {
+		client, err := newControlClient(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		var report executionReport
+		return prodExecutionReadError(ctx, dbPath, client.get(ctx, "/execution", nil, &report))
+	}
+	past := time.Now().Add(-time.Second)
+	t.Run("probe budget", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithDeadlineCause(t.Context(), past, errProdExecutionUnanswered)
+		defer cancel()
+		err := read(ctx)
+		if !errors.Is(err, errProdExecutionUnanswered) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("error %v: want the unanswered sentinel and the deadline class", err)
+		}
+		if !strings.Contains(err.Error(), "within 5s") || !strings.Contains(err.Error(), "contact running daemon") {
+			t.Fatalf("error %q does not name the probe's budget and the read", err)
+		}
+	})
+	t.Run("caller deadline", func(t *testing.T) {
+		t.Parallel()
+		parent, cancelParent := context.WithDeadline(t.Context(), past)
+		defer cancelParent()
+		ctx, cancel := context.WithTimeoutCause(parent, prodExecutionProbeTimeout, errProdExecutionUnanswered)
+		defer cancel()
+		err := read(ctx)
+		if errors.Is(err, errProdExecutionUnanswered) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("error %v: want the deadline class without the unanswered sentinel", err)
+		}
+	})
+}
+
 // TestProdExecutionProbeFailsClosed pins that only a missing advertisement
 // reads as "not running": an advertisement whose socket is gone, or a daemon
 // that does not serve the read, is an error the composition check fails on.

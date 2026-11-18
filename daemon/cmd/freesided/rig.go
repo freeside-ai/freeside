@@ -184,6 +184,14 @@ func probeListenAddressByBinding(ctx context.Context, address string) (string, b
 // stalling the run's start.
 const prodExecutionProbeTimeout = 5 * time.Second
 
+// errProdExecutionUnanswered marks a probe that ran out its own
+// prodExecutionProbeTimeout, so prelaunch can tell an overloaded machine from
+// a refused or malformed read (#3337). It is the probe context's cause, which
+// net/http returns in place of ctx.Err(), so it wraps
+// context.DeadlineExceeded to keep a timed-out read in that class.
+var errProdExecutionUnanswered = fmt.Errorf("prod did not answer the execution read within %s: %w",
+	prodExecutionProbeTimeout, context.DeadlineExceeded)
+
 // ProdExecution reads what the prod daemon serving dbPath may run, through
 // the control socket it advertises beside that database. No advertisement
 // means no prod daemon runs: a daemon publishes it once it serves and removes
@@ -204,17 +212,29 @@ func (productionRigHost) ProdExecution(ctx context.Context, dbPath string) (exec
 		return "", false, fmt.Errorf("read prod's control advertisement for %q: %w", canonical, err)
 	}
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(ctx, prodExecutionProbeTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, prodExecutionProbeTimeout, errProdExecutionUnanswered)
 	defer cancel()
 	var report executionReport
 	if err := client.get(ctx, "/execution", nil, &report); err != nil {
-		return "", true, fmt.Errorf("read prod's execution mode for %q: %w", canonical, err)
+		return "", true, prodExecutionReadError(ctx, canonical, err)
 	}
 	if report.Version != executionReportVersion || !report.Execution.valid() {
 		return "", true, fmt.Errorf("prod answered an unrecognized execution report (version %q, execution %q)",
 			report.Version, report.Execution)
 	}
 	return report.Execution, true, nil
+}
+
+// prodExecutionReadError wraps a failed execution read. When probeCtx ended
+// on its own budget it makes sure the chain holds errProdExecutionUnanswered,
+// which net/http already reports but need not; a caller's own deadline or
+// cancellation keeps today's error. The read's error stays in the chain
+// either way.
+func prodExecutionReadError(probeCtx context.Context, canonical string, err error) error {
+	if errors.Is(context.Cause(probeCtx), errProdExecutionUnanswered) && !errors.Is(err, errProdExecutionUnanswered) {
+		err = fmt.Errorf("%w: %w", errProdExecutionUnanswered, err)
+	}
+	return fmt.Errorf("read prod's execution mode for %q: %w", canonical, err)
 }
 
 func (productionRigHost) PresentContainers(

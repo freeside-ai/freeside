@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -291,6 +292,7 @@ func TestEvaluateProdExecution(t *testing.T) {
 		env             fakePreflightEnvironment
 		wantPass        bool
 		wantEvidence    string
+		wantDetail      string // the probe's own error, carried into evidence
 		wantRemediation string
 	}{
 		{name: "not running", wantPass: true, wantEvidence: "prod is not running"},
@@ -309,12 +311,25 @@ func TestEvaluateProdExecution(t *testing.T) {
 		{
 			name: "unanswering advertisement", env: fakePreflightEnvironment{prodError: errors.New("connection refused")},
 			wantEvidence:    "did not report its execution mode",
+			wantDetail:      "connection refused",
 			wantRemediation: "rewrites its control advertisement",
 		},
 		{
 			name: "older build", env: fakePreflightEnvironment{prodRunning: true, prodError: errors.New("404")},
 			wantEvidence:    "did not report its execution mode",
+			wantDetail:      "404",
 			wantRemediation: "update the installed build",
+		},
+		{
+			// An overloaded machine starves prod past the probe's budget; the
+			// check still fails, but points at load rather than at prod.
+			name: "probe timed out", env: fakePreflightEnvironment{
+				prodRunning: true,
+				prodError:   fmt.Errorf("read prod's execution mode: contact running daemon: %w", errProdExecutionUnanswered),
+			},
+			wantEvidence:    "did not answer within 5s",
+			wantDetail:      "contact running daemon",
+			wantRemediation: "rerun prelaunch once load drops",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -341,6 +356,9 @@ func TestEvaluateProdExecution(t *testing.T) {
 			if !strings.Contains(check.Evidence, tc.wantEvidence) || !strings.Contains(check.Remediation, tc.wantRemediation) {
 				t.Fatalf("prod_execution evidence %q, remediation %q; want %q and %q",
 					check.Evidence, check.Remediation, tc.wantEvidence, tc.wantRemediation)
+			}
+			if !strings.Contains(check.Evidence, tc.wantDetail) {
+				t.Fatalf("prod_execution evidence %q omits the probe's error %q", check.Evidence, tc.wantDetail)
 			}
 		})
 	}
