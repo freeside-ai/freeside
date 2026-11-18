@@ -55,7 +55,6 @@ const (
 	productionBlockBaseAdvanced          = domain.PublicationBlockBaseAdvanced
 	productionBlockHandoffConflict       = domain.PublicationBlockHandoffConflict
 	productionBlockHandoffVerification   = domain.PublicationBlockHandoffVerification
-	productionBlockReentryRetired        = domain.PublicationBlockReentryRetired
 	productionBlockReentryConflict       = domain.PublicationBlockBaseAdvancedConflict
 	productionBlockReentryVerification   = domain.PublicationBlockBaseAdvancedVerification
 	productionBlockReentryRoundLimit     = domain.PublicationBlockBaseAdvancedRoundLimit
@@ -243,12 +242,6 @@ type productionPublicationTask struct {
 	Publication           ProductionPublication        `json:"publication"`
 	Summary               string                       `json:"summary,omitempty"`
 	Successor             *domain.PublicationSuccessor `json:"successor,omitempty"`
-	// AuthorizingTaskKey names the task whose verification checkpoint holds
-	// this task's candidate authorization. Only a legacy task that re-enters
-	// before publication sets it (reentersBeforePublication). Such tasks are
-	// no longer created (issue #2644); the field stays so a queued one still
-	// decodes and is retired.
-	AuthorizingTaskKey string `json:"authorizing_task_key,omitempty"`
 	// reevaluation is reconstructed from a signet intent. It is never part of
 	// the original publication task row, whose bytes remain immutable.
 	reevaluation *productionReevaluation               `json:"-"`
@@ -1471,8 +1464,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	switch route {
 	case productionPublicationRouteReentryInPlace:
 		return w.reconcileReentryTask(ctx, task, binding)
-	case productionPublicationRouteRetireUnpublishedReentry, productionPublicationRouteContinuation,
-		productionPublicationRouteForward:
+	case productionPublicationRouteContinuation, productionPublicationRouteForward:
 	}
 	if outcome, err := w.recoverScopeConflictTask(ctx, &task, binding); err != nil {
 		if errors.Is(err, domain.ErrParentKeyMismatch) || errors.Is(err, domain.ErrCardFactInconsistent) {
@@ -1489,13 +1481,6 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	if err := releaseProductionQuarantine(ctx, w.store, w.attention, productionScopeQuarantinePrefix, task.RunID); err != nil {
 		return productionTaskOutcome{}, err
-	}
-	switch route {
-	case productionPublicationRouteReentryInPlace:
-		return productionTaskOutcome{}, fmt.Errorf("publication route %q reached unpublished-head retirement", route)
-	case productionPublicationRouteRetireUnpublishedReentry:
-		return w.retireReentryTask(ctx, task, binding)
-	case productionPublicationRouteContinuation, productionPublicationRouteForward:
 	}
 	scratch, err := os.MkdirTemp(w.workDir, ".production-publication-")
 	if err != nil {
@@ -1562,7 +1547,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			imported.CommitSHA, len(imported.Findings), binding.export.HeadSHA, domain.ErrParentKeyMismatch)
 	}
 	switch route {
-	case productionPublicationRouteReentryInPlace, productionPublicationRouteRetireUnpublishedReentry:
+	case productionPublicationRouteReentryInPlace:
 		return productionTaskOutcome{}, fmt.Errorf("publication route %q reached publication continuation", route)
 	case productionPublicationRouteContinuation:
 		return w.startPublicationContinuation(ctx, task, checkoutDir)
@@ -3224,7 +3209,6 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		productionBlockBaseAdvanced,
 		productionBlockHandoffConflict,
 		productionBlockHandoffVerification,
-		productionBlockReentryRetired,
 		productionBlockReentryConflict,
 		productionBlockReentryVerification,
 		productionBlockReentryRoundLimit,
@@ -3244,9 +3228,6 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 				current.ID, domain.ErrParentKeyMismatch)
 		}
 		artifacts = checkpoint.Artifacts
-	case productionBlockReentryRetired:
-		// A retired re-entry is ended before any checkpoint is read, with no
-		// evidence.
 	case productionBlockHandoffVerification:
 		if !progress.hasCheckpoint() || !checkpoint.Authorization.AuthorizesPublication {
 			return nil, fmt.Errorf("production blocked item %q has an impossible handoff reason: %w",

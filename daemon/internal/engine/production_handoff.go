@@ -13,7 +13,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
-	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -662,88 +661,6 @@ func (w *productionPublicationWorkflow) taskRecordedAt(
 		err = fmt.Errorf("task row %q has no recorded time: %w", task.intentKey(), domain.ErrParentKeyMismatch)
 	}
 	return recordedAt, err
-}
-
-// retireReentryTask ends a re-entry cycle an earlier daemon queued for a base
-// advance (a v5 or v6 publication successor, now read-only legacy). The cycle
-// is never run: its rule is retired, and a moved tip is verified at handoff
-// instead (issue #2644). The run ends on publish_blocked naming that, or holds
-// when that daemon already committed the cycle's publication intent.
-func (w *productionPublicationWorkflow) retireReentryTask(
-	ctx context.Context, task productionPublicationTask, binding productionBinding,
-) (productionTaskOutcome, error) {
-	checkpoint, found, err := w.retiredReentryCheckpoint(ctx, task, binding)
-	if err != nil {
-		return productionTaskOutcome{}, err
-	}
-	imported := importer.Result{CommitSHA: task.HeadSHA}
-	if found {
-		imported = checkpoint.Imported
-	}
-	// A retired cycle reads no ready item or publication intent, so its
-	// progress says only whether a checkpoint exists, the one fact
-	// blocked-item recovery needs from it besides readiness.
-	progress := productionPublicationProgressUnverified
-	if found {
-		progress = productionPublicationProgressVerified
-	}
-	recovered, err := w.recoverDefinitiveBlockedTask(ctx, task, binding, imported, checkpoint, progress)
-	if err != nil || recovered != nil {
-		return derefOutcome(recovered), err
-	}
-	pending, err := w.hasPendingPublicationIntent(ctx, task.PublicationID)
-	if err != nil {
-		return productionTaskOutcome{}, err
-	}
-	if pending {
-		// The retired cycle's publication may have reached the forge, and
-		// this daemon cannot finish it (its disposition history no longer
-		// reads), so the run holds where a person can see it rather than
-		// blocking over a live intent.
-		return w.holdBlockedTask(ctx, task, imported, productionHoldReentryRetiredIntent, domain.HoldTrustBlocked)
-	}
-	facts, err := definitivePublishBlockFacts(productionBlockReentryRetired)
-	if err != nil {
-		return productionTaskOutcome{}, err
-	}
-	return w.completeBlockedTask(ctx, task, binding.run, imported, nil,
-		productionBlockReentryRetired, productionShadowStopBlockActions, facts)
-}
-
-// productionHoldReentryRetiredIntent is the hold of a retired re-entry cycle
-// whose publication intent an earlier daemon committed.
-const productionHoldReentryRetiredIntent = "Publication is durably held because an earlier daemon committed this run's publication under a base-advance re-entry rule Freeside has retired, and this daemon cannot finish it. Inspect the run's pull request and disposition the run manually."
-
-// retiredReentryCheckpoint is the checkpoint a retired cycle's block is
-// recovered against. An earlier daemon may have blocked the cycle and stopped
-// before finishing the task. That block named the authorizing checkpoint's
-// import and evidence, except a failed re-entry verification, which showed
-// the cycle's own evidence. That evidence is taken from the stored item, not
-// re-derived: the cycle that produced it no longer runs, and the daemon's own
-// item is trusted state.
-func (w *productionPublicationWorkflow) retiredReentryCheckpoint(
-	ctx context.Context, task productionPublicationTask, binding productionBinding,
-) (productionVerificationCheckpoint, bool, error) {
-	checkpoint, found, err := w.loadCheckpoint(ctx, task, binding)
-	if err != nil || !found {
-		return checkpoint, found, err
-	}
-	var current domain.AttentionItem
-	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		current, err = tx.GetAttentionItemRecord(ctx, task.blockedItemID())
-		return err
-	})
-	if errors.Is(err, store.ErrNotFound) {
-		return checkpoint, true, nil
-	}
-	if err != nil {
-		return productionVerificationCheckpoint{}, false, err
-	}
-	if current.Reason == productionBlockReentryVerification {
-		checkpoint.Artifacts = current.EvidenceSnapshot
-	}
-	return checkpoint, true, nil
 }
 
 func derefOutcome(outcome *productionTaskOutcome) productionTaskOutcome {

@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -26,20 +28,13 @@ func TestProductionPublicationRouteEnum(t *testing.T) {
 
 // TestProductionPublicationTaskRoute pins every task-field combination that
 // selects a path to its route. The overlapping rows pin the first-match
-// order: in-place re-entry before retirement, and both before continuation.
+// order: in-place re-entry before continuation.
 func TestProductionPublicationTaskRoute(t *testing.T) {
 	t.Parallel()
 	const producer = domain.InvocationID("inv-producer")
 	reentry := &domain.PublicationSuccessorReentry{BaseSHA: "base", HeadSHA: "head"}
 	successor := func(version string, origin domain.PublicationSuccessorOrigin, reentry *domain.PublicationSuccessorReentry) *domain.PublicationSuccessor {
 		return &domain.PublicationSuccessor{Version: version, Origin: origin, Reentry: reentry}
-	}
-	unpublishedReentry := func() *domain.PublicationSuccessor {
-		return successor(domain.PublicationUnpublishedReentryVersion,
-			domain.PublicationSuccessorUnpublishedBaseAdvance, reentry)
-	}
-	successorReentry := func() *domain.PublicationSuccessor {
-		return successor(domain.PublicationSuccessorReentryVersion, domain.PublicationSuccessorBaseAdvance, reentry)
 	}
 	readinessInvalidation := func() *domain.PublicationSuccessor {
 		return successor(domain.PublicationReentryVersion, domain.PublicationSuccessorReadinessInvalidation, reentry)
@@ -96,28 +91,6 @@ func TestProductionPublicationTaskRoute(t *testing.T) {
 			want: productionPublicationRouteReentryInPlace,
 		},
 		{
-			name: "unpublished re-entry (v5) with producer",
-			task: productionPublicationTask{ProducingInvocationID: producer, Successor: unpublishedReentry()},
-			want: productionPublicationRouteRetireUnpublishedReentry,
-		},
-		{
-			name: "successor re-entry (v6) with producer",
-			task: productionPublicationTask{ProducingInvocationID: producer, Successor: successorReentry()},
-			want: productionPublicationRouteRetireUnpublishedReentry,
-		},
-		// No builder makes a v5 or v6 task without a producer today, but
-		// validateReentry doesn't check the version, so a stored row can.
-		{
-			name: "unpublished re-entry (v5) without producer",
-			task: productionPublicationTask{Successor: unpublishedReentry()},
-			want: productionPublicationRouteReentryInPlace,
-		},
-		{
-			name: "successor re-entry (v6) without producer",
-			task: productionPublicationTask{Successor: successorReentry()},
-			want: productionPublicationRouteReentryInPlace,
-		},
-		{
 			name: "continuation without successor",
 			task: productionPublicationTask{ProducingInvocationID: producer, continuation: continuation},
 			want: productionPublicationRouteContinuation,
@@ -126,13 +99,6 @@ func TestProductionPublicationTaskRoute(t *testing.T) {
 			name: "continuation on in-place re-entry",
 			task: productionPublicationTask{Successor: readinessInvalidation(), continuation: continuation},
 			want: productionPublicationRouteReentryInPlace,
-		},
-		{
-			name: "continuation on successor re-entry (v6)",
-			task: productionPublicationTask{
-				ProducingInvocationID: producer, Successor: successorReentry(), continuation: continuation,
-			},
-			want: productionPublicationRouteRetireUnpublishedReentry,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,4 +112,60 @@ func TestProductionPublicationTaskRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestProductionPublicationTaskUnderRetiredReentryIsRefused: a task an
+// earlier daemon queued under a v5 or v6 successor no longer decodes, so it
+// never runs down the forward route or as an in-place re-entry (#3323). The
+// successors are valid, so the refusal is the version's.
+func TestProductionPublicationTaskUnderRetiredReentryIsRefused(t *testing.T) {
+	t.Parallel()
+	const runID = domain.RunID("run-retired-reentry")
+	reentry := &domain.PublicationSuccessorReentry{
+		Reason:  domain.ReadinessInvalidationBaseAdvanced,
+		BaseSHA: strings.Repeat("b", 40), HeadSHA: strings.Repeat("a", 40),
+	}
+	for _, successor := range []domain.PublicationSuccessor{
+		{
+			Version: domain.PublicationUnpublishedReentryVersion,
+			Origin:  domain.PublicationSuccessorUnpublishedBaseAdvance,
+			RunID:   runID, PredecessorItemID: productionReadyItemID(runID),
+			PriorReviewInvocationID: ProductionReviewInvocationID(runID, 1), ReviewRound: 2,
+			Reentry: reentry,
+		},
+		{
+			Version: domain.PublicationSuccessorReentryVersion,
+			Origin:  domain.PublicationSuccessorBaseAdvance,
+			RunID:   runID, PredecessorItemID: "ready-feedback",
+			PriorReviewInvocationID: ProductionReviewInvocationID(runID, 2), ReviewRound: 3,
+			Reentry: reentry,
+		},
+	} {
+		if err := successor.Validate(); err != nil {
+			t.Fatalf("%s fixture: %v", successor.Version, err)
+		}
+		for name, task := range map[string]productionPublicationTask{
+			"with producer":    validRetiredReentryTask(t, runID, successor, remediationInvocationID(runID, 1)),
+			"without producer": newReentryTask("project-retired-reentry", successor),
+		} {
+			err := task.validate()
+			if !errors.Is(err, domain.ErrParentKeyMismatch) || !strings.Contains(err.Error(), "retired re-entry") {
+				t.Errorf("%s %s: validate = %v, want the retired re-entry refusal", successor.Version, name, err)
+			}
+		}
+	}
+}
+
+func validRetiredReentryTask(
+	t *testing.T, runID domain.RunID, successor domain.PublicationSuccessor, producer domain.InvocationID,
+) productionPublicationTask {
+	t.Helper()
+	task := validPublicationTask(t, runID, "project-retired-reentry")
+	task.ProducingInvocationID = producer
+	task.VerificationID = productionVerificationInvocationIDForProducer(runID, producer)
+	task.Replay.InvocationID = producer
+	task.HeadSHA, task.Replay.HeadSHA = successor.Reentry.HeadSHA, successor.Reentry.HeadSHA
+	task.PublicationID = successor.PublicationID()
+	task.Successor = &successor
+	return task
 }

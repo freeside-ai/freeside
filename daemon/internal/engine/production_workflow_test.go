@@ -2232,7 +2232,10 @@ func TestDecodeProductionPublicationTaskRefusesRemovedFields(t *testing.T) {
 	if _, err := decodeProductionPublicationTask(entry); err != nil {
 		t.Fatalf("current task: %v", err)
 	}
-	for _, field := range []string{`"remediation_noop":true`} {
+	for _, field := range []string{
+		`"remediation_noop":true`,
+		`"authorizing_task_key":"production-publication/run-removed-task-field"`,
+	} {
 		edited := entry
 		edited.Payload = append([]byte("{"+field+","), payload[1:]...)
 		if _, err := decodeProductionPublicationTask(edited); err == nil {

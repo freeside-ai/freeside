@@ -770,12 +770,8 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	authorization := checkpoint.Authorization
 	versionMatches := checkpoint.Version == productionVerificationVersion &&
 		checkpoint.HeadSHA == task.HeadSHA
-	authorizingTaskKey := task.intentKey()
-	if task.AuthorizingTaskKey != "" {
-		authorizingTaskKey = task.AuthorizingTaskKey
-	}
 	if !versionMatches ||
-		checkpoint.TaskKey != authorizingTaskKey ||
+		checkpoint.TaskKey != task.intentKey() ||
 		checkpoint.ProjectImage != binding.verificationImage().ID || authorization.Validate() != nil ||
 		authorization.ValidateAdvisoryStance(binding.profile.CandidateAutomationChanges) != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||

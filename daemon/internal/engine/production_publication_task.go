@@ -92,9 +92,6 @@ const (
 	// productionPublicationRouteReentryInPlace re-earns readiness for an
 	// already published pull request: reconcileReentryTask.
 	productionPublicationRouteReentryInPlace productionPublicationRoute = "reentry_in_place"
-	// productionPublicationRouteRetireUnpublishedReentry retires a legacy
-	// re-entry of an unpublished head: retireReentryTask.
-	productionPublicationRouteRetireUnpublishedReentry productionPublicationRoute = "retire_unpublished_reentry"
 	// productionPublicationRouteContinuation starts a remediation
 	// continuation after import: startPublicationContinuation.
 	productionPublicationRouteContinuation productionPublicationRoute = "continuation"
@@ -105,15 +102,14 @@ const (
 
 var allProductionPublicationRoutes = []productionPublicationRoute{
 	productionPublicationRouteReentryInPlace,
-	productionPublicationRouteRetireUnpublishedReentry,
 	productionPublicationRouteContinuation,
 	productionPublicationRouteForward,
 }
 
 func (r productionPublicationRoute) valid() bool {
 	switch r {
-	case productionPublicationRouteReentryInPlace, productionPublicationRouteRetireUnpublishedReentry,
-		productionPublicationRouteContinuation, productionPublicationRouteForward:
+	case productionPublicationRouteReentryInPlace, productionPublicationRouteContinuation,
+		productionPublicationRouteForward:
 		return true
 	default:
 		return false
@@ -130,8 +126,6 @@ func (task productionPublicationTask) route() productionPublicationRoute {
 	switch {
 	case task.reentersInPlace():
 		return productionPublicationRouteReentryInPlace
-	case task.Successor != nil && task.Successor.ReentersUnpublishedHead():
-		return productionPublicationRouteRetireUnpublishedReentry
 	case task.continuation != nil:
 		return productionPublicationRouteContinuation
 	default:
@@ -165,14 +159,6 @@ func (task productionPublicationTask) reentryCheckpointKey() string {
 func (task productionPublicationTask) verificationCheckpointKey() string {
 	if task.reentersInPlace() {
 		return task.reentryCheckpointKey()
-	}
-	// A successor re-entry reads the checkpoint of the task it replaced,
-	// which for a remediation continuation is keyed by its command.
-	if task.reentersBeforePublication() {
-		prefix := "production-publication-continuation/" + url.PathEscape(string(task.RunID)) + "/"
-		if commandID, ok := strings.CutPrefix(task.AuthorizingTaskKey, prefix); ok {
-			return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") + "/continuation/" + commandID
-		}
 	}
 	commandID := ""
 	if task.reevaluation != nil {
@@ -325,17 +311,7 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		}
 		producerRound, priorRemediation := remediationRoundForInvocation(
 			task.RunID, task.ProducingInvocationID)
-		// A successor re-entry keeps the producer of the cycle it replaced
-		// (issue #2111), so the feedback that produced its head belongs to
-		// the first successor behind it that is not one.
 		producing := task.Successor
-		for producing != nil && producing.ReentersUnpublishedHead() && !producing.RepublishesUnpublished() {
-			parent, err := tx.PublicationSuccessorForReadyItem(ctx, task.RunID, producing.PredecessorItemID)
-			if err != nil {
-				return taskMarkerMismatch(errors.Join(err, domain.ErrParentKeyMismatch))
-			}
-			producing = &parent
-		}
 		feedback := producing != nil &&
 			task.ProducingInvocationID == producing.FeedbackInvocationID
 		priorFeedback := feedback &&
@@ -452,6 +428,13 @@ func (t productionPublicationTask) validate() error {
 }
 
 func (t productionPublicationTask) validateWithPublication(validatePublication func(ProductionPublication) error) error {
+	// No cycle re-enters an unpublished head any more (issue #2644), and the
+	// task an earlier daemon queued under a v5 or v6 successor no longer
+	// decodes (#3323), with a producer or without one.
+	if t.Successor != nil && t.Successor.ReentersUnpublishedHead() {
+		return fmt.Errorf("production publication task under retired re-entry %s: %w",
+			t.Successor.PublicationID(), domain.ErrParentKeyMismatch)
+	}
 	if t.reentersInPlace() {
 		return t.validateReentry()
 	}
@@ -462,21 +445,11 @@ func (t productionPublicationTask) validateWithPublication(validatePublication f
 		if err := t.Successor.Validate(); err != nil || t.Successor.RunID != t.RunID {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
-		switch {
-		case t.Successor.RepublishesUnpublished():
-		case t.Successor.ReentersUnpublishedHead():
-			// A successor re-entry keeps the head its predecessor's producer
-			// exported: an operator feedback return or a remediation.
-			validProducer = remediationProducer ||
-				domain.HasOperatorFeedbackInvocationPrefix(t.ProducingInvocationID)
-		default:
-			validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
-		}
+		validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
 		wantPublication = t.Successor.PublicationID()
 	}
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
 		!validProducer ||
-		(t.AuthorizingTaskKey != "") != t.reentersBeforePublication() ||
 		t.VerificationID != productionVerificationInvocationIDForProducer(t.RunID, t.ProducingInvocationID) ||
 		t.PublicationID != wantPublication ||
 		!validCommitSHA(t.HeadSHA) {

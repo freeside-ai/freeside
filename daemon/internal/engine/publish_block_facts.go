@@ -35,7 +35,7 @@ func definitivePublishBlockFacts(reason string) (*domain.PublishBlockFacts, erro
 	case productionBlockTrust:
 		return publishBlockTrustRule(domain.TrustRuleTrustProfileDrift), nil
 	case productionBlockBaseAdvanced, productionBlockHandoffConflict,
-		productionBlockHandoffVerification, productionBlockReentryRetired,
+		productionBlockHandoffVerification,
 		productionBlockReentryConflict, productionBlockReentryVerification,
 		productionBlockReentryRoundLimit:
 		return publishBlockTrustRule(domain.TrustRuleTargetBaseAdvanced), nil
