@@ -14,8 +14,6 @@ import (
 // prove the checkpoint's closure and reads it as unhealthy (#2053).
 func BackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 	return map[string]store.BackupPayloadDigestExtractor{
-		FakePublicationTaskKind:                     FakePublicationBackupPayloadDigests,
-		FakePublicationInvocationOwnerKind:          FakePublicationInvocationOwnerBackupPayloadDigests,
 		signet.AgentInvocationRequestedKind:         signet.AgentInvocationBackupPayloadDigests,
 		signet.PublicationReevaluationRequestedKind: signet.PublicationReevaluationBackupPayloadDigests,
 		signet.PublicationReevaluationCompletedKind: signet.PublicationReevaluationCompletionBackupPayloadDigests,

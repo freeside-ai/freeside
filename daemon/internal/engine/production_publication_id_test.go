@@ -60,22 +60,39 @@ func TestReadinessReentryExhaustionItemIDSeparatesCyclesAndNamespaces(t *testing
 	}
 }
 
+// Production's ready and blocked item IDs hash the retired fake lane's task
+// kind, so every stored item is keyed by these exact strings. The expected
+// IDs were copied from the functions before the lane's codec was deleted;
+// a change here orphans every stored production ready and blocked item.
 func TestFakePublicationTerminalItemIDsUseWorkflowNamespace(t *testing.T) {
 	t.Parallel()
-	ids := []domain.ItemID{
-		readyItemID("run-1"),
-		blockedItemID("run-1"),
-		readyItemID("run-2"),
-		blockedItemID("run-2"),
+	if got, want := readyItemID("run-1"), domain.ItemID(
+		"fake-publication-ready-92f7db10592864199ce732ead6522282cdb21a91b9763c8b80ca11425631d21f",
+	); got != want {
+		t.Fatalf("readyItemID(run-1) = %q, want %q", got, want)
+	}
+	if got, want := blockedItemID("run-1"), domain.ItemID(
+		"fake-publication-blocked-2caaee1e0f1b2cdd71018066c1e281e38b405e3dcf41a4d3bdcb5946d7d210f4",
+	); got != want {
+		t.Fatalf("blockedItemID(run-1) = %q, want %q", got, want)
+	}
+	ids := []struct {
+		id     domain.ItemID
+		prefix string
+	}{
+		{readyItemID("run-1"), "fake-publication-ready-"},
+		{blockedItemID("run-1"), "fake-publication-blocked-"},
+		{readyItemID("run-2"), "fake-publication-ready-"},
+		{blockedItemID("run-2"), "fake-publication-blocked-"},
 	}
 	seen := map[domain.ItemID]bool{}
-	for _, id := range ids {
-		if !strings.HasPrefix(string(id), "fake-publication-") {
-			t.Fatalf("terminal item id %q is outside workflow namespace", id)
+	for _, item := range ids {
+		if !strings.HasPrefix(string(item.id), item.prefix) {
+			t.Fatalf("terminal item id %q is outside namespace %q", item.id, item.prefix)
 		}
-		if seen[id] {
-			t.Fatalf("terminal item id collision: %q", id)
+		if seen[item.id] {
+			t.Fatalf("terminal item id collision: %q", item.id)
 		}
-		seen[id] = true
+		seen[item.id] = true
 	}
 }

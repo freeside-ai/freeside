@@ -219,54 +219,6 @@ func TestRunServesSignetAndStops(t *testing.T) {
 	}
 }
 
-func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "freeside.db")
-	cfg := config{
-		Environment: environmentEphemeral,
-		DBPath:      dbPath, FakeDriverDir: filepath.Join(root, "driver"),
-		FakeDriverEnabled: true,
-		ListenAddr:        "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
-	}
-	cleanCtx, stopClean := context.WithCancel(context.Background())
-	seedTemplateStore(t, dbPath)
-	clean, err := run(cleanCtx, nil, cfg)
-	if err != nil {
-		stopClean()
-		t.Fatal(err)
-	}
-	stopClean()
-	if err := errors.Join(clean.Wait(cleanCtx), clean.Close()); err != nil {
-		t.Fatal(err)
-	}
-
-	st := storetest.Open(t, dbPath, store.Options{})
-	const key = "engine.fake_publication/legacy-invalid"
-	seedErr := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
-		if _, _, err := tx.EnqueueOutbox(
-			context.Background(), key, engine.FakePublicationTaskKind, []byte(`{}`),
-		); err != nil {
-			return err
-		}
-		return tx.MarkOutboxDispatched(context.Background(), key)
-	})
-	if err := errors.Join(seedErr, st.Close()); err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	h, err := run(ctx, nil, cfg)
-	if err == nil {
-		_ = h.Close()
-		t.Fatal("run started scheduler before rejecting malformed legacy publication history")
-	}
-	if !strings.Contains(err.Error(), "converge legacy fake-publication policies") {
-		t.Fatalf("run error = %v, want synchronous legacy convergence", err)
-	}
-}
-
 // A durable row this binary cannot reconstruct, the shape a downgrade leaves
 // behind, must not stop the daemon from starting: startup is the one pass an
 // operator cannot retry past, and a daemon that will not start cannot be
