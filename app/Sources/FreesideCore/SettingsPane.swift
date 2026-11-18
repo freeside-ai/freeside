@@ -180,22 +180,30 @@ enum SettingsHost {
 
 // MARK: - Pane grammar
 
-/// The pane's opening: the title in the serif, one dim line under it.
+/// The pane's opening: the title in the serif, one dim line under it. A
+/// view whose title is a sentence rather than its own name passes a
+/// keyword, drawn above the title as the sheet header draws its eyebrow.
 struct SettingsPaneHead: View {
+    var keyword: String? = nil
     let title: String
     var line: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(FreesideFont.sheetAsk)
-                .foregroundStyle(Color.ink)
-                .accessibilityAddTraits(.isHeader)
-            if let line {
-                Text(line)
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 6) {
+            if let keyword {
+                KeywordLabel(text: keyword)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(FreesideFont.sheetAsk)
+                    .foregroundStyle(Color.ink)
+                    .accessibilityAddTraits(.isHeader)
+                if let line {
+                    Text(line)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.bottom, 4)

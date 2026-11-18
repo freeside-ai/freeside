@@ -57,14 +57,13 @@ struct WorkStatusView: View {
 
     private func content(overTime screenshot: WorkHoursView?) -> some View {
         let shown = screenshot == nil ? tab : .overTime
-        return VStack(alignment: .leading, spacing: 0) {
-            FreesideSheetHeader(
-                eyebrow: "Work Status",
-                ask: "Where your work is sitting",
-                consequence: "\(UnifiedListView.filterState(projectID: projectID)). "
+        return VStack(alignment: .leading, spacing: 12) {
+            SettingsPaneHead(
+                keyword: "Work Status",
+                title: "Where your work is sitting",
+                line: "\(UnifiedListView.filterState(projectID: projectID)). "
                     + (shown == .now
-                        ? "Choose a count to show its tasks in the list." : "Choose a day to see its tasks."),
-                askLineLimit: nil)
+                        ? "Choose a count to show its tasks in the list." : "Choose a day to see its tasks."))
             VStack(alignment: .leading, spacing: 16) {
                 FreesideSegmentedControl(
                     accessibilityLabel: "Work status",
@@ -76,9 +75,8 @@ struct WorkStatusView: View {
                     if let screenshot { screenshot } else { liveHours }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
         }
+        .padding(16)
         .frame(maxWidth: DecisionCardComposition.Scale.columnCap)
         .padding(.horizontal, Self.sideMargin)
         .padding(.top, topMargin ?? 0)
