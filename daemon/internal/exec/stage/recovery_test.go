@@ -110,9 +110,12 @@ func orphanInvocation(
 	if err != nil {
 		t.Fatalf("render prompt: %v", err)
 	}
+	if released != nil && released.RecordedAt.IsZero() {
+		released.RecordedAt = fixedNow
+	}
 	in := intent{
 		InvocationID: id, RunID: testRunIDFor(id), Phase: ph, Spec: spec,
-		Seed: filepath.Join(d.seedRoot, testRunIDFor(id)), Prompt: prompt,
+		Seed: filepath.Join(d.seedRoot, testRunIDFor(id)), Prompt: prompt, PromptDelivery: PromptFileV8,
 		Inputs: durableInputsFrom(inputs), Instructions: instructions, Export: released,
 		RecordedAt: fixedNow, CommitDate: fixedNow,
 	}

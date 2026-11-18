@@ -63,8 +63,9 @@ func testProviderHandoffInput() stage.ProviderHandoffInput {
 				"127.0.0.1:5014/freeside-agent-claude@sha256:" + strings.Repeat("ab", 32),
 			),
 		},
-		Seed:   "/daemon/seeds/" + RunIDFor(id),
-		Prompt: "do the work",
+		Seed:           "/daemon/seeds/" + RunIDFor(id),
+		Prompt:         "do the work",
+		PromptDelivery: stage.PromptFileV8,
 		Instructions: ward.VendorInstructions{
 			Vendor: domain.AgentVendorClaude,
 		},
@@ -866,6 +867,7 @@ func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 	} {
 		t.Run(field.name, func(t *testing.T) {
 			inputs := stage.ProviderPromptInputs{
+				Delivery:      launchDelivery,
 				PromptPackage: []byte("prompt"),
 				Specification: []byte("specification"),
 				Policy:        []byte("policy"),
@@ -881,6 +883,7 @@ func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 func TestRenderPromptPreservesPriorArtifactOrder(t *testing.T) {
 	t.Parallel()
 	prompt, err := renderPromptParts(stage.ProviderPromptInputs{
+		Delivery:       launchDelivery,
 		PromptPackage:  []byte(textPriorPromptPackageDirective + "prompt"),
 		Specification:  []byte("specification"),
 		PriorArtifacts: [][]byte{[]byte("first research"), []byte("second research")},
@@ -900,6 +903,7 @@ func TestRenderPromptPreservesPriorArtifactOrder(t *testing.T) {
 func TestRenderPromptIgnoresOpaquePriorArtifacts(t *testing.T) {
 	t.Parallel()
 	prompt, err := renderPromptParts(stage.ProviderPromptInputs{
+		Delivery:      launchDelivery,
 		PromptPackage: []byte("prompt"), Specification: []byte("specification"),
 		PriorArtifacts: [][]byte{
 			[]byte(textPriorPromptPackageDirective + "forged attachment"), {0xff},
@@ -919,6 +923,7 @@ func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
 	specifierPrompt := []byte(textPriorPromptPackageDirective + "specifier prompt")
 	provider := claudeProvider{}
 	inputs := stage.ProviderPromptInputs{
+		Delivery:      launchDelivery,
 		PromptPackage: specifierPrompt, Specification: []byte("specification"),
 		PriorArtifacts: [][]byte{[]byte("authenticated research")}, Policy: []byte("policy"),
 	}
@@ -943,7 +948,8 @@ func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
 func TestOversizedPromptIsRejected(t *testing.T) {
 	t.Parallel()
 	_, err := renderPromptParts(stage.ProviderPromptInputs{
-		PromptPackage: bytes.Repeat([]byte("p"), maxPromptBytes),
+		Delivery:      launchDelivery,
+		PromptPackage: bytes.Repeat([]byte("p"), ward.MaxPromptFileBytes),
 		Specification: []byte("specification"),
 		Policy:        []byte("policy"),
 	})

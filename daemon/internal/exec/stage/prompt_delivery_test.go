@@ -19,6 +19,7 @@ func TestPromptDeliveryModesAndLegacyRecord(t *testing.T) {
 	}
 	d := newTestDriver(t, &stubGate{}, newStubExports())
 	in := testHandoffIntent(t, d)
+	in.PromptDelivery = ""
 	if in.delivery() != PromptArgument {
 		t.Fatal("legacy record changed delivery")
 	}
@@ -59,6 +60,7 @@ func TestProviderCannotSubstitutePromptFile(t *testing.T) {
 				}
 				d.provider = testProvider{handoffMutate: func(hs *ward.HandoffSpec) {
 					if change == "missing" {
+						hs.Agent.PromptFile = nil
 						return
 					}
 					hs.Agent.PromptFile = ward.NewPromptFile([]byte(in.Prompt))

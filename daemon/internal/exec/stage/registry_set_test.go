@@ -94,8 +94,9 @@ func TestProviderRegistryIntentPassesTheReconstructionGate(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
+		RegistryHosts: []string{"proxy.golang.org", "registry.npmjs.org"},
 	}
 	if err := d.saveIntent(in); err != nil {
 		t.Fatalf("save intent: %v", err)
@@ -125,6 +126,7 @@ func registryIntent(t *testing.T, d *Driver) intent {
 	if err != nil {
 		t.Fatal(err)
 	}
+	in.RegistryHosts = []string{"proxy.golang.org", "registry.npmjs.org"}
 	return in
 }
 

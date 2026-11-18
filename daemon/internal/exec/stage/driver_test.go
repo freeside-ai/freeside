@@ -104,7 +104,7 @@ func (p testProvider) Workspace(id domain.InvocationID) string {
 
 func (testProvider) PrepareFailedStatus() int { return testPrepareFailedStatus }
 
-func (testProvider) PromptDelivery() PromptDelivery { return PromptArgument }
+func (testProvider) PromptDelivery() PromptDelivery { return PromptFileV8 }
 
 func (testProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
 	return renderPromptParts(durableInputs{
@@ -212,6 +212,7 @@ func (p testProvider) HandoffSpec(
 				Manifest: ward.CredentialManifestSetupToken,
 			}},
 			VendorInstructions: in.Instructions,
+			PromptFile:         ward.NewPromptFile([]byte(in.Prompt)),
 		},
 		AuthStoreLease: &ward.AuthStoreLeaseClaim{
 			AuthIdentityID: spec.AuthIdentityID, Holder: in.InvocationID,
@@ -1668,7 +1669,7 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 
@@ -1748,8 +1749,8 @@ func testHandoffIntent(t *testing.T, d *Driver) intent {
 	return intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs), Instructions: instructions,
-		RecordedAt: fixedNow, CommitDate: fixedNow,
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
+		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 }
 
@@ -1948,7 +1949,7 @@ func TestHandoffSpecCommandTracksTheRecordNotComposition(t *testing.T) {
 		return intent{
 			InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 			Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-			Prompt: prompt, Inputs: durableInputsFrom(inputs),
+			Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 			Instructions: instructions, Preparation: prep,
 			RecordedAt: fixedNow, CommitDate: fixedNow,
 		}
@@ -2031,7 +2032,7 @@ func TestDecodeIntentReGatesPreparation(t *testing.T) {
 	}
 	valid := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
-		Spec: spec, Seed: "seed", Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Spec: spec, Seed: "seed", Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, Preparation: []string{projectimage.PreparationPath},
 		RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
@@ -2090,7 +2091,8 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 	base := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)), Prompt: prompt,
-		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
+		PromptDelivery: PromptFileV8,
+		Instructions:   instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	tests := []struct {
 		name string
@@ -2966,7 +2968,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durable,
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durable,
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	if err := d.saveIntent(in); err != nil {
@@ -3073,7 +3075,7 @@ func TestRecoveryOfLostHandoffReportsNoResult(t *testing.T) {
 	in := intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	if err := d.saveIntent(in); err != nil {

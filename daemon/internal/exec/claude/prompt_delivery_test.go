@@ -44,6 +44,7 @@ func TestPromptDeliveryPreservesLegacyRefusalAndSupportsCompleteFile(t *testing.
 
 func TestPromptFileDoesNotChangeLegacyHandoff(t *testing.T) {
 	in := testProviderHandoffInput()
+	in.PromptDelivery = ""
 	provider := claudeProvider{volumes: testAuthStoreVolumes{}}
 	legacy, err := provider.HandoffSpec(t.Context(), in)
 	if err != nil {

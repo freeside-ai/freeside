@@ -32,7 +32,7 @@ func TestPinnedClaudeUsageDriverLive(t *testing.T) {
 	prompt := []byte(strings.Repeat("Synthetic UTF-8 α ' $() \\n\n", 2500) + "end")
 	sum := sha256.Sum256(prompt)
 	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}).
-		HandoffSpec(context.Background(), handoffCommandCase{delivery: stage.PromptFileV6}.input())
+		HandoffSpec(context.Background(), handoffCommandCase{delivery: stage.PromptFileV8}.input())
 	if err != nil {
 		t.Fatal(err)
 	}

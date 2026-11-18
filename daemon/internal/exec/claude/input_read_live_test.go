@@ -41,7 +41,7 @@ func TestPinnedClaudeInputReadLive(t *testing.T) {
 		t.Run(map[bool]string{false: "implementation", true: "specification"}[specification], func(t *testing.T) {
 			hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}).HandoffSpec(
 				context.Background(),
-				handoffCommandCase{delivery: stage.PromptFileV6, specification: specification}.input())
+				handoffCommandCase{delivery: stage.PromptFileV8, specification: specification}.input())
 			if err != nil {
 				t.Fatal(err)
 			}

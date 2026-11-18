@@ -37,11 +37,15 @@ func handoffSpecWithProfileAndPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Record the set a start records; a policy whose set a start refuses
+	// records none, and the handoff refuses it on its own read.
+	hosts, _ := d.startRegistryHosts(context.Background(), spec, []byte(policyBody))
 	return d.handoffSpec(context.Background(), intent{
 		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
-		Prompt: prompt, Inputs: durableInputsFrom(inputs),
+		Prompt: prompt, PromptDelivery: PromptFileV8, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
+		RegistryHosts: hosts,
 	})
 }
 
