@@ -3350,8 +3350,8 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		artifacts = checkpoint.Artifacts
 	case productionBlockMemoryLimit:
 		// A first cycle's killed verification records no checkpoint and no
-		// evidence. An unpublished re-entry's carries the authorizing
-		// checkpoint it re-verified, like its other base-advance blocks.
+		// evidence. A handoff's carries the authorizing checkpoint whose
+		// merge into the tip it verified.
 		if progress.hasCheckpoint() {
 			if !checkpoint.Authorization.AuthorizesPublication {
 				return nil, fmt.Errorf("production blocked item %q has an impossible memory-limit reason: %w",

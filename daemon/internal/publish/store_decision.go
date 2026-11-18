@@ -207,10 +207,9 @@ func (d *storePublicationDecision) prepare(
 			// of stranding a branch.
 			if reservationState == invocationReserved {
 				// A first publication a later first-publication cycle
-				// replaced may no longer commit an intent: a stored
-				// unpublished re-entry (v5, now read-only legacy) or a
-				// handoff conflict's remediation sealed against the
-				// reservation this one would settle.
+				// replaced may no longer commit an intent: a handoff
+				// conflict's remediation sealed against the reservation
+				// this one would settle.
 				current, err := tx.CurrentPublicationSuccessor(ctx, c.RunID)
 				if err != nil {
 					return fmt.Errorf("read current publication successor: %w", err)

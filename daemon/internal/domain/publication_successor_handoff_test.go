@@ -44,7 +44,7 @@ func TestPublicationSuccessorHandoffConflictValidation(t *testing.T) {
 		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
 		"external finding":     func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
 		"profile":              func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
-		"other origin":         func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorBaseAdvance },
+		"other origin":         func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorReadinessInvalidation },
 		"other version":        func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationReentryVersion },
 		"first round":          func(s *domain.PublicationSuccessor) { s.ReviewRound = 1 },
 	} {
@@ -63,7 +63,7 @@ func TestPublicationSuccessorHandoffConflictValidation(t *testing.T) {
 		"first publication": func(s *domain.PublicationSuccessor) { s.FirstPublication = true },
 	} {
 		for _, other := range []domain.PublicationSuccessor{
-			reentrySuccessor(), externalReviewSuccessor(), unpublishedReentrySuccessor(),
+			reentrySuccessor(), externalReviewSuccessor(), handBackSuccessor(),
 		} {
 			mutate(&other)
 			if other.Validate() == nil {
@@ -111,8 +111,7 @@ func TestPublicationSuccessorHandoffConflictCanonical(t *testing.T) {
 
 func TestPublicationSuccessorHandoffConflictPredicates(t *testing.T) {
 	first := handoffConflictSuccessor()
-	if !first.RemediatesHandoffConflict() || !first.MakesFirstPublication() ||
-		first.ReentersUnpublishedHead() || first.RepublishesUnpublished() || first.AdmitsSuccessorReentry() {
+	if !first.RemediatesHandoffConflict() || !first.MakesFirstPublication() {
 		t.Fatalf("first-publication handoff conflict predicates are wrong: %#v", first)
 	}
 	update := first
@@ -120,8 +119,8 @@ func TestPublicationSuccessorHandoffConflictPredicates(t *testing.T) {
 	if update.MakesFirstPublication() {
 		t.Fatal("a handoff conflict that updates a pull request makes a first publication")
 	}
-	if !unpublishedReentrySuccessor().MakesFirstPublication() || reentrySuccessor().MakesFirstPublication() {
-		t.Fatal("MakesFirstPublication disagrees with the v5 and v3 shapes")
+	if reentrySuccessor().MakesFirstPublication() {
+		t.Fatal("a v3 re-entry makes a first publication")
 	}
 }
 
@@ -139,7 +138,6 @@ func TestPublicationSuccessorCarriesForeignHead(t *testing.T) {
 	for name, successor := range map[string]domain.PublicationSuccessor{
 		"base_advanced re-entry": reentrySuccessor(),
 		"handoff conflict":       handoffConflictSuccessor(),
-		"unpublished re-entry":   unpublishedReentrySuccessor(),
 		"no re-entry":            {},
 	} {
 		if successor.CarriesForeignHead() {

@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -29,8 +30,6 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		{"publication-successor-v2", continuation},
 		{"publication-successor-v3", reentry},
 		{"publication-successor-v4", externalReviewSuccessor()},
-		{"publication-successor-v5", unpublishedReentrySuccessor()},
-		{"publication-successor-v6", successorReentrySuccessor()},
 		{"publication-successor-v7", handoffConflictSuccessor()},
 		{"publication-successor-v8", handBackSuccessor()},
 	} {
@@ -69,10 +68,6 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value = reentry
 		case domain.PublicationSuccessorExternalReview:
 			value = externalReviewSuccessor()
-		case domain.PublicationSuccessorUnpublishedBaseAdvance:
-			value = unpublishedReentrySuccessor()
-		case domain.PublicationSuccessorBaseAdvance:
-			value = successorReentrySuccessor()
 		case domain.PublicationSuccessorHandoffConflict:
 			value = handoffConflictSuccessor()
 		case domain.PublicationSuccessorHandBack:
@@ -104,8 +99,6 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
 		func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
 		func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
-		func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorUnpublishedBaseAdvance },
-		func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationUnpublishedReentryVersion },
 	} {
 		invalid := continuation
 		mutate(&invalid)
@@ -141,26 +134,6 @@ func reentrySuccessor() domain.PublicationSuccessor {
 	}
 }
 
-func unpublishedReentrySuccessor() domain.PublicationSuccessor {
-	return domain.PublicationSuccessor{
-		Version: domain.PublicationUnpublishedReentryVersion, Origin: domain.PublicationSuccessorUnpublishedBaseAdvance,
-		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
-		Reentry: &domain.PublicationSuccessorReentry{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-1",
-		},
-	}
-}
-
-func successorReentrySuccessor() domain.PublicationSuccessor {
-	return domain.PublicationSuccessor{
-		Version: domain.PublicationSuccessorReentryVersion, Origin: domain.PublicationSuccessorBaseAdvance,
-		RunID: "run-1", PredecessorItemID: "production-ready-feedback-return-1", PriorReviewInvocationID: "review-2", ReviewRound: 3,
-		Reentry: &domain.PublicationSuccessorReentry{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-2",
-		},
-	}
-}
-
 func externalReviewSuccessor() domain.PublicationSuccessor {
 	return domain.PublicationSuccessor{
 		Version: domain.PublicationExternalReviewVersion, Origin: domain.PublicationSuccessorExternalReview,
@@ -187,7 +160,7 @@ func TestPublicationSuccessorHandBackValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !valid.HandsBack() || !valid.AnswersExternalFindings() || valid.CarriesForeignHead() ||
-		valid.AdmitsSuccessorReentry() || valid.RemediatesHandoffConflict() {
+		valid.RemediatesHandoffConflict() {
 		t.Fatal("hand_back predicates")
 	}
 	if external := externalReviewSuccessor(); external.HandsBack() || !external.AnswersExternalFindings() {
@@ -441,79 +414,6 @@ func TestPublicationSuccessorReentryIdentities(t *testing.T) {
 	}
 }
 
-// An unpublished base-advance record is the v3 shape under its own version and
-// origin: a base advance with both coordinates, and no command, feedback,
-// reevaluation, or external-review field. Neither shape may wear the other's
-// version or origin, so a store reader can tell a run that never published
-// from one whose pull request needs updating.
-func TestPublicationSuccessorUnpublishedReentryValidation(t *testing.T) {
-	valid := unpublishedReentrySuccessor()
-	if err := valid.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if !valid.RepublishesUnpublished() || reentrySuccessor().RepublishesUnpublished() ||
-		externalReviewSuccessor().RepublishesUnpublished() {
-		t.Fatal("RepublishesUnpublished does not single out the unpublished origin")
-	}
-	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
-		"head changed":         func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationHeadChanged },
-		"retargeted":           func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationRetargeted },
-		"no reason":            func(s *domain.PublicationSuccessor) { s.Reentry.Reason = "" },
-		"no base":              func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
-		"no head":              func(s *domain.PublicationSuccessor) { s.Reentry.HeadSHA = "" },
-		"no reentry":           func(s *domain.PublicationSuccessor) { s.Reentry = nil },
-		"command":              func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
-		"feedback invocation":  func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
-		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
-		"external finding":     func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
-		"admitting profile":    func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
-		"published origin":     func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorReadinessInvalidation },
-		"external origin":      func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
-		"no origin":            func(s *domain.PublicationSuccessor) { s.Origin = "" },
-		"published version":    func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationReentryVersion },
-		"external version":     func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationExternalReviewVersion },
-		"continuation version": func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationContinuationVersion },
-		"no predecessor":       func(s *domain.PublicationSuccessor) { s.PredecessorItemID = "" },
-		"no prior review":      func(s *domain.PublicationSuccessor) { s.PriorReviewInvocationID = "" },
-		"first round":          func(s *domain.PublicationSuccessor) { s.ReviewRound = 1 },
-		"no run":               func(s *domain.PublicationSuccessor) { s.RunID = "" },
-	} {
-		invalid := unpublishedReentrySuccessor()
-		mutate(&invalid)
-		if invalid.Validate() == nil {
-			t.Errorf("%s: invalid unpublished re-entry accepted: %#v", name, invalid)
-		}
-	}
-	published := reentrySuccessor()
-	published.Origin = domain.PublicationSuccessorUnpublishedBaseAdvance
-	if published.Validate() == nil {
-		t.Fatal("a published re-entry version accepted the unpublished origin")
-	}
-}
-
-// The unpublished re-entry shares the commandless identities and the
-// base-advance prospective-merge rule: it keys on its predecessor, reviews the
-// head on the new base, and only the head's prospective merge into that base
-// stands in for the head. It admits no remediation at any base.
-func TestPublicationSuccessorUnpublishedReentryRules(t *testing.T) {
-	unpublished, published := unpublishedReentrySuccessor(), reentrySuccessor()
-	if unpublished.PublicationID() != published.PublicationID() || unpublished.TaskKey() != published.TaskKey() ||
-		unpublished.ReadyItemID() != published.ReadyItemID() {
-		t.Fatal("unpublished re-entry does not take the commandless identities")
-	}
-	request := domain.RemediationInvocationIntent{
-		RunID: unpublished.RunID, SuccessorPublicationID: unpublished.PublicationID(), Round: unpublished.ReviewRound,
-		BaseSHA: unpublished.Reentry.BaseSHA, HeadSHA: unpublished.Reentry.HeadSHA,
-	}
-	if unpublished.AllowsRemediation(request) {
-		t.Fatal("unpublished re-entry admitted remediation at its base and head")
-	}
-	request.BaseSHA = "base-1"
-	if unpublished.AllowsRemediation(request) {
-		t.Fatal("unpublished re-entry admitted remediation at the superseded base")
-	}
-}
-
 func TestPublicationSuccessorReentryRemediation(t *testing.T) {
 	advanced := reentrySuccessor()
 	request := domain.RemediationInvocationIntent{
@@ -550,66 +450,18 @@ func TestPublicationSuccessorReentryRemediation(t *testing.T) {
 	}
 }
 
-// A successor re-entry is the unpublished re-entry's shape under its own
-// version and origin (issue #2111): it keeps an unpublished head and reviews
-// its prospective merge into the newer base, but updates the pull request the
-// run already published instead of opening one.
-func TestPublicationSuccessorSuccessorReentry(t *testing.T) {
-	valid := successorReentrySuccessor()
-	if err := valid.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if !valid.ReentersUnpublishedHead() || valid.RepublishesUnpublished() {
-		t.Fatal("successor re-entry is not an unpublished-head re-entry that updates a pull request")
-	}
-	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
-		"head changed":         func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationHeadChanged },
-		"no base":              func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
-		"no reentry":           func(s *domain.PublicationSuccessor) { s.Reentry = nil },
-		"command":              func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
-		"feedback invocation":  func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
-		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
-		"unpublished origin":   func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorUnpublishedBaseAdvance },
-		"unpublished version":  func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationUnpublishedReentryVersion },
-		"published version":    func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationReentryVersion },
-		"continuation version": func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationContinuationVersion },
+// A record at a retired version fails loudly (issue #3341). Versions 5 and 6
+// re-entered an unpublished head at a newer base; no writer has sealed one
+// since the handoff check replaced that re-entry (567421d46). The bodies are
+// the canonical shapes their goldens pinned, so only the retired version and
+// origin can be what refuses them.
+func TestPublicationSuccessorRetiredVersionsAreRefused(t *testing.T) {
+	for _, body := range []string{
+		`{"version":"freeside.publication-successor/v5","run_id":"run-1","command_id":"","feedback_invocation_id":"","predecessor_item_id":"production-ready-run-1","prior_review_invocation_id":"review-1","review_round":2,"origin":"unpublished_base_advance","reentry":{"reason":"base_advanced","base_sha":"base-2","head_sha":"head-1"}}`,
+		`{"version":"freeside.publication-successor/v6","run_id":"run-1","command_id":"","feedback_invocation_id":"","predecessor_item_id":"production-ready-feedback-return-1","prior_review_invocation_id":"review-2","review_round":3,"origin":"successor_base_advance","reentry":{"reason":"base_advanced","base_sha":"base-2","head_sha":"head-2"}}`,
 	} {
-		invalid := successorReentrySuccessor()
-		mutate(&invalid)
-		if invalid.Validate() == nil {
-			t.Errorf("%s: invalid successor re-entry accepted: %#v", name, invalid)
-		}
-	}
-	request := domain.RemediationInvocationIntent{
-		RunID: valid.RunID, SuccessorPublicationID: valid.PublicationID(), Round: valid.ReviewRound,
-		BaseSHA: valid.Reentry.BaseSHA, HeadSHA: valid.Reentry.HeadSHA,
-	}
-	if valid.AllowsRemediation(request) {
-		t.Fatal("successor re-entry admitted remediation")
-	}
-}
-
-// Only a cycle that updates a pull request with a head of its own admits a
-// successor re-entry. The store's read gate still needs the rule to decode a
-// stored v6 successor; no new one is sealed (issue #2644).
-func TestPublicationSuccessorAdmitsSuccessorReentry(t *testing.T) {
-	feedback := domain.PublicationSuccessor{
-		Version: domain.PublicationContinuationVersion, Origin: domain.PublicationSuccessorFeedback,
-		RunID: "run-1", CommandID: "return-1", FeedbackInvocationID: "inv-feedback-1",
-		PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-2", ReviewRound: 3,
-	}
-	remediation := feedback
-	remediation.Origin, remediation.FeedbackInvocationID, remediation.ReevaluationCommandID = domain.PublicationSuccessorRemediation, "", "rerun-1"
-	for _, admits := range []domain.PublicationSuccessor{feedback, remediation, successorReentrySuccessor()} {
-		if !admits.AdmitsSuccessorReentry() {
-			t.Errorf("%s cycle does not admit a successor re-entry", admits.EffectiveOrigin())
-		}
-	}
-	for _, refuses := range []domain.PublicationSuccessor{
-		reentrySuccessor(), externalReviewSuccessor(), unpublishedReentrySuccessor(),
-	} {
-		if refuses.AdmitsSuccessorReentry() {
-			t.Errorf("%s cycle admits a successor re-entry", refuses.EffectiveOrigin())
+		if _, err := domain.DecodePublicationSuccessor([]byte(body)); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Errorf("retired successor decoded: %v\n%s", err, body)
 		}
 	}
 }

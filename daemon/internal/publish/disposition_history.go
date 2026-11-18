@@ -199,11 +199,7 @@ func loadDispositionHistoryFromTx(
 	if err != nil {
 		return DispositionHistory{}, err
 	}
-	evaluatedBase, segments, err := dispositionReentryContext(ctx, tx, c, auth)
-	if err != nil {
-		return DispositionHistory{}, err
-	}
-	reviews, dispositions = currentDispositionLineage(reviews, dispositions, segments)
+	reviews, dispositions = currentDispositionLineage(reviews, dispositions)
 	if len(reviews) == 0 {
 		return DispositionHistory{}, fmt.Errorf("no current review lineage: %w", domain.ErrParentKeyMismatch)
 	}
@@ -243,7 +239,7 @@ func loadDispositionHistoryFromTx(
 		)
 	}
 	if expectedInstructionDigest == "" || review.InstructionDigest != expectedInstructionDigest ||
-		review.BaseSHA != evaluatedBase {
+		review.BaseSHA != auth.BaseSHA {
 		return DispositionHistory{}, fmt.Errorf("review authority disagrees with current publication decision: %w", domain.ErrParentKeyMismatch)
 	}
 	run, err := tx.GetRun(ctx, c.RunID)
@@ -271,7 +267,7 @@ func loadDispositionHistoryFromTx(
 	}
 	base := domain.BaseRevision{
 		Repo: c.Repo, RepositoryID: profile.RepositoryID,
-		BaseRef: c.BaseRef, BaseSHA: evaluatedBase,
+		BaseRef: c.BaseRef, BaseSHA: auth.BaseSHA,
 	}
 	verificationProof, err := domain.NewCheckProof(resolutions[0], c.HeadSHA, &base, *c.RecipeDigest)
 	if err != nil {
@@ -322,86 +318,6 @@ func loadDispositionHistoryFromTx(
 	}, st)
 }
 
-// lineageSegment says which base the rounds from FromRound on were reviewed
-// at, until the next segment begins. The run's unpublished re-entry chain
-// defines the segments (dispositionReentryContext).
-type lineageSegment struct {
-	FromRound int
-	BaseSHA   string
-}
-
-// dispositionReentryContext derives, from the store alone, what the run's
-// unpublished re-entries change about a disposition history (issue #2058),
-// counting a successor's re-entry of its unpublished head (issue #2111).
-// The returned base is the one the candidate's head was evaluated at: the
-// authorization's base, or the base of an unpublished re-entry whose own
-// publication the candidate is. The segments name the base of each
-// stretch of rounds the run's re-entry chain links, so rounds at a base an
-// earlier cycle superseded keep their dispositions in the lineage; none is
-// returned for a run without an unpublished re-entry.
-func dispositionReentryContext(
-	ctx context.Context, tx *store.ReadTx, c Candidate, auth domain.CandidateAuthorization,
-) (string, []lineageSegment, error) {
-	evaluatedBase := auth.BaseSHA
-	chain, err := tx.PublicationSuccessorChain(ctx, c.RunID)
-	if err != nil {
-		return "", nil, err
-	}
-	priorBases := make(map[domain.InvocationID]string)
-	for _, successor := range chain {
-		if !successor.ReentersUnpublishedHead() {
-			continue
-		}
-		prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
-		if err != nil {
-			return "", nil, err
-		}
-		priorBases[successor.PriorReviewInvocationID] = prior.BaseSHA
-	}
-	segments := reentryLineageSegments(chain, priorBases)
-	for _, successor := range chain {
-		if !successor.ReentersUnpublishedHead() || successor.PublicationID() != c.InvocationID {
-			continue
-		}
-		// A stored re-entry's own publication (read-only legacy) evaluated a
-		// merge no candidate names any more, so readiness at the re-entry
-		// base without that merge no longer matches what the engine
-		// persisted, and the history fails closed.
-		evaluatedBase = successor.Reentry.BaseSHA
-	}
-	return evaluatedBase, segments, nil
-}
-
-// reentryLineageSegments derives the lineage segments from the run's
-// successor chain, root first, and the base each re-entry's prior review ran
-// at, keyed by that review's invocation. The first re-entry opens the
-// segment its prior rounds share. A successor re-entry (issue #2111) can
-// replace a feedback or remediation cycle that worked at another base than
-// the re-entry before it, so that cycle's rounds open a segment of their own
-// from its first round. Each re-entry then opens its own segment at its base.
-func reentryLineageSegments(
-	chain []domain.PublicationSuccessor, priorBases map[domain.InvocationID]string,
-) []lineageSegment {
-	var segments []lineageSegment
-	var replaced domain.PublicationSuccessor
-	for _, successor := range chain {
-		if !successor.ReentersUnpublishedHead() {
-			replaced = successor
-			continue
-		}
-		prior := priorBases[successor.PriorReviewInvocationID]
-		switch {
-		case len(segments) == 0:
-			segments = append(segments, lineageSegment{FromRound: 0, BaseSHA: prior})
-		case prior != segments[len(segments)-1].BaseSHA:
-			segments = append(segments, lineageSegment{FromRound: replaced.ReviewRound, BaseSHA: prior})
-		}
-		segments = append(segments, lineageSegment{FromRound: successor.ReviewRound, BaseSHA: successor.Reentry.BaseSHA})
-		replaced = successor
-	}
-	return segments
-}
-
 // currentDispositionLineage keeps the review rounds that share the latest
 // pass's exact base, reviewer configuration, and instruction authority. A
 // superseded pass under stale instructions or configuration is durable history
@@ -409,58 +325,18 @@ func reentryLineageSegments(
 // publication and may correctly have no disposition. Remediation rounds remain
 // included because their heads may change while these authority bindings stay
 // fixed.
-//
-// An unpublished re-entry moves the base mid-lineage (issue #2058): its round
-// reviews the same candidate merged into a newer base. When the latest round
-// sits in the last segment the run's re-entry chain links, at that segment's
-// base, each earlier round belongs if it was reviewed at the base of its own
-// segment. Only bases the chain names link, and the configuration equality
-// still applies to every round. Each segment's base composes its own
-// repository instructions, so a round answers to the instructions of the
-// latest round in its own segment, the way the single-base rule's rounds
-// answer to the latest pass: an advance that changes the instructions keeps
-// the earlier segment's dispositions in the history, while a pass superseded
-// within one segment stays out. Any other latest round, such as one at a base
-// a later published re-entry moved to, keeps the single-base rule.
 func currentDispositionLineage(
 	reviews []domain.ReviewRecord,
 	dispositions []domain.ReviewDispositionRecord,
-	segments []lineageSegment,
 ) ([]domain.ReviewRecord, []domain.ReviewDispositionRecord) {
 	if len(reviews) == 0 {
 		return nil, nil
 	}
 	latest := reviews[len(reviews)-1]
-	baseFor := func(int) string { return latest.BaseSHA }
-	instructionsFor := func(int) domain.Digest { return latest.InstructionDigest }
-	if len(segments) > 0 {
-		last := segments[len(segments)-1]
-		if latest.Round >= last.FromRound && latest.BaseSHA == last.BaseSHA {
-			segmentOf := func(round int) int {
-				index := 0
-				for i, segment := range segments {
-					if round >= segment.FromRound {
-						index = i
-					}
-				}
-				return index
-			}
-			baseFor = func(round int) string { return segments[segmentOf(round)].BaseSHA }
-			segmentInstructions := make([]domain.Digest, len(segments))
-			for _, review := range reviews {
-				index := segmentOf(review.Round)
-				if review.BaseSHA == segments[index].BaseSHA &&
-					review.ConfigurationDigest == latest.ConfigurationDigest {
-					segmentInstructions[index] = review.InstructionDigest
-				}
-			}
-			instructionsFor = func(round int) domain.Digest { return segmentInstructions[segmentOf(round)] }
-		}
-	}
 	sameAuthority := func(review domain.ReviewRecord) bool {
-		return review.BaseSHA == baseFor(review.Round) &&
+		return review.BaseSHA == latest.BaseSHA &&
 			review.ConfigurationDigest == latest.ConfigurationDigest &&
-			review.InstructionDigest == instructionsFor(review.Round)
+			review.InstructionDigest == latest.InstructionDigest
 	}
 	currentRounds := make(map[int]struct{}, len(reviews))
 	currentReviews := make([]domain.ReviewRecord, 0, len(reviews))

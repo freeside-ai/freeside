@@ -153,8 +153,8 @@ func (t *GitPublicationTransport) ProspectiveMerge(
 }
 
 // ProspectiveMergeOnto forwards to the sealed transport. Like UpdateHead it
-// is an optional seam the workflow asserts for: only a run whose base advanced
-// before its first publication needs a merge into a base other than the
+// is an optional seam the workflow asserts for: only a handoff whose target
+// tip moved past the checkout's base needs a merge into a base other than the
 // checkout's own.
 func (t *GitPublicationTransport) ProspectiveMergeOnto(
 	ctx context.Context, checkout PublicationCheckout, baseSHA, headSHA string,
