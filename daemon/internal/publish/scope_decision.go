@@ -28,10 +28,10 @@ func renderScopeDecision(f domain.ScopeDecisionFacts) (string, error) {
 	var out strings.Builder
 	fmt.Fprintf(&out, "<!-- %s -->\n\n%s\n\nThe operator kept the approved scope. Required work on these paths remains unmet; they were left unchanged:\n", scopeDecisionMarkerName, scopeDecisionHeading)
 	for _, p := range f.Paths {
-		fmt.Fprintf(&out, "- %s\n", boundedClaim(p, 768))
+		fmt.Fprintf(&out, "- %s\n", boundedInertClaim(p, 768))
 	}
 	fmt.Fprintf(&out, "\nDeclared paths: %s\n\nCandidate: %s\n\nDecision: %s at %s\n\nOperator answer: %s\n\n<!-- /%s -->",
-		boundedClaim(strings.Join(f.DeclaredPaths, ", "), 1024), boundedClaim(f.HeadSHA, 256), screenedScopeCommandClaim(f.CommandID, 256),
+		boundedInertClaim(strings.Join(f.DeclaredPaths, ", "), 1024), boundedInertClaim(f.HeadSHA, 256), screenedScopeCommandClaim(f.CommandID, 256),
 		f.DecidedAt.UTC().Format(time.RFC3339Nano), screenedScopeCommandClaim(f.Answer, 3072), scopeDecisionMarkerName)
 	if out.Len() > maxRenderedScopeDecisionBytes {
 		return "", fmt.Errorf("scope decision exceeds reserved body budget")
@@ -45,7 +45,7 @@ func screenedScopeCommandClaim(value string, limit int) string {
 	if importer.ContainsSecret([]byte(value)) {
 		return "[redacted: credential detected]"
 	}
-	return boundedClaim(value, limit)
+	return boundedInertClaim(value, limit)
 }
 
 func validateCurrentScopeDecision(ctx context.Context, tx *store.ReadTx, c Candidate) error {

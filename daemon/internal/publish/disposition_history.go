@@ -763,18 +763,13 @@ func boundedDispositionClaim(value string) string {
 }
 
 // boundedClaim renders value as an escaped code span of at most limit
-// bytes, identifying any omitted bytes by the value's content address.
+// bytes, identifying any omitted bytes by the value's content address. Its
+// bytes are frozen: the disposition history and an external review reply
+// bind them by digest. The body's other sections use boundedInertClaim.
 func boundedClaim(value string, limit int) string {
 	return truncatedClaim(value, limit, func() string {
 		return " (truncated; content digest " + dispositionCode(contentaddr.Sum([]byte(value))) + ")"
 	})
-}
-
-// shortClaim is boundedClaim without the content digest, for the
-// Verification section, whose reader has no use for one; the full value stays
-// in the store.
-func shortClaim(value string, limit int) string {
-	return truncatedClaim(value, limit, func() string { return " (truncated)" })
 }
 
 // truncatedClaim renders value as an escaped code span and, when that exceeds

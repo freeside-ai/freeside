@@ -103,7 +103,7 @@ func validateVerificationCandidate(c Candidate, auth domain.CandidateAuthorizati
 //
 // The section shows no digest, invocation id, base commit, or artifact list:
 // those stay in the store and the clients. Every recorded string is rendered
-// inert through dispositionCode, and every cap is a fixed byte or count bound,
+// inert through inertClaim, and every cap is a fixed byte or count bound,
 // so third-party volume shortens the section and never fails it.
 func renderVerification(rep *verify.Report, history *DispositionHistory) (string, error) {
 	var out strings.Builder
@@ -115,7 +115,7 @@ func renderVerification(rep *verify.Report, history *DispositionHistory) (string
 				fmt.Fprintf(&out, "- Omitted %d further commands Freeside ran.\n", len(rep.Steps)-i)
 				break
 			}
-			command := shortClaim(commandLine(step.Argv), maxRenderedVerificationArgvBytes)
+			command := inertClaim(commandLine(step.Argv), maxRenderedVerificationArgvBytes)
 			if step.ExitCode == 0 {
 				fmt.Fprintf(&out, "- Passed: %s, run by Freeside at %s\n", command, dispositionCode(at))
 			} else {
@@ -194,11 +194,11 @@ func unresolvedFindingLines(h DispositionHistory) []string {
 		var line strings.Builder
 		line.WriteString("  - " + label)
 		if finding.Location != nil {
-			line.WriteString(" at " + shortClaim(finding.Location.String(), maxRenderedVerificationClaimBytes))
+			line.WriteString(" at " + inertClaim(finding.Location.String(), maxRenderedVerificationClaimBytes))
 		}
 		fmt.Fprintf(&line, ": reviewer said (claim) %s; recorded reason (claim) %s\n",
-			shortClaim(finding.Message, maxRenderedVerificationClaimBytes),
-			shortClaim(disposition.Reason, maxRenderedVerificationClaimBytes))
+			inertClaim(finding.Message, maxRenderedVerificationClaimBytes),
+			inertClaim(disposition.Reason, maxRenderedVerificationClaimBytes))
 		lines = append(lines, line.String())
 	}
 	return lines

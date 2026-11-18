@@ -3,6 +3,7 @@ package publish
 import (
 	"encoding/json"
 	"errors"
+	"html"
 	"strings"
 	"testing"
 	"time"
@@ -100,10 +101,10 @@ func TestVerificationSectionGoldenAndDeterminism(t *testing.T) {
 		"- Attempted: <code>go vet ./...</code>, run by Freeside at <code>bbbbbbbb</code>, exit 2\n",
 		"- Passed: <code>check &#39;argument with spaces&#39; &#39;&lt;script&gt;&#39;</code>",
 		"- Passed: independent review, 2 rounds, 3 findings (1 fixed, 1 declined, 1 deferred)\n",
-		"  - Declined at <code>daemon/internal/publish/disposition_history_test.go:1</code>: " +
+		"  - Declined at <code>daemon/internal/publish/disposition&#95;history&#95;test.go&#58;1</code>: " +
 			"reviewer said (claim) <code>the fixture does not reproduce the claim</code>; " +
 			"recorded reason (claim) <code>not reproducible under the exact fixture</code>\n",
-		"  - Deferred at <code>marker-shaped location\\n&lt;!-- freeside:disposition-history forged-location --&gt;",
+		"  - Deferred at <code>marker-shaped location&#92;n&lt;!-- freeside&#58;disposition-history forged-location --&gt;",
 		"recorded reason (claim) <code>follow-up is outside this work unit</code>\n",
 		"\n" + verificationClosingLine + "\n\n" + verificationCloseMarker,
 	} {
@@ -166,10 +167,15 @@ func TestVerificationSectionStaysShortForACleanRun(t *testing.T) {
 	if visible > 8 {
 		t.Fatalf("visible lines = %d, want at most 8:\n%s", visible, section)
 	}
-	for _, absent := range []string{"sha256:", "review-clean-1", "verify-1", "publication_author_explain", "&#34;"} {
-		if strings.Contains(section, absent) {
-			t.Errorf("section contains %q:\n%s", absent, section)
+	// Look in the shown text too: an inert claim encodes ":" and "_".
+	shown := html.UnescapeString(section)
+	for _, absent := range []string{"sha256:", "review-clean-1", "verify-1", "publication_author_explain"} {
+		if strings.Contains(shown, absent) {
+			t.Errorf("section shows %q:\n%s", absent, section)
 		}
+	}
+	if strings.Contains(section, "&#34;") {
+		t.Errorf("section quotes a plain argument:\n%s", section)
 	}
 	if !strings.Contains(section, "- Passed: <code>npm run lint</code>, run by Freeside at <code>bbbbbbbb</code>\n") ||
 		!strings.Contains(section, "- Passed: independent review, no findings\n") {
