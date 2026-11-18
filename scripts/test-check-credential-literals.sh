@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-check-credential-literals.sh — fixtures for the credential-literal check.
 #
-# Builds synthetic git repos and runs the check against a stand-in scanner
+# Builds synthetic git repos and trees and runs the check against a stand-in scanner
 # (CREDENTIAL_LITERALS), so it needs no Go and no network: the scanner's own
 # matching is tested in daemon/cmd/freeside-credential-literals. This suite
 # covers the plumbing (which paths reach the scanner, how its exit maps to
@@ -126,11 +126,42 @@ STUB_EXIT=2 run_check "$ROOT"
 assert_rc 2
 assert_contains 'the scanner failed (exit 2)'
 
-begin_case 'a directory outside git is refused'
-mkdir -p "$TMP/not-a-repo"
-run_check "$TMP/not-a-repo"
+# The project-image proof and verification run the check in a workspace
+# with no .git (#3350); it scans what the tree's .gitignore files leave.
+begin_case 'outside git the scanner gets every unignored file'
+tree=$TMP/no-git
+mkdir -p "$tree/sub/.build" "$tree/app/.build"
+printf 'x\n' >"$tree/a.txt"
+printf 'y\n' >"$tree/sub/with space.md"
+printf '.build/\n' >"$tree/sub/.gitignore"
+printf 'ignored\n' >"$tree/sub/.build/out"
+printf '/.build/\n' >"$tree/app/.gitignore"
+printf 'ignored\n' >"$tree/app/.build/out"
+printf '\000\001binary\n' >"$tree/bin.dat"
+run_check "$tree"
+assert_rc 0
+expected=$(printf 'a.txt\napp/.gitignore\nbin.dat\nsub/.gitignore\nsub/with space.md')
+if [ "$(LC_ALL=C sort "$STUB_RECORD")" = "$expected" ]; then
+  pass=$((pass + 1))
+else
+  report_failure "scanner read: $(cat "$STUB_RECORD")"
+fi
+
+begin_case 'outside git a tree with nothing to scan passes'
+mkdir -p "$TMP/no-git-empty"
+: >"$TMP/no-git-empty/empty.txt"
+run_check "$TMP/no-git-empty"
+assert_rc 0
+if [ ! -s "$STUB_RECORD" ]; then
+  pass=$((pass + 1))
+else
+  report_failure "scanner read: $(cat "$STUB_RECORD")"
+fi
+
+begin_case 'a missing directory is refused'
+run_check "$TMP/missing"
 assert_rc 2
-assert_contains 'is not a git work tree'
+assert_contains 'is not a directory'
 
 begin_case 'extra arguments are refused'
 run_check "$ROOT" extra

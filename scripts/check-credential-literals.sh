@@ -11,6 +11,9 @@
 # in the tree can refuse a handoff that leaked nothing (#3305). This check
 # applies the same rules, through daemon/cmd/freeside-credential-literals,
 # to every file `git ls-files` lists, so the gates and the check can't drift.
+# Outside a git work tree, such as the project-image proof's workspace, it
+# scans every file the tree's .gitignore files leave unignored instead
+# (#3350), as check-vocabulary.sh does.
 #
 # Each match prints as `path:line: rule-id`, never the matched text, so a
 # real credential committed by mistake doesn't reach a CI log.
@@ -26,8 +29,9 @@
 # Exit codes:
 #   0  no tracked file matches
 #   1  one or more matches, each listed
-#   2  usage/environment error: <repo-root> is not a git work tree, the tool
-#      failed to build, or a file couldn't be read
+#   2  usage/environment error: <repo-root> is not a directory, the files
+#      couldn't be listed, the tool failed to build, or a file couldn't be
+#      read
 set -euo pipefail
 
 PROG=check-credential-literals
@@ -37,18 +41,44 @@ if [ "$#" -gt 1 ]; then
   exit 2
 fi
 root=${1:-.}
-if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "$PROG: $root is not a git work tree" >&2
+if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  in_git=1
+  root=$(git -C "$root" rev-parse --show-toplevel)
+elif [ -d "$root" ]; then
+  in_git=0
+else
+  echo "$PROG: $root is not a directory" >&2
   exit 2
 fi
-root=$(git -C "$root" rev-parse --show-toplevel)
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# list_files prints the NUL-separated repo-relative paths to scan. Without
+# git, `git grep --no-index --exclude-standard` names every non-empty file
+# the tree's .gitignore files leave unignored, binary ones included (an
+# empty file has nothing to match). It exits 1 when it names none, which
+# is an empty list, not a failure. core.excludesFile=/dev/null keeps the
+# per-user ignore file from hiding a file.
+list_files() {
+  if [ "$in_git" -eq 1 ]; then
+    git -C "$root" ls-files -z
+    return
+  fi
+  local status=0
+  (cd "$root" && git -c core.excludesFile=/dev/null grep --no-index \
+    --exclude-standard -l -z -e '') || status=$?
+  [ "$status" -le 1 ]
+}
+if ! list_files >"$tmp/files"; then
+  echo "$PROG: cannot list files under $root" >&2
+  exit 2
+fi
 
 if [ -n "${CREDENTIAL_LITERALS:-}" ]; then
   # shellcheck disable=SC2206 # the override may carry arguments
   tool=($CREDENTIAL_LITERALS)
 else
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   if ! go -C "$root/daemon" build -o "$tmp/freeside-credential-literals" ./cmd/freeside-credential-literals; then
     echo "$PROG: building the scanner failed" >&2
     exit 2
@@ -57,7 +87,7 @@ else
 fi
 
 status=0
-(cd "$root" && git ls-files -z | "${tool[@]}") || status=$?
+(cd "$root" && "${tool[@]}" <"$tmp/files") || status=$?
 case "$status" in
   0) ;;
   1)
