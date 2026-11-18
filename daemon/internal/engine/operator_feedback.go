@@ -807,6 +807,12 @@ func (e *Engine) enqueueImplementationFeedback(
 	patch := []byte(nil)
 	if task != nil {
 		patch, err = e.productionPublication.operatorFeedbackPatch(ctx, *task)
+		// A profile encoding bump leaves this run's admitted profile
+		// unreadable: the patch can't be rebuilt, so this one command is
+		// undeliverable rather than an engine fault (#3171).
+		if errors.Is(err, errAdmittedTrustProfileUnreadable) {
+			return e.recordOperatorFeedbackUndeliverable(ctx, item, command)
+		}
 		if err != nil {
 			return false, err
 		}
