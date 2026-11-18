@@ -53,7 +53,6 @@ type Engine struct {
 	store                       *store.Store
 	signet                      *signet.Service
 	driver                      exec.StageDriver
-	fakePublicationPolicy       *fakePublicationPolicyRecovery
 	productionPublication       *productionPublicationWorkflow
 	productionDeliveryValidator func(context.Context, exec.StartSpec) error
 	specification               *specificationWorkflow
@@ -254,10 +253,9 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	}
 	e := &Engine{
 		store: st, signet: attention, driver: driver,
-		taskNames:             make(chan domain.Run, taskNameQueueCapacity),
-		taskNamesActive:       make(map[domain.TaskID]struct{}),
-		fakePublicationPolicy: &fakePublicationPolicyRecovery{store: st},
-		logger:                slog.New(slog.DiscardHandler),
+		taskNames:       make(chan domain.Run, taskNameQueueCapacity),
+		taskNamesActive: make(map[domain.TaskID]struct{}),
+		logger:          slog.New(slog.DiscardHandler),
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -339,9 +337,6 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	}
 	if err := e.reconcileSettledClosureProposals(ctx); err != nil {
 		return ReconcileResult{}, err
-	}
-	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
-		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 	}
 	runTransitions, err := e.reconcileRuns(ctx)
 	if err != nil {

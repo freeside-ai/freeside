@@ -15,9 +15,6 @@
 //   - off_pass.go     the network calls a pass starts and does not wait for,
 //     and what they hand the next pass (#3215)
 //   - fake_workflow.go the 1A.0 walking skeleton
-//   - legacy_fake_publication.go what outlives the retired 1A.1 fake-candidate
-//     publication lane: its outbox codecs, backup extractors, and the legacy
-//     run-policy converge
 //   - invocation.go   dispatch of committed outbox requests into durable
 //     invocations
 //   - hold_classification.go the one table that classifies a dispatch error

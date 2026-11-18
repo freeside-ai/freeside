@@ -430,11 +430,6 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		return nil, fmt.Errorf("initial doctor pass: %w", err)
 	}
 	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, running, integrityProbe)
-	if workflow != nil {
-		if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
-			return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
-		}
-	}
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)

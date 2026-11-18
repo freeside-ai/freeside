@@ -763,9 +763,7 @@ directory named before it in the same bullet. All under `daemon/`:
   `migrations/squashed_history.txt` (the applied history a database
   created before the baseline may carry), and any `migrations/*.sql` file
   that updates, moves, or drops existing rows or rebuilds a table. A
-  migration that only adds a table, column, or index is Tier B. The engine's
-  `internal/engine/legacy_fake_publication.go` joins them (converges
-  pre-August fake-lane runs to a resolved policy, rewriting stored runs).
+  migration that only adds a table, column, or index is Tier B.
 
 ### Worked Examples
 
