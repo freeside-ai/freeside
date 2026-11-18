@@ -599,6 +599,32 @@
             }
         }
 
+        /// A store holding `snapshot` alone and a model validated against
+        /// it, so a card draws its actions enabled, as an operator sees it
+        /// once it can be answered (#3352). The store is its own because
+        /// validating raises the served item's revision (#2930), which
+        /// would move every surface that reads the shared store. `drawn`
+        /// names other items the card is drawn with, whose references load
+        /// here as they do in the shared store. The check fails the suite
+        /// when a fixture stops validating, rather than letting its card
+        /// draw the disabled row again.
+        private func validatedDecision(
+            _ snapshot: Components.Schemas.AttentionItemSnapshot,
+            drawing drawn: [Components.Schemas.AttentionItem] = []
+        ) async -> (store: InboxStore, model: DecisionModel) {
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer(items: [snapshot])))
+            store.replaceAll(with: [snapshot])
+            store.replaceAllConversations(with: AttentionFixtures.defaultConversations())
+            for item in [snapshot.item] + drawn {
+                await preloadReferences(item, into: store)
+            }
+            let model = DecisionModel(store: store, itemID: snapshot.item.id)
+            await model.validate()
+            await model.refreshActionSurface()
+            #expect(model.actionsEnabled, "\(snapshot.item.id) draws its actions disabled")
+            return (store, model)
+        }
+
         private func screenshotNavigation(selecting itemID: String?) -> NavigationModel {
             let navigation = NavigationModel(
                 launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
@@ -1813,6 +1839,28 @@
                     showsValidationProgress: false,
                     now: screenshotNow
                 )
+                // The type's own card and its platform and theme siblings
+                // draw from a validated model, so their actions show the way
+                // an operator sees them once the card can be answered
+                // (#3352). The variants further down pin something other
+                // than the action row and keep the unvalidated `detail`.
+                let drawn: [Components.Schemas.AttentionItem] =
+                    switch snapshot.item._type {
+                    case .agent_question: [AttentionFixtures.longQuestion().item]
+                    case .execution_failure:
+                        [AttentionFixtures.quotaFailure().item, AttentionFixtures.invalidEvidenceFailure().item]
+                    default: []
+                    }
+                let validated = await validatedDecision(snapshot, drawing: drawn)
+                let answerableDetail = DecisionDetailView(
+                    store: validated.store,
+                    itemID: snapshot.item.id,
+                    graphics: graphics,
+                    loadsAttachments: false,
+                    showsValidationProgress: false,
+                    now: screenshotNow,
+                    model: validated.model
+                )
                 let proposalFacts =
                     snapshot.item._type == .task_proposal
                     ? Components.Schemas.TaskProposalFactsSnapshot(
@@ -1833,7 +1881,7 @@
                     Surface(
                         name: "decision-\(snapshot.item._type.rawValue)",
                         view: AnyView(
-                            detail.screenshotCard(
+                            answerableDetail.screenshotCard(
                                 snapshot.item,
                                 at: dynamicTypeSize,
                                 proposalFacts: proposalFacts,
@@ -1880,7 +1928,7 @@
                                 width: width,
                                 colorScheme: scheme,
                                 view: AnyView(
-                                    detail.screenshotCard(
+                                    answerableDetail.screenshotCard(
                                         snapshot.item,
                                         at: dynamicTypeSize,
                                         compactLayout: width < canvasWidth))))
@@ -1892,7 +1940,7 @@
                                 name: "\(name)-\(suffix)",
                                 width: width,
                                 view: AnyView(
-                                    detail.screenshotCard(
+                                    answerableDetail.screenshotCard(
                                         long,
                                         at: dynamicTypeSize,
                                         compactLayout: width < canvasWidth))))
@@ -1905,7 +1953,7 @@
                             name: "decision-execution_failure-phone",
                             width: 390,
                             view: AnyView(
-                                detail.screenshotCard(
+                                answerableDetail.screenshotCard(
                                     snapshot.item,
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
@@ -1915,13 +1963,14 @@
                     var quota = AttentionFixtures.quotaFailure().item
                     quota.alternate_agents = UsageFixtures.alternateAgentOffers()
                     let quotaDetail = DecisionDetailView(
-                        store: store,
+                        store: validated.store,
                         itemID: snapshot.item.id,
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
                         now: screenshotNow,
-                        usagePools: UsageFixtures.alternatesUsagePools(now: screenshotNow)
+                        usagePools: UsageFixtures.alternatesUsagePools(now: screenshotNow),
+                        model: validated.model
                     )
                     for (suffix, width) in [("", canvasWidth), ("-phone", CGFloat(390))] {
                         surfaces.append(
@@ -1939,7 +1988,7 @@
                             name: "decision-execution_failure-invalid_evidence",
                             width: canvasWidth,
                             view: AnyView(
-                                detail.screenshotCard(
+                                answerableDetail.screenshotCard(
                                     AttentionFixtures.invalidEvidenceFailure().item, at: dynamicTypeSize))))
                 }
 
@@ -1957,7 +2006,7 @@
                                 width: width,
                                 colorScheme: scheme,
                                 view: AnyView(
-                                    detail.screenshotCard(
+                                    answerableDetail.screenshotCard(
                                         snapshot.item,
                                         at: dynamicTypeSize,
                                         effectProposalFacts: effectProposalFacts))))
@@ -1966,12 +2015,13 @@
 
                 if snapshot.item._type == .spec_approval {
                     let phoneDetail = DecisionDetailView(
-                        store: store,
+                        store: validated.store,
                         itemID: snapshot.item.id,
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        now: screenshotNow)
+                        now: screenshotNow,
+                        model: validated.model)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-phone",
@@ -1982,12 +2032,13 @@
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
                     let darkDetail = DecisionDetailView(
-                        store: store,
+                        store: validated.store,
                         itemID: snapshot.item.id,
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        now: screenshotNow)
+                        now: screenshotNow,
+                        model: validated.model)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-dark",
@@ -1998,12 +2049,13 @@
                                     at: dynamicTypeSize,
                                     proposalFacts: proposalFacts))))
                     let phoneDarkDetail = DecisionDetailView(
-                        store: store,
+                        store: validated.store,
                         itemID: snapshot.item.id,
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        now: screenshotNow)
+                        now: screenshotNow,
+                        model: validated.model)
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-phone-dark",
@@ -2484,13 +2536,21 @@
 
             // The fixture carries the contract recommendation, so the card
             // renders the item's own authoritative lead rather than an
-            // injected presentation.
-            let adjudication = AttentionFixtures.fixture(type: .finding_adjudication).item
+            // injected presentation. It is validated so the recommendation
+            // draws filled and the other commands outlined (#3352); the
+            // variants drawn from other items share its enabled state.
+            let adjudicationSnapshot = AttentionFixtures.fixture(type: .finding_adjudication)
+            let adjudication = adjudicationSnapshot.item
+            let routes: [Components.Schemas.AdjudicationRoute] = [.remediate, .park_revision, .park_separate_work]
+            let adjudicationValidated = await validatedDecision(
+                adjudicationSnapshot,
+                drawing: routes.map { AttentionFixtures.findingAdjudicationFixture(route: $0).item })
             let recommendedDetail = DecisionDetailView(
-                store: store,
+                store: adjudicationValidated.store,
                 itemID: adjudication.id,
                 loadsAttachments: false,
-                showsValidationProgress: false
+                showsValidationProgress: false,
+                model: adjudicationValidated.model
             )
             let preferencesSuite = "FreesideScreenshotFootPreferences-\(UUID().uuidString)"
             guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
@@ -2539,9 +2599,7 @@
             // One finding per route, carrying the daemon's consequence-led
             // reason and recommendation: the card says what accepting does
             // before any route vocabulary (#1551).
-            for route in [
-                Components.Schemas.AdjudicationRoute.remediate, .park_revision, .park_separate_work,
-            ] {
+            for route in routes {
                 let single = AttentionFixtures.findingAdjudicationFixture(route: route).item
                 surfaces.append(
                     Surface(
@@ -3773,17 +3831,18 @@
 
             // The recommended effect-proposal card is not in the default
             // inbox, so it is rendered from its own store here, in the same
-            // four variants as the verified card in the inbox loop above.
+            // four variants as the verified card in the inbox loop above,
+            // validated as that card is so the recommendation draws filled.
             let recommendedEffect = AttentionFixtures.recommendedEffectProposal()
-            let recommendedEffectStore = InboxStore(client: client)
-            recommendedEffectStore.replaceAll(with: [recommendedEffect])
+            let recommendedEffectValidated = await validatedDecision(recommendedEffect)
             let recommendedEffectDetail = DecisionDetailView(
-                store: recommendedEffectStore,
+                store: recommendedEffectValidated.store,
                 itemID: recommendedEffect.item.id,
                 graphics: .init(),
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                now: screenshotNow)
+                now: screenshotNow,
+                model: recommendedEffectValidated.model)
             let recommendedEffectFacts = AttentionFixtures.effectProposalFacts(for: recommendedEffect)
             for (suffix, width, scheme) in [
                 ("", canvasWidth, ColorScheme.light),
@@ -4434,15 +4493,19 @@
             // the shape production sends, which has no positions: one claim
             // with its text, and one that arrived as an attachment. These
             // render after the surfaces above for the reason the open feet
-            // below do.
+            // below do. The positioned card draws from a validated model so
+            // its actions show enabled (#3352); the production shapes pin
+            // their claims and keep the unvalidated card.
             if let snapshot = inbox.first(where: { $0.item._type == .review_dispute }) {
+                let validated = await validatedDecision(snapshot)
                 let detail = DecisionDetailView(
-                    store: store,
+                    store: validated.store,
                     itemID: snapshot.item.id,
                     graphics: graphicPresentations(for: snapshot.item),
                     loadsAttachments: false,
                     showsValidationProgress: false,
-                    now: screenshotNow)
+                    now: screenshotNow,
+                    model: validated.model)
                 let name = "decision-\(snapshot.item._type.rawValue)"
                 for (suffix, width, scheme) in [
                     ("phone", CGFloat(390), ColorScheme.light),
