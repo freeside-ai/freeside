@@ -1128,20 +1128,11 @@ func verifyOperatorFeedbackUndeliverableItem(
 	validSubject := source.Subject.RunID != nil && item.Subject.Type == domain.SubjectRun &&
 		item.Subject.ID == domain.SubjectID(*source.Subject.RunID) && item.Subject.RunID != nil &&
 		*item.Subject.RunID == *source.Subject.RunID
-	// The write path creates the notice as a system_health advisory. A legacy
-	// execution_failure row is tolerated as a transitional backward-compat
-	// case: before #1342 the pre-existing retry-overflow path persisted this
-	// notice as execution_failure under the same deterministic ID, and
-	// rejecting it here would loop reconcile on ErrParentKeyMismatch after an
-	// in-place upgrade. Migration 0075 rewrites those rows to system_health and
-	// removes this tolerance (#1358).
+	// The write path creates the notice as a system_health advisory.
 	if item.ID != operatorFeedbackUndeliverableItemID(command.CommandID) ||
-		(item.Type != domain.AttentionSystemHealth && item.Type != domain.AttentionExecutionFailure) ||
+		item.Type != domain.AttentionSystemHealth ||
+		item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory ||
 		item.ProjectID != source.ProjectID || !validSubject {
-		return domain.ErrParentKeyMismatch
-	}
-	if item.Type == domain.AttentionSystemHealth &&
-		(item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory) {
 		return domain.ErrParentKeyMismatch
 	}
 	return nil

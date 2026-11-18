@@ -1647,14 +1647,9 @@ func verifyRemediationUndeliverableItem(
 	validSubject := item.Subject.Type == domain.SubjectRun &&
 		item.Subject.ID == domain.SubjectID(task.RunID) &&
 		item.Subject.RunID != nil && *item.Subject.RunID == task.RunID
-	// The write path creates the notice as a system_health advisory. A legacy
-	// execution_failure row is tolerated: before #1354 this path wrote the
-	// notice as execution_failure under the same deterministic ID, daemon state
-	// survives an in-place upgrade, and rejecting that row would fail every
-	// reconcile with ErrParentKeyMismatch and stop the publication lane.
-	validType := item.Type == domain.AttentionExecutionFailure ||
-		(item.Type == domain.AttentionSystemHealth &&
-			item.Posture != nil && *item.Posture == domain.HealthPostureAdvisory)
+	// The write path creates the notice as a system_health advisory.
+	validType := item.Type == domain.AttentionSystemHealth &&
+		item.Posture != nil && *item.Posture == domain.HealthPostureAdvisory
 	if !validType || item.ProjectID != task.ProjectID || !validSubject {
 		return fmt.Errorf(
 			"remediation-undeliverable attention item %q disagrees with run %q: %w",
