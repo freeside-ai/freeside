@@ -14,12 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-const (
-	// ReviewInstructionCompositionVersionV1 remains valid only so persisted
-	// bindings can be read, superseded, and included in backup closures.
-	ReviewInstructionCompositionVersionV1 = "codex_explicit_bundle_v1"
-	ReviewInstructionCompositionVersion   = "codex_explicit_bundle_v2"
-)
+const ReviewInstructionCompositionVersion = "codex_explicit_bundle_v2"
 
 // ReviewInstructionSource binds one path-scoped repository instruction file
 // from the reviewed repository's exact trusted base.
@@ -42,8 +37,7 @@ type ReviewInstructionBinding struct {
 // persistence. That makes reordering an authority change rather than an
 // alternative encoding of the same request.
 func (b ReviewInstructionBinding) Validate() error {
-	if (b.CompositionVersion != ReviewInstructionCompositionVersionV1 &&
-		b.CompositionVersion != ReviewInstructionCompositionVersion) ||
+	if b.CompositionVersion != ReviewInstructionCompositionVersion ||
 		!contentaddr.Valid(string(b.ResultDigest)) {
 		return fmt.Errorf("review instruction composition: %w", domain.ErrInvalidReviewCompletionEvidence)
 	}

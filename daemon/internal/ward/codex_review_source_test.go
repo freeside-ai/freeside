@@ -322,13 +322,12 @@ func TestCodexReviewSourceRejectsPersistedV1InstructionReconstruction(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding.CompositionVersion = exec.ReviewInstructionCompositionVersionV1
+	binding.CompositionVersion = "codex_explicit_bundle_v1"
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
 		InstructionArtifacts: testReviewInstructionArtifacts{},
 	}}
 	_, err = source.reconstructReviewInstructions(t.Context(), binding)
-	if err == nil || !strings.Contains(err.Error(), "cannot launch") ||
-		!strings.Contains(err.Error(), exec.ReviewInstructionCompositionVersionV1) {
+	if !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
 		t.Fatalf("persisted v1 reconstruction error = %v", err)
 	}
 }
@@ -1976,53 +1975,22 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 	}
 }
 
-func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	fx := newHandoffFixture(t)
-	seedSpec := fx.seed(t)
-	backend := fx.codexReviewLifecycle(t)
-	cfg, requestSpec := testCodexReview(t)
-	journal := &fakeCodexReviewJournal{}
-	source, err := NewCodexReviewSource(
-		codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := domain.InvocationID("review-legacy-rejected-outcome")
-	request := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-rejected"),
-		RunID:     "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
-		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
-		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
-		RequestedAt: codexReviewEpoch.Add(-time.Minute),
-	}
-	if err := source.RequestReview(ctx, id, request); err != nil {
-		t.Fatal(err)
-	}
-	journal.failGetRequest = errors.Join(ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest)
-	journal.failGetOutcome = ErrCodexReviewOutcomeRejected
-	if err := source.VerifyReviewRequestSupersession(ctx, id, request); !errors.Is(err, exec.ErrLegacyReviewRequest) {
-		t.Fatalf("rejected legacy request outcome = %v, want ErrLegacyReviewRequest", err)
-	}
-}
-
-func TestCodexReviewSourceSupersedesPersistedV1InstructionRequest(t *testing.T) {
+// TestCodexReviewSourceSupersedesAnUpdatedInstructionBinding: a persisted
+// request whose only authority change is the trusted instruction binding is
+// torn down and superseded, so the engine reruns it under the current one.
+func TestCodexReviewSourceSupersedesAnUpdatedInstructionBinding(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
-	id := domain.InvocationID("review-v1-superseded")
+	id := domain.InvocationID("review-instructions-superseded")
 	current := testReviewInstructionBinding()
 	persisted := current
-	persisted.CompositionVersion = exec.ReviewInstructionCompositionVersionV1
 	persisted.ResultDigest = domain.Digest("sha256:" + strings.Repeat("e", 64))
 	request := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-v1-superseded"),
-		RunID:     "run-v1-superseded", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		Admission: testReviewAdmission("run-instructions-superseded"),
+		RunID:     "run-instructions-superseded", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Workspace: "/candidate", Verification: testReviewVerificationEvidence(),
 		Instructions: persisted, RequestedAt: codexReviewEpoch,
@@ -2041,11 +2009,11 @@ func TestCodexReviewSourceSupersedesPersistedV1InstructionRequest(t *testing.T) 
 	err = source.VerifyReviewRequestSupersession(ctx, id, expected)
 	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient ||
 		!errors.Is(err, exec.ErrSupersededReviewRequest) {
-		t.Fatalf("persisted v1 supersession = %v", err)
+		t.Fatalf("updated instruction supersession = %v", err)
 	}
 	outcome, ready, outcomeErr := journal.GetCodexReviewOutcome(ctx, string(id))
 	if outcomeErr != nil || !ready || !outcome.AbortRequired {
-		t.Fatalf("persisted v1 rejection outcome = %#v, ready=%v, %v", outcome, ready, outcomeErr)
+		t.Fatalf("superseded request outcome = %#v, ready=%v, %v", outcome, ready, outcomeErr)
 	}
 }
 
@@ -4628,10 +4596,6 @@ func TestCodexReviewSourceLaunchFollowsTheAdmission(t *testing.T) {
 	admission := testReviewAdmission("run-launch")
 	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "gpt-5.3-codex", "medium"
 
-	legacy, err := (&CodexReviewSource{cfg: composed}).requestLaunch(ctx, exec.ReviewRequest{RunID: "run-launch"})
-	if err != nil || legacy.review.Model != "gpt-5.2-codex" || legacy.identity != "codex-reviewer" {
-		t.Fatalf("legacy launch = %+v, %v; want the composed launch", legacy, err)
-	}
 	same, err := (&CodexReviewSource{cfg: composed}).requestLaunch(ctx, exec.ReviewRequest{Admission: admission})
 	switch {
 	case err != nil:
@@ -4866,7 +4830,7 @@ func TestAbortRecoveredReviewReapsStartedReview(t *testing.T) {
 // again would fail every pass, so the abort reaps the review instead.
 func TestAbortRecoveredReviewDoesNotReraiseItsContradiction(t *testing.T) {
 	t.Parallel()
-	rejectedRequest := errors.Join(ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest)
+	rejectedRequest := errors.Join(ErrCodexReviewRequestRejected, domain.ErrEmptyField)
 	t.Run("rejected request, already reaped", func(t *testing.T) {
 		ctx := t.Context()
 		fx, source, journal, id := startRecoveredReview(t)

@@ -348,11 +348,10 @@ type reviewLaunch struct {
 
 // requestLaunch derives a request's launch from its admission snapshot, so a
 // task's reviewer line runs the agent it selected (#1981). The request-time
-// launch and the relaunch of a recorded request both derive it here. A request
-// recorded before review admission carries no snapshot and runs what the
-// source was composed with. The configuration digest stays the composed one:
-// the snapshot records the selected agent's values, and they are not
-// re-approved.
+// launch and the relaunch of a recorded request both derive it here, from a
+// request that passed Validate, so the snapshot is always present. The
+// configuration digest stays the composed one: the snapshot records the
+// selected agent's values, and they are not re-approved.
 //
 // A request recorded before review stopped covering a prospective merge
 // (#2660) names one, and no launch runs it: review covers the head only, so
@@ -365,9 +364,6 @@ func (s *CodexReviewSource) requestLaunch(ctx context.Context, req exec.ReviewRe
 	}
 	launch := reviewLaunch{review: s.cfg.Review, identity: s.cfg.AuthIdentityID, snapshot: s.cfg.AuthSnapshot}
 	admission := req.Admission
-	if admission.InvocationID == "" {
-		return launch, nil
-	}
 	launch.review.Model = admission.AgentBinding.RouteModelID
 	launch.review.ReasoningEffort = admission.AgentBinding.NativeEffort
 	if admission.AuthIdentityID == s.cfg.AuthIdentityID {
@@ -540,14 +536,10 @@ func (s *CodexReviewSource) reconstructReviewInstructions(
 	ctx context.Context,
 	binding exec.ReviewInstructionBinding,
 ) ([]byte, error) {
+	// Validate accepts only the current composition version, so a binding
+	// to another version never launches.
 	if err := binding.Validate(); err != nil {
 		return nil, err
-	}
-	if binding.CompositionVersion != exec.ReviewInstructionCompositionVersion {
-		return nil, fmt.Errorf(
-			"review instruction composition version %q cannot launch; current version is %q",
-			binding.CompositionVersion, exec.ReviewInstructionCompositionVersion,
-		)
 	}
 	host := exec.ReviewHostInstructionInput{Present: binding.HostDigest != nil}
 	if binding.HostDigest != nil {

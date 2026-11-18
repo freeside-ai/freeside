@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -86,9 +85,7 @@ type ReviewSource interface {
 // workspace — because the engine terminalizes on the contradiction and
 // never inspects the invocation again; a rejected request must not strand
 // a credential-bearing topology. While that teardown is still converging
-// the verifier reports a transient failure so the engine retries. An
-// authenticated pre-authority request reports ErrLegacyReviewRequest after
-// teardown so the engine can supersede it with a new round.
+// the verifier reports a transient failure so the engine retries.
 type ReviewRequestAuthorityVerifier interface {
 	VerifyRequestAuthority(
 		ctx context.Context, id domain.InvocationID, expected domain.Digest,
@@ -120,8 +117,8 @@ type ReviewRequestSupersessionVerifier interface {
 // Admission is the snapshot the engine admitted the invocation under before
 // it asked the source (plan §5.4): the agent the lineup selected, the identity
 // it runs under, and its launch values. The source returns it unchanged on
-// the ReviewResult. A persisted request with no snapshot predates review
-// admission and is a legacy request.
+// the ReviewResult. Validate refuses a request without one, such as one a
+// daemon before review admission persisted.
 //
 // Inputs are the task's attachments the reviewer reads read-only, as
 // task/<name> in submitted order (plan §5.7). The engine reads them when it
@@ -202,43 +199,6 @@ func (e ReviewVerificationEvidence) Validate() error {
 // verification, its instructions, and the admission its invocation runs
 // under.
 func (r ReviewRequest) Validate() error {
-	if err := r.ValidateBeforeAdmission(); err != nil {
-		return err
-	}
-	if err := r.Admission.Validate(); err != nil {
-		return fmt.Errorf("review request admission: %w", err)
-	}
-	if r.Admission.RunID != r.RunID {
-		return fmt.Errorf("review request admission names run %q: %w",
-			r.Admission.RunID, domain.ErrParentKeyMismatch)
-	}
-	return nil
-}
-
-// ValidateRetainedReviewRequest holds a request read back from retained
-// history to the rule it was written under. body is the stored encoding the
-// request was decoded from: one that carries an admission is held to
-// Validate, and one that carries none, which a daemon before review admission
-// wrote, to ValidateBeforeAdmission. It is for readers of history (a backup's
-// artifact closure, the review evidence view) and grants no execution
-// authority: a source runs only a request that passes Validate.
-func ValidateRetainedReviewRequest(body []byte, request ReviewRequest) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return fmt.Errorf("retained review request: %w", err)
-	}
-	for field := range fields {
-		if strings.EqualFold(field, "admission") {
-			return request.Validate()
-		}
-	}
-	return request.ValidateBeforeAdmission()
-}
-
-// ValidateBeforeAdmission is Validate without the admission: what a request
-// had to satisfy before requests carried one. It tells a request a previous
-// daemon wrote from a damaged one. No source runs a request on it.
-func (r ReviewRequest) ValidateBeforeAdmission() error {
 	switch {
 	case r.RunID == "":
 		return fmt.Errorf("review request run_id: %w", domain.ErrEmptyID)
@@ -260,7 +220,19 @@ func (r ReviewRequest) ValidateBeforeAdmission() error {
 			return fmt.Errorf("review request evaluated_sha: %w", err)
 		}
 	}
-	return errors.Join(r.Verification.Validate(), r.Instructions.Validate(), validateReviewInputs(r.Inputs))
+	if err := errors.Join(
+		r.Verification.Validate(), r.Instructions.Validate(), validateReviewInputs(r.Inputs),
+	); err != nil {
+		return err
+	}
+	if err := r.Admission.Validate(); err != nil {
+		return fmt.Errorf("review request admission: %w", err)
+	}
+	if r.Admission.RunID != r.RunID {
+		return fmt.Errorf("review request admission names run %q: %w",
+			r.Admission.RunID, domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 // validateReviewInputs holds a request's input list to the rules a stage's

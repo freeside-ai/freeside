@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -37,32 +36,6 @@ func decodeCodexReview[T any](body []byte) (T, error) {
 		return value, fmt.Errorf("decode Codex review journal: %w", err)
 	}
 	return value, nil
-}
-
-// legacyCodexReviewRequest reports whether a persisted request that no longer
-// validates is one a previous daemon wrote, not a damaged one. There are two
-// legacy shapes, each a field the request did not have yet: no instruction
-// binding, and no review admission snapshot. The body must lack the field
-// itself; a present but invalid one is damage, and so is a request without
-// an admission that was not valid before requests carried one.
-func legacyCodexReviewRequest(body []byte, request exec.ReviewRequest) bool {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return false
-	}
-	has := func(name string) bool {
-		for field := range fields {
-			if strings.EqualFold(field, name) {
-				return true
-			}
-		}
-		return false
-	}
-	instructions := request.Instructions
-	noInstructions := !has("instructions") && instructions.CompositionVersion == "" &&
-		instructions.HostDigest == nil && len(instructions.RepositorySources) == 0 &&
-		instructions.ResultDigest == ""
-	return noInstructions || (!has("admission") && request.ValidateBeforeAdmission() == nil)
 }
 
 func classifyCodexReviewMutation(err error) error {
@@ -226,10 +199,6 @@ func (a *Journal) GetCodexReviewRequest(
 		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
 	}
 	if err := request.Validate(); err != nil {
-		if legacyCodexReviewRequest(record.Body, request) {
-			return exec.ReviewRequest{}, errors.Join(
-				ward.ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest, err)
-		}
 		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
 	}
 	return request, nil

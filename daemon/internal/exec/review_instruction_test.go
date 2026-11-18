@@ -2,7 +2,6 @@ package exec
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -104,24 +103,20 @@ func TestComposeCodexReviewInstructionsEnforcesByteCeiling(t *testing.T) {
 	}
 }
 
-func TestReviewInstructionBindingAcceptsPersistedCompositionVersions(t *testing.T) {
+func TestReviewInstructionBindingAcceptsOnlyTheCurrentCompositionVersion(t *testing.T) {
 	_, binding, err := ComposeCodexReviewInstructions(ReviewHostInstructionInput{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []string{
-		ReviewInstructionCompositionVersionV1,
-		ReviewInstructionCompositionVersion,
-	} {
+	if err := binding.Validate(); err != nil {
+		t.Fatalf("Validate(%q): %v", binding.CompositionVersion, err)
+	}
+	for _, version := range []string{"codex_explicit_bundle_v1", "codex_explicit_bundle_v3"} {
 		candidate := binding
 		candidate.CompositionVersion = version
-		if err := candidate.Validate(); err != nil {
-			t.Errorf("Validate(%q): %v", version, err)
+		if err := candidate.Validate(); err == nil {
+			t.Errorf("composition version %q remained valid", version)
 		}
-	}
-	binding.CompositionVersion = "codex_explicit_bundle_v3"
-	if err := binding.Validate(); err == nil {
-		t.Fatal("unknown composition version remained valid")
 	}
 }
 
@@ -270,9 +265,9 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 	}
 }
 
-// TestReviewRequestRequiresItsAdmission pins the request's second legacy
-// shape: a request with no admission snapshot, or one admitted for another
-// run, does not validate and has no authority digest.
+// TestReviewRequestRequiresItsAdmission: a request with no admission
+// snapshot, such as one a daemon before review admission stored, or one
+// admitted for another run, does not validate and has no authority digest.
 func TestReviewRequestRequiresItsAdmission(t *testing.T) {
 	_, instructions, err := ComposeCodexReviewInstructions(ReviewHostInstructionInput{}, nil)
 	if err != nil {
@@ -341,70 +336,6 @@ func TestReviewResultRequiresAWellFormedAdmission(t *testing.T) {
 		if err := refused.Validate(); !errors.Is(err, tc.want) {
 			t.Fatalf("%s: Validate = %v, want %v", name, err, tc.want)
 		}
-	}
-}
-
-// TestRetainedReviewRequestIsHeldToTheRuleItWasWrittenUnder: a reader of
-// history accepts a request from before review admission, which no source
-// would run, and holds a request that carries an admission to the whole rule.
-func TestRetainedReviewRequestIsHeldToTheRuleItWasWrittenUnder(t *testing.T) {
-	_, instructions, err := ComposeCodexReviewInstructions(ReviewHostInstructionInput{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
-		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
-		Workspace: "/candidate", Instructions: instructions,
-		Admission: testReviewAdmission("run-1"),
-		Verification: ReviewVerificationEvidence{
-			Outcome:                domain.VerificationPassed,
-			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
-			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		},
-		RequestedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
-	}
-	for name, tc := range map[string]struct {
-		mutate  func(map[string]any)
-		refused bool
-	}{
-		"admitted":                       {func(map[string]any) {}, false},
-		"before admission":               {func(f map[string]any) { delete(f, "admission") }, false},
-		"before admission, no workspace": {func(f map[string]any) { delete(f, "admission"); f["workspace"] = "" }, true},
-		"an admission for another run":   {func(f map[string]any) { f["admission"].(map[string]any)["run_id"] = "run-2" }, true},
-		"an empty admission":             {func(f map[string]any) { f["admission"] = map[string]any{} }, true},
-		"an admission under another case": {func(f map[string]any) {
-			f["Admission"] = map[string]any{}
-			delete(f, "admission")
-		}, true},
-	} {
-		encoded, err := json.Marshal(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var fields map[string]any
-		if err := json.Unmarshal(encoded, &fields); err != nil {
-			t.Fatal(err)
-		}
-		tc.mutate(fields)
-		body, err := json.Marshal(fields)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var retained ReviewRequest
-		if err := json.Unmarshal(body, &retained); err != nil {
-			t.Fatal(err)
-		}
-		if err := ValidateRetainedReviewRequest(body, retained); (err != nil) != tc.refused {
-			t.Fatalf("%s: retained request = %v, want refused %t", name, err, tc.refused)
-		}
-		// Whatever history accepts, a source runs only an admitted request.
-		if name != "admitted" && retained.Validate() == nil {
-			t.Fatalf("%s: the request would run", name)
-		}
-	}
-	if err := ValidateRetainedReviewRequest([]byte("not json"), request); err == nil {
-		t.Fatal("an undecodable body was accepted")
 	}
 }
 
@@ -547,8 +478,8 @@ func TestRetainedLegacyReviewRequestReads(t *testing.T) {
 	if request.LegacyEvaluatedSHA != "merge-sha-1" {
 		t.Fatalf("LegacyEvaluatedSHA = %q, want the stored evaluated_sha", request.LegacyEvaluatedSHA)
 	}
-	if err := ValidateRetainedReviewRequest(body, request); err != nil {
-		t.Fatalf("ValidateRetainedReviewRequest: %v", err)
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 	digest, err := request.AuthorityDigest()
 	if err != nil {

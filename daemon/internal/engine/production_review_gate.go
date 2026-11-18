@@ -877,7 +877,7 @@ func (w *productionPublicationWorkflow) requestReviewRound(
 	if supersessionVerifier, ok := w.reviewSource.(exec.ReviewRequestSupersessionVerifier); ok {
 		if err := supersessionVerifier.VerifyReviewRequestSupersession(ctx, id, req); err != nil &&
 			!errors.Is(err, exec.ErrUnknownInvocation) {
-			if errors.Is(err, exec.ErrSupersededReviewRequest) || errors.Is(err, exec.ErrLegacyReviewRequest) {
+			if errors.Is(err, exec.ErrSupersededReviewRequest) {
 				state, err := w.recordReviewSourceFailure(ctx, task, id, round,
 					binding.admission.Base.BaseSHA, task.HeadSHA,
 					&exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err})
@@ -895,16 +895,6 @@ func (w *productionPublicationWorkflow) requestReviewRound(
 	// credential-bearing review, not only after Poll delivers a result.
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil &&
 		!errors.Is(err, exec.ErrUnknownInvocation) {
-		if errors.Is(err, exec.ErrLegacyReviewRequest) {
-			state, err := w.recordReviewSourceFailure(ctx, task, id, round,
-				binding.admission.Base.BaseSHA, task.HeadSHA,
-				&exec.ReviewSourceFailure{
-					Class: domain.ReviewFailureTransient,
-					Err:   err,
-				},
-			)
-			return reviewRoundInvocation{}, state, true, err
-		}
 		state, err := w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA, err)
 		return reviewRoundInvocation{}, state, true, err

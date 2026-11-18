@@ -51,11 +51,11 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 func TestDecodeRetainedCodexReview(t *testing.T) {
 	t.Parallel()
 	reads := map[string]bool{
-		"none": true, "request before admission": true, "claude": true,
+		"none": true, "claude": true,
 		"fence without binding": true,
 	}
 	for _, corruption := range []string{
-		"none", "request before admission", "result before admission", "request admission", "request legacy",
+		"none", "request before admission", "request admission", "request legacy",
 		"request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation",
 		"collection", "provider", "returned admission", "state",
 		"claude", "codex v2 topology", "claude binding over codex evidence", "codex binding over claude evidence",
@@ -148,14 +148,11 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if corruption == "request before admission" || corruption == "result before admission" {
-				// A round requested before requests carried an admission
-				// still reads when it failed, because a failure returns no
-				// snapshot to hold against the request. A result always
-				// returns one, so it cannot answer such a request.
-				if corruption == "request before admission" {
-					outcome = codexGoldenReviewOutcome(`{"type":"turn.failed","error":{"message":"configuration invalid"}}`)
-				}
+			if corruption == "request before admission" {
+				// A round requested before requests carried an admission is
+				// refused even when it failed and its outcome returns no
+				// snapshot to hold against the request.
+				outcome = codexGoldenReviewOutcome(`{"type":"turn.failed","error":{"message":"configuration invalid"}}`)
 				var fields map[string]json.RawMessage
 				if err := json.Unmarshal(requestBody, &fields); err != nil {
 					t.Fatal(err)

@@ -122,45 +122,24 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 			t.Fatalf("invalid persisted request %q = %v, want ErrCodexReviewRequestRejected", body, err)
 		}
 	}
-	requestFields := make(map[string]json.RawMessage)
+	// A request without its instructions or its admission, which a daemon
+	// before those authorities wrote, is rejected like any damaged row.
 	requestBody, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(requestBody, &requestFields); err != nil {
-		t.Fatal(err)
-	}
-	delete(requestFields, "instructions")
-	legacyBody, err := json.Marshal(requestFields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(legacyBody))
-	if _, err := db.ExecContext(ctx,
-		`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
-		string(legacyBody), legacyDigest, "review-run-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, exec.ErrLegacyReviewRequest) {
-		t.Fatalf("legacy persisted request = %v, want ErrLegacyReviewRequest", err)
-	}
-	// The second legacy shape: a request persisted before review admission
-	// carries its instructions and no snapshot. A snapshot that is present
-	// and invalid is damage, not a previous daemon's request.
-	for name, tc := range map[string]struct {
-		admission  func(map[string]json.RawMessage)
-		wantLegacy bool
-	}{
-		"no admission": {func(fields map[string]json.RawMessage) { delete(fields, "admission") }, true},
-		"an invalid admission": {func(fields map[string]json.RawMessage) {
+	for name, damage := range map[string]func(map[string]json.RawMessage){
+		"no instructions": func(fields map[string]json.RawMessage) { delete(fields, "instructions") },
+		"no admission":    func(fields map[string]json.RawMessage) { delete(fields, "admission") },
+		"an invalid admission": func(fields map[string]json.RawMessage) {
 			fields["admission"] = json.RawMessage(`{"invocation_id":"review-run-1"}`)
-		}, false},
+		},
 	} {
 		fields := make(map[string]json.RawMessage)
 		if err := json.Unmarshal(requestBody, &fields); err != nil {
 			t.Fatal(err)
 		}
-		tc.admission(fields)
+		damage(fields)
 		body, err := json.Marshal(fields)
 		if err != nil {
 			t.Fatal(err)
@@ -170,18 +149,9 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 			string(body), fmt.Sprintf("sha256:%x", sha256.Sum256(body)), "review-run-1"); err != nil {
 			t.Fatal(err)
 		}
-		_, err = adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1")
-		if !errors.Is(err, ward.ErrCodexReviewRequestRejected) {
+		if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, ward.ErrCodexReviewRequestRejected) {
 			t.Fatalf("persisted request with %s = %v, want ErrCodexReviewRequestRejected", name, err)
 		}
-		if got := errors.Is(err, exec.ErrLegacyReviewRequest); got != tc.wantLegacy {
-			t.Fatalf("persisted request with %s: legacy = %t, want %t (%v)", name, got, tc.wantLegacy, err)
-		}
-	}
-	if _, err := db.ExecContext(ctx,
-		`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
-		string(legacyBody), legacyDigest, "review-run-1"); err != nil {
-		t.Fatal(err)
 	}
 	outcome := ward.CodexReviewSourceOutcome{
 		InvocationID: "review-run-1", FailureClass: domain.ReviewFailureContradiction,

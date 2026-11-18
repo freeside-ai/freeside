@@ -197,7 +197,7 @@ func (w *productionPublicationWorkflow) observeClosedReview(
 		if err := strictjson.Decode(row.Body, &request, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
 			return err
 		}
-		if err := exec.ValidateRetainedReviewRequest(row.Body, request); err != nil {
+		if err := request.Validate(); err != nil {
 			return err
 		}
 		admission, err := tx.GetReviewAdmission(ctx, id)

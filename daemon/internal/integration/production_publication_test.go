@@ -1781,69 +1781,6 @@ func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) 
 	}
 }
 
-func TestProductionLegacyReviewRequestAdvancesToAuthoritativeRound(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	fault := &faultReviewSource{
-		ReviewSource:    p.reviewer,
-		failAuthorityAt: 1,
-		failAuthorityWith: errors.Join(exec.ErrLegacyReviewRequest,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction,
-				Err:   errors.New("pre-authority request rejected after teardown"),
-			}),
-	}
-	p.reviewSource = fault
-	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	p.startAndRecordExport(t)
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
-		t.Fatalf("legacy request supersession = %#v, %v", result, err)
-	}
-	p.now = p.now.Add(2 * time.Second)
-	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
-	p.reviewer.Script(secondID, fake.ReviewScript{
-		Outcome: fake.OutcomeComplete,
-		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("authoritative replacement")),
-		},
-	})
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-		t.Fatalf("authoritative replacement review = %#v, %v", result, err)
-	}
-}
-
-func TestProductionLegacyReviewRequestSupersessionPreflightAdvancesRound(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	fault := &faultReviewSource{
-		ReviewSource: p.reviewer, failSupersessionAt: 1,
-		failSupersessionWith: errors.Join(exec.ErrLegacyReviewRequest,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureContradiction,
-				Err:   errors.New("legacy request rejected after teardown"),
-			}),
-	}
-	p.reviewSource = fault
-	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	p.startAndRecordExport(t)
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
-		t.Fatalf("legacy supersession preflight = %#v, %v", result, err)
-	}
-	p.now = p.now.Add(2 * time.Second)
-	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
-	p.reviewer.Script(secondID, fake.ReviewScript{
-		Outcome: fake.OutcomeComplete,
-		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("legacy preflight replacement")),
-		},
-	})
-	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-		t.Fatalf("legacy preflight replacement review = %#v, %v", result, err)
-	}
-}
-
 func TestProductionSupersededInstructionRequestAdvancesToNewRound(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
