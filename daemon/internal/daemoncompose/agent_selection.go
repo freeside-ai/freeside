@@ -117,8 +117,16 @@ type adapterConformanceGate interface {
 // that expires inside it is not launched (proveAdapterOnCandidates).
 const adapterProofBudget = 3 * time.Minute
 
+// errAdapterProofBudget is the cause of an adapter proof's context when
+// adapterProofBudget ends it, so a runtime call the budget kills names it.
+// It wraps context.DeadlineExceeded because a caller that returns
+// context.Cause (net/http does) must keep that class.
+var errAdapterProofBudget = fmt.Errorf("adapter proof passed its adapterProofBudget of %s: %w",
+	adapterProofBudget, context.DeadlineExceeded)
+
 func runAdapterConformance(ctx context.Context, gate adapterConformanceGate, input claude.ConformanceInput, authorities []string) (domain.LaunchCapabilitySet, error) {
-	ctx, cancel := context.WithTimeout(ctx, adapterProofBudget)
+	started := time.Now()
+	ctx, cancel := context.WithTimeoutCause(ctx, adapterProofBudget, errAdapterProofBudget)
 	defer cancel()
 	spec, err := claude.ConformanceHandoff(ctx, input)
 	if err != nil {
@@ -129,12 +137,24 @@ func runAdapterConformance(ctx context.Context, gate adapterConformanceGate, inp
 		defer func() { _ = os.RemoveAll(result.ExportDir) }()
 	}
 	if err != nil {
-		return nil, err
+		return nil, adapterProofBudgetError(ctx, started, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, adapterProofBudgetError(ctx, started, err)
 	}
 	return claude.JudgeConformance(result, input.Task, input.InvocationID, authorities)
+}
+
+// adapterProofBudgetError says a proof that failed once its own budget ended
+// ran out of time, which under load reads otherwise as a defect (#3337). It
+// keeps err's chain and leaves a failure under any other cause as it was.
+func adapterProofBudgetError(ctx context.Context, started time.Time, err error) error {
+	if !errors.Is(context.Cause(ctx), errAdapterProofBudget) {
+		return err
+	}
+	return fmt.Errorf("adapter proof ran %s and passed its %s budget; "+
+		"if the machine was loaded, restart the daemon once load drops to rerun the proof: %w",
+		time.Since(started).Round(100*time.Millisecond), adapterProofBudget, err)
 }
 
 // proveClaudeAdapter proves the Claude ward adapter in image, the image the

@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/wardname"
@@ -824,6 +828,94 @@ func TestRuntimeStderrKeepsItsTail(t *testing.T) {
 	}
 	if len(reported) > 512 {
 		t.Errorf("error reports %d bytes of stderr, bound 512", len(reported))
+	}
+}
+
+// cancelOnWrite ends its context with cause on the first write, so a test
+// can end a runtime call's context while the process is running, with no
+// timer.
+type cancelOnWrite struct {
+	cancel context.CancelCauseFunc
+	cause  error
+}
+
+func (w cancelOnWrite) Write(p []byte) (int, error) {
+	w.cancel(w.cause)
+	return len(p), nil
+}
+
+// TestRuntimeCallNamesTheContextThatEndedIt pins #3337: a runtime call that
+// fails after its context ended says how long it ran and the context's cause,
+// in both the redacted and the stderr-reporting branch, while the error chain
+// keeps only what it held before. Callers classify a runtime failure by
+// context.DeadlineExceeded, so the cause must never join the chain.
+func TestRuntimeCallNamesTheContextThatEndedIt(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	// Announces itself on stdout, then outlives any test unless killed.
+	execfixture.Write(t, bin, []byte("#!/bin/sh\necho started\necho runtime-stderr >&2\nexec sleep 60\n"), 0o700)
+	// Shaped as the real budgets' causes are, wrapping the deadline class
+	// that must still stay out of the call's chain.
+	budget := fmt.Errorf("adapter proof passed its adapterProofBudget of 3m0s: %w", context.DeadlineExceeded)
+	for _, reportStderr := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reportStderr=%t", reportStderr), func(t *testing.T) {
+			t.Parallel()
+			t.Run("ended while running", func(t *testing.T) {
+				t.Parallel()
+				ctx, cancel := context.WithCancelCause(t.Context())
+				defer cancel(nil)
+				cmd := osexec.CommandContext(ctx, bin, "start", "fixture") //nolint:gosec // G204: test-owned fixture executable
+				err := runPrepared(ctx, cmd, cancelOnWrite{cancel: cancel, cause: budget}, reportStderr, "start")
+				msg := fmt.Sprint(err)
+				if !strings.HasPrefix(msg, "container start: ran ") ||
+					!strings.Contains(msg, "before its context ended ("+budget.Error()+"): signal: killed") {
+					t.Fatalf("error %q does not name how long the call ran and why its context ended", msg)
+				}
+				var exitErr *osexec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatalf("error %v lost its exit error", err)
+				}
+				if errors.Is(err, budget) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("error %v carries the context's end in its chain", err)
+				}
+			})
+			t.Run("ended before start", func(t *testing.T) {
+				t.Parallel()
+				ctx, cancel := context.WithDeadlineCause(t.Context(), time.Now().Add(-time.Second), budget)
+				defer cancel()
+				cmd := osexec.CommandContext(ctx, bin, "start", "fixture") //nolint:gosec // G204: test-owned fixture executable
+				err := runPrepared(ctx, cmd, io.Discard, reportStderr, "start")
+				if !strings.Contains(fmt.Sprint(err), "before its context ended ("+budget.Error()+")") {
+					t.Fatalf("error %v does not name why its context ended", err)
+				}
+				// Start reports the done context itself, as it did before;
+				// the cause stays out of the chain.
+				if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, budget) {
+					t.Fatalf("error %v: want Start's deadline error and no cause in the chain", err)
+				}
+			})
+		})
+	}
+}
+
+// TestRuntimeCallUnderALiveContextKeepsItsMessage pins that a call killed
+// while its context is live (by the OS, say) gets no deadline wording: the
+// message stays exactly what it was before #3337.
+func TestRuntimeCallUnderALiveContextKeepsItsMessage(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	execfixture.Write(t, bin, []byte("#!/bin/sh\necho runtime-stderr >&2\nkill -KILL $$\n"), 0o700)
+	for reportStderr, want := range map[bool]string{
+		false: "container start: signal: killed",
+		true:  "container start: signal: killed: runtime-stderr",
+	} {
+		err := runPrepared(t.Context(), osexec.CommandContext(t.Context(), bin, "start"), io.Discard, reportStderr, "start") //nolint:gosec // G204: test-owned fixture executable
+		if fmt.Sprint(err) != want {
+			t.Errorf("reportStderr=%t: error %q, want %q", reportStderr, err, want)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errStderrTruncated) {
+			t.Errorf("reportStderr=%t: error %v gained a classification", reportStderr, err)
+		}
 	}
 }
 
