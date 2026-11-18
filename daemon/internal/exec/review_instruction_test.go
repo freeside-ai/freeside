@@ -461,6 +461,34 @@ func testBacktickFenceRun(line string) int {
 	return len(line)
 }
 
+// TestCurrentReviewRequestAuthorityDigestIsPinned pins the authority digest
+// of each current request shape the goldens store, so a change to the digest's
+// members or encoding cannot pass unnoticed: a persisted request's digest
+// must keep matching the one the engine recomputes for it.
+func TestCurrentReviewRequestAuthorityDigestIsPinned(t *testing.T) {
+	t.Parallel()
+	for name, recorded := range map[string]domain.Digest{
+		"review_request":        "sha256:19198e68322c174cfa875c35a39101b60ef9be968d4504ea626d5767c6676c99",
+		"review_request_inputs": "sha256:ae84e7a304334bd384ceebbbc6b23da3c520bb11c31a7b5004ac21c068069f29",
+	} {
+		body, err := os.ReadFile("testdata/" + name + ".golden") //nolint:gosec // G304: fixed golden names
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request ReviewRequest
+		if err := strictjson.Decode(body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+			t.Fatalf("%s: strict decode: %v", name, err)
+		}
+		digest, err := request.AuthorityDigest()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if digest != recorded {
+			t.Fatalf("%s: AuthorityDigest = %s, want the recorded %s", name, digest, recorded)
+		}
+	}
+}
+
 // TestRetainedLegacyReviewRequestReads pins that a request a daemon stored
 // before #2660, naming a prospective merge, still decodes strictly, still
 // validates as retained, and keeps the authority digest it was recorded under
