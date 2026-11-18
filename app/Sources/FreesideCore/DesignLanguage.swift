@@ -521,6 +521,10 @@ enum FreesideFont {
     /// A sidebar row's serif line: a step under the statement, since a row
     /// is one of a list.
     static var rowTitle: Font { fixed("FreesideSerif-Regular", ladder.rowTitle, relativeTo: .body) }
+    /// A timeline event's title: the row title's size in sans, regular on
+    /// every row, so a list of routine events stays under the statement
+    /// and color, not weight, marks the one that matters.
+    static var eventTitle: Font { fixed("IBMPlexSans", ladder.rowTitle, relativeTo: .body) }
     /// A fact's label and a disclosure's label.
     static var factLabel: Font { fixed("IBMPlexSans", ladder.label, relativeTo: .callout) }
     /// A fact's value.
