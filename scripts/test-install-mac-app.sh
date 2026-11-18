@@ -600,8 +600,14 @@ cat >"$STUB_AGENT_TEMPLATE" <<'PLIST'
 		<string>-listen</string>
 		<string>127.0.0.1:7331</string>
 	</array>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ExitTimeOut</key>
+	<integer>0</integer>
 	<key>StandardErrorPath</key>
 	<string>__FREESIDE_STDERR_PATH__</string>
+	<key>ProcessType</key>
+	<string>Standard</string>
 </dict>
 </plist>
 PLIST
@@ -908,6 +914,26 @@ assert_program_arguments() {
         pass=$((pass + 1))
     else
         report_failure "ProgramArguments mismatch in $path"$'\n'"expected:"$'\n'"$expected"$'\n'"actual:"$'\n'"$actual"
+    fi
+}
+
+# Pin a scalar key's value element, the line after its <key>, so a check on
+# `<string>Standard</string>` can't pass on some other key's value. $1 is the
+# plist, $2 the key, $3 the expected element (for example
+# `<integer>0</integer>`). A missing key reads as an empty value and fails.
+assert_plist_value() {
+    local path=$1
+    local key=$2
+    local expected=$3
+    local actual
+    actual=$(awk -v key="<key>$key</key>" '
+        found { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print; exit }
+        index($0, key) { found = 1 }
+    ' "$path")
+    if [[ "$actual" == "$expected" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "expected $key in $path to be $expected, got: ${actual:-<missing>}"
     fi
 }
 
@@ -1780,6 +1806,15 @@ assert_file_contains \
 assert_file_contains \
     "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
     "__FREESIDE_ENVIRONMENT__"
+# Background let foreground load starve the daemon past every timeout
+# (#3336), and plan §5.2 requires the unlimited exit timeout launchd reads
+# from 0.
+assert_plist_value \
+    "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
+    ProcessType "<string>Standard</string>"
+assert_plist_value \
+    "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
+    ExitTimeOut "<integer>0</integer>"
 assert_file_omits \
     "$CASE_DIR/defaults-calls" \
     "before-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
