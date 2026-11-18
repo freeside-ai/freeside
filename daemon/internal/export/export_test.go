@@ -313,6 +313,73 @@ func TestExportBudgetChargesWrittenBytes(t *testing.T) {
 	}
 }
 
+// TestExportBlobCountBudget: the count budget charges distinct stored blobs,
+// so a dedup hit is free, and a file past it is recorded blob_omitted with
+// its digest, never dropped.
+func TestExportBlobCountBudget(t *testing.T) {
+	fsys := fstest.MapFS{
+		"a.txt": {Data: []byte("same")},
+		"b.txt": {Data: []byte("same")}, // dedup: free
+		"c.txt": {Data: []byte("other")},
+		"d.txt": {Data: []byte("third")}, // past the budget
+	}
+	out := t.TempDir()
+	m, err := export.Export(fsys, out, export.Options{MaxBlobs: 2})
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	for _, e := range m.Entries {
+		if wantOmitted := e.Path == "d.txt"; e.BlobOmitted != wantOmitted || e.Digest == nil {
+			t.Errorf("%s: blob_omitted = %v (digest %v), want %v with a digest", e.Path, e.BlobOmitted, e.Digest, wantOmitted)
+		}
+	}
+	if blobs := listFiles(t, filepath.Join(out, "blobs", "sha256")); len(blobs) != 2 {
+		t.Errorf("stored %d blobs, want 2: %v", len(blobs), blobs)
+	}
+}
+
+// TestExportSpendsBudgetOnIgnoredLast: build output under a directory the
+// workspace's .gitignore ignores sorts before the real change, yet both
+// budgets go to the .gitignore and the unignored files first (#3347). A
+// rules file inside the ignored directory is not read, as git would not
+// read it, and the manifest keeps its sorted order.
+func TestExportSpendsBudgetOnIgnoredLast(t *testing.T) {
+	fsys := fstest.MapFS{
+		"app/.gitignore":            {Data: []byte(".build/\n")},
+		"app/.build/a.o":            {Data: []byte("aaaaaaaa")},
+		"app/.build/b.o":            {Data: []byte("bbbbbbbb")},
+		"app/.build/c.o":            {Data: []byte("cccccccc")},
+		"app/.build/pkg/.gitignore": {Data: []byte("!*\n")},
+		"app/Sources/x.swift":       {Data: []byte("xxxxxxxx")},
+		"daemon/y.go":               {Data: []byte("yyyyyyyy")},
+	}
+	kept := map[string]bool{"app/.gitignore": true, "app/Sources/x.swift": true, "daemon/y.go": true}
+	for name, opts := range map[string]export.Options{
+		"count budget": {MaxBlobs: 3},
+		"byte budget":  {MaxTotalBlobBytes: 8 + 8 + 8},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, err := export.Export(fsys, t.TempDir(), opts)
+			if err != nil {
+				t.Fatalf("Export: %v", err)
+			}
+			var paths []string
+			for _, e := range m.Entries {
+				paths = append(paths, e.Path)
+				if e.Kind != export.EntryRegular {
+					continue
+				}
+				if e.BlobOmitted == kept[e.Path] || e.Digest == nil {
+					t.Errorf("%s: blob_omitted = %v (digest %v), want %v with a digest", e.Path, e.BlobOmitted, e.Digest, !kept[e.Path])
+				}
+			}
+			if !slices.IsSorted(paths) {
+				t.Errorf("manifest order changed: %v", paths)
+			}
+		})
+	}
+}
+
 // TestExportEntryCap: blobless entries evade the blob budgets, so the
 // entry cap fails the export closed instead of accumulating an unbounded
 // manifest.

@@ -268,7 +268,9 @@ type Config struct {
 	// Defaults to 4 GiB.
 	MaxArchiveBytes int64
 	// MaxExportEntries caps filesystem objects under HandoffDir before any
-	// archive-derived path is created on the host. Defaults to 10,000.
+	// archive-derived path is created on the host. Defaults to 10,000;
+	// the exporter's blob-count budget (export.DefaultMaxBlobs) keeps an
+	// export under it, so only the evidence channel can still overrun it.
 	MaxExportEntries int
 	// MaxManifestBytes caps the manifest.json read into the daemon heap
 	// during verification. The per-file extraction budget (MaxExportBytes)

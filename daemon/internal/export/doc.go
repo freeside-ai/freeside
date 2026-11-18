@@ -1,8 +1,10 @@
 // Package export is the gauntlet's trusted export helper (§5.6): given a
 // workspace mounted read-only, it emits digest-addressed content blobs and
 // a normalized manifest onto the exporter's own root filesystem, optionally
-// lifting the reserved commit plan as one opaque capped member, and never
-// executes or parses workspace content. It ships inside the ward's pinned exporter
+// lifting the reserved commit plan as one opaque capped member. It never
+// executes workspace content and parses none of it but the workspace's
+// .gitignore files, read as a capped hint that only orders the blob budgets
+// (ignore.go). It ships inside the ward's pinned exporter
 // image (the #73/#76 seam); the ward collects the output via container
 // export of the stopped exporter, and the hostile importer consumes it.
 //
@@ -21,6 +23,8 @@
 //   - errors.go    sentinel validation errors (wrapped with %w)
 //   - walk.go      read-only workspace walk and entry classification
 //   - blob.go      digest-addressed blob writing
+//   - ignore.go    the .gitignore hint that spends blob budgets on
+//     unignored files first
 //   - commit_plan.go opaque reserved-path lift
 //   - evidence.go  evidence-channel schema v1: the manifest, producer classes,
 //     head binding, and Validate

@@ -145,7 +145,7 @@ func writeEvidence(fsys fs.FS, outDir string, sources []resolvedEvidenceSource) 
 	}
 	entries := make([]EvidenceEntry, 0, len(sources))
 	for _, rs := range sources {
-		res, err := bw.digestAndStore(fsys, rs.source.Path, true)
+		res, err := bw.digestAndStore(fsys, rs.source.Path, true, nil)
 		if err != nil {
 			return err
 		}

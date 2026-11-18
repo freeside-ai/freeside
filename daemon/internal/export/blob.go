@@ -37,6 +37,9 @@ func newBlobWriter(outDir, channelDir string) (*blobWriter, error) {
 	return &blobWriter{dir: dir, written: map[Digest]bool{}}, nil
 }
 
+// blobs reports how many distinct blobs this writer has stored.
+func (w *blobWriter) blobs() int { return len(w.written) }
+
 // blobResult reports one digestAndStore pass: the content address, the
 // bytes observed in the stream, whether the blob is present under the
 // store after the call, and how many new bytes the call wrote (zero on a
@@ -50,10 +53,12 @@ type blobResult struct {
 }
 
 // digestAndStore streams one workspace file exactly once. With store false
-// (a file over the per-file cap or past the aggregate budget) it hashes
-// without writing, then still reports the blob as stored if identical
-// content already landed it. Identical content dedups onto one blob.
-func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResult, error) {
+// (a file over the per-file cap or past a budget) it hashes without
+// writing, then still reports the blob as stored if identical content
+// already landed it. Identical content dedups onto one blob. A non-nil
+// capture also receives the stream, so a caller that needs a file's bytes
+// (the ignore hint) reads them in this same pass rather than a second open.
+func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool, capture io.Writer) (blobResult, error) {
 	f, err := fsys.Open(p)
 	if err != nil {
 		return blobResult{}, fmt.Errorf("open %q: %w", p, err)
@@ -61,8 +66,12 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
+	var sink io.Writer = h
+	if capture != nil {
+		sink = io.MultiWriter(h, capture)
+	}
 	if !store {
-		n, err := io.Copy(h, f)
+		n, err := io.Copy(sink, f)
 		if err != nil {
 			return blobResult{}, fmt.Errorf("hash %q: %w", p, err)
 		}
@@ -75,7 +84,7 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 		return blobResult{}, fmt.Errorf("stage blob for %q: %w", p, err)
 	}
 	defer func() { _ = tmp.Abort() }()
-	n, err := io.Copy(io.MultiWriter(h, tmp), f)
+	n, err := io.Copy(io.MultiWriter(sink, tmp), f)
 	if err != nil {
 		return blobResult{}, fmt.Errorf("write blob for %q: %w", p, err)
 	}
