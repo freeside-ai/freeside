@@ -114,6 +114,26 @@ func productionVerificationInvocationIDForProducer(
 	return ""
 }
 
+// ProductionLaneIDs names the stage and invocation the production lane
+// derives for runID. The marker's decode refuses any other pair, so a writer
+// outside the engine (a development fixture) takes them from here.
+func ProductionLaneIDs(runID domain.RunID) (domain.StageID, domain.InvocationID) {
+	return productionStageID(runID), productionInvocationID(runID)
+}
+
+// ProductionInvocationRequestPayload is the canonical outbox payload of
+// runID's production dispatch intent: the exact bytes decodeProductionRequest
+// accepts. It does not validate publication; SubmitProductionRun does that
+// before writing, and the decode re-checks it on every read.
+func ProductionInvocationRequestPayload(runID domain.RunID, publication ProductionPublication) ([]byte, error) {
+	stageID, invocationID := ProductionLaneIDs(runID)
+	return json.Marshal(productionInvocationRequest{
+		Version:      productionInvocationRequestVersion,
+		InvocationID: invocationID, RunID: runID, StageID: stageID,
+		Publication: publication,
+	})
+}
+
 // productionInvocationRequest is the outbox payload for one production
 // dispatch intent. Unlike the conversation lane's request it carries the run
 // and stage directly: there is no attention item to resolve them through.
@@ -357,13 +377,8 @@ func submitProductionRunTx(ctx context.Context, tx *store.WriteTx, spec Producti
 			spec.RunID, spec.ResolvedPolicy.RunID, domain.ErrParentKeyMismatch)
 	}
 
-	stageID := productionStageID(spec.RunID)
-	invocationID := productionInvocationID(spec.RunID)
-	payload, err := json.Marshal(productionInvocationRequest{
-		Version:      productionInvocationRequestVersion,
-		InvocationID: invocationID, RunID: spec.RunID, StageID: stageID,
-		Publication: spec.Publication,
-	})
+	stageID, invocationID := ProductionLaneIDs(spec.RunID)
+	payload, err := ProductionInvocationRequestPayload(spec.RunID, spec.Publication)
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
 	}

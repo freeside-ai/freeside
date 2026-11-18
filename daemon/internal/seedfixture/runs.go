@@ -81,10 +81,28 @@ func registerProjects(s seeder, projects ...project) error {
 	})
 }
 
-func stageID(runID domain.RunID) domain.StageID { return domain.StageID("stage-" + string(runID)) }
+// stageID and invocationID are the production lane's derivation, so each
+// fixture dispatch intent sits at the key the engine reads and decodes as a
+// production marker. The seeded stages keep their display names, so a
+// driver could not run them; -seed-fixture requires the driver disabled.
+func stageID(runID domain.RunID) domain.StageID {
+	stage, _ := engine.ProductionLaneIDs(runID)
+	return stage
+}
 
 func invocationID(runID domain.RunID) domain.InvocationID {
-	return domain.InvocationID("inv-" + string(runID))
+	_, invocation := engine.ProductionLaneIDs(runID)
+	return invocation
+}
+
+// fixturePublication is the publication metadata every seeded production
+// intent carries; the engine refuses an intent without it.
+var fixturePublication = engine.ProductionPublication{
+	Title: "Seeded fixture change",
+	Body:  "A representative change seeded for development.",
+	CommitAuthor: engine.ProductionCommitAuthor{
+		AppSlug: "freeside-fixture", BotUserID: 1,
+	},
 }
 
 func attemptID(invocation domain.InvocationID) domain.AttemptID {
@@ -120,8 +138,10 @@ func singleStageRun(p project, runID domain.RunID, stage string, policyDigest do
 // executed by the first engine a later driver start opens on this store.
 func (s seeder) submit(tx *store.WriteTx, run domain.Run, at time.Time) error {
 	attempt := run.Stages[0].Attempts[len(run.Stages[0].Attempts)-1]
-	payload := fmt.Appendf(nil, `{"invocation_id":%q,"run_id":%q,"stage_id":%q}`,
-		attempt.InvocationID, run.ID, attempt.StageID)
+	payload, err := engine.ProductionInvocationRequestPayload(run.ID, fixturePublication)
+	if err != nil {
+		return err
+	}
 	if _, _, err := tx.EnqueueOutbox(s.ctx, string(attempt.InvocationID),
 		string(domain.ProductionInvocationRequestedKind), payload); err != nil {
 		return err

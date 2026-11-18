@@ -881,8 +881,7 @@ func (c controlHandler) putRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runID := domain.RunID(req.ID)
-	invocationID := domain.InvocationID("inv-" + req.ID)
-	stageID := domain.StageID("stage-" + req.ID)
+	stageID, invocationID := engine.ProductionLaneIDs(runID)
 	policyDigest := domain.Digest("sha256:policy-" + req.ID)
 	run := domain.Run{
 		ID: runID, ProjectID: "proj-convergence",
@@ -916,14 +915,20 @@ func (c controlHandler) putRun(w http.ResponseWriter, r *http.Request) {
 		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
+	payload, err := engine.ProductionInvocationRequestPayload(runID, engine.ProductionPublication{
+		Title: "Convergence fixture change", Body: "A run seeded for the convergence suite.",
+		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "convergence", BotUserID: 1},
+	})
+	if err != nil {
+		controlError(w, err)
+		return
+	}
 	if err := c.store.Write(r.Context(), func(tx *store.WriteTx) error {
 		if err := tx.PutRun(r.Context(), run); err != nil {
 			return err
 		}
 		if _, _, err := tx.EnqueueOutbox(r.Context(), string(invocationID),
-			string(domain.ProductionInvocationRequestedKind), []byte(fmt.Sprintf(
-				`{"invocation_id":%q,"run_id":%q,"stage_id":%q}`,
-				invocationID, runID, stageID))); err != nil {
+			string(domain.ProductionInvocationRequestedKind), payload); err != nil {
 			return err
 		}
 		return tx.PutSchedule(r.Context(), schedule)

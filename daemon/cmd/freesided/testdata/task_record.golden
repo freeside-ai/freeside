@@ -135,7 +135,7 @@
         "milestone": {
           "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
           "kind": "run_submitted",
-          "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
           "terminal": null,
           "outcome": null,
           "reason": null,
@@ -159,7 +159,7 @@
         "milestone": {
           "run_id": "run-freeside-656",
           "kind": "terminal_recorded",
-          "invocation_id": "inv-run-freeside-656",
+          "invocation_id": "inv-implement-run-freeside-656",
           "terminal": "failed",
           "outcome": null,
           "reason": null,
@@ -183,7 +183,7 @@
         "milestone": {
           "run_id": "run-freeside-656",
           "kind": "run_submitted",
-          "invocation_id": "inv-run-freeside-656",
+          "invocation_id": "inv-implement-run-freeside-656",
           "terminal": null,
           "outcome": null,
           "reason": null,
@@ -325,7 +325,7 @@
               {
                 "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
                 "kind": "invocation_admitted",
-                "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
                 "terminal": null,
                 "outcome": null,
                 "reason": null,
@@ -334,7 +334,7 @@
               {
                 "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
                 "kind": "run_submitted",
-                "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
                 "terminal": null,
                 "outcome": null,
                 "reason": null,
@@ -343,7 +343,7 @@
             ],
             "hold": {
               "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
-              "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+              "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
               "reason": "verification_findings",
               "detail": null,
               "image_upkeep": null,
@@ -357,7 +357,7 @@
             "hold_history": [
               {
                 "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
-                "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+                "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
                 "reason": "verification_findings",
                 "first_observed_at": "2026-09-01T14:10:00Z",
                 "last_observed_at": "2026-09-01T14:20:00Z",
@@ -383,7 +383,7 @@
               {
                 "run_id": "run-freeside-656",
                 "kind": "terminal_recorded",
-                "invocation_id": "inv-run-freeside-656",
+                "invocation_id": "inv-implement-run-freeside-656",
                 "terminal": "failed",
                 "outcome": null,
                 "reason": null,
@@ -392,7 +392,7 @@
               {
                 "run_id": "run-freeside-656",
                 "kind": "execution_outcome_recorded",
-                "invocation_id": "inv-run-freeside-656",
+                "invocation_id": "inv-implement-run-freeside-656",
                 "terminal": null,
                 "outcome": "failed",
                 "reason": null,
@@ -401,7 +401,7 @@
               {
                 "run_id": "run-freeside-656",
                 "kind": "invocation_admitted",
-                "invocation_id": "inv-run-freeside-656",
+                "invocation_id": "inv-implement-run-freeside-656",
                 "terminal": null,
                 "outcome": null,
                 "reason": null,
@@ -410,7 +410,7 @@
               {
                 "run_id": "run-freeside-656",
                 "kind": "run_submitted",
-                "invocation_id": "inv-run-freeside-656",
+                "invocation_id": "inv-implement-run-freeside-656",
                 "terminal": null,
                 "outcome": null,
                 "reason": null,
@@ -540,7 +540,7 @@
       "hold": null,
       "invocations": [
         {
-          "invocation_id": "inv-run-freeside-656",
+          "invocation_id": "inv-implement-run-freeside-656",
           "run_id": "run-freeside-656",
           "status": "failed",
           "live": false,
@@ -549,10 +549,10 @@
       ],
       "admissions": [
         {
-          "id": "sha256:57045174e3b72d639c7eb198fa7ed9e6267c5acdfb22287b4adf2995e2aa6441",
-          "invocation_id": "inv-run-freeside-656",
-          "stage_id": "stage-run-freeside-656",
-          "attempt_id": "attempt-inv-run-freeside-656",
+          "id": "sha256:325c17449d645a4ead5468952c6a8be60271aa598e81dcd315cb715218cab062",
+          "invocation_id": "inv-implement-run-freeside-656",
+          "stage_id": "implement-run-freeside-656",
+          "attempt_id": "attempt-inv-implement-run-freeside-656",
           "admitted_at": "2026-09-01T13:32:00Z",
           "operating_mode": "attended_dev",
           "credential_mode": "local_trusted",
@@ -566,7 +566,7 @@
           },
           "spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
           "policy_digest": "sha256:8813d5d7e2f9097c5050f515830edf01fc20f9effb6c98eecc82109bd8a1c61b",
-          "input_digest": "sha256:c0a155240ea42dea42c32d6e57f27548f45078d7682b80209e95b6d4fbb29dc3",
+          "input_digest": "sha256:3dfca9dce8300b7c2e4fed38990e2e9b567f0abea91d0184650ed895f10ccef2",
           "trust_profile_digest": null,
           "agent": null
         }
@@ -620,7 +620,7 @@
       },
       "hold": {
         "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
-        "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+        "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
         "reason": "verification_findings",
         "detail": null,
         "image_upkeep": null,
@@ -632,7 +632,7 @@
       },
       "invocations": [
         {
-          "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
           "run_id": "run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
           "status": "running",
           "live": true,
@@ -641,10 +641,10 @@
       ],
       "admissions": [
         {
-          "id": "sha256:374fc2079368338ce954ba48deb6efe9867e926ce78d3f1b4ad537e430b11910",
-          "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
-          "stage_id": "stage-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
-          "attempt_id": "attempt-inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "id": "sha256:e82641dfcf99728f12096df97ce041181d042b33e68ccdc49188bf087049400c",
+          "invocation_id": "inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "stage_id": "implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
+          "attempt_id": "attempt-inv-implement-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
           "admitted_at": "2026-09-01T13:56:00Z",
           "operating_mode": "attended_dev",
           "credential_mode": "local_trusted",
@@ -658,7 +658,7 @@
           },
           "spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
           "policy_digest": "sha256:8813d5d7e2f9097c5050f515830edf01fc20f9effb6c98eecc82109bd8a1c61b",
-          "input_digest": "sha256:562e6547345758554455ef9ffbaae6f8676fad604faa84aeb2994cbb24126b50",
+          "input_digest": "sha256:fce4e5430a326f86385c908895bbac7d4c84e64073fb791bd5f9a1e92e005c18",
           "trust_profile_digest": null,
           "agent": null
         }
@@ -693,9 +693,9 @@
         "outcome": "failed",
         "cause": "unknown",
         "stage": "implementation",
-        "invocation_id": "inv-run-freeside-656",
+        "invocation_id": "inv-implement-run-freeside-656",
         "admitted": {
-          "invocation_id": "inv-run-freeside-656",
+          "invocation_id": "inv-implement-run-freeside-656",
           "kind": "execution",
           "role": "implementer",
           "admitted_at": "2026-09-01T13:32:00Z",
@@ -790,9 +790,9 @@
         "outcome": "failed",
         "cause": "unknown",
         "stage": "implementation",
-        "invocation_id": "inv-run-freeside-656",
+        "invocation_id": "inv-implement-run-freeside-656",
         "admitted": {
-          "invocation_id": "inv-run-freeside-656",
+          "invocation_id": "inv-implement-run-freeside-656",
           "kind": "execution",
           "role": "implementer",
           "admitted_at": "2026-09-01T13:32:00Z",
@@ -853,7 +853,7 @@
       "deliveries": []
     },
     {
-      "id": "invocation-stalled-inv-run-freeside-656-22",
+      "id": "invocation-stalled-inv-implement-run-freeside-656-22",
       "error": null,
       "type": "system_health",
       "status": "open",
