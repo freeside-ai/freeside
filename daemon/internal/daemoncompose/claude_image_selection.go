@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -173,6 +174,14 @@ func (m *baseInputsMemo) fetch(key baseInputsKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err != nil {
+		// A fetch its deadline cut off proves nothing about the base: the
+		// transport can read a killed git command as the base missing from
+		// its branch, which would stop a run whose base is recorded
+		// (selectRecordedImage). It holds and retries as a plain failure,
+		// so the transport error is kept as text, not in the chain.
+		if ctx.Err() != nil && errors.Is(err, publish.ErrRemoteMissingBase) {
+			err = fmt.Errorf("fetch reached its deadline: %w (%s)", ctx.Err(), err.Error())
+		}
 		now := m.now()
 		maps.DeleteFunc(m.failures, func(_ baseInputsKey, failure baseFetchFailure) bool {
 			return !now.Before(failure.retryAt)
@@ -545,9 +554,10 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 // or the error that holds the attempt: image_upkeep_pending or the unserved
 // admission_policy_refused hold when no image serves base, the run's base,
 // backend_not_conformant while ward holds no published proof of the
-// selected image, input_unavailable when the base could not be read, and
+// selected image, input_unavailable when the base could not be read,
 // engine.ErrBaseInputsPending, which records no reason, while the base is
-// fetched off the pass.
+// fetched off the pass, and engine.ErrRunBaseLeftBranch when the base is
+// no longer on its branch, which stops an attempt at the run's recorded base.
 //
 // Selection prefers an image ward has proved (engine.SelectProjectImage).
 // Ward publishes an image's proof, the two capabilities a pass earns
@@ -581,7 +591,7 @@ func (s *claudeImageSelector) selectImage(
 				repair.MeasuredFromImageID, repair.ID, engine.ErrProjectImageUnserved)
 		}
 	} else {
-		selected, found, err = selectRecordedImage(ctx, s.store, s.repo, s.repositoryID, base.BaseSHA,
+		selected, found, err = selectRecordedImage(ctx, s.store, s.repo, s.repositoryID, base,
 			imageRefs(proven), s.base)
 		if err != nil {
 			return "", err
@@ -659,8 +669,16 @@ func (s *claudeImageSelector) repairImage(
 // cannot be read is exec.ErrInputUnavailable, which holds the attempt
 // instead of failing the dispatch pass. A base not yet read is fetched off
 // the pass (baseInputsMemo.lookup) and is engine.ErrBaseInputsPending.
+//
+// A base the fetch found off its branch (publish.ErrRemoteMissingBase) is
+// engine.ErrRunBaseLeftBranch, whether that fetch failed now or the memo
+// serves its failure; the engine decides whether the base is the one the
+// run recorded, and so whether to stop it. The transport error is left out
+// of the chain: its text can carry git's output, and the chain becomes a
+// stopped run's card summary. The memo already logged it
+// (baseInputsMemo.fetch).
 func selectRecordedImage(
-	ctx context.Context, st *store.Store, repo string, repositoryID int64, baseSHA string,
+	ctx context.Context, st *store.Store, repo string, repositoryID int64, runBase domain.BaseRevision,
 	proved []domain.ImageRef, base *baseInputsMemo,
 ) (domain.ProjectImage, bool, error) {
 	var (
@@ -682,9 +700,14 @@ func selectRecordedImage(
 	if !found {
 		return domain.ProjectImage{}, false, nil
 	}
-	return SelectAmongRecordedImages(pointed, images, repo, baseSHA, proved,
+	return SelectAmongRecordedImages(pointed, images, repo, runBase.BaseSHA, proved,
 		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
-			return base.lookup(baseSHA, layout)
+			inputs, err := base.lookup(runBase.BaseSHA, layout)
+			if errors.Is(err, publish.ErrRemoteMissingBase) {
+				return domain.ProjectImageBaseInputs{}, fmt.Errorf("base %s is no longer on %s: %w",
+					runBase.BaseSHA, runBase.BaseRef, engine.ErrRunBaseLeftBranch)
+			}
+			return inputs, err
 		})
 }
 
@@ -694,8 +717,11 @@ func selectRecordedImage(
 // pointer whose repository disagrees with repo is
 // domain.ErrRepositoryIdentityMismatch; a base that cannot be read is
 // exec.ErrInputUnavailable. A base still being fetched is
-// engine.ErrBaseInputsPending, returned without that join: joined, its
-// hold would match input_unavailable first and record that reason.
+// engine.ErrBaseInputsPending, and a base off its branch is
+// engine.ErrRunBaseLeftBranch, each returned without that join: joined, the
+// first would hold as input_unavailable instead of recording no reason, and
+// the second would hold instead of stopping the attempt. Only the daemon's
+// baseInputs answers engine.ErrRunBaseLeftBranch.
 func SelectAmongRecordedImages(
 	pointed domain.ProjectImage, images []domain.ProjectImage, repo, baseSHA string, proved []domain.ImageRef,
 	baseInputs func(domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
@@ -709,7 +735,7 @@ func SelectAmongRecordedImages(
 		Proved: proved, Pointed: pointed, Images: images, BaseSHA: baseSHA,
 		BaseInputs: baseInputs, Preparation: projectimage.PreparationDigest(),
 	})
-	if errors.Is(err, engine.ErrBaseInputsPending) {
+	if errors.Is(err, engine.ErrBaseInputsPending) || errors.Is(err, engine.ErrRunBaseLeftBranch) {
 		return domain.ProjectImage{}, false, fmt.Errorf("select project image: %w", err)
 	}
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -1387,6 +1388,74 @@ func TestClaudeImageSelectorBacksOffAFailedFetch(t *testing.T) {
 	memo.mu.Unlock()
 	if len(failed) != 1 || failed[0].baseSHA != other.BaseSHA {
 		t.Fatalf("failures = %v, want only the newest base's", failed)
+	}
+}
+
+// A fetch its deadline cut off is a plain failure even when the transport
+// read the killed git command as the base missing from its branch, so it
+// holds and retries rather than stopping a run.
+func TestBaseInputsMemoDeadlineIsNotABaseOffItsBranch(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		layout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}
+		memo := newBaseInputsMemo(func(
+			ctx context.Context, _ string, _ domain.ProjectImageInputLayout,
+		) (domain.ProjectImageBaseInputs, error) {
+			<-ctx.Done()
+			return domain.ProjectImageBaseInputs{}, fmt.Errorf("base is not on remote branch: %w: %w",
+				publish.ErrRemoteMissingBase, errors.New("signal: killed"))
+		}, slog.New(slog.DiscardHandler))
+		defer func() { _ = memo.Close(context.Background()) }()
+
+		if _, err := memo.lookup(selectorBase, layout); !errors.Is(err, engine.ErrBaseInputsPending) {
+			t.Fatalf("lookup = %v, want pending", err)
+		}
+		memo.fetches.Wait()
+		_, err := memo.lookup(selectorBase, layout)
+		if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, publish.ErrRemoteMissingBase) {
+			t.Fatalf("lookup after the deadline = %v, want the deadline and not a base off its branch", err)
+		}
+	})
+}
+
+// A fetch that finds the base off its branch is engine.ErrRunBaseLeftBranch,
+// not input_unavailable, for as long as the memo serves the failure. The
+// transport's error stays out of the chain, since its text can carry git's
+// output and the chain becomes a stopped run's card summary.
+func TestClaudeImageSelectorReportsABaseOffItsBranch(t *testing.T) {
+	t.Parallel()
+	pointed := selectorImage(t, strings.Repeat("a", 40), "2", "d")
+	st := selectorStore(t, pointed)
+	ward := newFakeWard(pointed.ImageRef)
+	follower := testFollower(t, ward, refuseProof(t), time.Now, pointed.ImageRef)
+	fetchErr := fmt.Errorf("base is not on remote branch: %w: %w",
+		publish.ErrRemoteMissingBase, errors.New("git: fatal: remote said something"))
+	memo := closeAtCleanup(t, newBaseInputsMemo(func(
+		context.Context, string, domain.ProjectImageInputLayout,
+	) (domain.ProjectImageBaseInputs, error) {
+		return domain.ProjectImageBaseInputs{}, fetchErr
+	}, slog.New(slog.DiscardHandler)))
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	memo.now = func() time.Time { return now }
+	selector := &claudeImageSelector{
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, backend: ward, follower: follower,
+		base: memo,
+	}
+
+	if _, err := selector.selectImage(t.Context(), "", selectorRevision, nil); !errors.Is(err, engine.ErrBaseInputsPending) {
+		t.Fatalf("first select = %v, want pending", err)
+	}
+	memo.fetches.Wait()
+	for _, elapsed := range []time.Duration{0, baseFetchRetryBackoff - time.Nanosecond} {
+		now = now.Add(elapsed)
+		_, err := selector.selectImage(t.Context(), "", selectorRevision, nil)
+		if !errors.Is(err, engine.ErrRunBaseLeftBranch) || errors.Is(err, exec.ErrInputUnavailable) ||
+			errors.Is(err, publish.ErrRemoteMissingBase) {
+			t.Fatalf("select %s after the fetch = %v, want only the base-left-branch refusal", elapsed, err)
+		}
+		if !strings.Contains(err.Error(), selectorRevision.BaseSHA) || strings.Contains(err.Error(), "git:") {
+			t.Fatalf("select error = %q, want the base named and the transport's text left out", err)
+		}
 	}
 }
 
