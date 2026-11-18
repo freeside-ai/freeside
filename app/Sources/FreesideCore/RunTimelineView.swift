@@ -485,7 +485,7 @@ struct RunTimelineView: View {
                 attemptContext(invocationID: invocation.invocation_id, in: timeline)
                     ?? invocation.invocation_id
             )
-            .font(FreesideFont.sans(.headline, weight: .semibold))
+            .font(FreesideFont.rowTitle)
             if let line = admission.flatMap(RunDisplay.admissionLine) {
                 Text(line)
                     .font(FreesideFont.trailingSummary)

@@ -163,7 +163,7 @@ struct RunReviewSection: View {
                 } label: {
                     markedRow(isCurrent: false, time: prior.first.flatMap(ReviewRoundPresentation.time)) {
                         Text(ReviewRoundPresentation.priorSummary(prior, in: all, stages: stages))
-                            .font(FreesideFont.callout)
+                            .font(FreesideFont.eventTitle)
                             .foregroundStyle(Color.inkDim)
                             .fixedSize(horizontal: false, vertical: true)
                             .multilineTextAlignment(.leading)
@@ -190,7 +190,7 @@ struct RunReviewSection: View {
         markedRow(isCurrent: false, time: ReviewRoundPresentation.time(round)) {
             WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
                 Text(ReviewRoundPresentation.priorSummary([round], in: all, stages: stages))
-                    .font(FreesideFont.callout)
+                    .font(FreesideFont.eventTitle)
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
@@ -214,7 +214,7 @@ struct RunReviewSection: View {
         ) {
             WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
                 Text(ReviewRoundPresentation.title(round, in: rounds, stages: stages))
-                    .font(FreesideFont.sans(.callout, weight: isCurrent ? .semibold : .regular))
+                    .font(FreesideFont.eventTitle)
                     .foregroundStyle(isCurrent ? Color.ink : Color.inkDim)
                 StateChip(
                     label: ReviewRoundPresentation.verdict(round, now: now),

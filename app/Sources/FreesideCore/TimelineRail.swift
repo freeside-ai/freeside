@@ -162,10 +162,10 @@ struct TimelineRail: View {
             .frame(width: 2, height: Self.connectorReach)
     }
 
-    /// The newest entry is semibold. A failure reads in wax and a stage
-    /// start in full ink wherever they sit; an older event is dimmed. The
-    /// context, when there is one, sits under the label in the mono a
-    /// trailing summary uses.
+    /// Every label is the regular event title; color carries emphasis. The
+    /// newest entry and a stage start read in full ink and a failure in wax
+    /// wherever they sit; an older event is dimmed. The context, when there
+    /// is one, sits under the label in the mono a trailing summary uses.
     private func label(_ row: Row) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if let itemID = row.itemID, let onOpenItem {
@@ -174,7 +174,7 @@ struct TimelineRail: View {
                 } label: {
                     FreesideLink(
                         title: row.label,
-                        face: FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular)
+                        face: FreesideFont.eventTitle
                     )
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -182,7 +182,7 @@ struct TimelineRail: View {
                 .buttonStyle(.plain)
             } else {
                 Text(row.label)
-                    .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
+                    .font(FreesideFont.eventTitle)
                     .foregroundStyle(Self.labelColor(row))
                     .fixedSize(horizontal: false, vertical: true)
             }
