@@ -120,13 +120,15 @@ func DecodeResearchEvidence(data []byte) (ResearchEvidence, error) {
 	if err := request.validate(); err != nil {
 		return ResearchEvidence{}, fmt.Errorf("decode research evidence request: %w", err)
 	}
+	// The fetch refuses a content type over the bound before it stores an
+	// envelope, so a stored one over it is bad metadata, not a research
+	// failure. The bound stays here: it is the only check on a stored
+	// envelope's content type.
 	final, err := url.Parse(envelope.FinalURL)
 	if err != nil || final.Scheme != "https" || final.User != nil || final.Hostname() == "" ||
-		final.Fragment != "" || net.ParseIP(final.Hostname()) != nil || !envelope.outcomeValid() {
+		final.Fragment != "" || net.ParseIP(final.Hostname()) != nil || !envelope.outcomeValid() ||
+		len(envelope.ContentType) > maxResearchContentTypeBytes {
 		return ResearchEvidence{}, fmt.Errorf("decode research evidence metadata: %w", domain.ErrParentKeyMismatch)
-	}
-	if len(envelope.ContentType) > maxResearchContentTypeBytes {
-		return ResearchEvidence{}, fmt.Errorf("decode research evidence content type: %w", ErrResearchTooLarge)
 	}
 	return ResearchEvidence{
 		Source: ResearchSource{

@@ -842,41 +842,6 @@ func TestSpecificationPriorEnvelopeEscapesRendererDelimiters(t *testing.T) {
 	}
 }
 
-func TestSpecificationClassifiesLegacyResearchMetadataLimitUndeliverable(t *testing.T) {
-	t.Parallel()
-	f := newSpecificationFixture(t, true, 4)
-	body, err := json.Marshal(struct {
-		URL         string `json:"url"`
-		Purpose     string `json:"purpose"`
-		FinalURL    string `json:"final_url"`
-		Status      int    `json:"status"`
-		ContentType string `json:"content_type"`
-		BodyBase64  string `json:"body_base64"`
-	}{
-		URL: "https://docs.example/legacy", Purpose: "verify legacy evidence",
-		FinalURL: "https://docs.example/legacy", Status: http.StatusOK,
-		ContentType: strings.Repeat("x", (8<<10)+1), BodyBase64: "",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := domain.Digest(contentaddr.Sum(body))
-	if _, err := f.blobs.Put(digest, bytes.NewReader(body)); err != nil {
-		t.Fatal(err)
-	}
-	artifact := testSpecificationArtifact(
-		t, "research-inv-specify-specification-run-1-1", domain.ArtifactKindResearch,
-		digest, domain.ProducerDaemon, "inv-specify-specification-run-1",
-	)
-
-	engine := &Engine{specification: &specificationWorkflow{blobs: f.blobs}}
-	_, err = engine.encodeSpecificationPriorArtifact(t.Context(), artifact)
-	if !errors.Is(err, ErrSpecificationInputUndeliverable) ||
-		!errors.Is(err, specify.ErrResearchTooLarge) {
-		t.Fatalf("legacy oversized content type = %v, want typed undeliverable research refusal", err)
-	}
-}
-
 // attemptPurposes lists the purpose recorded on each of run's attempts, in
 // stage and attempt order, with "" for an attempt that carries none.
 func attemptPurposes(run domain.Run) []domain.AttemptPurpose {

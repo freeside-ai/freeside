@@ -309,10 +309,6 @@ func (e *Engine) encodeSpecificationPriorArtifact(
 	if role == "research" {
 		evidence, err := specify.DecodeResearchEvidence(body)
 		if err != nil {
-			if specify.IsResearchRequestFailure(err) {
-				return nil, fmt.Errorf("%w: decode research artifact %q for specification: %w",
-					ErrSpecificationInputUndeliverable, artifact.ID, err)
-			}
 			return nil, fmt.Errorf("decode research artifact %q for specification: %w", artifact.ID, err)
 		}
 		promptBody = evidence.Body
