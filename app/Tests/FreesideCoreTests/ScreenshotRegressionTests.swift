@@ -1981,6 +1981,24 @@
                                     quotaDetail.screenshotCard(
                                         quota, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
                     }
+                    // Both folds open (#3358): the run's other facts, then
+                    // one block per offer with its reading.
+                    surfaces.append(
+                        Surface(
+                            name: "decision-execution_failure-quota-open",
+                            width: canvasWidth,
+                            view: AnyView(
+                                DecisionDetailView(
+                                    store: store,
+                                    itemID: snapshot.item.id,
+                                    expandedDisclosures: [.runDetails, .otherAgents],
+                                    graphics: graphics,
+                                    loadsAttachments: false,
+                                    showsValidationProgress: false,
+                                    now: screenshotNow,
+                                    usagePools: UsageFixtures.alternatesUsagePools(now: screenshotNow)
+                                )
+                                .screenshotCard(quota, at: dynamicTypeSize))))
                     // An import refusal of the run's evidence (#3180): the
                     // cause names invalid evidence rather than unknown.
                     surfaces.append(

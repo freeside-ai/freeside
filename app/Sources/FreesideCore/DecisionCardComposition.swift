@@ -930,12 +930,13 @@ struct DecisionCardComposition: Equatable {
                 reviewingActionInsertionIndex: 5,
                 foldedModuleCount: 2)
         case .execution_failure:
-            // Frame 5.3: what failed, then the agent's account of why, then
-            // the stages the run reached, so the diagnostic is read before
-            // the history it explains.
+            // The agent's account of why, then what failed with the run's
+            // other facts and other agents folded, then the stages the run
+            // reached (#3358), so the diagnosis is read first and the
+            // history it explains after it.
             return .init(
                 modules: [
-                    .recommendation, .facts, .claims, .stageRail, .factBlock, .summary, .claims,
+                    .recommendation, .claims, .facts, .stageRail, .factBlock, .summary, .claims,
                     .evidence, .details,
                 ],
                 actionInsertionIndex: 4,
@@ -1126,6 +1127,8 @@ struct DecisionRecordedContext: Equatable {
 /// screenshot shows what a folded section holds.
 enum DecisionDisclosure: Hashable {
     case runDetails
+    /// The execution failure's Other Agents fold.
+    case otherAgents
     case recordedContext
     /// One claim's source identifiers. Neither a label nor a digest is
     /// unique on its own, and two claims that share both are the same bytes
@@ -1148,14 +1151,37 @@ enum DecisionDisclosure: Hashable {
 /// commit-plan notice says something about the candidate the operator is
 /// deciding on, so it stays visible on every type.
 ///
+/// The execution failure keeps only what failed visible and folds the
+/// run's other facts and the other agents into `folds`, which draw with
+/// the visible facts above the stages (#3358).
+///
 /// `pools`, `locale`, and `timeZone` take no defaults here, unlike
 /// `cardFacts`, so a card that places its facts names the pools it reads
 /// rather than dropping the readings by omission.
 struct DecisionFactPlacement: Equatable {
     static let foldedTitle = "Run and Binding Details"
 
+    /// A closed fold drawn right after the visible facts, with a line that
+    /// says what it holds.
+    struct Fold: Equatable, Identifiable {
+        enum Content: Equatable {
+            case facts([AttentionDisplay.FactRow])
+            /// One block per offer; the fold's title names them.
+            case offers([AttentionDisplay.FactRow.Offer])
+        }
+
+        let disclosure: DecisionDisclosure
+        let title: String
+        let summary: String
+        let content: Content
+
+        var id: DecisionDisclosure { disclosure }
+    }
+
     let visible: [AttentionDisplay.FactRow]
     let folded: [AttentionDisplay.FactRow]
+    /// The folds drawn after `visible`, in order.
+    let folds: [Fold]
 
     init(
         _ item: Components.Schemas.AttentionItem,
@@ -1165,13 +1191,36 @@ struct DecisionFactPlacement: Equatable {
         locale: Locale,
         timeZone: TimeZone
     ) {
-        let facts = AttentionDisplay.cardFacts(
-            item, now: now, pools: pools, locale: locale, timeZone: timeZone)
         let notices: [AttentionDisplay.FactRow] =
             includesCommitPlan
             ? [item.commit_plan_notice?.value1].compactMap { $0 }.map {
                 .init("Commit plan", AttentionDisplay.label($0))
             } : []
+        if item._type == .execution_failure,
+            let failure = AttentionDisplay.executionFailureFacts(
+                item, now: now, pools: pools, locale: locale, timeZone: timeZone)
+        {
+            visible = failure.failure + notices
+            folded = []
+            // The run always names its invocation, so Run Details always
+            // draws; Other Agents draws only with offers.
+            folds = [
+                Fold(
+                    disclosure: .runDetails, title: "Run Details",
+                    summary: Self.runDetailsSummary(failure.run), content: .facts(failure.run)),
+                failure.otherAgents.flatMap { row -> Fold? in
+                    guard case .offers(let offers) = row.form else { return nil }
+                    return Fold(
+                        disclosure: .otherAgents, title: row.label,
+                        summary: Self.otherAgentsSummary(item.alternate_agents ?? [], pools: pools, now: now),
+                        content: .offers(offers))
+                },
+            ].compactMap(\.self)
+            return
+        }
+        let facts = AttentionDisplay.cardFacts(
+            item, now: now, pools: pools, locale: locale, timeZone: timeZone)
+        folds = []
         if DecisionCardComposition.foldsRoutineFacts(item._type) {
             visible = notices
             folded = facts
@@ -1179,6 +1228,29 @@ struct DecisionFactPlacement: Equatable {
             visible = facts + notices
             folded = []
         }
+    }
+
+    /// The first five rows' labels in lowercase, then how many more:
+    /// `invocation · harness · model · effort · enrollment · 5 more`.
+    static func runDetailsSummary(_ rows: [AttentionDisplay.FactRow]) -> String {
+        let named = rows.prefix(5).map { $0.label.lowercased() }
+        let more = rows.count - named.count
+        return (named + (more > 0 ? ["\(more) more"] : [])).joined(separator: " · ")
+    }
+
+    /// How many enrollments are offered and how many have quota left:
+    /// `3 enrollments · 1 with quota left`. A count is shown, never
+    /// weighed: no offer is reordered, hidden, or disabled (#1722).
+    static func otherAgentsSummary(
+        _ offers: [Components.Schemas.AlternateAgentOffer],
+        pools: [Components.Schemas.UsagePoolSnapshot],
+        now: Date
+    ) -> String {
+        let withQuota = offers.filter {
+            AgentChoiceDisplay.hasQuotaLeft(for: $0.enrollment, pools: pools, now: now)
+        }.count
+        let offered = offers.count == 1 ? "1 enrollment" : "\(offers.count) enrollments"
+        return "\(offered) · \(withQuota == 0 ? "none" : "\(withQuota)") with quota left"
     }
 }
 

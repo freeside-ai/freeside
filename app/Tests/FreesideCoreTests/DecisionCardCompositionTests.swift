@@ -134,7 +134,7 @@ import Testing
             ])
         #expect(
             DecisionCardComposition.forType(.execution_failure).modules == [
-                .recommendation, .facts, .claims, .stageRail, .factBlock, .summary, .claims,
+                .recommendation, .claims, .facts, .stageRail, .factBlock, .summary, .claims,
                 .evidence, .details,
             ])
         // Plan §9 revision 78 (visual audit D08): the supplied claim leads
@@ -173,11 +173,11 @@ import Testing
         let execution = DecisionCardComposition.forType(.execution_failure)
         let executionClaims = AttentionFixtures.fixture(type: .execution_failure).item.agent_claims
         let diagnosticIndex = executionClaims.firstIndex { $0.label == "Likely cause (unverified)" }
-        #expect(execution.claimsAreProminent(at: 2))
+        #expect(execution.claimsAreProminent(at: 1))
         #expect(!execution.claimsAreProminent(at: 6))
         #expect(
             execution.claims(
-                from: executionClaims, at: 2, prominentClaimIndex: diagnosticIndex
+                from: executionClaims, at: 1, prominentClaimIndex: diagnosticIndex
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -187,7 +187,7 @@ import Testing
         // still leads and the attachment stays supporting context.
         #expect(
             execution.claims(
-                from: executionClaims, at: 2, prominentClaimIndex: nil
+                from: executionClaims, at: 1, prominentClaimIndex: nil
             ).map(\.label) == ["Likely cause (unverified)"])
         #expect(
             execution.claims(
@@ -367,13 +367,23 @@ import Testing
             item, includesCommitPlan: false, now: now, pools: [], locale: .current, timeZone: .current)
         let folds: [Components.Schemas.AttentionType] = [.agent_question, .review_dispute]
 
+        let placedFolds = placement.folds.flatMap { fold -> [AttentionDisplay.FactRow] in
+            switch fold.content {
+            case .facts(let rows): rows
+            case .offers(let offers): [.init(fold.title, offers: offers)]
+            }
+        }
+
         #expect(DecisionCardComposition.foldsRoutineFacts(type) == folds.contains(type))
-        #expect(placement.visible + placement.folded == facts)
+        #expect(placement.visible + placement.folded + placedFolds == facts)
         #expect(placement.folded == (folds.contains(type) ? facts : []))
+        #expect(placement.folds.isEmpty == (type != .execution_failure))
     }
 
     /// Placement hands the pools to the facts, so the quota failure's Other
-    /// Agents row shows each offer's reading beside the decision (#3030).
+    /// Agents fold shows each offer's reading (#3030), and its closed line
+    /// counts the offers with quota left: the fresh 65% reading, not the
+    /// stale or the unsupported one (#3358).
     @Test func quotaFailureShowsTheOffersReadings() throws {
         let now = Date(timeIntervalSince1970: 1_767_400_000)
         let locale = Locale(identifier: "en_US_POSIX")
@@ -384,13 +394,71 @@ import Testing
 
         let placement = DecisionFactPlacement(
             item, includesCommitPlan: false, now: now, pools: pools, locale: locale, timeZone: utc)
-        let row = try #require(placement.visible.first { $0.label == "Other Agents" })
+        let fold = try #require(placement.folds.first { $0.disclosure == .otherAgents })
         let reading = try #require(
             AgentChoiceDisplay.reading(
                 for: UsageFixtures.readingSecondEnrollmentID, pools: pools, now: now, locale: locale,
                 timeZone: utc))
-        #expect(row.value.hasPrefix("\(UsageFixtures.readingSecondEnrollmentID) · \(reading)\n"))
+        guard case .offers(let offers) = fold.content else {
+            Issue.record("Other Agents holds \(fold.content)")
+            return
+        }
+        #expect(offers.first == .init(enrollment: UsageFixtures.readingSecondEnrollmentID, reading: reading))
+        #expect(offers.count == 3)
+        #expect(fold.title == "Other Agents")
+        #expect(fold.summary == "3 enrollments · 1 with quota left")
+        #expect(!placement.visible.contains { $0.label == "Other Agents" })
         #expect(placement.folded.isEmpty)
+    }
+
+    /// The failure keeps what failed visible and folds what ran, then the
+    /// other agents (#3358). Run Details' closed line names five facts and
+    /// counts the rest.
+    @Test func failureCardFoldsItsRunFactsAndOtherAgents() {
+        let now = Date(timeIntervalSince1970: 1_767_400_000)
+        var item = AttentionFixtures.quotaFailure().item
+        item.alternate_agents = UsageFixtures.alternateAgentOffers()
+        let placement = DecisionFactPlacement(
+            item, includesCommitPlan: false, now: now, pools: UsageFixtures.alternatesUsagePools(now: now),
+            locale: .current, timeZone: .current)
+
+        #expect(placement.visible.map(\.label) == ["Outcome", "Cause", "Stage"])
+        #expect(placement.folds.map(\.disclosure) == [.runDetails, .otherAgents])
+        #expect(placement.folds.map(\.title) == ["Run Details", "Other Agents"])
+        #expect(placement.folds.first?.summary == "invocation · harness · model · effort · enrollment · 5 more")
+
+        // An item raised before the daemon recorded its admission folds its
+        // invocation alone, and offers no other agent.
+        var unrecorded = AttentionFixtures.fixture(type: .execution_failure).item
+        unrecorded.execution_failure?.value1.admitted = nil
+        let bare = DecisionFactPlacement(
+            unrecorded, includesCommitPlan: false, now: now, pools: [], locale: .current, timeZone: .current)
+        #expect(bare.folds.map(\.disclosure) == [.runDetails])
+        #expect(bare.folds.first?.summary == "invocation")
+    }
+
+    /// A closed line names five facts or fewer in full, and says `none`
+    /// and `1 enrollment` in words.
+    @Test func foldSummariesNameAndCount() {
+        let rows = ["Invocation", "Harness", "Model", "Effort", "Enrollment", "Selection"].map {
+            AttentionDisplay.FactRow($0, "value")
+        }
+        #expect(
+            DecisionFactPlacement.runDetailsSummary(Array(rows.prefix(5)))
+                == "invocation · harness · model · effort · enrollment")
+        #expect(
+            DecisionFactPlacement.runDetailsSummary(rows)
+                == "invocation · harness · model · effort · enrollment · 1 more")
+
+        let now = Date(timeIntervalSince1970: 1_767_400_000)
+        let pools = UsageFixtures.alternatesUsagePools(now: now)
+        let offers = UsageFixtures.alternateAgentOffers()
+        #expect(
+            DecisionFactPlacement.otherAgentsSummary(Array(offers.suffix(1)), pools: pools, now: now)
+                == "1 enrollment · none with quota left")
+        #expect(
+            DecisionFactPlacement.otherAgentsSummary(offers, pools: [], now: now)
+                == "3 enrollments · none with quota left")
     }
 
     /// The ready card keeps an elapsed deadline (#2752) visible under Facts
@@ -656,7 +724,7 @@ import Testing
                 composition.cardLeadClaims(from: [attachment], prominentClaimIndex: nil).isEmpty)
         }
         if type == .execution_failure {
-            #expect(composition.claims(from: [attachment], at: 2, prominentClaimIndex: nil).isEmpty)
+            #expect(composition.claims(from: [attachment], at: 1, prominentClaimIndex: nil).isEmpty)
             #expect(
                 composition.claims(from: [attachment], at: 6, prominentClaimIndex: nil)
                     == [attachment])
@@ -1429,8 +1497,10 @@ import Testing
         #expect(DecisionCardComposition.factsKeyword(for: .execution_failure) == "Failure")
         #expect(DecisionCardComposition.leadClaimsKeyword(for: .execution_failure) == "Diagnostic")
         #expect(DecisionCardComposition.factsKeyword(for: .system_health) == "Facts")
-        if let claims, let rail {
-            #expect(claims < rail)
+        let facts = composition.modules.firstIndex(of: .facts)
+        if let claims, let rail, let facts {
+            #expect(claims < facts)
+            #expect(facts < rail)
             #expect(rail < composition.actionInsertionIndex)
             for platform in [DecisionCardComposition.UnverifiedContext.Platform.mac, .phone] {
                 #expect(

@@ -110,9 +110,24 @@
             #expect(expanded > collapsed)
         }
 
+        /// The execution failure leads with its diagnosis and folds its run
+        /// facts and other agents (#3358), so the quota card, with three
+        /// offers, reaches its actions within the 520pt first viewport: at
+        /// 438.5pt at 560pt width (measured 2026-11-18).
+        @Test func theQuotaFailureReachesItsActionsInTheFirstViewport() throws {
+            var snapshot = AttentionFixtures.quotaFailure()
+            snapshot.item.alternate_agents = UsageFixtures.alternateAgentOffers()
+            let offset = try actionRegionOffset(
+                snapshot, expandedFindings: [],
+                usagePools: UsageFixtures.alternatesUsagePools(now: AttentionFixtures.createdInstant))
+
+            #expect(offset <= 520)
+        }
+
         private func actionRegionOffset(
             _ snapshot: Components.Schemas.AttentionItemSnapshot,
-            expandedFindings: Set<String>
+            expandedFindings: Set<String>,
+            usagePools: [Components.Schemas.UsagePoolSnapshot] = []
         ) throws -> CGFloat {
             _ = FreesideFont.registration
             let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
@@ -123,7 +138,8 @@
                 expandedFindings: expandedFindings,
                 loadsAttachments: false,
                 showsValidationProgress: false,
-                now: AttentionFixtures.createdInstant)
+                now: AttentionFixtures.createdInstant,
+                usagePools: usagePools)
 
             final class Measurement: @unchecked Sendable {
                 var minY: CGFloat?

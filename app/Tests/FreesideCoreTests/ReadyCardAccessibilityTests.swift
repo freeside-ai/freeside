@@ -99,9 +99,53 @@
             #expect(loads.isEmpty)
         }
 
+        /// The execution failure's Run Details and Other Agents folds
+        /// (#3358) read their label and closed line while closed, and their
+        /// rows only once open.
+        @Test func theFailureFoldsReadTheirClosedLineThenTheirRows() throws {
+            let now = Date.now
+            var snapshot = AttentionFixtures.quotaFailure()
+            snapshot.item.alternate_agents = UsageFixtures.alternateAgentOffers()
+            func read(_ expanded: Set<DecisionDisclosure>) throws -> [String] {
+                let window = host(
+                    snapshot, expandedDisclosures: expanded, now: now,
+                    usagePools: UsageFixtures.alternatesUsagePools(now: now))
+                defer {
+                    window.close()
+                    setAssistiveClientAttributes(false)
+                }
+                var walk = Walk()
+                try walk.visit(try #require(window.contentView), depth: 0)
+                // A control speaks its label; a row's static text, its value.
+                return walk.descriptions + walk.texts
+            }
+            func reads(_ spoken: [String], _ text: String) -> Bool {
+                spoken.contains { $0.contains(text) }
+            }
+
+            let closed = try read([])
+            #expect(
+                closed.contains {
+                    $0.hasPrefix("Run Details")
+                        && $0.contains("invocation · harness · model · effort · enrollment · 5 more")
+                })
+            #expect(
+                closed.contains {
+                    $0.hasPrefix("Other Agents") && $0.contains("3 enrollments · 1 with quota left")
+                })
+            #expect(!reads(closed, "Isolation Class"))
+            #expect(!reads(closed, UsageFixtures.staleEnrollmentID))
+
+            let open = try read([.runDetails, .otherAgents])
+            #expect(reads(open, "Isolation Class"))
+            #expect(reads(open, UsageFixtures.staleEnrollmentID))
+        }
+
         private func host(
             _ snapshot: Components.Schemas.AttentionItemSnapshot,
             expandedDisclosures: Set<DecisionDisclosure> = [],
+            now: Date = .now,
+            usagePools: [Components.Schemas.UsagePoolSnapshot] = [],
             runTimelines: DecisionDetailView.RunTimelines = .init()
         ) -> NSWindow {
             _ = FreesideFont.registration
@@ -110,7 +154,7 @@
             store.replaceAll(with: [snapshot])
             let detail = DecisionDetailView(
                 store: store, itemID: snapshot.item.id, expandedDisclosures: expandedDisclosures,
-                runTimelines: runTimelines
+                now: now, usagePools: usagePools, runTimelines: runTimelines
             )
             .frame(width: 560, height: 900)
             // The default `FreesideRootView` sets for every window.
@@ -142,6 +186,9 @@
             var seen = Set<ObjectIdentifier>()
             var labels = 0
             var descriptions: [String] = []
+            /// The string titles and values read, which static text answers
+            /// with its words.
+            var texts: [String] = []
 
             mutating func visit(_ object: AnyObject, depth: Int) throws {
                 guard seen.insert(ObjectIdentifier(object)).inserted else { return }
@@ -174,7 +221,11 @@
                     descriptions.append(label)
                 }
                 for attribute: NSAccessibility.Attribute in [.title, .value, .help, .role] {
-                    _ = value(attribute)
+                    if let text = value(attribute) as? String, attribute == .title || attribute == .value,
+                        !text.isEmpty
+                    {
+                        texts.append(text)
+                    }
                 }
                 for child in value(.children) as? [AnyObject] ?? [] {
                     try visit(child, depth: depth + 1)

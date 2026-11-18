@@ -406,6 +406,55 @@ package enum AttentionDisplay {
         }
     }
 
+    /// An execution failure's card facts in three parts, so the card can
+    /// keep what failed beside the decision and fold the rest (#3358)
+    /// without matching rows by label. `cardFacts` returns them joined in
+    /// this order.
+    package struct ExecutionFailureFacts: Equatable {
+        /// What failed: Outcome, Cause when the outcome has one, Stage.
+        package let failure: [FactRow]
+        /// What ran: Invocation, then the failed attempt's admission when
+        /// the item records it.
+        package let run: [FactRow]
+        /// The Other Agents row, or nil when the item offers none.
+        package let otherAgents: FactRow?
+    }
+
+    /// Nil when the item carries no execution failure facts.
+    package static func executionFailureFacts(
+        _ item: Components.Schemas.AttentionItem,
+        now: Date,
+        pools: [Components.Schemas.UsagePoolSnapshot],
+        locale: Locale,
+        timeZone: TimeZone
+    ) -> ExecutionFailureFacts? {
+        guard let failure = item.execution_failure?.value1 else { return nil }
+        let failureRows: [FactRow] = [
+            .init("Outcome", label(failure.outcome)),
+            failure.cause.map { .init("Cause", label($0)) },
+            .init("Stage", label(failure.stage)),
+        ].compactMap { $0 }
+        // The enrollments Retry With Another Agent offers, in the
+        // daemon's order, each with the reading the chooser prints for
+        // it, so the card shows the decision's main input before the
+        // chooser opens. One row, not a row per offer: a row's id is its
+        // label. A reading is shown, never weighed (#1722).
+        let offers = (item.alternate_agents ?? []).map { offer in
+            FactRow.Offer(
+                enrollment: offer.enrollment,
+                reading: AgentChoiceDisplay.reading(
+                    for: offer.enrollment, pools: pools, now: now, locale: locale, timeZone: timeZone)
+                    ?? "no usage reading")
+        }
+        // What ran the failed attempt, as its admission recorded it; an
+        // item raised before the daemon recorded it carries none (#979).
+        return ExecutionFailureFacts(
+            failure: failureRows,
+            run: [.init("Invocation", failure.invocation_id, monospaced: true)]
+                + admittedFailureRows(failure.admitted?.value1),
+            otherAgents: offers.isEmpty ? nil : .init("Other Agents", offers: offers))
+    }
+
     /// The Section 9 "leads with" facts for one item type, read from the
     /// item's typed fact fields. Every value is a daemon-produced card fact;
     /// nothing here is derived from prose, logs, or event names, and a type
@@ -422,29 +471,11 @@ package enum AttentionDisplay {
     ) -> [FactRow] {
         switch item._type {
         case .execution_failure:
-            guard let failure = item.execution_failure?.value1 else { return [] }
-            let rows: [FactRow] = [
-                .init("Outcome", label(failure.outcome)),
-                failure.cause.map { .init("Cause", label($0)) },
-                .init("Stage", label(failure.stage)),
-                .init("Invocation", failure.invocation_id, monospaced: true),
-            ].compactMap { $0 }
-            // The enrollments Retry With Another Agent offers, in the
-            // daemon's order, each with the reading the chooser prints for
-            // it, so the card shows the decision's main input before the
-            // chooser opens. One row, not a row per offer: a row's id is its
-            // label. A reading is shown, never weighed (#1722).
-            let offers = (item.alternate_agents ?? []).map { offer in
-                FactRow.Offer(
-                    enrollment: offer.enrollment,
-                    reading: AgentChoiceDisplay.reading(
-                        for: offer.enrollment, pools: pools, now: now, locale: locale, timeZone: timeZone)
-                        ?? "no usage reading")
-            }
-            let alternates: [FactRow] = offers.isEmpty ? [] : [.init("Other Agents", offers: offers)]
-            // What ran the failed attempt, as its admission recorded it; an
-            // item raised before the daemon recorded it carries none (#979).
-            return rows + admittedFailureRows(failure.admitted?.value1) + alternates
+            guard
+                let facts = executionFailureFacts(
+                    item, now: now, pools: pools, locale: locale, timeZone: timeZone)
+            else { return [] }
+            return facts.failure + facts.run + [facts.otherAgents].compactMap(\.self)
         case .review_diminishing_returns:
             return [
                 item.billable_cost_so_far.map { .init("Cost so Far", costSoFar($0.value1)) },
