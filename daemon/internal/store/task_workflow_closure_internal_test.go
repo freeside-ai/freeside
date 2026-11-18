@@ -223,3 +223,51 @@ func TestWorkflowClosureRejectsCorruptAuthority(t *testing.T) {
 		})
 	}
 }
+
+// A task item from before workflow origins existed names no producing run.
+// Its owner is never guessed from the task's starts or the item's ID, which
+// once encoded the run (#3323).
+func TestTaskItemWithoutOriginIsRefused(t *testing.T) {
+	t.Parallel()
+	s := openTestStore(t)
+	ctx := t.Context()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: "only-start", ProjectID: "project",
+			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{},
+		}); err != nil {
+			return err
+		}
+		run, err := tx.GetRun(ctx, "only-start")
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordTaskStart(ctx, run.ID, now); err != nil {
+			return err
+		}
+		posture := domain.HealthPostureAdvisory
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: "held-work/only-start/1", ProjectID: "project", Type: domain.AttentionSystemHealth,
+			Subject:  domain.Subject{Type: domain.SubjectTask, ID: domain.SubjectID(run.TaskID), TaskID: &run.TaskID},
+			Priority: domain.PriorityNormal, Reason: "The producing run needs attention.",
+			RequestedDecision: []domain.Action{domain.ActionAcknowledge}, ItemVersion: 1,
+			InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+			HealthDiagnostic: &domain.HealthDiagnostic{Code: "work_held", Impairs: domain.ImpairedCapabilityNone},
+			Posture:          &posture,
+		}, nil)
+		if err != nil {
+			return err
+		}
+		// A plain put records no origin, as the producers did before origins.
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		if _, _, err := tx.AttentionItemWorkflowEpisode(ctx, item); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("ownership of an item without an origin = %v, want ErrParentKeyMismatch", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
