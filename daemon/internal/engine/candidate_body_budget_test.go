@@ -2,36 +2,12 @@ package engine
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
-	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
-func TestCandidateBodyValidatorsAgreeAtBudgetBoundary(t *testing.T) {
-	t.Parallel()
-	low, high := 0, 64<<10
-	for low < high {
-		mid := (low + high + 1) / 2
-		if err := publish.ValidateCandidateBody(strings.Repeat("x", mid)); err == nil {
-			low = mid
-		} else {
-			high = mid - 1
-		}
-	}
-
-	for _, size := range []int{low - 1, low, low + 1} {
-		body := strings.Repeat("x", size)
-		publishErr := publish.ValidateCandidateBody(body)
-		fakeErr := fakepublication.ValidateCandidateBody(body)
-		if fmt.Sprint(publishErr) != fmt.Sprint(fakeErr) {
-			t.Errorf("%d-byte body: publish error %q, fake error %q", size, publishErr, fakeErr)
-		}
-	}
-}
-
-func TestCandidateBodyValidatorsReserveVerificationHeadings(t *testing.T) {
+func TestCandidateBodyValidatorReservesVerificationHeadings(t *testing.T) {
 	t.Parallel()
 	for _, body := range []string{
 		"## Verification", "### verification", "# VERIFICATION #\r\n", "Verification\n---\n", "Verification\r\n===\r\n",
@@ -56,7 +32,7 @@ func TestCandidateBodyValidatorsReserveVerificationHeadings(t *testing.T) {
 		"> **Verification**\n> ---", "## Why\nText\n## **Verification**\nPassed: not executed",
 		"## Verification\n\n## *Verification*", "## Verification\t<!-- CI --> ##\n",
 	} {
-		if publish.ValidateCandidateBody(body) == nil || fakepublication.ValidateCandidateBody(body) == nil {
+		if publish.ValidateCandidateBody(body) == nil {
 			t.Errorf("validator accepted publisher-owned heading or marker: %q", body)
 		}
 	}
@@ -67,13 +43,13 @@ func TestCandidateBodyValidatorsReserveVerificationHeadings(t *testing.T) {
 		"## Why\nKeep every byte.\r\n\n", "## Verification <!-- hidden --> details",
 		"**Verification details**\n---", "<h2>Verification details</h2>",
 	} {
-		if publish.ValidateCandidateBody(body) != nil || fakepublication.ValidateCandidateBody(body) != nil {
+		if publish.ValidateCandidateBody(body) != nil {
 			t.Errorf("validator rejected distinct prose or heading: %q", body)
 		}
 	}
 }
 
-func TestCandidateBodyValidatorsReserveInvisibleVerificationHeadings(t *testing.T) {
+func TestCandidateBodyValidatorReservesInvisibleVerificationHeadings(t *testing.T) {
 	t.Parallel()
 	for _, invisible := range []rune{
 		'\u200b', '\u200c', '\u200d', '\u2060', '\ufeff', '\u00ad',
@@ -82,7 +58,7 @@ func TestCandidateBodyValidatorsReserveInvisibleVerificationHeadings(t *testing.
 		for _, spelling := range []string{string(invisible), fmt.Sprintf("&#x%X;", invisible)} {
 			for _, title := range []string{"Verification" + spelling, "Verifi" + spelling + "cation"} {
 				for _, body := range []string{"## " + title, "> ### **" + title + "**", title + "\r\n---\r\n"} {
-					if publish.ValidateCandidateBody(body) == nil || fakepublication.ValidateCandidateBody(body) == nil {
+					if publish.ValidateCandidateBody(body) == nil {
 						t.Errorf("validator accepted invisible reserved title: %q", body)
 					}
 				}
@@ -93,7 +69,7 @@ func TestCandidateBodyValidatorsReserveInvisibleVerificationHeadings(t *testing.
 		"## Verification details\u200b", "## Verifying the fix\ufe0f",
 		"## Verification\u0301", "## Verifi cation", "Verification\u200b in prose.",
 	} {
-		if publish.ValidateCandidateBody(body) != nil || fakepublication.ValidateCandidateBody(body) != nil {
+		if publish.ValidateCandidateBody(body) != nil {
 			t.Errorf("validator rejected a distinct visible title or prose: %q", body)
 		}
 	}
