@@ -573,10 +573,11 @@ func quotedWithin(text string, limit int) string {
 
 // reentryUnverifiableTreeReason reports a verification refusal that the
 // evaluated tree itself causes, with the reason the cycle stops on. On a
-// first cycle the importer refuses such a tree before verification, so there
-// these classes contradict stored state and stop the lane. A re-entry
-// evaluates a commit the importer never saw: returned, the error would stop
-// the lane for every run, on every pass, for as long as the push stands.
+// first cycle the importer refuses such a tree before verification and builds
+// the candidate on its admitted base, so there these classes contradict stored
+// state and stop the lane. A re-entry evaluates a commit the importer never
+// saw: returned, the error would stop the lane for every run, on every pass,
+// for as long as the push stands.
 func reentryUnverifiableTreeReason(
 	task productionPublicationTask, baseSHA string, err error,
 ) (string, bool) {
@@ -591,12 +592,20 @@ func reentryUnverifiableTreeReason(
 
 // unverifiableTreeCause names a verification refusal the evaluated tree
 // itself causes, as a person reads it. Any other refusal is not one.
+//
+// A history request refused because the head and the base share more than one
+// merge base counts: the pushed head's history causes it. The malformed-tree
+// case comes first because the verifier's .git path refusal wraps both
+// sentinels and is about the tree. A refusal that also wraps ErrGitPlumbing is
+// a failed git merge-base, not the head's history, so it stays a lane error.
 func unverifiableTreeCause(err error) (string, bool) {
 	switch {
 	case errors.Is(err, verify.ErrSymlinkEntrypoint):
 		return "a verification command's entrypoint is a symbolic link in its tree", true
 	case errors.Is(err, verify.ErrMalformedTree):
 		return "its tree holds paths that cannot be materialized safely", true
+	case errors.Is(err, verify.ErrHistoryUnavailable) && !errors.Is(err, verify.ErrGitPlumbing):
+		return "the head shares more than one merge base with the commit it is verified against, so a verification command cannot be given exactly the head's commits", true
 	case errors.Is(err, verify.ErrWorkspaceMismatch):
 		return "its tree did not materialize faithfully on this host", true
 	default:

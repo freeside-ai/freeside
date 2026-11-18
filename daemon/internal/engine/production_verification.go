@@ -676,7 +676,11 @@ func verificationMemoryLimit(err error) bool {
 // names an execution class with no room is one: the recipe is approved and the
 // rooms are the engine's choice, so retrying cannot supply the missing room.
 // verificationRooms supplies every class or refuses before verify runs, so
-// this case is a backstop.
+// this case is a backstop. A history request the verifier cannot give exactly
+// is another: the head and the base it is verified against fix their merge
+// bases, so a retry meets the same commits. A first cycle's candidate is built
+// on its admitted base, so there the refusal means Freeside's state is wrong;
+// at a re-entry or handoff, unverifiableTreeCause ends the cycle on it instead.
 func productionVerificationStateContradiction(err error) bool {
 	return errors.Is(err, verify.ErrRecipeInvalid) ||
 		errors.Is(err, verify.ErrRoomUnavailable) ||
@@ -688,7 +692,8 @@ func productionVerificationStateContradiction(err error) bool {
 		errors.Is(err, verify.ErrWorkspaceMismatch) ||
 		errors.Is(err, verify.ErrMalformedTree) ||
 		errors.Is(err, verify.ErrInvalidOptions) ||
-		errors.Is(err, verify.ErrSymlinkEntrypoint)
+		errors.Is(err, verify.ErrSymlinkEntrypoint) ||
+		errors.Is(err, verify.ErrHistoryUnavailable)
 }
 
 func (w *productionPublicationWorkflow) persistCheckpoint(
