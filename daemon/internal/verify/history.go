@@ -32,12 +32,16 @@ const historyConfig = "[core]\n\trepositoryformatversion = 0\n\tbare = false\n"
 // per verification in the scratch directory and copied into each history
 // command's workspace after that workspace passes its exact-tree check.
 //
-// It is a shallow repository: the commits in base..head, the boundary
-// commits listed in shallow, and every object in those commits' trees, in
-// one pack. HEAD is detached at the head. There are no refs, hooks,
-// info/attributes, index, or anything else, and nothing is read from the
-// candidate's tree. Both of #3121's scripts call `git merge-base`, which
-// returns the base on this shape because the base is a boundary commit.
+// It is a shallow repository: the commits in base..head, the commits
+// between the base and any older commit the candidate merged (see
+// rangeCommits), the boundary commits listed in shallow, and every object
+// in those commits' trees, in one pack. HEAD is detached at the head.
+// There are no refs, hooks, info/attributes, index, or anything else, and
+// nothing is read from the candidate's tree. Every boundary of base..head
+// is reachable from the base inside the written repository, so `git
+// merge-base` returns the base, and base..head and `merge-base
+// --is-ancestor` against the base answer as in a full clone, which is
+// what #3121's two scripts rely on.
 type history struct {
 	gitDir  string
 	baseSHA string
@@ -157,16 +161,53 @@ func writePack(ctx context.Context, g *gitRunner, packDir string, objects []byte
 	return nil
 }
 
-// rangeCommits returns the commits in base..head and the sorted boundary
-// commits: the parents of those commits that the range excludes. The base
-// is always a boundary, also when head is the base and the range is empty,
-// so HEAD and the shallow file always name a commit the pack holds.
+// rangeCommits returns the commits the written repository packs and the
+// sorted boundary commits its shallow file lists.
+//
+// For a candidate whose only boundary in base..head is the base, that is
+// the commits in base..head and the base, also when head is the base and
+// the range is empty, so HEAD and the shallow file always name a commit
+// the pack holds.
+//
+// A candidate that merged history older than its base has other
+// boundaries: ancestors of the base that a cut at the base would leave
+// parentless and unreachable from it, so base..head would list them as
+// the candidate's own commits and merge-base --is-ancestor couldn't place
+// them in the base. Then the walk runs instead from the head down to the
+// octopus merge bases of the base and those boundaries, which packs every
+// commit between them and the base, and each one stays reachable from the
+// base. When they share no ancestor (the candidate merged two unrelated
+// histories the base already holds), there is no such walk short of the
+// whole history, and the verification is refused with
+// ErrHistoryUnavailable.
 func rangeCommits(ctx context.Context, g *gitRunner, base, head string) (commits, boundary []string, err error) {
-	out, err := g.run(ctx, nil, "rev-list", "--boundary", base+".."+head)
+	commits, boundary, err = walkWithBoundary(ctx, g, base+".."+head)
+	if err != nil {
+		return nil, nil, err
+	}
+	older := slices.DeleteFunc(slices.Clone(boundary), func(sha string) bool { return sha == base })
+	if len(older) == 0 {
+		return commits, []string{base}, nil
+	}
+	// merge-base exits 1 when the commits share no ancestor.
+	out, err := g.run(ctx, nil, append([]string{"merge-base", "--octopus", "--all", base}, older...)...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("common ancestor of base %s and merged-in commits %s: %w: %w", base, strings.Join(older, ", "), ErrHistoryUnavailable, err)
+	}
+	bottoms, err := shaLines(out)
+	if err != nil {
+		return nil, nil, err
+	}
+	return walkWithBoundary(ctx, g, append([]string{head, "--not"}, bottoms...)...)
+}
+
+// walkWithBoundary runs rev-list --boundary over revs and returns the
+// walked commits and the sorted, deduplicated boundary commits.
+func walkWithBoundary(ctx context.Context, g *gitRunner, revs ...string) (commits, boundary []string, err error) {
+	out, err := g.run(ctx, nil, append([]string{"rev-list", "--boundary"}, revs...)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list history commits: %w", err)
 	}
-	boundary = []string{base}
 	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
 		if line == "" {
 			continue

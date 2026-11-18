@@ -3924,9 +3924,12 @@ that has it. For a history command the verifier:
   workspace passes its exact-tree check: `HEAD` detached at the candidate
   head, a fixed `config`, a `shallow` file naming the boundary commits,
   an empty `refs/`, and one pack holding the commits in base..head, the
-  boundary commits, and every object in those commits' trees. Nothing
-  comes from the candidate or the daemon checkout's config, and the
-  command has no network.
+  boundary commits, and every object in those commits' trees. When the
+  candidate merged history older than the base, the pack also holds every
+  commit between those merged-in commits and the base, so `base..head`
+  and `git merge-base --is-ancestor` give the same answers as in a full
+  clone. Nothing comes from the candidate or the daemon checkout's
+  config, and the command has no network.
 - **Exports the range.** `FREESIDE_VERIFY_BASE_SHA` is the single merge
   base of the enforced base and the head; `FREESIDE_VERIFY_HEAD_SHA` is
   the head. `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=safe.directory`, and
@@ -3937,7 +3940,9 @@ that has it. For a history command the verifier:
   named script with the base and head SHAs as its two arguments and
   exits 2 when either variable is missing or empty.
 - **Refuses what it can't give exactly**, before any command runs: a head
-  and base with no merge base or more than one, a verified tree holding a
+  and base with no merge base or more than one, a candidate that merged
+  in older commits sharing no ancestor with each other (unrelated
+  histories the base already holds), a verified tree holding a
   `.git` path component or an alias of one, and a room that can't pass
   extra environment variables (the project-image room and `ProcRoom`
   can).
@@ -3950,8 +3955,9 @@ the base as `history_base_sha`; both are omitted when no command asks, so
 other reports keep their bytes. The project image's offline proof skips
 history commands, because it has no candidate to give them a range. A
 command that doesn't ask keeps the exact-tree workspace with no `.git`,
-the same stray-file check, and the same environment. Decision record:
-`devlog/2026-11-12-1730-verify-command-history.md`.
+the same stray-file check, and the same environment. Decision records:
+`devlog/2026-11-12-1730-verify-command-history.md` and
+`devlog/2026-11-18-1007-history-range-with-merges.md`.
 
 **The daemon asks for the executor only when a recipe needs it.** Every
 verification job (a first cycle, a remediation round, a readiness re-entry,

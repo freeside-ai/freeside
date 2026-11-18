@@ -64,8 +64,10 @@ var (
 	ErrRoomUnavailable = errors.New("recipe names an execution class with no room")
 	// ErrHistoryUnavailable rejects a verification whose recipe asks for
 	// history the verifier can't give exactly: the head and the enforced
-	// base share no single merge base, or the verified tree holds a path
-	// component the written .git would collide with. Nothing runs. The
-	// path refusal also wraps ErrMalformedTree, since no retry gets past it.
+	// base share no single merge base, the commits older than that base
+	// which the candidate merged share no ancestor with it, or the
+	// verified tree holds a path component the written .git would collide
+	// with. Nothing runs. The path refusal also wraps ErrMalformedTree,
+	// since no retry gets past it.
 	ErrHistoryUnavailable = errors.New("candidate history cannot be given to a recipe command")
 )
