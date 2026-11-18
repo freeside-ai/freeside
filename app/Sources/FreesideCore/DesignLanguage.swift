@@ -566,6 +566,9 @@ enum FreesideFont {
     /// card: a heading set by its case and tracking, at the chip's size.
     /// Drawn tracked by `keywordTracking`.
     static var keyword: Font { fixed("IBMPlexMono-Medm", keywordSize, relativeTo: .caption2) }
+    /// The keyword in semibold, for the one keyword on a surface that names
+    /// a stop: an open blocking finding (#3356). Same size and tracking.
+    static var keywordStrong: Font { fixed("IBMPlexMono-SmBld", keywordSize, relativeTo: .caption2) }
     /// Medium, not regular: the compact register stays readable without
     /// asking semantic color to compensate for a light face. Drawn tracked
     /// by `chipTracking`.
@@ -651,11 +654,13 @@ extension StateChip {
 struct KeywordLabel: View {
     let text: String
     var color: Color = .inkDim
+    /// True draws the semibold face, `FreesideFont.keywordStrong`.
+    var isStrong = false
 
     var body: some View {
         Text(text)
             .textCase(.uppercase)
-            .font(FreesideFont.keyword)
+            .font(isStrong ? FreesideFont.keywordStrong : FreesideFont.keyword)
             .tracking(FreesideFont.keywordTracking)
             .foregroundStyle(color)
     }
