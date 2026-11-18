@@ -348,26 +348,13 @@ type reviewLaunch struct {
 
 // requestLaunch derives a request's launch from its admission snapshot, so a
 // task's reviewer line runs the agent it selected (#1981). The request-time
-// launch and the relaunch of a recorded request both derive it here. A request
-// recorded before review admission carries no snapshot and runs what the
-// source was composed with. The configuration digest stays the composed one:
-// the snapshot records the selected agent's values, and they are not
-// re-approved.
-//
-// A request recorded before review stopped covering a prospective merge
-// (#2660) names one, and no launch runs it: review covers the head only, so
-// the refusal is a configuration failure that never retries.
+// launch and the relaunch of a recorded request both derive it here, from a
+// request that passed Validate, so the snapshot is always present. The
+// configuration digest stays the composed one: the snapshot records the
+// selected agent's values, and they are not re-approved.
 func (s *CodexReviewSource) requestLaunch(ctx context.Context, req exec.ReviewRequest) (reviewLaunch, error) {
-	if req.LegacyEvaluatedSHA != "" {
-		return reviewLaunch{}, fmt.Errorf(
-			"%w: the request names prospective merge %s, and review covers only the head",
-			ErrInvalidCodexReviewSpec, req.LegacyEvaluatedSHA)
-	}
 	launch := reviewLaunch{review: s.cfg.Review, identity: s.cfg.AuthIdentityID, snapshot: s.cfg.AuthSnapshot}
 	admission := req.Admission
-	if admission.InvocationID == "" {
-		return launch, nil
-	}
 	launch.review.Model = admission.AgentBinding.RouteModelID
 	launch.review.ReasoningEffort = admission.AgentBinding.NativeEffort
 	if admission.AuthIdentityID == s.cfg.AuthIdentityID {
@@ -540,14 +527,10 @@ func (s *CodexReviewSource) reconstructReviewInstructions(
 	ctx context.Context,
 	binding exec.ReviewInstructionBinding,
 ) ([]byte, error) {
+	// Validate accepts only the current composition version, so a binding
+	// to another version never launches.
 	if err := binding.Validate(); err != nil {
 		return nil, err
-	}
-	if binding.CompositionVersion != exec.ReviewInstructionCompositionVersion {
-		return nil, fmt.Errorf(
-			"review instruction composition version %q cannot launch; current version is %q",
-			binding.CompositionVersion, exec.ReviewInstructionCompositionVersion,
-		)
 	}
 	host := exec.ReviewHostInstructionInput{Present: binding.HostDigest != nil}
 	if binding.HostDigest != nil {
@@ -1544,21 +1527,12 @@ func (s *CodexReviewSource) VerifyReviewRequestSupersession(
 	if err := request.Validate(); err != nil {
 		return s.rejectPersistedRequest(ctx, id, err)
 	}
-	// A request persisted before reviewers received attachments carries no
-	// Inputs. When the task has attachments, that request differs from the
-	// current one only by what it never delivered, so it is superseded: the
-	// engine reruns one still in flight and lets a finished one stand under
-	// the authority it was persisted with.
-	preInputs := len(request.Inputs) == 0 && len(expected.Inputs) > 0
 	withCurrent := request
 	withCurrent.Instructions = expected.Instructions
-	if preInputs {
-		withCurrent.Inputs = expected.Inputs
-	}
 	currentAuthority, err := withCurrent.AuthorityDigest()
 	expectedAuthority, expectedErr := expected.AuthorityDigest()
 	if err != nil || expectedErr != nil || currentAuthority != expectedAuthority ||
-		(!preInputs && sameReviewInstructionBinding(request.Instructions, expected.Instructions)) {
+		sameReviewInstructionBinding(request.Instructions, expected.Instructions) {
 		return nil
 	}
 	if reconcileErr := s.reconcileRejectedRequest(ctx, id); reconcileErr != nil {

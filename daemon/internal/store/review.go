@@ -26,26 +26,6 @@ func reviewBodyAuthority(body string) string {
 	return reviewBodyDigest(body) + body
 }
 
-// validatePersistedReviewRecord holds a stored record to the rule every write
-// is held to, the attribution rule among them: a record carries its
-// invocation's admission snapshot or its three legacy strings, never both and
-// never neither. A legacy record reads back as stored; nothing here resolves
-// its strings against a lineup.
-func validatePersistedReviewRecord(record domain.ReviewRecord) error {
-	if record.InstructionDigest != "" || record.Admission != nil {
-		return record.Validate()
-	}
-	// Historical rows written before instruction authority have exactly this
-	// one missing field. Keep them readable so the engine can invalidate their
-	// clean pass and schedule a current review; every write remains strict.
-	// Such a row predates review admission too, so one that carries a
-	// snapshot is not historical and gets no allowance.
-	legacy := record
-	legacy.InstructionDigest = domain.Digest(
-		"sha256:0000000000000000000000000000000000000000000000000000000000000000")
-	return legacy.Validate()
-}
-
 // PutReviewRecord atomically persists one completed pass and its immutable raw
 // findings. Replays converge only when the complete byte-form agrees.
 func (tx *WriteTx) PutReviewRecord(
@@ -142,7 +122,7 @@ func (tx *ReadTx) GetReviewRecord(
 	if err := json.Unmarshal(body, &record); err != nil {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, err)
 	}
-	if err := validatePersistedReviewRecord(record); err != nil {
+	if err := record.Validate(); err != nil {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, err)
 	}
 	if record.InvocationID != id || record.RunID != domain.RunID(runID) ||

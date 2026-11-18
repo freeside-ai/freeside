@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // The on-disk file names, one per fake, under the fake's persistence dir.
@@ -45,7 +46,7 @@ type reviewState struct {
 // caller writes into a live map.
 func loadStageState(dir string) (stageState, error) {
 	st := stageState{}
-	if err := loadState(dir, stageStateFile, &st); err != nil {
+	if err := loadState(dir, stageStateFile, &st, false); err != nil {
 		return stageState{}, err
 	}
 	if st.Scripts == nil {
@@ -60,10 +61,12 @@ func loadStageState(dir string) (stageState, error) {
 	return st, nil
 }
 
-// loadReviewState mirrors loadStageState for the review fake.
+// loadReviewState mirrors loadStageState for the review fake, except that an
+// unknown field fails the load: a request a retired shape stored, such as one
+// naming evaluated_sha, never reads as a current one.
 func loadReviewState(dir string) (reviewState, error) {
 	st := reviewState{}
-	if err := loadState(dir, reviewStateFile, &st); err != nil {
+	if err := loadState(dir, reviewStateFile, &st, true); err != nil {
 		return reviewState{}, err
 	}
 	if st.Scripts == nil {
@@ -85,8 +88,9 @@ func loadReviewState(dir string) (reviewState, error) {
 }
 
 // loadState unmarshals dir/name into v, treating a missing file as empty
-// (load-or-create). It is the shared read half of the two typed loaders.
-func loadState(dir, name string, v any) error {
+// (load-or-create). It is the shared read half of the two typed loaders;
+// strict refuses a field v does not declare.
+func loadState(dir, name string, v any, strict bool) error {
 	path := filepath.Join(dir, name)
 	// G304: path derives from a caller-supplied fixture/daemon dir, never
 	// from external input.
@@ -97,7 +101,13 @@ func loadState(dir, name string, v any) error {
 	if err != nil {
 		return fmt.Errorf("fake: read state %s: %w", path, err)
 	}
-	if err := json.Unmarshal(b, v); err != nil {
+	decode := json.Unmarshal
+	if strict {
+		decode = func(b []byte, v any) error {
+			return strictjson.Decode(b, v, strictjson.TolerateInvalidUTF8, strictjson.NoLimit)
+		}
+	}
+	if err := decode(b, v); err != nil {
 		return fmt.Errorf("fake: parse state %s: %w", path, err)
 	}
 	return nil

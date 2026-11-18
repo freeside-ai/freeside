@@ -246,8 +246,7 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	// The pull request did not move, so the cycle reviews its head itself
 	// against the base the last review used: no merge, nothing pushed.
 	if len(reviews.requests) != 1 || reviews.requests[0].Round != 2 ||
-		reviews.requests[0].BaseSHA != p.baseSHA || reviews.requests[0].HeadSHA != head ||
-		reviews.requests[0].LegacyEvaluatedSHA != "" {
+		reviews.requests[0].BaseSHA != p.baseSHA || reviews.requests[0].HeadSHA != head {
 		t.Fatalf("review requests = %#v", reviews.requests)
 	}
 	if p.room.runs != 2 || p.transport.MergeCount() != 0 {

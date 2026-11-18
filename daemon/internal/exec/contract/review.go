@@ -24,7 +24,6 @@ const (
 	ReviewCaseFailedOutcome        = "failed_outcome_after_restart"
 	ReviewCaseStaleHead            = "superseded_head"
 	ReviewCaseRequestAuthority     = "request_authority"
-	ReviewCaseLegacyEvaluated      = "legacy_evaluated_request"
 )
 
 var reviewCases = map[string]struct{}{
@@ -34,7 +33,6 @@ var reviewCases = map[string]struct{}{
 	ReviewCaseStatusVocabulary: {}, ReviewCaseStaleHead: {},
 	ReviewCaseFailedOutcome:    {},
 	ReviewCaseRequestAuthority: {},
-	ReviewCaseLegacyEvaluated:  {},
 }
 
 // RunReviewSourceContract runs the reusable ReviewSource contract against one
@@ -260,29 +258,6 @@ func RunReviewSourceContract(t *testing.T, factory ReviewSourceFactory) {
 			return wrongError("verify request authority mismatched digest", "ErrParentKeyMismatch", err)
 		}
 		return h.AuthorityRejectionComplete(t, id)
-	})
-
-	// A retained request a daemon wrote before review stopped covering a
-	// prospective merge (#2660) names one. No source runs it: the refusal is
-	// permanent, never retried as transient or quota, and commits no result.
-	runCase(t, ReviewCaseLegacyEvaluated, divergences, func(t *testing.T) error {
-		h, id, request := newReviewScenario(t, factory, OutcomeComplete)
-		request.LegacyEvaluatedSHA = strings.Repeat("e", 40)
-		if err := request.Validate(); err != nil {
-			return fmt.Errorf("contract prepared an invalid legacy request: %w", err)
-		}
-		source := h.Source()
-		err := source.RequestReview(t.Context(), id, request)
-		var failure *exec.ReviewSourceFailure
-		if !errors.As(err, &failure) || (failure.Class != domain.ReviewFailureConfiguration &&
-			failure.Class != domain.ReviewFailureContradiction) {
-			return wrongError("RequestReview of a legacy evaluated request",
-				"a configuration or contradiction ReviewSourceFailure", err)
-		}
-		if result, err := source.Poll(t.Context(), id); err == nil {
-			return wrongValue("Poll after a refused legacy request", result, err, "no result")
-		}
-		return nil
 	})
 }
 

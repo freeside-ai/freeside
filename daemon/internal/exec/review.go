@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -86,9 +85,7 @@ type ReviewSource interface {
 // workspace — because the engine terminalizes on the contradiction and
 // never inspects the invocation again; a rejected request must not strand
 // a credential-bearing topology. While that teardown is still converging
-// the verifier reports a transient failure so the engine retries. An
-// authenticated pre-authority request reports ErrLegacyReviewRequest after
-// teardown so the engine can supersede it with a new round.
+// the verifier reports a transient failure so the engine retries.
 type ReviewRequestAuthorityVerifier interface {
 	VerifyRequestAuthority(
 		ctx context.Context, id domain.InvocationID, expected domain.Digest,
@@ -96,10 +93,9 @@ type ReviewRequestAuthorityVerifier interface {
 }
 
 // ReviewRequestSupersessionVerifier recognizes a persisted request whose only
-// authority change is an updated trusted instruction binding, or the task's
-// attachments that a request persisted before reviewers received them never
-// carried. It must tear down that request before returning
-// ErrSupersededReviewRequest; a finished request's outcome and evidence stay.
+// authority change is an updated trusted instruction binding. It must tear
+// down that request before returning ErrSupersededReviewRequest; a finished
+// request's outcome and evidence stay.
 type ReviewRequestSupersessionVerifier interface {
 	VerifyReviewRequestSupersession(ctx context.Context, id domain.InvocationID, expected ReviewRequest) error
 }
@@ -109,19 +105,11 @@ type ReviewRequestSupersessionVerifier interface {
 // HeadSHA is always the head the forge shows, and the review record binds it;
 // the workspace holds it, and review covers it (plan revision 110).
 //
-// LegacyEvaluatedSHA is set only on a request a daemon wrote before #2660,
-// when a base-advance re-entry had the unpushed merge of HeadSHA into BaseSHA
-// reviewed in place of the head. It stays, under its stored JSON name, so a
-// retained request still decodes under the strict history readers and its
-// authority digest still recomputes
-// (devlog/2026-11-05-2315-retire-review-merge-path.md).
-// Nothing builds a request that sets it, and every source refuses to run one.
-//
 // Admission is the snapshot the engine admitted the invocation under before
 // it asked the source (plan §5.4): the agent the lineup selected, the identity
 // it runs under, and its launch values. The source returns it unchanged on
-// the ReviewResult. A persisted request with no snapshot predates review
-// admission and is a legacy request.
+// the ReviewResult. Validate refuses a request without one, such as one a
+// daemon before review admission persisted.
 //
 // Inputs are the task's attachments the reviewer reads read-only, as
 // task/<name> in submitted order (plan §5.7). The engine reads them when it
@@ -130,20 +118,19 @@ type ReviewRequestSupersessionVerifier interface {
 // for a task without attachments in the shape and digest it had before
 // reviewers received inputs.
 type ReviewRequest struct {
-	RunID              domain.RunID                  `json:"run_id"`
-	Round              int                           `json:"round"`
-	Repo               string                        `json:"repo"`
-	RepositoryID       int64                         `json:"repository_id"`
-	BaseRef            string                        `json:"base_ref"`
-	BaseSHA            string                        `json:"base_sha"`
-	HeadSHA            string                        `json:"head_sha"`
-	LegacyEvaluatedSHA string                        `json:"evaluated_sha,omitempty"`
-	Workspace          string                        `json:"workspace"`
-	Verification       ReviewVerificationEvidence    `json:"verification"`
-	Instructions       ReviewInstructionBinding      `json:"instructions"`
-	Admission          domain.ReviewAdmission        `json:"admission"`
-	Inputs             []domain.StageInputAttachment `json:"inputs,omitempty"`
-	RequestedAt        time.Time                     `json:"requested_at"`
+	RunID        domain.RunID                  `json:"run_id"`
+	Round        int                           `json:"round"`
+	Repo         string                        `json:"repo"`
+	RepositoryID int64                         `json:"repository_id"`
+	BaseRef      string                        `json:"base_ref"`
+	BaseSHA      string                        `json:"base_sha"`
+	HeadSHA      string                        `json:"head_sha"`
+	Workspace    string                        `json:"workspace"`
+	Verification ReviewVerificationEvidence    `json:"verification"`
+	Instructions ReviewInstructionBinding      `json:"instructions"`
+	Admission    domain.ReviewAdmission        `json:"admission"`
+	Inputs       []domain.StageInputAttachment `json:"inputs,omitempty"`
+	RequestedAt  time.Time                     `json:"requested_at"`
 }
 
 // ReviewVerificationEvidence is the compact, content-addressed account of
@@ -202,43 +189,6 @@ func (e ReviewVerificationEvidence) Validate() error {
 // verification, its instructions, and the admission its invocation runs
 // under.
 func (r ReviewRequest) Validate() error {
-	if err := r.ValidateBeforeAdmission(); err != nil {
-		return err
-	}
-	if err := r.Admission.Validate(); err != nil {
-		return fmt.Errorf("review request admission: %w", err)
-	}
-	if r.Admission.RunID != r.RunID {
-		return fmt.Errorf("review request admission names run %q: %w",
-			r.Admission.RunID, domain.ErrParentKeyMismatch)
-	}
-	return nil
-}
-
-// ValidateRetainedReviewRequest holds a request read back from retained
-// history to the rule it was written under. body is the stored encoding the
-// request was decoded from: one that carries an admission is held to
-// Validate, and one that carries none, which a daemon before review admission
-// wrote, to ValidateBeforeAdmission. It is for readers of history (a backup's
-// artifact closure, the review evidence view) and grants no execution
-// authority: a source runs only a request that passes Validate.
-func ValidateRetainedReviewRequest(body []byte, request ReviewRequest) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return fmt.Errorf("retained review request: %w", err)
-	}
-	for field := range fields {
-		if strings.EqualFold(field, "admission") {
-			return request.Validate()
-		}
-	}
-	return request.ValidateBeforeAdmission()
-}
-
-// ValidateBeforeAdmission is Validate without the admission: what a request
-// had to satisfy before requests carried one. It tells a request a previous
-// daemon wrote from a damaged one. No source runs a request on it.
-func (r ReviewRequest) ValidateBeforeAdmission() error {
 	switch {
 	case r.RunID == "":
 		return fmt.Errorf("review request run_id: %w", domain.ErrEmptyID)
@@ -252,15 +202,19 @@ func (r ReviewRequest) ValidateBeforeAdmission() error {
 	case r.RequestedAt.Location() != time.UTC:
 		return fmt.Errorf("review request requested_at: %w", domain.ErrTimestampNotUTC)
 	}
-	if r.LegacyEvaluatedSHA != "" {
-		merge := domain.ProspectiveMergeIdentity{
-			BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, MergeSHA: r.LegacyEvaluatedSHA,
-		}
-		if err := merge.Validate(); err != nil {
-			return fmt.Errorf("review request evaluated_sha: %w", err)
-		}
+	if err := errors.Join(
+		r.Verification.Validate(), r.Instructions.Validate(), validateReviewInputs(r.Inputs),
+	); err != nil {
+		return err
 	}
-	return errors.Join(r.Verification.Validate(), r.Instructions.Validate(), validateReviewInputs(r.Inputs))
+	if err := r.Admission.Validate(); err != nil {
+		return fmt.Errorf("review request admission: %w", err)
+	}
+	if r.Admission.RunID != r.RunID {
+		return fmt.Errorf("review request admission names run %q: %w",
+			r.Admission.RunID, domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 // validateReviewInputs holds a request's input list to the rules a stage's
@@ -301,7 +255,6 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 		BaseRef      string                        `json:"base_ref"`
 		BaseSHA      string                        `json:"base_sha"`
 		HeadSHA      string                        `json:"head_sha"`
-		EvaluatedSHA string                        `json:"evaluated_sha,omitempty"`
 		Workspace    string                        `json:"workspace"`
 		Verification ReviewVerificationEvidence    `json:"verification"`
 		Instructions ReviewInstructionBinding      `json:"instructions"`
@@ -310,8 +263,7 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 	}{
 		Version: "review-request-authority-v4", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
-		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, EvaluatedSHA: r.LegacyEvaluatedSHA,
-		Workspace:    r.Workspace,
+		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, Workspace: r.Workspace,
 		Verification: r.Verification, Instructions: r.Instructions,
 		Admission: r.Admission, Inputs: r.Inputs,
 	})

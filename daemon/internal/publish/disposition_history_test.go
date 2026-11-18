@@ -19,26 +19,24 @@ const (
 	dispositionDigestC = domain.Digest("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
-// dispositionCostOwnerSentinel is the cost owner of the fixture's legacy
-// round, and dispositionIdentitySentinel the auth identity of its admitted
-// round. Each names who pays, so it is recorded but never published; the
-// values are distinctive so a test can prove no rendered text carries them.
-const (
-	dispositionCostOwnerSentinel = "cost-owner-sentinel-must-not-publish"
-	dispositionIdentitySentinel  = "auth-identity-sentinel-must-not-publish"
-)
+// dispositionIdentitySentinel is the auth identity of the fixture's rounds.
+// It names who pays, so it is recorded but never published; the value is
+// distinctive so a test can prove no rendered text carries it.
+const dispositionIdentitySentinel = "auth-identity-sentinel-must-not-publish"
 
 func dispositionHistoryFixture(t *testing.T) DispositionHistory {
 	t.Helper()
 	runID := domain.RunID("run-disposition-history")
-	// Round 1 is a legacy record: it renders the strings it stored. Round 2
-	// carries an admission snapshot: it renders the admitted agent's lineage
-	// group, model, and effort.
+	// Each round renders its admitted agent's lineage group, model, and
+	// effort. Round 1's model carries markup the renderer must escape.
+	firstAdmission := fake.RecordAdmission(domain.RoleReviewer, runID, "review-round-1")
+	firstAdmission.AuthIdentityID, firstAdmission.LineageGroup = dispositionIdentitySentinel, "openai"
+	firstAdmission.AgentBinding.RouteModelID, firstAdmission.AgentBinding.NativeEffort = "codex <frontier>", "high"
 	first, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-round-1", RunID: runID, Round: 1,
-		LegacyProvider: "openai", LegacyModelConfiguration: "codex <frontier>",
+		Admission:           firstAdmission,
 		ConfigurationDigest: dispositionDigestA, InstructionDigest: dispositionDigestB,
-		LegacyCostOwner: dispositionCostOwnerSentinel, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
+		BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40),
 		CompletedAt:        time.Date(2026, 8, 11, 15, 4, 5, 0, time.UTC),
 		CompletionEvidence: dispositionDigestC, Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{"finding-deferred", "finding-fixed", "finding-declined"},
@@ -143,12 +141,8 @@ func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 	t.Parallel()
 	history := dispositionHistoryFixture(t)
 	for _, review := range history.reviews {
-		payer := review.LegacyCostOwner
-		if review.Admission != nil {
-			payer = string(review.Admission.AuthIdentityID)
-		}
-		if payer != dispositionCostOwnerSentinel && payer != dispositionIdentitySentinel {
-			t.Fatalf("round %d payer = %q, want a sentinel", review.Round, payer)
+		if payer := review.Admission.AuthIdentityID; payer != dispositionIdentitySentinel {
+			t.Fatalf("round %d payer = %q, want the sentinel", review.Round, payer)
 		}
 	}
 	section, err := RenderDispositionHistory(history)
@@ -176,18 +170,20 @@ func TestPublicationTextOmitsReviewCostOwner(t *testing.T) {
 	for name, text := range map[string]string{
 		"disposition history": section, "pull request title": title, "pull request body": body,
 	} {
-		if strings.Contains(text, dispositionCostOwnerSentinel) || strings.Contains(text, dispositionIdentitySentinel) {
+		if strings.Contains(text, dispositionIdentitySentinel) {
 			t.Errorf("%s publishes who paid for a review:\n%s", name, text)
 		}
 	}
 }
 
-// preChangeDispositionHistoryDigest is the digest an intent bound for
-// dispositionHistoryFixture before #3022 took the history out of the body,
-// computed from the golden as it stood then. It is a literal, not today's
-// renderer output, so a change to RenderDispositionHistory's bytes fails here
-// even if the golden is regenerated.
-const preChangeDispositionHistoryDigest = domain.Digest("sha256:1c21cb74a963e0578451a3545120ed75f2181868aa534ee63fda58f2ffa399c6")
+// preChangeDispositionHistoryDigest is the digest an intent binds for
+// dispositionHistoryFixture under the canonical rendering an intent written
+// before #3022 took the history out of the body bound. It is a literal, not
+// today's renderer output, so a change to RenderDispositionHistory's bytes
+// fails here even if the golden is regenerated. #3324 gave the fixture's
+// first round an admission in place of its legacy strings and recomputed this
+// literal with the renderer as it stood before that change (4481f907a).
+const preChangeDispositionHistoryDigest = domain.Digest("sha256:caeb0e1cbf83b1ab851cb863c659a6499fb1cd156ca5db5383f4881c4fbe9a15")
 
 // TestPreChangeIntentStillValidatesOnRecovery pins #3022 criterion 5's binding
 // half: the body no longer shows the history, but a durable intent written
@@ -410,70 +406,6 @@ func TestDispositionHistoryRejectsUnfinishedFinalRound(t *testing.T) {
 				t.Fatalf("newDispositionHistory = %v, want ErrParentKeyMismatch", err)
 			}
 		})
-	}
-}
-
-// TestCurrentDispositionLineageExcludesLegacyPassOnTheAdmittedHead covers the
-// upgrade window: a legacy pass whose adjudication never finished is
-// superseded by the first admitted pass on the same head and may have no
-// disposition, while a legacy pass on an earlier head was remediated and keeps
-// its place and its dispositions.
-func TestCurrentDispositionLineageExcludesLegacyPassOnTheAdmittedHead(t *testing.T) {
-	t.Parallel()
-	runID := domain.RunID("run-legacy-lineage")
-	at := time.Date(2026, 8, 11, 2, 0, 0, 0, time.UTC)
-	record := func(round int, head string, admitted bool, outcome domain.ReviewOutcome, findings ...domain.FindingID) domain.ReviewRecord {
-		t.Helper()
-		id := domain.InvocationID(fmt.Sprintf("review-%d", round))
-		in := domain.ReviewRecord{
-			InvocationID: id, RunID: runID, Round: round, ConfigurationDigest: dispositionDigestA,
-			InstructionDigest: dispositionDigestB, BaseSHA: "base", HeadSHA: head,
-			CompletedAt: at.Add(time.Duration(round) * time.Minute), CompletionEvidence: dispositionDigestC,
-			Outcome: outcome, FindingIDs: findings,
-		}
-		if admitted {
-			in.Admission = fake.RecordAdmission(domain.RoleReviewer, runID, id)
-		} else {
-			in.LegacyProvider, in.LegacyModelConfiguration, in.LegacyCostOwner = "openai", "gpt-codex/high", "owner"
-		}
-		out, err := domain.NewReviewRecord(in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-	remediated := record(1, "head-1", false, domain.ReviewFindings, "fixed-finding")
-	superseded := record(2, "head-2", false, domain.ReviewFindings, "unsettled-finding")
-	admitted := record(3, "head-2", true, domain.ReviewClean)
-	fixed := domain.ReviewDispositionRecord{
-		FindingID: "fixed-finding", Round: 1, Disposition: domain.ReviewDispositionFixed,
-	}
-	partial := domain.ReviewDispositionRecord{
-		FindingID: "unsettled-finding", Round: 2, Disposition: domain.ReviewDispositionDeclined,
-	}
-
-	reviews, dispositions := currentDispositionLineage(
-		[]domain.ReviewRecord{remediated, superseded, admitted},
-		[]domain.ReviewDispositionRecord{fixed, partial}, nil,
-	)
-	if len(reviews) != 2 || reviews[0].Round != 1 || reviews[1].Round != 3 ||
-		len(dispositions) != 1 || dispositions[0].Round != 1 {
-		t.Fatalf("lineage = %#v, %#v", reviews, dispositions)
-	}
-
-	// With no admitted pass, the legacy passes are the whole lineage, as they
-	// were when written.
-	reviews, _ = currentDispositionLineage([]domain.ReviewRecord{remediated, superseded}, nil, nil)
-	if len(reviews) != 2 {
-		t.Fatalf("legacy-only lineage = %#v", reviews)
-	}
-
-	// An admitted pass with unsettled findings is never filtered: only a
-	// legacy pass is superseded by a later pass on its head.
-	unsettled := record(2, "head-2", true, domain.ReviewFindings, "unsettled-finding")
-	reviews, _ = currentDispositionLineage([]domain.ReviewRecord{remediated, unsettled, admitted}, nil, nil)
-	if len(reviews) != 3 {
-		t.Fatalf("admitted lineage = %#v", reviews)
 	}
 }
 

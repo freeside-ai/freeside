@@ -410,13 +410,6 @@ func reentryLineageSegments(
 // included because their heads may change while these authority bindings stay
 // fixed.
 //
-// A legacy pass (one with no admission snapshot) is superseded the same way
-// when the first admitted pass reviewed its head: the daemon never treats a
-// legacy record as current, so that pass's adjudication may never have
-// finished, and the admitted pass reviewed the same candidate again. A legacy
-// pass on an earlier head was remediated before the admitted pass ran, so it
-// stays in the lineage and its dispositions stay required.
-//
 // An unpublished re-entry moves the base mid-lineage (issue #2058): its round
 // reviews the same candidate merged into a newer base. When the latest round
 // sits in the last segment the run's re-entry chain links, at that segment's
@@ -469,18 +462,10 @@ func currentDispositionLineage(
 			review.ConfigurationDigest == latest.ConfigurationDigest &&
 			review.InstructionDigest == instructionsFor(review.Round)
 	}
-	firstAdmittedHead := ""
-	for _, review := range reviews {
-		if sameAuthority(review) && review.Admission != nil {
-			firstAdmittedHead = review.HeadSHA
-			break
-		}
-	}
 	currentRounds := make(map[int]struct{}, len(reviews))
 	currentReviews := make([]domain.ReviewRecord, 0, len(reviews))
 	for _, review := range reviews {
-		if !sameAuthority(review) ||
-			(review.Admission == nil && firstAdmittedHead != "" && review.HeadSHA == firstAdmittedHead) {
+		if !sameAuthority(review) {
 			continue
 		}
 		currentRounds[review.Round] = struct{}{}

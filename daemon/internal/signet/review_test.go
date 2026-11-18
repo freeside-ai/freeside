@@ -90,11 +90,8 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 				timeline.Review.Rounds[0].Provider != nil || timeline.Review.Rounds[0].ModelConfiguration != nil {
 				t.Fatalf("running: %#v", timeline)
 			}
-			// A round recorded before the admission snapshot: the timeline
-			// shows the attribution strings exactly as they were stored.
 			record := domain.ReviewRecord{
 				InvocationID: request.InvocationID, RunID: run.ID, Round: 1,
-				LegacyProvider: "openai", LegacyModelConfiguration: "codex/high", LegacyCostOwner: "owner",
 				ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), InstructionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
 				BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, CompletedAt: f.at.Add(time.Minute),
 				CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
@@ -109,6 +106,9 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 			case "invocation":
 				record.InvocationID = "other"
 			}
+			// The timeline shows the reviewer the record's snapshot names.
+			record.Admission = fake.SeededReviewAdmission(run.ID, record.InvocationID)
+			record.Admission.AgentBinding.RouteModelID = "codex"
 			f.mustWrite(t, func(tx *store.WriteTx) error { return tx.PutReviewRecord(ctx, record, nil) })
 			timeline, err = f.service.GetRunTimeline(ctx, run.ID)
 			if mismatch != "none" {

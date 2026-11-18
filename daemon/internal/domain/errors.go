@@ -550,8 +550,6 @@ var (
 		"review admission records a binding no review launch could have run")
 	ErrReviewAdmissionMismatch = errors.New(
 		"review result's admission is not the one its invocation was admitted under")
-	ErrReviewAttribution = errors.New(
-		"review record must carry an admission snapshot or its legacy attribution, never both and never neither")
 	ErrAdmissionFactsInconsistent = errors.New(
 		"invocation admission facts are not ones an admission record could carry")
 

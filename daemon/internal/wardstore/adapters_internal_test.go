@@ -122,45 +122,29 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 			t.Fatalf("invalid persisted request %q = %v, want ErrCodexReviewRequestRejected", body, err)
 		}
 	}
-	requestFields := make(map[string]json.RawMessage)
+	// A request in a shape a daemon before the current authorities wrote is
+	// rejected like any damaged row.
 	requestBody, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(requestBody, &requestFields); err != nil {
-		t.Fatal(err)
-	}
-	delete(requestFields, "instructions")
-	legacyBody, err := json.Marshal(requestFields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(legacyBody))
-	if _, err := db.ExecContext(ctx,
-		`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
-		string(legacyBody), legacyDigest, "review-run-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, exec.ErrLegacyReviewRequest) {
-		t.Fatalf("legacy persisted request = %v, want ErrLegacyReviewRequest", err)
-	}
-	// The second legacy shape: a request persisted before review admission
-	// carries its instructions and no snapshot. A snapshot that is present
-	// and invalid is damage, not a previous daemon's request.
-	for name, tc := range map[string]struct {
-		admission  func(map[string]json.RawMessage)
-		wantLegacy bool
-	}{
-		"no admission": {func(fields map[string]json.RawMessage) { delete(fields, "admission") }, true},
-		"an invalid admission": {func(fields map[string]json.RawMessage) {
+	for name, damage := range map[string]func(map[string]json.RawMessage){
+		"no instructions": func(fields map[string]json.RawMessage) { delete(fields, "instructions") },
+		"no admission":    func(fields map[string]json.RawMessage) { delete(fields, "admission") },
+		"an invalid admission": func(fields map[string]json.RawMessage) {
 			fields["admission"] = json.RawMessage(`{"invocation_id":"review-run-1"}`)
-		}, false},
+		},
+		// A request stored before #2660 names the prospective merge it
+		// reviewed; it never reads as a request for the head alone.
+		"an evaluated commit": func(fields map[string]json.RawMessage) {
+			fields["evaluated_sha"] = json.RawMessage(`"` + strings.Repeat("e", 40) + `"`)
+		},
 	} {
 		fields := make(map[string]json.RawMessage)
 		if err := json.Unmarshal(requestBody, &fields); err != nil {
 			t.Fatal(err)
 		}
-		tc.admission(fields)
+		damage(fields)
 		body, err := json.Marshal(fields)
 		if err != nil {
 			t.Fatal(err)
@@ -170,18 +154,9 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 			string(body), fmt.Sprintf("sha256:%x", sha256.Sum256(body)), "review-run-1"); err != nil {
 			t.Fatal(err)
 		}
-		_, err = adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1")
-		if !errors.Is(err, ward.ErrCodexReviewRequestRejected) {
+		if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, ward.ErrCodexReviewRequestRejected) {
 			t.Fatalf("persisted request with %s = %v, want ErrCodexReviewRequestRejected", name, err)
 		}
-		if got := errors.Is(err, exec.ErrLegacyReviewRequest); got != tc.wantLegacy {
-			t.Fatalf("persisted request with %s: legacy = %t, want %t (%v)", name, got, tc.wantLegacy, err)
-		}
-	}
-	if _, err := db.ExecContext(ctx,
-		`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
-		string(legacyBody), legacyDigest, "review-run-1"); err != nil {
-		t.Fatal(err)
 	}
 	outcome := ward.CodexReviewSourceOutcome{
 		InvocationID: "review-run-1", FailureClass: domain.ReviewFailureContradiction,
@@ -424,57 +399,5 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 		if _, _, err := adapters.Journal.GetCodexReviewOutcome(ctx, id); !errors.Is(err, ward.ErrCodexReviewOutcomeRejected) {
 			t.Fatalf("rewritten outcome ready=%v = %v, want ErrCodexReviewOutcomeRejected", ready, err)
 		}
-	}
-}
-
-// TestCodexReviewJournalReadsRetainedEvaluatedRequest pins that a request a
-// daemon stored before #2660, naming the prospective merge a re-entry had
-// reviewed under evaluated_sha, still reads from the journal: history readers
-// decode strictly, so dropping the field would make the row unreadable.
-func TestCodexReviewJournalReadsRetainedEvaluatedRequest(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "freeside.db")
-	st := storetest.Open(t, path, store.Options{})
-	adapters, err := New(st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-1"),
-		RunID:     "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
-		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
-		LegacyEvaluatedSHA: strings.Repeat("e", 40),
-		Workspace:          "/seed/candidate", Verification: exec.ReviewVerificationEvidence{
-			Outcome:                domain.VerificationPassed,
-			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
-			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		}, Instructions: instructions, RequestedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
-	}
-	if err := adapters.Journal.PutCodexReviewRequest(ctx, "review-run-1", request); err != nil {
-		t.Fatal(err)
-	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	var body string
-	if err := db.QueryRowContext(ctx,
-		`SELECT body FROM codex_review_requests WHERE invocation_id = ?`, "review-run-1").Scan(&body); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(body, `"evaluated_sha":"`+request.LegacyEvaluatedSHA+`"`) {
-		t.Fatalf("stored request does not carry evaluated_sha: %s", body)
-	}
-	got, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1")
-	if err != nil {
-		t.Fatalf("retained evaluated request = %v, want it to read", err)
-	}
-	if got.LegacyEvaluatedSHA != request.LegacyEvaluatedSHA || got.HeadSHA != request.HeadSHA {
-		t.Fatalf("retained evaluated request read as %+v", got)
 	}
 }

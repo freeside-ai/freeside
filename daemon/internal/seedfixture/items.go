@@ -8,6 +8,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -219,15 +220,16 @@ func seedFindingAdjudication(s seeder, run domain.Run, at time.Time) error {
 		Message:  "The retry path drops the operator's reason.",
 		RawText:  "The retry path drops the operator's reason.", CreatedAt: at,
 	}
-	// A legacy record on purpose: it carries the three strings a record
-	// stored before review admission, so a seeded store always holds one
-	// round that must read back as stored.
+	// The seeded admission shows the reviewer as openai and gpt-codex/high.
+	// No admission row is stored: -seed-fixture runs without a driver, so
+	// nothing re-gates the seeded round.
+	invocationID := domain.InvocationID(fmt.Sprintf("review-%s-%d", run.ID, round))
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: domain.InvocationID(fmt.Sprintf("review-%s-%d", run.ID, round)), RunID: run.ID, Round: round,
-		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high",
+		InvocationID: invocationID, RunID: run.ID, Round: round,
+		Admission:           fake.SeededReviewAdmission(run.ID, invocationID),
 		ConfigurationDigest: digest("review-configuration"),
-		InstructionDigest:   instructionDigest, LegacyCostOwner: "owner",
-		BaseSHA: baseSHA, HeadSHA: headSHA, CompletedAt: at,
+		InstructionDigest:   instructionDigest,
+		BaseSHA:             baseSHA, HeadSHA: headSHA, CompletedAt: at,
 		CompletionEvidence: digest("review-completion"),
 		Outcome:            domain.ReviewFindings, FindingIDs: []domain.FindingID{findingID},
 	})

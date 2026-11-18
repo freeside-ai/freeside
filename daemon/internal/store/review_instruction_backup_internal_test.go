@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -21,21 +20,10 @@ func TestCheckpointArtifactDigestsIncludesCodexReviewInstructionClosure(t *testi
 	host := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	source := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	result := domain.Digest("sha256:" + strings.Repeat("c", 64))
-	for i, version := range []string{
-		exec.ReviewInstructionCompositionVersionV1,
-		exec.ReviewInstructionCompositionVersion,
-	} {
-		body := validReviewRequestBody(t, version, host, source, result)
-		if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
-			(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
-			fmt.Sprintf("review-%d", i), codexReviewBodyDigest(body), string(body)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	legacy := []byte(`{"run_id":"legacy-run","round":1}`)
+	body := validReviewRequestBody(t, exec.ReviewInstructionCompositionVersion, host, source, result)
 	if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
 		(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
-		"review-legacy", codexReviewBodyDigest(legacy), string(legacy)); err != nil {
+		"review-1", codexReviewBodyDigest(body), string(body)); err != nil {
 		t.Fatal(err)
 	}
 	closure, err := checkpointArtifactDigests(ctx, db, nil, nil)
@@ -87,31 +75,24 @@ func TestCheckpointArtifactDigestsRejectsUnknownCurrentReviewRequestFields(t *te
 	}
 }
 
-// TestCheckpointArtifactDigestsReadsRequestsFromBeforeReviewAdmission: a
-// request a previous daemon wrote carries its instruction artifacts and no
-// admission snapshot. It stays in the closure, so an upgraded store still
-// backs up whole. A snapshot that is present and invalid is damage.
-func TestCheckpointArtifactDigestsReadsRequestsFromBeforeReviewAdmission(t *testing.T) {
+// TestCheckpointArtifactDigestsRefusesRequestsWithoutTheirAuthority: a
+// request without its instructions or its admission, which a daemon before
+// those authorities wrote, or one bound to the retired v1 bundle, fails the
+// backup instead of leaving its artifacts out of the closure.
+func TestCheckpointArtifactDigestsRefusesRequestsWithoutTheirAuthority(t *testing.T) {
 	t.Parallel()
 	host := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	source := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	result := domain.Digest("sha256:" + strings.Repeat("c", 64))
-	for name, tc := range map[string]struct {
-		mutate func(map[string]any)
-		want   []domain.Digest
-	}{
-		"no admission": {
-			func(request map[string]any) { delete(request, "admission") },
-			[]domain.Digest{host, source, result},
+	for name, mutate := range map[string]func(map[string]any){
+		"no instructions": func(request map[string]any) { delete(request, "instructions") },
+		"a v1 bundle": func(request map[string]any) {
+			request["instructions"].(map[string]any)["composition_version"] = "codex_explicit_bundle_v1"
 		},
-		"no admission and an invalid candidate": {
-			func(request map[string]any) { delete(request, "admission"); request["workspace"] = "" }, nil,
-		},
-		"an invalid admission": {
-			func(request map[string]any) { request["admission"].(map[string]any)["role"] = "implementer" }, nil,
-		},
-		"an admission for another run": {
-			func(request map[string]any) { request["admission"].(map[string]any)["run_id"] = "run-2" }, nil,
+		"no admission":         func(request map[string]any) { delete(request, "admission") },
+		"an invalid admission": func(request map[string]any) { request["admission"].(map[string]any)["role"] = "implementer" },
+		"an admission for another run": func(request map[string]any) {
+			request["admission"].(map[string]any)["run_id"] = "run-2"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -121,7 +102,7 @@ func TestCheckpointArtifactDigestsReadsRequestsFromBeforeReviewAdmission(t *test
 			), &request); err != nil {
 				t.Fatal(err)
 			}
-			tc.mutate(request)
+			mutate(request)
 			body, err := json.Marshal(request)
 			if err != nil {
 				t.Fatal(err)
@@ -133,20 +114,9 @@ func TestCheckpointArtifactDigestsReadsRequestsFromBeforeReviewAdmission(t *test
 				"review-retained", codexReviewBodyDigest(body), string(body)); err != nil {
 				t.Fatal(err)
 			}
-			closure, err := checkpointArtifactDigests(ctx, db, nil, nil)
-			if tc.want == nil {
-				if err == nil {
-					t.Fatal("a damaged review request was accepted")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			slices.Sort(closure.digests)
-			slices.Sort(tc.want)
-			if !slices.Equal(closure.digests, tc.want) {
-				t.Fatalf("review instruction closure = %v, want %v", closure.digests, tc.want)
+			_, err = checkpointArtifactDigests(ctx, db, nil, nil)
+			if err == nil || !strings.Contains(err.Error(), "instruction closure is invalid") {
+				t.Fatalf("checkpoint closure = %v, want the invalid-closure refusal", err)
 			}
 		})
 	}

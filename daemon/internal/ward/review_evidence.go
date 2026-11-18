@@ -31,11 +31,7 @@ func DecodeRetainedCodexReview(binding domain.ReviewRequestRecord, requestBody [
 	if err := strictjson.Decode(requestBody, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
 		return outcome, err
 	}
-	// A request from before review admission is held to the rule it was
-	// written under, so a round that failed then keeps its evidence. A round
-	// that completed then does not: its result predates the snapshot a
-	// result returns and no longer decodes.
-	if err := exec.ValidateRetainedReviewRequest(requestBody, request); err != nil {
+	if err := request.Validate(); err != nil {
 		return outcome, err
 	}
 	if request.RunID != binding.RunID || request.Round != binding.Round || request.BaseSHA != binding.BaseSHA || request.HeadSHA != binding.HeadSHA {

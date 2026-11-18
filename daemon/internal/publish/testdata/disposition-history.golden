@@ -17,7 +17,7 @@
 - Invocation: <code>review-round-1</code>
 - Outcome: **findings**
 - Provider: <code>openai</code>
-- Model configuration: <code>codex &lt;frontier&gt;</code>
+- Model configuration: <code>codex &lt;frontier&gt;/high</code>
 - Configuration digest: <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>
 - Instruction digest: <code>sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code>
 - Base/head: <code>1111111111111111111111111111111111111111</code> / <code>2222222222222222222222222222222222222222</code>

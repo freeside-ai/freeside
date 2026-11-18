@@ -646,29 +646,22 @@ func checkpointArtifactDigests(
 			}
 		}
 		if instructionRaw == nil {
-			// Review requests written before instruction authority carry no
-			// instruction artifacts. Their review records cannot satisfy the
-			// current gate, but they do not make historical backups incomplete.
-			continue
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
 		}
 		if bytes.Equal(bytes.TrimSpace(instructionRaw), []byte("null")) {
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is null")
 		}
-		// A request written before review admission carries its instruction
-		// artifacts and no snapshot. It is held to what it had to satisfy
-		// then, so a retained one neither fails the backup nor drops its
-		// artifacts from it.
 		var request exec.ReviewRequest
 		if err := strictjson.Decode(
 			body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
-		); err != nil || exec.ValidateRetainedReviewRequest(body, request) != nil {
+		); err != nil || request.Validate() != nil {
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
 		}
 		instructions := request.Instructions
-		if (instructions.CompositionVersion != exec.ReviewInstructionCompositionVersionV1 &&
-			instructions.CompositionVersion != exec.ReviewInstructionCompositionVersion) ||
+		if instructions.CompositionVersion != exec.ReviewInstructionCompositionVersion ||
 			!contentaddr.Valid(string(instructions.ResultDigest)) {
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")

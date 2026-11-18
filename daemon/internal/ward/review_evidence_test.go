@@ -51,11 +51,11 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 func TestDecodeRetainedCodexReview(t *testing.T) {
 	t.Parallel()
 	reads := map[string]bool{
-		"none": true, "request before admission": true, "claude": true,
+		"none": true, "claude": true,
 		"fence without binding": true,
 	}
 	for _, corruption := range []string{
-		"none", "request before admission", "result before admission", "request admission", "request legacy",
+		"none", "request before admission", "request admission", "request legacy",
 		"request run", "request round", "request head", "request digest", "outcome digest", "outcome invocation",
 		"collection", "provider", "returned admission", "state",
 		"claude", "codex v2 topology", "claude binding over codex evidence", "codex binding over claude evidence",
@@ -148,14 +148,11 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if corruption == "request before admission" || corruption == "result before admission" {
-				// A round requested before requests carried an admission
-				// still reads when it failed, because a failure returns no
-				// snapshot to hold against the request. A result always
-				// returns one, so it cannot answer such a request.
-				if corruption == "request before admission" {
-					outcome = codexGoldenReviewOutcome(`{"type":"turn.failed","error":{"message":"configuration invalid"}}`)
-				}
+			if corruption == "request before admission" {
+				// A round requested before requests carried an admission is
+				// refused even when it failed and its outcome returns no
+				// snapshot to hold against the request.
+				outcome = codexGoldenReviewOutcome(`{"type":"turn.failed","error":{"message":"configuration invalid"}}`)
 				var fields map[string]json.RawMessage
 				if err := json.Unmarshal(requestBody, &fields); err != nil {
 					t.Fatal(err)
@@ -230,10 +227,11 @@ func testReviewJournalBinding(t *testing.T, topologyVersion string, runID domain
 
 // TestDecodeRetainedCodexReviewRequestFacts covers the journal a pre-0067
 // in-flight review leaves behind: the decoder recovers its request time only
-// for the exact candidate, and a request from before instruction binding still
-// reads, as does one naming the prospective merge a pre-#2660 re-entry
-// reviewed. TestProductionReviewUpgradePreservesRequestTime runs the upgrade
-// end to end on an intact and a damaged journal.
+// for the exact candidate. A request from before instruction binding still
+// yields its facts, which grant nothing, but one naming the prospective merge
+// a pre-#2660 re-entry reviewed fails the strict decode: the request no longer
+// declares evaluated_sha. TestProductionReviewUpgradePreservesRequestTime runs
+// the upgrade end to end on an intact and a damaged journal.
 func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 	t.Parallel()
 	for _, corruption := range []string{"none", "legacy", "evaluated", "run", "round", "base", "head", "time", "digest"} {
@@ -250,8 +248,6 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 				BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
 			}
 			switch corruption {
-			case "evaluated":
-				request.LegacyEvaluatedSHA = strings.Repeat("c", 40)
 			case "run":
 				request.RunID = "other-run"
 			case "round":
@@ -267,12 +263,16 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if corruption == "legacy" {
+			if corruption == "legacy" || corruption == "evaluated" {
 				var fields map[string]json.RawMessage
 				if err := json.Unmarshal(body, &fields); err != nil {
 					t.Fatal(err)
 				}
-				delete(fields, "instructions")
+				if corruption == "legacy" {
+					delete(fields, "instructions")
+				} else {
+					fields["evaluated_sha"] = json.RawMessage(`"` + strings.Repeat("c", 40) + `"`)
+				}
 				if body, err = json.Marshal(fields); err != nil {
 					t.Fatal(err)
 				}
@@ -283,7 +283,12 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 			}
 			got, err := DecodeRetainedCodexReviewRequestFacts(binding, body, digest)
 			switch corruption {
-			case "none", "legacy", "evaluated":
+			case "none", "legacy":
+			case "evaluated":
+				if err == nil || !strings.Contains(err.Error(), "evaluated_sha") {
+					t.Fatalf("journal naming evaluated_sha = %v, want the strict decode's refusal", err)
+				}
+				return
 			case "time":
 				if err == nil {
 					t.Fatalf("journal without a request time decoded: %+v", got)

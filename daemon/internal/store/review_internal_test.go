@@ -98,67 +98,6 @@ func TestListReviewRecordsRejectsRunKeyOmissionTamper(t *testing.T) {
 	}
 }
 
-func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openTemplateStoreAt(t, t.TempDir()+"/review.db", Options{})
-	run := domain.Run{
-		ID: "run-review-legacy", ProjectID: "project-1",
-		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
-	}
-	record, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: "review-legacy-1", RunID: run.ID, Round: 1,
-		// Only a record from before the admission snapshot can also
-		// predate the instruction digest.
-		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "owner",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		BaseSHA:             "base", HeadSHA: "head",
-		CompletedAt:        time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
-		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
-		Outcome:            domain.ReviewClean,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Write(ctx, func(tx *WriteTx) error {
-		if err := tx.PutRun(ctx, run); err != nil {
-			return err
-		}
-		return tx.PutReviewRecord(ctx, record, nil)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var raw []byte
-	if err := st.db.QueryRowContext(ctx,
-		`SELECT body FROM review_records WHERE invocation_id = ?`, record.InvocationID).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var legacy map[string]any
-	if err := json.Unmarshal(raw, &legacy); err != nil {
-		t.Fatal(err)
-	}
-	delete(legacy, "instruction_digest")
-	raw, err = json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.db.ExecContext(ctx,
-		`UPDATE review_records SET body_digest = ?, body = ? WHERE invocation_id = ?`,
-		reviewBodyDigest(string(raw)), string(raw), record.InvocationID); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Read(ctx, func(tx *ReadTx) error {
-		got, err := tx.GetReviewRecord(ctx, record.InvocationID)
-		if err == nil && got.InstructionDigest != "" {
-			t.Fatalf("legacy instruction digest = %q", got.InstructionDigest)
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -233,10 +172,10 @@ func TestReviewRetryReadRevalidatesCanonicalBody(t *testing.T) {
 }
 
 // TestReviewRecordAttributionAtWriteAndRead covers the persistence boundary
-// of the attribution rule for both record kinds: a record written before the
-// admission snapshot reads back exactly as stored, and a record carrying both
-// a snapshot and the legacy strings, or neither, is refused at write and,
-// when a row is rewritten into that shape, at read.
+// of the attribution rule for both record kinds: a record with its admission
+// snapshot reads back exactly as stored, and a record without one is refused
+// at write and, when a row holds the shape stored before review admission, at
+// read.
 func TestReviewRecordAttributionAtWriteAndRead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -249,15 +188,15 @@ func TestReviewRecordAttributionAtWriteAndRead(t *testing.T) {
 	digest := func(fill string) domain.Digest { return domain.Digest("sha256:" + strings.Repeat(fill, 64)) }
 	routed := domain.ReviewRecord{
 		InvocationID: "review-attribution-1", RunID: run.ID, Round: 1,
-		LegacyProvider: "openai", LegacyModelConfiguration: "gpt-codex/high", LegacyCostOwner: "subscription:owner",
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, run.ID, "review-attribution-1"),
 		ConfigurationDigest: digest("c"), InstructionDigest: digest("d"),
 		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: digest("e"), Outcome: domain.ReviewClean,
 	}
 	shadow := domain.ShadowReviewRecord{
 		InvocationID: "shadow-attribution-1", RunID: run.ID, ShadowedRound: 1,
-		Source:         domain.ShadowReviewClaudeLocal,
-		LegacyProvider: "anthropic", LegacyModelConfiguration: "claude/max", LegacyCostOwner: "subscription:owner",
+		Source:              domain.ShadowReviewClaudeLocal,
+		Admission:           fake.RecordAdmission(domain.RoleShadowReviewer, run.ID, "shadow-attribution-1"),
 		ConfigurationDigest: digest("c"), InstructionDigest: digest("d"),
 		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: digest("e"), Outcome: domain.ReviewClean,
@@ -279,64 +218,61 @@ func TestReviewRecordAttributionAtWriteAndRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	both, bothShadow := routed, shadow
-	both.Admission = fake.RecordAdmission(domain.RoleReviewer, run.ID, routed.InvocationID)
-	bothShadow.Admission = fake.RecordAdmission(domain.RoleShadowReviewer, run.ID, shadow.InvocationID)
-	neither, neitherShadow := routed, shadow
-	neither.LegacyProvider, neither.LegacyModelConfiguration, neither.LegacyCostOwner = "", "", ""
-	neitherShadow.LegacyProvider, neitherShadow.LegacyModelConfiguration, neitherShadow.LegacyCostOwner = "", "", ""
-	if routedErr, shadowErr := write(both, bothShadow); !errors.Is(routedErr, domain.ErrReviewAttribution) ||
-		!errors.Is(shadowErr, domain.ErrReviewAttribution) {
-		t.Fatalf("write with a snapshot and the legacy strings = %v, %v", routedErr, shadowErr)
-	}
-	if routedErr, shadowErr := write(neither, neitherShadow); !errors.Is(routedErr, domain.ErrEmptyField) ||
+	unattributed, unattributedShadow := routed, shadow
+	unattributed.Admission, unattributedShadow.Admission = nil, nil
+	if routedErr, shadowErr := write(unattributed, unattributedShadow); !errors.Is(routedErr, domain.ErrEmptyField) ||
 		!errors.Is(shadowErr, domain.ErrEmptyField) {
-		t.Fatalf("write with no attribution = %v, %v", routedErr, shadowErr)
+		t.Fatalf("write with no admission = %v, %v", routedErr, shadowErr)
 	}
 
 	if routedErr, shadowErr := write(routed, shadow); routedErr != nil || shadowErr != nil {
-		t.Fatalf("write legacy records = %v, %v", routedErr, shadowErr)
+		t.Fatalf("write records = %v, %v", routedErr, shadowErr)
 	}
 	gotRouted, gotShadow, routedErr, shadowErr := read()
 	if routedErr != nil || shadowErr != nil {
-		t.Fatalf("read legacy records = %v, %v", routedErr, shadowErr)
+		t.Fatalf("read records = %v, %v", routedErr, shadowErr)
 	}
 	if !reflect.DeepEqual(gotRouted, routed) || !reflect.DeepEqual(gotShadow, shadow) {
-		t.Fatalf("legacy records did not read back as stored:\n%#v\n%#v", gotRouted, gotShadow)
+		t.Fatalf("records did not read back as stored:\n%#v\n%#v", gotRouted, gotShadow)
 	}
 
-	// Rewrite each stored row, with a matching body digest, into a shape no
-	// writer produces. The shadow provider column follows the body so the
-	// attribution rule, not the copied-column check, is what refuses it.
-	rewrite := func(routed domain.ReviewRecord, shadow domain.ShadowReviewRecord, provider string) {
+	// Rewrite each stored row, with a matching body digest, into the shape a
+	// record had before review admission: the three reviewer strings, no
+	// snapshot, and no instruction digest. The record decode ignores the
+	// strings, so the missing snapshot is what refuses the row. The shadow
+	// provider column follows the old body, as it was stored.
+	legacyBody := func(record any, provider string) string {
 		t.Helper()
-		routedBody, err := json.Marshal(routed)
+		body, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)
 		}
-		shadowBody, err := json.Marshal(shadow)
+		var fields map[string]any
+		if err := json.Unmarshal(body, &fields); err != nil {
+			t.Fatal(err)
+		}
+		delete(fields, "admission")
+		delete(fields, "instruction_digest")
+		fields["provider"], fields["model_configuration"], fields["cost_owner"] = provider, "gpt-codex/high", "owner"
+		body, err = json.Marshal(fields)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.db.ExecContext(ctx,
-			`UPDATE review_records SET body_digest = ?, body = ? WHERE invocation_id = ?`,
-			reviewBodyDigest(string(routedBody)), string(routedBody), routed.InvocationID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := st.db.ExecContext(ctx,
-			`UPDATE shadow_review_records SET provider = ?, body_digest = ?, body = ? WHERE invocation_id = ?`,
-			provider, reviewBodyDigest(string(shadowBody)), string(shadowBody), shadow.InvocationID); err != nil {
-			t.Fatal(err)
-		}
+		return string(body)
 	}
-	rewrite(both, bothShadow, bothShadow.Provider())
-	if _, _, routedErr, shadowErr := read(); !errors.Is(routedErr, domain.ErrReviewAttribution) ||
-		!errors.Is(shadowErr, domain.ErrReviewAttribution) {
-		t.Fatalf("read of a row with a snapshot and the legacy strings = %v, %v", routedErr, shadowErr)
+	routedBody, shadowBody := legacyBody(routed, "openai"), legacyBody(shadow, "anthropic")
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE review_records SET body_digest = ?, body = ? WHERE invocation_id = ?`,
+		reviewBodyDigest(routedBody), routedBody, routed.InvocationID); err != nil {
+		t.Fatal(err)
 	}
-	rewrite(neither, neitherShadow, shadow.LegacyProvider)
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE shadow_review_records SET provider = ?, body_digest = ?, body = ? WHERE invocation_id = ?`,
+		"anthropic", reviewBodyDigest(shadowBody), shadowBody, shadow.InvocationID); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, routedErr, shadowErr := read(); !errors.Is(routedErr, domain.ErrEmptyField) ||
 		!errors.Is(shadowErr, domain.ErrEmptyField) {
-		t.Fatalf("read of a row with no attribution = %v, %v", routedErr, shadowErr)
+		t.Fatalf("read of a row stored before review admission = %v, %v", routedErr, shadowErr)
 	}
 }
