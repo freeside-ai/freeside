@@ -2573,30 +2573,6 @@ func TestSpecificationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	}
 }
 
-func TestSpecificationInputOrderAcceptsPreChainVerifierRevisionResearch(t *testing.T) {
-	t.Parallel()
-	source := domain.ArtifactID("source")
-	research := domain.ArtifactID("research")
-	priorSpec := domain.ArtifactID("prior-spec")
-	feedback := domain.ArtifactID("feedback")
-	canonical := specificationInputs(
-		source, []domain.ArtifactID{research}, &priorSpec, []domain.ArtifactID{feedback}, nil,
-	)
-	legacy := []domain.ArtifactID{source, priorSpec, feedback, research}
-
-	if !acceptsSpecificationInputOrder(legacy, canonical, legacy) {
-		t.Fatal("pre-chain-verifier revision research order was rejected")
-	}
-	if !acceptsSpecificationInputOrder(canonical, canonical, legacy) {
-		t.Fatal("canonical revision research order was rejected")
-	}
-	if acceptsSpecificationInputOrder(
-		[]domain.ArtifactID{source, feedback, priorSpec, research}, canonical, legacy,
-	) {
-		t.Fatal("unauthorized revision research order was accepted")
-	}
-}
-
 // TestSpecificationSecondRequestChangesDispatches guards #685: a second
 // request_changes round must retire the superseded prior specification from
 // the next invocation's inputs. Retaining it left a stale Specification-typed

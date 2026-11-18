@@ -1687,8 +1687,7 @@ func nextSpecificationRevisionRequest(
 
 // nextSpecificationRetryRequest repeats request as the next iteration after
 // its invocation ended failed, canceled, or lost. Every input stays as it
-// was, including the vector's stored order; only the identity advances and
-// the operator's reason is recorded.
+// was; only the identity advances and the operator's reason is recorded.
 func nextSpecificationRetryRequest(request specificationRequest, reason string) specificationRequest {
 	next := request
 	next.Iteration++
@@ -1698,19 +1697,6 @@ func nextSpecificationRetryRequest(request specificationRequest, reason string) 
 	next.AnswerArtifactIDs = slices.Clone(request.AnswerArtifactIDs)
 	next.RetryReason = reason
 	return next
-}
-
-// acceptsSpecificationInputOrder recognizes the current role-canonical vector
-// and the sole pre-#698 durable variant. Older daemons appended research
-// fetched after a request_changes transition to the then-current vector,
-// after its prior specification and feedback. The same terminal still
-// authorizes those exact IDs, so accepting that historical representation
-// preserves recovery without allowing arbitrary reordering.
-func acceptsSpecificationInputOrder(
-	actual, canonical, legacyPostRevisionResearch []domain.ArtifactID,
-) bool {
-	return slices.Equal(actual, canonical) ||
-		len(legacyPostRevisionResearch) > 0 && slices.Equal(actual, legacyPostRevisionResearch)
 }
 
 func requireSpecificationOutputProvenance(
@@ -2071,7 +2057,6 @@ func verifySpecificationChain(
 	feedback := []domain.ArtifactID{}
 	answers := []domain.ArtifactID{}
 	var priorSpec *domain.ArtifactID
-	var legacyPostRevisionResearch []domain.ArtifactID
 	// retryReason is the reason the preceding transition authorized for this
 	// iteration: empty except after a retry, so a reason no retry
 	// authorized is refused.
@@ -2102,7 +2087,7 @@ func verifySpecificationChain(
 		expectedInputs := specificationInputs(sourceID, research, priorSpec, feedback, answers)
 		if !sameSpecificationRoot(request, root) || request.InvocationID != invocationID ||
 			request.Iteration != iteration ||
-			!acceptsSpecificationInputOrder(request.InputArtifactIDs, expectedInputs, legacyPostRevisionResearch) ||
+			!slices.Equal(request.InputArtifactIDs, expectedInputs) ||
 			!sameArtifactID(request.PriorSpecArtifactID, priorSpec) ||
 			!slices.Equal(request.FeedbackArtifactIDs, feedback) ||
 			!slices.Equal(request.AnswerArtifactIDs, answers) ||
@@ -2149,7 +2134,6 @@ func verifySpecificationChain(
 				return verifiedSpecificationBinding{}, err
 			}
 			answers = append(answers, answerID)
-			legacyPostRevisionResearch = nil
 			purpose = domain.AttemptPurposeQuestionAnswer
 			continue
 		}
@@ -2164,8 +2148,8 @@ func verifySpecificationChain(
 		}
 		if terminal.InvocationID == invocationID && terminal.Iteration == iteration &&
 			retryableSpecificationStatus(terminal.Status) {
-			// The research, feedback, answers, and legacy order the failed
-			// request carried all stay as they were for its retry.
+			// The research, feedback, and answers the failed request carried
+			// all stay as they were for its retry.
 			if err := authenticateSpecificationRetryTransition(ctx, tx, run, request, nextRequest); err != nil {
 				return verifiedSpecificationBinding{}, err
 			}
@@ -2195,14 +2179,10 @@ func verifySpecificationChain(
 					return verifiedSpecificationBinding{}, err
 				}
 			}
-			legacyPostRevisionResearch = append(
-				slices.Clone(request.InputArtifactIDs), terminal.ResearchArtifactIDs...,
-			)
 			research = append(research, terminal.ResearchArtifactIDs...)
 			purpose = domain.AttemptPurposeResearchContinuation
 			continue
 		}
-		legacyPostRevisionResearch = nil
 
 		if !settings.SpecApproval {
 			return verifiedSpecificationBinding{}, fmt.Errorf(
