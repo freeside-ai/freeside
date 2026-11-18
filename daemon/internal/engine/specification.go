@@ -715,32 +715,18 @@ func submitSpecificationRunTx(
 		want.TaskID = task.ID
 	}
 	if existing, err := tx.GetRun(ctx, want.ID); err == nil {
-		expectedPayload := payload
-		legacyCampaignReplay := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
-			spec.CampaignID != ""
-		if legacyCampaignReplay {
-			legacyRequest := request
-			legacyRequest.CampaignID = ""
-			legacyRequest.AttemptNumber = 0
-			legacyRequest.PublicationDigest = ""
-			expectedPayload, err = encodeSpecificationRequest(legacyRequest)
-			if err != nil {
-				return domain.Run{}, err
-			}
-		}
 		stored, markerErr := tx.GetOutbox(ctx, string(invocationID))
 		claim, claimErr := tx.GetOutbox(ctx,
 			specificationImplementationClaimKey(spec.ImplementationRunID))
 		storedPolicy, policyErr := tx.GetResolvedPolicy(ctx, want.ID)
 		storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
-		lineageDisagrees := !legacyCampaignReplay &&
-			(existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber)
+		lineageDisagrees := existing.CampaignID != want.CampaignID || existing.AttemptNumber != want.AttemptNumber
 		if (want.TaskID != "" && existing.TaskID != want.TaskID) || existing.ProjectID != want.ProjectID || existing.SpecDigest != want.SpecDigest ||
 			existing.PolicyDigest != want.PolicyDigest || lineageDisagrees ||
 			markerErr != nil || stored.Kind != KindSpecificationInvocationRequested ||
-			!bytes.Equal(stored.Payload, expectedPayload) ||
+			!bytes.Equal(stored.Payload, payload) ||
 			claimErr != nil || claim.Kind != KindSpecificationImplementationClaim ||
-			!claim.Dispatched() || !bytes.Equal(claim.Payload, expectedPayload) ||
+			!claim.Dispatched() || !bytes.Equal(claim.Payload, payload) ||
 			policyErr != nil || storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
 			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) || invocationErr != nil ||
 			storedInvocation.ConversationID != nil ||
@@ -754,17 +740,12 @@ func submitSpecificationRunTx(
 		if len(existing.Stages) != 1 {
 			return domain.Run{}, fmt.Errorf("stored specification run has foreign stages: %w", domain.ErrImmutableTransition)
 		}
-		if spec.CampaignID != "" && !legacyCampaignReplay {
+		if spec.CampaignID != "" {
 			attempt, attemptErr := tx.GetProductionAttempt(ctx, spec.CampaignID, spec.AttemptNumber)
 			if attemptErr != nil || attempt.SourceDigest != source.Digest ||
 				attempt.SpecificationRunID != spec.SpecificationRunID ||
 				attempt.ImplementationRunID != spec.ImplementationRunID {
 				return domain.Run{}, fmt.Errorf("stored production attempt disagrees: %w", domain.ErrImmutableTransition)
-			}
-		} else if legacyCampaignReplay {
-			if _, attemptErr := tx.GetProductionAttemptByRun(ctx, spec.ImplementationRunID); !errors.Is(attemptErr, store.ErrNotFound) {
-				return domain.Run{}, fmt.Errorf("legacy specification replay has campaign attempt state: %w",
-					domain.ErrImmutableTransition)
 			}
 		}
 		return existing, nil
@@ -936,11 +917,8 @@ func submitIssueSubjectSpecificationRun(
 		if err != nil {
 			return err
 		}
-		legacyCampaignReservation := existing.CampaignID == "" && existing.AttemptNumber == 0 &&
-			spec.CampaignID != "" && spec.AttemptNumber == 1
 		if existing.ProjectID != spec.ProjectID || existing.PolicyDigest != spec.ResolvedPolicy.Digest ||
-			(!legacyCampaignReservation &&
-				(existing.CampaignID != spec.CampaignID || existing.AttemptNumber != spec.AttemptNumber)) ||
+			existing.CampaignID != spec.CampaignID || existing.AttemptNumber != spec.AttemptNumber ||
 			storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
 			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) {
 			return fmt.Errorf("reserved specification run disagrees with submission: %w", domain.ErrParentKeyMismatch)

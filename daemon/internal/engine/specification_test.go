@@ -3652,10 +3652,14 @@ WHERE campaign_id = ? AND attempt_number = ?`, forgedDigest, string(attemptBody)
 	}
 }
 
-func TestSubmitSpecificationRunReplaysLegacyIntakeAfterCampaignUpgrade(t *testing.T) {
+// TestSubmitSpecificationRunRefusesCampaignOverCampaignlessRun pins that a
+// campaign submission no longer replays over a stored run that has no
+// campaign, the shape submissions wrote before campaigns: the stored lineage
+// disagrees, so the submission is refused instead of adopted.
+func TestSubmitSpecificationRunRefusesCampaignOverCampaignlessRun(t *testing.T) {
 	t.Parallel()
 	f := newSpecificationFixture(t, true, 2)
-	implementationRunID := domain.RunID("legacy-upgrade-implementation")
+	implementationRunID := domain.RunID("campaignless-implementation")
 	specificationRunID, err := SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
 		t.Fatal(err)
@@ -3664,7 +3668,7 @@ func TestSubmitSpecificationRunReplaysLegacyIntakeAfterCampaignUpgrade(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := SpecificationRunSpec{
+	campaignless := SpecificationRunSpec{
 		SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 		ProjectID: "project-1", SourceArtifactID: f.source.ID,
 		PolicyArtifactID: f.policyArt.ID, ResolvedPolicy: policy,
@@ -3673,28 +3677,24 @@ func TestSubmitSpecificationRunReplaysLegacyIntakeAfterCampaignUpgrade(t *testin
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 		},
 	}
-	if _, err := SubmitSpecificationRun(t.Context(), f.store, legacy); err != nil {
+	if _, err := SubmitSpecificationRun(t.Context(), f.store, campaignless); err != nil {
 		t.Fatal(err)
 	}
 	campaignID, err := ProductionCampaignIDForImplementation(implementationRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	upgraded := legacy
-	upgraded.CampaignID = campaignID
-	upgraded.AttemptNumber = 1
-	replayed, err := SubmitSpecificationRun(t.Context(), f.store, upgraded)
-	if err != nil {
-		t.Fatalf("post-upgrade exact replay: %v", err)
-	}
-	if replayed.Run.CampaignID != "" || replayed.Run.AttemptNumber != 0 {
-		t.Fatalf("legacy replay was silently adopted: %+v", replayed.Run)
+	withCampaign := campaignless
+	withCampaign.CampaignID = campaignID
+	withCampaign.AttemptNumber = 1
+	if _, err := SubmitSpecificationRun(t.Context(), f.store, withCampaign); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("campaign submission over a campaignless run = %v, want ErrImmutableTransition", err)
 	}
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		_, err := tx.GetProductionAttempt(t.Context(), campaignID, 1)
 		return err
 	}); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("legacy replay campaign attempt = %v, want absent", err)
+		t.Fatalf("refused submission campaign attempt = %v, want absent", err)
 	}
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		return tx.PutProductionAttempt(t.Context(), domain.ProductionAttempt{
