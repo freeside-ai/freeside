@@ -18,7 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// TestPinnedClaudeInputReadLive runs the production file_v6 agent line
+// TestPinnedClaudeInputReadLive runs the production agent line
 // against the pinned CLI with a synthetic image in Ward's read-only input
 // directory, outside the working directory, and an in-container mock API that
 // asks the CLI's Read tool for it. It shows the current launch command can
@@ -35,8 +35,8 @@ func TestPinnedClaudeInputReadLive(t *testing.T) {
 	}
 	prompt := []byte("Read the attached screenshot.")
 	sum := sha256.Sum256(prompt)
-	// The specifier's command is file_v5's and the other stages' runs the
-	// usage driver; both must read the input.
+	// The specifier's command runs no usage driver and the other stages' runs
+	// it; both must read the input.
 	for _, specification := range []bool{false, true} {
 		t.Run(map[bool]string{false: "implementation", true: "specification"}[specification], func(t *testing.T) {
 			hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}).HandoffSpec(

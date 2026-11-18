@@ -253,20 +253,14 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 	// Detach before checking so provider-retained references cannot change the
 	// policy decision in the gap before ward freezes its own request.
 	hs = detachProviderHandoffSpec(hs)
-	if in.delivery().usesPromptFile() {
-		if hs.Agent.PromptFile == nil ||
-			!bytes.Equal(hs.Agent.PromptFile.Body, []byte(in.Prompt)) ||
-			hs.Agent.PromptFile.Validate() != nil {
-			return ward.HandoffSpec{}, fmt.Errorf("%w: provider prompt file differs from durable input", ErrUnsupportedStart)
-		}
-	} else if hs.Agent.PromptFile != nil {
-		return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt cannot acquire file delivery", ErrUnsupportedStart)
+	if hs.Agent.PromptFile == nil ||
+		!bytes.Equal(hs.Agent.PromptFile.Body, []byte(in.Prompt)) ||
+		hs.Agent.PromptFile.Validate() != nil {
+		return ward.HandoffSpec{}, fmt.Errorf("%w: provider prompt file differs from durable input", ErrUnsupportedStart)
 	}
-	// Input files ride only on file delivery, where the prompt names them, and
-	// must be exactly the admitted attachments: a provider can neither add,
-	// drop, rename, nor reorder one.
-	if want := InputFilesFor(in.Spec); !slices.Equal(hs.Agent.Inputs, want) ||
-		(len(want) > 0 && !in.delivery().usesPromptFile()) {
+	// Input files, which the prompt names, must be exactly the admitted
+	// attachments: a provider can neither add, drop, rename, nor reorder one.
+	if want := InputFilesFor(in.Spec); !slices.Equal(hs.Agent.Inputs, want) {
 		return ward.HandoffSpec{}, fmt.Errorf("%w: provider input files differ from admitted attachments", ErrUnsupportedStart)
 	}
 	// The provider chooses vendor-specific containment details, but it cannot

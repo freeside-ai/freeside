@@ -64,9 +64,9 @@ type intent struct {
 	// recovery rebuilds the identical handoff spec.
 	Seed   string `json:"seed"`
 	Prompt string `json:"prompt"`
-	// Omission preserves old records and their argument transport, including
-	// deterministic refusals recorded under its smaller size limit.
-	PromptDelivery PromptDelivery `json:"prompt_delivery,omitempty"`
+	// PromptDelivery is the launch protocol the provider selected at start;
+	// recovery rebuilds the launch command from it.
+	PromptDelivery PromptDelivery `json:"prompt_delivery"`
 	// Inputs are the immutable bodies used to render Prompt. Their
 	// digests are re-checked against Spec on every reconstruction, so the
 	// exported state file cannot substitute a prompt or policy while the
@@ -178,7 +178,7 @@ func providerHandoffInputFrom(in intent) ProviderHandoffInput {
 		Spec:           in.Spec.Clone(),
 		Seed:           in.Seed,
 		Prompt:         in.Prompt,
-		PromptDelivery: in.delivery(),
+		PromptDelivery: in.PromptDelivery,
 		Instructions:   instructions,
 		Preparation:    slices.Clone(in.Preparation),
 	}
@@ -191,16 +191,9 @@ func (i intent) exportRecordedAt() time.Time {
 	return i.RecordedAt
 }
 
-func (i intent) delivery() PromptDelivery {
-	if i.PromptDelivery == "" {
-		return PromptArgument
-	}
-	return i.PromptDelivery
-}
-
 func (i intent) validate() error {
 	switch {
-	case !i.delivery().valid():
+	case !i.PromptDelivery.valid():
 		return fmt.Errorf("driver intent has invalid prompt delivery %q", i.PromptDelivery)
 	case i.InvocationID == "":
 		return fmt.Errorf("driver intent invocation_id: %w", domain.ErrEmptyID)
@@ -673,7 +666,7 @@ func (d *Driver) regateWithCurrentPolicy(
 		}
 	}
 	promptInputs := providerPromptInputsFrom(i.Inputs, i.Spec)
-	promptInputs.Delivery = i.delivery()
+	promptInputs.Delivery = i.PromptDelivery
 	wantPrompt, promptErr := d.provider.RenderPrompt(promptInputs)
 	if promptErr != nil {
 		if i.Phase != phaseCommitted || i.Result == nil ||

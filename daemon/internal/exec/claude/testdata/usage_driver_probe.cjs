@@ -1,4 +1,4 @@
-// Networkless probe of the file_v6 launch: the production usage driver in
+// Networkless probe of the writer launch: the production usage driver in
 // front of the pinned CLI, against a mock API on loopback. It proves the turn
 // makes exactly one inference request, carries the prompt as one exact user
 // text block, gets an answer to its one get_usage, and that the driver exits

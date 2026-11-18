@@ -185,8 +185,8 @@ func TestUsageDriverKeepsAnEarlyExit(t *testing.T) {
 }
 
 // TestUsageDriverClosesStdinWithoutAnInitAnswer proves a CLI that never
-// answers initialize gets EOF and no prompt, as a file_v5 CLI that read its
-// stdin would, instead of waiting for input until the stage deadline.
+// answers initialize gets EOF and no prompt, as a CLI that read its stdin
+// directly would, instead of waiting for input until the stage deadline.
 func TestUsageDriverClosesStdinWithoutAnInitAnswer(t *testing.T) {
 	t.Parallel()
 	run := runUsageDriver(t, "mute", "prompt")

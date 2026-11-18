@@ -138,7 +138,6 @@ func TestHandoffSpecCarriesAdmittedInputFiles(t *testing.T) {
 	}{
 		{"file-v8", stage.PromptFileV8, list, true},
 		{"file-v8-without", stage.PromptFileV8, nil, false},
-		{"argument", stage.PromptArgument, list, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

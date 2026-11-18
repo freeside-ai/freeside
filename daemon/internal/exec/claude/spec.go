@@ -106,14 +106,11 @@ const launchDelivery = stage.PromptFileV8
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
-// pluginSettings is the --settings value file_v5 through file_v7 pass. The
-// pinned CLI's safe mode excludes installed plugins, but its bundled
-// agents-md plugin can still load repository instructions.
-const pluginSettings = `{"enabledPlugins":{"agents-md@builtin":false}}`
-
-// attributionOffSettings is file_v8's --settings value: pluginSettings plus
-// empty commit and PR attribution. The CLI's default attribution tells the
-// writer to add a Co-Authored-By trailer, which commit plans refuse (#3028).
+// attributionOffSettings is file_v8's --settings value. It turns off the
+// bundled agents-md plugin, which the pinned CLI's safe mode leaves able to
+// load repository instructions, and empties commit and PR attribution: the
+// CLI's default attribution tells the writer to add a Co-Authored-By
+// trailer, which commit plans refuse (#3028).
 const attributionOffSettings = `{"attribution":{"commit":"","pr":""},"enabledPlugins":{"agents-md@builtin":false}}`
 
 // ValidatePromptInputs runs the production Claude renderer over one fully
@@ -143,56 +140,17 @@ func ValidatePromptInputs(inputs exec.StageInputs) error {
 	return err
 }
 
-// maxPromptBytes is the retained argument protocol's bound. Its worst-case
-// shell quoting must remain below Linux's single-argument limit. New launches
-// use Ward's independently bounded prompt file; recovery never changes modes.
-const (
-	linuxMaxArgumentBytes = 128 << 10
-	maxPromptBytes        = 31 << 10
-)
-
-// launcherFiles says where the root launcher keeps its own files, the
-// evidence descriptor and the CLI transcript, while the agent runs. Both end
-// in the §5.6 evidence subtree either way, which is where ward's observer and
-// the exporter read them once the writer is gone.
-type launcherFiles int
-
-const (
-	// launcherFilesInWorkspace is the argument and file_v1 command. It writes
-	// the descriptor and streams the transcript into the evidence subtree
-	// before the agent exits, beside a 0700 control directory. A tool the agent
-	// runs over the repository root meets all three (#1929). Recovery rebuilds
-	// this command for a run started under it, so it never changes.
-	launcherFilesInWorkspace launcherFiles = iota
-	// launcherFilesDeferred is the file_v2 command. Until the agent exits the
-	// launcher adds only two empty, world-readable directories to the
-	// workspace: the transcript streams to launchDir on the container's own
-	// filesystem and the descriptor is not written. Afterwards the launcher
-	// closes both directories to the agent and moves both files into the
-	// subtree.
-	launcherFilesDeferred
-	// launcherFilesDeferredStderr is the file_v3 and file_v4 command:
-	// launcherFilesDeferred except that the CLI's stderr goes to
-	// launchStderrPath, not into the transcript, so a warning line cannot
-	// break the transcript's JSONL (#2307). When the CLI exits nonzero the
-	// launcher appends that file to the transcript before placing it, so the
-	// retained failure transcript still carries the diagnostics. A successful
-	// run's stderr is discarded with the container.
-	launcherFilesDeferredStderr
-)
-
-// launchDir holds the in-flight transcript of a deferred run, and under
-// launcherFilesDeferredStderr the CLI's stderr. It sits outside every mount,
-// so nothing reaches it after the container is gone, and it is root-only, so
-// the agent reaches either file by no path: only through the output
-// descriptors it was started with, as it always could.
+// launchDir holds the in-flight transcript and the CLI's stderr. It sits
+// outside every mount, so nothing reaches it after the container is gone,
+// and it is root-only, so the agent reaches either file by no path: only
+// through the output descriptors it was started with, as it always could.
 const (
 	launchDir            = "/var/lib/freeside-launch"
 	launchTranscriptPath = launchDir + "/agent-transcript.jsonl"
 	launchStderrPath     = launchDir + "/agent-stderr.log"
 )
 
-// usageDriverScript is the file_v6 writer's in-container driver: it sends the
+// usageDriverScript is the writer's in-container driver: it sends the
 // prompt over the CLI's stream-json input and asks for the CLI's usage
 // answer after the turn. The launch command inlines it, and recovery
 // rebuilds that command byte for byte, so a change to it needs a new
@@ -214,11 +172,13 @@ const (
 	usageOAuthScopes = "user:inference user:profile"
 )
 
-// agentCommand is the pinned CLI's unattended argv. The workspace is the
-// working directory, and the transcript ends in the §5.6 evidence subtree,
-// which the repo walk skips. The root launcher, never the agent, declares
-// that transcript as sensitive evidence, so it crosses only through the
-// evidence channel after the writer is gone.
+// agentCommandWithInput is the pinned CLI's unattended argv with the
+// prompt's shell input chosen by the caller, no settings, no usage driver,
+// and no review guide source. The workspace is the working directory, and
+// the transcript ends in the §5.6 evidence subtree, which the repo walk
+// skips. The root launcher, never the agent, declares that transcript as
+// sensitive evidence, so it crosses only through the evidence channel after
+// the writer is gone.
 //
 // When prepare is non-empty the root phase hydrates the workspace with the
 // project image's preparation command before ownership is handed to the agent,
@@ -227,50 +187,49 @@ const (
 // chown sweep, so the hydrated node_modules is dropped to the agent user with
 // the rest of the tree; a nonzero prepare exit writes the pre-agent sentinel
 // and never launches the agent. The tree is removed again in the epilogue
-// before the outcome marker, so the git-blind export walk never sees it. An
-// empty prepare keeps the attended launch command byte-identical.
+// before the outcome marker, so the git-blind export walk never sees it.
 //
 // A non-empty model adds --model and a non-empty effort adds --effort, each
 // independently, so the CLI runs what the admitted agent names. Empty passes
-// no flag and leaves the command byte-identical: recovery rebuilds a running
-// launch's command, and every start admitted before these flags carries
-// neither value, so none of them drifts.
-func agentCommand(
-	prompt, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
-) []string {
-	return agentCommandWithInput(
-		shellQuote(prompt), sessionID, invocationID, prepare, model, effort, "", launcherFilesInWorkspace)
-}
-
-// agentCommandWithInput is agentCommand with the prompt's shell input and
-// launcher files chosen by the caller. A non-empty outputSchema adds
-// --json-schema, so the CLI returns the model's answer as the result record's
-// structured_output; empty passes no flag and leaves the command
-// byte-identical for every protocol before file_v4.
+// no flag. A non-empty outputSchema adds --json-schema, so the CLI returns
+// the model's answer as the result record's structured_output.
 func agentCommandWithInput(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
-	outputSchema string, files launcherFiles,
+	outputSchema string,
 ) []string {
 	return agentCommandWithSettings(
-		promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", files, false, false)
+		promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", false, false)
 }
 
-// Settings are part of the versioned command. Older protocols pass none so
-// their recovery digests remain unchanged.
+// agentCommandWithSettings is agentCommandWithInput with the launch's
+// settings, usage driver, and review guide source. Every argument is part of
+// the versioned command: recovery rebuilds a running launch's command from
+// its intent, and ward refuses a rebuilt spec whose digest differs.
 //
-// usageDriver is the file_v6 writer launch. The root prefix writes the
-// embedded driver where the agent can run but not change it, the launch adds
-// the scope override beside the token, and the CLI runs under the driver
-// with --input-format stream-json. The driver runs after the drop, so no
-// root process parses agent output; stdin, stdout, and stderr redirect as
-// before. False leaves every older command byte-identical.
+// Until the agent exits the launcher adds only two empty, world-readable
+// directories to the workspace: the transcript streams to launchDir on the
+// container's own filesystem and the descriptor is not written, so a tool
+// the agent runs over the repository root meets neither (#1929). Afterwards
+// the launcher closes both directories to the agent and moves both files
+// into the subtree. The CLI's stderr goes to launchStderrPath, not into the
+// transcript, so a warning line cannot break the transcript's JSONL (#2307).
+// When the CLI exits nonzero the launcher appends that file to the
+// transcript before placing it, so the retained failure transcript still
+// carries the diagnostics. A successful run's stderr is discarded with the
+// container.
 //
-// reviewGuide is file_v7: the descriptor also declares the reserved review
-// guide source when the agent left one. False leaves every older command
-// byte-identical.
+// usageDriver runs the writer under the usage driver. The root prefix
+// writes the embedded driver where the agent can run but not change it, the
+// launch adds the scope override beside the token, and the CLI runs under
+// the driver with --input-format stream-json. The driver runs after the
+// drop, so no root process parses agent output; stdin, stdout, and stderr
+// redirect as before.
+//
+// reviewGuide makes the descriptor also declare the reserved review guide
+// source when the agent left one.
 func agentCommandWithSettings(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
-	outputSchema, settings string, files launcherFiles, usageDriver, reviewGuide bool,
+	outputSchema, settings string, usageDriver, reviewGuide bool,
 ) []string {
 	selection := ""
 	if settings != "" {
@@ -304,12 +263,6 @@ func agentCommandWithSettings(
 		Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
 		SensitivityClass:     export.EvidenceSensitivitySensitive,
 		ProducerInvocationID: string(invocationID),
-	}
-	descriptor, err := json.Marshal(export.EvidenceSourceManifest{
-		Version: export.EvidenceSourceVersion, Sources: []export.EvidenceSource{transcriptSource},
-	})
-	if err != nil {
-		panic("marshal fixed Claude transcript descriptor: " + err.Error())
 	}
 	summarySource := export.EvidenceSource{
 		Label: export.SummaryEvidenceLabel, MediaType: "text/markdown",
@@ -371,74 +324,50 @@ func agentCommandWithSettings(
 	// source, so the evidence channel never carries a source the workspace
 	// lacks. Each fragment appears once to keep the sh argument under the
 	// Linux single-argument limit.
-	collectSources := func(afterFirst, onPresent string) string {
-		script := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; " + afterFirst
-		for _, present := range reserved {
-			script += "if " + fileExists(present.source.Path) + "; then " +
-				"sources=\"$sources\"," + shellQuote(sourceFragment(present.name, present.source)) +
-				"; " + onPresent + "fi; "
-		}
-		return script
-	}
-	writeDescriptor := func(target string) string {
-		return "printf '%s\\n' " + shellQuote(descriptorPrefix) + "\"$sources\"']}' > " + shellQuote(target)
+	sources := "sources=" + shellQuote(sourceFragment("transcript", transcriptSource)) + "; "
+	for _, present := range reserved {
+		sources += "if " + fileExists(present.source.Path) + "; then " +
+			"sources=\"$sources\"," + shellQuote(sourceFragment(present.name, present.source)) +
+			"; fi; "
 	}
 	evidenceDir, controlDir := path.Dir(transcriptPath), path.Dir(writerOutcomePath)
-	// The in-workspace command fixes the transcript-only descriptor before
-	// the drop and rewrites it afterwards only when the agent left a source.
-	excludeReserved, controlMode, transcriptTarget := "", "0700", transcriptPath
-	beforeAgent := "printf '%s\\n' " + shellQuote(string(descriptor)) + " > " + shellQuote(transcriptDescriptorPath) +
-		"; chown 0:0 " + shellQuote(transcriptDescriptorPath) + "; chmod 0644 " + shellQuote(transcriptDescriptorPath) + "; "
-	afterAgent := collectSources("declare=0; ", "declare=1; ") +
-		"if [ \"$declare\" = 1 ]; then " + writeDescriptor(transcriptDescriptorPath) + "; fi; "
-	if files == launcherFilesDeferred || files == launcherFilesDeferredStderr {
-		excludeReserved, controlMode, transcriptTarget = excludeReservedPaths(), "0755", launchTranscriptPath
-		beforeAgent = "rm -rf " + shellQuote(launchDir) + "; mkdir " + shellQuote(launchDir) +
-			"; chown 0:0 " + shellQuote(launchDir) + "; chmod 0700 " + shellQuote(launchDir) + "; "
-		// Everything from here runs while a process the agent left behind may
-		// still be alive, so the launcher first takes that process's write
-		// access away: the evidence directory stops being world-writable and
-		// the control directory closes. Each file is then completed inside
-		// the control directory and renamed onto its final path. Both paths
-		// are on the workspace volume, so mv is one rename: it replaces
-		// whatever entry the agent left there without following it, and -T
-		// makes a directory there an error and not a destination. rm first
-		// clears a directory the agent left. set -e stops before the marker
-		// when any step fails.
-		place := func(staged, final string) string {
-			return "chmod 0644 " + shellQuote(staged) + "; rm -rf -- " + shellQuote(final) +
-				"; mv -T " + shellQuote(staged) + " " + shellQuote(final) + "; "
-		}
-		stagedDescriptor := controlDir + "/" + path.Base(transcriptDescriptorPath)
-		stagedTranscript := controlDir + "/" + path.Base(transcriptPath)
-		appendStderr := ""
-		if files == launcherFilesDeferredStderr {
-			// A failed transcript is retained as plain text, never validated as
-			// JSONL, so appending there keeps the diagnostics an interleaved
-			// stream used to carry.
-			appendStderr = "if [ \"$status\" -ne 0 ] && [ -s " + shellQuote(launchStderrPath) + " ]; then cat " +
-				shellQuote(launchStderrPath) + " >> " + shellQuote(launchTranscriptPath) + "; fi; "
-		}
-		afterAgent = "chmod 0755 " + shellQuote(evidenceDir) + "; chmod 0700 " + shellQuote(controlDir) + "; " +
-			collectSources("", "") + writeDescriptor(stagedDescriptor) + "; " +
-			place(stagedDescriptor, transcriptDescriptorPath) +
-			// No transcript exists when the agent never launched.
-			"if [ -f " + shellQuote(launchTranscriptPath) + " ]; then " + appendStderr +
-			"cp " + shellQuote(launchTranscriptPath) +
-			" " + shellQuote(stagedTranscript) + "; " + place(stagedTranscript, transcriptPath) + "fi; "
+	beforeAgent := "rm -rf " + shellQuote(launchDir) + "; mkdir " + shellQuote(launchDir) +
+		"; chown 0:0 " + shellQuote(launchDir) + "; chmod 0700 " + shellQuote(launchDir) + "; "
+	// Everything from here runs while a process the agent left behind may
+	// still be alive, so the launcher first takes that process's write
+	// access away: the evidence directory stops being world-writable and
+	// the control directory closes. Each file is then completed inside
+	// the control directory and renamed onto its final path. Both paths
+	// are on the workspace volume, so mv is one rename: it replaces
+	// whatever entry the agent left there without following it, and -T
+	// makes a directory there an error and not a destination. rm first
+	// clears a directory the agent left. set -e stops before the marker
+	// when any step fails.
+	place := func(staged, final string) string {
+		return "chmod 0644 " + shellQuote(staged) + "; rm -rf -- " + shellQuote(final) +
+			"; mv -T " + shellQuote(staged) + " " + shellQuote(final) + "; "
 	}
-	// The in-workspace and file_v2 commands send stderr into the transcript;
-	// recovery rebuilds them, so their redirection never changes. Under file_v3
-	// and file_v4 the root shell opens the stderr file before the drop, so the
-	// agent reaches it only through its own fd 2.
-	redirect := "> " + shellQuote(transcriptTarget) + " 2>&1"
-	if files == launcherFilesDeferredStderr {
-		redirect = "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
-	}
+	stagedDescriptor := controlDir + "/" + path.Base(transcriptDescriptorPath)
+	stagedTranscript := controlDir + "/" + path.Base(transcriptPath)
+	// A failed transcript is retained as plain text, never validated as
+	// JSONL, so appending there keeps the diagnostics an interleaved
+	// stream used to carry.
+	appendStderr := "if [ \"$status\" -ne 0 ] && [ -s " + shellQuote(launchStderrPath) + " ]; then cat " +
+		shellQuote(launchStderrPath) + " >> " + shellQuote(launchTranscriptPath) + "; fi; "
+	afterAgent := "chmod 0755 " + shellQuote(evidenceDir) + "; chmod 0700 " + shellQuote(controlDir) + "; " +
+		sources + "printf '%s\\n' " + shellQuote(descriptorPrefix) + "\"$sources\"']}' > " +
+		shellQuote(stagedDescriptor) + "; " +
+		place(stagedDescriptor, transcriptDescriptorPath) +
+		// No transcript exists when the agent never launched.
+		"if [ -f " + shellQuote(launchTranscriptPath) + " ]; then " + appendStderr +
+		"cp " + shellQuote(launchTranscriptPath) +
+		" " + shellQuote(stagedTranscript) + "; " + place(stagedTranscript, transcriptPath) + "fi; "
+	// The root shell opens the stderr file before the drop, so the agent
+	// reaches it only through its own fd 2.
+	redirect := "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
 	// hydrate runs before the chown sweep; guardPrefix turns the token check
 	// into a two-branch guard that reports the prepare failure and skips the
-	// agent. Both are empty/"if " with no preparation, so the command stays
-	// byte-identical for the attended path.
+	// agent. Both are empty/"if " with no preparation.
 	hydrate, guardPrefix := "", "if "
 	if len(prepare) > 0 {
 		hydrate = "prepare_status=0; set +e; ( cd " + shellQuote(workspaceDir) +
@@ -472,12 +401,12 @@ func agentCommandWithSettings(
 			"%s"+
 			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
-		shellQuote(evidenceDir), excludeReserved, hydrate,
+		shellQuote(evidenceDir), excludeReservedPaths(), hydrate,
 		shellQuote(workspaceDir),
 		agentUID, agentGID,
 		shellQuote(workspaceDir), shellQuote(workspaceDir),
 		shellQuote(evidenceDir), shellQuote(evidenceDir), shellQuote(evidenceDir),
-		shellQuote(controlDir), shellQuote(controlDir), controlMode, shellQuote(controlDir),
+		shellQuote(controlDir), shellQuote(controlDir), "0755", shellQuote(controlDir),
 		beforeAgent, installDriver,
 		agentUID, agentGID,
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
@@ -654,10 +583,7 @@ func renderProtectedPaths(patterns []string) string {
 
 func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	switch delivery {
-	case "", stage.PromptArgument:
-		return maxPromptBytes, nil
-	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5,
-		stage.PromptFileV6, stage.PromptFileV7, stage.PromptFileV8:
+	case stage.PromptFileV8:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -753,7 +679,6 @@ func (p claudeProvider) HandoffSpec(
 				ProducerInvocationID: string(id),
 			},
 			Image:             string(spec.ImageRef),
-			Command:           agentCommand(in.Prompt, sessionIDFor(id), id, in.Preparation, spec.RouteModelID, spec.NativeEffort),
 			Env:               agentEnv(),
 			EgressProfile:     spec.EgressProfile,
 			OutcomeMarkerPath: writerOutcomePath,
@@ -777,62 +702,33 @@ func (p claudeProvider) HandoffSpec(
 			return ward.HandoffSpec{}, fmt.Errorf("instruction base for %s: %w", boundary, err)
 		}
 	}
-	withPromptFile := func(files launcherFiles) (ward.HandoffSpec, error) {
+	switch in.PromptDelivery {
+	case stage.PromptFileV8:
 		hs.Agent.PromptFile = ward.NewPromptFile([]byte(in.Prompt))
 		if err := hs.Agent.PromptFile.Validate(); err != nil {
 			return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
 		}
 		// The prompt lists these files; Ward stages and proves their bytes.
 		hs.Agent.Inputs = stage.InputFilesFor(in.Spec)
-		// file_v4 asks for the specifier's schema only on a specification
-		// run's stage, so a model's prose preamble cannot fail the stage
-		// (#2314). Both fields are in the durable intent, so recovery rebuilds
-		// the same command; on any other stage the command is file_v3's.
+		// A specification run's stage asks for the specifier's schema, so a
+		// model's prose preamble cannot fail the stage (#2314), and runs without
+		// the usage driver, so its command, transcript, and structured_output stay
+		// the plain CLI's. Both facts are in the durable intent, so recovery
+		// rebuilds the same command. The review guide source is declared on every
+		// stage; only the implementer and remediator prompts ask for the file.
 		specification := spec.StageID == domain.SpecificationStageID(spec.RunID)
 		outputSchema := ""
-		if (in.PromptDelivery == stage.PromptFileV4 || in.PromptDelivery == stage.PromptFileV5 ||
-			in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7 ||
-			in.PromptDelivery == stage.PromptFileV8) && specification {
+		if specification {
 			outputSchema = specify.OutputJSONSchema
 		}
-		settings := ""
-		switch in.PromptDelivery {
-		case stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7:
-			settings = pluginSettings
-		case stage.PromptFileV8:
-			settings = attributionOffSettings
-		case "", stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3,
-			stage.PromptFileV4:
-		}
-		// file_v6 runs the usage driver only off a specification stage, so the
-		// specifier's command, transcript, and structured_output stay file_v5's.
-		usageDriver := (in.PromptDelivery == stage.PromptFileV6 || in.PromptDelivery == stage.PromptFileV7 ||
-			in.PromptDelivery == stage.PromptFileV8) && !specification
-		// file_v7 declares the review guide source on every stage; only the
-		// implementer and remediator prompts ask for the file.
-		reviewGuide := in.PromptDelivery == stage.PromptFileV7 || in.PromptDelivery == stage.PromptFileV8
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
 		hs.Agent.Command = agentCommandWithSettings(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
-			spec.RouteModelID, spec.NativeEffort, outputSchema, settings, files, usageDriver, reviewGuide)
+			spec.RouteModelID, spec.NativeEffort, outputSchema, attributionOffSettings, !specification, true)
 		return hs, nil
 	}
-	switch in.PromptDelivery {
-	case "", stage.PromptArgument:
-		if len(in.Prompt) > maxPromptBytes {
-			return ward.HandoffSpec{}, fmt.Errorf("%w: legacy prompt exceeds argument limit", ErrUnsupportedStart)
-		}
-		return hs, nil
-	case stage.PromptFileV1:
-		return withPromptFile(launcherFilesInWorkspace)
-	case stage.PromptFileV2:
-		return withPromptFile(launcherFilesDeferred)
-	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6, stage.PromptFileV7,
-		stage.PromptFileV8:
-		return withPromptFile(launcherFilesDeferredStderr)
-	}
-	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
+	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, in.PromptDelivery)
 }
 
 // transcriptPath is where the CLI's stream-json transcript ends: inside the
