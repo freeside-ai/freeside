@@ -1124,6 +1124,19 @@ func preSnapshotCodexReviewIntentForTest(runID, digest, owner string) *CodexRevi
 	}
 }
 
+// intentResource returns the intent's resource named name, so a test can set
+// the creation fingerprint or owner it recorded.
+func intentResource(t *testing.T, intent *CodexReviewLaunchIntent, name string) *CodexReviewIntentResource {
+	t.Helper()
+	for i := range intent.Resources {
+		if intent.Resources[i].Name == name {
+			return &intent.Resources[i]
+		}
+	}
+	t.Fatalf("intent has no resource %q", name)
+	return nil
+}
+
 func currentCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLaunchIntent {
 	names := codexReviewNames(runID)
 	return &CodexReviewLaunchIntent{
@@ -1314,19 +1327,10 @@ func TestRecoverCodexReviewReapsOnlyDurablyOwnedPreStartObjects(t *testing.T) {
 	shadow := codexReviewShadowVolumeName(launch.RunID)
 	network := codexReviewNetworkName(launch.RunID)
 	review := codexReviewContainerName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: network, ReviewContainer: review,
-		State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
-			{Name: network, OwnershipToken: owner.Value, Fingerprint: "network"},
-			{Name: review, OwnershipToken: owner.Value, Fingerprint: "review"},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
+	intentResource(t, journal.intent, network).Fingerprint = "network"
+	intentResource(t, journal.intent, review).Fingerprint = "review"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	rt.nets[network] = &fakeNetwork{labels: []Label{owner}, created: "network"}
 	rt.ctrs[review] = &fakeCtr{spec: ContainerSpec{Name: review, Labels: []Label{owner}}, created: "review"}
@@ -1359,19 +1363,8 @@ func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	failed := false
 	rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
@@ -1395,6 +1388,10 @@ func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
 
 func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	t.Parallel()
+	leaseVolumes := func(launch CodexReviewLaunchSpec) []string {
+		return codexReviewLeaseVolumes(launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID),
+			codexReviewSnapshotVolumeName(launch.RunID), "")
+	}
 	setup := func(t *testing.T) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, Label) {
 		t.Helper()
 		backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
@@ -1404,7 +1401,9 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			t.Fatal(err)
 		}
 		shadow := codexReviewShadowVolumeName(launch.RunID)
-		journal.intent = &CodexReviewLaunchIntent{RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value, ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID), ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPrepared, Resources: []CodexReviewIntentResource{{Name: codexReviewWorkspaceObserverName(launch.RunID)}, {Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewShadowObserverName(launch.RunID)}, {Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"}, {Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value}}}
+		journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+		journal.intent.State = CodexReviewIntentPrepared
+		intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 		rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 		return backend, rt, cfg, launch, journal, owner
 	}
@@ -1412,7 +1411,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	t.Run("same owner adopts and releases", func(t *testing.T) {
 		backend, rt, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
-		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value, []string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value, leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
@@ -1453,7 +1452,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		backend, _, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		stage := plantStage(t, backend, launch.RunID)
@@ -1489,7 +1488,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			}
 			leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 			if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-				[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+				leaseVolumes(launch)); err != nil {
 				t.Fatal(err)
 			}
 			stage := plantStage(t, backend, launch.RunID)
@@ -1513,7 +1512,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		backend, rt, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		journal.failDeleteWorkspace = errors.New("journal temporarily unavailable")
@@ -1542,7 +1541,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	t.Run("foreign owner blocks cleanup", func(t *testing.T) {
 		backend, rt, cfg, launch, journal, _ := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
-		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32), []string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32), leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -1565,7 +1564,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		stage := plantStage(t, backend, launch.RunID)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32),
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -1586,7 +1585,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		backend, _, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		// A crash-residue stage whose directory is made unwritable, so the early
@@ -1988,21 +1987,8 @@ func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
 	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, OwnershipToken: owner.Value,
-		ShadowVolume:    codexReviewShadowVolumeName(launch.RunID),
-		Network:         codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID),
-		State:           CodexReviewIntentClosed,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, "", owner.Value)
+	journal.intent.State = CodexReviewIntentClosed
 	journal.outcomes = map[string]CodexReviewSourceOutcome{launch.RunID: {
 		InvocationID: domain.InvocationID(launch.RunID),
 		FailureClass: domain.ReviewFailureTransient,
@@ -2110,19 +2096,8 @@ func TestCodexReviewRecoveryDoesNotLetInvalidIntentStarveLaterCleanup(t *testing
 	backend, _, cfg, _, journal := testCodexReviewLifecycle(t)
 	validID := "review-2"
 	owner := testOwnershipLabel()
-	valid := &CodexReviewLaunchIntent{
-		RunID: validID, OwnershipToken: owner.Value,
-		ShadowVolume: codexReviewShadowVolumeName(validID), Network: codexReviewNetworkName(validID),
-		ReviewContainer: codexReviewContainerName(validID), State: CodexReviewIntentClosed,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(validID)},
-			{Name: codexReviewShadowInitializerName(validID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(validID)},
-			{Name: codexReviewShadowVolumeName(validID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(validID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(validID), OwnershipToken: owner.Value},
-		},
-	}
+	valid := currentCodexReviewIntentForTest(validID, "", owner.Value)
+	valid.State = CodexReviewIntentClosed
 	journal.intent = nil
 	journal.extraIntents = map[string]*CodexReviewLaunchIntent{
 		"review-1": valid,
@@ -2177,19 +2152,8 @@ func TestRecoverCodexReviewRefusesForeignSameNameReviewContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	review := codexReviewContainerName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: codexReviewShadowVolumeName(launch.RunID), Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: review, State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: review, OwnershipToken: owner.Value, Fingerprint: "original"},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, review).Fingerprint = "original"
 	rt.ctrs[review] = &fakeCtr{spec: ContainerSpec{Name: review, Labels: []Label{{
 		Key: ownershipLabelKey, Value: strings.Repeat("1", 32),
 	}}}, created: "replacement"}
@@ -2210,18 +2174,9 @@ func TestRecoverCodexReviewRejectsForgedFixedResourceOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: strings.Repeat("1", 32), Fingerprint: "shadow"},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	*intentResource(t, journal.intent, shadow) = CodexReviewIntentResource{
+		Name: shadow, OwnershipToken: strings.Repeat("1", 32), Fingerprint: "shadow",
 	}
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -2241,19 +2196,8 @@ func TestRecoverCodexReviewKeepsIntentOpenWhenShadowDeletionLies(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	rt.onDeleteVolume = func(name string) (bool, error) { return name == shadow, nil }
 	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -2270,7 +2214,8 @@ func TestRecoverCodexReviewRetriesLeaseReleaseBeforeClosingIntent(t *testing.T) 
 	owner := testOwnershipLabel()
 	digest, _ := codexReviewIntentDigest(cfg, launch)
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value, ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID), ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing, Resources: []CodexReviewIntentResource{{Name: codexReviewWorkspaceObserverName(launch.RunID)}, {Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewShadowObserverName(launch.RunID)}, {Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"}, {Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value}}}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 	leaser.releaseErr = errors.New("release failed")

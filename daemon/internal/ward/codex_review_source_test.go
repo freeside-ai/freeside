@@ -378,20 +378,8 @@ func TestCodexReviewRecoveryRemovesInstructionSnapshot(t *testing.T) {
 	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, OwnershipToken: owner.Value,
-		ShadowVolume: codexReviewShadowVolumeName(launch.RunID),
-		Network:      codexReviewNetworkName(launch.RunID), ReviewContainer: codexReviewContainerName(launch.RunID),
-		State: CodexReviewIntentClosed,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, "", owner.Value)
+	journal.intent.State = CodexReviewIntentClosed
 	journal.outcomes = map[string]CodexReviewSourceOutcome{launch.RunID: {
 		InvocationID: domain.InvocationID(launch.RunID), FailureClass: domain.ReviewFailureTransient,
 		Failure: "cleanup completed before the ready mark",
@@ -2389,7 +2377,7 @@ func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
 	}
 }
 
-func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testing.T) {
+func TestCodexReviewRecoveryAbortsRunningInvocationWithLostProxy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
@@ -2418,12 +2406,6 @@ func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testin
 	_ = source.launches[id].Close()
 	delete(source.launches, id)
 	source.mu.Unlock()
-	journal.binding.InstructionCompositionVersion = ""
-	journal.binding.HostInstructionDigest = nil
-	journal.binding.RepositoryInstructionSources = nil
-	if err := journal.binding.validateForTeardown(codexReviewProvider{}); err != nil {
-		t.Fatalf("legacy binding fixture: %v", err)
-	}
 	volumeLeaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
 	if err != nil {
 		t.Fatal(err)
@@ -2754,31 +2736,17 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 	}
 }
 
-func TestCodexReviewRecoveryDoesNotTrustClosedRejectedLegacyOutcome(t *testing.T) {
+func TestCodexReviewRecoveryDoesNotTrustClosedRejectedOutcome(t *testing.T) {
 	t.Parallel()
 	for _, ready := range []bool{false, true} {
 		t.Run(fmt.Sprintf("ready=%t", ready), func(t *testing.T) {
 			fx := newHandoffFixture(t)
 			backend := fx.codexReviewLifecycle(t)
-			id := "review-legacy-closed"
-			owner := strings.Repeat("b", 32)
-			shadow := codexReviewShadowVolumeName(id)
-			network := codexReviewNetworkName(id)
-			review := codexReviewContainerName(id)
+			id := "review-closed"
+			intent := currentCodexReviewIntentForTest(id, strings.Repeat("a", 64), strings.Repeat("b", 32))
+			intent.State = CodexReviewIntentClosed
 			journal := &fakeCodexReviewJournal{
-				intent: &CodexReviewLaunchIntent{
-					RunID: id, SpecDigest: strings.Repeat("a", 64),
-					OwnershipToken: owner, ShadowVolume: shadow,
-					Network: network, ReviewContainer: review, State: CodexReviewIntentClosed,
-					Resources: []CodexReviewIntentResource{
-						{Name: codexReviewWorkspaceObserverName(id)},
-						{Name: codexReviewShadowInitializerName(id), OwnershipToken: owner},
-						{Name: codexReviewShadowObserverName(id)},
-						{Name: shadow, OwnershipToken: owner},
-						{Name: network, OwnershipToken: owner},
-						{Name: review, OwnershipToken: owner},
-					},
-				},
+				intent:         intent,
 				ready:          map[string]bool{id: ready},
 				failGetOutcome: ErrCodexReviewOutcomeRejected,
 			}
@@ -2791,7 +2759,7 @@ func TestCodexReviewRecoveryDoesNotTrustClosedRejectedLegacyOutcome(t *testing.T
 				t.Fatal(err)
 			}
 			if err := recovery.Reconcile(t.Context()); err != nil {
-				t.Fatalf("closed legacy outcome blocked topology recovery: %v", err)
+				t.Fatalf("closed rejected outcome blocked topology recovery: %v", err)
 			}
 		})
 	}
