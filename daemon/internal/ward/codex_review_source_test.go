@@ -2001,12 +2001,11 @@ func TestCodexReviewSourceSupersedesAnUpdatedInstructionBinding(t *testing.T) {
 	}
 }
 
-// TestCodexReviewSourceSupersedesAPreInputsRequest: a request persisted before
-// reviewers received attachments is superseded once the task has them, so the
-// engine reruns it with the files instead of failing its re-gate forever. A
-// request that already carried inputs is never superseded by a different list;
-// the authority re-gate refuses that one.
-func TestCodexReviewSourceSupersedesAPreInputsRequest(t *testing.T) {
+// TestCodexReviewSourceNeverSupersedesAnInputsChange: a request's inputs are
+// authority, so a persisted request whose list differs from the task's,
+// including one persisted before reviewers received attachments, is never
+// superseded; the authority re-gate refuses it as a contradiction.
+func TestCodexReviewSourceNeverSupersedesAnInputsChange(t *testing.T) {
 	t.Parallel()
 	shot := domain.StageInputAttachment{
 		Name: "task/shot.png", Digest: domain.Digest("sha256:" + strings.Repeat("1", 64)),
@@ -2017,24 +2016,22 @@ func TestCodexReviewSourceSupersedesAPreInputsRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		persisted, current []domain.StageInputAttachment
-		superseded         bool
 	}{
-		{name: "pre_inputs", current: []domain.StageInputAttachment{shot}, superseded: true},
+		{name: "pre_inputs", current: []domain.StageInputAttachment{shot}},
 		{
 			name: "changed_inputs", persisted: []domain.StageInputAttachment{shot},
 			current: []domain.StageInputAttachment{other},
 		},
-		{name: "no_inputs"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			fx := newHandoffFixture(t)
 			backend := fx.codexReviewLifecycle(t)
 			cfg, requestSpec := testCodexReview(t)
-			id := domain.InvocationID("review-pre-inputs")
+			id := domain.InvocationID("review-inputs-change")
 			request := exec.ReviewRequest{
-				Admission: testReviewAdmission("run-pre-inputs"),
-				RunID:     "run-pre-inputs", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+				Admission: testReviewAdmission("run-inputs-change"),
+				RunID:     "run-inputs-change", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 				BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 				Workspace: "/candidate", Verification: testReviewVerificationEvidence(),
 				Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
@@ -2051,21 +2048,8 @@ func TestCodexReviewSourceSupersedesAPreInputsRequest(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = source.VerifyReviewRequestSupersession(ctx, id, expected)
-			_, ready, _ := journal.GetCodexReviewOutcome(ctx, string(id))
-			if !tc.superseded {
-				if err != nil || ready {
-					t.Fatalf("supersession = %v, outcome ready=%v; want neither", err, ready)
-				}
-				return
-			}
-			var failure *exec.ReviewSourceFailure
-			if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient ||
-				!errors.Is(err, exec.ErrSupersededReviewRequest) {
-				t.Fatalf("pre-inputs supersession = %v", err)
-			}
-			outcome, ready, outcomeErr := journal.GetCodexReviewOutcome(ctx, string(id))
-			if outcomeErr != nil || !ready || !outcome.AbortRequired {
-				t.Fatalf("pre-inputs rejection outcome = %#v, ready=%v, %v", outcome, ready, outcomeErr)
+			if _, ready, _ := journal.GetCodexReviewOutcome(ctx, string(id)); err != nil || ready {
+				t.Fatalf("supersession = %v, outcome ready=%v; want neither", err, ready)
 			}
 		})
 	}

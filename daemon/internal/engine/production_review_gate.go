@@ -665,15 +665,10 @@ func (w *productionPublicationWorkflow) passCurrentReviewRecord(
 	latestRecord *domain.ReviewRecord,
 	latestAdmission domain.ReviewAdmission,
 ) (productionReviewGateState, error) {
-	req, requestAuthority, err := w.productionReviewRequest(
+	_, requestAuthority, err := w.productionReviewRequest(
 		ctx, task, binding, checkpoint, latestRecord.InvocationID,
 		latestRecord.Round, reviewInstructions, latestAdmission,
 	)
-	if err != nil {
-		return productionReviewPending, err
-	}
-	requestAuthority, err = w.persistedReviewAuthority(
-		ctx, latestRecord.InvocationID, req, requestAuthority)
 	if err != nil {
 		return productionReviewPending, err
 	}
@@ -2452,33 +2447,4 @@ func (w *productionPublicationWorkflow) observeReviewInvocation(ctx context.Cont
 		return err
 	}
 	return nil
-}
-
-// persistedReviewAuthority is the authority a finished review's persisted
-// request is re-gated against. A request persisted before reviewers received
-// the task's attachments carries none, and the source recognizes it as
-// superseded by req; its review stands under the authority it was persisted
-// with, req without inputs, as a findings record's adjudication already lets
-// it. Rerunning it instead would leave a round behind a remediation's
-// review, which reconcileRemediationReview refuses, or push a clean final
-// round past the hard limit. An unknown invocation, or one the source does
-// not supersede, keeps req's authority, and the re-gate decides.
-func (w *productionPublicationWorkflow) persistedReviewAuthority(
-	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest, authority domain.Digest,
-) (domain.Digest, error) {
-	verifier, ok := w.reviewSource.(exec.ReviewRequestSupersessionVerifier)
-	if !ok || len(req.Inputs) == 0 {
-		return authority, nil
-	}
-	err := verifier.VerifyReviewRequestSupersession(ctx, id, req)
-	switch {
-	case err == nil, errors.Is(err, exec.ErrUnknownInvocation):
-		return authority, nil
-	case errors.Is(err, exec.ErrSupersededReviewRequest):
-		persisted := req
-		persisted.Inputs = nil
-		return persisted.AuthorityDigest()
-	default:
-		return "", err
-	}
 }

@@ -93,10 +93,9 @@ type ReviewRequestAuthorityVerifier interface {
 }
 
 // ReviewRequestSupersessionVerifier recognizes a persisted request whose only
-// authority change is an updated trusted instruction binding, or the task's
-// attachments that a request persisted before reviewers received them never
-// carried. It must tear down that request before returning
-// ErrSupersededReviewRequest; a finished request's outcome and evidence stay.
+// authority change is an updated trusted instruction binding. It must tear
+// down that request before returning ErrSupersededReviewRequest; a finished
+// request's outcome and evidence stay.
 type ReviewRequestSupersessionVerifier interface {
 	VerifyReviewRequestSupersession(ctx context.Context, id domain.InvocationID, expected ReviewRequest) error
 }

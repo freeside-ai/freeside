@@ -1527,21 +1527,12 @@ func (s *CodexReviewSource) VerifyReviewRequestSupersession(
 	if err := request.Validate(); err != nil {
 		return s.rejectPersistedRequest(ctx, id, err)
 	}
-	// A request persisted before reviewers received attachments carries no
-	// Inputs. When the task has attachments, that request differs from the
-	// current one only by what it never delivered, so it is superseded: the
-	// engine reruns one still in flight and lets a finished one stand under
-	// the authority it was persisted with.
-	preInputs := len(request.Inputs) == 0 && len(expected.Inputs) > 0
 	withCurrent := request
 	withCurrent.Instructions = expected.Instructions
-	if preInputs {
-		withCurrent.Inputs = expected.Inputs
-	}
 	currentAuthority, err := withCurrent.AuthorityDigest()
 	expectedAuthority, expectedErr := expected.AuthorityDigest()
 	if err != nil || expectedErr != nil || currentAuthority != expectedAuthority ||
-		(!preInputs && sameReviewInstructionBinding(request.Instructions, expected.Instructions)) {
+		sameReviewInstructionBinding(request.Instructions, expected.Instructions) {
 		return nil
 	}
 	if reconcileErr := s.reconcileRejectedRequest(ctx, id); reconcileErr != nil {
