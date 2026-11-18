@@ -1373,6 +1373,7 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 	var recoveryErrs []error
 	intentIDs := make(map[string]struct{}, len(ids))
 	knownIntentIDs := make(map[string]struct{}, len(ids))
+	closedIntents := make(map[string]CodexReviewLaunchIntent, len(ids))
 	allIntentsAuthenticated := true
 	for _, id := range ids {
 		intent, err := r.cfg.Journal.GetCodexReviewIntent(ctx, id)
@@ -1392,6 +1393,8 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 		knownIntentIDs[id] = struct{}{}
 		if intent.State != CodexReviewIntentClosed {
 			intentIDs[id] = struct{}{}
+		} else {
+			closedIntents[id] = intent
 		}
 		if err := r.reconcileIntent(ctx, id, intent); err != nil {
 			recoveryErrs = append(recoveryErrs, fmt.Errorf("recover Codex review %q: %w", id, err))
@@ -1429,6 +1432,7 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 			CheckControlPlaneIsolation, "list recoverable Codex review outcomes: %v", err))
 		return errors.Join(recoveryErrs...)
 	}
+	r.releaseFencedReviews(ctx, closedIntents, outcomeIDs)
 	for _, id := range outcomeIDs {
 		if _, exists := knownIntentIDs[id]; exists {
 			continue
@@ -1552,6 +1556,48 @@ func (r *CodexReviewRecovery) reconcileIntent(
 		return errors.Join(cleanupErr, outcomeErr)
 	}
 	return cleanupErr
+}
+
+// releaseFencedReviews releases, in one call, the names of every closed review
+// intent whose outcome is stored. cleanupCodexReview makes this release after
+// its close; this covers a crash before it or a release that failed. A stored
+// outcome, valid or rejected, fences any relaunch of its run, and recovery and
+// cleanup bind names again before they act, so no later path creates under
+// these names. A closed intent with no outcome keeps its names.
+func (r *CodexReviewRecovery) releaseFencedReviews(
+	ctx context.Context, closed map[string]CodexReviewLaunchIntent, outcomeIDs []string,
+) {
+	var sets []RuntimeResourceNames
+	var runIDs []string
+	for _, id := range outcomeIDs {
+		intent, ok := closed[id]
+		if !ok {
+			continue
+		}
+		sets = append(sets, closedReviewRuntimeResourceNames(id, intent)...)
+		runIDs = append(runIDs, id)
+	}
+	if len(runIDs) == 0 {
+		return
+	}
+	lifecycle := r.lifecycle
+	releaseAfterClose(ctx, lifecycle.rt, lifecycle.cfg.ReleaseRuntime, lifecycle.cfg.TeardownTimeout,
+		lifecycle.cfg.Logger, strings.Join(runIDs, ","), concatRuntimeResourceNames(sets...))
+}
+
+// closedReviewRuntimeResourceNames is every name a closed review intent's
+// run may have held. The provider isn't re-derived: every provider's names
+// for id are included, and the absence check keeps any name an object still
+// holds.
+func closedReviewRuntimeResourceNames(id string, intent CodexReviewLaunchIntent) []RuntimeResourceNames {
+	var sets []RuntimeResourceNames
+	if names, err := intent.validatedResourceNames(id); err == nil {
+		sets = append(sets, codexReviewRuntimeResourceNames(id, names))
+	}
+	for _, provider := range allReviewProviders() {
+		sets = append(sets, reviewRuntimeResourceNamesFor(provider, id))
+	}
+	return sets
 }
 
 // reviewProviderForStartedIntent re-derives the provider from the complete

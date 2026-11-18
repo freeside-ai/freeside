@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
 // releaseRecorder is a RuntimeResourceReleaser that records every name set it
@@ -301,4 +306,258 @@ func TestReviewCleanupCloseReleasesItsNamespace(t *testing.T) {
 	}
 	requireReleased(t, recorder.released(),
 		reviewRuntimeResourceNamesFor(lifecycle.reviewProvider(), launchSpec.RunID))
+}
+
+// getFailJournal fails the journal read of one run.
+type getFailJournal struct {
+	*fakeJournal
+	failRun string
+}
+
+func (j getFailJournal) Get(ctx context.Context, runID string) (HandoffJournalRecord, error) {
+	if runID == j.failRun {
+		return HandoffJournalRecord{}, errors.New("fixture: journal read failed")
+	}
+	return j.fakeJournal.Get(ctx, runID)
+}
+
+// requireNotReleased fails if any name in names was released.
+func requireNotReleased(t *testing.T, got, names RuntimeResourceNames) {
+	t.Helper()
+	for _, pair := range [][2][]string{
+		{got.Containers, names.Containers}, {got.Volumes, names.Volumes}, {got.Networks, names.Networks},
+	} {
+		for _, name := range pair[1] {
+			if slices.Contains(pair[0], name) {
+				t.Errorf("%q was released", name)
+			}
+		}
+	}
+}
+
+func TestReleaseFinishedHandoffsReleasesOnlyAbsentOrClosedRecords(t *testing.T) {
+	t.Parallel()
+	fx := newRecoveryFixture(t)
+	var recorder releaseRecorder
+	fx.cfg.ReleaseRuntimeResources = recorder.release
+	specFor := func(runID string) HandoffSpec {
+		hs := testHandoffSpec()
+		hs.RunID = runID
+		return hs
+	}
+	const absent, closed, open, unreadable = "run-absent", "run-closed", "run-open", "run-unreadable"
+	fx.openRecord(t, specFor(closed))
+	if err := fx.j.Close(context.Background(), closed, HandoffLoss); err != nil {
+		t.Fatal(err)
+	}
+	fx.openRecord(t, specFor(open))
+	fx.openRecord(t, specFor(unreadable))
+	fx.cfg.Journal = getFailJournal{fakeJournal: fx.j, failRun: unreadable}
+
+	fx.backend(t).ReleaseFinishedHandoffs(context.Background(), []string{absent, closed, open, unreadable})
+	if calls := recorder.callCount(); calls != 1 {
+		t.Fatalf("release calls = %d, want one batch", calls)
+	}
+	got := recorder.released()
+	requireReleased(t, got, concatRuntimeResourceNames(RuntimeResourceNamesFor(absent), RuntimeResourceNamesFor(closed)))
+	requireNotReleased(t, got, concatRuntimeResourceNames(RuntimeResourceNamesFor(open), RuntimeResourceNamesFor(unreadable)))
+}
+
+func TestReleaseFinishedHandoffsWithoutRigReadsNothing(t *testing.T) {
+	t.Parallel()
+	fx := newRecoveryFixture(t)
+	fx.backend(t).ReleaseFinishedHandoffs(context.Background(), []string{"run-absent"})
+	if calls := fx.j.calls; len(calls) != 0 {
+		t.Fatalf("journal calls without a releaser = %v, want none", calls)
+	}
+	if calls := fx.rt.calls; len(calls) != 0 {
+		t.Fatalf("runtime calls without a releaser = %v, want none", calls)
+	}
+}
+
+// Review recovery releases a closed intent's names once a stored outcome
+// fences any relaunch of its run, and keeps them while none is stored.
+func TestReviewRecoveryReleasesClosedIntentOnlyBehindAnOutcome(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		outcome bool
+	}{
+		{name: "outcome stored", outcome: true},
+		{name: "no outcome"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			lifecycle, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
+			launch, err := lifecycle.CodexReview(ctx, cfg, launchSpec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = launch.Close()
+			if err := lifecycle.AbortCodexReview(ctx, cfg, launchSpec.RunID); err != nil {
+				t.Fatal(err)
+			}
+			if journal.intent.State != CodexReviewIntentClosed {
+				t.Fatalf("intent state = %q, want closed", journal.intent.State)
+			}
+			if test.outcome {
+				journal.outcomes = map[string]CodexReviewSourceOutcome{launchSpec.RunID: {
+					InvocationID: domain.InvocationID(launchSpec.RunID),
+					FailureClass: domain.ReviewFailureTransient, Failure: "fixture: review aborted",
+				}}
+			}
+			// A crash before cleanup's own release left these names bound.
+			var recorder releaseRecorder
+			lifecycle.cfg.ReleaseRuntime = recorder.release
+			leaser, err := NewRuntimeCodexReviewVolumeLeaser(rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovery, err := NewCodexReviewRecovery(lifecycle, journal, leaser, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := recovery.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			names := reviewRuntimeResourceNamesFor(lifecycle.reviewProvider(), launchSpec.RunID)
+			if !test.outcome {
+				if recorder.callCount() != 0 {
+					t.Fatalf("released %+v with no outcome fence", recorder.released())
+				}
+				return
+			}
+			if recorder.callCount() != 1 {
+				t.Fatalf("release calls = %d, want one batch", recorder.callCount())
+			}
+			requireReleased(t, recorder.released(), names)
+		})
+	}
+}
+
+// A review launch that fails with no open intent releases the names it bound,
+// because the next launch binds the same set again before it creates
+// anything. An open or unreadable intent keeps them for recovery.
+func TestReviewLaunchFailureReleasesNamesWithoutAnOpenIntent(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		intent  func(id string) *CodexReviewLaunchIntent
+		readErr bool
+		release bool
+	}{
+		{name: "intent absent", release: true},
+		{
+			name: "intent closed",
+			intent: func(id string) *CodexReviewLaunchIntent {
+				return &CodexReviewLaunchIntent{RunID: id, State: CodexReviewIntentClosed}
+			},
+			release: true,
+		},
+		{
+			name: "intent open",
+			intent: func(id string) *CodexReviewLaunchIntent {
+				return &CodexReviewLaunchIntent{RunID: id, State: CodexReviewIntentStarted}
+			},
+		},
+		{name: "intent unreadable", readErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fx := newHandoffFixture(t)
+			seedSpec := fx.seed(t)
+			lifecycle := fx.codexReviewLifecycle(t)
+			var recorder releaseRecorder
+			lifecycle.cfg.ReleaseRuntime = recorder.release
+			var bindMu sync.Mutex
+			binds := 0
+			lifecycle.authorizeRuntimeResources = func(context.Context, RuntimeResourceNames) error {
+				bindMu.Lock()
+				defer bindMu.Unlock()
+				binds++
+				return nil
+			}
+			cfg, requestSpec := testCodexReview(t)
+			journal := &fakeCodexReviewJournal{}
+			source, err := NewCodexReviewSource(
+				codexReviewSourceConfigForTest(t, lifecycle, cfg, requestSpec, journal),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := domain.InvocationID("review-release-1")
+			if test.intent != nil {
+				journal.extraIntents = map[string]*CodexReviewLaunchIntent{string(id): test.intent(string(id))}
+			}
+			if test.readErr {
+				journal.failIntentByID = map[string]error{string(id): errors.New("fixture: intent read failed")}
+			}
+			request := exec.ReviewRequest{
+				Admission: testReviewAdmission("run-release"),
+				RunID:     "run-release", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+				Instructions: testReviewInstructionBinding(),
+				RequestedAt:  codexReviewEpoch.Add(-time.Minute),
+			}
+			// A transient workspace failure stores no outcome and leaves no
+			// workspace object behind.
+			fx.rt.onCreateVolume = func(name string) error {
+				if name == namesFor(string(id)).Workspace {
+					return errors.New("fixture: runtime temporarily unavailable")
+				}
+				return nil
+			}
+			if err := source.RequestReview(ctx, id, request); err == nil ||
+				exec.ClassifyReviewSourceFailure(err) != domain.ReviewFailureTransient {
+				t.Fatalf("RequestReview = %v, want a transient failure", err)
+			}
+			names := reviewRuntimeResourceNamesFor(source.reviewProvider(), string(id))
+			if !test.release {
+				if recorder.callCount() != 0 {
+					t.Fatalf("released %+v while recovery may own the intent", recorder.released())
+				}
+				return
+			}
+			requireReleased(t, recorder.released(), names)
+			if _, stored, err := journal.GetCodexReviewOutcome(ctx, string(id)); err == nil || stored {
+				t.Fatalf("outcome stored after a transient failure; the test needs none")
+			}
+			if test.intent != nil {
+				return
+			}
+			// The retry binds the names again before it acts, and its success
+			// releases nothing.
+			bindMu.Lock()
+			before := binds
+			bindMu.Unlock()
+			released := recorder.callCount()
+			fx.rt.onCreateVolume = nil
+			if status, err := source.Inspect(ctx, id); err != nil || status != exec.StatusRunning {
+				t.Fatalf("retried launch = %q, %v", status, err)
+			}
+			bindMu.Lock()
+			after := binds
+			bindMu.Unlock()
+			if after <= before {
+				t.Fatal("the retried launch did not bind its names again")
+			}
+			if recorder.callCount() != released {
+				t.Fatalf("a successful launch released %+v", recorder.released())
+			}
+			source.mu.Lock()
+			launch := source.launches[id]
+			delete(source.launches, id)
+			source.mu.Unlock()
+			if launch != nil {
+				_ = launch.Close()
+			}
+			if err := lifecycle.AbortCodexReview(ctx, source.cfg.Review, string(id)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }

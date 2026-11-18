@@ -682,6 +682,19 @@ func (d *Driver) StartWithInputs(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// The pre-job hook binds the run's handoff namespace. Only a seeding
+	// intent that may exist lets anything create under those names without
+	// binding them again: recovery resumes it and never reruns the hook. Every
+	// other return leaves no runnable intent, and a later start of this
+	// invocation runs the hook again, so the names are released. The release
+	// runs before mu unlocks, so no other start of this invocation can bind and
+	// create in between.
+	seedingMayExist := false
+	defer func() {
+		if !seedingMayExist {
+			d.gate.ReleaseFinishedHandoffs(ctx, []string{runID})
+		}
+	}()
 	if d.preJob != nil {
 		if err := d.preJob(ctx, id, spec.ImageRef); err != nil {
 			return fmt.Errorf("pre-job probe: %w",
@@ -775,6 +788,9 @@ func (d *Driver) StartWithInputs(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// A failed write may still have landed the file, so the names stay
+	// bound from here on; the pipeline or recovery owns them.
+	seedingMayExist = true
 	if err := d.saveIntent(in); err != nil {
 		return err
 	}
@@ -1301,13 +1317,12 @@ func (d *Driver) commitPreJournalCancellation(
 	id domain.InvocationID,
 	sess *session,
 ) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	result := exec.StageResult{
 		InvocationID: id,
 		Status:       exec.StatusCanceled,
 		Summary:      d.displayName + " invocation canceled by daemon request.",
 	}
+	d.mu.Lock()
 	committed, err := d.commitPreJournalCancellationLocked(id, result)
 	if err != nil {
 		pending := result
@@ -1316,8 +1331,10 @@ func (d *Driver) commitPreJournalCancellation(
 		sess.preJournalCancellation = true
 		d.running[id] = sess
 	}
-	if !committed && err == nil {
-		return nil
+	d.mu.Unlock()
+	if committed {
+		// The intent is terminal, so its run's handoff never starts.
+		d.releaseTerminalHandoff(id)
 	}
 	return err
 }

@@ -416,6 +416,13 @@ func (s *CodexReviewSource) startRequestedReview(
 		}
 	}
 	defer releaseRun()
+	// Deferred after releaseRun, so it runs first, while the run gate still
+	// serializes this run's launches.
+	defer func() {
+		if err != nil {
+			s.releaseFailedLaunch(ctx, string(id))
+		}
+	}()
 	if err := codexReviewOutcomeFence(ctx, s.reviewProvider(), s.cfg.Journal, string(id)); err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexLaunchFailure(err), Err: err}
 	}
@@ -498,6 +505,38 @@ func (s *CodexReviewSource) startRequestedReview(
 	s.launches[id] = launch
 	s.mu.Unlock()
 	return nil
+}
+
+// releaseFailedLaunch releases the names a failed launch bound, when the run
+// has no open intent for recovery to act on. Releasing them is safe without an
+// outcome fence because every later creator under these names binds them
+// again first: the next launch binds this same set before it prepares a
+// workspace or launches, and recovery and cleanup bind before they act. The
+// caller holds the run gate, so no launch of this run races the release. An
+// open intent, or one that can't be read, keeps the names. The absence check
+// keeps a name an object still holds, such as a workspace a transient failure
+// left for the retry.
+func (s *CodexReviewSource) releaseFailedLaunch(ctx context.Context, runID string) {
+	lifecycle := s.cfg.Lifecycle
+	if lifecycle.cfg.ReleaseRuntime == nil {
+		return
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycle.cfg.TeardownTimeout)
+	defer cancel()
+	intent, err := s.cfg.Journal.GetCodexReviewIntent(readCtx, runID)
+	switch {
+	case errors.Is(err, ErrCodexReviewIntentNotFound):
+	case err != nil:
+		if lifecycle.cfg.Logger != nil {
+			lifecycle.cfg.Logger.Warn("rig runtime names stay bound after a failed release",
+				"run", runID, "error", err)
+		}
+		return
+	case intent.State != CodexReviewIntentClosed:
+		return
+	}
+	releaseAfterClose(ctx, lifecycle.rt, lifecycle.cfg.ReleaseRuntime, lifecycle.cfg.TeardownTimeout,
+		lifecycle.cfg.Logger, runID, reviewRuntimeResourceNamesFor(s.reviewProvider(), runID))
 }
 
 func (s *CodexReviewSource) materializeReviewInstructions(
