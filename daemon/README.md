@@ -4957,8 +4957,15 @@ the label once the run is ready again. So the lander's account must be on
 the trust profile's external-reviewer allowlist, and the lander must comment
 after it pushes, since a comment binds to the head Freeside reads with it.
 While the label is on, a moved head starts no ordinary head-change re-entry,
-so a labeled pull request whose head moved waits on that comment. Without
-the setting, a moved head re-enters as before. The label is at most 50
+so a labeled pull request whose head moved waits on that comment. A labeled
+head that waits for an admitted comment raises an advisory `system_health`
+notice (`hand_back_comment_missing`, #3192) on the second reconciler pass
+that sees it wait. It names the pull request, the head, and what is missing:
+no comment on that head, or the commenters the allowlist does not admit. It
+resolves itself when a hand-back cycle starts on the head, the label comes
+off, the head moves, or the pull request closes. The label Freeside has yet
+to remove after its own successful cycle raises none. Without the setting, a
+moved head re-enters as before. The label is at most 50
 characters, with no surrounding spaces or control characters.
 
 The deputy fixes, rather than reads from settings, the Claude driver, unattended

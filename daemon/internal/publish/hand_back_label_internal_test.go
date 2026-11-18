@@ -44,7 +44,7 @@ func removalRecorded(t *testing.T, f replyBindingFixture) bool {
 	t.Helper()
 	var recorded bool
 	if err := f.st.Read(context.Background(), func(tx *store.ReadTx) error {
-		entry, err := tx.GetOutbox(context.Background(), handBackLabelRemovalKey(f.binding.ItemID))
+		entry, err := tx.GetOutbox(context.Background(), HandBackLabelRemovalKey(f.binding.ItemID))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}

@@ -110,6 +110,8 @@
 //     start
 //   - hand_back_reentry.go the hand-back cycle a lander's comment starts on
 //     the head it pushed
+//   - hand_back_wait.go why a handed-back head waits for an admitted
+//     comment, read for the reconciler's notice
 //   - operator_feedback.go, operator_feedback_retry.go
 //     operator feedback invocations and their retries
 //   - production_publication.go the production publication workflow: the

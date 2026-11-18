@@ -1,8 +1,11 @@
 package integration_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -308,5 +311,116 @@ func (p *productionPublicationHarness) assertHandBackRemediated(t *testing.T, co
 	if end := p.externalReviewEnd(t); !end.readyItem || end.pending != 0 || len(end.reviewItems) != 0 ||
 		!end.successor.HandsBack() {
 		t.Fatalf("cycle end = %#v", end)
+	}
+}
+
+// commentGap runs the hand-back notice's classifier for the run on head.
+func (p *productionPublicationHarness) commentGap(t *testing.T, head string) *engine.HandBackWait {
+	t.Helper()
+	var gap *engine.HandBackWait
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		gap, err = engine.HandBackCommentGap(p.ctx, tx, p.runID, head)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return gap
+}
+
+// TestHandBackCommentGapWhileACycleOwnsTheHead: once a hand-back cycle
+// starts on a head, that head waits on no comment, even after the owner
+// takes the commenter off the allowlist (issue #3192).
+func TestHandBackCommentGapWhileACycleOwnsTheHead(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	first := p.publishReady(t)
+	maintainer := externalMaintainer()
+	p.listExternalReviewers(t, maintainer)
+	head := p.pushToPullRequest(t, "REWORK.md", "the lander's rework\n")
+	if _, started := p.handBack(t, first, 1, maintainer, head, p.baseSHA, "the rebase broke the build"); !started {
+		t.Fatal("a hand-back comment started no cycle")
+	}
+	p.listExternalReviewers(t, domain.ExternalReviewer{
+		Forge: domain.ExternalReviewForgeGitHub, AccountID: 4102, Login: "other", Authority: domain.ExternalReviewDriveRound,
+	})
+	if gap := p.commentGap(t, head); gap != nil {
+		t.Fatalf("gap = %#v, want none on the head a cycle adopted", gap)
+	}
+}
+
+// removalTransport stands in for GitHub's label endpoint and the token
+// source the remover uses.
+type removalTransport struct{ requests []string }
+
+func (*removalTransport) Token(context.Context, string) (publish.InstallationToken, error) {
+	return publish.InstallationToken{Token: publish.Secret("removal-fixture-token")}, nil
+}
+
+func (r *removalTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.requests = append(r.requests, req.Method+" "+req.URL.EscapedPath())
+	w := httptest.NewRecorder()
+	w.WriteHeader(http.StatusNoContent)
+	return w.Result(), nil
+}
+
+// TestHandBackCommentGapWaitsOutFreesidesOwnLabel: a hand-back cycle that
+// made the run ready again on the head it pushed leaves the label for the
+// remover, and that label raises no notice. Once the remover records taking
+// it off, the label on the same head with no comment is a new hand-back
+// that waits for one (issue #3192).
+func TestHandBackCommentGapWaitsOutFreesidesOwnLabel(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	driver := p.configureAdjudicator(t)
+	first := p.publishReady(t)
+	maintainer := externalMaintainer()
+	p.listExternalReviewers(t, maintainer)
+	head := p.pushToPullRequest(t, "REWORK.md", "the lander's rework\n")
+	comment, started := p.handBack(t, first, 1, maintainer, head, p.baseSHA, "the rework drops the handle check")
+	if !started {
+		t.Fatal("a hand-back comment started no cycle")
+	}
+	p.scriptCleanReview(2, p.baseSHA, head)
+	scriptAdjudication(t, driver, remediateVerdict(comment.ID))
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	remediated, _ := p.remediateExternalCycle(t, 2, "production change\nrestored the handle check\n")
+	ready := p.currentReadyItem(t)
+	if ready.Status != domain.StatusOpen || ready.PRHeadSHA != remediated.HeadSHA {
+		t.Fatalf("ready item = %#v, want open on the remediated head", ready)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		binding, err := tx.GetReadyItemPRBinding(p.ctx, ready.ID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.AppendPullMergeFact(p.ctx, domain.PullMergeFact{
+			Repo: binding.Repo, RepositoryID: binding.RepositoryID, PRNumber: binding.PRNumber,
+			State: domain.PullRequestOpen, BaseRef: binding.BaseRef, HeadSHA: remediated.HeadSHA,
+			ObservedAt: p.now.Add(time.Minute),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gap := p.commentGap(t, remediated.HeadSHA); gap != nil {
+		t.Fatalf("gap = %#v, want none while the label is Freeside's to remove", gap)
+	}
+
+	transport := &removalTransport{}
+	remover, err := publish.NewHandBackLabelRemover(p.store, transport, &http.Client{Transport: transport},
+		"https://api.example.test", "needs rework")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remover.Pass(p.ctx); err != nil || len(transport.requests) != 1 {
+		t.Fatalf("remover pass = %v, requests %q; want one removal", err, transport.requests)
+	}
+	gap := p.commentGap(t, remediated.HeadSHA)
+	if gap == nil || gap.HeadSHA != remediated.HeadSHA || gap.Repo != ready.PRReference.Repo ||
+		gap.PRNumber != ready.PRReference.Number || len(gap.Commenters) != 0 {
+		t.Fatalf("gap = %#v, want the remediated head waiting with no comment", gap)
 	}
 }

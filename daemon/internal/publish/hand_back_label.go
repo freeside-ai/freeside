@@ -32,7 +32,11 @@ type handBackLabelRemoval struct {
 	PRNumber int           `json:"pr_number"`
 }
 
-func handBackLabelRemovalKey(item domain.ItemID) string {
+// HandBackLabelRemovalKey is the outbox key under which the remover records
+// that it took the label off the pull request of item, a ready item a
+// hand-back cycle earned. Until that record exists the label is Freeside's
+// to remove, so a reader can tell it from a label a lander put back (#3192).
+func HandBackLabelRemovalKey(item domain.ItemID) string {
 	return "hand-back-label-removal/" + string(item)
 }
 
@@ -42,7 +46,7 @@ func HandBackLabelBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest,
 	var r handBackLabelRemoval
 	if entry.Kind != HandBackLabelRemovalKind ||
 		strictjson.Decode(entry.Payload, &r, strictjson.RejectInvalidUTF8, strictjson.NoLimit) != nil ||
-		r.ItemID == "" || r.RunID == "" || r.PRNumber < 1 || entry.IdempotencyKey != handBackLabelRemovalKey(r.ItemID) {
+		r.ItemID == "" || r.RunID == "" || r.PRNumber < 1 || entry.IdempotencyKey != HandBackLabelRemovalKey(r.ItemID) {
 		return nil, errors.New("hand-back label: invalid removal record")
 	}
 	if _, err := parseRepo(r.Repo); err != nil {
@@ -163,7 +167,7 @@ func (r *HandBackLabelRemover) remove(ctx context.Context, runID domain.RunID) e
 		if ready, due, err = tx.HandBackReadyBinding(ctx, runID); err != nil || !due {
 			return err
 		}
-		_, err = tx.GetOutbox(ctx, handBackLabelRemovalKey(ready.ItemID))
+		_, err = tx.GetOutbox(ctx, HandBackLabelRemovalKey(ready.ItemID))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -193,7 +197,7 @@ func (r *HandBackLabelRemover) removeFor(ctx context.Context, ready domain.Ready
 		return err
 	}
 	return r.store.Write(ctx, func(tx *store.WriteTx) error {
-		row, _, err := tx.RecordDispatchedOutbox(ctx, handBackLabelRemovalKey(ready.ItemID), HandBackLabelRemovalKind, payload)
+		row, _, err := tx.RecordDispatchedOutbox(ctx, HandBackLabelRemovalKey(ready.ItemID), HandBackLabelRemovalKind, payload)
 		if err != nil {
 			return err
 		}
