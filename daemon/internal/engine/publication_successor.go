@@ -177,11 +177,6 @@ func authenticateTaskSuccessor(ctx context.Context, tx *store.ReadTx, task produ
 		// that covered it, and the read above re-ran that gate.
 		return nil
 	}
-	if task.reentersBeforePublication() {
-		// The producer is the invocation that exported the head at an earlier
-		// base; the store proves it from that export.
-		return tx.AuthenticateSuccessorProducer(ctx, successor, task.ProducingInvocationID)
-	}
 	if task.ProducingInvocationID == successor.FeedbackInvocationID {
 		entry, err := tx.GetOutbox(ctx, string(task.ProducingInvocationID))
 		if err != nil {

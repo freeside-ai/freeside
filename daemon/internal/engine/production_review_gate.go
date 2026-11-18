@@ -787,13 +787,7 @@ func (w *productionPublicationWorkflow) chooseReviewRound(
 		if task.answersExternalReview() {
 			itemID = externalReviewExhaustionItemID(task.RunID, task.Successor.ReviewRound)
 		} else if task.reentersInPlace() {
-			legacyOpen, err := w.readinessLegacyExhaustionOpen(ctx, task, itemID)
-			if err != nil {
-				return 0, productionReviewPending, true, err
-			}
-			if !legacyOpen {
-				itemID = readinessReentryExhaustionItemID(*task.Successor)
-			}
+			itemID = readinessReentryExhaustionItemID(*task.Successor)
 		}
 		if err := w.putReviewAttentionWithID(ctx, task, record,
 			fmt.Sprintf("Review exhausted the resolved hard limit of %d rounds.", hardLimit),
@@ -1336,30 +1330,6 @@ func (w *productionPublicationWorkflow) settleReviewRound(
 	return productionReviewPassed, nil
 }
 
-// An upgrade may resume after the old writer created an exhaustion item but
-// before it finished the task. Only an open item with matching coordinates
-// proves a person is still being asked; a resolved item may be an older cycle's.
-func (w *productionPublicationWorkflow) readinessLegacyExhaustionOpen(
-	ctx context.Context, task productionPublicationTask, itemID domain.ItemID,
-) (bool, error) {
-	open := false
-	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		item, err := tx.GetAttentionItem(ctx, itemID)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		open = item.Status == domain.StatusOpen && item.Type == domain.AttentionReviewDiminishing &&
-			item.ProjectID == task.ProjectID && item.Subject.Type == domain.SubjectRun &&
-			item.Subject.ID == domain.SubjectID(task.RunID) && item.Subject.RunID != nil &&
-			*item.Subject.RunID == task.RunID && item.PRHeadSHA == task.HeadSHA
-		return nil
-	})
-	return open, err
-}
-
 func (w *productionPublicationWorkflow) classifyReviewFindings(
 	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
 ) (bool, error) {
@@ -1755,9 +1725,6 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		comparable.Timing = item.Timing
 		comparable.Recommendation = item.Recommendation
 		comparable.DecisionSurface = item.DecisionSurface
-		if comparable.Reason == legacyCodexReviewReason(item.Reason) {
-			comparable.Reason = item.Reason
-		}
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review contradiction item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewRecoveryBindingMismatch)
@@ -1914,12 +1881,6 @@ func (w *productionPublicationWorkflow) parkReviewConfiguration(
 	}); err != nil {
 		return productionReviewPending, err
 	}
-	if existing != nil && existing.Type == domain.AttentionReviewDispute {
-		// A pre-#611 daemon raised the terminalizing dispute at this identity
-		// and crashed before completing the task. Honor the contract that
-		// item presented rather than failing closed against its shape.
-		return productionReviewEscalated, nil
-	}
 	if existing != nil && existing.Type == domain.AttentionReviewConfiguration &&
 		existing.Status != domain.StatusOpen {
 		// Presence, not effectiveness, separates the operator's two exits: a
@@ -2035,9 +1996,6 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		comparable.ConversationID = item.ConversationID
 		comparable.Recommendation = item.Recommendation
 		comparable.DecisionSurface = item.DecisionSurface
-		if comparable.Reason == legacyCodexReviewReason(item.Reason) {
-			comparable.Reason = item.Reason
-		}
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review configuration item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewConfigRecoveryBindingMismatch)
@@ -2514,16 +2472,6 @@ func (w *productionPublicationWorkflow) observeReviewInvocation(ctx context.Cont
 		return err
 	}
 	return nil
-}
-
-// legacyCodexReviewReason is a review item's reason in the wording an
-// earlier daemon wrote, "Codex review ..." where the harness-neutral
-// wording reads "Review ..." (#397). A parked contradiction or configuration
-// item is re-put on every tick while it stays open, so its comparison
-// accepts the earlier wording rather than failing every reconcile after an
-// upgrade.
-func legacyCodexReviewReason(reason string) string {
-	return "Codex review" + strings.TrimPrefix(reason, "Review")
 }
 
 // persistedReviewAuthority is the authority a finished review's persisted

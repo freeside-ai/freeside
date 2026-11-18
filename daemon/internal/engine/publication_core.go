@@ -380,39 +380,13 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	// the terminal shape, so compare it using the durable original stamp.
 	expected.CreatedAt = current.CreatedAt
 	normalized := current
-	legacyReadiness := current.Readiness == nil && expected.Readiness != nil
-	if legacyReadiness {
-		// Ready items created before the readiness summary existed cannot be
-		// upgraded in place: the field is creation-immutable. Compare that one
-		// legacy absence against the freshly reconstructed daemon value, then
-		// keep nil as the transition baseline below.
-		normalized.Readiness = expected.Readiness
-	}
-	legacyReadinessDetail := current.ReadinessDetail == nil && expected.ReadinessDetail != nil
-	if legacyReadinessDetail {
-		normalized.ReadinessDetail = expected.ReadinessDetail
-	}
-	// A detail stored before #1735 names no handoff tip, and the detail is
-	// creation-immutable, so compare it as if it named the rebuilt tip and
-	// merge, then keep the stored shape as the transition baseline below.
-	legacyHandoff := !legacyReadinessDetail &&
-		current.ReadinessDetail != nil && expected.ReadinessDetail != nil &&
-		current.ReadinessDetail.HandoffTip == "" && expected.ReadinessDetail.HandoffTip != ""
-	if legacyHandoff {
-		detail := *current.ReadinessDetail
-		detail.HandoffTip = expected.ReadinessDetail.HandoffTip
-		detail.HandoffMerge = expected.ReadinessDetail.HandoffMerge
-		normalized.ReadinessDetail = &detail
-	}
-	legacyYieldHistory := current.YieldHistory == nil && expected.YieldHistory != nil
-	if legacyYieldHistory {
-		normalized.YieldHistory = expected.YieldHistory
-	}
-	legacyDisplayNames := current.DisplayNames == nil && expected.DisplayNames != nil
 	// Display names are mutable presentation state. Recovery derives the
 	// current project and work-unit names, while the terminal item may retain
 	// an older label from before a rename.
 	normalized.DisplayNames = expected.DisplayNames
+	// A shadow-review stop writes its trust block with no facts, while
+	// recovery rebuilds the definitive reason's facts, so a stored block
+	// without facts still compares as the rebuilt one.
 	legacyPublishBlock := current.PublishBlock == nil && expected.PublishBlock != nil
 	if legacyPublishBlock {
 		normalized.PublishBlock = expected.PublishBlock
@@ -445,24 +419,6 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	normalized.DecisionSurface = expected.DecisionSurface
 	if !reflect.DeepEqual(normalized, expected) {
 		return false
-	}
-	if legacyReadiness {
-		expected.Readiness = nil
-	}
-	if legacyReadinessDetail {
-		expected.ReadinessDetail = nil
-	}
-	if legacyHandoff {
-		detail := *expected.ReadinessDetail
-		detail.HandoffTip = ""
-		detail.HandoffMerge = nil
-		expected.ReadinessDetail = &detail
-	}
-	if legacyYieldHistory {
-		expected.YieldHistory = nil
-	}
-	if legacyDisplayNames {
-		expected.DisplayNames = nil
 	}
 	if legacyPublishBlock {
 		expected.PublishBlock = nil

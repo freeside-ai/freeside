@@ -197,15 +197,13 @@ func TestPreChangeIntentStillValidatesOnRecovery(t *testing.T) {
 	t.Parallel()
 	history := dispositionHistoryFixture(t)
 	candidate := Candidate{RunID: history.runID, HeadSHA: history.headSHA, DispositionHistory: &history}
-	for _, version := range []int{IntentFormatHistory, IntentFormatCurrent} {
-		intent := Intent{FormatVersion: version, DispositionHistoryDigest: preChangeDispositionHistoryDigest}
-		if err := ValidateIntentDispositionHistory(intent, candidate); err != nil {
-			t.Fatalf("format %d: pre-change intent refused on recovery: %v", version, err)
-		}
-		intent.DispositionHistoryDigest = dispositionDigestA
-		if err := ValidateIntentDispositionHistory(intent, candidate); !errors.Is(err, ErrPublicationConflict) {
-			t.Fatalf("format %d: changed history digest = %v, want a publication conflict", version, err)
-		}
+	intent := Intent{FormatVersion: IntentFormatCurrent, DispositionHistoryDigest: preChangeDispositionHistoryDigest}
+	if err := ValidateIntentDispositionHistory(intent, candidate); err != nil {
+		t.Fatalf("pre-change intent refused on recovery: %v", err)
+	}
+	intent.DispositionHistoryDigest = dispositionDigestA
+	if err := ValidateIntentDispositionHistory(intent, candidate); !errors.Is(err, ErrPublicationConflict) {
+		t.Fatalf("changed history digest = %v, want a publication conflict", err)
 	}
 }
 

@@ -99,16 +99,15 @@ func TestReentryTaskRoundTripsThroughTheLaneDecoder(t *testing.T) {
 	}
 
 	for name, edit := range map[string]func(*productionPublicationTask){
-		"another head":      func(task *productionPublicationTask) { task.HeadSHA = strings.Repeat("d", 40) },
-		"another run":       func(task *productionPublicationTask) { task.RunID = "run-other" },
-		"no project":        func(task *productionPublicationTask) { task.ProjectID = "" },
-		"publication id":    func(task *productionPublicationTask) { task.PublicationID = "publish-other" },
-		"verification id":   func(task *productionPublicationTask) { task.VerificationID = "verify-other" },
-		"summary":           func(task *productionPublicationTask) { task.Summary = "exported" },
-		"replay":            func(task *productionPublicationTask) { task.Replay.HeadSHA = task.HeadSHA },
-		"publication":       func(task *productionPublicationTask) { task.Publication.Title = "Title" },
-		"artifacts":         func(task *productionPublicationTask) { task.Artifacts = []domain.Digest{"sha256:artifact"} },
-		"remediation no-op": func(task *productionPublicationTask) { task.LegacyRemediationNoop = true },
+		"another head":    func(task *productionPublicationTask) { task.HeadSHA = strings.Repeat("d", 40) },
+		"another run":     func(task *productionPublicationTask) { task.RunID = "run-other" },
+		"no project":      func(task *productionPublicationTask) { task.ProjectID = "" },
+		"publication id":  func(task *productionPublicationTask) { task.PublicationID = "publish-other" },
+		"verification id": func(task *productionPublicationTask) { task.VerificationID = "verify-other" },
+		"summary":         func(task *productionPublicationTask) { task.Summary = "exported" },
+		"replay":          func(task *productionPublicationTask) { task.Replay.HeadSHA = task.HeadSHA },
+		"publication":     func(task *productionPublicationTask) { task.Publication.Title = "Title" },
+		"artifacts":       func(task *productionPublicationTask) { task.Artifacts = []domain.Digest{"sha256:artifact"} },
 		"short base": func(task *productionPublicationTask) {
 			edited := *task.Successor
 			reentry := *edited.Reentry

@@ -45,10 +45,7 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 		// when its tree is the tip's: the head would propose no change.
 		return w.reentryTreeSHA(ctx, checkoutDir, request.BaseSHA)
 	}
-	var (
-		entry  store.QueueEntry
-		legacy bool
-	)
+	var entry store.QueueEntry
 	sourceTaskKey := task.intentKey()
 	sourceCheckpointKey := productionVerificationCheckpointKey(task.RunID, request.HeadSHA, "")
 	var continuationVerification domain.InvocationID
@@ -80,10 +77,6 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		entry, err = tx.GetInbox(ctx, sourceCheckpointKey)
-		if errors.Is(err, store.ErrNotFound) {
-			entry, err = tx.GetInbox(ctx, "production-verification/"+string(task.RunID))
-			legacy = err == nil
-		}
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -130,11 +123,8 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	if err != nil {
 		return "", remediationSourceReadError(ctx, err)
 	}
-	versionMatches := !legacy && checkpoint.Version == productionVerificationVersion &&
+	versionMatches := checkpoint.Version == productionVerificationVersion &&
 		checkpoint.HeadSHA == request.HeadSHA
-	if legacy {
-		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
-	}
 	sourceVerificationValid := validRemediationSourceVerificationID(task.RunID, round, authorization.InvocationID)
 	if continuationVerification != "" {
 		sourceVerificationValid = authorization.InvocationID == continuationVerification

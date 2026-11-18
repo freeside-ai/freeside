@@ -2669,56 +2669,10 @@ func TestRemediationUndeliverableNoticeAcceptsAcknowledge(t *testing.T) {
 	assertNoRemediationMarker(t, f)
 }
 
-// TestRemediationLegacyExecutionFailureNoticeStillParksRun covers an in-place
-// upgrade: a notice the pre-#1354 code stored as execution_failure under the
-// same deterministic ID must keep parking the run rather than fail every
-// reconcile with ErrParentKeyMismatch and stop the publication lane.
-func TestRemediationLegacyExecutionFailureNoticeStillParksRun(t *testing.T) {
-	t.Parallel()
-	f, candidateRoot := newOversizedRemediationFixture(t)
-	itemID := productionRemediationUndeliverableItemID(f.task.RunID, f.record.Round)
-	runID := f.task.RunID
-	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID}
-	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
-		names, err := tx.DisplayNamesFor(f.ctx, f.task.ProjectID, subject)
-		if err != nil {
-			return err
-		}
-		createdAt := f.workflow.attentionCreatedAt()
-		legacy, err := domain.NewAttentionItem(domain.AttentionItemInput{
-			ID: itemID, ProjectID: f.task.ProjectID,
-			Subject: subject, Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
-			Reason:            "Remediation input for the adjudicated findings cannot be delivered to the remediator.",
-			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
-			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen,
-		}, f.workflow.operatorRecipes)
-		if err != nil {
-			return err
-		}
-		return tx.PutAttentionItem(f.ctx, legacy)
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := f.workflow.reconcileFindingAdjudication(
-		f.ctx, f.task, f.binding, f.record, f.baseRoot, candidateRoot)
-	if err != nil {
-		t.Fatalf("reconcile over legacy notice err = %v, want nil", err)
-	}
-	if state != productionReviewPending {
-		t.Fatalf("reconcile over legacy notice state = %d, want pending", state)
-	}
-	if got := countFixtureAttentionItems(t, f); got != 1 {
-		t.Fatalf("attention items over legacy notice = %d, want 1 (no new item)", got)
-	}
-	assertNoRemediationMarker(t, f)
-}
-
 // TestVerifyRemediationUndeliverableItemFailsClosed pins which rows the
 // verifier accepts at the notice's deterministic ID: the current
-// system_health advisory and the legacy execution_failure shape, and nothing
-// that disagrees with the run's project, subject, or advisory posture.
+// system_health advisory, and nothing that disagrees with the run's project,
+// subject, type, or advisory posture.
 func TestVerifyRemediationUndeliverableItemFailsClosed(t *testing.T) {
 	t.Parallel()
 	task := productionPublicationTask{RunID: "run-1", ProjectID: "project-1"}
@@ -2741,9 +2695,9 @@ func TestVerifyRemediationUndeliverableItemFailsClosed(t *testing.T) {
 		wantErr bool
 	}{
 		{"system_health advisory", notice(func(*domain.AttentionItem) {}), false},
-		{"legacy execution_failure", notice(func(item *domain.AttentionItem) {
+		{"pre-#1354 execution_failure", notice(func(item *domain.AttentionItem) {
 			item.Type, item.Posture = domain.AttentionExecutionFailure, nil
-		}), false},
+		}), true},
 		{"wrong project", notice(func(item *domain.AttentionItem) { item.ProjectID = "project-2" }), true},
 		{"wrong run subject", notice(func(item *domain.AttentionItem) {
 			item.Subject.ID, item.Subject.RunID = domain.SubjectID(otherRun), &otherRun

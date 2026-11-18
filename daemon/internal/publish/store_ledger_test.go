@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -115,31 +114,20 @@ func TestStoreLedgerAuthenticatesCommittedIntentFormat(t *testing.T) {
 		_ = raw.Close()
 		t.Fatalf("payload-version downgrade = %v, want schema refusal", err)
 	}
-	var changed []byte
-	if err := raw.QueryRowContext(
-		ctx,
-		`UPDATE outbox
-		 SET payload = CAST(json_set(json_remove(payload, '$.branch'), '$.format_version', 1) AS BLOB)
-		 WHERE idempotency_key = ?
-		 RETURNING payload`,
-		key,
-	).Scan(&changed); err != nil {
-		_ = raw.Close()
-		t.Fatal(err)
-	}
-	_, digestErr := raw.ExecContext(
-		ctx, "UPDATE outbox SET payload_digest = ? WHERE idempotency_key = ?",
-		contentaddr.Sum(changed), key,
+	// Raising the marker is allowed by the schema, so the ledger itself must
+	// refuse a format 3 payload stored under format 4.
+	_, upgradeErr := raw.ExecContext(
+		ctx, "UPDATE outbox SET payload_version = 4 WHERE idempotency_key = ?", key,
 	)
 	closeErr := raw.Close()
-	if digestErr != nil || closeErr != nil {
-		t.Fatal(errors.Join(digestErr, closeErr))
+	if upgradeErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(upgradeErr, closeErr))
 	}
 
 	if _, _, err := ledger.Record(
 		ctx, key, publish.IntentKindPublication, payload, nil,
 	); err == nil || !strings.Contains(err.Error(), "disagrees with outbox format") {
-		t.Fatalf("Record with payload-declared legacy row = %v, want format mismatch", err)
+		t.Fatalf("Record with a format 3 payload under marker 4 = %v, want format mismatch", err)
 	}
 }
 

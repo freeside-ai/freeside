@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -193,18 +191,9 @@ func (tx *WriteTx) CloseTaskWorkflow(ctx context.Context, taskID domain.TaskID, 
 		if item.Subject.Type != domain.SubjectTask {
 			continue
 		}
-		owner, episode, err := tx.AttentionItemWorkflowEpisode(ctx, item)
-		if err != nil {
-			return TaskWorkflowClosure{}, false, err
-		}
-		if owner != taskID || episode != ordinal {
-			continue
-		}
-		if _, err := tx.taskAttentionWorkflowRun(ctx, item); errors.Is(err, ErrNotFound) {
-			if err := tx.bindTaskAttentionWorkflow(ctx, item, start.RunID); err != nil {
-				return TaskWorkflowClosure{}, false, err
-			}
-		} else if err != nil {
+		// Resolving ownership refuses an item that records no producing run,
+		// so closure never strands one it cannot attribute.
+		if _, _, err := tx.AttentionItemWorkflowEpisode(ctx, item); err != nil {
 			return TaskWorkflowClosure{}, false, err
 		}
 	}
@@ -307,7 +296,7 @@ func (tx *ReadTx) taskAttentionWorkflowRun(ctx context.Context, item domain.Atte
 	err := tx.tx.QueryRowContext(ctx, `SELECT task_id, run_id, body
 		FROM task_attention_workflow_origins WHERE item_id = ?`, item.ID).Scan(&taskID, &runID, &body)
 	if errors.Is(err, sql.ErrNoRows) {
-		return tx.legacyHeldWorkNoticeRun(ctx, item)
+		return "", ErrNotFound
 	}
 	if err != nil {
 		return "", err
@@ -328,81 +317,6 @@ func (tx *ReadTx) taskAttentionWorkflowRun(ctx context.Context, item domain.Atte
 		return "", errRowInconsistent
 	}
 	return runID, nil
-}
-
-// Before workflow origins were recorded, both held-work producers encoded the
-// producing run in their IDs. Authenticate that historical binding without
-// depending on a hold row, which may already have cleared, or inferring closure.
-func (tx *ReadTx) legacyHeldWorkNoticeRun(ctx context.Context, item domain.AttentionItem) (domain.RunID, error) {
-	id := string(item.ID)
-	encoded, raised := strings.CutPrefix(id, "raised-work-held-")
-	if !raised {
-		var known bool
-		encoded, known = strings.CutPrefix(id, "work-held-")
-		if !known {
-			return "", ErrNotFound
-		}
-	}
-	separator := strings.LastIndexByte(encoded, '-')
-	if separator <= 0 {
-		return "", errRowInconsistent
-	}
-	suffix, err := strconv.ParseInt(encoded[separator+1:], 10, 64)
-	if err != nil || suffix <= 0 || strconv.FormatInt(suffix, 10) != encoded[separator+1:] {
-		return "", errRowInconsistent
-	}
-	runID := domain.RunID(encoded[:separator])
-	owner, _, err := tx.TaskWorkflowEpisode(ctx, runID)
-	if errors.Is(err, ErrNotFound) {
-		return "", errRowInconsistent
-	}
-	if err != nil {
-		return "", err
-	}
-	task, err := tx.GetTask(ctx, owner)
-	if err != nil {
-		return "", err
-	}
-	if item.Subject.Type != domain.SubjectTask || item.Subject.TaskID == nil ||
-		*item.Subject.TaskID != owner || item.Subject.ID != domain.SubjectID(owner) ||
-		item.Subject.RunID != nil || item.ProjectID != task.ProjectID ||
-		item.Type != domain.AttentionSystemHealth || item.Priority != domain.PriorityHigh ||
-		item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != "work_held" ||
-		item.HealthDiagnostic.Impairs != domain.ImpairedCapabilityUnattendedAdmission ||
-		item.Posture == nil || *item.Posture != domain.HealthPostureAdvisory ||
-		item.InterruptionClass != domain.InterruptionExceptional || item.CreatedAt == nil ||
-		!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionAcknowledge}) {
-		return "", errRowInconsistent
-	}
-	// This is the pre-0100 HeldWorkNoticeItem body. It corroborates the ID;
-	// free-form reason text never selects the owner.
-	held, ok := strings.CutPrefix(item.Reason, fmt.Sprintf("Run %s has been held since ", runID))
-	if !ok {
-		return "", errRowInconsistent
-	}
-	observed, _, ok := strings.Cut(held, " with hold reason ")
-	firstObserved, err := time.Parse(time.RFC3339, observed)
-	if !ok || err != nil || (!raised && firstObserved.Unix() != suffix) ||
-		(raised && observed != item.CreatedAt.Format(time.RFC3339)) {
-		return "", errRowInconsistent
-	}
-	for _, reason := range []domain.RunHoldReason{
-		domain.HoldBackendNotConformant, domain.HoldAdmissionPolicyRefused,
-		domain.HoldBackupProtectionUnready, domain.HoldRepositoryUntrusted,
-		domain.HoldProviderAuthorityUnavailable,
-	} {
-		if raised && reason != domain.HoldAdmissionPolicyRefused {
-			continue
-		}
-		expected := fmt.Sprintf("Run %s has been held since %s with hold reason %s. "+
-			"Freeside keeps retrying it. "+
-			"This notice resolves itself when the hold clears, its cause changes, or the task is stopped.",
-			runID, observed, reason)
-		if item.Reason == expected {
-			return runID, nil
-		}
-	}
-	return "", errRowInconsistent
 }
 
 // AttentionItemWorkflowEpisode resolves ownership from the stored subject or
@@ -431,23 +345,12 @@ func (tx *ReadTx) AttentionItemWorkflowEpisode(ctx context.Context, item domain.
 		var err error
 		runID, err = tx.taskAttentionWorkflowRun(ctx, item)
 		if errors.Is(err, ErrNotFound) {
-			// Legacy task-only notices with one start have only one possible
-			// owner. Multiple episodes require the producer's explicit binding;
-			// never guess the newest start after a reattempt.
-			task, readErr := tx.GetTask(ctx, *item.Subject.TaskID)
-			if readErr != nil {
-				return "", 0, readErr
-			}
-			for _, fact := range task.LifecycleFacts {
-				if fact.Kind != domain.TaskLifecycleStarted {
-					continue
-				}
-				if runID != "" {
-					return "", 0, fmt.Errorf("task item %q has ambiguous episode ownership: %w", item.ID, domain.ErrParentKeyMismatch)
-				}
-				runID = fact.RunID
-			}
-		} else if err != nil {
+			// Every task-subject item records its producing run when it is
+			// created (PutTaskAttentionItem). One without that origin is a
+			// row from before origins existed, and its owner is never guessed.
+			return "", 0, fmt.Errorf("task item %q records no producing run: %w", item.ID, domain.ErrParentKeyMismatch)
+		}
+		if err != nil {
 			return "", 0, err
 		}
 	}

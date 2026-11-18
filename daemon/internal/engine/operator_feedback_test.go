@@ -1174,22 +1174,17 @@ func TestUndeliverableOperatorFeedbackNoticeAcceptsAcknowledge(t *testing.T) {
 	})
 }
 
-// TestUndeliverableNoticeToleratesLegacyExecutionFailureRow proves the
-// idempotence guard does not loop reconcile on ErrParentKeyMismatch when it
-// meets a notice persisted as execution_failure before #1342. Such a row
-// survives an in-place upgrade under the same deterministic ID; the verifier
-// tolerates it so the retry route parks instead of erroring. Migration 0075
-// rewrites the row to system_health and drops the tolerance (#1358).
-func TestUndeliverableNoticeToleratesLegacyExecutionFailureRow(t *testing.T) {
+// TestUndeliverableNoticeRefusesPreAdvisoryRow: a notice persisted as
+// execution_failure before #1342, under the same deterministic ID, is refused
+// rather than read as the current system_health advisory (#3323).
+func TestUndeliverableNoticeRefusesPreAdvisoryRow(t *testing.T) {
 	t.Parallel()
 	s := newOversizedFeedbackScenario(t)
 	seedLegacyExecutionFailureNotice(t, s)
 	if parked, err := s.engine.operatorFeedbackUndeliverableRecorded(
-		t.Context(), s.concluded, s.command); err != nil || !parked {
-		t.Fatalf("operatorFeedbackUndeliverableRecorded over legacy row = %t, %v", parked, err)
-	}
-	if transitions, err := s.engine.reconcileOperatorFeedback(t.Context()); err != nil || transitions != 0 {
-		t.Fatalf("reconcile over legacy row = %d, %v", transitions, err)
+		t.Context(), s.concluded, s.command); !errors.Is(err, domain.ErrParentKeyMismatch) || parked {
+		t.Fatalf("operatorFeedbackUndeliverableRecorded over pre-#1342 row = %t, %v, want a parent-key mismatch",
+			parked, err)
 	}
 }
 

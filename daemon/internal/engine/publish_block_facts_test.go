@@ -16,7 +16,6 @@ func TestHandoffBlockTextsNameTheBaseAdvanceRule(t *testing.T) {
 		productionBlockBaseAdvanced,
 		productionBlockHandoffConflict,
 		productionBlockHandoffVerification,
-		productionBlockReentryRetired,
 		productionBlockReentryConflict,
 		productionBlockReentryVerification,
 		productionBlockReentryRoundLimit,

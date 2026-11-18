@@ -154,27 +154,15 @@ func (t productionPublicationTask) handoffID() domain.InvocationID {
 
 // admittedBaseSHA is the base the task's candidate was admitted at: the
 // replay's observed base, and for a cycle that re-enters in place, which has
-// no replay, or one that re-enters before publication, which reviews its head
-// at a newer base, the base its sealed authority names. A remediation an
-// in-place cycle starts is admitted at that base; externalReviewMayAdjudicate
-// lets the cycle start one only while it is the base the predecessor's
-// producer was admitted at. A re-entry before publication starts none.
+// no replay, the base its sealed authority names. A remediation an in-place
+// cycle starts is admitted at that base; externalReviewMayAdjudicate lets
+// the cycle start one only while it is the base the predecessor's producer
+// was admitted at.
 func (t productionPublicationTask) admittedBaseSHA() string {
-	if t.reentersInPlace() || t.reentersBeforePublication() {
+	if t.reentersInPlace() {
 		return t.Successor.Reentry.BaseSHA
 	}
 	return t.Replay.ObservedBaseSHA
-}
-
-// reentersBeforePublication reports whether the task publishes, against a
-// newer base, the head a task before it verified and reviewed but could not
-// publish because the target base advanced: the run's first publication
-// (issue #2058) or a successor's update of its pull request (issue #2111).
-// Such a cycle starts no remediation, so every task under its authority
-// carries that head.
-func (t productionPublicationTask) reentersBeforePublication() bool {
-	return t.Successor != nil && t.Successor.ReentersUnpublishedHead() &&
-		t.HeadSHA == t.Successor.Reentry.HeadSHA
 }
 
 func reentryVerificationInvocationID(successor domain.PublicationSuccessor) domain.InvocationID {
@@ -212,7 +200,6 @@ func (t productionPublicationTask) validateReentry() error {
 		return errors.Join(err, domain.ErrParentKeyMismatch)
 	}
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
-		t.LegacyRemediationNoop ||
 		t.VerificationID != reentryVerificationInvocationID(successor) ||
 		t.PublicationID != successor.PublicationID() ||
 		!validCommitSHA(t.HeadSHA) || t.HeadSHA != successor.Reentry.HeadSHA ||

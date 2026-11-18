@@ -169,18 +169,11 @@ func (d *storePublicationDecision) prepare(
 			decisionErr = err
 			return nil
 		}
-		validateReadinessProofs := c.DispositionHistory != nil
 		if existing, err := tx.GetOutbox(ctx, key); err == nil {
 			if existing.Kind == IntentKindPublication {
-				intent, err := DecodeStoredIntent(existing)
-				if err != nil {
+				if _, err := DecodeStoredIntent(existing); err != nil {
 					return fmt.Errorf("decode existing publication intent: %w", err)
 				}
-				// Only pre-disposition-history intents receive legacy
-				// compatibility. A modern retry can still create forge state,
-				// so its frozen readiness proofs must remain reconstructable.
-				validateReadinessProofs = c.DispositionHistory != nil &&
-					intent.FormatVersion >= IntentFormatHistory
 			}
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("read existing publication intent: %w", err)
@@ -191,11 +184,7 @@ func (d *storePublicationDecision) prepare(
 			decisionErr = fmt.Errorf("validate disposition history at publication decision: %w", err)
 			return nil
 		}
-		if validateReadinessProofs {
-			if c.DispositionHistory == nil {
-				decisionErr = errors.New("validate persisted readiness derivation: modern publication intent carries no disposition history")
-				return nil
-			}
+		if c.DispositionHistory != nil {
 			if err := validatePersistedReadinessProofs(ctx, &tx.ReadTx, *c.DispositionHistory); err != nil {
 				decisionErr = fmt.Errorf("validate persisted readiness derivation: %w", err)
 				return nil

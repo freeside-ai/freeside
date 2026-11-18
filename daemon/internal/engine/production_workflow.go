@@ -1929,19 +1929,6 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		} else if itemErr != nil {
 			return itemErr
 		} else {
-			// An item raised before the admitted facts existed (#979) is
-			// stored without them, and one raised before they carried the
-			// selection (#2598) without its four fields; a replay must
-			// converge on either body.
-			if facts != nil && item.ExecutionFailure != nil {
-				switch stored := item.ExecutionFailure.Admitted; {
-				case stored == nil:
-					facts.Admitted = nil
-				case stored.SelectionDigest == nil && facts.Admitted != nil:
-					facts.Admitted.EnrollmentID, facts.Admitted.SelectionModelID = nil, nil
-					facts.Admitted.SelectionEffort, facts.Admitted.SelectionDigest = nil, nil
-				}
-			}
 			want, err := productionDeliveryRefusalItem(current, terminal, *item.CreatedAt, facts, names)
 			if err != nil {
 				return err

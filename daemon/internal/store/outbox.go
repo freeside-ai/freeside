@@ -452,8 +452,13 @@ func outboxPayloadVersion(kind string, payload []byte) int {
 }
 
 func validateOutboxPayload(entry QueueEntry) error {
-	if entry.PayloadVersion != 1 && entry.PayloadVersion != 2 &&
-		(entry.Kind != readyPublicationIntentKind || (entry.PayloadVersion != 3 && entry.PayloadVersion != 4)) {
+	// Versions 1 and 2 of a publication intent and version 2 of any kind
+	// are no longer written (outboxPayloadVersion) or read (#3323).
+	valid := entry.PayloadVersion == 1
+	if entry.Kind == readyPublicationIntentKind {
+		valid = entry.PayloadVersion == 3 || entry.PayloadVersion == 4
+	}
+	if !valid {
 		return fmt.Errorf("stored payload version %d is invalid", entry.PayloadVersion)
 	}
 	if !contentaddr.Valid(entry.PayloadDigest) {
