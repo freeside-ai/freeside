@@ -1,16 +1,21 @@
 package export
 
 import (
+	"bytes"
+	"cmp"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 )
 
-// Options configures one export. The caps are pinned by the exporter
-// image invocation, so they never vary between runs of the same workspace,
-// and entries are processed in manifest (sorted) order, so which blobs a
-// budget omits is deterministic. An omitted-but-needed blob is
+// Options configures one export. The caps are pinned by the exporter image
+// invocation, so they never vary between runs of the same workspace, and
+// the blob order is a pure function of the workspace (writeBlobs), so which
+// blobs a budget omits is deterministic. An omitted-but-needed blob is
 // publish-blocking at the importer, the contained failure direction for a
 // workspace built to exceed the caps. Zero or negative disables a cap.
 //
@@ -107,26 +112,8 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	bw, err := newBlobWriter(outDir, "blobs")
-	if err != nil {
+	if err := writeBlobs(fsys, outDir, entries, opts); err != nil {
 		return Manifest{}, err
-	}
-	var written int64
-	for i, e := range entries {
-		if e.Kind != EntryRegular {
-			continue
-		}
-		store := blobAllowed(*e.Size, written, bw.blobs(), opts)
-		res, err := bw.digestAndStore(fsys, e.Path, store)
-		if err != nil {
-			return Manifest{}, err
-		}
-		if res.size != *e.Size {
-			return Manifest{}, fmt.Errorf("file %q: size %d became %d: %w", e.Path, *e.Size, res.size, ErrWorkspaceChanged)
-		}
-		written += res.bytesWritten
-		entries[i].Digest = &res.digest
-		entries[i].BlobOmitted = !res.stored
 	}
 	if entries == nil {
 		entries = []Entry{}
@@ -154,6 +141,95 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("write manifest: %w", err)
 	}
 	return m, nil
+}
+
+// writeBlobs digests every regular entry and spends the blob budgets on
+// them in priority order, recording each digest and omission in entries.
+// The workspace's own .gitignore files go first, shallowest first, because
+// their rules decide the rest of the order; then the files those rules leave
+// unignored, in manifest order; then the ignored ones, in manifest order.
+// Build output and package caches under an ignored directory therefore
+// cannot spend the budget before the agent's real change, however they sort.
+// The order only moves omissions: every regular entry is still read once and
+// recorded, and the importer, not this hint, decides what an omitted blob
+// means (ignore.go).
+func writeBlobs(fsys fs.FS, outDir string, entries []Entry, opts Options) error {
+	bw, err := newBlobWriter(outDir, "blobs")
+	if err != nil {
+		return err
+	}
+	var written int64
+	digest := func(i int, capture io.Writer) error {
+		e := &entries[i]
+		store := blobAllowed(*e.Size, written, bw.blobs(), opts)
+		res, err := bw.digestAndStore(fsys, e.Path, store, capture)
+		if err != nil {
+			return err
+		}
+		if res.size != *e.Size {
+			return fmt.Errorf("file %q: size %d became %d: %w", e.Path, *e.Size, res.size, ErrWorkspaceChanged)
+		}
+		written += res.bytesWritten
+		e.Digest = &res.digest
+		e.BlobOmitted = !res.stored
+		return nil
+	}
+
+	hint := newIgnoreHint()
+	var rulesFiles []int
+	for i, e := range entries {
+		if e.Kind == EntryRegular && isIgnoreFile(e.Path) {
+			rulesFiles = append(rulesFiles, i)
+		}
+	}
+	slices.SortStableFunc(rulesFiles, func(a, b int) int {
+		return cmp.Compare(strings.Count(entries[a].Path, "/"), strings.Count(entries[b].Path, "/"))
+	})
+	for _, i := range rulesFiles {
+		e := entries[i]
+		if hint.underIgnoredDir(e.Path) {
+			continue // digested with the other ignored files below
+		}
+		var content *bytes.Buffer
+		if *e.Size <= maxIgnoreFileBytes {
+			content = &bytes.Buffer{}
+		}
+		if err := digest(i, writerOrNil(content)); err != nil {
+			return err
+		}
+		if content != nil {
+			hint.add(e.Path, content.Bytes())
+		}
+	}
+	hint.forgetVerdicts()
+
+	var ignored []int
+	for i, e := range entries {
+		if e.Kind != EntryRegular || e.Digest != nil {
+			continue
+		}
+		if hint.ignored(e.Path) {
+			ignored = append(ignored, i)
+			continue
+		}
+		if err := digest(i, nil); err != nil {
+			return err
+		}
+	}
+	for _, i := range ignored {
+		if err := digest(i, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writerOrNil keeps a nil *bytes.Buffer from becoming a non-nil io.Writer.
+func writerOrNil(b *bytes.Buffer) io.Writer {
+	if b == nil {
+		return nil
+	}
+	return b
 }
 
 // blobAllowed reports whether a regular file of the given size still gets

@@ -50,6 +50,48 @@ func TestImportExcludesBaseIgnoredBuildOutput(t *testing.T) {
 	}
 }
 
+// TestImportBudgetedExportKeepsTheChange: ignored build output that
+// outnumbers the exporter's blob budget, and sorts before the real change,
+// still leaves a clean candidate holding that change (#3347). The exporter
+// spends its budget on unignored files first, and import excludes the
+// blob-omitted build output the base ignores.
+func TestImportBudgetedExportKeepsTheChange(t *testing.T) {
+	t.Parallel()
+	baseFiles := map[string]string{"app/.gitignore": ".build/\n", "app/Sources/x.swift": "old\n"}
+	checkout, base := initBaseRepo(t, baseFiles)
+	workspace := t.TempDir()
+	files := map[string]string{"app/.gitignore": ".build/\n", "app/Sources/x.swift": "new\n"}
+	for i := range 5 {
+		files[fmt.Sprintf("app/.build/obj%d.o", i)] = fmt.Sprintf("object %d\n", i)
+	}
+	for path, body := range files {
+		full := filepath.Join(workspace, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handoff := filepath.Join(t.TempDir(), "handoff")
+	if _, err := export.Export(os.DirFS(workspace), handoff, export.Options{MaxBlobs: 2}); err != nil {
+		t.Fatalf("export.Export: %v", err)
+	}
+	opts := testImportOptions(base)
+	opts.Policy.Allowlist = []string{"app/**"}
+	clone := cloneAtBase(t, checkout)
+	result, err := Import(t.Context(), handoff, clone, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings) != 0 || len(result.Changes) != 1 || result.Changes[0].Path != "app/Sources/x.swift" {
+		t.Fatalf("candidate = %+v, want only the source edit", result)
+	}
+	if got := rungit(t, clone, "show", result.CommitSHA+":app/Sources/x.swift"); got != "new" {
+		t.Fatalf("committed x.swift = %q, want the agent's edit", got)
+	}
+}
+
 //nolint:paralleltest // Serial: the "ambient rules" subtest calls t.Setenv, which panics under a parallel parent.
 func TestImportIgnoredOutputKeepsScopeAndSecurityGates(t *testing.T) {
 	for _, tc := range []struct {
