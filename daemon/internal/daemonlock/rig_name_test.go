@@ -66,7 +66,7 @@ var rigAdmittedNameShapes = []rigNameShape{
 	{
 		prefix: "freeside-review-", id: rigReviewRunID,
 		containers: []string{
-			"ws-obs", "workspace-observer", "agents-init", "agents-obs", "agents-observer",
+			"ws-obs", "agents-init", "agents-obs",
 			"snap-init", "snap-obs", "inputs-init", "inputs-obs", "codex", "claude",
 		},
 		volumes:  []string{"agents", "snap", "inputs"},

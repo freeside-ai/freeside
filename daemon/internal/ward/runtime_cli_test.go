@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 func readFixture(t *testing.T, name string) []byte {
@@ -405,16 +406,16 @@ func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
 	}
 }
 
-func TestRuntimeResourceNameLimitRejectsLegacyCodexObserver(t *testing.T) {
+func TestRuntimeResourceNameLimitRejectsOversizedObserver(t *testing.T) {
 	t.Parallel()
 	maximumID := strings.Repeat("a", 32)
-	legacy := legacyCodexReviewNames(maximumID).workspaceObserver
-	if len(legacy) <= appleContainerIDLimit {
-		t.Fatalf("legacy workspace observer is %d bytes, want a regression fixture over %d",
-			len(legacy), appleContainerIDLimit)
+	oversized := wardname.Name(wardname.ReviewPrefix, maximumID, "workspace-observer")
+	if len(oversized) <= appleContainerIDLimit {
+		t.Fatalf("oversized observer is %d bytes, want a regression fixture over %d",
+			len(oversized), appleContainerIDLimit)
 	}
-	if err := validateRuntimeResourceName(legacy); err == nil {
-		t.Fatal("runtime boundary accepted the legacy oversized workspace observer")
+	if err := validateRuntimeResourceName(oversized); err == nil {
+		t.Fatal("runtime boundary accepted an oversized observer name")
 	}
 	if err := validateRuntimeResourceName(strings.Repeat("a", appleContainerIDLimit)); err != nil {
 		t.Fatalf("runtime boundary rejected an ID at the limit: %v", err)

@@ -561,10 +561,8 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 			"freeside-handoff-review-" + strings.Repeat("a", 24) + "-seeder",
 			"freeside-handoff-review-" + strings.Repeat("a", 24) + "-observer",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-ws-obs",
-			"freeside-review-review-" + strings.Repeat("a", 24) + "-workspace-observer",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-agents-init",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-agents-obs",
-			"freeside-review-review-" + strings.Repeat("a", 24) + "-agents-observer",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-snap-init",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-snap-obs",
 			"freeside-review-review-" + strings.Repeat("a", 24) + "-inputs-init",
@@ -591,7 +589,7 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 	if _, err := BindRigRuntimeResources(
 		cfg.StateRoot, lease.Token(), valid.Containers, valid.Volumes, valid.Networks,
 	); err != nil {
-		t.Fatalf("bind exact current and legacy Codex and Claude review names: %v", err)
+		t.Fatalf("bind exact current Codex and Claude review names: %v", err)
 	}
 	for _, tc := range []struct {
 		name       string
@@ -600,6 +598,8 @@ func TestRigBindClosesCodexReviewRuntimeNamespace(t *testing.T) {
 		networks   []string
 	}{
 		{name: "unknown container role", containers: []string{"freeside-review-review-" + strings.Repeat("a", 24) + "-shell"}},
+		{name: "pre-#587 workspace observer", containers: []string{"freeside-review-review-" + strings.Repeat("a", 24) + "-workspace-observer"}},
+		{name: "pre-#587 agents observer", containers: []string{"freeside-review-review-" + strings.Repeat("a", 24) + "-agents-observer"}},
 		{name: "short review id", containers: []string{"freeside-review-review-" + strings.Repeat("a", 23) + "-codex"}},
 		{name: "short Claude review id", containers: []string{"freeside-review-review-" + strings.Repeat("a", 23) + "-claude"}},
 		{name: "review handoff agent", containers: []string{"freeside-handoff-review-" + strings.Repeat("a", 24) + "-agent"}},

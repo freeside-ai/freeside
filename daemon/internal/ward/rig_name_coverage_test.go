@@ -41,10 +41,6 @@ func wardRigNameSources(t *testing.T) []wardRigNameSource {
 		{"RuntimeResourceNamesFor", RuntimeResourceNamesFor(coverageProductionRunID)},
 		{"CodexReviewRuntimeResourceNamesFor", CodexReviewRuntimeResourceNamesFor(coverageReviewRunID)},
 		{"codexReviewWorkspaceRuntimeResourceNames", codexReviewWorkspaceRuntimeResourceNames(coverageReviewRunID)},
-		{"legacyCodexReviewNames", codexReviewRuntimeResourceNames(
-			coverageReviewRunID, legacyCodexReviewNames(coverageReviewRunID))},
-		{"preSnapshotCodexReviewNames", codexReviewRuntimeResourceNames(
-			coverageReviewRunID, preSnapshotCodexReviewNames(coverageReviewRunID))},
 		{"FullConformanceRuntimeResourceNamesFor", FullConformanceRuntimeResourceNamesFor(
 			coverageConfRunID, coverageConfRegistryID)},
 		{"PreJobContainerNameForInvocation", RuntimeResourceNames{
@@ -159,8 +155,6 @@ func TestWardNameStructsReachAnEnumerator(t *testing.T) {
 		value any
 	}{
 		{"handoffNames", namesFor(coverageProductionRunID)},
-		{"legacyCodexReviewNames", legacyCodexReviewNames(coverageReviewRunID)},
-		{"preSnapshotCodexReviewNames", preSnapshotCodexReviewNames(coverageReviewRunID)},
 	}
 	for _, provider := range allReviewProviders() {
 		structs = append(structs, struct {
@@ -175,8 +169,9 @@ func TestWardNameStructsReachAnEnumerator(t *testing.T) {
 			if field.Type.Kind() != reflect.String {
 				t.Fatalf("%s.%s is not a name string; extend this test", s.label, field.Name)
 			}
-			// Empty fields are the legacy generations' absent resources.
-			if name := value.Field(i).String(); name != "" && !produced[name] {
+			// Every current generation names every resource; only the
+			// six-resource generations #3326 removed left fields empty.
+			if name := value.Field(i).String(); name == "" || !produced[name] {
 				t.Errorf("%s.%s = %q reaches no rig enumerator", s.label, field.Name, name)
 			}
 		}

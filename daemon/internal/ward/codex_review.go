@@ -70,12 +70,9 @@ const (
 	// create a missing nested mountpoint under the read-only workspace, so a
 	// candidate without .agents mounts no shadow there, and the chosen
 	// topology is bound to the observation that justified it. A v2 binding
-	// must not validate against the conditional shape; teardown
-	// authentication alone still accepts v2 so pre-upgrade reviews can be
-	// reaped. (v2 was #591's move to the read-only snapshot volume.)
-	codexReviewTopologyVersion   = "codex_review_read_only_v3"
-	codexReviewTopologyVersionV2 = "codex_review_read_only_v2"
-	maxCodexAuthSnapshotBytes    = 1 << 20
+	// (#591's move to the read-only snapshot volume) no longer validates.
+	codexReviewTopologyVersion = "codex_review_read_only_v3"
+	maxCodexAuthSnapshotBytes  = 1 << 20
 	// The prompt is a dedicated sh -c positional argument, not part of the
 	// shell program. Keep it below Linux's 128-KiB MAX_ARG_STRLEN with room for
 	// the terminating NUL and runtime implementation margins.
@@ -1211,16 +1208,7 @@ func buildReviewAgentSpec(
 // deliberately not an authorization gate: CodexReview reloads the durable
 // record and reconstructs every runtime observation before start.
 func (b CodexReviewJournalBinding) validateShape(provider reviewProvider) error {
-	return b.validate(provider, true, false)
-}
-
-// validateForTeardown accepts the historical shapes that predate the current
-// contract: the instruction binding without explicit composition provenance,
-// and the v2 topology without the observed workspace .agents entry. It is
-// used only to authenticate cleanup targets; legacy authority can never
-// launch or satisfy a review result.
-func (b CodexReviewJournalBinding) validateForTeardown(provider reviewProvider) error {
-	return b.validate(provider, true, true)
+	return b.validate(provider, true)
 }
 
 func (b CodexReviewJournalBinding) validatePrepared(provider reviewProvider) error {
@@ -1230,17 +1218,13 @@ func (b CodexReviewJournalBinding) validatePrepared(provider reviewProvider) err
 		b.InputsPreStartObserverFingerprint != "" {
 		return errors.New("codex review prepared journal binding carries pre-start evidence")
 	}
-	return b.validate(provider, false, false)
+	return b.validate(provider, false)
 }
 
 func (b CodexReviewJournalBinding) validate(
-	provider reviewProvider, requirePreStartObservation, allowLegacyTeardownBinding bool,
+	provider reviewProvider, requirePreStartObservation bool,
 ) error {
-	topologyVersionValid := b.TopologyVersion == provider.topologyVersion()
-	if allowLegacyTeardownBinding && slices.Contains(provider.legacyTopologyVersions(), b.TopologyVersion) {
-		topologyVersionValid = true
-	}
-	if !topologyVersionValid ||
+	if b.TopologyVersion != provider.topologyVersion() ||
 		!runIDPattern.MatchString(b.RunID) ||
 		b.Boundary != CodexReviewFreshStart || !b.FreshContext || b.ContinuityMounted ||
 		!b.WorkspaceReadOnly || !b.AuthReadOnly || !b.AuthStoreMutationLeaseRequired ||
@@ -1258,13 +1242,6 @@ func (b CodexReviewJournalBinding) validate(
 	workspaceAgents := b.WorkspaceAgentsEntry
 	workspaceAgentsValid := workspaceAgents == codexWorkspaceAgentsDir ||
 		workspaceAgents == codexWorkspaceAgentsAbsent
-	if allowLegacyTeardownBinding && b.TopologyVersion == codexReviewTopologyVersionV2 &&
-		workspaceAgents == "" {
-		// v2 predates the observed .agents entry and always shadowed the
-		// workspace root; legacy authority reaps, it never launches.
-		workspaceAgentsValid = true
-		workspaceAgents = codexWorkspaceAgentsDir
-	}
 	_, workspaceTreeDigestOK := contentaddr.FromHex(b.WorkspaceTreeDigest)
 	if b.WorkspaceFingerprint == "" || !commitSHAPattern.MatchString(b.WorkspaceHead) ||
 		!workspaceTreeDigestOK || !workspaceAgentsValid ||
@@ -1277,14 +1254,8 @@ func (b CodexReviewJournalBinding) validate(
 			b.WorkspacePreStartObserverFingerprint == b.WorkspaceObserverFingerprint) {
 		return errors.New("codex review journal omits distinct pre-start workspace evidence")
 	}
-	instructionBindingValid := b.instructionBinding().Validate() == nil
-	if allowLegacyTeardownBinding && b.InstructionCompositionVersion == "" &&
-		b.HostInstructionDigest == nil && len(b.RepositoryInstructionSources) == 0 &&
-		contentaddr.Valid(string(b.InstructionDigest)) {
-		instructionBindingValid = true
-	}
 	if !b.AuthMode.valid() || b.AuthIdentityID == "" ||
-		!contentaddr.Valid(b.AuthSnapshotDigest) || !instructionBindingValid {
+		!contentaddr.Valid(b.AuthSnapshotDigest) || b.instructionBinding().Validate() != nil {
 		return errors.New("codex review journal credential or instruction binding is invalid")
 	}
 	if b.AuthMode == CodexAuthSubscription && b.AccessTokenExpiresAt == nil {
@@ -1799,12 +1770,9 @@ type codexReviewResourceNames struct {
 	reviewContainer   string
 	shadowVolume      string
 	network           string
-	// snapshot resources are empty on the pre-#591 generation, which delivered
-	// the two files as read-only host binds instead of a seeded volume. An empty
-	// snapshotVolume selects the six-resource legacy shape in resourceNamesMatch.
-	snapshotVolume   string
-	snapshotSeeder   string
-	snapshotObserver string
+	snapshotVolume    string
+	snapshotSeeder    string
+	snapshotObserver  string
 	// input resources exist only for a review that delivers operator files;
 	// validatedResourceNames blanks them for an intent that has none, and
 	// every generation before review inputs leaves them empty.
@@ -1870,13 +1838,9 @@ func codexReviewRuntimeResourceNames(
 	containers := []string{
 		handoff.Seeder, handoff.Observer,
 		review.workspaceObserver, review.shadowInitializer, review.shadowObserver,
-		review.reviewContainer,
+		review.reviewContainer, review.snapshotSeeder, review.snapshotObserver,
 	}
-	volumes := []string{handoff.Workspace, review.shadowVolume}
-	if review.snapshotVolume != "" {
-		containers = append(containers, review.snapshotSeeder, review.snapshotObserver)
-		volumes = append(volumes, review.snapshotVolume)
-	}
+	volumes := []string{handoff.Workspace, review.shadowVolume, review.snapshotVolume}
 	if review.inputsVolume != "" {
 		containers = append(containers, review.inputsSeeder, review.inputsObserver)
 		volumes = append(volumes, review.inputsVolume)
@@ -1893,39 +1857,6 @@ func codexReviewWorkspaceRuntimeResourceNames(runID string) RuntimeResourceNames
 	return RuntimeResourceNames{
 		Containers: []string{names.Seeder, names.Observer},
 		Volumes:    []string{names.Workspace},
-	}
-}
-
-// legacyCodexReviewNames re-derives the exact topology persisted before #587.
-// It is accepted only while authenticating existing intents for cleanup; no
-// new resource is ever created with these names. It carries no snapshot
-// resources: pre-#587 launches used host binds, so their intents have the
-// six-resource shape.
-func legacyCodexReviewNames(runID string) codexReviewResourceNames {
-	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
-	return codexReviewResourceNames{
-		workspaceObserver: name(wardname.LegacyWorkspaceObserver),
-		shadowInitializer: name(wardname.AgentsInit),
-		shadowObserver:    name(wardname.LegacyAgentsObserver),
-		reviewContainer:   name(wardname.Codex),
-		shadowVolume:      name(wardname.Agents),
-		network:           name(wardname.Egress),
-	}
-}
-
-// preSnapshotCodexReviewNames re-derives the #587..#590 topology: the current
-// short names but still the six-resource, host-bind shape from before the
-// snapshot volume (#591). It authenticates the round-2 intent persisted by
-// run 482 for cleanup only; no new resource is created with this shape.
-func preSnapshotCodexReviewNames(runID string) codexReviewResourceNames {
-	name := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
-	return codexReviewResourceNames{
-		workspaceObserver: name(wardname.WorkspaceObs),
-		shadowInitializer: name(wardname.AgentsInit),
-		shadowObserver:    name(wardname.AgentsObs),
-		reviewContainer:   name(wardname.Codex),
-		shadowVolume:      name(wardname.Agents),
-		network:           name(wardname.Egress),
 	}
 }
 

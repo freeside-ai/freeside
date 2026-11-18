@@ -593,9 +593,9 @@ type HandoffSpec struct {
 	// LaunchWriter, or LaunchConformance for the suite's own handoff.
 	Class LaunchClass `json:",omitzero"`
 	// Size is the declared CPU cap and memory limit of every container this
-	// handoff creates. Class and Size are omitted from the journaled digest
-	// when zero, so a spec journaled before sizes were declared keeps its
-	// digest and still recovers.
+	// handoff creates. validate requires Class and Size, so a record
+	// journaled before sizes were declared matches no spec recovery can be
+	// given, and its recovery is refused (#3326).
 	Size ContainerSize `json:",omitzero"`
 	// RegistryHosts is the run's declared registry set (plan §5.4), the
 	// hosts of domain.RegistrySet in canonical order, each reached on port

@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 )
 
 type fakeCodexReviewJournal struct {
@@ -829,25 +830,6 @@ func retargetCodexReviewLifecycle(
 	}
 }
 
-func legacyCodexReviewIntentForTest(
-	runID, digest, owner string,
-) *CodexReviewLaunchIntent {
-	names := legacyCodexReviewNames(runID)
-	return &CodexReviewLaunchIntent{
-		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
-		ShadowVolume: names.shadowVolume, Network: names.network,
-		ReviewContainer: names.reviewContainer, State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: names.workspaceObserver},
-			{Name: names.shadowInitializer, OwnershipToken: owner},
-			{Name: names.shadowObserver},
-			{Name: names.reviewContainer, OwnershipToken: owner},
-			{Name: names.shadowVolume, OwnershipToken: owner},
-			{Name: names.network, OwnershipToken: owner},
-		},
-	}
-}
-
 func TestCodexReviewResourceNamesFitReferenceRuntime(t *testing.T) {
 	t.Parallel()
 	maximumID := strings.Repeat("a", 32)
@@ -910,35 +892,6 @@ func TestCodexReviewRuntimeResourceNamesAreComplete(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Codex review runtime resources = %#v, want %#v", got, want)
-	}
-}
-
-func TestRecoverCodexReviewAuthorizesExactLegacyTopologyBeforeRuntime(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
-	owner := testOwnershipLabel()
-	intent := legacyCodexReviewIntentForTest(launch.RunID, "legacy-digest", owner.Value)
-	journal.intent = intent
-	want := codexReviewRuntimeResourceNames(launch.RunID, legacyCodexReviewNames(launch.RunID))
-	bindFailure := errors.New("rig authority unavailable")
-	var authorized RuntimeResourceNames
-	backend.authorizeRuntimeResources = func(_ context.Context, resources RuntimeResourceNames) error {
-		authorized = resources
-		return bindFailure
-	}
-	beforeCalls := len(rt.calls)
-	err := backend.recoverCodexReviewIntent(t.Context(), cfg, *intent, true)
-	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
-		t.Fatalf("recovery authorization error = %v, want %v", err, bindFailure)
-	}
-	if !reflect.DeepEqual(authorized, want) {
-		t.Fatalf("legacy recovery resources = %#v, want %#v", authorized, want)
-	}
-	if len(rt.calls) != beforeCalls {
-		t.Fatalf("runtime calls after refused recovery authorization = %v", rt.calls[beforeCalls:])
-	}
-	if journal.intent.State != CodexReviewIntentPreparing {
-		t.Fatalf("intent state = %q, want preserved preparing", journal.intent.State)
 	}
 }
 
@@ -1026,102 +979,17 @@ func TestBackendCodexReviewRefusesNonDirectoryWorkspaceAgents(t *testing.T) {
 	}
 }
 
-func TestBackendCodexReviewReapsAuthenticatedLegacyOversizedObserverBeforeRelaunch(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
-	const runID = "review-0dcd5c691adcaec0c353993a"
-	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
-	digest, err := codexReviewIntentDigest(cfg, launchSpec)
-	if err != nil {
-		t.Fatal(err)
+// intentResource returns the intent's resource named name, so a test can set
+// the creation fingerprint or owner it recorded.
+func intentResource(t *testing.T, intent *CodexReviewLaunchIntent, name string) *CodexReviewIntentResource {
+	t.Helper()
+	for i := range intent.Resources {
+		if intent.Resources[i].Name == name {
+			return &intent.Resources[i]
+		}
 	}
-	owner := testOwnershipLabel()
-	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
-	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
-	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
-	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, legacyObserver, observerOwner.Value, "legacy-observer",
-	)
-	if err := validateRuntimeResourceName(legacyObserver); err == nil {
-		t.Fatal("production regression fixture is not oversized")
-	}
-	rt.ctrs[legacyObserver] = &fakeCtr{
-		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(runID), observerOwner)},
-		created: "legacy-observer",
-	}
-	launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
-	if err != nil {
-		t.Fatalf("same-invocation relaunch after legacy recovery: %v", err)
-	}
-	t.Cleanup(func() { _ = launch.Close() })
-	if _, exists := rt.ctrs[legacyObserver]; exists {
-		t.Fatal("authenticated legacy oversized observer survived recovery")
-	}
-	if journal.intent.State != CodexReviewIntentStarted ||
-		journal.intent.Resources[0].Name != codexReviewWorkspaceObserverName(runID) {
-		t.Fatalf("relaunch intent = %#v, want current started topology", journal.intent)
-	}
-}
-
-func TestRecoverCodexReviewRefusesForeignLegacyOversizedObserver(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
-	const runID = "review-0dcd5c691adcaec0c353993a"
-	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
-	digest, err := codexReviewIntentDigest(cfg, launchSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := testOwnershipLabel()
-	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
-	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
-	rt.ctrs[legacyObserver] = &fakeCtr{
-		spec: ContainerSpec{Name: legacyObserver, Labels: []Label{{
-			Key: ownershipLabelKey, Value: strings.Repeat("f", 32),
-		}}},
-		created: "foreign-observer",
-	}
-	if err := backend.RecoverCodexReview(context.Background(), cfg, launchSpec); err == nil ||
-		!errors.Is(err, ErrConformance) {
-		t.Fatalf("foreign legacy recovery = %v, want conformance refusal", err)
-	}
-	if _, exists := rt.ctrs[legacyObserver]; !exists {
-		t.Fatal("recovery deleted a foreign legacy oversized observer")
-	}
-	if journal.intent.State != CodexReviewIntentPreparing {
-		t.Fatalf("foreign legacy recovery closed intent: %q", journal.intent.State)
-	}
-}
-
-func TestCodexReviewIntentRejectsMixedResourceNameGenerations(t *testing.T) {
-	t.Parallel()
-	runID := strings.Repeat("a", 32)
-	owner := strings.Repeat("1", 32)
-	intent := legacyCodexReviewIntentForTest(runID, strings.Repeat("a", 64), owner)
-	intent.Resources[0].Name = codexReviewNames(runID).workspaceObserver
-	if err := intent.validateIdentity(runID); err == nil {
-		t.Fatal("intent accepted a mixed legacy/current resource topology")
-	}
-}
-
-// preSnapshotCodexReviewIntentForTest builds the #587..#590 host-bind
-// generation: the current short names, six resources, and no snapshot volume,
-// exactly the shape run 482 persisted at its round-2 pause before #591.
-func preSnapshotCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLaunchIntent {
-	names := preSnapshotCodexReviewNames(runID)
-	return &CodexReviewLaunchIntent{
-		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
-		ShadowVolume: names.shadowVolume, Network: names.network,
-		ReviewContainer: names.reviewContainer, State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: names.workspaceObserver},
-			{Name: names.shadowInitializer, OwnershipToken: owner},
-			{Name: names.shadowObserver},
-			{Name: names.reviewContainer, OwnershipToken: owner},
-			{Name: names.shadowVolume, OwnershipToken: owner},
-			{Name: names.network, OwnershipToken: owner},
-		},
-	}
+	t.Fatalf("intent has no resource %q", name)
+	return nil
 }
 
 func currentCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLaunchIntent {
@@ -1145,31 +1013,15 @@ func currentCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLa
 	}
 }
 
-// TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup pins the #591
-// restart-safety criterion: run 482's persisted six-resource, host-bind intent
-// authenticates as a cleanup-only legacy generation (no snapshot resources),
-// while the current generation carries nine resources and the snapshot volume,
-// and a six-resource intent claiming a snapshot volume is rejected.
-func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
+// TestCodexReviewIntentRefusesSixResourceGenerations pins #3326: the
+// six-resource, host-bind intents written before #591, under the current
+// observer names or the long pre-#587 ones, no longer authenticate, while the
+// current nine-resource generation does and a truncated one stays refused.
+func TestCodexReviewIntentRefusesSixResourceGenerations(t *testing.T) {
 	t.Parallel()
 	runID := strings.Repeat("a", 32)
 	owner := strings.Repeat("1", 32)
 	digest := strings.Repeat("a", 64)
-
-	preSnapshot := preSnapshotCodexReviewIntentForTest(runID, digest, owner)
-	names, err := preSnapshot.validatedResourceNames(runID)
-	if err != nil {
-		t.Fatalf("pre-snapshot intent rejected: %v", err)
-	}
-	if names.snapshotVolume != "" || names.snapshotSeeder != "" || names.snapshotObserver != "" {
-		t.Fatalf("pre-snapshot generation carried snapshot resources: %#v", names)
-	}
-
-	poisoned := preSnapshotCodexReviewIntentForTest(runID, digest, owner)
-	poisoned.SnapshotVolume = codexReviewSnapshotVolumeName(runID)
-	if err := poisoned.validateIdentity(runID); err == nil {
-		t.Fatal("six-resource intent accepted a snapshot volume")
-	}
 
 	current := currentCodexReviewIntentForTest(runID, digest, owner)
 	currentNames, err := current.validatedResourceNames(runID)
@@ -1178,6 +1030,23 @@ func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
 	}
 	if currentNames.snapshotVolume != codexReviewSnapshotVolumeName(runID) {
 		t.Fatalf("current generation missing snapshot volume: %#v", currentNames)
+	}
+
+	sixResource := func() *CodexReviewLaunchIntent {
+		intent := currentCodexReviewIntentForTest(runID, digest, owner)
+		intent.SnapshotVolume = ""
+		intent.Resources = intent.Resources[:6]
+		return intent
+	}
+	if _, err := sixResource().validatedResourceNames(runID); err == nil {
+		t.Error("pre-#591 six-resource intent authenticated")
+	}
+	longNames := sixResource()
+	longName := func(role string) string { return wardname.Name(wardname.ReviewPrefix, runID, role) }
+	intentResource(t, longNames, codexReviewWorkspaceObserverName(runID)).Name = longName("workspace-observer")
+	intentResource(t, longNames, codexReviewShadowObserverName(runID)).Name = longName("agents-observer")
+	if _, err := longNames.validatedResourceNames(runID); err == nil {
+		t.Error("pre-#587 long-name intent authenticated")
 	}
 
 	truncated := currentCodexReviewIntentForTest(runID, digest, owner)
@@ -1303,6 +1172,37 @@ func TestBackendCodexReviewPreservesResourceMutationConformance(t *testing.T) {
 	}
 }
 
+func TestRecoverCodexReviewAuthorizesExactTopologyBeforeRuntime(t *testing.T) {
+	t.Parallel()
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	owner := testOwnershipLabel()
+	intent := currentCodexReviewIntentForTest(launch.RunID, "intent-digest", owner.Value)
+	journal.intent = intent
+	names := reviewNames(codexReviewProvider{}, launch.RunID)
+	names.inputsVolume, names.inputsSeeder, names.inputsObserver = "", "", ""
+	want := codexReviewRuntimeResourceNames(launch.RunID, names)
+	bindFailure := errors.New("rig authority unavailable")
+	var authorized RuntimeResourceNames
+	backend.authorizeRuntimeResources = func(_ context.Context, resources RuntimeResourceNames) error {
+		authorized = resources
+		return bindFailure
+	}
+	beforeCalls := len(rt.calls)
+	err := backend.recoverCodexReviewIntent(t.Context(), cfg, *intent, true)
+	if err == nil || !strings.Contains(err.Error(), bindFailure.Error()) {
+		t.Fatalf("recovery authorization error = %v, want %v", err, bindFailure)
+	}
+	if !reflect.DeepEqual(authorized, want) {
+		t.Fatalf("recovery resources = %#v, want %#v", authorized, want)
+	}
+	if len(rt.calls) != beforeCalls {
+		t.Fatalf("runtime calls after refused recovery authorization = %v", rt.calls[beforeCalls:])
+	}
+	if journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("intent state = %q, want preserved preparing", journal.intent.State)
+	}
+}
+
 func TestRecoverCodexReviewReapsOnlyDurablyOwnedPreStartObjects(t *testing.T) {
 	t.Parallel()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
@@ -1314,19 +1214,10 @@ func TestRecoverCodexReviewReapsOnlyDurablyOwnedPreStartObjects(t *testing.T) {
 	shadow := codexReviewShadowVolumeName(launch.RunID)
 	network := codexReviewNetworkName(launch.RunID)
 	review := codexReviewContainerName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: network, ReviewContainer: review,
-		State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
-			{Name: network, OwnershipToken: owner.Value, Fingerprint: "network"},
-			{Name: review, OwnershipToken: owner.Value, Fingerprint: "review"},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
+	intentResource(t, journal.intent, network).Fingerprint = "network"
+	intentResource(t, journal.intent, review).Fingerprint = "review"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	rt.nets[network] = &fakeNetwork{labels: []Label{owner}, created: "network"}
 	rt.ctrs[review] = &fakeCtr{spec: ContainerSpec{Name: review, Labels: []Label{owner}}, created: "review"}
@@ -1359,19 +1250,8 @@ func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	failed := false
 	rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
@@ -1395,6 +1275,10 @@ func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
 
 func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	t.Parallel()
+	leaseVolumes := func(launch CodexReviewLaunchSpec) []string {
+		return codexReviewLeaseVolumes(launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID),
+			codexReviewSnapshotVolumeName(launch.RunID), "")
+	}
 	setup := func(t *testing.T) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, Label) {
 		t.Helper()
 		backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
@@ -1404,7 +1288,9 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			t.Fatal(err)
 		}
 		shadow := codexReviewShadowVolumeName(launch.RunID)
-		journal.intent = &CodexReviewLaunchIntent{RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value, ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID), ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPrepared, Resources: []CodexReviewIntentResource{{Name: codexReviewWorkspaceObserverName(launch.RunID)}, {Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewShadowObserverName(launch.RunID)}, {Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"}, {Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value}}}
+		journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+		journal.intent.State = CodexReviewIntentPrepared
+		intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 		rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 		return backend, rt, cfg, launch, journal, owner
 	}
@@ -1412,7 +1298,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	t.Run("same owner adopts and releases", func(t *testing.T) {
 		backend, rt, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
-		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value, []string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value, leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
@@ -1453,7 +1339,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		backend, _, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		stage := plantStage(t, backend, launch.RunID)
@@ -1489,7 +1375,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			}
 			leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 			if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-				[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+				leaseVolumes(launch)); err != nil {
 				t.Fatal(err)
 			}
 			stage := plantStage(t, backend, launch.RunID)
@@ -1513,7 +1399,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		backend, rt, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		journal.failDeleteWorkspace = errors.New("journal temporarily unavailable")
@@ -1542,7 +1428,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	t.Run("foreign owner blocks cleanup", func(t *testing.T) {
 		backend, rt, cfg, launch, journal, _ := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
-		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32), []string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32), leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -1565,7 +1451,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		stage := plantStage(t, backend, launch.RunID)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32),
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -1586,7 +1472,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		backend, _, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
-			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			leaseVolumes(launch)); err != nil {
 			t.Fatal(err)
 		}
 		// A crash-residue stage whose directory is made unwritable, so the early
@@ -1747,62 +1633,6 @@ func TestRecoverCodexReviewReapsPartialPreparationAttachmentsForRelaunch(t *test
 			t.Cleanup(func() { _ = relaunched.Close() })
 		})
 	}
-}
-
-func TestRecoverCodexReviewReapsLegacyPartialPreparationAttachmentForRelaunch(t *testing.T) {
-	t.Parallel()
-	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
-	digest, err := codexReviewIntentDigest(cfg, launch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := testOwnershipLabel()
-	names := preSnapshotCodexReviewNames(launch.RunID)
-	observerOwner := Label{Key: ownershipLabelKey, Value: strings.Repeat("2", 32)}
-	journal.intent = preSnapshotCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
-	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, names.workspaceObserver, observerOwner.Value, "legacy-prep-created",
-	)
-	setCodexReviewIntentResourceEvidenceForTest(
-		t, journal.intent, names.shadowVolume, owner.Value, "legacy-shadow-created",
-	)
-	rt.vols[names.shadowVolume] = &fakeVol{
-		labels: append(runLabels(launch.RunID), owner), created: "legacy-shadow-created",
-	}
-	rt.ctrs[names.workspaceObserver] = &fakeCtr{
-		spec: ContainerSpec{
-			Name:   names.workspaceObserver,
-			Labels: append(runLabels(launch.RunID), observerOwner),
-			Mounts: []Mount{{
-				Type: MountVolume, Source: launch.WorkspaceVolume, Target: "/legacy-prep", ReadOnly: true,
-			}},
-		},
-		created: "legacy-prep-created",
-	}
-	leaser, err := NewRuntimeCodexReviewVolumeLeaser(rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.VolumeLifecycleLeaser = leaser
-
-	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
-		t.Fatalf("legacy partial preparation recovery = %v, want convergence", err)
-	}
-	if _, exists := rt.ctrs[names.workspaceObserver]; exists {
-		t.Fatal("legacy recovery left the workspace-only observer")
-	}
-	if _, exists := rt.vols[names.shadowVolume]; exists {
-		t.Fatal("legacy recovery left the owned shadow volume")
-	}
-	if journal.intent.State != CodexReviewIntentClosed || len(leaser.holders) != 0 {
-		t.Fatalf("legacy recovery did not close and release: state=%q holders=%v",
-			journal.intent.State, leaser.holders)
-	}
-	relaunched, err := backend.CodexReview(context.Background(), cfg, launch)
-	if err != nil {
-		t.Fatalf("relaunch after legacy partial preparation recovery = %v", err)
-	}
-	t.Cleanup(func() { _ = relaunched.Close() })
 }
 
 func TestRecoverCodexReviewLeavesUnauthenticatedPartialPreparationAttachments(t *testing.T) {
@@ -1988,21 +1818,8 @@ func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
 	t.Parallel()
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	owner := testOwnershipLabel()
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, OwnershipToken: owner.Value,
-		ShadowVolume:    codexReviewShadowVolumeName(launch.RunID),
-		Network:         codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID),
-		State:           CodexReviewIntentClosed,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, "", owner.Value)
+	journal.intent.State = CodexReviewIntentClosed
 	journal.outcomes = map[string]CodexReviewSourceOutcome{launch.RunID: {
 		InvocationID: domain.InvocationID(launch.RunID),
 		FailureClass: domain.ReviewFailureTransient,
@@ -2110,19 +1927,8 @@ func TestCodexReviewRecoveryDoesNotLetInvalidIntentStarveLaterCleanup(t *testing
 	backend, _, cfg, _, journal := testCodexReviewLifecycle(t)
 	validID := "review-2"
 	owner := testOwnershipLabel()
-	valid := &CodexReviewLaunchIntent{
-		RunID: validID, OwnershipToken: owner.Value,
-		ShadowVolume: codexReviewShadowVolumeName(validID), Network: codexReviewNetworkName(validID),
-		ReviewContainer: codexReviewContainerName(validID), State: CodexReviewIntentClosed,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(validID)},
-			{Name: codexReviewShadowInitializerName(validID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(validID)},
-			{Name: codexReviewShadowVolumeName(validID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(validID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(validID), OwnershipToken: owner.Value},
-		},
-	}
+	valid := currentCodexReviewIntentForTest(validID, "", owner.Value)
+	valid.State = CodexReviewIntentClosed
 	journal.intent = nil
 	journal.extraIntents = map[string]*CodexReviewLaunchIntent{
 		"review-1": valid,
@@ -2177,19 +1983,8 @@ func TestRecoverCodexReviewRefusesForeignSameNameReviewContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	review := codexReviewContainerName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: codexReviewShadowVolumeName(launch.RunID), Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: review, State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: review, OwnershipToken: owner.Value, Fingerprint: "original"},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, review).Fingerprint = "original"
 	rt.ctrs[review] = &fakeCtr{spec: ContainerSpec{Name: review, Labels: []Label{{
 		Key: ownershipLabelKey, Value: strings.Repeat("1", 32),
 	}}}, created: "replacement"}
@@ -2210,18 +2005,9 @@ func TestRecoverCodexReviewRejectsForgedFixedResourceOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: strings.Repeat("1", 32), Fingerprint: "shadow"},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	*intentResource(t, journal.intent, shadow) = CodexReviewIntentResource{
+		Name: shadow, OwnershipToken: strings.Repeat("1", 32), Fingerprint: "shadow",
 	}
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -2241,19 +2027,8 @@ func TestRecoverCodexReviewKeepsIntentOpenWhenShadowDeletionLies(t *testing.T) {
 		t.Fatal(err)
 	}
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{
-		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
-		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
-		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
-		Resources: []CodexReviewIntentResource{
-			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
-			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewShadowObserverName(launch.RunID)},
-			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
-			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
-			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
-		},
-	}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	rt.onDeleteVolume = func(name string) (bool, error) { return name == shadow, nil }
 	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
@@ -2270,7 +2045,8 @@ func TestRecoverCodexReviewRetriesLeaseReleaseBeforeClosingIntent(t *testing.T) 
 	owner := testOwnershipLabel()
 	digest, _ := codexReviewIntentDigest(cfg, launch)
 	shadow := codexReviewShadowVolumeName(launch.RunID)
-	journal.intent = &CodexReviewLaunchIntent{RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value, ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID), ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing, Resources: []CodexReviewIntentResource{{Name: codexReviewWorkspaceObserverName(launch.RunID)}, {Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewShadowObserverName(launch.RunID)}, {Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"}, {Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value}, {Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value}}}
+	journal.intent = currentCodexReviewIntentForTest(launch.RunID, digest, owner.Value)
+	intentResource(t, journal.intent, shadow).Fingerprint = "shadow"
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 	leaser.releaseErr = errors.New("release failed")
@@ -3146,6 +2922,20 @@ func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 	if err := empty.validatePrepared(codexReviewProvider{}); err == nil {
 		t.Error("binding accepted an unrecorded workspace .agents entry")
 	}
+	// #591's v2 topology and a binding without instruction provenance were
+	// read for teardown until #3326; neither validates now.
+	v2 := binding
+	v2.TopologyVersion = "codex_review_read_only_v2"
+	if err := v2.validatePrepared(codexReviewProvider{}); err == nil {
+		t.Error("binding accepted the v2 topology")
+	}
+	unversioned := binding
+	unversioned.InstructionCompositionVersion = ""
+	unversioned.HostInstructionDigest = nil
+	unversioned.RepositoryInstructionSources = nil
+	if err := unversioned.validatePrepared(codexReviewProvider{}); err == nil {
+		t.Error("binding accepted instructions without composition provenance")
+	}
 
 	consistent := binding
 	consistent.WorkspaceAgentsEntry = codexWorkspaceAgentsAbsent
@@ -3159,48 +2949,6 @@ func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 	}
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, consistent); err == nil {
 		t.Error("spec validation accepted a binding whose entry disagrees with the observation")
-	}
-}
-
-// TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly pins the upgrade
-// posture: a v2 binding without the observed .agents entry may still
-// authenticate cleanup of a pre-upgrade review, but can never validate for
-// launch or result collection under the v3 contract.
-func TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly(t *testing.T) {
-	t.Parallel()
-	cfg, req := testCodexReview(t)
-	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding.ReviewContainer = codexReviewContainerName(binding.RunID)
-	binding.ReviewContainerFingerprint = "fingerprint"
-	binding.ReviewOwnershipToken = strings.Repeat("b", 32)
-	binding.WorkspacePreStartObserverFingerprint = "pre-start-workspace"
-	binding.SnapshotPreStartObserverFingerprint = "pre-start-snapshot"
-	binding.AgentsShadowPreStartObserverFingerprint = "pre-start-shadow"
-	if err := binding.validateShape(codexReviewProvider{}); err != nil {
-		t.Fatalf("v3 binding shape: %v", err)
-	}
-
-	legacy := binding
-	legacy.TopologyVersion = codexReviewTopologyVersionV2
-	legacy.WorkspaceAgentsEntry = ""
-	if err := legacy.validateForTeardown(codexReviewProvider{}); err != nil {
-		t.Errorf("legacy v2 binding failed teardown authentication: %v", err)
-	}
-	if err := legacy.validateShape(codexReviewProvider{}); err == nil {
-		t.Error("legacy v2 binding validated outside teardown")
-	}
-	downgraded := binding
-	downgraded.TopologyVersion = codexReviewTopologyVersionV2
-	if err := downgraded.validateShape(codexReviewProvider{}); err == nil {
-		t.Error("v2 topology version validated outside teardown")
-	}
-	unversioned := binding
-	unversioned.WorkspaceAgentsEntry = ""
-	if err := unversioned.validateForTeardown(codexReviewProvider{}); err == nil {
-		t.Error("v3 binding without a recorded entry authenticated teardown")
 	}
 }
 

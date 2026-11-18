@@ -129,25 +129,6 @@ func TestFailedWriterRetainsTranscriptWithoutSourceExport(t *testing.T) {
 	}
 }
 
-func TestFailureTranscriptUpgradePreservesHistoricalHandoff(t *testing.T) {
-	t.Parallel()
-	fx, _, hs := failedTranscriptFixture(t)
-	legacy := hs
-	legacy.Agent.FailureTranscript = nil
-	b := fx.backend(t)
-	if _, err := b.Handoff(context.Background(), legacy); !errors.Is(err, ErrWriterFailed) {
-		t.Fatalf("legacy handoff: %v", err)
-	}
-	out, err := b.Recover(context.Background(), hs.RunID, hs)
-	if err != nil || out.Outcome != RecoveryFailed || out.FailureEvidence != nil {
-		t.Fatalf("upgrade must preserve the old capture omission: %+v, %v", out, err)
-	}
-	hs.Agent.Image = "changed-image@sha256:" + strings.Repeat("ab", 32)
-	if _, err := b.Recover(context.Background(), hs.RunID, hs); !errors.Is(err, ErrInvalidJournalRecord) {
-		t.Fatalf("upgrade accepted another spec change: %v", err)
-	}
-}
-
 func TestFailureEvidenceAmendmentFailurePreservesWorkspace(t *testing.T) {
 	t.Parallel()
 	fx, j, hs := failedTranscriptFixture(t)

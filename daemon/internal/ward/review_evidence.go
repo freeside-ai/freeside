@@ -2,7 +2,6 @@ package ward
 
 import (
 	"errors"
-	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -73,7 +72,7 @@ func DecodeRetainedCodexReview(binding domain.ReviewRequestRecord, requestBody [
 // launch, so an outcome row never chooses the gate it is held to. It
 // re-checks the binding's digest against its body, that the binding belongs
 // to the invocation, and that exactly one registered provider owns its
-// topology version, current or legacy. Recovery validates the whole binding
+// topology version. Recovery validates the whole binding
 // (reviewProviderForStartedIntent) because it acts on resources; a read
 // grants nothing, so it decodes only the two fields it needs and stays
 // readable across later binding schema changes.
@@ -93,8 +92,7 @@ func retainedReviewProvider(invocationID domain.InvocationID, body []byte, diges
 	}
 	var matched reviewProvider
 	for _, provider := range allReviewProviders() {
-		if binding.TopologyVersion != provider.topologyVersion() &&
-			!slices.Contains(provider.legacyTopologyVersions(), binding.TopologyVersion) {
+		if binding.TopologyVersion != provider.topologyVersion() {
 			continue
 		}
 		if matched != nil {
