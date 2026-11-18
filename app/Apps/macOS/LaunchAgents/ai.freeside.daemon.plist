@@ -25,6 +25,6 @@
 	<key>StandardErrorPath</key>
 	<string>__FREESIDE_STDERR_PATH__</string>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 </dict>
 </plist>
