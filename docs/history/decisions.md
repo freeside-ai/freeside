@@ -4210,3 +4210,46 @@ and depends on agent behavior.
 
 (Owner decision of 2026-11-18 in the #2382 exit run, applied as #3395;
 [decision note](../../devlog/2026-11-18-1805-ignored-symlinks.md).)
+
+## Revision 132 ("A Read-Only Live View of a Running Writer Comes Forward"):
+
+1. **The operator may watch a running stage's writer, under five
+   conditions** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
+   Outcome Authority). The view is read-only; the daemon pulls only the
+   transcript, as untrusted bytes, and the writer gains no outbound channel
+   or egress; its content is checked with
+   a retained transcript's credential rules as the stream grows, before it
+   leaves the daemon, and a match ends the view; it grants nothing, never
+   affects the writer's stop, teardown, or outcome, and stores nothing it
+   shows; and clients label it unverified agent output and render it
+   inertly. It is the one exception to reading a writer's output only
+   after the writer is gone. Reviewers and discussion replies are not
+   covered.
+2. **The evidence channel stays the only route that keeps a writer's
+   transcript** (Sections
+   [5.6](../plan.md#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
+   and [12](../plan.md#12-exit-criteria-definitions)). The live view is neither
+   gauntlet channel; content it shows without its scan, or anything it
+   stores, counts as escaped output.
+3. **The owner accepts the view's residual** (Section [14](../plan.md#14-risks)).
+   Content the credential rules miss, such as an encoded or partial token,
+   reaches the operator's clients while the writer runs, and content
+   displayed before a later match can't be taken back, though that match
+   withholds the whole retained transcript.
+4. **Only the read-only view leaves Phase 3** (Sections
+   [5.14](../plan.md#514-client-synchronization-and-conversations), Conversations and
+   Discuss, and [11](../plan.md#11-roadmap-build-order-and-coordination)). Mid-turn
+   steering, ACP interactive attachment, and live streaming of a discussion
+   reply stay there.
+
+Rejected: waiting for Phase 3's ACP attachment, which bundles the view with
+steering; a writer-pushed stream, which gives the writer a new outbound
+channel; and showing only the retained transcript after the run, which
+leaves the operator an hour-long run with nothing to read.
+
+Nothing in this revision is built yet: #1926 on tracker #3461 builds it and
+chooses how the daemon pulls.
+
+(Owner decision of 2026-11-19 on tracker #3461, from the owner's request in
+#1926; [decision note](../../devlog/2026-11-19-1526-live-writer-view.md).)
