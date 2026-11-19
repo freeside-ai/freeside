@@ -98,9 +98,16 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 		}); err != nil {
 			return false, err
 		}
+		// The request may still be undispatched. Dispatch records the attempt
+		// before Start, and the first pass to reach an intent leaves it
+		// undispatched while the start-authority check runs outside the pass
+		// (#3224), so this scan sees that attempt every time, as well as
+		// after a crash before Start or under a held dispatch (#319). That is
+		// the window before Start, not a mismatch: collectWorkflowTerminal
+		// waits on the pending dispatch, and publication still requires the
+		// dispatched request.
 		request, err := decodeRemediationRequest(requestEntry)
-		if err != nil || !requestEntry.Dispatched() || request.Round != round ||
-			task.HeadSHA != request.HeadSHA {
+		if err != nil || request.Round != round || task.HeadSHA != request.HeadSHA {
 			return false, errors.Join(err, domain.ErrParentKeyMismatch)
 		}
 		feedbackProducer := task.Successor != nil && task.ProducingInvocationID == task.Successor.FeedbackInvocationID
