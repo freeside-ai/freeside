@@ -41,10 +41,16 @@ struct TaskPageView: View {
     /// it, the macOS detail column shows it in place of this view.
     let onOpenRun: (String) -> Void
     /// Routes to an item by id, which leads this page with its card: a
-    /// one-line row, the Decisions popup, a linked timeline row, and the
-    /// header's guidance. Nil (a screenshot) draws plain text, never a link
-    /// that goes nowhere.
+    /// one-line row, the Decisions popup, and the header's guidance, and a
+    /// linked timeline row when `onOpenTimelineItem` is nil. Nil (a
+    /// screenshot) draws plain text, never a link that goes nowhere.
     var onOpenItem: ((String) -> Void)?
+    /// Opens a Timeline row's item over this page, with a way back to it
+    /// (#3454), where `onOpenItem` replaces the route.
+    var onOpenTimelineItem: ((String) -> Void)?
+    /// Back to Task, drawn above the leading card when the Mac shows the
+    /// page as an earlier card's layer. Nil draws no row.
+    var onReturnToTask: (() -> Void)?
     /// The item whose card `leadingCard` draws.
     private let leadingItemID: String?
     private let leadingCard: AnyView?
@@ -192,6 +198,7 @@ struct TaskPageView: View {
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
+        onOpenTimelineItem: ((String) -> Void)? = nil, onReturnToTask: (() -> Void)? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil, scrollProxy: ScrollViewProxy? = nil,
         scrollBy: ((CGFloat) -> Void)? = nil, forgetCorrections: @escaping () -> Void = {},
         probe: TaskPagePlaceProbe? = nil,
@@ -206,6 +213,8 @@ struct TaskPageView: View {
         self.snapshot = snapshot
         self.onOpenRun = onOpenRun
         self.onOpenItem = onOpenItem
+        self.onOpenTimelineItem = onOpenTimelineItem
+        self.onReturnToTask = onReturnToTask
         self.leadingItemID = leadingItemID
         self.leadingCard = leadingCard
         self.decisionIdentifiers = decisionIdentifiers
@@ -310,7 +319,11 @@ struct TaskPageView: View {
             // started it.
             .onAppear { place.lead = leadingItemID }
             .task { await restorePlace() }
-            .onChange(of: memory?.cardOpenings) { moveToOpenedCard() }
+            .onChange(of: memory?.cardOpenings) {
+                // An opening aimed at another page's lead leaves this one.
+                if let lead = memory?.openedCardLead, lead != leadingItemID { return }
+                moveToOpenedCard()
+            }
             .onChange(of: leadingItemID) { previous, current in
                 place.lead = current
                 // An open the memory counted has already started the move.
@@ -376,9 +389,16 @@ struct TaskPageView: View {
         VStack(alignment: .leading, spacing: Self.contentGap) {
             let earlier = earlierConversations
             if let leadingCard {
-                leadingCard
-                    .environment(\.taskPageHoldMarker, cardHoldMarker)
-                    .background(alignment: .top) { jumpTarget(.section(.decisions)) }
+                // Back to Task sits inside the Decisions target, so a move
+                // to the card shows the way back too.
+                VStack(alignment: .leading, spacing: 10) {
+                    if let onReturnToTask {
+                        BackToTaskLink(action: onReturnToTask)
+                    }
+                    leadingCard
+                        .environment(\.taskPageHoldMarker, cardHoldMarker)
+                }
+                .background(alignment: .top) { jumpTarget(.section(.decisions)) }
             }
             let others = openItems.filter { $0.item.id != leadingItemID }
             if !others.isEmpty {
@@ -432,11 +452,12 @@ struct TaskPageView: View {
     func screenshotContent(
         _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil,
-        decisionIdentifiers: [AttentionDisplay.BindingRow] = []
+        decisionIdentifiers: [AttentionDisplay.BindingRow] = [], returnsToTask: Bool = false
     ) -> some View {
         TaskPageView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun,
-            onOpenItem: onOpenItem, leadingItemID: leadingItemID, leadingCard: leadingCard,
+            onOpenItem: onOpenItem, onReturnToTask: returnsToTask ? {} : nil,
+            leadingItemID: leadingItemID, leadingCard: leadingCard,
             decisionIdentifiers: decisionIdentifiers,
             screenshotTimeline: timeline,
             disclosures: disclosures ?? TaskTimelineDisclosurePreferences(defaults: nil))
@@ -1258,7 +1279,7 @@ struct TaskPageView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    TimelineRail(rows: rows, onOpenItem: onOpenItem, rowMarker: rowMarker)
+                    TimelineRail(rows: rows, onOpenItem: onOpenTimelineItem ?? onOpenItem, rowMarker: rowMarker)
                 }
             }
             if timeline.sections.isEmpty {
@@ -1593,6 +1614,23 @@ struct TaskPageView: View {
 
 /// Where a jump lands, and the reader's place the page keeps: a section, or
 /// a run inside the Timeline.
+/// The way back to the task page from a page reached through it: a run on
+/// the Mac, and an earlier card opened from the Timeline (#3454). One
+/// control, so both read and act alike.
+struct BackToTaskLink: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Back to Task", systemImage: "chevron.left")
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.accentText)
+        }
+        .buttonStyle(.plain)
+        .help("Back to Task")
+    }
+}
+
 extension EnvironmentValues {
     /// Draws a hold point of the task page a seated card sits in, keyed
     /// within the card, so a reader inside the card holds their place as
@@ -1714,6 +1752,8 @@ struct TaskPageHost: View {
     var memory: TaskPageMemory? = nil
     let onOpenRun: (String) -> Void
     let onOpenItem: (String) -> Void
+    var onOpenTimelineItem: ((String) -> Void)? = nil
+    var onReturnToTask: (() -> Void)? = nil
     /// The launch input that opens a card's identifiers; on a page with a
     /// card it opens the footer that holds them.
     var identifiersOpenAtLaunch = false
@@ -1741,6 +1781,7 @@ struct TaskPageHost: View {
             ScrollView {
                 TaskPageView(
                     coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
+                    onOpenTimelineItem: onOpenTimelineItem, onReturnToTask: onReturnToTask,
                     leadingItemID: leadingItemID,
                     leadingCard: leadingItemID.map { AnyView(card($0, seat(proxy)).id($0)) },
                     scrollProxy: proxy,

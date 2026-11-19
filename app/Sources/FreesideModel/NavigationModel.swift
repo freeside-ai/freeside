@@ -39,8 +39,9 @@ public final class NavigationModel {
         case workStatus
     }
 
-    /// The one route: an item, a task, or a task with its run over it. The
-    /// selections read from it, so an item and a task can't both be open.
+    /// The one route: an item, a task, or either with a run or an earlier
+    /// card over its page. The selections read its first element, so an
+    /// item and a task can't both be open.
     public private(set) var path: [Destination] {
         didSet {
             if path.last != linkedItemID.map(Destination.attentionItem) { linkedItemID = nil }
@@ -179,6 +180,13 @@ public final class NavigationModel {
 
     public var runSelection: String? {
         if case .run(_, let runID)? = path.last { runID } else { nil }
+    }
+
+    /// The item whose card an earlier-card layer leads over the route's
+    /// page (`openEarlierCard(itemID:)`), or nil with no layer.
+    public var earlierCardSelection: String? {
+        guard path.count > 1, case .attentionItem(let itemID)? = path.last else { return nil }
+        return itemID
     }
 
     /// The surface a destination opens. An item a held task owns leads that
@@ -328,6 +336,22 @@ public final class NavigationModel {
         setPath(Array(path.prefix(1)) + [.run(taskID: taskID, runID: runID)])
     }
 
+    /// Open an item from the task page's Timeline (#3454): its card leads
+    /// the page over the route that page came from, as `openRun` does, so
+    /// the Mac's Back to Task and the iPhone stack's back return to the
+    /// page as it was. Another such open replaces the layer, so the route
+    /// never holds more than the page and one layer.
+    public func openEarlierCard(itemID: String) {
+        setPath(Array(path.prefix(1)) + [.attentionItem(itemID)])
+    }
+
+    /// Returns from an earlier card to the page under it on macOS, which
+    /// has no stack to pop.
+    public func closeEarlierCard() {
+        guard earlierCardSelection != nil else { return }
+        setPath(Array(path.dropLast()))
+    }
+
     /// Route to the item a notification link named; see `linkedItemID`.
     public func route(toLinkedItem itemID: String) {
         route(to: .attentionItem(itemID))
@@ -350,12 +374,16 @@ public final class NavigationModel {
     }
 
     /// Whether the route's page holds a card, which is what an operator may
-    /// have work in progress on. A run over the page leaves the card held.
+    /// have work in progress on. A run over the page leaves the card held,
+    /// and an earlier card over it is held too.
     package func holdsCard(in list: UnifiedList) -> Bool {
-        switch path.first.map({ Self.surface(for: $0, in: list) }) {
-        case .card: true
-        case .taskPage(_, let leadingItemID): leadingItemID != nil
-        case .run, .workStatus, nil: false
+        let held = [path.first, earlierCardSelection.map(Destination.attentionItem)].compactMap { $0 }
+        return held.contains { destination in
+            switch Self.surface(for: destination, in: list) {
+            case .card: true
+            case .taskPage(_, let leadingItemID): leadingItemID != nil
+            case .run, .workStatus: false
+            }
         }
     }
 

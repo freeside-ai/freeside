@@ -5423,6 +5423,27 @@
                             view: AnyView(earlierView.screenshotContent(earlierTimeline, disclosures: earlierFolds))))
                 }
             }
+            // An earlier card opened from the Timeline (#3454): the resolved
+            // approval leads the same finished page under Back to Task, as
+            // the Mac draws it. The card holds the task, so it would draw
+            // `Open task page` alone; seated on its page it draws none.
+            let earlierCard = DecisionDetailView(
+                store: earlierCoordinator.store, itemID: approved.item.id, loadsAttachments: false,
+                showsValidationProgress: false, tasks: earlierCoordinator.tasks)
+            for scheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "task-page-earlier-card" + (scheme == .dark ? "-dark" : ""), colorScheme: scheme,
+                        nativeAppearance: true,
+                        view: AnyView(
+                            earlierView.screenshotContent(
+                                earlierTimeline, leadingItemID: approved.item.id,
+                                leadingCard: AnyView(
+                                    earlierCard.screenshotPageCard(approved.item, at: dynamicTypeSize)),
+                                decisionIdentifiers: DecisionDetailView.identifierRows(
+                                    approved.item, proposalFacts: nil, effectProposalFacts: nil),
+                                returnsToTask: true))))
+            }
             return surfaces
         }
 
