@@ -203,7 +203,8 @@ func (d scenarioStageDriver) putExport(manifest export.Manifest, handoff string)
 		return "", fmt.Errorf("store export manifest: %w", err)
 	}
 	for _, entry := range manifest.Entries {
-		if entry.Kind != export.EntryRegular || entry.Digest == nil {
+		// A withheld blob has no file in the handoff; the importer reads none.
+		if entry.Kind != export.EntryRegular || entry.BlobOmitted || entry.Digest == nil {
 			continue
 		}
 		blob := domain.Digest(*entry.Digest)

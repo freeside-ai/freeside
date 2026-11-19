@@ -127,6 +127,10 @@ type publicationHarness struct {
 	// profile's, as a forged task payload would.
 	replayStanceClaim domain.AutomationChangePolicy
 
+	// exportMaxBlobs, when set, caps the distinct blobs the next built
+	// replay's export stores, so a test can make export withhold one.
+	exportMaxBlobs int
+
 	// repairRefusal, when set, makes a client submission the maintenance
 	// task image upkeep submits for the refusal it returns, given the
 	// harness's project image, in place of a device's task.

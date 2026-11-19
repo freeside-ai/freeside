@@ -512,7 +512,8 @@ func productionReplayDigests(replay ProductionReplay) []domain.Digest {
 		set[*replay.CommitPlanDigest] = struct{}{}
 	}
 	for _, entry := range replay.Manifest.Entries {
-		if entry.Kind == export.EntryRegular && entry.Digest != nil {
+		// A withheld blob was never stored, so the replay needs none.
+		if entry.Kind == export.EntryRegular && !entry.BlobOmitted && entry.Digest != nil {
 			set[domain.Digest(*entry.Digest)] = struct{}{}
 		}
 	}

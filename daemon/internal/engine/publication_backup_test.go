@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -295,5 +296,39 @@ func TestHistoricalSpecificationCheckpointRoundTrip(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A blob the export withheld was never stored, so a publication task's backup
+// payload must not name it: the backup would otherwise fail to find it (#3427).
+func TestPublicationBackupLeavesOutWithheldBlobs(t *testing.T) {
+	t.Parallel()
+	task := validPublicationTask(t, "run-withheld", "project-withheld")
+	stored := *task.Replay.Manifest.Entries[0].Digest
+	withheld := export.Digest("sha256:" + strings.Repeat("d", 64))
+	mode := "0644"
+	size := int64(200 << 20)
+	task.Replay.Manifest.Entries = append(task.Replay.Manifest.Entries, export.Entry{
+		Path: "build/Tests.xctest", Kind: export.EntryRegular,
+		Mode: &mode, Size: &size, Digest: &withheld, BlobOmitted: true,
+	})
+	encoded, err := task.Replay.Manifest.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Replay.ManifestDigest = digestProductionBytes(encoded)
+	payload, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digests, err := ProductionPublicationBackupPayloadDigests(store.QueueEntry{
+		IdempotencyKey: productionPublicationTaskKey(task.RunID),
+		Kind:           KindProductionPublicationRequested, Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(digests, domain.Digest(stored)) || slices.Contains(digests, domain.Digest(withheld)) {
+		t.Fatalf("backup digests = %v, want the stored blob and not the withheld one", digests)
 	}
 }
