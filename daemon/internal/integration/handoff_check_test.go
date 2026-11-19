@@ -791,12 +791,12 @@ func TestHandoffAfterARemediationPublishes(t *testing.T) {
 	}
 }
 
-// TestHandoffRecoversAnIntentCommittedBeforeHandoffChecks: a publication
+// TestHandoffRefusesAnIntentCommittedBeforeHandoffChecks: a publication
 // intent an earlier daemon committed before handoff checks existed has no
-// sealed tip. It is recovered under the decision it was made with, at the
-// admitted base, even after the target moved: no tip is sealed and no merge
-// is built.
-func TestHandoffRecoversAnIntentCommittedBeforeHandoffChecks(t *testing.T) {
+// sealed tip. After the target moves it is refused on every pass, never
+// published against the later tip: no tip is sealed, no merge is built, and
+// nothing reaches the forge (issue #3341).
+func TestHandoffRefusesAnIntentCommittedBeforeHandoffChecks(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
@@ -816,8 +816,14 @@ func TestHandoffRecoversAnIntentCommittedBeforeHandoffChecks(t *testing.T) {
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
+	refsBefore, prsBefore := p.forge.Counts()
 	p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
-	p.reconcileUntilReady(t, 3)
+	for pass := range 2 {
+		if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) ||
+			!strings.Contains(err.Error(), "no sealed tip") {
+			t.Fatalf("pass %d = %v, want the unsealed intent refused", pass, err)
+		}
+	}
 
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		publication, err := tx.CurrentPublicationInvocationID(p.ctx, p.runID)
@@ -827,15 +833,57 @@ func TestHandoffRecoversAnIntentCommittedBeforeHandoffChecks(t *testing.T) {
 		_, err = tx.GetHandoffCheck(p.ctx, p.runID, publication)
 		return err
 	}); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("recovered intent's handoff check = %v, want none sealed", err)
+		t.Fatalf("refused intent's handoff check = %v, want none sealed", err)
 	}
 	if p.transport.MergeCount() != 0 {
-		t.Fatalf("recovered intent built %d merges, want none", p.transport.MergeCount())
+		t.Fatalf("refused intent built %d merges, want none", p.transport.MergeCount())
 	}
-	// With no sealed check the detail names the evidence base as the tip,
-	// the rule the handoff applied when it recovered the intent.
-	p.assertReadyDetailNamesHandoff(t, p.baseSHA, "")
-	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
-		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
+	if refs, prs := p.forge.Counts(); refs != refsBefore || prs != prsBefore {
+		t.Fatalf("publication effects = %d refs, %d prs, want %d and %d as before the refusal",
+			refs, prs, refsBefore, prsBefore)
+	}
+}
+
+// TestHandoffRefusesAPublishedIntentWithoutASealedCheck: recovery of a
+// publication whose intent already reached the forge refuses when no handoff
+// check was sealed for it, rather than naming the evidence base as the tip
+// (issue #3341). Every publication seals its check before it commits an
+// intent, so a published one without a check is a broken invariant.
+func TestHandoffRefusesAPublishedIntentWithoutASealedCheck(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterPublication: func() error { return errors.New("stop after durable publication outcome") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("publication outcome seam did not interrupt reconciliation")
+	}
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(p.ctx,
+		`DELETE FROM publication_handoff_checks WHERE run_id = ?`, p.runID); err != nil {
+		_ = raw.Close()
+		t.Fatalf("drop the seal: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	refsBefore, prsBefore := p.forge.Counts()
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) ||
+		!strings.Contains(err.Error(), "no sealed handoff check") {
+		t.Fatalf("recovery = %v, want the published intent without a check refused", err)
+	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ProductionReadyItemID(p.runID),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("refused recovery's ready item = %v, want none", err)
+	}
+	if refs, prs := p.forge.Counts(); refs != refsBefore || prs != prsBefore {
+		t.Fatalf("publication effects = %d refs, %d prs, want %d and %d as before the refusal",
+			refs, prs, refsBefore, prsBefore)
 	}
 }

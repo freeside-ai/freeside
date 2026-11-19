@@ -67,8 +67,8 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 // productionClosureCheckpoint is the once-per-publication closure answer. The
 // proposal is head- and base-independent, so the key binds only the run and its
 // publication invocation; a merge that moves within one publication keeps the
-// same proposal and re-binds it. A successor cycle that publishes, including a
-// base-advance re-entry, admits its own proposal; the predecessor's open card
+// same proposal and re-binds it. A successor cycle that publishes admits its
+// own proposal; the predecessor's open card
 // is retired when the successor seals
 // (store.WriteTx.RecordPublicationSuccessor), and admission retires whatever
 // the seal left open, such as an external-review successor's card. A stored
@@ -104,8 +104,8 @@ func closureProposalBatchID(runID domain.RunID) domain.ProposalBatchID {
 // unavailable propose site, an inference fault, or a source that is no longer
 // closable records a durable no-close answer rather than failing the pass. Only
 // a store fault the daemon should retry propagates. targetBaseSHA is the base
-// the publication targets, which the bound merge names; it differs from the
-// admitted base only for a re-entry before publication (issue #2058), whose
+// the publication targets, which the bound merge names: the tip the handoff
+// checked, which differs from the admitted base when the target advanced. The
 // decision inputs still come from the admitted binding.
 func (w *productionPublicationWorkflow) reconcilePublicationClosure(
 	ctx context.Context,
@@ -616,7 +616,8 @@ func ProductionPublicationClosure(
 ) (ProductionClosureAnswer, bool, error) {
 	publicationID, err := tx.PublishedPublicationInvocationID(ctx, runID)
 	if errors.Is(err, store.ErrNoPublishedContinuationTarget) {
-		// The run re-entered before its first publication.
+		// A handoff conflict's cycle that makes the run's first publication
+		// is current before anything has published.
 		publicationID, err = tx.CurrentPublicationInvocationID(ctx, runID)
 	}
 	if err != nil {

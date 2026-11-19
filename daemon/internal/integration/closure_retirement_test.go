@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -127,5 +128,43 @@ func TestHandoffConflictOpensNoClosureCard(t *testing.T) {
 	p.startHandoffConflictRemediation(t, 1)
 	if open, closed := p.closureCards(t); len(open) != 0 || len(closed) != 0 {
 		t.Fatalf("closure cards after the conflicting handoff = %d open, %d closed, want none", len(open), len(closed))
+	}
+}
+
+// TestProductionPublicationClosureBeforeFirstPublication: the task record's
+// closure read follows the current cycle while no cycle has published. A
+// handoff conflict on the run's first publication seals a cycle that makes
+// that publication, so until it does the read finds no answer rather than
+// failing for want of a published cycle, and once it publishes the read
+// returns that cycle's answer.
+func TestProductionPublicationClosureBeforeFirstPublication(t *testing.T) {
+	t.Parallel()
+	p := newClosureGateHarness(t)
+	p.advanceBaseBeforePublication(t, "README.md", "conflicting upstream change\n")
+	r := p.startHandoffConflictRemediation(t, 1)
+	if !r.authority.FirstPublication {
+		t.Fatalf("authority = %#v, want a first publication", r.authority)
+	}
+	read := func() (engine.ProductionClosureAnswer, bool) {
+		t.Helper()
+		var answer engine.ProductionClosureAnswer
+		var found bool
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			var err error
+			answer, found, err = engine.ProductionPublicationClosure(p.ctx, tx, p.runID)
+			return err
+		}); err != nil {
+			t.Fatalf("read closure: %v", err)
+		}
+		return answer, found
+	}
+	if answer, found := read(); found {
+		t.Fatalf("closure before any publication = %+v, want none", answer)
+	}
+	p.finishHandoffConflictRemediation(t, r, "conflicting upstream change\nproduction change\n")
+	p.reconcileUntilReady(t, 6)
+	answer, found := read()
+	if !found || !answer.HasProposal || answer.Origin != domain.ClosureFlagOriginProposeSite {
+		t.Fatalf("closure after the remediated head published = %+v (found %t), want its proposal", answer, found)
 	}
 }

@@ -379,10 +379,10 @@ func (tx *ReadTx) validateItemPRBindingAgainst(
 		return errRowInconsistent
 	}
 	if intent.Successor == nil && strings.HasPrefix(string(binding.PublicationInvocationID), reentryPublicationPrefix) {
-		// A first publication under a re-entry invocation is an unpublished
-		// re-entry's or a handoff conflict's whose run never published: it
-		// opened the pull request, so it has no target, but its authority
-		// still decides which item it may make ready.
+		// A first publication under a re-entry invocation is a handoff
+		// conflict's whose run never published: it opened the pull request,
+		// so it has no target, but its authority still decides which item it
+		// may make ready.
 		successor, err := tx.GetPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
 		if err != nil || !successor.MakesFirstPublication() || (ready && successor.ReadyItemID() != item.ID) {
 			return errors.Join(err, domain.ErrParentKeyMismatch)

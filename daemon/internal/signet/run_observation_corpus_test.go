@@ -1486,6 +1486,27 @@ func TestRunObservationCorpusForges(t *testing.T) {
 			})
 			return runID
 		}},
+		{"publication_blocked/retired_reentry_reason", func(t *testing.T, f corpusFixture) domain.RunID {
+			runID := domain.RunID("run-1")
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				return tx.PutRun(ctx, corpusRun(runID, corpusAttempt(runID, "inv-attempt")))
+			})
+			// The block an earlier daemon wrote, from 567421d46 to f736f2e9b,
+			// for a task queued under a retired v5 or v6 re-entry. Its reason
+			// is no longer definitive (issue #3341), so the base-advanced
+			// milestone the engine recorded with it has no accepted item.
+			item, err := blockedItem(runID, "The target base advanced after admission, and this run was queued to re-enter under a rule Freeside has retired; start a new run against the current base.",
+				[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop})
+			if err != nil {
+				t.Fatalf("blockedItem: %v", err)
+			}
+			f.seedItem(t, item)
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestonePublicationBlocked, InvocationID: ptr(publicationInvocation(runID)),
+				Reason: ptr(domain.HoldBaseAdvanced), RecordedAt: f.at.Add(3 * time.Hour),
+			})
+			return runID
+		}},
 		{"publication_blocked/wrong_action_shape", func(t *testing.T, f corpusFixture) domain.RunID {
 			runID := domain.RunID("run-1")
 			f.mustWrite(t, func(tx *store.WriteTx) error {

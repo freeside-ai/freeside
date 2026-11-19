@@ -18,13 +18,6 @@ const (
 	// PublicationExternalReviewVersion is the v3 shape plus the finding and
 	// trust profile an external_review re-entry rests on.
 	PublicationExternalReviewVersion = "freeside.publication-successor/v4"
-	// PublicationUnpublishedReentryVersion is the v3 shape for a run whose base
-	// advanced before its first publication (issue #2058).
-	PublicationUnpublishedReentryVersion = "freeside.publication-successor/v5"
-	// PublicationSuccessorReentryVersion is the v5 shape for a successor whose
-	// unpublished head was refused for a base advance after the run's pull
-	// request already existed (issue #2111).
-	PublicationSuccessorReentryVersion = "freeside.publication-successor/v6"
 	// PublicationHandoffConflictVersion is the v3 shape plus a cause and a
 	// first-publication flag, for a remediation at the tip a handoff check
 	// sealed (issue #2646).
@@ -49,22 +42,6 @@ const (
 	// (issue #1623). Like a readiness invalidation it has no operator command
 	// and pushes nothing of its own, so it shares that origin's identities.
 	PublicationSuccessorExternalReview PublicationSuccessorOrigin = "external_review"
-	// PublicationSuccessorUnpublishedBaseAdvance re-enters a run whose
-	// publication-time audit found the target base advanced before any
-	// publication intent committed (issue #2058). Nothing is on a pull request
-	// yet: the cycle keeps the candidate head, reviews its prospective merge into
-	// the audited base, and makes the run's first publication against that base.
-	// No operator command starts it, so its identities key on its predecessor.
-	PublicationSuccessorUnpublishedBaseAdvance PublicationSuccessorOrigin = "unpublished_base_advance"
-	// PublicationSuccessorBaseAdvance re-enters a successor cycle (a feedback
-	// return, a remediation continuation, or an earlier such re-entry) whose
-	// head was verified and reviewed but refused because the target base
-	// advanced before its intent committed (issue #2111). Unlike
-	// unpublished_base_advance the run's pull request exists: the cycle keeps
-	// the head, reviews its prospective merge into the audited base, and then
-	// updates that pull request. No operator command starts it, so its
-	// identities key on its predecessor.
-	PublicationSuccessorBaseAdvance PublicationSuccessorOrigin = "successor_base_advance"
 	// PublicationSuccessorHandoffConflict remediates a head whose handoff
 	// check found a conflict at the target's tip (plan §7, revision 110;
 	// issue #2646): a textual conflict, or a merge that failed verification.
@@ -87,15 +64,13 @@ const (
 
 var AllPublicationSuccessorOrigins = []PublicationSuccessorOrigin{
 	PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
-	PublicationSuccessorExternalReview, PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorBaseAdvance,
-	PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack,
+	PublicationSuccessorExternalReview, PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack,
 }
 
 func (o PublicationSuccessorOrigin) valid() bool {
 	switch o {
 	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
-		PublicationSuccessorExternalReview, PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorBaseAdvance,
-		PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
+		PublicationSuccessorExternalReview, PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
 		return true
 	default:
 		return false
@@ -152,10 +127,9 @@ func (r PublicationSuccessorReentry) valid() bool {
 }
 
 // PublicationSuccessor binds a cycle to an accepted feedback return, a recheck
-// approval, a readiness invalidation, an admitted external review, or a base
-// advance found before the run's first publication. Remediation may produce a
-// later candidate under any but the last of these, but cannot change its
-// predecessor or review floor.
+// approval, a readiness invalidation, an admitted external review, a handoff
+// conflict, or a hand-back. Remediation may produce a later candidate under it
+// (AllowsRemediation), but cannot change its predecessor or review floor.
 type PublicationSuccessor struct {
 	Version                 string                       `json:"version"`
 	RunID                   RunID                        `json:"run_id"`
@@ -286,18 +260,6 @@ func (s PublicationSuccessor) Validate() error {
 	if s.ExternalFindingID != "" || s.AdmittingProfileDigest != "" {
 		return ErrParentKeyMismatch
 	}
-	if s.Version == PublicationUnpublishedReentryVersion || s.Version == PublicationSuccessorReentryVersion {
-		origin := PublicationSuccessorUnpublishedBaseAdvance
-		if s.Version == PublicationSuccessorReentryVersion {
-			origin = PublicationSuccessorBaseAdvance
-		}
-		if s.Origin != origin || s.CommandID != "" ||
-			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
-			s.Reentry == nil || s.Reentry.Reason != ReadinessInvalidationBaseAdvanced || !s.Reentry.valid() {
-			return ErrParentKeyMismatch
-		}
-		return nil
-	}
 	if s.Version == PublicationReentryVersion {
 		if s.Origin != PublicationSuccessorReadinessInvalidation || s.CommandID != "" ||
 			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
@@ -328,27 +290,17 @@ func (s PublicationSuccessor) Validate() error {
 			return ErrParentKeyMismatch
 		}
 	case PublicationSuccessorReadinessInvalidation, PublicationSuccessorExternalReview,
-		PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorBaseAdvance,
 		PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
 		return ErrParentKeyMismatch
 	}
 	return nil
 }
 
-// RepublishesUnpublished reports whether the authority re-enters a run that
-// never published, so its cycle makes the run's first publication rather than
-// updating a pull request.
-func (s PublicationSuccessor) RepublishesUnpublished() bool {
-	return s.Version == PublicationUnpublishedReentryVersion &&
-		s.Origin == PublicationSuccessorUnpublishedBaseAdvance
-}
-
 // MakesFirstPublication reports whether the cycle publishes the run's first
-// pull request rather than updating one: an unpublished re-entry (v5), or a
-// handoff conflict remediation (v7) of a run that never published.
+// pull request rather than updating one: a handoff conflict remediation (v7)
+// of a run that never published.
 func (s PublicationSuccessor) MakesFirstPublication() bool {
-	return s.RepublishesUnpublished() ||
-		(s.RemediatesHandoffConflict() && s.FirstPublication)
+	return s.RemediatesHandoffConflict() && s.FirstPublication
 }
 
 // CarriesForeignHead reports whether the authority's head is one no Freeside
@@ -403,34 +355,6 @@ func (s PublicationSuccessor) RemediatesHandoffConflict() bool {
 		s.Origin == PublicationSuccessorHandoffConflict
 }
 
-// ReentersUnpublishedHead reports whether the authority re-enters, at a newer
-// base, a head that was verified and reviewed but never published: v5 for the
-// run's first publication, v6 for a successor of a published pull request.
-// Both keep the head and review its prospective merge, and neither admits
-// remediation; only v5 makes a first publication.
-func (s PublicationSuccessor) ReentersUnpublishedHead() bool {
-	return s.RepublishesUnpublished() || (s.Version == PublicationSuccessorReentryVersion &&
-		s.Origin == PublicationSuccessorBaseAdvance)
-}
-
-// AdmitsSuccessorReentry reports whether a base-advance refusal of this
-// cycle's unpublished head may seal a successor re-entry (v6) after it. The
-// cycle must have built or kept a head of its own and update an existing pull
-// request: a feedback return, a remediation continuation, or an earlier
-// successor re-entry. An in-place re-entry pushes nothing of its own, and an
-// unpublished re-entry, which opens the pull request, re-enters as v5.
-func (s PublicationSuccessor) AdmitsSuccessorReentry() bool {
-	switch s.EffectiveOrigin() {
-	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorBaseAdvance:
-		return true
-	case PublicationSuccessorReadinessInvalidation, PublicationSuccessorExternalReview,
-		PublicationSuccessorUnpublishedBaseAdvance, PublicationSuccessorHandoffConflict,
-		PublicationSuccessorHandBack:
-		return false
-	}
-	return false
-}
-
 // AllowsRemediation binds the first continuation producer to the recheck's
 // findings round. Later producers obey the cycle's ordinary review floor. A
 // re-entered cycle admits remediation after a base advance or an external
@@ -439,11 +363,7 @@ func (s PublicationSuccessor) AdmitsSuccessorReentry() bool {
 // replace the commits someone else pushed. The store refuses an
 // external_review authority on such a head for the same reason. The authority
 // is for one base, so every request must be for findings reviewed against it,
-// and the cycle's first review must be of the head it re-entered for. A
-// re-entry before publication admits none: a remediation is admitted at the
-// base the composition derives, the run's admitted one, and a fix built there
-// would be a candidate on the base the re-entry left behind. A successor's
-// re-entry (v6) admits none for the same reason.
+// and the cycle's first review must be of the head it re-entered for.
 //
 // A hand_back re-entry (v8) adopts a head no Freeside invocation produced,
 // and admits remediation on it all the same: its authority is the permission
@@ -454,7 +374,7 @@ func (s PublicationSuccessor) AdmitsSuccessorReentry() bool {
 // sealed. Its first answers the conflict on the prior review's round, on the
 // head that conflicted; the rest answer its own review rounds.
 func (s PublicationSuccessor) AllowsRemediation(r RemediationInvocationIntent) bool {
-	if r.RunID != s.RunID || r.SuccessorPublicationID != s.PublicationID() || s.ReentersUnpublishedHead() {
+	if r.RunID != s.RunID || r.SuccessorPublicationID != s.PublicationID() {
 		return false
 	}
 	if s.RemediatesHandoffConflict() {

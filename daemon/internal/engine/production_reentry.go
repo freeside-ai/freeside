@@ -1343,7 +1343,7 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 			}
 			return *outcome, err
 		}
-		readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
+		readiness, _, err = w.withPublishedHandoff(ctx, task, binding, readiness)
 	} else {
 		// The cycle verified the head on the base its authority names, and
 		// ran no handoff of its own: the sealed check under this publication

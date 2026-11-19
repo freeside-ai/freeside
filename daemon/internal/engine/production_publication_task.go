@@ -428,13 +428,6 @@ func (t productionPublicationTask) validate() error {
 }
 
 func (t productionPublicationTask) validateWithPublication(validatePublication func(ProductionPublication) error) error {
-	// No cycle re-enters an unpublished head any more (issue #2644), and the
-	// task an earlier daemon queued under a v5 or v6 successor no longer
-	// decodes (#3323), with a producer or without one.
-	if t.Successor != nil && t.Successor.ReentersUnpublishedHead() {
-		return fmt.Errorf("production publication task under retired re-entry %s: %w",
-			t.Successor.PublicationID(), domain.ErrParentKeyMismatch)
-	}
 	if t.reentersInPlace() {
 		return t.validateReentry()
 	}

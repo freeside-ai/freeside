@@ -87,28 +87,12 @@ func productionTaskForInvocation(ctx context.Context, tx *store.ReadTx, runID do
 		}
 		successor = &sealed
 	}
-	// An unpublished or successor re-entry moves a run's one task to its own
-	// key and retires the row it replaced (issues #2058, #2111). An invocation
-	// behind a replaced row resolves to the run's current row, the one that
-	// now carries its candidate. The rows a chain of re-entries at its tip
-	// replaced are each of those re-entries' and the cycle before them, the
-	// root's when the chain starts at the root.
-	chain, err := tx.PublicationSuccessorChain(ctx, runID)
-	if err != nil {
+	// The lookup also requires every sealed successor of the run to
+	// authenticate, not only the one this invocation names: a run holding a
+	// record no current rule admits, such as a retired version 5 or 6
+	// re-entry (issue #3341), resolves to no task.
+	if _, err := tx.PublicationSuccessorChain(ctx, runID); err != nil {
 		return store.QueueEntry{}, err
-	}
-	first := len(chain)
-	for first > 0 && chain[first-1].ReentersUnpublishedHead() {
-		first--
-	}
-	if first < len(chain) {
-		replaced := false
-		for _, sealed := range chain[max(first-1, 0):] {
-			replaced = replaced || (successor != nil && sealed.PublicationID() == successor.PublicationID())
-		}
-		if replaced || (successor == nil && first == 0) {
-			successor = &chain[len(chain)-1]
-		}
 	}
 	if successor == nil {
 		return tx.GetOutbox(ctx, productionPublicationTaskKey(runID))
@@ -201,9 +185,9 @@ func authenticateTaskSuccessor(ctx context.Context, tx *store.ReadTx, task produ
 }
 
 func (w *productionPublicationWorkflow) bindSuccessorCandidate(ctx context.Context, task productionPublicationTask, candidate *publish.Candidate) error {
-	// An unpublished re-entry, or a handoff conflict's remediation in a run
-	// that never published, has no pull request to update: it is still the
-	// run's first publication, under its authority's publication identity.
+	// A handoff conflict's remediation in a run that never published has no
+	// pull request to update: it is still the run's first publication, under
+	// its authority's publication identity.
 	if task.Successor == nil || task.Successor.MakesFirstPublication() {
 		return nil
 	}

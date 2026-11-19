@@ -2,8 +2,6 @@ package publish
 
 import (
 	"errors"
-	"fmt"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -409,91 +407,6 @@ func TestDispositionHistoryRejectsUnfinishedFinalRound(t *testing.T) {
 	}
 }
 
-// An unpublished re-entry reviews the same candidate at a newer base (issue
-// #2058). Its chain links the rounds at the admitted base to the rounds at the
-// re-entry base, so their dispositions stay in the lineage; a round at any
-// base the chain does not name for its round stays out, and so does every
-// earlier round once a later published re-entry moves the latest round to a
-// base the chain does not name.
-func TestCurrentDispositionLineageFollowsUnpublishedReentrySegments(t *testing.T) {
-	t.Parallel()
-	runID := domain.RunID("run-segments")
-	at := func(round int, base, head string, findings ...domain.FindingID) domain.ReviewRecord {
-		invocation := domain.InvocationID(fmt.Sprintf("review-%d", round))
-		outcome := domain.ReviewClean
-		if len(findings) > 0 {
-			outcome = domain.ReviewFindings
-		}
-		record, err := domain.NewReviewRecord(domain.ReviewRecord{
-			InvocationID: invocation, RunID: runID, Round: round,
-			Admission: fake.RecordAdmission(domain.RoleReviewer, runID, invocation), ConfigurationDigest: dispositionDigestA,
-			InstructionDigest: dispositionDigestA, BaseSHA: base, HeadSHA: head,
-			CompletedAt: time.Date(2026, 10, 18, 2, round, 0, 0, time.UTC), CompletionEvidence: dispositionDigestC,
-			Outcome: outcome, FindingIDs: findings,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return record
-	}
-	first := at(1, "base-a", "head-1", "declined-finding")
-	second := at(2, "base-a", "head-1", "deferred-finding")
-	reentered := at(3, "base-b", "head-1")
-	declined := domain.ReviewDispositionRecord{FindingID: "declined-finding", Round: 1, Disposition: domain.ReviewDispositionDeclined}
-	deferred := domain.ReviewDispositionRecord{FindingID: "deferred-finding", Round: 2, Disposition: domain.ReviewDispositionDeferred}
-	segments := []lineageSegment{{FromRound: 0, BaseSHA: "base-a"}, {FromRound: 3, BaseSHA: "base-b"}}
-
-	reviews, dispositions := currentDispositionLineage(
-		[]domain.ReviewRecord{first, second, reentered},
-		[]domain.ReviewDispositionRecord{declined, deferred}, segments,
-	)
-	if len(reviews) != 3 || len(dispositions) != 2 {
-		t.Fatalf("re-entry lineage dropped the admitted base's rounds: %#v, %#v", reviews, dispositions)
-	}
-	// Without the chain, the single-base rule keeps only the latest base.
-	if reviews, _ := currentDispositionLineage([]domain.ReviewRecord{first, second, reentered}, nil, nil); len(reviews) != 1 {
-		t.Fatalf("lineage linked bases with no re-entry chain: %#v", reviews)
-	}
-	// A round at a base the chain does not name for that round stays out.
-	stray := at(2, "base-c", "head-1", "stray-finding")
-	if reviews, _ := currentDispositionLineage([]domain.ReviewRecord{first, stray, reentered}, nil, segments); len(reviews) != 2 ||
-		slices.ContainsFunc(reviews, func(r domain.ReviewRecord) bool { return r.BaseSHA == "base-c" }) {
-		t.Fatalf("lineage admitted a base the chain does not name: %#v", reviews)
-	}
-	// A later round at a base the chain does not name keeps the single-base rule.
-	moved := at(4, "base-d", "head-1")
-	if reviews, _ := currentDispositionLineage([]domain.ReviewRecord{first, second, reentered, moved}, nil, segments); len(reviews) != 1 ||
-		reviews[0].BaseSHA != "base-d" {
-		t.Fatalf("lineage linked a base past the re-entry chain: %#v", reviews)
-	}
-	// A pass superseded by other instructions within its own segment stays out.
-	stale := first
-	stale.InstructionDigest = dispositionDigestB
-	if reviews, _ := currentDispositionLineage([]domain.ReviewRecord{stale, second, reentered}, nil, segments); len(reviews) != 2 {
-		t.Fatalf("lineage kept a round under other instructions: %#v", reviews)
-	}
-	// An advance whose base composes other instructions keeps the earlier
-	// segment's rounds: each segment answers to its own latest round.
-	oldFirst, oldSecond := first, second
-	oldFirst.InstructionDigest = dispositionDigestB
-	oldSecond.InstructionDigest = dispositionDigestB
-	reviews, dispositions = currentDispositionLineage(
-		[]domain.ReviewRecord{oldFirst, oldSecond, reentered},
-		[]domain.ReviewDispositionRecord{declined, deferred}, segments,
-	)
-	if len(reviews) != 3 || len(dispositions) != 2 {
-		t.Fatalf("instructions changed at the new base dropped the carried rounds: %#v, %#v", reviews, dispositions)
-	}
-	// The configuration equality still applies across bases.
-	otherConfiguration := second
-	otherConfiguration.ConfigurationDigest = dispositionDigestB
-	if reviews, _ := currentDispositionLineage(
-		[]domain.ReviewRecord{first, otherConfiguration, reentered}, nil, segments,
-	); len(reviews) != 2 || reviews[0].Round != 1 {
-		t.Fatalf("lineage kept a round under another configuration: %#v", reviews)
-	}
-}
-
 func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) {
 	t.Parallel()
 	runID := domain.RunID("run-lineage")
@@ -518,7 +431,7 @@ func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) 
 		t.Fatal(err)
 	}
 	reviews, dispositions := currentDispositionLineage(
-		[]domain.ReviewRecord{stale, current}, nil, nil,
+		[]domain.ReviewRecord{stale, current}, nil,
 	)
 	if len(reviews) != 1 || reviews[0].InvocationID != current.InvocationID || len(dispositions) != 0 {
 		t.Fatalf("current lineage = %#v, %#v", reviews, dispositions)
@@ -533,7 +446,7 @@ func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) 
 
 	stale.InstructionDigest = current.InstructionDigest
 	reviews, dispositions = currentDispositionLineage(
-		[]domain.ReviewRecord{stale, current}, nil, nil,
+		[]domain.ReviewRecord{stale, current}, nil,
 	)
 	if _, err := newDispositionHistory(dispositionHistoryInput{
 		runID: runID, headSHA: "head", expectedInstructionDigest: dispositionDigestB,
@@ -545,85 +458,5 @@ func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) 
 		readiness:    domain.ReadinessVerdict{Class: domain.ReadinessReadyClean, EvaluationSetDigest: dispositionDigestC},
 	}, nil); err == nil {
 		t.Fatal("current-authority finding without a disposition was silently filtered")
-	}
-}
-
-// TestReentryLineageSegmentsKeepTheReplacedCycle: an unpublished re-entry at
-// base-b publishes, a feedback cycle then works at the admitted base-a, and a
-// successor re-entry replaces it at base-c (issue #2111). The feedback's own
-// rounds keep their base-a segment, so a disposition recorded there stays in
-// the history the successor re-entry publishes.
-func TestReentryLineageSegmentsKeepTheReplacedCycle(t *testing.T) {
-	t.Parallel()
-	runID := domain.RunID("run-successor-segments")
-	reentry := func(version string, origin domain.PublicationSuccessorOrigin, predecessor domain.ItemID,
-		prior domain.InvocationID, round int, base string,
-	) domain.PublicationSuccessor {
-		return domain.PublicationSuccessor{
-			Version: version, Origin: origin, RunID: runID, PredecessorItemID: predecessor,
-			PriorReviewInvocationID: prior, ReviewRound: round,
-			Reentry: &domain.PublicationSuccessorReentry{
-				Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: base, HeadSHA: "head-1",
-			},
-		}
-	}
-	unpublished := reentry(domain.PublicationUnpublishedReentryVersion, domain.PublicationSuccessorUnpublishedBaseAdvance,
-		domain.ProductionReadyItemID(runID), "review-2", 3, "base-b")
-	feedback := domain.PublicationSuccessor{
-		Version: domain.PublicationContinuationVersion, Origin: domain.PublicationSuccessorFeedback,
-		RunID: runID, CommandID: "return-1", FeedbackInvocationID: "inv-feedback-1",
-		PredecessorItemID: unpublished.ReadyItemID(), PriorReviewInvocationID: "review-3", ReviewRound: 4,
-	}
-	successor := reentry(domain.PublicationSuccessorReentryVersion, domain.PublicationSuccessorBaseAdvance,
-		feedback.ReadyItemID(), "review-5", 6, "base-c")
-	further := reentry(domain.PublicationSuccessorReentryVersion, domain.PublicationSuccessorBaseAdvance,
-		successor.ReadyItemID(), "review-6", 7, "base-d")
-	priorBases := map[domain.InvocationID]string{
-		"review-2": "base-a", "review-5": "base-a", "review-6": "base-c",
-	}
-	segments := reentryLineageSegments(
-		[]domain.PublicationSuccessor{unpublished, feedback, successor, further}, priorBases)
-	want := []lineageSegment{
-		{FromRound: 0, BaseSHA: "base-a"},
-		{FromRound: 3, BaseSHA: "base-b"},
-		{FromRound: 4, BaseSHA: "base-a"},
-		{FromRound: 6, BaseSHA: "base-c"},
-		{FromRound: 7, BaseSHA: "base-d"},
-	}
-	if !slices.Equal(segments, want) {
-		t.Fatalf("segments = %#v, want %#v", segments, want)
-	}
-	if segments := reentryLineageSegments([]domain.PublicationSuccessor{feedback}, priorBases); segments != nil {
-		t.Fatalf("a chain without a re-entry has segments %#v", segments)
-	}
-
-	at := func(round int, base string, findings ...domain.FindingID) domain.ReviewRecord {
-		invocation := domain.InvocationID(fmt.Sprintf("review-%d", round))
-		outcome := domain.ReviewClean
-		if len(findings) > 0 {
-			outcome = domain.ReviewFindings
-		}
-		record, err := domain.NewReviewRecord(domain.ReviewRecord{
-			InvocationID: invocation, RunID: runID, Round: round,
-			Admission: fake.RecordAdmission(domain.RoleReviewer, runID, invocation), ConfigurationDigest: dispositionDigestA,
-			InstructionDigest: dispositionDigestA, BaseSHA: base, HeadSHA: "head-1",
-			CompletedAt: time.Date(2026, 10, 21, 2, round, 0, 0, time.UTC), CompletionEvidence: dispositionDigestC,
-			Outcome: outcome, FindingIDs: findings,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return record
-	}
-	declined := domain.ReviewDispositionRecord{FindingID: "feedback-finding", Round: 5, Disposition: domain.ReviewDispositionDeclined}
-	reviews, dispositions := currentDispositionLineage(
-		[]domain.ReviewRecord{
-			at(1, "base-a"), at(2, "base-a"), at(3, "base-b"), at(4, "base-a"),
-			at(5, "base-a", "feedback-finding"), at(6, "base-c"),
-		},
-		[]domain.ReviewDispositionRecord{declined}, segments[:4],
-	)
-	if len(reviews) != 6 || len(dispositions) != 1 {
-		t.Fatalf("successor re-entry lineage dropped the feedback cycle's rounds: %#v, %#v", reviews, dispositions)
 	}
 }

@@ -100,19 +100,18 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 	checkoutDir string,
 	checkpoint productionVerificationCheckpoint,
 ) (domain.HandoffCheck, *productionTaskOutcome, error) {
-	legacyIntent, err := w.unsealedCommittedIntent(ctx, task)
+	unsealed, err := w.unsealedCommittedIntent(ctx, task)
 	if err != nil {
 		return domain.HandoffCheck{}, nil, err
 	}
-	if legacyIntent {
-		// Recovered under the decision it was committed with: the publisher
-		// gates only a new reservation, and a tip resolved now would move the
-		// candidate's base away from what that decision named.
-		base := binding.admission.Base.BaseSHA
-		return domain.HandoffCheck{
-			RunID: task.RunID, PublicationID: task.handoffID(), HeadSHA: task.HeadSHA,
-			EvidenceBaseSHA: base, TipSHA: base,
-		}, nil, nil
+	if unsealed {
+		// Refused before any tip is sealed (issue #3341): sealing one now
+		// would publish the intent against a tip its decision never named,
+		// and the publisher gates only a new reservation. No database a
+		// current build opens holds such an intent.
+		return domain.HandoffCheck{}, nil, fmt.Errorf(
+			"publication %s has an intent committed before handoff checks and no sealed tip: %w",
+			task.PublicationID, domain.ErrParentKeyMismatch)
 	}
 	check, sealedNow, err := w.sealHandoffTip(ctx, task, binding)
 	if err != nil {
@@ -302,7 +301,8 @@ func (w *productionPublicationWorkflow) loadHandoffCheck(
 
 // unsealedCommittedIntent reports a publication intent an earlier daemon
 // committed before handoff checks existed: one is pending and no tip was
-// sealed. A daemon with handoff checks seals before it commits an intent.
+// sealed. A daemon with handoff checks seals before it commits an intent, so
+// reconcileHandoff refuses such an intent rather than publishing it.
 func (w *productionPublicationWorkflow) unsealedCommittedIntent(
 	ctx context.Context, task productionPublicationTask,
 ) (bool, error) {
@@ -540,24 +540,24 @@ func (w *productionPublicationWorkflow) loadHandoffStop(
 }
 
 // withPublishedHandoff names on a published candidate's readiness detail the
-// tip its sealed handoff check resolved and the verified merge into it. A
-// publication intent committed before handoff checks existed has no sealed
-// check; reconcileHandoff treats its evidence base as the tip, and so does
-// this. A sealed moved tip without a merge never reaches publication, so one
-// here is a broken invariant.
+// tip its sealed handoff check resolved and the verified merge into it, and
+// returns that check. Every publication seals its check before it commits an
+// intent, so a published candidate without one, like a sealed moved tip
+// without a merge, is a broken invariant.
 func (w *productionPublicationWorkflow) withPublishedHandoff(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
 	readiness productionReadiness,
-) (productionReadiness, error) {
+) (productionReadiness, domain.HandoffCheck, error) {
 	check, found, err := w.loadHandoffCheck(ctx, task)
 	if err != nil {
-		return productionReadiness{}, err
+		return productionReadiness{}, domain.HandoffCheck{}, err
 	}
 	if !found {
-		return readiness.withHandoff(binding.admission.Base.BaseSHA, "")
+		return productionReadiness{}, domain.HandoffCheck{}, fmt.Errorf(
+			"published %s has no sealed handoff check: %w", task.handoffID(), domain.ErrParentKeyMismatch)
 	}
 	if !check.Proved() {
-		return productionReadiness{}, fmt.Errorf(
+		return productionReadiness{}, domain.HandoffCheck{}, fmt.Errorf(
 			"published %s has an unproved handoff merge onto tip %s: %w",
 			task.handoffID(), check.TipSHA, domain.ErrParentKeyMismatch)
 	}
@@ -565,7 +565,11 @@ func (w *productionPublicationWorkflow) withPublishedHandoff(
 	if check.Merge != nil {
 		merge = check.Merge.MergeSHA
 	}
-	return readiness.withHandoff(check.TipSHA, merge)
+	readiness, err = readiness.withHandoff(check.TipSHA, merge)
+	if err != nil {
+		return productionReadiness{}, domain.HandoffCheck{}, err
+	}
+	return readiness, check, nil
 }
 
 // handoffBlockArtifacts is the evidence a recovered handoff-verification block

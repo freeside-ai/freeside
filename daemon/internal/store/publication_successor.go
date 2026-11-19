@@ -52,13 +52,6 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 		if err := tx.requireCurrentExternalReviewAdmission(ctx, successor); err != nil {
 			return err
 		}
-		// No cycle re-enters an unpublished head any more: the handoff
-		// verifies a moved tip instead (issue #2644). Stored v5 and v6
-		// authorities stay readable; a new one is never sealed.
-		if successor.ReentersUnpublishedHead() {
-			return fmt.Errorf("seal retired base-advance re-entry %s: %w",
-				successor.PublicationID(), domain.ErrParentKeyMismatch)
-		}
 		// A successor that replaces the publication's merge retires the
 		// replaced card here, once, at the seal; a cycle that publishes admits
 		// its own closure proposal.
@@ -80,8 +73,6 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 // so its card binds a merge that no longer exists.
 func closureRetirementReason(origin domain.PublicationSuccessorOrigin) (string, bool) {
 	switch origin {
-	case domain.PublicationSuccessorUnpublishedBaseAdvance, domain.PublicationSuccessorBaseAdvance:
-		return "Superseded because the target base advanced; the re-entered publication proposes closure again.", true
 	case domain.PublicationSuccessorFeedback:
 		return "Superseded because the pull request was returned to the agent.", true
 	case domain.PublicationSuccessorRemediation:
@@ -170,10 +161,6 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 	case domain.PublicationSuccessorReadinessInvalidation, domain.PublicationSuccessorExternalReview,
 		domain.PublicationSuccessorHandBack:
 		return tx.validateReentrySuccessor(ctx, successor)
-	case domain.PublicationSuccessorUnpublishedBaseAdvance:
-		return tx.validateUnpublishedReentrySuccessor(ctx, successor)
-	case domain.PublicationSuccessorBaseAdvance:
-		return tx.validateSuccessorReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorHandoffConflict:
 		return tx.validateHandoffConflictSuccessor(ctx, successor)
 	case domain.PublicationSuccessorRemediation:
@@ -366,115 +353,6 @@ func (tx *ReadTx) handBackPredecessorBinding(
 	return ready, nil
 }
 
-// publicationReservationKind is publish.IntentKindReservation, the kind a
-// publication invocation's slot holds until its intent commits. The store
-// cannot import publish; TestPublicationReservationKind pins the two together.
-const publicationReservationKind = "publish.invocation_reservation"
-
-// validateUnpublishedReentrySuccessor is the every-read gate of an authority
-// that re-enters a run whose base advanced before its first publication
-// (issue #2058). Nothing was published, so no item, binding, or forge
-// observation proves its coordinates; the store proves each one instead:
-//
-//   - The head is the one the round before the cycle reviewed, and the
-//     cycle's round follows it. That review was at another base.
-//   - The authority extends the run's chain from its root ready item through
-//     unpublished re-entries only, and nothing on that chain published.
-//   - The base is the tip of a workflow audit the daemon itself recorded for
-//     the run's repository, never a value the engine or a task row supplied.
-//
-// Sealing adds the checks that only hold at that moment
-// (requireCurrentUnpublishedReentry). Audits record no ref, so this gate
-// cannot tell a tip of the target branch from a tip of another branch of the
-// same repository. It does not need to: the publication decision audits the
-// target branch again and refuses unless that fresh tip is this base.
-func (tx *ReadTx) validateUnpublishedReentrySuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
-	reentry := successor.Reentry
-	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
-	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound ||
-		prior.HeadSHA != reentry.HeadSHA || prior.BaseSHA == "" || prior.BaseSHA == reentry.BaseSHA {
-		return errors.Join(err, domain.ErrParentKeyMismatch)
-	}
-	if successor.PredecessorItemID != domain.ProductionReadyItemID(successor.RunID) {
-		parent, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID)
-		if err != nil || !parent.RepublishesUnpublished() {
-			return errors.Join(err, domain.ErrParentKeyMismatch)
-		}
-	}
-	var published bool
-	if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
-		successor.PredecessorItemID).Scan(&published); err != nil {
-		return err
-	}
-	if published {
-		return domain.ErrParentKeyMismatch
-	}
-	audits, err := tx.runWorkflowAudits(ctx, successor.RunID)
-	if err != nil {
-		return err
-	}
-	if !slices.ContainsFunc(audits, func(record WorkflowAuditRecord) bool {
-		return record.Audit.AuditedCommitSHA == reentry.BaseSHA
-	}) {
-		return fmt.Errorf("re-entry base %s is no recorded audit tip: %w", reentry.BaseSHA, domain.ErrParentKeyMismatch)
-	}
-	return nil
-}
-
-// validateSuccessorReentrySuccessor is the every-read gate of an authority
-// that re-enters a successor cycle refused for a base advance after the run's
-// pull request already existed (issue #2111). The successor's head was never
-// pushed, so, as for an unpublished re-entry, the store proves each
-// coordinate from its own records:
-//
-//   - The head is the one the round before the cycle reviewed, and the
-//     cycle's round follows it. That review was at another base.
-//   - The predecessor is the ready item of a feedback, remediation
-//     continuation, or earlier successor re-entry cycle that never
-//     published, and an ancestor before it did: that ancestor's pull request
-//     is the one the cycle updates.
-//   - The base is the tip of a workflow audit the daemon itself recorded for
-//     the run's repository.
-//
-// Sealing adds the same moment-bound checks as an unpublished re-entry
-// (requireCurrentUnpublishedReentry).
-func (tx *ReadTx) validateSuccessorReentrySuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
-	reentry := successor.Reentry
-	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
-	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound ||
-		prior.HeadSHA != reentry.HeadSHA || prior.BaseSHA == "" || prior.BaseSHA == reentry.BaseSHA {
-		return errors.Join(err, domain.ErrParentKeyMismatch)
-	}
-	parent, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID)
-	if err != nil {
-		return errors.Join(err, domain.ErrParentKeyMismatch)
-	}
-	if !parent.AdmitsSuccessorReentry() {
-		return domain.ErrParentKeyMismatch
-	}
-	var published bool
-	if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
-		successor.PredecessorItemID).Scan(&published); err != nil {
-		return err
-	}
-	if published {
-		return domain.ErrParentKeyMismatch
-	}
-	if _, err := tx.publishedReadyAtOrBefore(ctx, successor.RunID, parent.PredecessorItemID); err != nil {
-		return errors.Join(err, domain.ErrParentKeyMismatch)
-	}
-	audits, err := tx.runWorkflowAudits(ctx, successor.RunID)
-	if err != nil {
-		return err
-	}
-	if !slices.ContainsFunc(audits, func(record WorkflowAuditRecord) bool {
-		return record.Audit.AuditedCommitSHA == reentry.BaseSHA
-	}) {
-		return fmt.Errorf("re-entry base %s is no recorded audit tip: %w", reentry.BaseSHA, domain.ErrParentKeyMismatch)
-	}
-	return nil
-}
-
 // validateHandoffConflictSuccessor is the every-read gate of an authority
 // that remediates a conflict the predecessor's handoff found (issue #2646).
 // The tip it admits a remediation at is the one the handoff sealed, never a
@@ -554,28 +432,6 @@ func handoffCheckPublication(parent domain.PublicationSuccessor, head string) do
 		return parent.InPlaceHandoffID()
 	}
 	return parent.PublicationID()
-}
-
-// runWorkflowAudits lists the workflow audits recorded for the one repository
-// a run's admissions name, in insertion order. The repository comes from the
-// admission records, which are immutable facts, so a later policy change does
-// not hide audits the run already relied on.
-func (tx *ReadTx) runWorkflowAudits(ctx context.Context, runID domain.RunID) ([]WorkflowAuditRecord, error) {
-	admissions, err := tx.listRunExecutionAdmissions(ctx, runID, false)
-	if err != nil {
-		return nil, err
-	}
-	repo := ""
-	for _, admission := range admissions {
-		if repo != "" && admission.Base.Repo != repo {
-			return nil, domain.ErrParentKeyMismatch
-		}
-		repo = admission.Base.Repo
-	}
-	if repo == "" {
-		return nil, domain.ErrParentKeyMismatch
-	}
-	return tx.ListWorkflowAudits(ctx, repo)
 }
 
 // validateReentrySuccessor re-derives every coordinate of a re-entry authority
@@ -1086,24 +942,6 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	if producer == successor.FeedbackInvocationID {
 		return tx.validatePublicationSuccessor(ctx, successor)
 	}
-	if successor.ReentersUnpublishedHead() {
-		// The cycle publishes the head its predecessor reviewed and admits
-		// no remediation, so its only producer is the invocation that
-		// exported that head at an earlier base.
-		exported, err := tx.GetExecutionExportRecord(ctx, producer)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		if err != nil || exported.HeadSHA != successor.Reentry.HeadSHA {
-			return domain.ErrParentKeyMismatch
-		}
-		admission, err := tx.GetExecutionAdmissionRecord(ctx, producer)
-		if err != nil || admission.RunID != successor.RunID ||
-			exported.ObservedBaseSHA == successor.Reentry.BaseSHA {
-			return errors.Join(err, domain.ErrParentKeyMismatch)
-		}
-		return nil
-	}
 	entry, err := tx.GetOutbox(ctx, string(producer))
 	if err != nil {
 		return err
@@ -1337,7 +1175,7 @@ func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.R
 	// not be the published ancestor's. A handoff conflict's head never
 	// published, so the pull request still carries the ancestor's, or the
 	// head a hand_back cycle before it adopted.
-	if successor.Reentry != nil && !successor.ReentersUnpublishedHead() && !successor.RemediatesHandoffConflict() {
+	if successor.Reentry != nil && !successor.RemediatesHandoffConflict() {
 		target.HeadSHA = successor.Reentry.HeadSHA
 	}
 	return target, target.Validate(ready.BaseRef)

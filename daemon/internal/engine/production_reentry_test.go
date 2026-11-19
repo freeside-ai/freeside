@@ -406,8 +406,8 @@ func TestReentryStopsOnBaseTheImageCannotServe(t *testing.T) {
 }
 
 // A re-entered cycle whose verification room was killed at its memory limit
-// stops on a readable item, and an unpublished re-entry blocks on the
-// memory-limit reason: either retry would verify at the same size. Only the
+// stops on a readable item, and a publication blocks on the memory-limit
+// reason: either retry would verify at the same size. Only the
 // verification class counts; a writer's or review's kill is not this cycle's.
 func TestReentryStopsOnAVerificationMemoryLimitKill(t *testing.T) {
 	t.Parallel()
