@@ -415,6 +415,50 @@ func TestProductionReplayBytesOutliveTheReleasedDirectory(t *testing.T) {
 	}
 }
 
+// TestPersistRepositoryBlobsSkipsWithheldBlobs: a blob the export withheld
+// (an ignored build artifact past the caps, #3427) has no file in the
+// released directory, so persistence skips it instead of wedging the import.
+func TestPersistRepositoryBlobsSkipsWithheldBlobs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	artifacts := newStubArtifacts()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.artifacts = artifacts
+	dir := t.TempDir()
+	body := []byte("candidate bytes\n")
+	sum := sha256.Sum256(body)
+	hexDigits := hex.EncodeToString(sum[:])
+	blobDir := filepath.Join(dir, "blobs", "sha256")
+	if err := os.MkdirAll(blobDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blobDir, hexDigits), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mode := "100644"
+	size := int64(len(body))
+	stored := export.Digest("sha256:" + hexDigits)
+	withheld := export.Digest("sha256:" + strings.Repeat("ab", 32))
+	withheldSize := int64(200 << 20)
+	entries := []export.Entry{
+		{Path: "README.md", Kind: export.EntryRegular, Mode: &mode, Size: &size, Digest: &stored},
+		{
+			Path: "app/.build/debug/Tests.xctest", Kind: export.EntryRegular,
+			Mode: &mode, Size: &withheldSize, Digest: &withheld, BlobOmitted: true,
+		},
+	}
+	out := exportOutcome{dir: dir, manifest: export.Manifest{Version: export.ManifestVersion, Entries: entries}}
+	if err := d.persistRepositoryBlobs(ctx, out); err != nil {
+		t.Fatalf("persistRepositoryBlobs with a withheld blob: %v", err)
+	}
+	if got := artifacts.blobs[domain.Digest(stored)]; !bytes.Equal(got, body) {
+		t.Fatalf("stored repository blob = %q", got)
+	}
+	if _, ok := artifacts.blobs[domain.Digest(withheld)]; ok {
+		t.Fatal("a withheld blob reached durable storage")
+	}
+}
+
 func TestEvidenceFailureLeavesNoExecutionExport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

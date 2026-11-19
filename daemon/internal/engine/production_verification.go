@@ -37,11 +37,13 @@ func (w *productionPublicationWorkflow) materializeReplay(
 	if err := os.WriteFile(filepath.Join(dir, export.ManifestFilename), manifest, 0o600); err != nil {
 		return err
 	}
+	// A blob the export withheld was never stored, and the importer reads
+	// none for it; the replayed import's head check binds what it decides.
 	for _, entry := range replay.Manifest.Entries {
-		if entry.Kind != export.EntryRegular {
+		if entry.Kind != export.EntryRegular || entry.BlobOmitted {
 			continue
 		}
-		if entry.BlobOmitted || entry.Digest == nil {
+		if entry.Digest == nil {
 			return fmt.Errorf("replay manifest entry %q has no durable blob", entry.Path)
 		}
 		if err := w.materializeBlob(domain.Digest(*entry.Digest), filepath.Join(dir, "blobs", "sha256")); err != nil {

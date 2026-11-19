@@ -988,16 +988,19 @@ func (d *Driver) persistReleasedMaterial(
 	return artifacts, executionReplay{CommitPlanDigest: planDigest}, nil
 }
 
-// persistRepositoryBlobs copies every regular repository blob named by the
-// manifest into durable content-addressed storage. A successful importer
-// cannot have accepted an omitted blob, but this boundary rejects one
-// explicitly rather than depending on that earlier conclusion.
+// persistRepositoryBlobs copies every regular repository blob the export
+// stored into durable content-addressed storage, so the production replay can
+// reconstruct the import. An entry whose blob the export withheld is skipped:
+// the importer reads no content for it, deciding from the manifest and the
+// base alone (an unchanged file is elided, a base-ignored addition excluded,
+// changed content the blocking blob_omitted finding), and the replay's head
+// check binds that same decision. A stored entry must still name its content.
 func (d *Driver) persistRepositoryBlobs(ctx context.Context, out exportOutcome) error {
 	for _, entry := range out.manifest.Entries {
-		if entry.Kind != export.EntryRegular {
+		if entry.Kind != export.EntryRegular || entry.BlobOmitted {
 			continue
 		}
-		if entry.BlobOmitted || entry.Digest == nil {
+		if entry.Digest == nil {
 			return fmt.Errorf("persist repository blob for %q: manifest content is unavailable", entry.Path)
 		}
 		digest := domain.Digest(*entry.Digest)

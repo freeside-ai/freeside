@@ -610,7 +610,7 @@ func exportProductionReplay(
 ) engine.ProductionReplay {
 	t.Helper()
 	handoff := filepath.Join(t.TempDir(), "handoff")
-	manifest, err := export.Export(os.DirFS(workspace), handoff, export.Options{})
+	manifest, err := export.Export(os.DirFS(workspace), handoff, export.Options{MaxBlobs: h.exportMaxBlobs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +621,7 @@ func exportProductionReplay(
 	manifestDigest := productionDigest(manifestBody)
 	putProductionBlob(t, h, manifestDigest, manifestBody)
 	for _, entry := range manifest.Entries {
-		if entry.Kind != export.EntryRegular || entry.Digest == nil {
+		if entry.Kind != export.EntryRegular || entry.BlobOmitted || entry.Digest == nil {
 			continue
 		}
 		digest := domain.Digest(*entry.Digest)
@@ -1315,6 +1315,41 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	if p.forge.PullRequests()[0].Body != body {
 		t.Fatal("second reconcile changed publication body")
 	}
+}
+
+// A candidate whose export withheld an ignored build artifact's blob (#3427)
+// still publishes: the importer excludes the artifact without reading it, and
+// the publication replay materializes only the blobs the export stored.
+func TestProductionPublishesPastAWithheldIgnoredBlob(t *testing.T) {
+	t.Parallel()
+	ignore := "build/\n"
+	baseFiles := productionBaseManifests()
+	baseFiles[".gitignore"] = ignore
+	h := newPublicationHarnessWithBaseFiles(
+		t, []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`), baseFiles)
+	// .gitignore, README.md, and the two npm manifests take the blob budget;
+	// export spends it on ignored files last, so it withholds the artifact.
+	h.exportMaxBlobs = 4
+	artifact := "build/debug/Tests.xctest"
+	p := newProductionPublicationHarnessFromBase(t, h, "", nil, nil, map[string]string{
+		".gitignore": ignore, artifact: "compiled test bundle\n",
+	})
+	withheld := false
+	for _, entry := range p.replay.Manifest.Entries {
+		withheld = withheld || (entry.Path == artifact && entry.BlobOmitted)
+	}
+	if !withheld {
+		t.Fatalf("export stored %s; the test needs it withheld", artifact)
+	}
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PublicationTasksCompleted != 1 || result.LastPRNumber == 0 {
+		t.Fatalf("publication result = %#v", result)
+	}
+	p.assertReady(t)
 }
 
 // A declared branch that still lists a merged pull request from another
