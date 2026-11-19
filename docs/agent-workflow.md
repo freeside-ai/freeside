@@ -110,10 +110,21 @@ follow this full sequence:
    step 7. A blocker in that review reopens fix rounds. If it has none, defer
    or decline its findings and do not push again.
 
-7. **Stop and report.** End the turn with this report as its final message.
-   Give the parts below in this order, each with its bold lead words, and use
-   no headings or tables. Aim for 60 to 120 words. Omit a part only where its
-   rule says so.
+7. **Stop and report.** First check that the PR's worktree holds nothing
+   real: after the final push,
+   `git status --porcelain --untracked-files=all` in it prints nothing. The
+   flag keeps a `status.showUntrackedFiles` setting from hiding files.
+   Scratch files belong outside the checkout, so move or delete your own and
+   leave files you didn't create.
+   A file that belongs in the PR means another commit and push, which
+   restarts the review watch (step 2), unless the approver has already
+   approved the PR: then push nothing, as the freeze below says. Anything
+   you must leave goes under **Left for you**, by path; a clean result needs
+   no mention.
+
+   End the turn with this report as its final message. Give the parts below
+   in this order, each with its bold lead words, and use no headings or
+   tables. Aim for 60 to 120 words. Omit a part only where its rule says so.
 
    1. **Status.** One line: the PR link once, the tip step 3 checked,
       then "open and green, ready to merge." For a PR you handed off behind
@@ -132,7 +143,8 @@ follow this full sequence:
    4. **Left for you.** Up to three bullets on what the owner must do besides
       merge. Each is a thread that needs their word, a check only they can
       run, a follow-up filed as #N or still to file, or a sibling PR to
-      refresh after this one lands. Omit when none.
+      refresh after this one lands. A file left in the worktree goes here
+      too, by path. Omit when none.
    5. **Skipped.** Up to two bullets, each a workflow step not run and why:
       the review watch a `none` reviewer record skipped (step 1), screenshots
       not captured or not uploaded (with the error), or a check not run. Omit
@@ -381,17 +393,10 @@ mechanical change (a rename, move, format, or generated update) that does
 none of those relies on CI and the recorded bot reviewer, or the human
 reviewer when there is none, however many files it touches.
 
-- **Choose the reviewer by risk.** Ordinary code, prompt, or docs changes,
-  including behavior changes without tests, get one reviewer in a fresh
-  context with the brief below. Work on a destructive path, a credential-leak
-  surface, a returned-object trust boundary, or a contract or public interface
-  uses the `council` skill when it is installed.
-- **Treat this section as the standing request for council.** It is the
-  project's request for council on that work, so council's "the user asks for
-  it" condition holds. Call council in findings mode, report only, with the
-  change at a fixed revision, its intended outcome, and the risk-class flag
-  set. Council picks its rung and panel and states their cost. This procedure,
-  not council's staging, owns fixes and re-review.
+- **Use one fresh-context reviewer.** Every change this section covers,
+  risky or not, gets one reviewer in a fresh context with the brief below.
+  The `council` skill is an escalation, not a default: run it only when the
+  user asks for it.
 - **Give the single reviewer a fixed brief.** Send the same words every
   round, changing only the revision. Give the reviewer no reasoning trail, and
   ask it to work read-only:
@@ -411,13 +416,11 @@ reviewer when there is none, however many files it touches.
   don't count it and don't drop it. Judge reachability and severity as
   §review-convergence says.
 - **Re-review only while blockers remain.** After fixing confirmed blockers,
-  review the new fixed revision through the same route. A round with no
+  review the new fixed revision with the same brief. A round with no
   confirmed blocker ends pre-push review; fix, defer, or decline its
   non-blockers per §review-convergence. There is no round cap and no required
   subagent; after many blocker rounds, reassess as §review-convergence says.
-- **Fall back when a route is missing.** Without council installed, use one
-  fresh-context reviewer with the brief. When council reports rung 3 (no
-  panel), use the fallback reviewer it names. When delegation is unavailable
+- **Fall back when delegation is missing.** When delegation is unavailable
   or needs permission you don't have, skip it and rely on the external bot or
   human. You may ask the user first.
 - **Match the review effort to risk.** A same-model delegate is only partly
