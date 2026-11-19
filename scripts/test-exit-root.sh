@@ -18,10 +18,11 @@
 #
 # The cases cover the settings rendering from the fixture template (every
 # fixture-table value and the machine file, nothing else), the tree commit on
-# its own branch, the stop at the onboarding approval and the resume after
-# it, the installation-intent stop, the rerun on a new build, the serve wait,
-# port selection, the seeded-routing overlay, the scenario pass, and the
-# refusals that create nothing.
+# its own branch and a later one against a checkout whose policy files
+# differ, the stop at the onboarding approval and the resume after it, the
+# installation-intent stop, the rerun on a new build, the serve wait, port
+# selection, the seeded-routing overlay, the scenario pass, and the refusals
+# that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -653,6 +654,27 @@ FAKE_DEPUTY_MODE=crash run_exit_root --pass fixture --build "$SHA1" --machine "$
 assert_rc 1
 assert_contains 'the deputy exited before it served (status 1)'
 assert_not_contains 'timed out'
+
+begin_case "a second tree commit succeeds when the checkout's HEAD and working tree hold other policy files"
+OP_TREE=$TMP/operator-tree
+git_q init "$OP_TREE"
+mkdir -p "$OP_TREE/policy"
+printf 'operator lineup\n' >"$OP_TREE/policy/lineup"
+git_q -C "$OP_TREE" add -A
+git_q -C "$OP_TREE" commit -m 'Operator lineup'
+printf 'operator lineup, edited\n' >"$OP_TREE/policy/lineup"
+M=$CASE_DIR/machine.json
+make_machine "$M" "$ROOTS" ".settings.agent_tree.checkout = \"$OP_TREE\""
+run_exit_root --pass fixture --build "$SHA1" --machine "$M" optree
+assert_rc 3
+run_exit_root --pass fixture --build "$SHA2" --machine "$M" optree
+assert_rc 3
+tip=$(git -C "$OP_TREE" rev-parse --verify --quiet refs/heads/exit-root/fixture || true)
+assert_eq "$(git -C "$OP_TREE" log --format=%s exit-root/fixture | grep -c 'Adopt the fixture exit-root tree')" 2 'adopt commits'
+assert_eq "$(jq -r .tree_commit "$ROOTS/optree/exit-root.json")" "$tip" 'state tree commit follows the branch'
+assert_eq "$(git -C "$OP_TREE" show "$tip:policy/lineup")" \
+  "lineup $(cksum <"$ROOTS/optree/builds/$SHA2/src/prompts/phase-1a/implementer.md" | cut -d' ' -f1) none" 'tree holds the second patch'
+assert_eq "$(git -C "$OP_TREE" status --porcelain)" ' M policy/lineup' 'operator checkout unchanged'
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild

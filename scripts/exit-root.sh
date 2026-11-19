@@ -522,7 +522,11 @@ commit_tree() {
   index="$work/tree-index"
   rm -f "$index"
   GIT_INDEX_FILE=$index git -C "$tree_checkout" read-tree "$base"
-  GIT_INDEX_FILE=$index git -C "$tree_checkout" rm --cached -r -q --ignore-unmatch -- \
+  # The scratch index holds the branch tip, but git rm checks its entries
+  # against the checkout's HEAD and working tree, which needn't match the
+  # tip; -f skips that check, and with --cached it still touches only the
+  # scratch index.
+  GIT_INDEX_FILE=$index git -C "$tree_checkout" rm --cached -f -r -q --ignore-unmatch -- \
     policy/fragments policy/lineup policy/agents.lock
   GIT_INDEX_FILE=$index git -C "$tree_checkout" apply --cached "$patch"
   tree=$(GIT_INDEX_FILE=$index git -C "$tree_checkout" write-tree)
