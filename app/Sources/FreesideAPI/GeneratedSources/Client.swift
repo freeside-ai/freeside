@@ -1848,23 +1848,39 @@ public struct Client: APIProtocol {
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
-    /// records a receipt with recorded false and moves no entity. An unknown
-    /// pool, enrollment, or task is 404. An enrollment whose identity meters
-    /// another pool (reassign_collector) and an agent the daemon's agent tree
-    /// does not carry (set_routing_policy) are 400. A role whose attempt is
-    /// running (change_task_line) is 409 with the current task snapshot, and
-    /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A set_workflow_policy with
-    /// an unknown key or scope, a value its key does not take, or a project
-    /// the daemon does not serve is 400; one whose expected_revision is not
-    /// the current workflow policy revision is 409 with the current workflow
-    /// policy. A move_parked_task for a
-    /// task with no attempt parked on an exhausted quota window, or naming
-    /// an agent the park no longer offers, is 400 and records nothing, as is
-    /// a retry_with_alternate_agent decision whose agent no longer
-    /// qualifies. Until the daemon routes
-    /// refresh_usage and reassign_collector to its collection lifecycle, it
-    /// answers them with 500 and records nothing.
+    /// records a receipt with recorded false and moves no entity. Every
+    /// refusal below applies no command effect and saves no command result;
+    /// like any authenticated request, it may still update the device's
+    /// last-seen time. For refresh_usage and
+    /// reassign_collector, an unknown pool is 404, and so is a
+    /// reassign_collector enrollment the daemon does not hold; an enrollment
+    /// whose identity meters another pool is 400. For change_task_line and
+    /// move_parked_task, an unknown task is 404. A change_task_line for a
+    /// role that takes no task line, or whose selection names an enrollment
+    /// the daemon does not hold or a model or effort the enrollment's
+    /// discovered catalog does not list, is 400; one for a role whose
+    /// attempt is running is 409 with the current task snapshot. A
+    /// set_routing_policy that orders an enrollment the daemon does not
+    /// hold, one whose identity is disabled, or one that cannot serve its
+    /// role's lineup model and effort is 400, as are a role the lineup
+    /// leaves unbound and a drain_first_account that is not the usage pool
+    /// of an ordered enrollment; one whose expected_revision is not the
+    /// current policy revision is 409 with the current policy. A
+    /// set_workflow_policy with an unknown key or scope, a value its key
+    /// does not take, or a project the daemon does not serve is 400; one
+    /// whose expected_revision is not the current workflow policy revision
+    /// is 409 with the current workflow policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or whose
+    /// choice is an enrollment the park does not offer now or a model or
+    /// effort that enrollment does not serve, is 400, as is a
+    /// retry_with_alternate_agent decision whose chosen enrollment no
+    /// longer qualifies. A daemon with no committed agent tree answers 400
+    /// to a set_routing_policy, a move_parked_task, or a
+    /// retry_with_alternate_agent decision once the command reaches the
+    /// step that needs the tree. Checks that run before that step keep
+    /// their own answers, such as 409 for a stale expected_revision and 404
+    /// for an unknown task. The same command can succeed once the daemon
+    /// has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -1944,6 +1960,72 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .badRequest(.init(body: body))
+                case 401:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.Unauthorized.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .unauthorized(.init(body: body))
+                case 403:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.Forbidden.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .forbidden(.init(body: body))
+                case 404:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(body: body))
                 case 409:
                     let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
                     let body: Operations.submitCommand.Output.Conflict.Body
@@ -1966,6 +2048,50 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .conflict(.init(body: body))
+                case 413:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.ContentTooLarge.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .contentTooLarge(.init(body: body))
+                case 500:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.InternalServerError.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .internalServerError(.init(body: body))
                 default:
                     return .undocumented(
                         statusCode: response.status.code,

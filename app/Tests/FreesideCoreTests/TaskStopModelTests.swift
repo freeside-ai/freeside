@@ -393,7 +393,7 @@ import Testing
         #expect(next.id != prepared.id)
     }
 
-    @Test(arguments: [401, 403, 408, 429, 500, 200, 409])
+    @Test(arguments: [401, 403, 408, 413, 429, 500, 200, 409])
     func ambiguousOrAuthenticationResponseKeepsIdentity(status: Int) async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)

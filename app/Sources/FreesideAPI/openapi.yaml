@@ -767,23 +767,39 @@ paths:
         and are rejected as malformed if they do. Each records a receipt in
         the transaction that applies it, and a replay returns that receipt and
         its revision. A request for the line or the role orders already held
-        records a receipt with recorded false and moves no entity. An unknown
-        pool, enrollment, or task is 404. An enrollment whose identity meters
-        another pool (reassign_collector) and an agent the daemon's agent tree
-        does not carry (set_routing_policy) are 400. A role whose attempt is
-        running (change_task_line) is 409 with the current task snapshot, and
-        a set_routing_policy whose expected_revision is not the current policy
-        revision is 409 with the current policy. A set_workflow_policy with
-        an unknown key or scope, a value its key does not take, or a project
-        the daemon does not serve is 400; one whose expected_revision is not
-        the current workflow policy revision is 409 with the current workflow
-        policy. A move_parked_task for a
-        task with no attempt parked on an exhausted quota window, or naming
-        an agent the park no longer offers, is 400 and records nothing, as is
-        a retry_with_alternate_agent decision whose agent no longer
-        qualifies. Until the daemon routes
-        refresh_usage and reassign_collector to its collection lifecycle, it
-        answers them with 500 and records nothing.
+        records a receipt with recorded false and moves no entity. Every
+        refusal below applies no command effect and saves no command result;
+        like any authenticated request, it may still update the device's
+        last-seen time. For refresh_usage and
+        reassign_collector, an unknown pool is 404, and so is a
+        reassign_collector enrollment the daemon does not hold; an enrollment
+        whose identity meters another pool is 400. For change_task_line and
+        move_parked_task, an unknown task is 404. A change_task_line for a
+        role that takes no task line, or whose selection names an enrollment
+        the daemon does not hold or a model or effort the enrollment's
+        discovered catalog does not list, is 400; one for a role whose
+        attempt is running is 409 with the current task snapshot. A
+        set_routing_policy that orders an enrollment the daemon does not
+        hold, one whose identity is disabled, or one that cannot serve its
+        role's lineup model and effort is 400, as are a role the lineup
+        leaves unbound and a drain_first_account that is not the usage pool
+        of an ordered enrollment; one whose expected_revision is not the
+        current policy revision is 409 with the current policy. A
+        set_workflow_policy with an unknown key or scope, a value its key
+        does not take, or a project the daemon does not serve is 400; one
+        whose expected_revision is not the current workflow policy revision
+        is 409 with the current workflow policy. A move_parked_task for a
+        task with no attempt parked on an exhausted quota window, or whose
+        choice is an enrollment the park does not offer now or a model or
+        effort that enrollment does not serve, is 400, as is a
+        retry_with_alternate_agent decision whose chosen enrollment no
+        longer qualifies. A daemon with no committed agent tree answers 400
+        to a set_routing_policy, a move_parked_task, or a
+        retry_with_alternate_agent decision once the command reaches the
+        step that needs the tree. Checks that run before that step keep
+        their own answers, such as 409 for a stale expected_revision and 404
+        for an unknown task. The same command can succeed once the daemon
+        has a tree.
       requestBody:
         required: true
         description: The command to apply, prepared against canonical state.
@@ -803,14 +819,51 @@ paths:
                 $ref: "#/components/schemas/CommandResult"
         "400":
           description: >
-            The daemon refused the request without applying or recording
-            anything. `reason` names a refusal the client acts on; a 400
+            The daemon refused the request: it applied no command effect
+            and saved no command result. `reason` names a refusal the client acts on; a 400
             without one is one of the malformed or invalid commands this
-            operation's description lists, and carries `message` alone.
+            operation's description lists, or a command that reached an
+            operator hook the daemon cannot apply yet, such as one that
+            needs a committed agent tree, and carries `message` alone. A
+            hook refusal can clear once the daemon's state changes.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CommandRequestRejection"
+        "401":
+          description: >
+            The bearer credential is missing, malformed, or no longer
+            active, and the answer carries `WWW-Authenticate: Bearer`. The
+            credential gate runs before the command is read, so this
+            request applied no command effect and saved no command result.
+            It says nothing about an earlier attempt with the same
+            `command_id`: a retry that meets 401 leaves that attempt's
+            outcome unknown.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >
+            The command's `device_id` does not match the authenticated
+            device, or the device is no longer active: the active-device
+            gate runs again inside the accepting transaction. The daemon
+            applied no command effect and saved no command result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >
+            An entity the command names does not exist, such as the decided
+            attention item or the task or pool an operator command names;
+            this operation's description lists each operator command's
+            cases. The daemon applied no command effect and saved no
+            command result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: >
             Optimistic-concurrency rejection: the command's
@@ -826,6 +879,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CommandRejection"
+        "413":
+          description: >
+            The request body is too large. The daemon applied no command
+            effect and saved no command result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >
+            The daemon could not report a definite outcome: the command may
+            or may not have committed. The client resolves it by retrying
+            the same `command_id`, which returns the recorded result when
+            the command committed. A submit_task to a daemon that serves no
+            task submission also answers 500, and a retry meets the same
+            answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /pairing:
     post:
@@ -6932,8 +7005,8 @@ components:
     CommandRequestRejection:
       type: object
       description: >
-        A refused command: the daemon applied and recorded nothing. A
-        refusal with reason `unknown_command_kind` meets every retry to the
+        A refused command: the daemon applied no command effect and saved
+        no command result. A refusal with reason `unknown_command_kind` meets every retry to the
         same daemon; any other refusal may clear when state changes, as when
         a snooze ends.
       required: [message]

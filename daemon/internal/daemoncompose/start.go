@@ -707,8 +707,8 @@ func newAttentionService(
 		}),
 		// A policy orders enrollments on the admitted lineup, which exists
 		// only after the Claude or scenario composition; without one the
-		// command fails closed. Signet has already translated the wire's
-		// agent names to enrollments.
+		// command answers 400 and records nothing. Signet has already put
+		// the request's enrollment orders in canonical form.
 		signet.WithRoutingPolicySetter(func(
 			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 		) (signet.RoutingPolicyOutcome, error) {
@@ -739,7 +739,7 @@ func newAttentionService(
 		// An alternate-agent choice re-derives its rule against the admitted
 		// lineup and the daemon's admission settings, which exist only after
 		// the Claude or scenario composition; without one both commands
-		// fail closed.
+		// answer 400 and record nothing.
 		signet.WithAlternateAgentRetrier(func(
 			ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem, now time.Time,
 		) (domain.AlternateAgentRetry, error) {
@@ -760,7 +760,9 @@ func newAttentionService(
 		}),
 		// The catalog, like the tree it projects, exists only after the
 		// Claude or scenario composition; until then, and in the fake-driver
-		// composition that loads no tree, clients see null.
+		// composition that loads no tree, the bootstrap's catalog carries an
+		// empty lineup and a null lineup_revision beside the enrollments the
+		// store holds, and the heartbeat's lineup_revision is null.
 		signet.WithAgentCatalog(func() *signet.AgentCatalog { return late.AgentCatalog }),
 		signet.WithUsageRefreshAge(usageRefreshAge),
 		// A client's refresh or reassignment starts its collection only after

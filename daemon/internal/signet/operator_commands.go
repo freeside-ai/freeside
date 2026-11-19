@@ -67,13 +67,18 @@ type MoveParkedTaskPayload struct {
 var ErrInvalidOperatorCommandPayload = errors.New("operator command payload is invalid")
 
 // ErrUsageOperationUnavailable answers refresh_usage and reassign_collector
-// on a service composed without a UsageOperator, as ErrTaskSubmissionUnavailable
-// answers submit_task: the command fails closed and records nothing.
+// on a service composed without a UsageOperator: the command fails closed
+// inside its transaction and records nothing, and the HTTP surface answers
+// 400 (isCommandRequestError).
 var ErrUsageOperationUnavailable = errors.New("usage operation is not available")
 
 // ErrOperatorSettingUnavailable answers change_task_line,
-// set_routing_policy, move_parked_task, set_workflow_policy, and a retry_with_alternate_agent
-// decision on a service composed without their hook.
+// set_routing_policy, move_parked_task, set_workflow_policy, and a
+// retry_with_alternate_agent decision on a service composed without their
+// hook, or whose hook has no committed agent tree to apply against yet. It
+// is returned inside the command's transaction before anything is written,
+// so nothing is recorded, and the HTTP surface answers 400
+// (isCommandRequestError).
 var ErrOperatorSettingUnavailable = errors.New("operator setting is not available")
 
 // UsageOperator runs a pool's refresh or collector reassignment

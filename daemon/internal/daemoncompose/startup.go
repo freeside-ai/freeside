@@ -145,7 +145,8 @@ func (b *StartupBindings) ProjectReadinessGate(ctx context.Context, tx *store.Re
 
 // Agents is the lineup the composed engine admits through: the Claude
 // composition's, else the scenario composition's, else nil, which the
-// operator hooks answer with signet.ErrOperatorSettingUnavailable.
+// operator hooks answer with signet.ErrOperatorSettingUnavailable (a 400
+// that records nothing).
 func (b *StartupBindings) Agents() *engine.AgentSelection {
 	switch {
 	case b.ClaudeWiring != nil:

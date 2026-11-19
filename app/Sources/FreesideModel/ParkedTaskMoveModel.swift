@@ -108,7 +108,8 @@ package final class ParkedTaskMoveModel {
         failure = nil
         defer { coordinator.parkedTaskMoveSending = false }
         do {
-            switch try await coordinator.store.client.submitCommand(body: .json(entry.command)) {
+            let output = try await coordinator.store.client.submitCommand(body: .json(entry.command))
+            switch output {
             case .ok(let ok):
                 let receipt = try ok.body.json
                 guard CommandResultTrust.accepts(receipt, for: entry.command) else { return }
@@ -131,7 +132,8 @@ package final class ParkedTaskMoveModel {
                     refusal, otherwise: "The daemon refused the move (status 400). Nothing was changed.")
                 failure = entry.taskID.map { .init(taskID: $0, message: message) }
                 await coordinator.refreshAfterCommit()
-            case .undocumented(let status, _):
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+                let status = output.statusCode
                 switch status {
                 case 404:
                     // The task is no longer parked, or the enrollment no

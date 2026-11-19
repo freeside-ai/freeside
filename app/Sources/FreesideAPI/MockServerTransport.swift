@@ -21,8 +21,9 @@ public struct MockServerTransport: ClientTransport {
             try await server.runBeforeRespond(operationID)
         } catch let forced as MockServer.ForcedStatus {
             // An answered-but-failed read: the daemon is reachable and
-            // returns a status, which the generated client surfaces as
-            // `.undocumented`, unlike a plain throw (a transport outage).
+            // returns a status, which the generated client surfaces as that
+            // status (`.undocumented` when the operation doesn't declare
+            // it), unlike a plain throw (a transport outage).
             return try Self.json(
                 status: .init(code: forced.code),
                 body: Components.Schemas._Error(message: "forced status \(forced.code)"))
@@ -416,9 +417,8 @@ public struct MockServerTransport: ClientTransport {
                     status: .forbidden, body: Components.Schemas._Error(message: "device is not active"))
             } catch let missing as MockServer.UnknownItemError {
                 // Daemon rejections are authoritative HTTP responses, not
-                // transport failures: the generated client surfaces the
-                // undocumented ones as their status, distinguishable from
-                // a lost response.
+                // transport failures: the generated client surfaces each as
+                // its status, distinguishable from a lost response.
                 return try Self.json(
                     status: .notFound,
                     body: Components.Schemas._Error(
@@ -436,8 +436,10 @@ public struct MockServerTransport: ClientTransport {
                 return try Self.json(
                     status: .badRequest, body: Components.Schemas._Error(message: rejection.reason))
             } catch is MockServer.OperatorSettingUnavailableError {
+                // The daemon refuses before writing anything, so it answers
+                // 400 (isCommandRequestError), never an ambiguous 500.
                 return try Self.json(
-                    status: .internalServerError,
+                    status: .badRequest,
                     body: Components.Schemas._Error(message: "operator setting is not available"))
             } catch let rejection as MockServer.ActionNotOfferedError {
                 // Mirrors store.ErrActionNotOffered, which the daemon answers 400.

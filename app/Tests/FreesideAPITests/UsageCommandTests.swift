@@ -43,7 +43,12 @@ import Testing
         switch output {
         case .ok: 200
         case .badRequest: 400
+        case .unauthorized: 401
+        case .forbidden: 403
+        case .notFound: 404
         case .conflict: 409
+        case .contentTooLarge: 413
+        case .internalServerError: 500
         case .undocumented(let status, _): status
         }
     }
@@ -407,11 +412,13 @@ import Testing
         #expect(CommandResultTrust.accepts(cleared, for: clearCommand))
     }
 
+    /// A daemon with no committed agent tree refuses the change with a
+    /// definite 400 and records nothing, never an ambiguous 500.
     @Test func routingPolicyChangeFailsClosedWithoutATree() async throws {
         let client = APIClientFactory.mock(
             server: MockServer(routingPolicy: nil, agentCatalog: UsageFixtures.treelessAgentCatalog()))
         let first = policy("first", expected: nil, enrollments: [UsageFixtures.readingCollectorID])
-        #expect(status(try await client.submitCommand(body: .json(first))) == 500)
+        #expect(status(try await client.submitCommand(body: .json(first))) == 400)
         #expect(try await client.getSyncBootstrap().ok.body.json.routing_policy == nil)
     }
 

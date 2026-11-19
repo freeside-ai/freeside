@@ -131,7 +131,8 @@ package final class TaskStopModel {
         messages[taskID] = nil
         defer { sending.remove(taskID) }
         do {
-            switch try await coordinator.store.client.submitCommand(body: .json(entry.command)) {
+            let output = try await coordinator.store.client.submitCommand(body: .json(entry.command))
+            switch output {
             case .ok(let ok):
                 let receipt = try ok.body.json
                 guard CommandResultTrust.accepts(receipt, for: entry.command) else { return }
@@ -164,7 +165,8 @@ package final class TaskStopModel {
                         "Stop was rejected by the daemon (status 400). Review the refreshed task before confirming again."
                 )
                 await coordinator.refreshAfterCommit()
-            case .undocumented(let status, _):
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+                let status = output.statusCode
                 switch status {
                 case 404:
                     // These daemon responses reject the command before acceptance.
