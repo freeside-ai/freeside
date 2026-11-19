@@ -241,6 +241,7 @@ func runDeputy(
 		stop()
 		return errors.Join(err, h.Close())
 	}
+	reportDeputyPairing(stderr, stateRoot, h.Readiness())
 	announceDeputyReady(stderr, check, paths.DB)
 	if err := daemonshell.Serve(ctx, stop, h.Shell); err != nil {
 		return err
@@ -262,6 +263,18 @@ type deputyRunEnd struct {
 // last steps, so only its failed end abandons the lease outright.
 func (e deputyRunEnd) clean() bool {
 	return !e.served || !e.driver || e.ok
+}
+
+// reportDeputyPairing tells the operator how to pair a client once the
+// deputy serves: the startup code in the readiness line expires, and an
+// attention item reaches no one until a device pairs.
+func reportDeputyPairing(stderr io.Writer, stateRoot string, ready daemonshell.Readiness) {
+	executable, err := os.Executable()
+	if err != nil {
+		executable = "freesided"
+	}
+	_, _ = fmt.Fprintf(stderr, "freesided deputy: startup pairing code expires %s; for a new code run: %s pairing-code -state-dir %s\n",
+		ready.ExpiresAt.Format(time.RFC3339), executable, stateRoot)
 }
 
 // deputyHomes are the two homes the environment checks run against: $HOME

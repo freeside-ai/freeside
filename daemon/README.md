@@ -593,8 +593,13 @@ If the startup code expires, run this command as the daemon's OS user:
 freesided pairing-code -state-dir /path/to/existing/daemon-state
 ```
 
-The daemon must already be running with that `-state-dir`. The command prints
-one JSON object with `api_url`, `pairing_code` and `expires_at`. Treat stdout
+The daemon must already be running with that `-state-dir`. Before it
+advertises `pairing-control.json`, the command says the daemon is still
+starting when the state directory's pairing-control lock is held (a deputy's
+ward conformance can take minutes before it serves), and otherwise that no
+daemon serves the directory yet; the check creates nothing. The command prints
+one JSON object with `api_url`, `pairing_code` and `expires_at`. The startup
+code's readiness line and `readiness.json` carry the same `expires_at`. Treat stdout
 as private pairing material. The code expires after ten minutes and can enroll
 one device; ordinary daemon logs do not contain it. Existing codes retain
 their original expiry and redemption state.
@@ -5114,9 +5119,10 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
-to stderr. A start whose self-check passed then logs one
-`freesided deputy: ready for submissions on <db>` line, once its
-composition manifest and control address both exist; a start whose
+to stderr, including the startup code's expiry and the exact `pairing-code
+-state-dir` command that mints a new one. A start whose self-check passed
+then logs one `freesided deputy: ready for submissions on <db>` line, once
+its composition manifest and control address both exist; a start whose
 self-check failed logs none. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig

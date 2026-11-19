@@ -217,14 +217,17 @@ the CLI nor the clients automatically resend unresolved submissions. A second
 unfinished task for the same specification in the same project is refused;
 the refusal names the first task and the commands that settle it.
 
-If pairing has not finished before the startup code expires, request a fresh
-code as the deputy's OS user:
+If pairing has not finished before the startup code expires (the pairing
+screen then says the code isn't valid or has expired), request a fresh code
+as the deputy's OS user:
 
 ```sh
 freesided pairing-code -state-dir <root>/daemon
 ```
 
-Use the returned `api_url`, not the normal installed service's endpoint. The
+Until the deputy serves, the command says it is still starting; rerun it
+once the readiness line appears. Use the returned `api_url`, not the normal
+installed service's endpoint. The
 command prints a private code and its ten-minute expiry. Keep that output out
 of shared logs and evidence; record a redacted mint/preview receipt and
 successful client pairing instead. Renewal does not consume or create a
