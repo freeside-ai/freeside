@@ -893,7 +893,7 @@ bot reviews pull requests.
   past PRs, and waits on the PR's CI checks only. Keep the record here: the
   skill doesn't treat the landing record's `Reviewer: none` as one.
 - **Before pushing:** follow `docs/agent-workflow.md` §pre-push-review, which
-  asks for a fresh-context reviewer when delegation is available and
+  chooses fresh-context review by risk when delegation is available and
   otherwise relies on the owner. The owner's review is the final one.
 - **No new record from stray activity:** an old summary comment or an
   on-demand `@codex review` is not a reviewer to record; a new record needs
@@ -1077,9 +1077,10 @@ change.
 - **Self-review the full diff in the PR files view.** Look for stray changes,
   debug code, scope creep, and accidental files. This catches accidental
   changes; it doesn't check whether the solution is correct.
-- **Repeat integration checks when the base moves.** Before merge, follow
-  `docs/agent-workflow.md` §handing-off step 3. A landing check reruns CI,
-  not review; a refresh you push restarts the review watch.
+- **Integrate the PR with the base as its landing check requires.** Follow
+  `docs/agent-workflow.md` §handing-off step 3, which says when a base move
+  calls for another check. A landing check reruns CI, not review; a refresh
+  you push restarts the review watch.
 - **Use fresh eyes for substantive review.** Reviewing your own work in the
   same conversation shares the author's blind spots. A review in a fresh
   conversation is more independent. A bot from another provider or a human is

@@ -55,14 +55,14 @@ follow this full sequence:
    The landing check decides whether you also refresh the branch:
 
    - **A merge queue or land command** tests the PR combined with the tip it
-     selects and reruns CI there, so it integrates the PR with the tip itself.
-     Refresh before handoff only when your merge check finds a conflict, or a
-     change on the base needs a fix in this PR. Otherwise hand the PR off
-     behind the tip: a refresh adds a CI run and a review restart and saves
-     the lander no work. If the base moves before your step 7 report, check
-     again and refresh only for the same reasons. After handoff, leave the PR
-     waiting. Refresh only when the lander hands it back (a merge queue does
-     so by removing it) or the owner asks.
+     selects and reruns CI there, so it integrates the PR with a moving base.
+     Verify against the current tip in this step, and again each time you
+     change the PR and hand it off. Never recheck or refresh because the base
+     moved, before or after handoff. Refresh only when this check finds a
+     conflict or a base change that needs a fix in this PR, when the lander
+     hands the PR back (a merge queue removes it), or when the owner asks.
+     Otherwise hand the PR off behind the tip: a refresh adds a CI run and a
+     review restart and saves the lander no work.
    - **Only a required check that must pass on the branch updated to the
      tip** (on GitHub, the up-to-date rule): nobody else pushes that update,
      so refresh before handoff and again whenever the base moves before
@@ -70,13 +70,16 @@ follow this full sequence:
    - **No landing check:** refresh before handoff, and repeat the integration
      pass by hand whenever the base moves.
 
-   Refresh from the tip, preferring rebase so `git range-diff` applies. Push
-   the refreshed branch so the required checks run on it. After a rebase that
-   conflicted, run `git range-diff` between the branch before and after the
-   rebase, and record what the resolution changed in the PR's Verification
-   section. Don't repeat CI by hand; read `git range-diff` only when a rebase
-   conflicts. After approval, step 7 applies, and whoever lands the PR updates
-   the branch.
+   Refresh only by rebasing onto the tip, never by merging the base into the
+   branch. A merge inside the branch breaks the linear history under the PR's
+   merge commit, and `git range-diff` can't read it. Push the rebase with
+   `--force-with-lease` so the required checks run on it. If the forge
+   refuses that push, stop and report the refusal and its error; don't fall
+   back to a merge. After a rebase that conflicted, run `git range-diff`
+   between the branch before and after the rebase, and record what the
+   resolution changed in the PR's Verification section. Don't repeat CI by
+   hand; read `git range-diff` only when a rebase conflicts. After approval,
+   step 7 applies, and whoever lands the PR updates the branch.
 
    A landing check reruns CI, not review. A clean rebase can still change the
    diff, for example by following an upstream rename. When you push a refresh,
@@ -378,14 +381,47 @@ mechanical change (a rename, move, format, or generated update) that does
 none of those relies on CI and the recorded bot reviewer, or the human
 reviewer when there is none, however many files it touches.
 
-- When the platform supports delegation and session policy permits it, ask a
-  reviewer in a fresh session to look for reasons the change may be wrong. Give
-  that reviewer only the diff and the PR's intended outcome, not your reasoning
-  trail. Ask them to find correctness, security, and edge-case failures.
-- When delegation is unavailable or needs permission you don't have, skip it
-  and rely on the external bot or human. You may ask the user first.
-- A same-model delegate is only partly independent and costs tokens. Match the
-  review effort to risk.
+- **Choose the reviewer by risk.** Ordinary code, prompt, or docs changes,
+  including behavior changes without tests, get one reviewer in a fresh
+  context with the brief below. Work on a destructive path, a credential-leak
+  surface, a returned-object trust boundary, or a contract or public interface
+  uses the `council` skill when it is installed.
+- **Treat this section as the standing request for council.** It is the
+  project's request for council on that work, so council's "the user asks for
+  it" condition holds. Call council in findings mode, report only, with the
+  change at a fixed revision, its intended outcome, and the risk-class flag
+  set. Council picks its rung and panel and states their cost. This procedure,
+  not council's staging, owns fixes and re-review.
+- **Give the single reviewer a fixed brief.** Send the same words every
+  round, changing only the revision. Give the reviewer no reasoning trail, and
+  ask it to work read-only:
+
+  ```text
+  Review this change and look for reasons it may be wrong.
+  Change: <commit SHA or saved diff path>, at that fixed revision.
+  Intended outcome: <what the change should do>.
+  Find correctness, security, and edge-case failures. Do not edit files.
+  For each claim, give its file:line, whether it blocks the change, and the
+  failing input or call path. If you find nothing, answer "no findings".
+  ```
+
+- **Count only confirmed findings.** A finding counts once you confirm it
+  with a reproduction (run the failing case) or a trace (the call path with
+  `file:line` references). List a claim you can't confirm as unconfirmed;
+  don't count it and don't drop it. Judge reachability and severity as
+  §review-convergence says.
+- **Re-review only while blockers remain.** After fixing confirmed blockers,
+  review the new fixed revision through the same route. A round with no
+  confirmed blocker ends pre-push review; fix, defer, or decline its
+  non-blockers per §review-convergence. There is no round cap and no required
+  subagent; after many blocker rounds, reassess as §review-convergence says.
+- **Fall back when a route is missing.** Without council installed, use one
+  fresh-context reviewer with the brief. When council reports rung 3 (no
+  panel), use the fallback reviewer it names. When delegation is unavailable
+  or needs permission you don't have, skip it and rely on the external bot or
+  human. You may ask the user first.
+- **Match the review effort to risk.** A same-model delegate is only partly
+  independent and costs tokens.
 
 Never write a step that assumes the running platform can delegate.
 
