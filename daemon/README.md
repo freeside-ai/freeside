@@ -4597,7 +4597,10 @@ daemon records it, plus a status block (current hold, per-invocation status
 and liveness, elapsed time, last observation) whenever the observed state
 changes. The timeline is durable, so a disconnected or restarted follow
 resumes with everything already observed; `-once` prints one snapshot instead
-of following, and `-until` waits for a checkpoint (below). Liveness distinguishes an observed live invocation from an
+of following, and `-until` waits for a checkpoint (below). A plain follow and
+`-once` read only the run's conclusion, which names no recipe, so they never
+take `-approved-recipe`; only `-snapshot` and `-until` read an item's
+evidence and accept it, and the flag is refused elsewhere. Liveness distinguishes an observed live invocation from an
 `observation_gap`: a stopped daemon leaves its last observation behind, and
 the reader's `-freshness-window` (30s by default) is what turns that stale
 observation into a gap rather than a claim. A finished invocation shows its

@@ -777,6 +777,8 @@ func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
+		// message, when set, is text the usage error must carry.
+		message string
 	}{
 		{name: "no database", args: []string{"-run", string(followRun)}},
 		{name: "no run", args: []string{"-db", path}},
@@ -797,8 +799,9 @@ func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
 			args: []string{"-db", path, "-run", string(followRun), "-once", "-snapshot"},
 		},
 		{
-			name: "recipe without snapshot",
-			args: []string{"-db", path, "-run", string(followRun), "-approved-recipe", "sha256:recipe"},
+			name:    "recipe without snapshot",
+			args:    []string{"-db", path, "-run", string(followRun), "-approved-recipe", "sha256:recipe"},
+			message: "a plain follow and -once read only the run's conclusion and need no recipe",
 		},
 		{
 			name: "until without timeout",
@@ -847,6 +850,9 @@ func TestFollowCommandRejectsFlagMisuse(t *testing.T) {
 			}
 			if code := ExitCode(err); code != 2 {
 				t.Errorf("follow %v exit = %d, want 2", tc.args, code)
+			}
+			if !strings.Contains(err.Error(), tc.message) {
+				t.Errorf("follow %v err = %v, want it to say %q", tc.args, err, tc.message)
 			}
 			if output != "" {
 				t.Errorf("refused follow printed %q", output)

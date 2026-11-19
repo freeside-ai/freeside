@@ -40,6 +40,10 @@ type Opener func(context.Context, string, ...domain.Digest) (Source, error)
 // snapshot, or (with -until) a checkpoint or a timeout. Observing a run whose own outcome is blocked or failed succeeds:
 // the command reports what the daemon saw, and the printed outcome line
 // carries the run's verdict.
+//
+// -approved-recipe is accepted only with -snapshot or -until, the two modes
+// that read an item's evidence: a plain follow and -once read only the
+// run's conclusion, which names no recipe, so they never need one.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Opener) (err error) {
 	flags := flag.NewFlagSet("freesided follow", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -78,7 +82,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, open Open
 	case !waiting && *timeout != 0:
 		return fmt.Errorf("%w: -timeout requires -until", ErrUsage)
 	case *approvedRecipe != "" && !*snapshot && !waiting:
-		return fmt.Errorf("%w: -approved-recipe requires -snapshot or -until", ErrUsage)
+		return fmt.Errorf("%w: -approved-recipe requires -snapshot or -until: "+
+			"a plain follow and -once read only the run's conclusion and need no recipe", ErrUsage)
 	}
 	var until Until
 	if waiting {
