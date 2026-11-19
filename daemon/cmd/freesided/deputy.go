@@ -163,11 +163,13 @@ func runDeputy(
 	if err != nil {
 		return err
 	}
-	daemonRan, cleanEnd := false, false
+	var end deputyRunEnd
 	defer func() {
-		// A daemon that ran and did not end cleanly may have left recorded
-		// resources: abandon the lease so the next start recovers them.
-		err = errors.Join(err, releaseDeputyLease(ctx, host.rig, paths, lease, !daemonRan || cleanEnd))
+		// A run that may have interrupted a task run abandons the lease, so
+		// the next start recovers what it left and files the interrupted
+		// card (deputyRunEnd.clean). The clean release still abandons when
+		// the rig can't be proved clear.
+		err = errors.Join(err, releaseDeputyLease(ctx, host.rig, paths, lease, end.clean()))
 	}()
 	if err := writeDeputyAcquisition(paths.Acquisition, lease); err != nil {
 		return err
@@ -224,13 +226,17 @@ func runDeputy(
 	if err != nil {
 		return err
 	}
-	daemonRan = true
 	daemonConfig := deputyDaemonConfig(settings, paths, launch, logger)
 	daemonConfig.AuthorityLock = authority
+	// A run that fails before it serves takes the clean release: its
+	// engine loops start only in startup's last steps, and Start closes
+	// the sessions they resumed and waits for its goroutines before it
+	// returns the error, so the release's proof sees what they left.
 	h, err := run(ctx, stop, daemonConfig)
 	if err != nil {
 		return err
 	}
+	end.served, end.driver = true, daemonConfig.Claude != nil
 	if err := json.NewEncoder(stdout).Encode(h.Readiness()); err != nil {
 		stop()
 		return errors.Join(err, h.Close())
@@ -238,8 +244,23 @@ func runDeputy(
 	if err := daemonshell.Serve(ctx, stop, h.Shell); err != nil {
 		return err
 	}
-	cleanEnd = true
+	end.ok = true
 	return nil
+}
+
+// deputyRunEnd is how a deputy run ended, which decides how its lease is
+// released. Served is set once the daemon started and so could serve;
+// driver when it ran with an execution driver, without which it runs no
+// agent; ok when it served and ended without an error.
+type deputyRunEnd struct {
+	served, driver, ok bool
+}
+
+// clean reports whether the lease takes the clean release. Only a run that
+// served with a driver can have interrupted a task run beyond startup's
+// last steps, so only its failed end abandons the lease outright.
+func (e deputyRunEnd) clean() bool {
+	return !e.served || !e.driver || e.ok
 }
 
 // deputyHomes are the two homes the environment checks run against: $HOME

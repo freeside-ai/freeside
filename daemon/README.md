@@ -5035,8 +5035,13 @@ The readiness line goes to stdout once the daemon serves; progress lines go
 to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig
-cleanup` proves. A failed proof, or a daemon that ended in
-error, abandons the lease instead, so the next start recovers it.
+cleanup` proves. A failed proof, or a daemon that served with the Claude
+driver and ended in error, abandons the lease instead, so the next start
+recovers it and files `deputy_run_interrupted`. A daemon whose startup
+failed, or one without the driver (a failed self-check), takes the clean
+release even when it ended in error: the driverless daemon runs no agent,
+and startup starts its engine loops only in its last steps and tears down
+what they resumed before it returns the error.
 
 **What it writes.** Under `<state-root>/daemon/`: `freeside.db`,
 `rig-acquisition.json` (the lease's acquisition record, `0600`) and
