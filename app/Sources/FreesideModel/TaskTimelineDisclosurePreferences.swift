@@ -5,8 +5,9 @@ import Observation
 /// this device: the same UserDefaults-backed shape as
 /// `DecisionSectionPreferences`. Everything starts collapsed; only a task
 /// with something open keeps an entry, so the store does not grow with the
-/// task list. Current Run and the Timeline never fold, so no section names
-/// them. The page head's Attachments fold keeps its state here too, as
+/// task list. Current Run, Runs, and the Timeline never fold, so no
+/// section names them; a Timeline event's explanation does (#3455). The
+/// page head's Attachments fold keeps its state here too, as
 /// the one fold above the body, and so does each earlier thread's fold
 /// under the Timeline. A stored id for the retired Task fold (`task`) is
 /// kept as written and never read. A stored id for the current campaign
@@ -37,6 +38,10 @@ package final class TaskTimelineDisclosurePreferences {
         case attachments
         /// An earlier thread's fold under the Timeline, by conversation id.
         case conversation(String)
+        /// A Timeline event's explanation, by a key for the event that
+        /// leaves the explanation's words out, so it stays short and holds
+        /// across refetches (`TaskTimelinePresentation.explanationKey`).
+        case explanation(String)
 
         var id: String {
             switch self {
@@ -48,6 +53,7 @@ package final class TaskTimelineDisclosurePreferences {
             case .identifiers: "identifiers"
             case .attachments: "attachments"
             case .conversation(let conversationID): "conversation:\(conversationID)"
+            case .explanation(let key): "explanation:\(key)"
             }
         }
     }

@@ -534,9 +534,6 @@ enum FreesideFont {
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", ladder.actionLabel, relativeTo: .body) }
     /// A text action: the link's size, medium.
     static var noticeAction: Font { fixed("IBMPlexSans-Medm", ladder.link, relativeTo: .body) }
-    /// A menu drawn as its text, such as the Elapsed line's runs menu: the
-    /// fact label's size, semibold.
-    static var textMenu: Font { fixed("IBMPlexSans-SmBld", ladder.label, relativeTo: .callout) }
     /// A rail entry's title: the fact label's size, semibold on the entry
     /// the rail stands on.
     static func railTitle(emphasized: Bool) -> Font {
@@ -546,6 +543,10 @@ enum FreesideFont {
     /// and digest: mono at the keyword's size, the ladder's floor (frame
     /// 6.9). The platform caption styles these lines used are 10pt on macOS.
     static var attachmentFact: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
+    /// A stage's name in the task page's stage strip over Elapsed: the
+    /// mono label face at the keyword's size, regular, so the name labels
+    /// its block without reading as a heading.
+    static var stageName: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
     /// An attachment row's state lines (not an image, loading, failed):
     /// sans at the same size, semibold on the line that names the state.
     static func attachmentState(emphasized: Bool = false) -> Font {
@@ -1373,33 +1374,79 @@ private struct ChoiceOptionSurface<Value: Hashable, Label: View>: View {
 /// The task timeline draws two more: the start of a stage in the diff
 /// green, and an entry that records a failure in wax. Neither color is the
 /// only signal, since the entry's words say the same.
+///
+/// An entry that folds an explanation draws its marker as a disclosure
+/// triangle of the same size, color, and fill (hollow where the dot is a
+/// ring), pointing right while closed and down while open (#3455).
 struct ChronologyMarker: View {
     enum Kind: Equatable {
         case current, prior, stageStart, failure
     }
 
+    enum Disclosure: Equatable {
+        case closed, open
+    }
+
     static let diameter: CGFloat = 10
+    private static let ringWidth: CGFloat = 1.5
     let kind: Kind
+    /// Nil draws the dot; a state draws the triangle.
+    var disclosure: Disclosure?
 
     init(isCurrent: Bool) {
         kind = isCurrent ? .current : .prior
     }
 
-    init(kind: Kind) {
+    init(kind: Kind, disclosure: Disclosure? = nil) {
         self.kind = kind
+        self.disclosure = disclosure
+    }
+
+    private var color: Color {
+        switch kind {
+        case .current: .ink
+        case .prior: .milestonePrior
+        case .stageStart: .diffAdd
+        case .failure: .waxText
+        }
     }
 
     var body: some View {
         Group {
-            switch kind {
-            case .current: Circle().fill(Color.ink)
-            case .prior: Circle().strokeBorder(Color.milestonePrior, lineWidth: 1.5)
-            case .stageStart: Circle().fill(Color.diffAdd)
-            case .failure: Circle().fill(Color.waxText)
+            if let disclosure {
+                Group {
+                    if kind == .prior {
+                        DisclosureTriangle(inset: Self.ringWidth / 2)
+                            .stroke(color, style: StrokeStyle(lineWidth: Self.ringWidth, lineJoin: .round))
+                    } else {
+                        DisclosureTriangle(inset: 0).fill(color)
+                    }
+                }
+                .rotationEffect(.degrees(disclosure == .open ? 90 : 0))
+            } else if kind == .prior {
+                Circle().strokeBorder(color, lineWidth: Self.ringWidth)
+            } else {
+                Circle().fill(color)
             }
         }
         .frame(width: Self.diameter, height: Self.diameter)
         .accessibilityHidden(true)
+    }
+}
+
+/// A triangle pointing right, inset so a stroke stays inside its frame.
+private struct DisclosureTriangle: Shape {
+    let inset: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        // The frames' proportions: a little narrower than tall, centred.
+        let box = rect.insetBy(dx: rect.width * 0.1 + inset, dy: inset)
+        var path = Path()
+        path.move(to: CGPoint(x: box.minX, y: box.minY))
+        path.addLine(to: CGPoint(x: box.maxX, y: box.midY))
+        path.addLine(to: CGPoint(x: box.minX, y: box.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 

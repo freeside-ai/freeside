@@ -131,13 +131,8 @@ package enum TaskTimeStrip {
         attentionItems: [Components.Schemas.AttentionItemSnapshot],
         now: Date
     ) -> Strip? {
-        let ordered = runs.compactMap { run -> RunPart? in
-            RunTimeStrip.strip(
-                runID: run.runID, finished: run.finished, milestones: oldestFirst(run.milestones),
-                attentionItems: attentionItems, holdHistory: run.holdHistory, clocks: run.clocks, now: now
-            ).map { RunPart(runID: run.runID, start: $0.start, end: $0.end, segments: $0.segments) }
-        }
-        .sorted { ($0.start, $0.end, $0.runID) < ($1.start, $1.end, $1.runID) }
+        let ordered = wholeRuns(runs, attentionItems: attentionItems, now: now)
+            .sorted { ($0.start, $0.end, $0.runID) < ($1.start, $1.end, $1.runID) }
 
         // Every run edge cuts the axis; each piece between two cuts lies
         // wholly inside or wholly outside any one run.
@@ -157,6 +152,35 @@ package enum TaskTimeStrip {
             }
         }
         return parts.isEmpty ? nil : Strip(parts: parts)
+    }
+
+    /// Each run's own stretch by run id, from its strip's start to its
+    /// end, whole however other runs cut its part of the task strip: the
+    /// length and start a run's line reports, cut as the bar cuts it so
+    /// the two agree. A run with no strip of its own has none.
+    package static func runSpans(
+        runs: [Run],
+        attentionItems: [Components.Schemas.AttentionItemSnapshot],
+        now: Date
+    ) -> [String: DateInterval] {
+        Dictionary(
+            wholeRuns(runs, attentionItems: attentionItems, now: now).map {
+                ($0.runID, DateInterval(start: $0.start, end: $0.end))
+            },
+            uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Each run cut by its own run strip, in the order given; a run with
+    /// no strip is left out.
+    private static func wholeRuns(
+        _ runs: [Run], attentionItems: [Components.Schemas.AttentionItemSnapshot], now: Date
+    ) -> [RunPart] {
+        runs.compactMap { run in
+            RunTimeStrip.strip(
+                runID: run.runID, finished: run.finished, milestones: oldestFirst(run.milestones),
+                attentionItems: attentionItems, holdHistory: run.holdHistory, clocks: run.clocks, now: now
+            ).map { RunPart(runID: run.runID, start: $0.start, end: $0.end, segments: $0.segments) }
+        }
     }
 
     /// Served milestones (newest first, ties in record order) back in

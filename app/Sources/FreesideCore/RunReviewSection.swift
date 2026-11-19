@@ -121,7 +121,10 @@ struct RunReviewSection: View {
                     roundsBlock(
                         current: current, prior: Array(rounds.dropFirst()), all: rounds, now: pinnedNow ?? Date())
                 }
-            } else if hasTimeline && state == .loaded && availability == nil {
+            } else if hasTimeline && availability == nil {
+                // Not tied to `.loaded`: answered details stay quiet through
+                // a refetch, and dropping this line while one is in flight
+                // moved everything under it on every sync round (F56).
                 Text("No review requested yet")
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)

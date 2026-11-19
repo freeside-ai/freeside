@@ -262,6 +262,34 @@ public enum TaskFixtures {
         return (task, runs, history)
     }
 
+    /// The task strip's task with the triager's choice of the specifying
+    /// tier a minute after the task's first event (#3455): a Timeline event
+    /// whose reason explains it.
+    public static func taskStripExplained() -> (
+        task: Components.Schemas.TaskSnapshot, runs: [Components.Schemas.RunSnapshot],
+        history: Components.Schemas.TaskTimeline
+    ) {
+        var strip = taskStrip()
+        guard let first = strip.history.events.last?.recorded_at else {
+            preconditionFailure("The task strip's history requires an event")
+        }
+        let triage = Components.Schemas.TaskEvent(
+            triage: .init(
+                value1: .init(
+                    outcome: .answered, tier: .init(value1: .standard),
+                    reason: "The issue names one module and its acceptance criteria can be tested as written, "
+                        + "so the standard tier fits. No migration, public contract or cross-repository change "
+                        + "was found.",
+                    escalated: false)),
+            kind: .specifier_triaged, recorded_at: first.addingTimeInterval(60))
+        // Newest first, the triage after every event at or before its instant.
+        let index =
+            strip.history.events.firstIndex { $0.recorded_at <= triage.recorded_at }
+            ?? strip.history.events.endIndex
+        strip.history.events.insert(triage, at: index)
+        return strip
+    }
+
     /// The task snapshot the daemon would serve over `snapshots`, the
     /// task's runs.
     private static func task(

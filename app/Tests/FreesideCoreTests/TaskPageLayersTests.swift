@@ -414,34 +414,63 @@ import Testing
                 == [history.sections[1].campaign_id])
     }
 
-    /// Acceptance 7 (#2611): the Runs chip goes to the run's card where the
-    /// page draws one, opening the folds around it, else to its run page.
-    /// Since #3375 the current campaign's earlier attempts have no card.
-    @Test func theRunsChipGoesWhereTheRunIsDrawn() throws {
+    /// #3455: the Runs section lists every run of the task, newest first,
+    /// the current one and an earlier campaign's among them, and still does
+    /// once the task finishes and Current Run is gone.
+    @Test func theRunsSectionListsEveryRunNewestFirst() throws {
         let page = TaskStageFixtures.page(.secondCampaign)
         let history = try #require(page.history)
-        let currentID = try #require(page.task.current_position?.value1.run_id)
-        let target = { TaskTimelinePresentation.runTarget($0, task: page.task, timeline: history) }
-        #expect(target(currentID) == .currentRun)
-        let earlierCampaign = try #require(history.sections[1].runs.first)
-        #expect(target(earlierCampaign.run_id) == .earlierCampaign(history.sections[1].campaign_id))
-        #expect(target("run-not-in-the-history") == .runPage)
-
-        let implementation = TaskStageFixtures.page(.retry)
-        let attempts = try #require(implementation.history?.sections.first?.runs)
-        #expect(attempts.count > 1)
-        #expect(
-            TaskTimelinePresentation.runTarget(
-                attempts[1].run_id, task: implementation.task, timeline: try #require(implementation.history))
-                == .runPage)
-
-        // A finished task draws no card for its newest campaign's runs.
+        let every = history.sections.flatMap(\.runs).map(\.run_id)
+        #expect(every.count > 1)
+        #expect(TaskTimelinePresentation.allRuns(history).map(\.run_id) == every)
+        let rows = { (task: Components.Schemas.Task) in
+            TaskTimelinePresentation.entries(history, task: task).compactMap {
+                if case .runsRow(let id) = $0 { id } else { nil }
+            }
+        }
+        #expect(rows(page.task) == every)
         var finished = page.task
         finished.lifecycle = .finished
-        #expect(TaskTimelinePresentation.runTarget(currentID, task: finished, timeline: history) == .runPage)
+        #expect(rows(finished) == every)
+    }
+
+    /// #3455: the stage strip names a run by its stage, an implementation
+    /// run by its attempt alone; a run with no role takes its title.
+    @Test func aStageBlockNamesItsRunsStage() {
+        func run(_ role: Components.Schemas.TaskRunRole?, attempt: Int?) -> Components.Schemas.TaskTimelineRun {
+            .init(
+                run_id: "run-abcdef123456", role: role.map { .init(value1: $0) }, attempt_number: attempt,
+                milestones: [], events: [])
+        }
+        #expect(TaskTimelinePresentation.stageLabel(run(.specification, attempt: 1)) == "Specification")
+        #expect(TaskTimelinePresentation.stageLabel(run(.implementation, attempt: 2)) == "Implementation · 2")
+        #expect(TaskTimelinePresentation.stageLabel(run(.implementation, attempt: nil)) == "Implementation")
+        #expect(TaskTimelinePresentation.stageLabel(run(nil, attempt: 3)) == "Attempt 3")
+    }
+
+    /// #3455: a run's line reports the span the Elapsed bar draws for it,
+    /// and a run with no strip of its own reports nothing.
+    @Test func aRunLineReportsItsWholeSpan() {
+        let base = Date(timeIntervalSince1970: 1_786_502_400)
+        func at(_ minute: Int) -> Date { base.addingTimeInterval(TimeInterval(minute * 60)) }
+        let measured = TaskTimeStrip.Run(
+            runID: "a", finished: true,
+            milestones: [
+                .init(run_id: "a", kind: .terminal_recorded, invocation_id: "inv-1", recorded_at: at(73)),
+                .init(run_id: "a", kind: .invocation_started, invocation_id: "inv-1", recorded_at: at(2)),
+                .init(run_id: "a", kind: .run_submitted, recorded_at: at(0)),
+            ])
+        let lines = TaskTimelinePresentation.runLines(
+            [measured, .init(runID: "empty", finished: false, milestones: [])], attentionItems: [],
+            now: at(90), locale: enUS, timeZone: utc)
+        let start = FreesideFormat.shortTime(at(0), now: at(90), locale: enUS, timeZone: utc)
+        #expect(lines["a"] == .init(length: "1h 13m", start: start))
+        #expect(lines["empty"] == .init(length: nil, start: nil))
+        #expect(TaskTimelinePresentation.runLineSpokenValue(lines["a"]) == "1h 13m, started \(start)")
+        // The chip or reason the line draws beside its title leads what it says.
         #expect(
-            TaskTimelinePresentation.runTarget(earlierCampaign.run_id, task: finished, timeline: history)
-                == .earlierCampaign(history.sections[1].campaign_id))
+            TaskTimelinePresentation.runLineSpokenValue(lines["a"], leading: "Failed")
+                == "Failed, 1h 13m, started \(start)")
     }
 
     /// The guidance link leads to the very item whose lookup produced it.
