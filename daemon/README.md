@@ -5063,7 +5063,10 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
-to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
+to stderr. A start whose self-check passed then logs one
+`freesided deputy: ready for submissions on <db>` line, once its
+composition manifest and control address both exist; a start whose
+self-check failed logs none. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig
 cleanup` proves. A failed proof, or a daemon that served with the Claude

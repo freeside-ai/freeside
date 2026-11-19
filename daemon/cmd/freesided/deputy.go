@@ -241,6 +241,7 @@ func runDeputy(
 		stop()
 		return errors.Join(err, h.Close())
 	}
+	announceDeputyReady(stderr, check, paths.DB)
 	if err := daemonshell.Serve(ctx, stop, h.Shell); err != nil {
 		return err
 	}
@@ -552,6 +553,17 @@ type deputySelfCheckResult struct {
 }
 
 func (r deputySelfCheckResult) passed() bool { return len(r.Failed) == 0 }
+
+// announceDeputyReady logs the line an operator waits for before submitting,
+// once the run serves with a passing composition. By then the self-check has
+// written the composition manifest and the daemon has published its control
+// address, which submit -require-composition both need. A failed check logs
+// nothing here, since execution stays disabled.
+func announceDeputyReady(stderr io.Writer, check deputySelfCheckResult, db string) {
+	if check.passed() {
+		_, _ = fmt.Fprintf(stderr, "freesided deputy: ready for submissions on %s\n", db)
+	}
+}
 
 // deputySelfCheck adopts the agent tree and runs the composition preflight,
 // in that order, as the script did. Both need the database idle and the

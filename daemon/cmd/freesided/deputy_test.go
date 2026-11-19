@@ -1112,3 +1112,16 @@ func TestReleaseDeputyLeaseProvesTheRigClear(t *testing.T) {
 		})
 	}
 }
+
+func TestAnnounceDeputyReadyOnlyAfterAPassingCheck(t *testing.T) {
+	t.Parallel()
+	var passed, failed bytes.Buffer
+	announceDeputyReady(&passed, deputySelfCheckResult{}, "/root/daemon/freeside.db")
+	announceDeputyReady(&failed, deputySelfCheckResult{Failed: []string{"agent_tree"}}, "/root/daemon/freeside.db")
+	if got := passed.String(); got != "freesided deputy: ready for submissions on /root/daemon/freeside.db\n" {
+		t.Fatalf("passing check logged %q", got)
+	}
+	if failed.Len() != 0 {
+		t.Fatalf("failed check logged %q", failed.String())
+	}
+}
