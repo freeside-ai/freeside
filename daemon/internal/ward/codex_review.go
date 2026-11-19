@@ -1519,11 +1519,25 @@ func codexReviewUIDMatches(stat *syscall.Stat_t, euid int) bool {
 	return stat != nil && euid >= 0 && uint64(stat.Uid) == uint64(euid)
 }
 
+// codexAuthTokens models every member Codex writes under tokens, so the
+// strict decoder refuses anything else and a rotation re-encodes the store
+// without dropping a member. Codex 0.167 added the two optional pointers;
+// omitempty keeps an older store from gaining them on re-encode.
 type codexAuthTokens struct {
-	IDToken      string  `json:"id_token"`
-	AccessToken  string  `json:"access_token"`
-	RefreshToken *string `json:"refresh_token"`
-	AccountID    *string `json:"account_id,omitempty"`
+	IDToken         string                    `json:"id_token"`
+	AccessToken     string                    `json:"access_token"`
+	RefreshToken    *string                   `json:"refresh_token"`
+	AccountID       *string                   `json:"account_id,omitempty"`
+	OAuthProvenance *codexAuthOAuthProvenance `json:"oauth_provenance,omitempty"`
+	LoginOwnerID    *string                   `json:"login_owner_id,omitempty"`
+}
+
+// codexAuthOAuthProvenance names the authority Codex refreshes the tokens
+// against. Freeside refreshes only against its own fixed endpoint and client,
+// so inspectCodexHostAuth accepts a provenance only when it names them.
+type codexAuthOAuthProvenance struct {
+	Issuer   string `json:"issuer"`
+	ClientID string `json:"client_id"`
 }
 
 type codexAuthFile struct {
@@ -1625,6 +1639,9 @@ func inspectCodexHostAuth(
 		if codexAuthRefreshTokenAliased(auth.Tokens) {
 			return codexAuthFile{}, nil, errors.New("subscription refresh token is aliased into an agent-visible field")
 		}
+		if err := checkCodexAuthOAuthProvenance(auth.Tokens.OAuthProvenance); err != nil {
+			return codexAuthFile{}, nil, err
+		}
 		expires, err := jwtExpiry(auth.Tokens.AccessToken)
 		if err != nil {
 			return codexAuthFile{}, nil, err
@@ -1650,6 +1667,25 @@ func inspectCodexHostAuth(
 	return codexAuthFile{}, nil, errors.New("unsupported auth mode")
 }
 
+// checkCodexAuthOAuthProvenance refuses a provenance that names another
+// authority than the one codexAuthHTTPRefresher posts to. Codex sends the
+// refresh token to the recorded issuer and client; Freeside would send it to
+// its fixed endpoint instead, so a store issued elsewhere is refused rather
+// than followed or ignored. An absent provenance is a pre-0.167 store.
+func checkCodexAuthOAuthProvenance(provenance *codexAuthOAuthProvenance) error {
+	if provenance == nil {
+		return nil
+	}
+	if provenance.Issuer == "" || provenance.ClientID == "" {
+		return errors.New("auth.json OAuth provenance is incomplete")
+	}
+	if strings.TrimRight(provenance.Issuer, "/") != codexAuthRefreshIssuer ||
+		provenance.ClientID != codexAuthRefreshClientID {
+		return errors.New("auth.json OAuth provenance names an authority Freeside does not refresh against")
+	}
+	return nil
+}
+
 func codexAuthRefreshTokenAliased(tokens *codexAuthTokens) bool {
 	if tokens == nil || tokens.RefreshToken == nil || *tokens.RefreshToken == "" {
 		return false
@@ -1664,7 +1700,15 @@ func codexAuthTokensExpose(tokens *codexAuthTokens, secret string) bool {
 	if strings.Contains(tokens.IDToken, secret) || strings.Contains(tokens.AccessToken, secret) {
 		return true
 	}
-	return tokens.AccountID != nil && strings.Contains(*tokens.AccountID, secret)
+	if tokens.AccountID != nil && strings.Contains(*tokens.AccountID, secret) {
+		return true
+	}
+	if tokens.LoginOwnerID != nil && strings.Contains(*tokens.LoginOwnerID, secret) {
+		return true
+	}
+	return tokens.OAuthProvenance != nil &&
+		(strings.Contains(tokens.OAuthProvenance.Issuer, secret) ||
+			strings.Contains(tokens.OAuthProvenance.ClientID, secret))
 }
 
 // codexReviewAgentAuthSnapshot derives the container-facing credential from

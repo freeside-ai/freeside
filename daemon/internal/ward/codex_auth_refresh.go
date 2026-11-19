@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	codexAuthRefreshEndpoint      = "https://auth.openai.com/oauth/token"
+	codexAuthRefreshIssuer        = "https://auth.openai.com"
+	codexAuthRefreshEndpoint      = codexAuthRefreshIssuer + "/oauth/token"
 	codexAuthRefreshClientID      = "app_EMoamEEZ73f0CkXaXp7hrann"
 	codexAuthRefreshLeaseDuration = 2 * time.Minute
 	codexAuthRefreshResponseLimit = 1 << 20
