@@ -4389,12 +4389,16 @@ Additional rules:
   operator-provided name, and a revised specification does not rename.
   When the approved body opens with a heading, approval names the task from
   that heading, replacing an identifier or agent name, so a task still on its
-  identifier at approval gets its first name there. Approval freezes every
-  name; subsequent specification revisions and retries do not rename the task.
-  After approval, only an
-  explicit operator rename changes it. Agent-produced names retain
-  producer-labeled claim provenance. Names grant no execution, approval, or
-  publication authority.
+  identifier at approval gets its first name there. An issue-backed task (a
+  label-intake task, or a submitted task whose text is exactly one issue URL
+  in the project's repository) takes its issue's title as its name instead.
+  That name replaces the identifier, an agent name, or a specification title
+  whenever it lands, before or after approval, so every task for one issue
+  carries one name; only an operator name outranks it. Approval freezes every
+  other name; subsequent specification revisions and retries do not rename
+  the task. After approval, only an explicit operator rename or the issue
+  title changes it. Agent-produced names retain producer-labeled claim
+  provenance. Names grant no execution, approval, or publication authority.
 - **Task name and PR title are separate fields.** Each has its own length
   bound and validation contract; neither supplies the other's identity or
   approval binding. The downstream field contracts define those bounds.
