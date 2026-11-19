@@ -153,8 +153,10 @@ func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) 
 	flags.StringVar(&cfg.Route, "route", "", "route fragment id the credential is valid for (required)")
 	flags.StringVar(&cfg.CostOwner, "cost-owner", "",
 		"who pays for the identity's usage (required for a new or ownerless identity; must match an existing one)")
-	flags.Var(&cfg.ApprovedRecipes, "approved-recipe", "approved verification-recipe digest (repeatable)")
-	flags.StringVar(&cfg.ProjectID, "project", "", "codex_cli: project id for the recovery attention item")
+	flags.Var(&cfg.ApprovedRecipes, "approved-recipe", "approved verification-recipe digest (repeatable); "+
+		"a fresh store with no recipe-gated evidence needs none")
+	flags.StringVar(&cfg.ProjectID, "project", "", "codex_cli: project id for the re-enrollment attention item: "+
+		"the deputy settings' repository.project")
 	flags.StringVar(&cfg.InputRoot, "input-root", "", "codex_cli: private root containing the operator login")
 	flags.StringVar(&cfg.InputFile, "input-file", "", "codex_cli: operator-generated auth.json under input-root")
 	flags.StringVar(&cfg.AuthStoreRoot, "auth-store-root", "", "codex_cli: separate private root containing live Codex auth stores")

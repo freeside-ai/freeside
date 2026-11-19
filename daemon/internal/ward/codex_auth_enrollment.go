@@ -84,7 +84,11 @@ type CodexAuthEnrollmentJournal interface {
 		ctx context.Context,
 		identity domain.AuthIdentity,
 	) (domain.CodexReenrollmentRecoveryBinding, bool, error)
-	ProjectVerified(ctx context.Context, id domain.AuthIdentityID) (domain.AttentionItem, error)
+	// ProjectVerified attaches the verified binding to the operation's
+	// marker. initial reports an identity's first enrollment, whose marker
+	// the daemon resolves in the same write; otherwise the marker stays open
+	// for the paired client's resolve_reenrollment.
+	ProjectVerified(ctx context.Context, id domain.AuthIdentityID) (item domain.AttentionItem, initial bool, err error)
 }
 
 // CodexAuthEnrollmentConfig identifies one operator-supplied login and its
@@ -135,6 +139,10 @@ type CodexAuthEnrollmentResult struct {
 	AccessTokenExpiresAt time.Time             `json:"access_token_expires_at"`
 	AttentionItemID      domain.ItemID         `json:"attention_item_id"`
 	AttentionItemVersion int                   `json:"attention_item_version"`
+	// AttentionItemStatus is resolved after an identity's first enrollment,
+	// which needs no further step, and open after a revoked chain's
+	// replacement, which a paired client resolves.
+	AttentionItemStatus domain.ItemStatus `json:"attention_item_status"`
 	// EnrollmentID is set only when the sequence recorded an enrollment.
 	EnrollmentID domain.ClientEnrollmentID `json:"enrollment_id,omitempty"`
 }
@@ -142,8 +150,10 @@ type CodexAuthEnrollmentResult struct {
 // EnrollCodexAuth seeds or replaces one Codex host auth store, deliberately
 // spends the operator's refresh token through the shared daemon-owned refresh
 // transaction, and projects exact verified evidence onto the recovery item.
-// The operator still resolves that item through resolve_reenrollment; this
-// function never bypasses signet's command-backed match-or-refuse boundary.
+// After a revoked chain's replacement the operator still resolves that item
+// through resolve_reenrollment; this function never bypasses signet's
+// command-backed match-or-refuse boundary. An identity's first enrollment has
+// no hold to lift, so the journal resolves its item at projection.
 func EnrollCodexAuth(
 	ctx context.Context, cfg CodexAuthEnrollmentConfig,
 ) (_ CodexAuthEnrollmentResult, retErr error) {
@@ -420,7 +430,7 @@ func EnrollCodexAuth(
 			"finish verified Codex auth enrollment transaction: %w", err,
 		)
 	}
-	item, err := cfg.Journal.ProjectVerified(ctx, cfg.AuthIdentityID)
+	item, initial, err := cfg.Journal.ProjectVerified(ctx, cfg.AuthIdentityID)
 	if err != nil {
 		return CodexAuthEnrollmentResult{}, fmt.Errorf("project verified Codex re-enrollment: %w", err)
 	}
@@ -428,7 +438,7 @@ func EnrollCodexAuth(
 		AuthIdentityID: cfg.AuthIdentityID, LeaseFence: lease.Fence,
 		AuthStoreDigest: digest, AccessTokenExpiresAt: expiresAt,
 	}
-	if err := validateProjectedCodexAuthEnrollment(item, binding); err != nil {
+	if err := validateProjectedCodexAuthEnrollment(item, binding, initial); err != nil {
 		return CodexAuthEnrollmentResult{}, err
 	}
 	result := CodexAuthEnrollmentResult{
@@ -436,6 +446,7 @@ func EnrollCodexAuth(
 		LeaseFence: lease.Fence, AuthStoreDigest: digest,
 		AccessTokenExpiresAt: expiresAt,
 		AttentionItemID:      item.ID, AttentionItemVersion: item.ItemVersion,
+		AttentionItemStatus: item.Status,
 	}
 	if bootstrap != nil {
 		result.EnrollmentID = bootstrap.Enrollment.ID
@@ -525,12 +536,12 @@ func recoverVerifiedCodexAuthEnrollment(
 	); err != nil {
 		return CodexAuthEnrollmentResult{}, false, errors.Join(err, release())
 	}
-	item, err := cfg.Journal.ProjectVerified(ctx, cfg.AuthIdentityID)
+	item, initial, err := cfg.Journal.ProjectVerified(ctx, cfg.AuthIdentityID)
 	if err != nil {
 		return CodexAuthEnrollmentResult{}, false,
 			errors.Join(fmt.Errorf("project verified Codex re-enrollment: %w", err), release())
 	}
-	if err := validateProjectedCodexAuthEnrollment(item, binding); err != nil {
+	if err := validateProjectedCodexAuthEnrollment(item, binding, initial); err != nil {
 		return CodexAuthEnrollmentResult{}, false, errors.Join(err, release())
 	}
 	return CodexAuthEnrollmentResult{
@@ -538,17 +549,27 @@ func recoverVerifiedCodexAuthEnrollment(
 		LeaseFence: binding.LeaseFence, AuthStoreDigest: binding.AuthStoreDigest,
 		AccessTokenExpiresAt: binding.AccessTokenExpiresAt,
 		AttentionItemID:      item.ID, AttentionItemVersion: item.ItemVersion,
+		AttentionItemStatus: item.Status,
 	}, true, release()
 }
 
+// validateProjectedCodexAuthEnrollment checks the projected marker carries
+// the exact verified binding. An initial enrollment's marker must be resolved
+// by the daemon; any other must stay open for the paired client.
 func validateProjectedCodexAuthEnrollment(
 	item domain.AttentionItem,
 	binding domain.CodexReenrollmentRecoveryBinding,
+	initial bool,
 ) error {
 	if err := item.Validate(); err != nil {
 		return fmt.Errorf("projected Codex re-enrollment item is invalid: %w", err)
 	}
-	if item.Status != domain.StatusOpen ||
+	statusMatches := item.Status == domain.StatusOpen && item.Conclusion == nil
+	if initial {
+		statusMatches = item.Status == domain.StatusResolved && item.Conclusion != nil &&
+			item.Conclusion.Cause == domain.ConcludedByDaemon
+	}
+	if !statusMatches ||
 		!item.Offers(domain.ActionResolveReenrollment) ||
 		item.CodexReenrollmentRecoveryBinding == nil ||
 		*item.CodexReenrollmentRecoveryBinding != binding {

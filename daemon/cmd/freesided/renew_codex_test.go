@@ -22,6 +22,24 @@ func TestRenewCodexRecoveryWithExecutionDisabled(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, db)
+	// The marker a revocation opens: replacing that chain leaves a hold for
+	// the paired client, where a first enrollment would resolve its own.
+	st, _, err := openStoreWithTopicKey(t.Context(), db, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, err := store.NewCodexReenrollmentMarker("codex-primary", 1, "project-1", 1, domain.StatusOpen, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(t.Context(), marker)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 	_, output, _, err := runEnrollCodexAgainst(t, db)
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +47,9 @@ func TestRenewCodexRecoveryWithExecutionDisabled(t *testing.T) {
 	var enrolled ward.CodexAuthEnrollmentResult
 	if err := json.Unmarshal([]byte(output), &enrolled); err != nil {
 		t.Fatal(err)
+	}
+	if enrolled.AttentionItemStatus != domain.StatusOpen {
+		t.Fatalf("revoked chain replacement item status = %s, want open", enrolled.AttentionItemStatus)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	h, err := run(ctx, nil, config{Environment: environmentEphemeral, DBPath: db, ListenAddr: "127.0.0.1:0"})

@@ -23,6 +23,7 @@ type fakeCodexAuthEnrollmentJournal struct {
 	failure       CodexAuthEnrollmentFailure
 	verified      domain.CodexReenrollmentRecoveryBinding
 	recoverable   bool
+	initial       bool
 	item          domain.AttentionItem
 	projectMutate func(*domain.AttentionItem)
 	bootstrap     *EnrollmentBootstrap
@@ -90,7 +91,7 @@ func (j *fakeCodexAuthEnrollmentJournal) RecoverableVerified(
 
 func (j *fakeCodexAuthEnrollmentJournal) ProjectVerified(
 	_ context.Context, _ domain.AuthIdentityID,
-) (domain.AttentionItem, error) {
+) (domain.AttentionItem, bool, error) {
 	j.projectCalls++
 	posture := domain.HealthPostureAdvisory
 	binding := j.verified
@@ -107,13 +108,20 @@ func (j *fakeCodexAuthEnrollmentJournal) ProjectVerified(
 		Posture: &posture, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
-		return domain.AttentionItem{}, err
+		return domain.AttentionItem{}, false, err
+	}
+	if j.initial {
+		item, err = item.ConcludeByDaemon(domain.ConcludedByDaemon, codexReviewEpoch,
+			"First enrollment verified.", nil)
+		if err != nil {
+			return domain.AttentionItem{}, false, err
+		}
 	}
 	if j.projectMutate != nil {
 		j.projectMutate(&item)
 	}
 	j.item = item
-	return item, nil
+	return item, j.initial, nil
 }
 
 func TestEnrollCodexAuthSpendsInputAndProjectsVerifiedRotation(t *testing.T) {
@@ -157,7 +165,8 @@ func TestEnrollCodexAuthSpendsInputAndProjectsVerifiedRotation(t *testing.T) {
 	}
 	wantDigest := domain.Digest(contentaddr.Sum(written))
 	if result.AuthStoreDigest != wantDigest || journal.verified.AuthStoreDigest != wantDigest ||
-		result.AttentionItemID != journal.item.ID || result.AttentionItemVersion != journal.item.ItemVersion {
+		result.AttentionItemID != journal.item.ID || result.AttentionItemVersion != journal.item.ItemVersion ||
+		result.AttentionItemStatus != domain.StatusOpen {
 		t.Fatalf("result = %+v, journal = %+v", result, journal.verified)
 	}
 }
@@ -183,6 +192,50 @@ func TestEnrollCodexAuthKeepsCodex0167TokenMembers(t *testing.T) {
 		t.Fatalf("refresh calls = %d; store did not hold the rotated family", refresher.calls)
 	}
 	assertCodex0167TokenMembers(t, written)
+}
+
+// TestEnrollCodexAuthAcceptsResolvedInitialProjection proves a first
+// enrollment reports its daemon-resolved item, on the fresh path and on the
+// retry that recovers a verified operation whose projection never ran.
+func TestEnrollCodexAuthAcceptsResolvedInitialProjection(t *testing.T) {
+	t.Parallel()
+	t.Run("fresh", func(t *testing.T) {
+		t.Parallel()
+		cfg, journal, _, _, _, _ := codexAuthEnrollmentFixture(t)
+		journal.initial = true
+		result, err := EnrollCodexAuth(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.AttentionItemStatus != domain.StatusResolved || journal.projectCalls != 1 {
+			t.Fatalf("result = %+v, project calls = %d", result, journal.projectCalls)
+		}
+	})
+	t.Run("recovered", func(t *testing.T) {
+		t.Parallel()
+		cfg, journal, _, _, _, storePath := codexAuthEnrollmentFixture(t)
+		rotated := codexHostAuthBody(
+			t, "already-rotated", codexReviewEpoch.Add(4*time.Hour), codexReviewEpoch,
+		)
+		seedCodexAuthEnrollmentCrash(t, cfg.AuthStoreRoot, storePath, cfg.AuthIdentityID,
+			codexHostAuthBody(t, "spent-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch),
+			rotated, true)
+		journal.verified = domain.CodexReenrollmentRecoveryBinding{
+			AuthIdentityID: cfg.AuthIdentityID, LeaseFence: 7,
+			AuthStoreDigest:      domain.Digest(contentaddr.Sum(rotated)),
+			AccessTokenExpiresAt: codexReviewEpoch.Add(4 * time.Hour),
+		}
+		journal.recoverable = true
+		journal.initial = true
+		result, err := EnrollCodexAuth(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.AttentionItemStatus != domain.StatusResolved || journal.beginCalls != 0 ||
+			journal.projectCalls != 1 {
+			t.Fatalf("result = %+v, begin %d project %d", result, journal.beginCalls, journal.projectCalls)
+		}
+	})
 }
 
 func TestEnrollCodexAuthDoesNotReplaceStoreAfterLeaseLoss(t *testing.T) {
@@ -554,33 +607,46 @@ func TestEnrollCodexAuthRecordsCredentialFreeVerificationFailure(t *testing.T) {
 
 func TestEnrollCodexAuthRejectsMismatchedProjectedItem(t *testing.T) {
 	t.Parallel()
-	tests := map[string]func(*domain.AttentionItem){
-		"not open": func(item *domain.AttentionItem) {
+	// initial selects the first-enrollment projection, which must come back
+	// resolved by the daemon; any other must come back open.
+	tests := map[string]struct {
+		initial bool
+		mutate  func(*domain.AttentionItem)
+	}{
+		"not open": {mutate: func(item *domain.AttentionItem) {
 			item.Status = domain.StatusResolved
-		},
-		"missing action": func(item *domain.AttentionItem) {
+		}},
+		"initial left open": {initial: true, mutate: func(item *domain.AttentionItem) {
+			item.Status = domain.StatusOpen
+			item.Conclusion = nil
+		}},
+		"missing action": {mutate: func(item *domain.AttentionItem) {
 			item.RequestedDecision = []domain.Action{domain.ActionAcknowledge}
-		},
-		"missing binding": func(item *domain.AttentionItem) {
+		}},
+		"missing binding": {mutate: func(item *domain.AttentionItem) {
 			item.CodexReenrollmentRecoveryBinding = nil
-		},
-		"identity": func(item *domain.AttentionItem) {
+		}},
+		"identity": {mutate: func(item *domain.AttentionItem) {
 			item.CodexReenrollmentRecoveryBinding.AuthIdentityID = "other"
-		},
-		"fence": func(item *domain.AttentionItem) {
+		}},
+		"fence": {mutate: func(item *domain.AttentionItem) {
 			item.CodexReenrollmentRecoveryBinding.LeaseFence++
-		},
-		"digest": func(item *domain.AttentionItem) {
+		}},
+		"digest": {mutate: func(item *domain.AttentionItem) {
 			item.CodexReenrollmentRecoveryBinding.AuthStoreDigest = "sha256:other"
-		},
-		"expiry": func(item *domain.AttentionItem) {
+		}},
+		"initial digest": {initial: true, mutate: func(item *domain.AttentionItem) {
+			item.CodexReenrollmentRecoveryBinding.AuthStoreDigest = "sha256:other"
+		}},
+		"expiry": {mutate: func(item *domain.AttentionItem) {
 			item.CodexReenrollmentRecoveryBinding.AccessTokenExpiresAt = item.CodexReenrollmentRecoveryBinding.AccessTokenExpiresAt.Add(time.Second)
-		},
+		}},
 	}
-	for name, mutate := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			cfg, journal, _, _, _, _ := codexAuthEnrollmentFixture(t)
-			journal.projectMutate = mutate
+			journal.initial = tc.initial
+			journal.projectMutate = tc.mutate
 			if _, err := EnrollCodexAuth(context.Background(), cfg); err == nil {
 				t.Fatal("enrollment trusted a mismatched projected item")
 			}

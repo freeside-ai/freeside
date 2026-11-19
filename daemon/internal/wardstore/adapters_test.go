@@ -498,14 +498,14 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 		binding.AuthStoreDigest != digest || !binding.AccessTokenExpiresAt.Equal(expiresAt) {
 		t.Fatalf("verified binding = %+v", binding)
 	}
-	item, err := adapters.Enrollment.ProjectVerified(ctx, identity.ID)
+	item, initial, err := adapters.Enrollment.ProjectVerified(ctx, identity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.CodexReenrollmentRecoveryBinding == nil ||
+	if !initial || item.Status != domain.StatusResolved || item.CodexReenrollmentRecoveryBinding == nil ||
 		*item.CodexReenrollmentRecoveryBinding != binding ||
 		!item.Offers(domain.ActionResolveReenrollment) {
-		t.Fatalf("projected item = %+v", item)
+		t.Fatalf("projected item = %+v, initial %t", item, initial)
 	}
 	if err := adapters.Leaser.Release(ctx, identity.ID, lease.Holder, lease.Fence, at.Add(3*time.Second)); err != nil {
 		t.Fatalf("release verified enrollment lease: %v", err)
@@ -518,6 +518,157 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID)
 	if err != nil || !needs {
 		t.Fatalf("replacement marker needs reenrollment = %t, %v", needs, err)
+	}
+}
+
+// codexEnrollmentAdapterFixture opens a store with a project and run, so a
+// test can mark a revocation as well as enroll.
+func codexEnrollmentAdapterFixture(t *testing.T) (*wardstore.Adapters, domain.AuthIdentity, domain.RunID) {
+	t.Helper()
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{
+		ID: "run-codex-first", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	identity := domain.AuthIdentity{
+		ID: "codex-first", Provider: domain.AuthProviderOpenAI, AuthStoreMutationLease: true,
+		Interim: domain.InterimClientFacts{
+			AuthStoreVolume: "/private/auth/codex.json", RefreshStrategy: domain.RefreshOnDemand,
+			SupportsReadOnlyAuthSnapshot: true,
+		},
+	}
+	return adapters, identity, run.ID
+}
+
+// enrollCodexThroughAdapter runs one adapter enrollment to a verified,
+// projected result and releases its lease.
+func enrollCodexThroughAdapter(
+	t *testing.T, adapters *wardstore.Adapters, identity domain.AuthIdentity,
+	holder domain.InvocationID, at time.Time,
+) (domain.AttentionItem, bool) {
+	t.Helper()
+	ctx := context.Background()
+	lease, err := adapters.Enrollment.Begin(ctx, identity, "project-1", holder, nil, at, at.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Enrollment.Verify(
+		ctx, identity.ID, holder, lease.Fence, "sha256:"+domain.Digest(holder), at.Add(4*time.Hour), at.Add(time.Second), nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	item, initial, err := adapters.Enrollment.ProjectVerified(ctx, identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Leaser.Release(ctx, identity.ID, holder, lease.Fence, at.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	return item, initial
+}
+
+// TestFirstCodexEnrollmentLeavesNoHold proves an identity's first verified
+// enrollment resolves its own marker and clears admission, and that a later
+// revocation still opens a new hold that the paired client must resolve.
+func TestFirstCodexEnrollmentLeavesNoHold(t *testing.T) {
+	ctx := context.Background()
+	adapters, identity, runID := codexEnrollmentAdapterFixture(t)
+	at := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+
+	item, initial := enrollCodexThroughAdapter(t, adapters, identity, "first-holder", at)
+	if !initial || item.Status != domain.StatusResolved || item.Conclusion == nil ||
+		item.Conclusion.Cause != domain.ConcludedByDaemon {
+		t.Fatalf("first enrollment marker = %+v, initial %t", item, initial)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || needs {
+		t.Fatalf("first enrollment hold = %t, %v", needs, err)
+	}
+
+	// A rerun whose first run finished but never reported (a crash after the
+	// projection committed) recovers the same result, not a new operation.
+	binding, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity)
+	if err != nil || !found || binding != *item.CodexReenrollmentRecoveryBinding {
+		t.Fatalf("finished first enrollment recovery = %+v, %t, %v", binding, found, err)
+	}
+	again, initial, err := adapters.Enrollment.ProjectVerified(ctx, identity.ID)
+	if err != nil || !initial || again.ID != item.ID || again.ItemVersion != item.ItemVersion ||
+		again.Status != domain.StatusResolved {
+		t.Fatalf("finished first enrollment re-projection = %+v, %t, %v", again, initial, err)
+	}
+
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, runID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("revocation after first enrollment hold = %t, %v", needs, err)
+	}
+	if _, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity); err != nil || found {
+		t.Fatalf("revoked first enrollment recovery = %t, %v", found, err)
+	}
+	replaced, initial := enrollCodexThroughAdapter(t, adapters, identity, "replacement-holder", at.Add(time.Hour))
+	if initial || replaced.Status != domain.StatusOpen || !replaced.Offers(domain.ActionResolveReenrollment) {
+		t.Fatalf("revoked chain replacement marker = %+v, initial %t", replaced, initial)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("revoked chain replacement hold before resolve = %t, %v", needs, err)
+	}
+}
+
+// TestRevokedCodexChainKeepsResolveStep proves a marker a revocation opened is
+// never initial, even as the identity's first occurrence: its replacement
+// stays open for the paired client.
+func TestRevokedCodexChainKeepsResolveStep(t *testing.T) {
+	ctx := context.Background()
+	adapters, identity, runID := codexEnrollmentAdapterFixture(t)
+	at := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, runID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	item, initial := enrollCodexThroughAdapter(t, adapters, identity, "replacement-holder", at)
+	if initial || item.Status != domain.StatusOpen || !item.Offers(domain.ActionResolveReenrollment) {
+		t.Fatalf("revoked chain marker = %+v, initial %t", item, initial)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("revoked chain hold before resolve = %t, %v", needs, err)
+	}
+}
+
+// TestFirstCodexEnrollmentRetryAfterFailureStaysInitial proves a retry that
+// reuses the marker a failed first enrollment opened is still the first
+// enrollment, so it too leaves no hold.
+func TestFirstCodexEnrollmentRetryAfterFailureStaysInitial(t *testing.T) {
+	ctx := context.Background()
+	adapters, identity, _ := codexEnrollmentAdapterFixture(t)
+	at := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	lease, err := adapters.Enrollment.Begin(ctx, identity, "project-1", "failed-holder", nil, at, at.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Enrollment.Fail(
+		ctx, identity.ID, "failed-holder", lease.Fence, ward.CodexAuthEnrollmentVerificationFailed, at.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Leaser.Release(ctx, identity.ID, "failed-holder", lease.Fence, at.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("failed first enrollment hold = %t, %v", needs, err)
+	}
+	item, initial := enrollCodexThroughAdapter(t, adapters, identity, "retry-holder", at.Add(time.Minute))
+	if !initial || item.Status != domain.StatusResolved {
+		t.Fatalf("retried first enrollment marker = %+v, initial %t", item, initial)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || needs {
+		t.Fatalf("retried first enrollment hold = %t, %v", needs, err)
 	}
 }
 
@@ -709,7 +860,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
 		t.Fatalf("pending admission refusal = %t, %v", needs, err)
 	}
-	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
+	if _, _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
 		t.Fatalf("pending projection = %v, want not verified", err)
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -719,7 +870,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	projected, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID)
+	projected, _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -857,7 +1008,7 @@ func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
 		t.Fatalf("failed admission refusal = %t, %v", needs, err)
 	}
-	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
+	if _, _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
 		t.Fatalf("failed projection = %v, want not verified", err)
 	}
 }
@@ -938,7 +1089,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 	if len(got) != 2 || got[0].Status != domain.StatusSuperseded || got[1].Status != domain.StatusOpen {
 		t.Fatalf("post-verification occurrences = %+v", got)
 	}
-	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+	if _, _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
 		t.Fatalf("old operation projection = %v, want marker mismatch", err)
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -948,7 +1099,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 		t.Fatal(err)
 	}
 	verify(got[1].ID, "enroll-second", at.Add(3*time.Second))
-	projected, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID)
+	projected, _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID)
 	if err != nil || projected.ID != got[1].ID {
 		t.Fatalf("second occurrence projection = %s, %v", projected.ID, err)
 	}
@@ -961,7 +1112,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 	if len(got) != 3 || got[1].Status != domain.StatusSuperseded || got[2].Status != domain.StatusOpen {
 		t.Fatalf("post-projection occurrences = %+v", got)
 	}
-	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+	if _, _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
 		t.Fatalf("projected old operation reuse = %v, want marker mismatch", err)
 	}
 }

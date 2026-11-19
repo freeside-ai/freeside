@@ -3196,8 +3196,9 @@ an enrolled store is re-enrollment, not `auth add`.
 **Codex.** Pass the `enroll-codex` input and store flags (see
 [Enroll A Codex Subscription Identity](#enroll-a-codex-subscription-identity))
 plus the client, route, and cost owner. The sequence is the one `enroll-codex`
-runs: it spends the same refresh token and leaves the same recovery item to
-resolve before the identity runs. It reads the account from the login's
+runs: it spends the same refresh token and treats the recovery item the
+same way, resolving it itself for a first enrollment and leaving it for a
+paired client after a revoked chain. It reads the account from the login's
 `tokens.account_id` and refuses a login without one. Produce that login with
 the dedicated-`CODEX_HOME` sequence in the enrollment section, never from
 `~/.codex`.
@@ -3822,7 +3823,8 @@ it; omitting it fails before enrollment with a message naming the flag. A
 fresh store with no recipe-gated evidence needs no `-approved-recipe`.
 
 Success prints only the identity, store path, lease fence, verified digest,
-access-token expiry, and recovery item coordinates. The input refresh token
+access-token expiry, and recovery item coordinates and status
+(`attention_item_status`). The input refresh token
 has then been deliberately spent and is no longer a usable backup. Securely
 remove the whole input root after success: it is the dedicated `CODEX_HOME`,
 and its login is spent. Preserve the rotated live store at the printed path. A
@@ -3833,10 +3835,24 @@ Restart the daemon with `-review-auth-mode subscription`, `-review-input-root`
 set to the durable review-input root, and `-review-auth-snapshot` set to the
 live store path. The `reviewer` lineup line selects the identity (see
 [Select Agents Through The Lineup](#select-agents-through-the-lineup)).
-Initial enrollment and recovery both leave the identity blocked until the
+A first enrollment, for an identity with no earlier recovery item, leaves
+nothing to resolve: once the store verifies, the daemon resolves the item
+itself (`attention_item_status` is `resolved`), and the identity runs. A
+deputy root's reviewer enrolls this way before the deputy's first start,
+with `-project` set to the settings' `repository.project`
+([Enroll The Reviewer Before The First Start](../docs/production-walkthrough.md#enroll-the-reviewer-before-the-first-start)).
+Never put a raw `codex login` result at the store path instead: only this
+command creates the store, and a refresh would spend that login without
+enrolling the identity.
+
+A rerun while the store is as the first enrollment left it reports that
+result again and spends nothing. Replacing a revoked chain, or enrolling an
+identity again once a refresh has rotated its store, leaves the identity
+blocked (`attention_item_status` is `open`) until the
 operator inspects the displayed digest, fence, and expiry and accepts the
 item's `Resolve re-enrollment` action. That command-backed decision, not this
-maintenance command alone, clears the revoked-identity marker.
+maintenance command alone, clears the revoked-identity marker. A revocation
+after a first enrollment opens a new item, which needs that decision too.
 
 ### Renew A Codex Subscription Credential
 

@@ -137,6 +137,80 @@ func TestBeginCodexReenrollmentAuthenticatesCurrentMarkerBeforeLease(t *testing.
 	}
 }
 
+// An initial journal lets projection resolve its marker without a paired
+// client, so the store refuses one on any marker but the identity's first,
+// which a revocation never opens once an enrollment has resolved it.
+func TestBeginInitialCodexEnrollmentRequiresTheFirstMarker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	identity := seedCodexReenrollmentIdentity(t, st, at)
+	firstID := testCodexReenrollmentMarkerID(identity.ID)
+
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		journal, _, err := tx.BeginCodexReenrollmentJournalBound(
+			ctx, identity.ID, firstID, "enroll-first", nil, true, at, at.Add(time.Minute))
+		if err != nil {
+			return err
+		}
+		if !journal.Initial {
+			t.Fatal("first-marker journal is not initial")
+		}
+		return tx.FailCodexReenrollment(ctx, identity.ID, journal.Holder, journal.LeaseFence,
+			store.CodexReenrollmentVerificationFailed, at)
+	}); err != nil {
+		t.Fatalf("initial begin on the first marker: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, identity.ID)
+		if err != nil || !found || !latest.Initial {
+			t.Fatalf("stored first-marker journal = %+v, %t, %v; want initial", latest, found, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	secondID := domain.ItemID(store.CodexReenrollmentMarkerPrefix(identity.ID) + "2")
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		first, err := tx.GetAttentionItem(ctx, firstID)
+		if err != nil {
+			return err
+		}
+		first.Status = domain.StatusSuperseded
+		first.ItemVersion++
+		if err := tx.PutAttentionItem(ctx, domaintest.MustConclude(first)); err != nil {
+			return err
+		}
+		second, err := store.NewCodexReenrollmentMarker(
+			identity.ID, 2, "project-1", 1, domain.StatusOpen, nil,
+		)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, second)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.BeginCodexReenrollmentJournalBound(
+			ctx, identity.ID, secondID, "enroll-second", nil, true, at, at.Add(time.Minute))
+		return err
+	}); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+		t.Fatalf("initial begin on the second marker = %v, want marker mismatch", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		latest, _, err := tx.LatestCodexReenrollmentJournal(ctx, identity.ID)
+		if err != nil || latest.MarkerItemID != firstID {
+			t.Fatalf("refused begin left journal %+v, %v", latest, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodexReenrollmentJournalRecoversAndLatestFenceWins(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

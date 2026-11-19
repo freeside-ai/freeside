@@ -440,6 +440,115 @@ func TestDeputyStartAdoptsASecondWriterOverItsExistingVolume(t *testing.T) {
 	}
 }
 
+// TestDeputyStartAdoptsAReviewerEnrolledBeforeTheFirstStart pins #3438's
+// fresh-root order. A start with no Codex store refuses and names
+// enroll-codex; enroll-codex then runs on the root's database with -project
+// set to repository.project and no -approved-recipe, and leaves no hold. The
+// start after it records the reviewer over the enrolled store, auth adopt
+// enrolls it, and the agent_selection resolution names it as the reviewer.
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
+func TestDeputyStartAdoptsAReviewerEnrolledBeforeTheFirstStart(t *testing.T) {
+	ctx := t.Context()
+	host, paths, _ := deputyLeaseFixture(t)
+	settings := secondWriterDeputySettings(t)
+	settings.AgentTree.SecondWriter = nil
+	login, err := os.ReadFile(settings.Review.AuthSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(settings.Review.AuthSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	inputRoot := filepath.Join(filepath.Dir(settings.Review.InputRoot), "codex-login")
+	if err := os.Mkdir(inputRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inputFile := filepath.Join(inputRoot, "auth.json")
+	//nolint:gosec // G703: a path under the test-owned temporary directory.
+	if err := os.WriteFile(inputFile, login, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seedTemplateStore(t, paths.DB)
+
+	err = withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		return recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+	})
+	if err == nil || !strings.Contains(err.Error(), settings.Review.AuthSnapshot+" does not exist") ||
+		!strings.Contains(err.Error(), "freesided enroll-codex") {
+		t.Fatalf("start without a store = %v, want the path and the enroll-codex step", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runEnrollCodexCommandWithRefresher(ctx, []string{
+		"-db", paths.DB, "-project", string(settings.Repository.Project),
+		"-auth-identity", settings.AgentTree.ReviewAuthIdentity,
+		"-input-root", inputRoot, "-input-file", inputFile,
+		"-auth-store-root", settings.Review.InputRoot, "-auth-store", settings.Review.AuthSnapshot,
+	}, &stdout, &stderr, &commandCodexAuthRefresher{}); err != nil {
+		t.Fatalf("enroll-codex: %v; stderr = %s", err, stderr.String())
+	}
+	var enrolled ward.CodexAuthEnrollmentResult
+	if err := json.Unmarshal(stdout.Bytes(), &enrolled); err != nil {
+		t.Fatal(err)
+	}
+	if enrolled.AttentionItemStatus != domain.StatusResolved {
+		t.Fatalf("first enrollment = %+v, want its item resolved", enrolled)
+	}
+
+	checkout := t.TempDir()
+	deputyTestGit(t, checkout, "init", "-q")
+	deputyTestGit(t, checkout, "commit", "-q", "--allow-empty", "-m", "empty")
+	settings.AgentTree.Checkout = checkout
+	settings.AgentTree.Commit = deputyTestGit(t, checkout, "rev-parse", "HEAD")
+	host.inspectImage = func(context.Context, string) error { return nil }
+	host.adopt = authAdoptDeps{
+		observeVolume: func(string, string) func(context.Context, string) (domain.Digest, error) {
+			return func(_ context.Context, volume string) (domain.Digest, error) {
+				return domain.Digest(contentaddr.Sum([]byte("tree of " + volume))), nil
+			}
+		},
+		now: func() time.Time { return time.Now().UTC() },
+	}
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		return recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+	}); err != nil {
+		t.Fatalf("the start after enrollment: %v", err)
+	}
+	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); ok ||
+		!strings.Contains(result.Remediation, "is not the tree auth adopt emitted") {
+		log, _ := os.ReadFile(paths.AdoptLog)
+		t.Fatalf("uncommitted tree: %+v, %t\n%s", result, ok, log)
+	}
+	deputyTestGit(t, checkout, "apply", paths.Patch)
+	deputyTestGit(t, checkout, "add", ".")
+	deputyTestGit(t, checkout, "commit", "-q", "-m", "agent tree")
+	settings.AgentTree.Commit = deputyTestGit(t, checkout, "rev-parse", "HEAD")
+	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); !ok {
+		t.Fatalf("committed tree: %+v", result)
+	}
+	patch, err := os.ReadFile(paths.Patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	revision, err := treeRevision(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents preflightAgentSelection
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		var err error
+		agents, err = resolvePreflightAgents(ctx, st, tree, revision, settings.Review.AuthMode, false, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatalf("resolve the agents: %v", err)
+	}
+	if agents.ReviewAuthIdentityID != domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity) {
+		t.Fatalf("agents = %+v, want the enrolled Codex reviewer", agents)
+	}
+}
+
 // TestDeputyStartRunsAClaudeReviewerOnTheWriterIdentity pins #3173: a
 // Claude reviewer on the writer's identity starts on a fresh root. The start
 // records the writer identity alone and refuses nothing as stray, auth adopt
