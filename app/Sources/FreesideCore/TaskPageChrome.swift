@@ -6,20 +6,40 @@ import SwiftUI
 struct PageHeader<Detail: View>: View {
     let eyebrow: String
     let title: TaskNameLabel
-    let status: String
+    let status: TaskTimelinePresentation.StatusLine
     @ViewBuilder let detail: () -> Detail
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             CardEyebrow(keyword: eyebrow)
             title
-            Text(status)
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
+            statusLine
             detail()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The state chip, the stage chip, then the remaining words, wrapping
+    /// as a unit so a narrow column puts the words under the chips. Only
+    /// the waiting chip is washed, so the accent keeps meaning "yours to
+    /// act on" (#3376). VoiceOver reads the line as one sentence.
+    private var statusLine: some View {
+        WrappingHStack(horizontalSpacing: 7, verticalSpacing: 6) {
+            StateChip(
+                label: status.state, cut: status.cut, fill: status.cut == .attention ? .accentWash : nil)
+            if let stage = status.stage {
+                StateChip(label: stage, color: .waterText, fill: .waterWash)
+            }
+            if let remaining = status.remaining {
+                Text(remaining)
+                    .font(FreesideFont.factLabel)
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityLabel(status.spoken)
     }
 }
 
