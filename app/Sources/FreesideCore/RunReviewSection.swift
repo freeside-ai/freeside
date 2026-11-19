@@ -72,9 +72,10 @@ struct RunReviewSection: View {
     }
     private let folds: Folds?
     /// Whether the round before the newest stands as its own line with its
-    /// reviewer output, ahead of the fold: the task page's Current Run,
-    /// where the last verdict is what the reader checks the running round
-    /// against. The run page folds every earlier round.
+    /// reviewer output, ahead of the fold: an earlier campaign's run on the
+    /// task page, where the last verdict is what the reader checks the
+    /// newest round against. The run page folds every earlier round.
+    /// Current Run draws `CurrentRunReview` instead.
     private let previousRoundLine: Bool
 
     init(
@@ -241,37 +242,10 @@ struct RunReviewSection: View {
         .padding(.leading, ChronologyMarker.diameter + 8)
     }
 
-    /// A marker, the row's content, and its time trailing; the time drops
-    /// under the content when the line does not fit. A round in progress
-    /// passes `elapsed`, which the row shows in place of the instant.
     private func markedRow<Content: View>(
         isCurrent: Bool, time: Date?, elapsed: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            ChronologyMarker(isCurrent: isCurrent)
-                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    content()
-                    Spacer(minLength: 8)
-                    timeText(time, elapsed: elapsed)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    content()
-                    timeText(time, elapsed: elapsed)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func timeText(_ time: Date?, elapsed: String?) -> some View {
-        if let time {
-            Text(elapsed ?? formattedTime(time))
-                .font(FreesideFont.trailingSummary)
-                .foregroundStyle(Color.inkDim)
-                .exactInstant(time)
-        }
+        ReviewMarkedRow(isCurrent: isCurrent, time: time, elapsed: elapsed, content: content())
     }
 
     private func roundFacts(
@@ -389,6 +363,131 @@ struct RunReviewSection: View {
 
     private func formattedTime(_ date: Date) -> String {
         FreesideFormat.shortTime(date, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
+    }
+}
+
+/// A review round's line: a marker, the row's content, and its time
+/// trailing; the time drops under the content when the line does not fit,
+/// as a Timeline event's does. A round in progress passes `elapsed`, which
+/// the row shows in place of the instant.
+private struct ReviewMarkedRow<Content: View>: View {
+    let isCurrent: Bool
+    let time: Date?
+    var elapsed: String? = nil
+    let content: Content
+    @Environment(\.timeZone) private var timeZone
+    @Environment(\.locale) private var locale
+    @Environment(\.pinnedNow) private var pinnedNow
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            ChronologyMarker(isCurrent: isCurrent)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    content
+                    Spacer(minLength: 8)
+                    timeText
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    content
+                    timeText
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var timeText: some View {
+        if let time {
+            Text(
+                elapsed ?? FreesideFormat.shortTime(time, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
+            )
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(Color.inkDim)
+            .exactInstant(time)
+        }
+    }
+}
+
+/// Current Run's Review on the task page (#3375): the newest round and
+/// the round before it, one line each, and nothing older, which run
+/// history holds with every round's facts. It draws no availability
+/// notice and no retry, since the Timeline's notice says when the history
+/// is saved, and nothing at all before a round exists.
+struct CurrentRunReview: View {
+    let coordinator: SyncCoordinator
+    let runID: String
+    let facts: Components.Schemas.RunReviewFacts?
+    @Environment(\.pinnedNow) private var pinnedNow
+    @State private var selection: Selection?
+
+    private struct Selection: Identifiable {
+        let round: Components.Schemas.RunReviewRound
+        var id: String { round.invocation_id }
+    }
+
+    var body: some View {
+        let rounds = RunHistoryPresentation.rounds(facts)
+        if !rounds.isEmpty {
+            // The clock sits inside, around the lines alone, so a tick never
+            // resets the reviewer-output sheet.
+            Group {
+                if RunReviewSection.ticks(Array(rounds.prefix(1)), pinnedNow: pinnedNow) {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        lines(rounds, now: context.date)
+                    }
+                } else {
+                    lines(rounds, now: pinnedNow ?? Date())
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .sheet(item: $selection) { selection in
+                ReviewEvidenceView(coordinator: coordinator, runID: runID, round: selection.round)
+            }
+        }
+    }
+
+    private func lines(_ rounds: [Components.Schemas.RunReviewRound], now: Date) -> some View {
+        let lines = ReviewRoundPresentation.currentRunLines(
+            rounds, now: now,
+            hasOpenAdjudication: ReviewRoundPresentation.hasOpenAdjudication(
+                runID: runID, in: coordinator.store.orderedSnapshots))
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(lines, id: \.round.invocation_id) { line in
+                lineView(line)
+            }
+        }
+    }
+
+    private func lineView(_ line: ReviewRoundPresentation.CurrentRunLine) -> some View {
+        ReviewMarkedRow(
+            isCurrent: line.isNewest, time: ReviewRoundPresentation.time(line.round), elapsed: line.elapsed,
+            content: WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
+                Text(line.text)
+                    .font(FreesideFont.factLabel)
+                    .foregroundStyle(line.isNewest ? Color.ink : Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                switch line.chip {
+                case .water(let label)?: StateChip(label: label, color: .waterText)
+                case .cut(let label, let cut)?: StateChip(label: label, cut: cut)
+                case nil: EmptyView()
+                }
+                if line.linksReviewerOutput {
+                    Button {
+                        selection = Selection(round: line.round)
+                    } label: {
+                        FreesideLink(title: "Reviewer output", face: FreesideFont.noticeAction)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        )
+        // A line with a link keeps it its own element, so VoiceOver can
+        // reach it; any other line reads as one.
+        .accessibilityElement(children: line.linksReviewerOutput ? .contain : .combine)
     }
 }
 
@@ -596,23 +695,115 @@ enum ReviewRoundPresentation {
         let verdicts: String
         if rounds.allSatisfy({ $0.state == .completed && $0.outcome?.value1 == .clean }) {
             verdicts = rounds.count == 1 ? "clean at its bound head" : "clean at their bound heads"
+        } else if rounds.count == 1 {
+            // "Round 1 · findings" for one round.
+            verdicts = resultWord(rounds[0]) ?? ""
         } else {
-            // (counted form, lone form): "1 with findings, 1 clean" across
-            // several rounds, but "Round 1 · findings" for one.
-            let groups: [(String, String, (Components.Schemas.RunReviewRound) -> Bool)] = [
-                ("with findings", "findings", { $0.state == .completed && $0.outcome?.value1 == .findings }),
-                ("clean", "clean", { $0.state == .completed && $0.outcome?.value1 == .clean }),
-                ("failed", "failed", { $0.state == .failed }),
-                ("not completed", "not completed", { $0.state == .pending || $0.state == .running }),
-                ("outcome unavailable", "outcome unavailable", { $0.state == .completed && $0.outcome == nil }),
+            // "1 with findings, 1 clean" across several rounds.
+            let groups: [(String, (Components.Schemas.RunReviewRound) -> Bool)] = [
+                ("with findings", { $0.state == .completed && $0.outcome?.value1 == .findings }),
+                ("clean", { $0.state == .completed && $0.outcome?.value1 == .clean }),
+                ("failed", { $0.state == .failed }),
+                ("not completed", { $0.state == .pending || $0.state == .running }),
+                ("outcome unavailable", { $0.state == .completed && $0.outcome == nil }),
             ]
-            verdicts = groups.compactMap { counted, lone, matches in
+            verdicts = groups.compactMap { counted, matches in
                 let count = rounds.count(where: matches)
-                if count == 0 { return nil }
-                return rounds.count == 1 ? lone : "\(count) \(counted)"
+                return count == 0 ? nil : "\(count) \(counted)"
             }.joined(separator: ", ")
         }
         return "\(name) · \(verdicts)"
+    }
+
+    /// One round's result in a word or two, lower case to follow a title:
+    /// `findings`, `clean`, `failed`, `not completed`, or `outcome
+    /// unavailable` for a completed round the daemon sent no outcome for.
+    /// Nil for a state or outcome the client doesn't know.
+    static func resultWord(_ round: Components.Schemas.RunReviewRound) -> String? {
+        switch round.state {
+        case .completed:
+            switch round.outcome?.value1 {
+            case .findings?: return "findings"
+            case .clean?: return "clean"
+            case nil: return "outcome unavailable"
+            case .unknown?: return nil
+            }
+        case .failed: return "failed"
+        case .pending, .running: return "not completed"
+        case .unknown: return nil
+        }
+    }
+
+    /// What the operator did with a round's findings, non-zero counts only,
+    /// in the order fixed, declined, deferred, open: `2 fixed, 1 declined`.
+    /// Nil when the daemon sent no dispositions or every count is zero.
+    static func dispositionsPhrase(_ round: Components.Schemas.RunReviewRound) -> String? {
+        guard let counts = round.dispositions?.value1 else { return nil }
+        let parts = [
+            (counts.fixed, "fixed"), (counts.declined, "declined"), (counts.deferred, "deferred"),
+            (counts.open, "open"),
+        ]
+        .filter { $0.0 > 0 }
+        .map { "\($0.0) \($0.1)" }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// Current Run's line for the round before the newest: `Round N`, its
+    /// result, and its dispositions, `Round 1 · findings · 2 fixed, 1
+    /// declined`. It names no attempt; run history does.
+    static func compactSummary(_ round: Components.Schemas.RunReviewRound) -> String {
+        (["Round \(round.round)", resultWord(round), dispositionsPhrase(round)].compactMap { $0 })
+            .joined(separator: " · ")
+    }
+
+    /// One line of Current Run's Review.
+    struct CurrentRunLine: Equatable {
+        enum Chip: Equatable {
+            /// A round in progress: the water outline the stage chip wears,
+            /// since both say where the work is.
+            case water(String)
+            /// A finished round, in the cut `cut(_:isCurrent:hasOpenAdjudication:)` gives.
+            case cut(String, StateChip.Cut)
+        }
+
+        let round: Components.Schemas.RunReviewRound
+        /// The newest round, which takes the filled marker and ink.
+        let isNewest: Bool
+        let text: String
+        let chip: Chip?
+        /// Whether it links to its reviewer output. Only the round before
+        /// the newest does, and only when the daemon kept the output; with
+        /// none it says nothing about it, which run history explains.
+        let linksReviewerOutput: Bool
+        /// A round in progress shows the time since its request.
+        let elapsed: String?
+    }
+
+    /// Current Run's Review lines (#3375), from rounds newest first: the
+    /// newest as `Round N` with its verdict chip and age, then the round
+    /// before it, dim, as `compactSummary` with its reviewer output when
+    /// available. Nothing older: run history holds every round.
+    static func currentRunLines(
+        _ rounds: [Components.Schemas.RunReviewRound], now: Date, hasOpenAdjudication: Bool
+    ) -> [CurrentRunLine] {
+        guard let newest = rounds.first else { return [] }
+        let label = verdict(newest, now: now)
+        var lines = [
+            CurrentRunLine(
+                round: newest, isNewest: true, text: "Round \(newest.round)",
+                chip: isInProgress(newest)
+                    ? .water(label)
+                    : .cut(label, cut(newest, isCurrent: true, hasOpenAdjudication: hasOpenAdjudication)),
+                linksReviewerOutput: false, elapsed: elapsed(newest, now: now))
+        ]
+        if rounds.count > 1 {
+            let previous = rounds[1]
+            lines.append(
+                CurrentRunLine(
+                    round: previous, isNewest: false, text: compactSummary(previous), chip: nil,
+                    linksReviewerOutput: previous.evidence.availability == .available, elapsed: nil))
+        }
+        return lines
     }
 }
 

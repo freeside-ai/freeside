@@ -175,8 +175,8 @@ import Testing
         #expect(ReviewRoundPresentation.bindingLine(head: "abc", base: "") == "Head abc · Base ")
     }
 
-    /// Current Run draws the round before the newest as its own line and
-    /// folds the rest; the run page folds every earlier round.
+    /// An earlier campaign's run draws the round before the newest as its
+    /// own line and folds the rest; the run page folds every earlier round.
     @Test func previousRoundLineSplitsTheRoundBeforeTheNewest() {
         let rounds = (1...3).reversed().map { RunFixtures.reviewRound(.completed, round: $0) }
         let line = ReviewRoundPresentation.split(rounds, previousRoundLine: true)
@@ -213,6 +213,70 @@ import Testing
         #expect(
             ReviewRoundPresentation.priorSummary(mixed)
                 == "Rounds 3, 2, and 1 · 1 with findings, 1 clean, 1 failed")
+    }
+
+    @Test func resultWordIsTheLoneVerdict() {
+        #expect(ReviewRoundPresentation.resultWord(RunFixtures.reviewRound(.completed)) == "clean")
+        var findings = RunFixtures.reviewRound(.completed, findings: true)
+        #expect(ReviewRoundPresentation.resultWord(findings) == "findings")
+        findings.outcome = nil
+        #expect(ReviewRoundPresentation.resultWord(findings) == "outcome unavailable")
+        #expect(ReviewRoundPresentation.resultWord(RunFixtures.reviewRound(.failed)) == "failed")
+        #expect(ReviewRoundPresentation.resultWord(RunFixtures.reviewRound(.pending)) == "not completed")
+        #expect(ReviewRoundPresentation.resultWord(RunFixtures.reviewRound(.running)) == "not completed")
+    }
+
+    @Test func dispositionsPhraseListsOnlyNonZeroCountsInOrder() {
+        // Absent: the daemon sent none, as for a round in progress.
+        #expect(ReviewRoundPresentation.dispositionsPhrase(RunFixtures.reviewRound(.running)) == nil)
+        // All zero: a clean round disposed of nothing.
+        #expect(ReviewRoundPresentation.dispositionsPhrase(RunFixtures.reviewRound(.completed)) == nil)
+        var round = RunFixtures.reviewRound(.completed, findings: true)
+        #expect(ReviewRoundPresentation.dispositionsPhrase(round) == "1 fixed, 1 deferred, 1 open")
+        round.dispositions = .init(value1: .init(fixed: 2, declined: 1, deferred: 0, open: 0))
+        #expect(ReviewRoundPresentation.dispositionsPhrase(round) == "2 fixed, 1 declined")
+        #expect(ReviewRoundPresentation.compactSummary(round) == "Round 1 · findings · 2 fixed, 1 declined")
+        #expect(
+            ReviewRoundPresentation.compactSummary(RunFixtures.reviewRound(.failed, round: 2)) == "Round 2 · failed")
+    }
+
+    /// Current Run's Review (#3375): at most two lines, the newest with its
+    /// chip, in water while it runs, and the one before it dim, linking its
+    /// reviewer output only when the daemon kept it, with no note when not.
+    @Test func currentRunLinesDrawTheNewestTwoRounds() throws {
+        let now = Self.now
+        let running = RunFixtures.reviewRound(.running, round: 3, requestedAt: now.addingTimeInterval(-60))
+        var previous = RunFixtures.reviewRound(.completed, round: 2, findings: true)
+        previous.dispositions = .init(value1: .init(fixed: 2, declined: 1, deferred: 0, open: 0))
+        let oldest = RunFixtures.reviewRound(.completed, round: 1, availability: .available)
+        let lines = ReviewRoundPresentation.currentRunLines(
+            [running, previous, oldest], now: now, hasOpenAdjudication: false)
+        #expect(lines.map(\.round.round) == [3, 2])
+        #expect(
+            lines[0]
+                == .init(
+                    round: running, isNewest: true, text: "Round 3", chip: .water("Running"),
+                    linksReviewerOutput: false, elapsed: "1m"))
+        // Without evidence: no link, and the text carries no note about it.
+        #expect(
+            lines[1]
+                == .init(
+                    round: previous, isNewest: false, text: "Round 2 · findings · 2 fixed, 1 declined", chip: nil,
+                    linksReviewerOutput: false, elapsed: nil))
+        previous.evidence.availability = .available
+        let linked = ReviewRoundPresentation.currentRunLines([running, previous], now: now, hasOpenAdjudication: false)
+        #expect(linked[1].linksReviewerOutput)
+
+        // A finished newest round keeps today's cut: ink, or attention
+        // while its findings wait on an adjudication.
+        let finished = RunFixtures.reviewRound(.completed, round: 2, findings: true)
+        #expect(
+            ReviewRoundPresentation.currentRunLines([finished], now: now, hasOpenAdjudication: false).map(\.chip)
+                == [.cut("Findings · 1 open", .ink)])
+        #expect(
+            ReviewRoundPresentation.currentRunLines([finished], now: now, hasOpenAdjudication: true).map(\.chip)
+                == [.cut("Findings · 1 open", .attention)])
+        #expect(ReviewRoundPresentation.currentRunLines([], now: now, hasOpenAdjudication: false).isEmpty)
     }
 
     @Test func aRoundsTimeIsItsCompletionElseItsRequest() {
