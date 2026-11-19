@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -724,4 +725,26 @@ func TestProdExecutionProbeFailsClosed(t *testing.T) {
 			t.Fatal("probe accepted a daemon that does not serve the execution read")
 		}
 	})
+}
+
+func TestOpenStoreOrControlSaysAHeldLockMayBeAStartingDaemon(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	lock, err := daemonlock.Acquire(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close() //nolint:errcheck // test lock is released at function end
+	_, err = openStoreOrControl(dbPath)
+	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "published no control address yet") ||
+		!strings.Contains(err.Error(), "a daemon that is starting publishes it once it serves") {
+		t.Fatalf("missing address error = %v", err)
+	}
+	if err := os.WriteFile(dbPath+".control.json", []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = openStoreOrControl(dbPath)
+	if err == nil || !strings.Contains(err.Error(), "control socket is unavailable (stop or upgrade the daemon)") {
+		t.Fatalf("invalid address error = %v", err)
+	}
 }
