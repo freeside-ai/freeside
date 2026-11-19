@@ -1,0 +1,11 @@
+# Ignored build output that merge-cleanup's worktree sweep may delete when
+# it removes a merged branch's worktree. Removal deletes everything under
+# an entry, so list only output a build regenerates.
+
+# SwiftPM build output (app/Package.swift; app/.gitignore .build/)
+app/.build/
+# Xcode derived data from the install scripts and dev-instance.sh
+# (app/.gitignore DerivedData/)
+app/DerivedData/
+# Exporter binary the image build cross-compiles (images/exporter/.gitignore)
+images/exporter/freeside-export

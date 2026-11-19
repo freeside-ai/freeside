@@ -884,6 +884,8 @@ Keep machine-read record headings exact, including
     and `visual-evidence` read this record before inferring a repository
     from a remote.
 
+- **Worktree disposables:** see `.worktree-disposables`.
+
 ## Automated Reviewer
 
 **None.** The owner turned off automatic Codex review on 2026-10-21, so no
