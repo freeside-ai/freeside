@@ -2576,6 +2576,85 @@ func TestQueuedCompletionToleratesAConcurrentPublicationDispatch(t *testing.T) {
 	}
 }
 
+// TestQueuedCompletionToleratesAPendingRemediationDispatch: dispatch records a
+// remediation attempt before Start, and the first pass to reach the intent
+// leaves it undispatched while the start-authority check runs outside the
+// pass (#3224); acceptance runs in that same pass. An attempt whose request
+// is not yet dispatched is a remediation about to start, not a parent-key
+// mismatch; reading it as one stopped the #2382 exit run durably. A request
+// whose head disagrees with the task must still be refused.
+func TestQueuedCompletionToleratesAPendingRemediationDispatch(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	run := domain.Run{ID: "run-pending-remediation", ProjectID: "project-pending-remediation"}
+	for _, tc := range []struct {
+		name       string
+		dispatched bool
+		head       string
+		want       error
+	}{
+		{"intent not yet dispatched", false, strings.Repeat("a", 40), nil},
+		{"intent dispatched", true, strings.Repeat("a", 40), nil},
+		{"intent on another head", false, strings.Repeat("d", 40), domain.ErrParentKeyMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
+
+			task := validPublicationTask(t, run.ID, run.ProjectID)
+			taskPayload, err := json.Marshal(task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := remediationInvocationRequest{
+				Version: remediationRequestVersion, InvocationID: remediationInvocationID(run.ID, 1),
+				RunID: run.ID, StageID: remediationStageID(run.ID, 1), Round: 1,
+				ReviewInvocationID:  ProductionReviewInvocationID(run.ID, 1),
+				AdjudicationDigest:  adjudicationDigest("1"),
+				InputArtifactID:     remediationInputArtifactID(run.ID, 1),
+				InputArtifactDigest: adjudicationDigest("2"),
+				BaseSHA:             task.Replay.ObservedBaseSHA, HeadSHA: tc.head,
+				FindingIDs: []domain.FindingID{"finding-1"},
+			}
+			requestPayload, err := encodeRemediationRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := productionPublicationTaskKey(run.ID)
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if _, _, err := tx.EnqueueOutbox(
+					ctx, key, KindProductionPublicationRequested, taskPayload,
+				); err != nil {
+					return err
+				}
+				if _, _, err := tx.EnqueueOutbox(
+					ctx, string(request.InvocationID), KindRemediationInvocationRequested, requestPayload,
+				); err != nil {
+					return err
+				}
+				if tc.dispatched {
+					return tx.MarkOutboxDispatched(ctx, string(request.InvocationID))
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			queued, err := w.hasQueuedCompletion(ctx, run, request.InvocationID)
+			if tc.want == nil {
+				if err != nil || queued {
+					t.Fatalf("hasQueuedCompletion = %v, %v; want not owned with no error", queued, err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("hasQueuedCompletion = %v, %v; want %v", queued, err, tc.want)
+			}
+		})
+	}
+}
+
 // TestProductionStageNameResolvesToCanonicalRole ties the §5.4 stage-role
 // resolver's exhaustive legacy set to the engine's persisted spelling: the
 // lineup keys resolve per role through CanonicalStageRole, and this is the
