@@ -907,9 +907,9 @@ const maxSummaryFindings = 5
 // persistsRepositoryChannel reports whether this import's repo-channel blobs
 // must enter durable storage. The specification profile publishes
 // a typed result and never publishes the repo commit, so those blobs are
-// vestigial: skipping them keeps unscanned tolerated content (a
-// secret_scan_skipped blob most sharply) out of the daemon CAS, which
-// publish-strict never admits because it rejects that finding outright. Every
+// vestigial: skipping them keeps tolerated content (out-of-scope or
+// oversized debris) out of the daemon CAS, which publish-strict never admits
+// because it rejects those findings outright. Every
 // other profile may publish, so its repo blobs must be resolvable for the
 // production replay that reconstructs the commit. This is safe only while no
 // path builds a publication replay from a specification export: the specification

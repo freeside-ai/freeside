@@ -170,9 +170,10 @@ type Policy struct {
 	// evidence blob is contract-impossible for an honest helper.
 	MaxEvidenceBlobBytes  int64
 	MaxEvidenceTotalBytes int64
-	// SecretMaxScanBytes caps the per-file size the best-effort secret
-	// scan reads; larger blobs are outside the scan's honest textual
-	// scope and covered by size/type controls instead.
+	// SecretMaxScanBytes caps the evidence text the importer reads
+	// whole to scan and inline: the review guide and markdown evidence.
+	// Repository content is scanned at any size within MaxBlobBytes
+	// (scanSecrets).
 	SecretMaxScanBytes int64
 	// MaxPathBytes caps one entry's path length and MaxPathDepth its
 	// component count, bounding work superlinear in a single path.

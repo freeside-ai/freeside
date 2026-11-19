@@ -78,7 +78,10 @@ const (
 	// content was not secret-scanned because it exceeded the scan cap.
 	// Surfaced rather than silently skipped so a findings-free import
 	// honestly means "everything in scope was scanned", never "a large
-	// file slipped through unscanned" (§5.4 honest scope).
+	// file slipped through unscanned" (§5.4 honest scope). The importer
+	// no longer emits it: since #3396 every stored blob is scanned. The
+	// kind stays registered because export rejections recorded before
+	// then name it.
 	FindingSecretScanSkipped FindingKind = "secret_scan_skipped"
 	// FindingCommitPlanSecret records a secret found only after syntactic JSON
 	// unescaping. It withholds construction so neither an agent-authored plan
@@ -287,9 +290,9 @@ func (k FindingKind) fatalForProfile(profile *FindingProfile, stance domain.Auto
 //     instructions, or git metadata is off-contract even unpublished.
 //   - Tolerated debris: build/test output the base does not ignore (ignored
 //     additions are excluded before dispatch, ignored.go) is out-of-allowlist
-//     and routinely over the size and scan caps. Tolerating secret_scan_skipped
-//     means large debris goes unscanned; accepted because nothing publishes
-//     and a secret match on scanned content stays fatal.
+//     and routinely over the size cap. The importer scans every stored blob
+//     (#3396), so tolerating secret_scan_skipped now covers only results
+//     recorded before then; a secret match stays fatal.
 func (k FindingKind) fatalForSpecification() bool {
 	switch k {
 	case FindingNonRegularChange, FindingInvalidPathEntry, FindingBlobOmitted,

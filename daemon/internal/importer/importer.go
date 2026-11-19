@@ -102,7 +102,7 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	}
 	findings = append(findings, applyPolicy(changes, opts.Policy)...)
 	findings = append(findings, detectCollisions(changes, base)...)
-	secretFindings, err := scanSecrets(blobs, changes, opts.Policy.SecretMaxScanBytes)
+	secretFindings, err := scanSecrets(blobs, changes)
 	if err != nil {
 		return Result{}, err
 	}
