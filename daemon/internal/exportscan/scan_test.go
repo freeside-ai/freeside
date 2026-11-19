@@ -17,15 +17,16 @@ func TestCredentialScannerBlocksLeakedMaterial(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
+		rule string
 	}{
-		{"anthropic key", "config: sk-ant-api03-" + strings.Repeat("A", 40)},
-		{"github token", "remote: https://ghp_" + strings.Repeat("b", 36) + "@github.com/x/y"},
-		{"github fine-grained token", "token=github_pat_" + strings.Repeat("c", 24)},
-		{"slack token", "SLACK_TOKEN=xoxb-" + strings.Repeat("d", 24)},
-		{"pem private key", "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nabc\n"},
-		{"pem private key with numeric label", "-----BEGIN " + "PKCS8 PRIVATE KEY-----\nabc\n"},
-		{"aws access key", "AWS_ACCESS_KEY_ID=AKIA" + "IOSFODNN7EXAMPLE"},
-		{"gcp service-account key id", `"private_key_id":"` + strings.Repeat("e", 40) + `"`},
+		{"anthropic key", "config: sk-ant-api03-" + strings.Repeat("A", 40), "anthropic_token"},
+		{"github token", "remote: https://ghp_" + strings.Repeat("b", 36) + "@github.com/x/y", "github_token"},
+		{"github fine-grained token", "token=github_pat_" + strings.Repeat("c", 24), "github_pat"},
+		{"slack token", "SLACK_TOKEN=xoxb-" + strings.Repeat("d", 24), "slack_token"},
+		{"pem private key", "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nabc\n", "pem_private_key"},
+		{"pem private key with numeric label", "-----BEGIN " + "PKCS8 PRIVATE KEY-----\nabc\n", "pem_private_key"},
+		{"aws access key", "AWS_ACCESS_KEY_ID=AKIA" + "IOSFODNN7EXAMPLE", "aws_access_key_id"},
+		{"gcp service-account key id", `"private_key_id":"` + strings.Repeat("e", 40) + `"`, "gcp_service_account_key"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,6 +53,14 @@ func TestCredentialScannerBlocksLeakedMaterial(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "leaked.txt") {
 				t.Fatalf("scanner error does not name the file: %v", err)
+			}
+			// Ward names the refusal only from these typed fields.
+			var refusal *ward.OutputScanRefusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("scanner refusal is not a typed OutputScanRefusal: %v", err)
+			}
+			if refusal.Rule != tc.rule || refusal.File != "blobs/sha256/leaked.txt" {
+				t.Fatalf("refusal = %+v, want rule %s in blobs/sha256/leaked.txt", refusal, tc.rule)
 			}
 		})
 	}

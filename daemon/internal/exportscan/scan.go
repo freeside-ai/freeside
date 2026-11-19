@@ -32,9 +32,9 @@ const scanOverlapBytes = 4 << 10
 // Scanner implements ward.OutputScanner. The zero value is ready to use.
 type Scanner struct{}
 
-// Scan walks dir and refuses with ward.ErrOutputScanRefused when any regular
-// file in it carries credential material. Any other error is an operational
-// failure, not a policy refusal.
+// Scan walks dir and refuses with a *ward.OutputScanRefusal, which matches
+// ward.ErrOutputScanRefused, when any regular file in it carries credential
+// material. Any other error is an operational failure, not a policy refusal.
 func (Scanner) Scan(ctx context.Context, dir string) error {
 	return filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -54,15 +54,14 @@ func (Scanner) Scan(ctx context.Context, dir string) error {
 			return err
 		}
 		if matched {
-			// The match itself is never reported: naming the pattern locates
-			// the leak without copying the secret into a log, an attention
-			// item, or an error a client can read.
+			// The match itself is never reported: naming the rule and the
+			// file locates the leak without copying the secret into a log,
+			// an attention item, or an error a client can read.
 			rel, relErr := filepath.Rel(dir, path)
 			if relErr != nil {
 				rel = filepath.Base(path)
 			}
-			return fmt.Errorf("%w: credential material matching %s found in exported %s",
-				ward.ErrOutputScanRefused, rule.Name, rel)
+			return &ward.OutputScanRefusal{Rule: rule.ID, File: filepath.ToSlash(rel)}
 		}
 		return nil
 	})

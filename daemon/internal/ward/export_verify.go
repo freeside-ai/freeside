@@ -17,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/credentialpattern"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -167,14 +168,99 @@ func (b *Backend) verifyMaterializedExport(ctx context.Context, destDir string) 
 	if err := verifyNoStrays(destDir, repoRef, evidenceRef, evidencePresent, planPresent); err != nil {
 		return nil, err
 	}
+	out := &exportOutput{Dir: destDir, Manifest: manifest, Evidence: evidence, EvidencePresent: evidencePresent, CommitPlanPresent: planPresent}
 	if err := b.cfg.Scanner.Scan(ctx, destDir); err != nil {
-		// The scanner's error may quote the matched secret; ConformanceFailure
-		// reasons must never carry credential material, so the detail is
-		// withheld here. A scanner that needs to record specifics logs them to
-		// its own audited sink.
-		return nil, evidencef(CheckExportVerification, "output scan refused the export (details withheld)")
+		return nil, evidencef(CheckExportVerification, "%s", scanRefusalReason(err, out))
 	}
-	return &exportOutput{Dir: destDir, Manifest: manifest, Evidence: evidence, EvidencePresent: evidencePresent, CommitPlanPresent: planPresent}, nil
+	return out, nil
+}
+
+// scanRefusalReason says what a scanner refusal matched, so an operator can
+// act on it. The scanner's error text may quote the matched secret and
+// ConformanceFailure reasons must never carry credential material, so the
+// reason is built only from a typed OutputScanRefusal's fields, each checked
+// here: a rule ID outside credentialpattern.All() or a file outside the
+// verified export's layout reads as unnamed, and any other error keeps the
+// detail withheld.
+func scanRefusalReason(err error, out *exportOutput) string {
+	var refusal *OutputScanRefusal
+	if !errors.As(err, &refusal) {
+		return "output scan refused the export (details withheld)"
+	}
+	rule := "an unnamed credential rule"
+	for _, known := range credentialpattern.All() {
+		if refusal.Rule == known.ID {
+			rule = "credential rule " + known.ID
+			break
+		}
+	}
+	// The rule goes last: a failure summary keeps its tail when truncated,
+	// so a long workspace path can't push the rule out of it.
+	return fmt.Sprintf("output scan refused the export: %s matched %s", scannedItem(refusal.File, out), rule)
+}
+
+// scannedItem maps an export-relative file back to what the workspace
+// called it: a repo blob to the workspace paths that carry its content, an
+// evidence blob to its labels, and the fixed members to their roles.
+func scannedItem(file string, out *exportOutput) string {
+	switch file {
+	case export.ManifestFilename:
+		return "the repo manifest"
+	case export.EvidenceFilename:
+		if out.EvidencePresent {
+			return "the evidence manifest"
+		}
+	case export.CommitPlanFilename:
+		if out.CommitPlanPresent {
+			return "the commit plan"
+		}
+	}
+	if hexDigest, ok := strings.CutPrefix(file, "blobs/sha256/"); ok {
+		var paths []string
+		for _, e := range out.Manifest.Entries {
+			if e.Kind == export.EntryRegular && !e.BlobOmitted && contentaddr.Hex(string(*e.Digest)) == hexDigest {
+				paths = append(paths, e.Path)
+			}
+		}
+		if len(paths) > 0 {
+			return "workspace file " + namedWithOthers(paths)
+		}
+	}
+	if hexDigest, ok := strings.CutPrefix(file, export.EvidenceBlobsDirname+"/sha256/"); ok && out.EvidencePresent {
+		var labels []string
+		for _, e := range out.Evidence.Entries {
+			if contentaddr.Hex(string(e.Digest)) == hexDigest {
+				labels = append(labels, e.Label)
+			}
+		}
+		if len(labels) > 0 {
+			return "evidence item " + namedWithOthers(labels)
+		}
+	}
+	return "an unnamed exported file"
+}
+
+// namedWithOthers shows the first name and counts the rest, which share the
+// matched content.
+func namedWithOthers(names []string) string {
+	shown := screenedName(names[0])
+	if len(names) == 1 {
+		return shown
+	}
+	return fmt.Sprintf("%s (and %d more with the same content)", shown, len(names)-1)
+}
+
+// screenedName shows a workspace path or evidence label. Both are
+// agent-chosen, so a name any credential rule matches could itself be the
+// secret: it shows only as its redactPath token. Every other name is
+// Go-quoted, so it stays on one log line.
+func screenedName(name string) string {
+	for _, rule := range credentialpattern.All() {
+		if rule.Pattern.MatchString(name) {
+			return redactPath(name)
+		}
+	}
+	return strconv.Quote(name)
 }
 
 // verifyMaterializedTree rejects links and special nodes before any member is
