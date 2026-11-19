@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 130
+revision: 131
 status: active
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # Freeside
@@ -2509,18 +2509,19 @@ secret scanning.
 
 An addition may be excluded from the constructed candidate only when the
 exact trusted base's `.gitignore` rules ignore it and the base tracks nothing
-at or beneath its path. That covers a new regular file, in scope or not, and a
-new nested repository, such as a package manager's checkout. Tracked changes
+at or beneath its path. That covers a new regular file, in scope or not, a new
+symlink, such as a build tool's link to its output directory, and a new nested
+repository, such as a package manager's checkout. Tracked changes
 keep their existing semantics. Candidate ignore rules, workspace Git state,
 checkout-local excludes, and host Git configuration cannot authorize exclusion.
 The full returned content still undergoes the existing integrity, structural,
 secret, size, collision, and control-plane checks. A secret match, a
 protected-path or collision finding, and the change set's total size still
 apply to an excluded addition. Only the findings about content no commit will
-hold drop: scope, a withheld or unscanned blob, a per-file size, and a nested
-repository. No excluded content enters a constructed commit. The rule applies
-to specification and publication imports alike; a handoff requiring no
-repository changes keeps every addition and refuses it.
+hold drop: scope, a withheld or unscanned blob, a per-file size, and a symlink
+or nested repository. No excluded content enters a constructed commit. The
+rule applies to specification and publication imports alike; a handoff
+requiring no repository changes keeps every addition and refuses it.
 
 Permanent tests include malicious manifests, commit plans, blobs, and
 evidence. Trusted verification recipes load only from approved control-plane
@@ -7876,21 +7877,26 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 130 ("Recovery Refuses Old Stage Intent Shapes"):
+Revision 131 ("Exclude Ignored Symlinks at Import"):
 
-1. **A stage intent the daemon no longer writes is refused at recovery**
-   (Section [5.8](#58-control-plane-trust)). An intent with a delivery
-   mode other than the current one is refused and never reinterpreted as the
-   current one; it no longer keeps argument delivery or its original handoff
-   identity. The operator gets an attention item for it, and a new attempt
-   still needs its own authorization.
+1. **A base-ignored symlink addition leaves the candidate**
+   (Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)).
+   A new symlink the exact base ignores and doesn't track at or beneath its
+   path is excluded like an ignored regular file or nested repository, and
+   its `non_regular_change` finding drops with it. Git judges it by its own
+   name, and its target is never read. A symlink the base doesn't ignore, or
+   one over tracked content, still blocks, and so do special files and
+   unusual modes.
 
-This revises the delivery-mode paragraph, which kept historical intents on
-argument delivery. Rejected: keeping the old readers, since no current writer
-produces those shapes and prod started on a fresh database (#3265).
+This extends revision 129, whose decision covered every base-ignored
+addition but whose rule named only regular files and nested repositories.
+SwiftPM always links `.build/debug` to its build directory, so a writer that
+built the app had its #2968 export refused. Rejected: having the agent delete
+build output before handoff, which leaves every toolchain's links blocking
+and depends on agent behavior.
 
-(Owner decision of 2026-11-16, applied as #3327;
-[decision note](../devlog/2026-11-17-2209-drop-old-stage-intent-shapes.md).)
+(Owner decision of 2026-11-18 in the #2382 exit run, applied as #3395;
+[decision note](../devlog/2026-11-18-1805-ignored-symlinks.md).)
 
 ## 14. Risks
 

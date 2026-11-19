@@ -4173,3 +4173,40 @@ publication.
 
 (Owner decision of 2026-11-17 in the #2382 exit run, applied as #3319;
 [decision note](../../devlog/2026-11-17-1015-ignored-hydration-output.md).)
+
+## Revision 130 ("Recovery Refuses Old Stage Intent Shapes"):
+
+1. **A stage intent the daemon no longer writes is refused at recovery**
+   (Section [5.8](../plan.md#58-control-plane-trust)). An intent with a delivery
+   mode other than the current one is refused and never reinterpreted as the
+   current one; it no longer keeps argument delivery or its original handoff
+   identity. The operator gets an attention item for it, and a new attempt
+   still needs its own authorization.
+
+This revises the delivery-mode paragraph, which kept historical intents on
+argument delivery. Rejected: keeping the old readers, since no current writer
+produces those shapes and prod started on a fresh database (#3265).
+
+(Owner decision of 2026-11-16, applied as #3327;
+[decision note](../../devlog/2026-11-17-2209-drop-old-stage-intent-shapes.md).)
+
+## Revision 131 ("Exclude Ignored Symlinks at Import"):
+
+1. **A base-ignored symlink addition leaves the candidate**
+   (Section [5.6](../plan.md#56-the-gauntlet-workspace-handoff-import-and-clean-verification)).
+   A new symlink the exact base ignores and doesn't track at or beneath its
+   path is excluded like an ignored regular file or nested repository, and
+   its `non_regular_change` finding drops with it. Git judges it by its own
+   name, and its target is never read. A symlink the base doesn't ignore, or
+   one over tracked content, still blocks, and so do special files and
+   unusual modes.
+
+This extends revision 129, whose decision covered every base-ignored
+addition but whose rule named only regular files and nested repositories.
+SwiftPM always links `.build/debug` to its build directory, so a writer that
+built the app had its #2968 export refused. Rejected: having the agent delete
+build output before handoff, which leaves every toolchain's links blocking
+and depends on agent behavior.
+
+(Owner decision of 2026-11-18 in the #2382 exit run, applied as #3395;
+[decision note](../../devlog/2026-11-18-1805-ignored-symlinks.md).)

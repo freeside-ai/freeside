@@ -259,7 +259,7 @@ func deriveSymlink(ctx context.Context, g *gitRunner, base map[string]treeEntry,
 			}
 		}
 	}
-	c := plannedChange{path: e.Path, kind: changeKindAgainst(base, e.Path)}
+	c := plannedChange{path: e.Path, kind: changeKindAgainst(base, e.Path), symlink: true}
 	f := Finding{Path: e.Path, Kind: FindingNonRegularChange, Detail: "symlink"}
 	return &c, []Finding{f}, nil
 }

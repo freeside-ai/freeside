@@ -69,6 +69,10 @@ type plannedChange struct {
 	// nested repository whose content the export does not descend into. It
 	// never enters a tree; ignore matching may exclude it (ignored.go).
 	nestedRepository bool
+	// symlink marks a symlink entry that differs from the base. It never
+	// enters a tree; ignore matching may exclude it (ignored.go), which
+	// judges it by name as Git does, never by its target.
+	symlink bool
 }
 
 // public renders the construction-facing form as the API's Change,

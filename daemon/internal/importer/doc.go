@@ -78,7 +78,7 @@
 //     manifest is a full snapshot; what changed is computed here, never
 //     taken from workspace parentage)
 //   - ignored.go  exact-base ignore matching for untracked additions (regular
-//     files and nested repositories); excluded content never enters
+//     files, symlinks, and nested repositories); excluded content never enters
 //     construction, and only findings about that absent content drop
 //   - importer.go the Import orchestrator and Result
 //   - policy.go   §5.5/§5.8 path classes, the declared-scope
