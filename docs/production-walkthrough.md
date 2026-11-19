@@ -601,7 +601,14 @@ The first start writes `<root>/daemon/composition-manifest.json`, whose
 completes, settings carry the machine file's placeholder image and recipe.
 A rerun with a new `--build` rebuilds and re-adopts on the same root,
 database, and port, which suits iterating on a build, but a pass counts only
-on a fresh root: give each counted pass a new `<name>`. Exit 2 is a refusal
+on a fresh root: give each counted pass a new `<name>`. Reruns also keep the
+root current on their own: one after an enrollment (such as `freesided
+enroll-codex`) starts the deputy again to re-adopt the tree, one after the
+review configuration digest or `repository.base_sha` moves runs the
+onboarding review again and stops for its approval, and one after a newer
+approval pins that approval's image and recipe. A setup start waits as long
+as the deputy's log keeps growing and gives up only once it has stayed
+still for 900 s. Exit 2 is a refusal
 (a supervised path, a root another pass made, a setting both files set) and
 exit 1 any other failure; the script's header lists every step and refusal.
 A setup start that exits nonzero says so with the `freesided rig recover`
