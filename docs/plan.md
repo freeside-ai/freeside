@@ -7083,7 +7083,9 @@ scopes are not the Workflow settings layers of Section
 - **Supervised tiers keep fixed ports.** The app keys its Keychain device
   credential by a hash of the daemon URL, so moving a supervised port orphans
   the pairing. `ephemeral` listens on port `0` by default and pairs afresh on
-  each run. It may take an explicit fixed nonzero port when a paired client
+  each root: it keeps its credential beside the daemon's state, never in the
+  Keychain, so a restart on the same root and port keeps the pairing and a
+  new root needs a new one. It may take an explicit fixed nonzero port when a paired client
   must reach the run (the deputy's `listen` setting pins its listener for
   the specification-approval gate), but never `7331` or `7332`, the supervised
   tiers' ports.

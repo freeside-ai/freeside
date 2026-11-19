@@ -61,9 +61,10 @@ public final class AppSession {
     /// rules as the launch.
     private let cacheRoot: URL?
     /// Where a live connection keeps its device credential, per deployment:
-    /// the Keychain for a supervised tier or a remote client, memory for
-    /// `ephemeral`, which pairs afresh on each run. `connect(serverURL:)`
-    /// reuses it like `cacheRoot`.
+    /// the Keychain for a supervised tier or a remote client; for
+    /// `ephemeral`, a file in the readiness directory for the run that
+    /// directory names, and memory otherwise (`credentialStore(for:...)`).
+    /// `connect(serverURL:)` reuses it like `cacheRoot`.
     private let credentialStore: (URL) -> any DeviceCredentialStore
     /// The last readiness the session was handed (`applyReadiness`),
     /// remembered so `rePair()` can prefill the fresh pairing screen the
@@ -452,9 +453,13 @@ public final class AppSession {
     /// follows the run named by `-FreesideReadinessDir` or asks for a
     /// connection, and never takes the persisted URL, which an earlier launch
     /// may have pointed at a supervised daemon. It never probes the Keychain
-    /// either: its credentials live in memory (`credentialStore(for:)`), and
-    /// a Debug build shares prod's Keychain identity, so a probe could prompt
-    /// or migrate a prod item. The readiness directory is
+    /// either: its credentials live in the readiness directory or in memory
+    /// (`credentialStore(for:...)`), and a Debug build shares prod's Keychain
+    /// identity, so a probe could prompt or migrate a prod item. Once the
+    /// file's one-time code expires, the run's URL is still followed, with no
+    /// code to prefill: the directory may hold a credential for it, and if
+    /// not, that run's daemon is still the one to pair with. The readiness
+    /// directory is
     /// refused in a supervised tier so a stray argument cannot point the
     /// operator's app at another daemon, and refused under any supervised
     /// state root so an ephemeral run never consumes a supervised daemon's
@@ -563,16 +568,18 @@ public final class AppSession {
         // installed app to a dead daemon on its next launch.
         let persist: (URL) -> Void =
             environment.isSupervised ? { persistServerURLToDefaults($0) } : { _ in }
+        // `launchMode` threw for any path it would not follow, so only a
+        // validated one names the window's instance and keeps its credential.
+        let readinessRun = followedReadinessRun(
+            readinessDirectory, argumentServerURL: argumentServerURL, mode: mode)
         let session = session(
             for: mode, localDaemonURL: environment.supervisedAPIURL,
             cacheRoot: environment.stateRoot(),
-            credentialStore: credentialStore(for: environment, keychainStore: keychainStore),
+            credentialStore: credentialStore(
+                for: environment, keychainStore: keychainStore, readinessRun: readinessRun),
             persistServerURL: persist, mockAlternates: arguments["FreesideAlternates"] as? String == "YES",
             pairingCodeSource: pairingCodeSource)
-        // `launchMode` threw for any path it would not follow, so only a
-        // validated one names the window's instance.
-        session.readinessRun = followedReadinessRun(
-            readinessDirectory, argumentServerURL: argumentServerURL, mode: mode)
+        session.readinessRun = readinessRun
         return session
     }
 
@@ -597,18 +604,28 @@ public final class AppSession {
     }
 
     /// A supervised tier keeps its device credential in the Keychain, keyed
-    /// by its fixed daemon URL. `ephemeral` keeps it in memory: a run may
-    /// reuse a fixed port with a fresh credential database, so a Keychain
-    /// credential from an earlier run would skip that run's pairing and send
-    /// a stale token (plan: `ephemeral` pairs afresh on each run).
+    /// by its fixed daemon URL. `ephemeral` never uses the Keychain: a run
+    /// may reuse a fixed port with a fresh credential database, so a
+    /// Keychain credential from an earlier run would skip that run's pairing
+    /// and send a stale token (plan: `ephemeral` pairs afresh on each root).
+    /// A launch that followed a readiness directory keeps the credential for
+    /// that run's deployment in the directory, so it lives exactly as long as
+    /// the daemon's root; any other deployment, and an ephemeral launch that
+    /// followed no directory, keeps it in memory.
     static func credentialStore(
         for environment: FreesideEnvironment,
-        keychainStore: @escaping (URL) -> any DeviceCredentialStore
+        keychainStore: @escaping (URL) -> any DeviceCredentialStore,
+        readinessRun: ReadinessRun? = nil
     ) -> (URL) -> any DeviceCredentialStore {
         if environment.isSupervised {
             return keychainStore
         }
-        return { _ in InMemoryCredentialStore() }
+        guard let readinessRun else { return { _ in InMemoryCredentialStore() } }
+        let runKey = deploymentKey(for: readinessRun.deploymentURL)
+        return { url in
+            guard deploymentKey(for: url) == runKey else { return InMemoryCredentialStore() }
+            return ReadinessDirectoryCredentialStore(directory: readinessRun.directory, deploymentURL: url)
+        }
     }
 
     /// A remote client (iOS) with no same-host daemon: explicit inputs, then
@@ -687,7 +704,8 @@ public final class AppSession {
     }
 
     /// A real daemon: the credential lives in the Keychain and nowhere
-    /// else (or only in memory for `ephemeral`), and the disk cache lives
+    /// else (for `ephemeral`, in its readiness directory or in memory), and
+    /// the disk cache lives
     /// in the app container (plan §5.14). Both are scoped to the daemon
     /// deployment: a device credential is minted by one daemon, so the
     /// credential store keys on the server URL and a token can never be
