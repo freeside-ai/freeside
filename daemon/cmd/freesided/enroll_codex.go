@@ -45,7 +45,8 @@ func runEnrollCodexCommandWithRefresher(
 	flags := flag.NewFlagSet("freesided enroll-codex", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
-	projectID := flags.String("project", "", "project id for the recovery attention item (required)")
+	projectID := flags.String("project", "", "project id for the re-enrollment attention item: "+
+		"the deputy settings' repository.project (required)")
 	authIdentityID := flags.String("auth-identity", "", "Codex auth identity id (required)")
 	inputRoot := flags.String("input-root", "", "private root containing the operator login (required)")
 	inputFile := flags.String("input-file", "", "operator-generated auth.json under input-root (required)")
@@ -53,7 +54,8 @@ func runEnrollCodexCommandWithRefresher(
 	authStorePath := flags.String("auth-store", "", "live auth.json path under auth-store-root (required; immutable after initial enrollment)")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
-		"approved verification-recipe digest (repeatable)")
+		"approved verification-recipe digest (repeatable); a fresh store with no "+
+			"recipe-gated evidence needs none")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

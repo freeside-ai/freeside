@@ -104,12 +104,18 @@ func (o CodexReenrollmentTerminal) Validate() error {
 // CodexReenrollmentJournal is one immutable operation header plus at most one
 // terminal outcome. Absence of Terminal is the durable pending state.
 type CodexReenrollmentJournal struct {
-	AuthIdentityID domain.AuthIdentityID      `json:"auth_identity_id"`
-	LeaseFence     int64                      `json:"lease_fence"`
-	MarkerItemID   domain.ItemID              `json:"marker_item_id"`
-	Holder         domain.InvocationID        `json:"holder"`
-	OpenedAt       time.Time                  `json:"opened_at"`
-	Terminal       *CodexReenrollmentTerminal `json:"terminal"`
+	AuthIdentityID domain.AuthIdentityID `json:"auth_identity_id"`
+	LeaseFence     int64                 `json:"lease_fence"`
+	MarkerItemID   domain.ItemID         `json:"marker_item_id"`
+	Holder         domain.InvocationID   `json:"holder"`
+	OpenedAt       time.Time             `json:"opened_at"`
+	// Initial marks an identity's first enrollment: its marker is the
+	// identity's first occurrence, opened by enrollment rather than by a
+	// revocation, so a verified outcome resolves it without the paired
+	// client's step. It lives only in the body; a row written before it
+	// existed omits it and reads as not initial.
+	Initial  bool                       `json:"initial,omitempty"`
+	Terminal *CodexReenrollmentTerminal `json:"terminal"`
 }
 
 func (j CodexReenrollmentJournal) Validate() error {
@@ -118,6 +124,11 @@ func (j CodexReenrollmentJournal) Validate() error {
 	}
 	if j.LeaseFence < 1 {
 		return fmt.Errorf("codex re-enrollment lease fence %d is not positive", j.LeaseFence)
+	}
+	if j.Initial {
+		if err := requireFirstCodexReenrollmentMarker(j.AuthIdentityID, j.MarkerItemID); err != nil {
+			return err
+		}
 	}
 	if j.OpenedAt.IsZero() || j.OpenedAt.Location() != time.UTC {
 		return errors.New("codex re-enrollment opened_at must be nonzero UTC")
@@ -148,6 +159,22 @@ func (j CodexReenrollmentJournal) RecoveryBinding() (domain.CodexReenrollmentRec
 		AuthStoreDigest:      *j.Terminal.AuthStoreDigest,
 		AccessTokenExpiresAt: *j.Terminal.AccessTokenExpiresAt,
 	}, nil
+}
+
+// requireFirstCodexReenrollmentMarker refuses an initial enrollment on any
+// marker but the identity's first occurrence. A revocation after a verified
+// first enrollment opens a later occurrence, so this bounds what an initial
+// journal can ever resolve.
+func requireFirstCodexReenrollmentMarker(id domain.AuthIdentityID, marker domain.ItemID) error {
+	first, err := CodexReenrollmentMarkerID(id, 1)
+	if err != nil {
+		return err
+	}
+	if marker != first {
+		return fmt.Errorf("initial codex enrollment must bind the identity's first marker: %w",
+			domain.ErrCodexReenrollmentMarkerMismatch)
+	}
+	return nil
 }
 
 var (
@@ -299,21 +326,23 @@ WHERE auth_identity_id = ? AND lease_fence = ? AND outcome IS NULL`
 )
 
 // BeginCodexReenrollmentJournal acquires the exact mutation lease and opens
-// the durable pending operation in this same SQLite transaction.
+// the durable pending, non-initial operation in this same SQLite transaction.
 func (tx *InternalTx) BeginCodexReenrollmentJournal(
 	ctx context.Context, id domain.AuthIdentityID, markerItemID domain.ItemID, holder domain.InvocationID,
 	now, expiresAt time.Time,
 ) (CodexReenrollmentJournal, domain.AuthStoreMutationLease, error) {
-	return tx.BeginCodexReenrollmentJournalBound(ctx, id, markerItemID, holder, nil, now, expiresAt)
+	return tx.BeginCodexReenrollmentJournalBound(ctx, id, markerItemID, holder, nil, false, now, expiresAt)
 }
 
 // BeginCodexReenrollmentJournalBound is BeginCodexReenrollmentJournal with a
 // lease generation binding: the fence it takes names the enrollment store the
 // operation mutates, so the verified result can append that enrollment's next
-// generation. A nil binding takes the unbound interim lease.
+// generation. A nil binding takes the unbound interim lease. initial records
+// the identity's first enrollment; the caller decides it, and Validate
+// refuses it unless the marker is the identity's first occurrence.
 func (tx *InternalTx) BeginCodexReenrollmentJournalBound(
 	ctx context.Context, id domain.AuthIdentityID, markerItemID domain.ItemID, holder domain.InvocationID,
-	binding *domain.LeaseGenerationBinding, now, expiresAt time.Time,
+	binding *domain.LeaseGenerationBinding, initial bool, now, expiresAt time.Time,
 ) (CodexReenrollmentJournal, domain.AuthStoreMutationLease, error) {
 	items, err := tx.ListAttentionItems(ctx)
 	if err != nil {
@@ -345,6 +374,11 @@ func (tx *InternalTx) BeginCodexReenrollmentJournalBound(
 		return CodexReenrollmentJournal{}, domain.AuthStoreMutationLease{},
 			domain.ErrCodexReenrollmentMarkerMismatch
 	}
+	if initial {
+		if err := requireFirstCodexReenrollmentMarker(id, markerItemID); err != nil {
+			return CodexReenrollmentJournal{}, domain.AuthStoreMutationLease{}, err
+		}
+	}
 	lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, id, holder, binding, now, expiresAt)
 	if err != nil {
 		return CodexReenrollmentJournal{}, domain.AuthStoreMutationLease{}, err
@@ -355,7 +389,7 @@ func (tx *InternalTx) BeginCodexReenrollmentJournalBound(
 	}
 	rec := CodexReenrollmentJournal{
 		AuthIdentityID: id, LeaseFence: lease.Fence, MarkerItemID: markerItemID,
-		Holder: holder, OpenedAt: now.UTC(),
+		Holder: holder, OpenedAt: now.UTC(), Initial: initial,
 	}
 	body, err := encode(rec)
 	if err != nil {

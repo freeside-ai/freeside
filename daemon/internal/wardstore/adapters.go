@@ -633,6 +633,23 @@ type codexAuthReenrollmentOccurrences struct {
 	open             []domain.AttentionItem
 }
 
+// finishedInitialCodexEnrollment reports whether the identity's latest marker
+// is the one an initial journal's projection already resolved by the daemon,
+// carrying that journal's binding, with no marker open since. A rerun of
+// that enrollment then recovers the finished result instead of beginning a
+// new operation, which would open a hold and spend the already spent login.
+func finishedInitialCodexEnrollment(
+	journal store.CodexReenrollmentJournal, binding domain.CodexReenrollmentRecoveryBinding,
+	occurrences codexAuthReenrollmentOccurrences,
+) bool {
+	item := occurrences.latest
+	return journal.Initial && len(occurrences.open) == 0 && item.ID == journal.MarkerItemID &&
+		item.Status == domain.StatusResolved && item.Conclusion != nil &&
+		item.Conclusion.Cause == domain.ConcludedByDaemon &&
+		item.CodexReenrollmentRecoveryBinding != nil && *item.CodexReenrollmentRecoveryBinding == binding &&
+		item.Offers(domain.ActionResolveReenrollment)
+}
+
 func scanCodexAuthReenrollmentOccurrences(
 	items []store.Snapshotted[domain.AttentionItem], id domain.AuthIdentityID,
 ) (codexAuthReenrollmentOccurrences, error) {
@@ -659,6 +676,12 @@ func scanCodexAuthReenrollmentOccurrences(
 
 // NeedsCodexAuthReenrollment authenticates the newest occurrence for id. The
 // item is advisory globally; this identity-specific predicate is the refusal.
+// A resolved latest marker clears the identity only when it carries the
+// latest verified journal's exact binding and either that journal is the
+// identity's initial enrollment, which the daemon resolved at projection, or
+// a command-backed recovery transition names the marker and binding. The
+// journal's own validation confines an initial one to the first occurrence,
+// so any revocation after it reopens the gate.
 func (a *AuthState) NeedsCodexAuthReenrollment(
 	ctx context.Context, id domain.AuthIdentityID,
 ) (bool, error) {
@@ -704,6 +727,11 @@ func (a *AuthState) NeedsCodexAuthReenrollment(
 		if latestJournal.MarkerItemID != latestItem.ID ||
 			*latestItem.CodexReenrollmentRecoveryBinding != binding {
 			needs = true
+			return nil
+		}
+		if latestJournal.Initial && latestItem.Conclusion != nil &&
+			latestItem.Conclusion.Cause == domain.ConcludedByDaemon {
+			needs = false
 			return nil
 		}
 		transition, found, err := tx.LatestCodexReenrollmentRecoveryTransition(ctx, id)
@@ -799,13 +827,16 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 }
 
 // ProjectVerifiedCodexReenrollment attaches the latest verified operation to
-// the exact open revoked-identity marker and exposes its resolving action. The
-// synchronized item update and journal re-read share one SQLite transaction.
+// the exact open marker and exposes its resolving action. The synchronized
+// item update and journal re-read share one SQLite transaction. For an
+// initial enrollment the same transaction then resolves the marker by the
+// daemon, because the identity had no hold before enrolling; initial reports
+// which case ran. A revoked identity's marker stays open for the paired
+// client's resolve_reenrollment.
 func (a *AuthState) ProjectVerifiedCodexReenrollment(
 	ctx context.Context, id domain.AuthIdentityID,
-) (domain.AttentionItem, error) {
-	var projected domain.AttentionItem
-	err := a.store.Write(ctx, func(tx *store.WriteTx) error {
+) (projected domain.AttentionItem, initial bool, err error) {
+	err = a.store.Write(ctx, func(tx *store.WriteTx) error {
 		latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, id)
 		if err != nil {
 			return err
@@ -824,6 +855,10 @@ func (a *AuthState) ProjectVerifiedCodexReenrollment(
 		occurrences, err := scanCodexAuthReenrollmentOccurrences(items, id)
 		if err != nil {
 			return err
+		}
+		if finishedInitialCodexEnrollment(latest, binding, occurrences) {
+			projected, initial = occurrences.latest, true
+			return nil
 		}
 		if len(occurrences.open) != 1 {
 			return fmt.Errorf("project codex re-enrollment binding: found %d open markers", len(occurrences.open))
@@ -848,10 +883,23 @@ func (a *AuthState) ProjectVerifiedCodexReenrollment(
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return err
 		}
-		projected = item
+		// The binding attaches only to an open marker, so a first enrollment
+		// closes it in a second write of this transaction.
+		if latest.Initial {
+			item, err = item.ConcludeByDaemon(domain.ConcludedByDaemon, a.now().UTC(),
+				"The identity's first Codex enrollment verified, so it needs no re-enrollment.", nil)
+			if err != nil {
+				return err
+			}
+			item.ItemVersion++
+			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return err
+			}
+		}
+		projected, initial = item, latest.Initial
 		return nil
 	})
-	return projected, err
+	return projected, initial, err
 }
 
 // Begin creates an initial identity and marker when needed, or authenticates
@@ -913,6 +961,11 @@ func (a *Enrollment) Begin(
 		}
 		var marker domain.AttentionItem
 		var replaced *domain.AttentionItem
+		// initial holds only for the identity's first marker opened by an
+		// enrollment: one this Begin creates when no occurrence exists, or
+		// that same marker reused by a retry after the first enrollment
+		// failed. A marker a revocation opened is never initial.
+		initial := false
 		if len(occurrences.open) == 1 {
 			marker = occurrences.open[0]
 			if marker.ID != occurrences.latest.ID {
@@ -927,9 +980,16 @@ func (a *Enrollment) Begin(
 				stale := marker
 				replaced = &stale
 				marker = domain.AttentionItem{}
+			} else {
+				latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, identity.ID)
+				if err != nil {
+					return err
+				}
+				initial = found && latest.Initial && latest.MarkerItemID == marker.ID
 			}
 		}
 		if marker.ID == "" {
+			initial = occurrences.latestOccurrence == 0
 			next, err := store.NextCodexReenrollmentMarkerOccurrence(occurrences.latestOccurrence)
 			if err != nil {
 				return err
@@ -963,7 +1023,7 @@ func (a *Enrollment) Begin(
 			}
 		}
 		_, lease, err = tx.BeginCodexReenrollmentJournalBound(
-			ctx, identity.ID, marker.ID, holder, binding, now, expiresAt,
+			ctx, identity.ID, marker.ID, holder, binding, initial, now, expiresAt,
 		)
 		return err
 	})
@@ -1048,7 +1108,8 @@ func (a *Enrollment) Verify(
 }
 
 // RecoverableVerified returns the latest verified coordinates only while
-// their exact marker is still the sole open occurrence for this identity.
+// their exact marker is still the sole open occurrence for this identity, or
+// is the latest occurrence a finished first enrollment resolved.
 // The caller must independently re-verify the live auth-store bytes before
 // projecting the resolving action.
 func (a *Enrollment) RecoverableVerified(
@@ -1089,7 +1150,8 @@ func (a *Enrollment) RecoverableVerified(
 			return err
 		}
 		if len(occurrences.open) == 1 && occurrences.open[0].ID == latest.MarkerItemID &&
-			occurrences.open[0].ID == occurrences.latest.ID {
+			occurrences.open[0].ID == occurrences.latest.ID ||
+			finishedInitialCodexEnrollment(latest, binding, occurrences) {
 			found = true
 		}
 		return nil
@@ -1098,10 +1160,11 @@ func (a *Enrollment) RecoverableVerified(
 }
 
 // ProjectVerified exposes resolve_reenrollment only after the journal's
-// verified terminal has committed.
+// verified terminal has committed, and resolves an initial enrollment's
+// marker in the same write.
 func (a *Enrollment) ProjectVerified(
 	ctx context.Context, id domain.AuthIdentityID,
-) (domain.AttentionItem, error) {
+) (domain.AttentionItem, bool, error) {
 	return a.authState.ProjectVerifiedCodexReenrollment(ctx, id)
 }
 
