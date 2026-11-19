@@ -22,11 +22,12 @@
 # fixture-table value and the machine file, nothing else), the tree commit on
 # its own branch and a later one against a checkout whose policy files
 # differ, the stop at the onboarding approval and the resume after it, the
-# installation-intent stop, the rerun on a new build or a new enrollment,
-# the serve wait, the re-onboarding after a moved base or review
-# configuration, the re-pin of a newer approval's image, the submit line,
-# port selection, the seeded-routing overlay, the scenario pass, and the
-# refusals that create nothing.
+# installation-intent stop, the reviewer-enrollment stop before the first
+# start and the resume once the store exists, the rerun on a new build or a
+# new enrollment, the serve wait, the re-onboarding after a moved base or
+# review configuration, the re-pin of a newer approval's image, the submit
+# line, port selection, the seeded-routing overlay, the scenario pass, and
+# the refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -379,10 +380,16 @@ CLONE=$TMP/fixture-clone
 mkdir -p "$CLONE"
 REPO_SLUG=freeasinbird/freeside-review-challenge
 
+# The reviewer's enrolled store, which every case but the enrollment stop
+# finds in place.
+REVIEW_INPUT=$TMP/review-input
+mkdir -p "$REVIEW_INPUT"
+printf '{}\n' >"$REVIEW_INPUT/auth.json"
+
 # make_machine <file> <roots_dir> [jq filter]: the example machine file with
 # the paths a case needs, then the case's own edit.
 make_machine() {
-  jq --arg roots "$2" --arg tree "$TREE" --arg clone "$CLONE" --arg r "$REPO_SLUG" \
+  jq --arg roots "$2" --arg tree "$TREE" --arg clone "$CLONE" --arg r "$REPO_SLUG" --arg review "$REVIEW_INPUT" \
     --arg image "registry.test/placeholder@sha256:$(printf 'e%.0s' $(seq 1 64))" \
     --arg recipe "sha256:$(printf 'f%.0s' $(seq 1 64))" '
     .exit_root.roots_dir = $roots | .exit_root.listen_host = "100.64.0.9" | .exit_root.port_base = 9100
@@ -390,6 +397,7 @@ make_machine() {
     | .exit_root.repositories[$r].checkout = $clone
     | .exit_root.second_writer.auth_identity = "claude-second"
     | .settings.agent_tree.checkout = $tree | .settings.agent_tree.auth_identity = "claude-first"
+    | .settings.review.input_root = $review | .settings.review.auth_snapshot = ($review + "/auth.json")
     | '"${3:-.}" "$REPO/scripts/exit-root/machine.example.json" >"$1"
 }
 
@@ -609,6 +617,35 @@ assert_not_contains 'starting the deputy'
 case $(sed -n 's/^approval=//p' "$CASE_DIR/stdout") in
 *" -resume -approve $APPROVAL_DIGEST "*) ok ;;
 *) report_failure "the approve command lacks -resume" ;;
+esac
+
+begin_case "a missing reviewer store stops before the first start with the enrollment commands, then resumes"
+M=$CASE_DIR/machine.json
+UNENROLLED=$CASE_DIR/review-input
+make_machine "$M" "$CASE_DIR/roots" '.settings.review.input_root = "'"$UNENROLLED"'"
+  | .settings.review.auth_snapshot = "'"$UNENROLLED/auth.json"'"'
+run_exit_root --pass fixture --build "$SHA1" --machine "$M" unenrolled
+assert_rc 3
+UNROOT=$CASE_DIR/roots/unenrolled
+assert_line "$CASE_DIR/stdout" "root=$UNROOT"
+approval=$(sed -n 's/^approval=codex_enrollment: //p' "$CASE_DIR/stdout")
+case $approval in
+*"CODEX_HOME=$UNROOT/codex-login codex login"*"enroll-codex -db $UNROOT/daemon/freeside.db -project fixture "*"-input-file $UNROOT/codex-login/auth.json -auth-store-root $UNENROLLED -auth-store $UNENROLLED/auth.json "*) ok ;;
+*) report_failure "approval is not the enrollment commands: $(cat "$CASE_DIR/stdout")" ;;
+esac
+assert_not_contains 'approved-recipe'
+assert_contains 'never put a raw codex login at'
+if grep -qx deputy "$CASE_DIR/calls.log" 2>/dev/null; then report_failure "the stop started the deputy"; else ok; fi
+assert_not_exists "$UNENROLLED/auth.json"
+mkdir -p "$UNENROLLED"
+printf '{}\n' >"$UNENROLLED/auth.json"
+run_exit_root --pass fixture --build "$SHA1" --machine "$M" unenrolled
+assert_rc 3
+if grep -qx deputy "$CASE_DIR/calls.log"; then ok; else report_failure "the rerun with the store did not start the deputy"; fi
+assert_not_contains 'codex_enrollment'
+case $(sed -n 's/^approval=//p' "$CASE_DIR/stdout") in
+*" onboard $REPO_SLUG "*"-approve $APPROVAL_DIGEST "*) ok ;;
+*) report_failure "the rerun did not go on to the onboarding approval: $(cat "$CASE_DIR/stdout")" ;;
 esac
 
 begin_case "a deputy that does not exit 0 fails with the rig-recover hint"

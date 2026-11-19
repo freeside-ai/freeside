@@ -45,7 +45,10 @@
 #      root's enrollments (from `freesided auth list`) differ from the last
 #      start that composed (a new root, a new build's prompt packages, a
 #      changed machine file, a new image, an enrollment from enroll-codex),
-#      start the deputy once and stop it; on a tree mismatch, commit
+#      start the deputy once and stop it. Before that start, a Codex
+#      reviewer whose review.auth_snapshot doesn't exist stops the run with
+#      approval=codex_enrollment: the login and enroll-codex commands that
+#      create it; a rerun once it exists goes on. On a tree mismatch, commit
 #      its patch on branch exit-root/<pass> of the agent-tree checkout, never
 #      touching the checkout's current branch or working tree, and start
 #      again. Prelaunch can't see such a change, since it compares the tree
@@ -603,6 +606,31 @@ onboard_review() {
   esac
 }
 
+# require_review_store: a Codex reviewer's store exists before the first
+# start, or this stops with the enrollment commands; exit 3. Only
+# enroll-codex creates that store, from a login in a separate CODEX_HOME,
+# because a raw login placed at review.auth_snapshot would be spent by the
+# first refresh and leave the reviewer unenrolled.
+require_review_store() {
+  local snapshot input_root login command
+  [[ "$(setting '.agent_tree.review_harness // "codex_cli"')" == codex_cli ]] || return 0
+  snapshot=$(setting .review.auth_snapshot)
+  [[ ! -e "$snapshot" ]] || return 0
+  input_root=$(setting .review.input_root)
+  login="$root/codex-login"
+  command="$(printf '%q ' install -d -m 700 "$login" "$input_root")&& CODEX_HOME=$(printf '%q' "$login") codex login"
+  command+=" && $(printf '%q ' chmod 600 "$login/auth.json")&& $(printf '%q ' "$freesided" enroll-codex \
+    -db "$root/daemon/freeside.db" -project "$(setting .repository.project)" \
+    -auth-identity "$(setting .agent_tree.review_auth_identity)" -input-root "$login" \
+    -input-file "$login/auth.json" -auth-store-root "$input_root" -auth-store "$snapshot")"
+  command+="&& $(printf '%q ' rm -rf "$login")"
+  emit_head
+  say "the reviewer's store $snapshot does not exist; enroll the reviewer, then rerun this command"
+  say "never put a raw codex login at $snapshot (docs/production-walkthrough.md, Enroll The Reviewer Before The First Start)"
+  printf 'approval=codex_enrollment: %s\n' "${command% }"
+  exit 3
+}
+
 approved_complete() {
   local approved="$root/daemon/onboard-approved.json"
   [[ -s "$approved" && "$(jq -r '.status // empty' "$approved" 2>/dev/null)" == complete ]]
@@ -697,6 +725,7 @@ for _ in 1 2 3 4 5 6 7 8; do
   render_settings
   key=$(start_key)
   if [[ -z "$key" || "$key" != "$(state_get .composed_inputs)" ]]; then
+    require_review_store
     setup_start
     if [[ "$start_result" == tree_mismatch ]]; then
       [[ "$committed" == false ]] || die "the deputy still reports a tree mismatch after the commit; see $logs/deputy-setup.err"
