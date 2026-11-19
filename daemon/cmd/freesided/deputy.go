@@ -529,6 +529,17 @@ func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, err
 	}
 	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
 		reviewSnapshot, err := filepath.EvalSymlinks(settings.Review.AuthSnapshot)
+		if errors.Is(err, fs.ErrNotExist) {
+			// Only enrollment creates the store: a raw login placed there would
+			// be spent by the first refresh and leave the reviewer unenrolled.
+			return nil, fmt.Errorf("review.auth_snapshot %s does not exist: enroll the reviewer before "+
+				"the first start with freesided enroll-codex -db <root>/daemon/freeside.db -project %s "+
+				"-auth-identity %s -input-root <separate login root> -input-file <login auth.json> "+
+				"-auth-store-root %s -auth-store %s (docs/production-walkthrough.md, Enroll The Reviewer "+
+				"Before The First Start); never put a raw codex login at that path",
+				settings.Review.AuthSnapshot, settings.Repository.Project,
+				settings.AgentTree.ReviewAuthIdentity, settings.Review.InputRoot, settings.Review.AuthSnapshot)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("review.auth_snapshot: %w", err)
 		}
