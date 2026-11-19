@@ -54,6 +54,13 @@ One issue per issue-backed work unit, created from the work-unit template:
   skill's `tracker-refresh.sh` run against that tracker must leave no unit
   held for a field it cannot parse. Both only read the forge.
 
+  To file several units that cite each other, use
+  `scripts/file-unit-batch.py` (usage in its header). It creates the
+  issues, writes their numbers into the bodies, reads each body back, and
+  runs the `trackercollect unit` reader on each new issue;
+  `tracker-refresh.sh` remains the second reader once a tracker lists
+  them.
+
 Labels: `kind:*` for type, and `tracker` for an issue that tracks other
 issues. Milestones carry the phase (1A, 1B). Each wave has a tracking issue
 listing its units, maintained by the planner (AGENTS.md, Work Units).

@@ -232,7 +232,12 @@ milestones exist is the half-scheduled state the sweep detects.
 
 - **One issue per unit.** Where the work list names an existing issue,
   stage or rescope it in place. New issues come from the work-unit template
-  with the fields docs/coordination.md (Work-Unit Issues) lists.
+  with the fields docs/coordination.md (Work-Unit Issues) lists. File the
+  new issues together with `scripts/file-unit-batch.py`, which writes each
+  sibling's number into the bodies that cite it. Its `filed.json` in the
+  input directory records what an interrupted run created (Preconditions,
+  No prior attempt); within one session, rerunning the same command
+  finishes the batch without duplicates.
 - **Check for live work first.** Before editing an existing issue, read
   its claims, its planning reservation, its open PRs, and the open
   trackers that list it (docs/coordination.md, Claiming).
