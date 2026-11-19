@@ -163,10 +163,9 @@ struct TaskStopView: View {
 
 /// The task's one menu, `Task Actions ▾` (◆B, 4 Nov handoff): Change Agent
 /// while the task is active (#2651), the page's own items, then Stop Task…
-/// under a divider. The page holds it in the pinned row on the Mac, as an
-/// outlined button, or the iPhone's navigation bar, so Stop stays in reach
-/// while the page scrolls; the Stop states it leads to speak in
-/// `TaskStopView`, in the body.
+/// under a divider. The page holds it in the document row under the head
+/// on the Mac, as an outlined button, or the iPhone's navigation bar; the
+/// Stop states it leads to speak in `TaskStopView`, in the body.
 struct TaskActionsMenu: View {
     /// A page's own item, drawn above Stop.
     struct Action {
@@ -188,7 +187,7 @@ struct TaskActionsMenu: View {
     let lineChange: Binding<TaskLineChangeRequest?>
     /// False draws the label alone, for a renderer that can't draw a menu.
     var rendersInteractiveControls = true
-    /// Draws the label as the pinned row's outlined button (#3377); false
+    /// Draws the label as the document row's outlined button (#3377); false
     /// keeps the dim label the iPhone navigation bar draws.
     var outlined = false
 
@@ -269,7 +268,7 @@ struct TaskActionsMenu: View {
         }
     }
 
-    /// Outlined, in ink at the action label step, as the pinned row's
+    /// Outlined, in ink at the action label step, as the document row's
     /// documents are framed; otherwise dim at keyword weight, as the
     /// canvas draws `.tmenu`, for the iPhone navigation bar.
     @ViewBuilder private var label: some View {

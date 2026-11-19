@@ -5288,8 +5288,10 @@
 
         /// The task page in each state the 30 Oct canvas draws, at Mac and
         /// phone width and in both appearances: a card leading alone
-        /// (bands 3, 4), with others under it (band 3), working and finished
-        /// (band 5), and with the header scrolled away under the pinned row (band 3).
+        /// (bands 3, 4), with others under it (band 3), and working and
+        /// finished (band 5). `task-page-pinned` retired with the pinned row
+        /// (#3454): `task-page-several` draws the same page with the row in
+        /// its place under the head.
         private func taskPageSurfaces(at dynamicTypeSize: DynamicTypeSize) throws -> [Surface] {
             let lines = [
                 TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
@@ -5304,7 +5306,7 @@
             open.items = [question]
             var several = open
             several.items = [question, approval, adjudication]
-            // A typed task, so the pinned row leads with Prompt (#2612).
+            // A typed task, so the document row leads with Prompt (#2612).
             var working = TaskStageFixtures.page(.implementation)
             working.task.source = .init(
                 value1: .work_item_artifact(
@@ -5341,14 +5343,13 @@
             // Decision group after the task's (#2607). `task-page-look-alike`
             // is the open page beside its twin, so the header draws the
             // look-alike marker over the card.
-            for (name, page, leading, pinned, identifiersOpen, others) in [
-                ("task-page-open", open, Optional(question), false, false, []),
-                ("task-page-open-identifiers", open, Optional(question), false, true, []),
-                ("task-page-look-alike", lookAlike, Optional(question), false, false, [twin]),
-                ("task-page-several", several, Optional(question), false, false, []),
-                ("task-page-working", working, nil, false, false, []),
-                ("task-page-finished", finished, nil, false, false, []),
-                ("task-page-pinned", several, Optional(question), true, false, []),
+            for (name, page, leading, identifiersOpen, others) in [
+                ("task-page-open", open, Optional(question), false, []),
+                ("task-page-open-identifiers", open, Optional(question), true, []),
+                ("task-page-look-alike", lookAlike, Optional(question), false, [twin]),
+                ("task-page-several", several, Optional(question), false, []),
+                ("task-page-working", working, nil, false, []),
+                ("task-page-finished", finished, nil, false, []),
             ] {
                 let (coordinator, task) = try TaskStageFixtures.coordinator(
                     page, conversations: AttentionFixtures.defaultConversations(), otherTasks: others)
@@ -5377,8 +5378,7 @@
                                         decisionIdentifiers: leading.map {
                                             DecisionDetailView.identifierRows(
                                                 $0.item, proposalFacts: nil, effectProposalFacts: nil)
-                                        } ?? [],
-                                        pinned: pinned))))
+                                        } ?? []))))
                     }
                 }
             }
@@ -5426,7 +5426,7 @@
             return surfaces
         }
 
-        /// The specification reader the task page's pinned row opens:
+        /// The specification reader the task page's document row opens:
         /// the approved bytes, and the unavailable state that names the
         /// digest when the daemon has none.
         private func taskSpecificationReaderSurfaces() -> [Surface] {
@@ -5463,7 +5463,7 @@
             return surfaces
         }
 
-        /// The prompt reader a typed task's pinned row opens (#2612):
+        /// The prompt reader a typed task's document row opens (#2612):
         /// the submitted text in the plain card, and the unavailable state
         /// that names the digest when the daemon has none.
         private func taskPromptReaderSurfaces() -> [Surface] {

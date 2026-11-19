@@ -430,7 +430,7 @@ import Testing
             }
 
             /// Scrolls the way a reader does until a row of the Timeline's
-            /// rail is under the pinned row, then `further` into the rail.
+            /// rail is at the view's top, then `further` into the rail.
             func scrollIntoTheRail(further: CGFloat = 40) async throws {
                 var steps = 0
                 while probe.reading.map({ !$0.key.contains("|") }) ?? true, steps < 600 {

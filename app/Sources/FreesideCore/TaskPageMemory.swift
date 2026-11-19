@@ -14,8 +14,8 @@ import SwiftUI
 final class TaskPageMemory {
     /// The task the entry belongs to.
     private(set) var taskID: String?
-    /// The section or run the reader had under the pinned row. Nil
-    /// while the header is in view.
+    /// The section or run the reader had at the view's top. Nil while
+    /// the header is in view.
     var anchor: TaskPageAnchor?
     /// How many cards the operator has opened. The mounted page moves to
     /// the card each one opens, even one that already leads, which the
