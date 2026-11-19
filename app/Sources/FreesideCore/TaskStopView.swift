@@ -163,9 +163,10 @@ struct TaskStopView: View {
 
 /// The task's one menu, `Task Actions ▾` (◆B, 4 Nov handoff): Change Agent
 /// while the task is active (#2651), the page's own items, then Stop Task…
-/// under a divider. The page pins it in the outline
-/// row, or the iPhone's navigation bar, so Stop stays in reach while the page
-/// scrolls; the Stop states it leads to speak in `TaskStopView`, in the body.
+/// under a divider. The page holds it in the pinned row on the Mac, as an
+/// outlined button, or the iPhone's navigation bar, so Stop stays in reach
+/// while the page scrolls; the Stop states it leads to speak in
+/// `TaskStopView`, in the body.
 struct TaskActionsMenu: View {
     /// A page's own item, drawn above Stop.
     struct Action {
@@ -187,6 +188,9 @@ struct TaskActionsMenu: View {
     let lineChange: Binding<TaskLineChangeRequest?>
     /// False draws the label alone, for a renderer that can't draw a menu.
     var rendersInteractiveControls = true
+    /// Draws the label as the pinned row's outlined button (#3377); false
+    /// keeps the dim label the iPhone navigation bar draws.
+    var outlined = false
 
     private var model: TaskStopModel { coordinator.taskStop }
     private var snapshot: Components.Schemas.TaskSnapshot? {
@@ -248,7 +252,7 @@ struct TaskActionsMenu: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .freesideFocusRing(cornerRadius: 4)
+                .freesideFocusRing(cornerRadius: outlined ? PinnedRowButtonFrame.cornerRadius : 4)
                 .disabled(isDisabled)
                 // The window's selection default would make the label a
                 // selectable text view, and that view then answers for the
@@ -265,14 +269,24 @@ struct TaskActionsMenu: View {
         }
     }
 
-    /// Dim at keyword weight, as the canvas's outline draws it (`.tmenu`).
-    private var label: some View {
-        Text("Task Actions \u{25BE}")
-            .font(FreesideFont.noticeAction)
-            .foregroundStyle(isDisabled ? Color.inkFaint : Color.inkDim)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
+    /// Outlined, in ink at the action label step, as the pinned row's
+    /// documents are framed; otherwise dim at keyword weight, as the
+    /// canvas draws `.tmenu`, for the iPhone navigation bar.
+    @ViewBuilder private var label: some View {
+        let title = Text("Task Actions \u{25BE}")
+        if outlined {
+            title
+                .font(FreesideFont.actionLabel)
+                .foregroundStyle(isDisabled ? Color.inkFaint : Color.ink)
+                .modifier(PinnedRowButtonFrame(isDisabled: isDisabled))
+        } else {
+            title
+                .font(FreesideFont.noticeAction)
+                .foregroundStyle(isDisabled ? Color.inkFaint : Color.inkDim)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+        }
     }
 
     private var hint: String {

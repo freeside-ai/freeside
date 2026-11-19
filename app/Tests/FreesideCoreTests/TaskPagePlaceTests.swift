@@ -17,7 +17,7 @@ import Testing
         // Every target sits below the row while the row sits under the header.
         #expect(
             TaskPageAnchor.reading(offsets: [
-                .section(.decisions): 16, .section(.task): 240, .section(.timeline): 900,
+                .section(.decisions): 16, .section(.conversation): 240, .section(.timeline): 900,
             ]) == nil)
         #expect(TaskPageAnchor.reading(offsets: [:]) == nil)
     }
@@ -25,11 +25,11 @@ import Testing
     @Test func theAnchorIsTheLastSectionScrolledUnderTheRow() {
         #expect(
             TaskPageAnchor.reading(offsets: [
-                .section(.task): -420, .section(.conversation): -30, .section(.timeline): 380,
+                .section(.decisions): -420, .section(.conversation): -30, .section(.timeline): 380,
             ]) == .section(.conversation))
         // A jump lands its target on the row's top, give or take rounding.
         #expect(
-            TaskPageAnchor.reading(offsets: [.section(.task): -300, .section(.timeline): 0.5])
+            TaskPageAnchor.reading(offsets: [.section(.decisions): -300, .section(.timeline): 0.5])
                 == .section(.timeline))
     }
 
@@ -46,27 +46,24 @@ import Testing
     // MARK: Restore rule
 
     /// The Mac detail column replaces the page with a run, so Back to Task
-    /// mounts a fresh page, which returns to the place and chip the memory
-    /// holds, with a card leading or not.
+    /// mounts a fresh page, which returns to the place the memory holds,
+    /// with a card leading or not.
     @Test func aPageMountingAgainForTheSameTaskReturnsToItsPlace() {
         let memory = TaskPageMemory()
         memory.reset(forRoutedTaskID: taskID)
         #expect(memory.restore(taskID: taskID, leadsWithCard: false) == nil)
         memory.anchor = .run("run-1")
-        memory.chosenSection = .runs
 
         // The route moves to the run and back: the task stays the same.
         memory.reset(forRoutedTaskID: taskID)
         #expect(memory.restore(taskID: taskID, leadsWithCard: true) == .run("run-1"))
         #expect(memory.restore(taskID: taskID, leadsWithCard: false) == .run("run-1"))
-        #expect(memory.chosenSection == .runs)
     }
 
     @Test func theMemoryResetsWhenTheRoutesTaskChanges() {
         let memory = TaskPageMemory()
         memory.reset(forRoutedTaskID: taskID)
         memory.anchor = .run("run-1")
-        memory.chosenSection = .runs
 
         memory.reset(forRoutedTaskID: taskID)
         #expect(memory.anchor == .run("run-1"))
@@ -74,15 +71,14 @@ import Testing
         memory.reset(forRoutedTaskID: "another-task")
         #expect(memory.taskID == "another-task")
         #expect(memory.anchor == nil)
-        #expect(memory.chosenSection == nil)
 
         // A route with no task page drops the entry, so coming back to the
         // task restores nothing.
-        memory.anchor = .section(.task)
+        memory.anchor = .section(.timeline)
         memory.reset(forRoutedTaskID: nil)
         #expect(memory.restore(taskID: "another-task", leadsWithCard: false) == nil)
         // A page mounting for another task claims the entry the same way.
-        memory.anchor = .section(.task)
+        memory.anchor = .section(.timeline)
         #expect(memory.restore(taskID: taskID, leadsWithCard: false) == nil)
         #expect(memory.taskID == taskID)
     }
@@ -91,10 +87,8 @@ import Testing
         let memory = TaskPageMemory()
         _ = memory.restore(taskID: taskID, leadsWithCard: true)
         memory.anchor = .section(.decisions)
-        memory.chosenSection = .decisions
         #expect(memory.restore(taskID: taskID, leadsWithCard: false) == nil)
         #expect(memory.anchor == nil)
-        #expect(memory.chosenSection == nil)
 
         // A card leading keeps it, whichever card it is.
         memory.anchor = .section(.decisions)
@@ -107,10 +101,8 @@ import Testing
         let memory = TaskPageMemory()
         memory.reset(forRoutedTaskID: taskID)
         memory.anchor = .section(.timeline)
-        memory.chosenSection = .timeline
         memory.openCard()
         #expect(memory.anchor == nil)
-        #expect(memory.chosenSection == nil)
         #expect(memory.cardOpenings == 1)
         memory.openCard()
         #expect(memory.cardOpenings == 2)
@@ -438,7 +430,7 @@ import Testing
             }
 
             /// Scrolls the way a reader does until a row of the Timeline's
-            /// rail is under the outline row, then `further` into the rail.
+            /// rail is under the pinned row, then `further` into the rail.
             func scrollIntoTheRail(further: CGFloat = 40) async throws {
                 var steps = 0
                 while probe.reading.map({ !$0.key.contains("|") }) ?? true, steps < 600 {
@@ -503,8 +495,7 @@ import Testing
             }
 
             /// The page's own scroll view: the tallest document in the
-            /// window. The outline row's chips scroll sideways in one of
-            /// their own.
+            /// window.
             static func pageScroll(in view: NSView) -> NSScrollView? {
                 func all(_ view: NSView) -> [NSScrollView] {
                     ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(all)
@@ -537,15 +528,13 @@ import Testing
             let scroll = try page.scrollView
             let document = try #require(scroll.documentView)
 
-            // At the top: the item's row draws, nothing scrolls, and the chip
-            // stays Task.
+            // At the top: the item's row draws and nothing scrolls.
             try await page.refresh { $0.items.append(Page.question) }
             try await page.settle(until: { page.probe.oneLineItemIDs == [Page.question.item.id] })
             #expect(page.navigation.path == [.task(page.task.task.id)])
             #expect(page.lead == nil)
             #expect(page.probe.oneLineItemIDs == [Page.question.item.id])
             #expect(page.offset == 0)
-            #expect(page.probe.selectedSection == .task)
             try await page.refresh { $0.close(Page.question.item.id) }
             try await page.settle(until: { page.probe.oneLineItemIDs.isEmpty })
             #expect(page.probe.oneLineItemIDs.isEmpty)
@@ -556,7 +545,6 @@ import Testing
             let reading = try #require(page.probe.reading)
             let readingOffset = page.offset
             let baseline = page.geometry
-            let chip = page.probe.selectedSection
             page.samples = []
             try await page.refresh { $0.items.append(Page.question) }
             try await page.settle(until: {
@@ -577,7 +565,6 @@ import Testing
                 """
             #expect(page.lead == nil)
             #expect(page.probe.oneLineItemIDs == [Page.question.item.id])
-            #expect(page.probe.selectedSection == chip)
             try expectHeld(page, reading, scroll: scroll, document: document, "after an item opens", detail: report)
             #expect(page.offset > readingOffset, Comment(rawValue: report))
             #expect(page.samples.allSatisfy { $0 >= readingOffset - 0.5 }, "no trip to the top\n\(report)")
@@ -867,19 +854,7 @@ import Testing
             try await page.settle(until: { page.memory.anchor == .section(.decisions) })
             #expect(page.lead == Page.question.item.id)
             #expect(page.memory.anchor == .section(.decisions))
-            #expect(page.probe.selectedSection == .decisions)
             #expect(page.samples.allSatisfy { $0 <= readingOffset + 0.5 }, "no hold past the card")
-
-            // From the Decisions chip, with no card seated.
-            page.navigation.route(to: .task(page.task.task.id))
-            try await page.settle(0.3)
-            #expect(page.lead == nil)
-            try await page.scrollIntoTheRail()
-            let select = try #require(page.probe.select)
-            select(.decisions)
-            try await page.settle(until: { page.memory.anchor == .section(.decisions) })
-            #expect(page.lead == Page.question.item.id)
-            #expect(page.memory.anchor == .section(.decisions))
 
             // From a route change to the item, which counts no opening.
             page.navigation.route(to: .task(page.task.task.id))

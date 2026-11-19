@@ -6,7 +6,7 @@ import SwiftUI
 /// reader's place itself, holding what they see still as content changes
 /// above it (`TaskPageView`); a route change is what replaces it. In the Mac detail column a run opened from the page
 /// takes its place, so Back to Task mounts a fresh page, which returns here
-/// to the reader's section and chip. The memory also counts the cards the
+/// to the reader's section. The memory also counts the cards the
 /// operator opens, which the mounted page moves to. It holds one entry, for
 /// the task the route holds, and none for a task the route has left.
 @MainActor
@@ -14,11 +14,9 @@ import SwiftUI
 final class TaskPageMemory {
     /// The task the entry belongs to.
     private(set) var taskID: String?
-    /// The section or run the reader had under the pinned outline row. Nil
+    /// The section or run the reader had under the pinned row. Nil
     /// while the header is in view.
     var anchor: TaskPageAnchor?
-    /// The outline chip last chosen.
-    var chosenSection: TaskPageSection?
     /// How many cards the operator has opened. The mounted page moves to
     /// the card each one opens, even one that already leads, which the
     /// route doesn't change.
@@ -29,14 +27,12 @@ final class TaskPageMemory {
         guard taskID != self.taskID else { return }
         self.taskID = taskID
         anchor = nil
-        chosenSection = nil
     }
 
     /// Drops the reader's place, for a card the operator chose: a page
     /// mounting for it then opens at its top, where that card leads.
     func forgetPlace() {
         anchor = nil
-        chosenSection = nil
     }
 
     /// Records that the operator opened a card, and drops the place for it.

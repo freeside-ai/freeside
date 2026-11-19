@@ -7,9 +7,9 @@ import Testing
 @testable import FreesideCore
 @testable import FreesideModel
 
-/// The task page's head (#2609): the documents line under the status, the
-/// outline row's chips, and the specification and prompt readers the line
-/// opens (#2612).
+/// The task page's head (#2609), the documents and Task Actions in the
+/// pinned row (#3377), and the specification and prompt readers the
+/// documents open (#2612).
 @Suite @MainActor struct TaskPageHeadTests {
     private let approvedDigest = "sha256:" + String(repeating: "c", count: 64)
     private let promptDigest = "sha256:" + String(repeating: "e", count: 64)
@@ -45,7 +45,7 @@ import Testing
         return item
     }
 
-    // MARK: Documents line
+    // MARK: Documents
 
     @Test func anIssueTaskWithANamedPullRequestLinksAllThree() throws {
         var page = TaskStageFixtures.page(.review)
@@ -219,9 +219,9 @@ import Testing
         )
     }
 
-    // MARK: Outline and Task Actions
+    // MARK: Pinned Row and Task Actions
 
-    /// Task Actions sits in the outline row at regular width and in the
+    /// Task Actions sits in the pinned row at regular width and in the
     /// navigation bar on a phone, so the phone's row holds no menu. Its own
     /// item draws while the Identifiers footer does: once the history
     /// loads, or while the leading decision names identifiers.
@@ -237,24 +237,6 @@ import Testing
         let history = TaskStageFixtures.page(.review).history
         #expect(
             TaskPageView.taskActions(history, task: .init(taskID: "task-1")).map(\.title) == ["Copy all identifiers"])
-    }
-
-    /// Acceptance 3 (#3041): the Conversation chip sits where its thread
-    /// is, in page order: before the Timeline for the card's thread, after
-    /// Runs for Earlier Conversations, and nowhere with neither.
-    @Test func theConversationChipFollowsTheThread() {
-        #expect(
-            TaskPageSection.outline(decisions: 2, conversation: .inCard(messages: 3)) == [
-                .decisions, .task, .conversation, .timeline, .runs,
-            ])
-        #expect(OutlineConversation.inCard(messages: 3).messages == 3)
-        #expect(
-            TaskPageSection.outline(decisions: 0, conversation: .earlier(messages: 5)) == [
-                .task, .timeline, .runs, .conversation,
-            ])
-        #expect(OutlineConversation.earlier(messages: 5).messages == 5)
-        #expect(TaskPageSection.outline(decisions: 0, conversation: nil) == [.task, .timeline, .runs])
-        #expect(TaskPageSection.outline(decisions: 1, conversation: nil) == [.decisions, .task, .timeline, .runs])
     }
 
     // MARK: Readers

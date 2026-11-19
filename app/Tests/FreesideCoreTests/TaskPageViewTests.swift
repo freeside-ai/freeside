@@ -1462,21 +1462,6 @@ import Testing
         #expect(summary(.expired, messages: 2).hasPrefix("Expired · 2 messages · "))
     }
 
-    /// Acceptance 5 (#3041): the Conversation chip goes to one place: the
-    /// card's thread when it has one, Earlier Conversations otherwise, and
-    /// nowhere with neither. The page jumps where this names.
-    @Test func theConversationChipHasOneDestination() {
-        let earlier = [
-            TaskTimelinePresentation.EarlierConversation(
-                item: item("a", "conv-a", hoursOld: 1), conversation: thread("conv-a", messages: 2)),
-            TaskTimelinePresentation.EarlierConversation(
-                item: item("b", "conv-b", hoursOld: 2), conversation: thread("conv-b", messages: 3)),
-        ]
-        #expect(TaskPageView.conversationChip(cardThreadMessages: 4, earlier: earlier) == .inCard(messages: 4))
-        #expect(TaskPageView.conversationChip(cardThreadMessages: 0, earlier: earlier) == .earlier(messages: 5))
-        #expect(TaskPageView.conversationChip(cardThreadMessages: 0, earlier: []) == nil)
-    }
-
     @Test func aRecordedDecisionLinksToItsItemOnlyWhenTheClientHoldsIt() throws {
         let script = TaskStageFixtures.script(.remediation)
         let decidedRow = { (rows: [TimelineRail.Row]) in rows.first { $0.label.contains("findings decided") } }
