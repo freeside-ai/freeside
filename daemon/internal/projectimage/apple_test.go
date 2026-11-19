@@ -1,6 +1,7 @@
 package projectimage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -250,6 +251,35 @@ func TestAppleRunBoundsAWorkspacelessProofAtTheVerificationRoomSize(t *testing.T
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("container argv = %q, want %q", args, want)
+	}
+}
+
+// The builder hands each step's log writer to the backend; the backend must
+// give it to the runner, or the step's full output and failing tests are lost.
+func TestAppleBuildAndRunForwardTheStepOutputWriter(t *testing.T) {
+	t.Parallel()
+	build := &recordingRunner{}
+	spec := testBuildSpec()
+	spec.BuildProxy = "http://192.168.64.1:53536"
+	spec.Output = &bytes.Buffer{}
+	if err := (appleBackend{containerPath: "container", runner: build}).Build(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(build.specs) != 1 || build.specs[0].Output != spec.Output {
+		t.Fatalf("build runner specs = %+v, want the step's writer", build.specs)
+	}
+
+	run := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
+		return commandOutput{exited: true}, nil
+	}}
+	output := &bytes.Buffer{}
+	if _, err := (appleBackend{containerPath: "container", runner: run}).Run(t.Context(), runSpec{
+		ImageRef: "example.test/image@sha256:" + strings.Repeat("a", 64), Argv: []string{"true"}, Output: output,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if run.specs[0].Args[0] != "run" || run.specs[0].Output != output {
+		t.Fatalf("run runner spec = %+v, want the step's writer", run.specs[0])
 	}
 }
 

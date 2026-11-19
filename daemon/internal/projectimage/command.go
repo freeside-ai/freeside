@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
@@ -16,6 +17,11 @@ type commandSpec struct {
 	Args []string
 	Dir  string
 	Env  []string
+	// Output, when set, also receives the command's whole stdout and stderr
+	// as they arrive. Its Write must never return an error: io.MultiWriter
+	// stops at the first one, and a failed write fails the command, which
+	// would turn a proof's verdict into a runtime fault.
+	Output io.Writer
 }
 
 type commandRunner interface {
@@ -38,8 +44,14 @@ func (execRunner) Run(ctx context.Context, spec commandSpec) (commandOutput, err
 		cmd.Env = append([]string{}, spec.Env...)
 	}
 	output := tailBuffer{max: maxCommandOutputBytes}
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	// One value for both streams, so os/exec copies them with one goroutine
+	// and the writers see the two interleaved as the child wrote them.
+	var stream io.Writer = &output
+	if spec.Output != nil {
+		stream = io.MultiWriter(&output, spec.Output)
+	}
+	cmd.Stdout = stream
+	cmd.Stderr = stream
 	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
 	result := commandOutput{bytes: output.bytes(), truncated: output.truncated}
 	if cmd.ProcessState != nil {

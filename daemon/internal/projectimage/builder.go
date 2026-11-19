@@ -188,6 +188,8 @@ type buildSpec struct {
 	RecipeDigest domain.Digest
 	DNS          []string
 	BuildProxy   string
+	// Output receives the build's whole output; see commandSpec.Output.
+	Output io.Writer
 }
 
 type provenanceSpec struct {
@@ -233,6 +235,8 @@ type runSpec struct {
 	// MaskedCache is the image path an empty tmpfs covers for this run, so
 	// the run cannot read the baked dependency cache; empty masks nothing.
 	MaskedCache string
+	// Output receives the run's whole output; see commandSpec.Output.
+	Output io.Writer
 }
 
 type runResult struct {

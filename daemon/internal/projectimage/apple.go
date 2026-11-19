@@ -203,7 +203,7 @@ func (a appleBackend) Build(ctx context.Context, spec buildSpec) (err error) {
 			}
 		}()
 	}
-	output, err := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args})
+	output, err := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args, Output: spec.Output})
 	if err == nil {
 		return nil
 	}
@@ -475,7 +475,7 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 	}
 	args = append(args, "--", spec.ImageRef)
 	args = append(args, spec.Argv...)
-	output, runErr := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args})
+	output, runErr := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args, Output: spec.Output})
 	containerID, identityErr := readContainerID(cidPath)
 	var recoverErr error
 	if identityErr == nil {
