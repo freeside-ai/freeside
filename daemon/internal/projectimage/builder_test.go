@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -106,7 +107,9 @@ type fakeBackend struct {
 	runFault      func(runSpec) bool
 	preflightExit int
 	buildErr      error
-	allowlistErr  error
+	// buildDelay is how long the fake build takes.
+	buildDelay   time.Duration
+	allowlistErr error
 	// publishedAllowlistErr answers the allowlist check of the published
 	// reference only.
 	publishedAllowlistErr error
@@ -158,6 +161,10 @@ func (f *fakeBackend) RemoveImage(_ context.Context, ref string) error {
 
 func (f *fakeBackend) Build(_ context.Context, spec buildSpec) error {
 	f.builds = append(f.builds, spec)
+	time.Sleep(f.buildDelay)
+	if spec.Output != nil {
+		_, _ = spec.Output.Write([]byte("STEP 1/9: FROM base\n"))
+	}
 	body, err := os.ReadFile(filepath.Join(spec.ContextDir, "Containerfile"))
 	if err != nil {
 		return err

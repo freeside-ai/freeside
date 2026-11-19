@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -146,6 +147,15 @@ type Options struct {
 	// sets it; an operator's build leaves the builder to `container build`,
 	// so it never stops a builder a daemon build is using.
 	ManageBuilder bool
+	// LogDir, when set, turns on full logs: each build writes every command
+	// step's whole output and a timing record to its own directory under
+	// LogDir/<image-name>, and names the files in its log and errors. Empty
+	// keeps no files. Nothing prunes the directory.
+	LogDir string
+	// Heartbeat, when positive, writes a line to Log at this interval while
+	// a step runs, with the step's elapsed time and its time in the last
+	// recorded build. Zero writes none.
+	Heartbeat time.Duration
 }
 
 // Builder owns source materialization and image-runtime orchestration. The
@@ -159,6 +169,8 @@ type Builder struct {
 	lookupRecordedRef func(context.Context, string) (bool, error)
 	tempDir           string
 	log               io.Writer
+	logDir            string
+	heartbeat         time.Duration
 }
 
 type source interface {
@@ -286,6 +298,8 @@ func New(opts Options) (*Builder, error) {
 		lookupRecordedRef: opts.LookupRecordedRef,
 		tempDir:           opts.TempDir,
 		log:               opts.Log,
+		logDir:            opts.LogDir,
+		heartbeat:         opts.Heartbeat,
 	}, nil
 }
 
@@ -307,18 +321,27 @@ func (b *Builder) Build(
 	if err != nil {
 		return domain.ProjectImage{}, err
 	}
+	progress, err := startProgress(b.log, b.logDir, b.heartbeat, normalized.ImageName)
+	if err != nil {
+		return domain.ProjectImage{}, err
+	}
+	defer progress.finish()
 	scratch, err := os.MkdirTemp(b.tempDir, "freeside-project-image-*")
 	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("create project-image scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // private scratch, best-effort after all handles close
 
+	sourceStep := progress.begin("source materialization", normalized.Repository+" at "+normalized.CommitSHA)
 	repositoryDir, err := b.materializeRepository(ctx, normalized, scratch)
 	if err != nil {
+		sourceStep.end(err)
 		return domain.ProjectImage{}, err
 	}
 	sourceDir := filepath.Join(scratch, "source")
-	if err := b.source.Copy(ctx, repositoryDir, normalized.CommitSHA, sourceDir); err != nil {
+	err = b.source.Copy(ctx, repositoryDir, normalized.CommitSHA, sourceDir)
+	sourceStep.end(err)
+	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("materialize source tree: %w", err)
 	}
 	contextDir := filepath.Join(scratch, "context")
@@ -365,16 +388,20 @@ func (b *Builder) Build(
 	}()
 
 	localRef := normalized.ImageName + ":" + filepath.Base(scratch) + "-" + strconv.Itoa(os.Getpid())
-	b.logf("building %s from %s at %s", localRef, normalized.Repository, normalized.CommitSHA)
-	if err := b.backend.Build(ctx, buildSpec{
+	buildStep := progress.beginCommand("container build", fmt.Sprintf(
+		"%s from %s at %s", localRef, normalized.Repository, normalized.CommitSHA))
+	err = b.backend.Build(ctx, buildSpec{
 		ContextDir: contextDir, LocalRef: localRef,
 		BaseRef: privateBaseRef, BaseDigest: baseDigest,
 		Repository: normalized.Repository, RepositoryID: normalized.RepositoryID,
 		CommitSHA: normalized.CommitSHA, RecipeDigest: recipeDigest,
 		DNS:        append([]string{}, normalized.DNS...),
 		BuildProxy: normalized.BuildProxy,
-	}); err != nil {
-		return domain.ProjectImage{}, fmt.Errorf("build project image: %w", err)
+		Output:     buildStep.writer(),
+	})
+	buildStep.end(err)
+	if err != nil {
+		return domain.ProjectImage{}, fmt.Errorf("build project image%s: %w", buildStep.noteSuffix(), err)
 	}
 	defer func() {
 		if removeErr := b.backend.RemoveImage(context.WithoutCancel(ctx), localRef); removeErr != nil {
@@ -382,12 +409,16 @@ func (b *Builder) Build(
 			err = errors.Join(err, fmt.Errorf("remove local project image: %w", removeErr))
 		}
 	}()
+	provenanceStep := progress.begin("provenance", "")
 	localDigest, err := b.backend.ImageDigest(ctx, localRef)
 	if err != nil {
+		provenanceStep.end(err)
 		return domain.ProjectImage{}, fmt.Errorf("inspect built image: %w", err)
 	}
 	if !validDigest(localDigest) {
-		return domain.ProjectImage{}, fmt.Errorf("built image reported digest %q: %w", localDigest, ErrProofFailed)
+		err = fmt.Errorf("built image reported digest %q: %w", localDigest, ErrProofFailed)
+		provenanceStep.end(err)
+		return domain.ProjectImage{}, err
 	}
 	provenance := expectedProvenance(provenanceSpec{
 		ImageDigest:  localDigest,
@@ -396,14 +427,19 @@ func (b *Builder) Build(
 		RepositoryID: normalized.RepositoryID, CommitSHA: normalized.CommitSHA,
 		RecipeDigest: recipeDigest, Layout: layout,
 	}, environment)
-	if err := b.backend.CheckProvenance(ctx, localRef, provenance); err != nil {
+	err = b.backend.CheckProvenance(ctx, localRef, provenance)
+	provenanceStep.end(err)
+	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image provenance: %w", proofFailure(err))
 	}
 	if err := b.backend.RemoveImage(context.WithoutCancel(ctx), privateBaseRef); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("release private base reference: %w", err)
 	}
 	basePinned = false
-	if err := b.backend.CheckAllowlist(ctx, localRef); err != nil {
+	allowlistStep := progress.begin("allowlist", "")
+	err = b.backend.CheckAllowlist(ctx, localRef)
+	allowlistStep.end(err)
+	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image allowlist: %w", proofFailure(err))
 	}
 	// The image runs only the recipe's project_image commands; a command
@@ -411,18 +447,20 @@ func (b *Builder) Build(
 	// command that asks for history is left out too: the proof has no
 	// candidate, so no base and head to give it.
 	if err := b.proveOffline(
-		ctx, repositoryDir, normalized.CommitSHA, localRef,
+		ctx, progress, repositoryDir, normalized.CommitSHA, localRef,
 		recipe.ProofCommands(), scratch, layout,
 	); err != nil {
 		return domain.ProjectImage{}, err
 	}
 
+	publishStep := progress.begin("publish", "")
 	published, err := b.backend.Publish(ctx, publishSpec{
 		LocalRef: localRef, Digest: localDigest, ImageName: normalized.ImageName,
 		RefTag: normalized.RefTag, Registry: normalized.Registry,
 		LocalRegistryPort: normalized.LocalRegistryPort,
 		RefRecorded:       b.lookupRecordedRef,
 	})
+	publishStep.end(err)
 	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("publish project image: %w", err)
 	}
@@ -466,7 +504,10 @@ func (b *Builder) Build(
 			"published reference %q does not match the approved destination and built digest %s: %w",
 			ref, localDigest, ErrProofFailed)
 	}
-	if err := b.backend.CheckAllowlist(ctx, string(ref)); err != nil {
+	publishedAllowlistStep := progress.begin("published allowlist", "")
+	err = b.backend.CheckAllowlist(ctx, string(ref))
+	publishedAllowlistStep.end(err)
+	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("published image allowlist: %w", proofFailure(err))
 	}
 
@@ -630,6 +671,7 @@ func maskedProbes(layout domain.ProjectImageInputLayout) []maskedProbe {
 
 func (b *Builder) proveOffline(
 	ctx context.Context,
+	progress *buildProgress,
 	sourceDir, commit, imageRef string,
 	commands [][]string,
 	scratch string,
@@ -641,14 +683,18 @@ func (b *Builder) proveOffline(
 	// approved base's layers, which the candidate's dependencies only add files
 	// beside, and provenance has already bounded those layers. So a failure
 	// here, like a runtime error anywhere below, is not a failed proof.
-	preflight, err := b.backend.Run(ctx, runSpec{ImageRef: imageRef, Argv: []string{"true"}})
+	preflightStep := progress.beginCommand("offline preflight", "")
+	preflight, err := b.backend.Run(ctx, runSpec{ImageRef: imageRef, Argv: []string{"true"}, Output: preflightStep.writer()})
+	preflightStep.end(runOutcome(preflight, err))
 	if err != nil {
-		return fmt.Errorf("offline preflight: %w", err)
+		return fmt.Errorf("offline preflight%s: %w", preflightStep.noteSuffix(), err)
 	}
 	if preflight.ExitCode != 0 {
-		return fmt.Errorf("offline preflight exited %d", preflight.ExitCode)
+		return fmt.Errorf("offline preflight exited %d%s", preflight.ExitCode, preflightStep.noteSuffix())
 	}
-	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, "positive", ""); err != nil {
+	if err := b.proveRecipe(
+		ctx, progress, sourceDir, commit, imageRef, commands, scratch, "positive", "",
+	); err != nil {
 		return err
 	}
 
@@ -664,26 +710,30 @@ func (b *Builder) proveOffline(
 		if err := b.source.Copy(ctx, sourceDir, commit, negative); err != nil {
 			return fmt.Errorf("materialize negative workspace: %w", err)
 		}
+		probeStep := progress.beginCommand("cache-masked"+suffix+" probe", fmt.Sprintf("%q masking %s", probe.argv, probe.cache))
 		result, runErr := b.backend.Run(ctx, runSpec{
 			ImageRef: imageRef, Workspace: negative,
-			Argv: probe.argv, MaskedCache: probe.cache,
+			Argv: probe.argv, MaskedCache: probe.cache, Output: probeStep.writer(),
 		})
+		// A probe that reached for the network and failed is the expected
+		// answer, so the step's outcome records only whether it ran.
+		probeStep.end(runErr)
 		switch {
 		case runErr != nil:
-			return fmt.Errorf("cache-masked preparation could not execute: %w", runErr)
+			return fmt.Errorf("cache-masked preparation could not execute%s: %w", probeStep.noteSuffix(), runErr)
 		case result.ExitCode == 0:
 			// Hydration need not consume the cache, for example with no
 			// dependencies. Prove the complete recipe works without it rather
 			// than infer this from manifest shape or accept hydration alone as
 			// sufficient proof.
 			if err := b.proveRecipe(
-				ctx, sourceDir, commit, imageRef, commands, scratch, "cache-masked"+suffix, probe.cache,
+				ctx, progress, sourceDir, commit, imageRef, commands, scratch, "cache-masked"+suffix, probe.cache,
 			); err != nil {
 				return fmt.Errorf("cache-independent verification: %w", err)
 			}
 		case !probe.networkAttempt.Match(result.Output):
 			return fmt.Errorf("cache-masked preparation failed without a registry/network attempt (%s): %w",
-				boundedOutput(result.Output), ErrProofFailed)
+				probeStep.proofOutput(result.Output), ErrProofFailed)
 		}
 	}
 	return nil
@@ -691,6 +741,7 @@ func (b *Builder) proveOffline(
 
 func (b *Builder) proveRecipe(
 	ctx context.Context,
+	progress *buildProgress,
 	sourceDir, commit, imageRef string,
 	commands [][]string,
 	scratch string,
@@ -702,29 +753,31 @@ func (b *Builder) proveRecipe(
 		if err := b.source.Copy(ctx, sourceDir, commit, workspace); err != nil {
 			return fmt.Errorf("materialize positive workspace %d: %w", index, err)
 		}
-		var hydrationTests failingTests
+		hydrationStep := progress.beginCommand(fmt.Sprintf("%s hydration %d", prefix, index), "")
 		preparation, err := b.backend.Run(ctx, runSpec{
 			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath}, MaskedCache: maskedCache,
-			Output: &hydrationTests,
+			Output: hydrationStep.writer(),
 		})
+		hydrationStep.end(runOutcome(preparation, err))
 		if err != nil {
-			return fmt.Errorf("hydrate positive workspace %d: %w", index, err)
+			return fmt.Errorf("hydrate positive workspace %d%s: %w", index, hydrationStep.noteSuffix(), err)
 		}
 		if preparation.ExitCode != 0 {
 			return fmt.Errorf("hydrate positive workspace %d exited %d (%s): %w",
-				index, preparation.ExitCode, proofOutput(&hydrationTests, preparation.Output), ErrProofFailed)
+				index, preparation.ExitCode, hydrationStep.proofOutput(preparation.Output), ErrProofFailed)
 		}
-		var recipeTests failingTests
+		recipeStep := progress.beginCommand(fmt.Sprintf("%s recipe command %d", prefix, index), fmt.Sprintf("%q", argv))
 		result, err := b.backend.Run(ctx, runSpec{
 			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...), MaskedCache: maskedCache,
-			Output: &recipeTests,
+			Output: recipeStep.writer(),
 		})
+		recipeStep.end(runOutcome(result, err))
 		if err != nil {
-			return fmt.Errorf("recipe command %d %q: %w", index, argv[0], err)
+			return fmt.Errorf("recipe command %d %q%s: %w", index, argv[0], recipeStep.noteSuffix(), err)
 		}
 		if result.ExitCode != 0 {
 			return fmt.Errorf("recipe command %d %q exited %d (%s): %w",
-				index, argv[0], result.ExitCode, proofOutput(&recipeTests, result.Output), ErrProofFailed)
+				index, argv[0], result.ExitCode, recipeStep.proofOutput(result.Output), ErrProofFailed)
 		}
 	}
 	return nil
@@ -1132,16 +1185,13 @@ func validDigest(digest string) bool {
 	return contentaddr.Valid(digest)
 }
 
-// proofOutput describes a failed proof command's output: the failing Go
-// tests from its whole stream, when there are any, then its bounded tail.
-// The tail alone often starts past the failing test (#3442).
-func proofOutput(tests *failingTests, output []byte) string {
-	tail := boundedOutput(output)
-	summary := tests.summary()
-	if summary == "" {
-		return tail
+// runOutcome is a proof run's outcome for its step's timing: an error when
+// the runtime failed to run it or the command exited non-zero.
+func runOutcome(result runResult, err error) error {
+	if err == nil && result.ExitCode != 0 {
+		return fmt.Errorf("exited %d", result.ExitCode)
 	}
-	return "failing Go tests:\n" + summary + "\noutput tail:\n" + tail
+	return err
 }
 
 func boundedOutput(output []byte) string {
@@ -1150,10 +1200,4 @@ func boundedOutput(output []byte) string {
 		output = output[len(output)-limit:]
 	}
 	return strings.TrimSpace(string(output))
-}
-
-func (b *Builder) logf(format string, args ...any) {
-	if b.log != nil {
-		_, _ = fmt.Fprintf(b.log, "project-image: "+format+"\n", args...)
-	}
 }
