@@ -550,25 +550,133 @@ func TestVerifyExportViolations(t *testing.T) {
 func TestVerifyExportScannerRefusal(t *testing.T) {
 	t.Parallel()
 	const secret = "FREESIDE_FAKE_PROVIDER_CREDENTIAL_DO_NOT_EXPORT" //nolint:gosec // inert test marker, not a credential
-	cfg := testConfig()
-	cfg.Scanner = scannerFunc(func(context.Context, string) error {
-		return fmt.Errorf("leak: matched %s at result.txt", secret)
-	})
-	b, err := New(stubRuntime{}, cfg)
+	// Built at runtime: a workspace path that is itself a GitHub token.
+	tokenPath := "ghp_" + strings.Repeat("a", 36) + ".txt"
+	fixtureHex := func(t *testing.T) string {
+		_, hexDigest := fixtureManifest(t, fixtureBlob)
+		return hexDigest
+	}
+	tests := []struct {
+		name    string
+		archive func(t *testing.T) []tarEntry
+		refusal func(t *testing.T) error
+		// want is the whole reason; hidden must not appear in it.
+		want   string
+		hidden string
+	}{
+		{
+			name:    "untyped error stays withheld",
+			archive: fixtureArchive,
+			refusal: func(*testing.T) error { return fmt.Errorf("leak: matched %s at result.txt", secret) },
+			want:    "output scan refused the export (details withheld)",
+			hidden:  secret,
+		},
+		{
+			name:    "typed refusal names the rule and workspace path",
+			archive: fixtureArchive,
+			refusal: func(t *testing.T) error {
+				return &OutputScanRefusal{Rule: "pem_private_key", File: "blobs/sha256/" + fixtureHex(t)}
+			},
+			want: `output scan refused the export: workspace file "result.txt" matched credential rule pem_private_key`,
+		},
+		{
+			name:    "typed refusal names an evidence label",
+			archive: evidenceArchive,
+			refusal: func(t *testing.T) error {
+				_, _, hexDigest, _ := fixtureEvidence(t)
+				return fmt.Errorf("wrapped: %w", &OutputScanRefusal{Rule: "github_token", File: "evidence/sha256/" + hexDigest})
+			},
+			want: `output scan refused the export: evidence item "after-shot" matched credential rule github_token`,
+		},
+		{
+			name:    "typed refusal names a fixed member by role",
+			archive: fixtureArchive,
+			refusal: func(*testing.T) error {
+				return &OutputScanRefusal{Rule: "slack_token", File: export.ManifestFilename}
+			},
+			want: "output scan refused the export: the repo manifest matched credential rule slack_token",
+		},
+		{
+			name:    "unknown rule and non-layout file read as unnamed",
+			archive: fixtureArchive,
+			refusal: func(t *testing.T) error {
+				return &OutputScanRefusal{Rule: secret, File: "blobs/sha256/" + fixtureHex(t) + "/../" + secret}
+			},
+			want:   "output scan refused the export: an unnamed exported file matched an unnamed credential rule",
+			hidden: secret,
+		},
+		{
+			name: "credential-shaped path shows only its token",
+			archive: func(t *testing.T) []tarEntry {
+				return sharedBlobArchive(t, tokenPath, "z.txt")
+			},
+			refusal: func(t *testing.T) error {
+				return &OutputScanRefusal{Rule: "aws_access_key_id", File: "blobs/sha256/" + fixtureHex(t)}
+			},
+			want: "output scan refused the export: workspace file " + redactPath(tokenPath) +
+				" (and 1 more with the same content) matched credential rule aws_access_key_id",
+			hidden: tokenPath,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			refusal := tc.refusal(t)
+			cfg := testConfig()
+			cfg.Scanner = scannerFunc(func(context.Context, string) error { return refusal })
+			b, err := New(stubRuntime{}, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := runVerifyExport(t, b, tc.archive(t))
+			var cf *ConformanceFailure
+			if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+				t.Fatalf("verifyExport = %v, want export_verification failure", err)
+			}
+			if out != nil {
+				t.Error("scanner refusal still released output")
+			}
+			// Recovery's committed-loss rule stands on the evidence mark.
+			if !errors.Is(err, errContentEvidence) {
+				t.Errorf("scanner refusal lost its content-evidence mark: %v", err)
+			}
+			if cf.Reason != tc.want {
+				t.Errorf("reason = %q, want %q", cf.Reason, tc.want)
+			}
+			if tc.hidden != "" && strings.Contains(err.Error(), tc.hidden) {
+				t.Errorf("failure reason leaked %q: %v", tc.hidden, err)
+			}
+		})
+	}
+}
+
+// sharedBlobArchive is fixtureArchive with one manifest entry per path, all
+// carrying fixtureBlob's content, so they share one blob. paths must be in
+// bytewise order.
+func sharedBlobArchive(t *testing.T, paths ...string) []tarEntry {
+	t.Helper()
+	sum := sha256.Sum256(fixtureBlob)
+	hexDigest := hex.EncodeToString(sum[:])
+	mode := "0644"
+	size := int64(len(fixtureBlob))
+	digest := export.Digest("sha256:" + hexDigest)
+	m := export.Manifest{Version: export.ManifestVersion}
+	for _, p := range paths {
+		m.Entries = append(m.Entries, export.Entry{
+			Path: p, Kind: export.EntryRegular, Mode: &mode, Size: &size, Digest: &digest,
+		})
+	}
+	raw, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := runVerifyExport(t, b, fixtureArchive(t))
-	var cf *ConformanceFailure
-	if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
-		t.Fatalf("verifyExport = %v, want export_verification failure", err)
+	entries := fixtureArchive(t)
+	for i := range entries {
+		if entries[i].name == "handoff/manifest.json" {
+			entries[i].body = raw
+		}
 	}
-	if out != nil {
-		t.Error("scanner refusal still released output")
-	}
-	if strings.Contains(err.Error(), secret) {
-		t.Errorf("scanner error leaked the matched secret into the failure reason: %v", err)
-	}
+	return entries
 }
 
 // TestVerifyExportScannerSeesOutput proves the scanner runs against the

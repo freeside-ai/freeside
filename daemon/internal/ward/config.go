@@ -117,6 +117,27 @@ type OutputScanner interface {
 // retaining, as distinct from an operational failure to examine the content.
 var ErrOutputScanRefused = errors.New("output scan refused content")
 
+// OutputScanRefusal is the refusal a scanner returns to say what it matched
+// without the match: Rule is a credentialpattern rule ID (such as
+// pem_private_key) and File is the matched file's slash-separated path
+// relative to the scanned directory. It matches ErrOutputScanRefused.
+//
+// The export gate reads only these two fields, never Error(), and checks
+// both before a refusal reason names them: Rule must be a known rule ID and
+// File a member of the verified export's layout. A scanner's error text may
+// quote the secret it found, so no other error reaches a reason.
+type OutputScanRefusal struct {
+	Rule string
+	File string
+}
+
+func (r *OutputScanRefusal) Error() string {
+	return fmt.Sprintf("%v: credential rule %s matched exported %s", ErrOutputScanRefused, r.Rule, r.File)
+}
+
+// Unwrap keeps errors.Is(err, ErrOutputScanRefused) true for a typed refusal.
+func (r *OutputScanRefusal) Unwrap() error { return ErrOutputScanRefused }
+
 // ErrInvalidConfig is the class sentinel for a Config that cannot gate
 // anything; New wraps it with the specific violation.
 var ErrInvalidConfig = errors.New("invalid ward backend config")
