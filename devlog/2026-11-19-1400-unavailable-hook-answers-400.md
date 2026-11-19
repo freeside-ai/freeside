@@ -3,18 +3,28 @@
 Work unit: #2968 (kind:contract). Mandatory note: it changes a contract
 (`POST /commands` statuses), touches a Tier A path
 (`daemon/internal/signet/http.go`), and records an owner choice that
-otherwise lives only in review feedback (F275DA07).
+otherwise lives only in review feedback (F275DA07) and in the owner's PR
+review of #3431.
 
-## Decision: 400, Nothing Recorded
+## Decision: 400, No Command Effect
 
 The owner chose that a command whose operator hook the daemon cannot apply
-answers 400 and records nothing. The hook sentinels are
+answers 400, applies no command effect, and saves no command result. Like
+any authenticated request, it may still update the device's
+`last_seen_at`, which `authenticated` in `http.go` records, at most once
+per activity window, before the handler runs. The
+hook sentinels are
 `signet.ErrOperatorSettingUnavailable` and
 `signet.ErrUsageOperationUnavailable`. In production the first one is the
 case of a daemon with no committed agent tree. It answers
 `set_routing_policy`, `move_parked_task`, and a
 `retry_with_alternate_agent` decision. Before this change both sentinels
 fell through `writeCommandError` to an ambiguous 500.
+
+The 400 applies only when a command reaches the hook. Checks that run
+before it keep their own answers: a malformed command is still 400 with
+its own message, a stale routing-policy `expected_revision` still 409, a
+move naming a missing task still 404, and a stale decision still 409.
 
 Chose 400 over the two alternatives:
 
@@ -70,12 +80,20 @@ recorded 200 before any hook is consulted.
 
 ## Contract Shape
 
-The change is additive. It declares 403, 404, 413, and 500 on
+The change is additive. It declares 401, 403, 404, 413, and 500 on
 `POST /commands` and moves only these refusals from 500 to 400. That leaves
 `x-compatibility-level` and `x-compatibility-floor` as they were. The app's
 generated client now gives the new statuses typed cases, and each command
 model routes them through the arm the matching undocumented status took
 before, so no model's classification changed.
+
+`POST /commands` is the only route that declares 401. The approved spec
+said not to add it, because the security scheme covers it and no other
+route declares it. The owner's review of #3431 overrode that for this
+route: a decision retry that meets 401 leaves the original attempt's
+outcome unknown, and the app handles it apart from other 4xx answers, so
+a client written from the schema needs to see it. Other routes keep
+relying on the security scheme.
 
 Revisit when a client needs to tell this refusal apart from other 400s,
 for example to show "waiting for the agent tree" instead of a generic

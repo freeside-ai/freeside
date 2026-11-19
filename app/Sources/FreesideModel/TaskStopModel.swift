@@ -165,7 +165,7 @@ package final class TaskStopModel {
                         "Stop was rejected by the daemon (status 400). Review the refreshed task before confirming again."
                 )
                 await coordinator.refreshAfterCommit()
-            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
                 let status = output.statusCode
                 switch status {
                 case 404:

@@ -1269,7 +1269,7 @@ public final class DecisionModel {
                 submissionError = CommandRefusal.message(
                     refusal, otherwise: "the daemon rejected the command (status 400)")
                 await validate()
-            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
                 let statusCode = output.statusCode
                 if statusCode == 401 {
                     // The credential gate rejected this first request
@@ -1759,7 +1759,7 @@ public final class DecisionModel {
                 guard ownsSlot else { return .displaced }
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 return .rejected
-            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
                 let statusCode = output.statusCode
                 if statusCode == 401 {
                     // The resend died at the credential gate, which

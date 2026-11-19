@@ -210,7 +210,7 @@ public final class TaskSubmissionModel {
                 state = .rejected(
                     CommandRefusal.message(refusal, otherwise: "the daemon rejected the submission (status 400)"))
                 return nil
-            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
                 let statusCode = output.statusCode
                 if (400..<500).contains(statusCode), statusCode != 401, statusCode != 403 {
                     coordinator.finishTaskSubmission(command.command_id)

@@ -1849,7 +1849,9 @@ public struct Client: APIProtocol {
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
     /// records a receipt with recorded false and moves no entity. Every
-    /// refusal below records nothing. For refresh_usage and
+    /// refusal below applies no command effect and saves no command result;
+    /// like any authenticated request, it may still update the device's
+    /// last-seen time. For refresh_usage and
     /// reassign_collector, an unknown pool is 404, and so is a
     /// reassign_collector enrollment the daemon does not hold; an enrollment
     /// whose identity meters another pool is 400. For change_task_line and
@@ -1873,9 +1875,12 @@ public struct Client: APIProtocol {
     /// effort that enrollment does not serve, is 400, as is a
     /// retry_with_alternate_agent decision whose chosen enrollment no
     /// longer qualifies. A daemon with no committed agent tree answers 400
-    /// to set_routing_policy, move_parked_task, and a
-    /// retry_with_alternate_agent decision, and records nothing; the same
-    /// command can succeed once the daemon has a tree.
+    /// to a set_routing_policy, a move_parked_task, or a
+    /// retry_with_alternate_agent decision once the command reaches the
+    /// step that needs the tree. Checks that run before that step keep
+    /// their own answers, such as 409 for a stale expected_revision and 404
+    /// for an unknown task. The same command can succeed once the daemon
+    /// has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -1955,6 +1960,28 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .badRequest(.init(body: body))
+                case 401:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.submitCommand.Output.Unauthorized.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .unauthorized(.init(body: body))
                 case 403:
                     let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
                     let body: Operations.submitCommand.Output.Forbidden.Body

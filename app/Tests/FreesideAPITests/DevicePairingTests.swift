@@ -430,11 +430,10 @@ private func client(server: MockServer, token: String? = nil) -> Client {
         _ = try await paired.revokeDevice(path: .init(device_id: active.id)).ok
 
         let output = try await paired.submitCommand(body: .json(prepared))
-        guard case .undocumented(let status, _) = output else {
+        guard case .unauthorized = output else {
             Issue.record("expected 401, got \(output)")
             return
         }
-        #expect(status == 401)
         // No side effect: the item is untouched at its original state.
         #expect(await server.snapshot(itemID: before.item.id) == before)
     }
@@ -478,11 +477,10 @@ private func client(server: MockServer, token: String? = nil) -> Client {
             id: "cmd-after-revocation", against: before, action: .stop)
         fresh.device_id = active.id
         let rejected = try await paired.submitCommand(body: .json(fresh))
-        guard case .undocumented(let status, _) = rejected else {
+        guard case .unauthorized = rejected else {
             Issue.record("expected 401, got \(rejected)")
             return
         }
-        #expect(status == 401)
         #expect(await server.snapshot(itemID: before.item.id) == itemNow)
     }
 }

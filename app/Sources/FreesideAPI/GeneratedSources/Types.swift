@@ -306,7 +306,9 @@ public protocol APIProtocol: Sendable {
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
     /// records a receipt with recorded false and moves no entity. Every
-    /// refusal below records nothing. For refresh_usage and
+    /// refusal below applies no command effect and saves no command result;
+    /// like any authenticated request, it may still update the device's
+    /// last-seen time. For refresh_usage and
     /// reassign_collector, an unknown pool is 404, and so is a
     /// reassign_collector enrollment the daemon does not hold; an enrollment
     /// whose identity meters another pool is 400. For change_task_line and
@@ -330,9 +332,12 @@ public protocol APIProtocol: Sendable {
     /// effort that enrollment does not serve, is 400, as is a
     /// retry_with_alternate_agent decision whose chosen enrollment no
     /// longer qualifies. A daemon with no committed agent tree answers 400
-    /// to set_routing_policy, move_parked_task, and a
-    /// retry_with_alternate_agent decision, and records nothing; the same
-    /// command can succeed once the daemon has a tree.
+    /// to a set_routing_policy, a move_parked_task, or a
+    /// retry_with_alternate_agent decision once the command reaches the
+    /// step that needs the tree. Checks that run before that step keep
+    /// their own answers, such as 409 for a stale expected_revision and 404
+    /// for an unknown task. The same command can succeed once the daemon
+    /// has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -894,7 +899,9 @@ extension APIProtocol {
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
     /// records a receipt with recorded false and moves no entity. Every
-    /// refusal below records nothing. For refresh_usage and
+    /// refusal below applies no command effect and saves no command result;
+    /// like any authenticated request, it may still update the device's
+    /// last-seen time. For refresh_usage and
     /// reassign_collector, an unknown pool is 404, and so is a
     /// reassign_collector enrollment the daemon does not hold; an enrollment
     /// whose identity meters another pool is 400. For change_task_line and
@@ -918,9 +925,12 @@ extension APIProtocol {
     /// effort that enrollment does not serve, is 400, as is a
     /// retry_with_alternate_agent decision whose chosen enrollment no
     /// longer qualifies. A daemon with no committed agent tree answers 400
-    /// to set_routing_policy, move_parked_task, and a
-    /// retry_with_alternate_agent decision, and records nothing; the same
-    /// command can succeed once the daemon has a tree.
+    /// to a set_routing_policy, a move_parked_task, or a
+    /// retry_with_alternate_agent decision once the command reaches the
+    /// step that needs the tree. Checks that run before that step keep
+    /// their own answers, such as 409 for a stale expected_revision and 404
+    /// for an unknown task. The same command can succeed once the daemon
+    /// has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -11270,7 +11280,7 @@ public enum Components {
                 case message
             }
         }
-        /// A refused command: the daemon applied and recorded nothing. A refusal with reason `unknown_command_kind` meets every retry to the same daemon; any other refusal may clear when state changes, as when a snooze ends.
+        /// A refused command: the daemon applied no command effect and saved no command result. A refusal with reason `unknown_command_kind` meets every retry to the same daemon; any other refusal may clear when state changes, as when a snooze ends.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/CommandRequestRejection`.
@@ -21217,7 +21227,9 @@ public enum Operations {
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
     /// records a receipt with recorded false and moves no entity. Every
-    /// refusal below records nothing. For refresh_usage and
+    /// refusal below applies no command effect and saves no command result;
+    /// like any authenticated request, it may still update the device's
+    /// last-seen time. For refresh_usage and
     /// reassign_collector, an unknown pool is 404, and so is a
     /// reassign_collector enrollment the daemon does not hold; an enrollment
     /// whose identity meters another pool is 400. For change_task_line and
@@ -21241,9 +21253,12 @@ public enum Operations {
     /// effort that enrollment does not serve, is 400, as is a
     /// retry_with_alternate_agent decision whose chosen enrollment no
     /// longer qualifies. A daemon with no committed agent tree answers 400
-    /// to set_routing_policy, move_parked_task, and a
-    /// retry_with_alternate_agent decision, and records nothing; the same
-    /// command can succeed once the daemon has a tree.
+    /// to a set_routing_policy, a move_parked_task, or a
+    /// retry_with_alternate_agent decision once the command reaches the
+    /// step that needs the tree. Checks that run before that step keep
+    /// their own answers, such as 409 for a stale expected_revision and 404
+    /// for an unknown task. The same command can succeed once the daemon
+    /// has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -21363,7 +21378,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The daemon refused the request without applying or recording anything. `reason` names a refusal the client acts on; a 400 without one is one of the malformed or invalid commands this operation's description lists, or a command whose operator hook the daemon cannot apply yet, such as one that needs a committed agent tree, and carries `message` alone. A hook refusal can clear once the daemon's state changes.
+            /// The daemon refused the request: it applied no command effect and saved no command result. `reason` names a refusal the client acts on; a 400 without one is one of the malformed or invalid commands this operation's description lists, or a command that reached an operator hook the daemon cannot apply yet, such as one that needs a committed agent tree, and carries `message` alone. A hook refusal can clear once the daemon's state changes.
             ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/400`.
@@ -21382,6 +21397,58 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct Unauthorized: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/commands/POST/responses/401/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/commands/POST/responses/401/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.submitCommand.Output.Unauthorized.Body
+                /// Creates a new `Unauthorized`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.submitCommand.Output.Unauthorized.Body) {
+                    self.body = body
+                }
+            }
+            /// The bearer credential is missing, malformed, or no longer active, and the answer carries `WWW-Authenticate: Bearer`. The credential gate runs before the command is read, so this request applied no command effect and saved no command result. It says nothing about an earlier attempt with the same `command_id`: a retry that meets 401 leaves that attempt's outcome unknown.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Operations.submitCommand.Output.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Operations.submitCommand.Output.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
                             response: self
                         )
                     }
@@ -21415,7 +21482,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The command's `device_id` does not match the authenticated device, or the device is no longer active: the active-device gate runs again inside the accepting transaction. Nothing was applied or recorded.
+            /// The command's `device_id` does not match the authenticated device, or the device is no longer active: the active-device gate runs again inside the accepting transaction. The daemon applied no command effect and saved no command result.
             ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/403`.
@@ -21467,7 +21534,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// An entity the command names does not exist, such as the decided attention item or the task or pool an operator command names; this operation's description lists each operator command's cases. Nothing was applied or recorded.
+            /// An entity the command names does not exist, such as the decided attention item or the task or pool an operator command names; this operation's description lists each operator command's cases. The daemon applied no command effect and saved no command result.
             ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/404`.
@@ -21571,7 +21638,8 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The request body is too large. Nothing was applied or recorded.
+            /// The request body is too large. The daemon applied no command effect and saved no command result.
+            ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/413`.
             ///

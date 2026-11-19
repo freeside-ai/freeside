@@ -132,7 +132,7 @@ package final class ParkedTaskMoveModel {
                     refusal, otherwise: "The daemon refused the move (status 400). Nothing was changed.")
                 failure = entry.taskID.map { .init(taskID: $0, message: message) }
                 await coordinator.refreshAfterCommit()
-            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
                 let status = output.statusCode
                 switch status {
                 case 404:

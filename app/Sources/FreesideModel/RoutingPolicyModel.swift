@@ -408,7 +408,7 @@ package final class RoutingPolicyModel {
                     message: CommandRefusal.message(
                         refusal, otherwise: "The daemon rejected the change (status 400). Nothing was changed."))
                 await coordinator.refreshAfterCommit()
-            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+            case .unauthorized, .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
                 let status = output.statusCode
                 switch status {
                 case 404:

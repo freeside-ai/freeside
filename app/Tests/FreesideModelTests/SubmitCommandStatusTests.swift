@@ -5,7 +5,7 @@ import Testing
 
 @testable import FreesideModel
 
-/// #2968: `POST /commands` declares 403, 404, 413, and 500, which the
+/// #2968: `POST /commands` declares 401, 403, 404, 413, and 500, which the
 /// generated client used to surface as `.undocumented`. Each command model
 /// classifies a declared status exactly as it classified the undocumented
 /// one. These run on Linux and cover the models whose own suites forced
@@ -34,9 +34,9 @@ import Testing
         }
     }
 
-    /// A line change: 400 and 404 refuse it and drop it; 403 is the
-    /// device's credential and keeps it; 413 and 500 leave it unresolved.
-    @Test(arguments: [400, 403, 404, 413, 500])
+    /// A line change: 400 and 404 refuse it and drop it; 401 and 403 are
+    /// the device's credential and keep it; 413 and 500 leave it unresolved.
+    @Test(arguments: [400, 401, 403, 404, 413, 500])
     func aTaskLineChangeKeepsItsClassification(status: Int) async throws {
         let server = MockServer()
         let task = try #require(
@@ -55,12 +55,12 @@ import Testing
             let pending = try #require(coordinator.pendingTaskLineChange)
             #expect(pending.receipt == nil)
             #expect(model.failure == nil)
-            expectAuthentication(coordinator, unauthenticated: status == 403)
+            expectAuthentication(coordinator, unauthenticated: status == 401 || status == 403)
         }
     }
 
     /// A parked-task move: the same classification as a line change.
-    @Test(arguments: [400, 403, 404, 413, 500])
+    @Test(arguments: [400, 401, 403, 404, 413, 500])
     func aParkedTaskMoveKeepsItsClassification(status: Int) async throws {
         // The forced status answers before the daemon would check the park,
         // so any task stands in for a parked one.
@@ -85,12 +85,12 @@ import Testing
             let pending = try #require(coordinator.pendingParkedTaskMove)
             #expect(pending.receipt == nil)
             #expect(model.failure == nil)
-            expectAuthentication(coordinator, unauthenticated: status == 403)
+            expectAuthentication(coordinator, unauthenticated: status == 401 || status == 403)
         }
     }
 
     /// A usage refresh: the same classification as a line change.
-    @Test(arguments: [400, 403, 404, 413, 500])
+    @Test(arguments: [400, 401, 403, 404, 413, 500])
     func aUsageRefreshKeepsItsClassification(status: Int) async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)
@@ -107,13 +107,14 @@ import Testing
             let pending = try #require(coordinator.pendingUsageCommand)
             #expect(pending.receipt == nil)
             #expect(model.failure == nil)
-            expectAuthentication(coordinator, unauthenticated: status == 403)
+            expectAuthentication(coordinator, unauthenticated: status == 401 || status == 403)
         }
     }
 
-    /// A task submission: every 4xx but 401 and 403 rejects it; 403 is the
-    /// device's credential and 500 is ambiguous, so both keep it as lost.
-    @Test(arguments: [400, 403, 404, 413, 500])
+    /// A task submission: every 4xx but 401 and 403 rejects it; 401 and 403
+    /// are the device's credential and 500 is ambiguous, so all keep it as
+    /// lost.
+    @Test(arguments: [400, 401, 403, 404, 413, 500])
     func aTaskSubmissionKeepsItsClassification(status: Int) async throws {
         let server = MockServer()
         let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
@@ -124,10 +125,10 @@ import Testing
 
         #expect(taskID == nil)
         switch status {
-        case 403, 500:
+        case 401, 403, 500:
             #expect(model.state == .lost)
             #expect(model.pendingSubmissions.count == 1)
-            expectAuthentication(coordinator, unauthenticated: status == 403)
+            expectAuthentication(coordinator, unauthenticated: status == 401 || status == 403)
         default:
             guard case .rejected(let message) = model.state else {
                 Issue.record("status \(status) left \(model.state), want rejected")
@@ -138,9 +139,10 @@ import Testing
         }
     }
 
-    /// A decision: every 4xx but 401, 403 included, is a definite refusal
-    /// that releases the ledger slot; a 500 is ambiguous and keeps it.
-    @Test(arguments: [400, 403, 404, 413, 500])
+    /// A decision: every 4xx, 403 included, is a definite refusal that
+    /// releases the ledger slot; a fresh command's 401 also releases it but
+    /// names the credential; a 500 is ambiguous and keeps it.
+    @Test(arguments: [400, 401, 403, 404, 413, 500])
     func aDecisionKeepsItsClassification(status: Int) async throws {
         let server = MockServer()
         let store = InboxStore(client: APIClientFactory.mock(server: server))
@@ -151,9 +153,14 @@ import Testing
 
         await model.submit(.approve)
 
-        if status == 500 {
+        switch status {
+        case 500:
             #expect(model.pendingCommand != nil)
-        } else {
+        case 401:
+            #expect(model.pendingCommand == nil)
+            #expect(model.submissionError?.contains("credential") == true)
+            #expect(store.freshness == .unauthenticated)
+        default:
             #expect(model.pendingCommand == nil)
             #expect(model.submissionError?.contains("status \(status)") == true)
         }
