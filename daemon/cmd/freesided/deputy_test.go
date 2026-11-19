@@ -255,7 +255,9 @@ func TestDeputyPreflightCardNamesFailedChecksAndClearsOnPass(t *testing.T) {
 	}
 	item := items[0]
 	if item.HealthDiagnostic.Code != "deputy_preflight_failed" || *item.Posture != domain.HealthPostureBlocking ||
-		!strings.Contains(item.Reason, "images, codex_credential") || !strings.Contains(item.Reason, "pull the images") {
+		!strings.Contains(item.Reason, "images, codex_credential") || !strings.Contains(item.Reason, "pull the images") ||
+		!strings.Contains(item.Reason, "closes on the next deputy start whose start-up checks pass") ||
+		!strings.Contains(item.Reason, "Acknowledge leaves it open") {
 		t.Fatalf("card %+v", item)
 	}
 	if err := convergeDeputyPreflightCard(ctx, st, deputySelfCheckResult{}, deputyTestNow); err != nil {
@@ -263,6 +265,27 @@ func TestDeputyPreflightCardNamesFailedChecksAndClearsOnPass(t *testing.T) {
 	}
 	if items := openDeputyItems(t, st, deputyPreflightItemPrefix); len(items) != 0 {
 		t.Fatalf("a passing start left %d deputy preflight cards open", len(items))
+	}
+}
+
+// TestDeputyRunEndAbandonsOnlyAFailedDriverRun pins the decision the
+// deferred lease release reads: only a run that served with a driver can
+// have interrupted a task run, so only its failed end abandons the lease
+// and makes the next start file the interrupted card.
+func TestDeputyRunEndAbandonsOnlyAFailedDriverRun(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		end  deputyRunEnd
+		want bool
+	}{
+		"daemon startup failed":                 {deputyRunEnd{driver: true}, true},
+		"served without a driver, ended failed": {deputyRunEnd{served: true}, true},
+		"served with a driver, ended failed":    {deputyRunEnd{served: true, driver: true}, false},
+		"served with a driver, ended cleanly":   {deputyRunEnd{served: true, driver: true, ok: true}, true},
+	} {
+		if got := tc.end.clean(); got != tc.want {
+			t.Errorf("%s: clean = %v, want %v", name, got, tc.want)
+		}
 	}
 }
 

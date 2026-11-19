@@ -3,7 +3,7 @@
   "settings_digest": "sha256:<settings>",
   "daemon_build": "2dce6570ee23",
   "checked_at": "2026-10-24T15:00:00Z",
-  "passed": true,
+  "passed": false,
   "manifest_digest": "sha256:<manifest>",
   "first_missing": null,
   "checks": [
@@ -58,8 +58,9 @@
     {
       "group": "state",
       "name": "system_health",
-      "status": "passed",
-      "evidence": "no open item holds unattended admission at revision 1"
+      "status": "failed",
+      "evidence": "open items hold unattended admission: system-health-deputy-preflight-2",
+      "fix": "these items close on the next deputy start whose start-up checks pass: start `freesided deputy -root` once on this root (exit-root does this), then rerun prelaunch"
     },
     {
       "group": "state",
@@ -254,7 +255,16 @@
       "evidence": "all 3 lineup calls answered"
     }
   ],
-  "health_items": [],
+  "health_items": [
+    {
+      "id": "system-health-deputy-preflight-2",
+      "requested_decision": [
+        "acknowledge"
+      ],
+      "operator_stop": false,
+      "closes_on_deputy_start": true
+    }
+  ],
   "lineup_probe": {
     "version": "freeside-lineup-probe-v1",
     "settings_digest": "sha256:<settings>",

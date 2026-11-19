@@ -246,7 +246,12 @@ with a partial run.
   retained root keeps every system-health item its earlier runs left open,
   and the record's `health_items` lists the ones that hold admission.
   Record each one's `id` and `requested_decision`, and the record's
-  `operator_stop`, and plan to resolve each at the pairing checkpoint (Run
+  `operator_stop`. An item with `closes_on_deputy_start: true` (a failed
+  deputy self-check, the driverless card, or a writer role's agent
+  selection) closes on the next deputy start whose start-up checks pass,
+  never from a client: exit-root starts the deputy once when such items
+  are all that fails, and stops naming them if that start doesn't clear
+  them. Plan to resolve every other item at the pairing checkpoint (Run
   the Deputy, step 2) or record why it stays open. With no daemon running
   the record can't waive a superseded item; the served read at the
   checkpoint decides it (daemon/README.md, Read A Task's Record).

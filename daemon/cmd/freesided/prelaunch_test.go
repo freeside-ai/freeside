@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -279,15 +280,25 @@ func TestPrelaunchPassesOnAReadyRoot(t *testing.T) {
 	}
 }
 
-// TestPrelaunchRecordGolden pins prelaunch.json. The settings digest and the
+// TestPrelaunchRecordGolden pins prelaunch.json. The root holds one open
+// deputy preflight card, so the record shows a health item and the
+// system_health fix a deputy start answers. The settings digest and the
 // agent-tree commit name temporary paths and a commit time, so they and the
 // manifest digest that covers them are normalized.
 func TestPrelaunchRecordGolden(t *testing.T) {
 	t.Parallel()
 	f := newPrelaunchFixture(t)
+	st := storetest.Open(t, f.paths.DB, store.Options{})
+	failed := deputySelfCheckResult{Failed: []string{"images"}, Remediation: "pull the images"}
+	if err := convergeDeputyPreflightCard(t.Context(), st, failed, deputyTestNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 	record, body, stderr, err := f.run(t, f.args())
-	if err != nil {
-		t.Fatalf("prelaunch: %v\nstderr=%s", err, stderr)
+	if err == nil || record.ManifestDigest == nil {
+		t.Fatalf("prelaunch over an open card: %v\nstderr=%s", err, stderr)
 	}
 	settings := f.load(t)
 	normalized := strings.NewReplacer(
@@ -296,6 +307,61 @@ func TestPrelaunchRecordGolden(t *testing.T) {
 		settings.AgentTree.Commit, "<agent-tree-commit>",
 	).Replace(string(body))
 	golden.Assert(t, "prelaunch_record", []byte(normalized))
+}
+
+// TestPrelaunchSaysWhichHealthItemsADeputyStartCloses files each
+// deputy-owned card through its producer, then a card a deputy start leaves
+// open, and checks the flag per item and the fix the check names.
+func TestPrelaunchSaysWhichHealthItemsADeputyStartCloses(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st := openDeputyTestStore(t)
+	failed := deputySelfCheckResult{Failed: []string{"images"}, Remediation: "pull the images"}
+	if err := convergeDeputyPreflightCard(ctx, st, failed, deputyTestNow); err != nil {
+		t.Fatal(err)
+	}
+	role := &daemoncompose.RoleAdmissionError{Role: domain.RoleSpecifier, Err: errors.New("adapter proof timed out")}
+	if err := daemoncompose.ReportRoleFailure(ctx, st, role, deputyTestNow()); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.DiscardHandler)
+	check := func(name string, wantFix string, wantOwned map[string]bool) {
+		t.Helper()
+		var record prelaunchRecord
+		checkPrelaunchHealth(ctx, &record, st)
+		got := map[string]bool{}
+		for _, item := range record.HealthItems {
+			for prefix := range wantOwned {
+				if strings.HasPrefix(string(item.ID), prefix) {
+					got[prefix] = item.ClosesOnDeputyStart
+				}
+			}
+		}
+		if !reflect.DeepEqual(got, wantOwned) || len(record.HealthItems) != len(wantOwned) {
+			t.Errorf("%s: closes_on_deputy_start by prefix %v over %d items, want %v", name, got, len(record.HealthItems), wantOwned)
+		}
+		if health := findPrelaunchCheck(record, prelaunchGroupState, "system_health"); health.Status != compositionFailed ||
+			!strings.Contains(health.Fix, wantFix) {
+			t.Errorf("%s: system_health %+v, want a fix naming %q", name, health, wantFix)
+		}
+	}
+
+	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionNotConfigured, deputyTestNow, logger); err != nil {
+		t.Fatal(err)
+	}
+	check("every item deputy-owned", "start `freesided deputy -root` once on this root", map[string]bool{
+		deputyPreflightItemPrefix: true, "system-health-execution-configuration-": true,
+		daemoncompose.AgentSelectionItemPrefix + daemoncompose.RoleCausePrefix: true,
+	})
+
+	// The same id prefix carries cards a deputy start leaves open.
+	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionAuthorityInUse, deputyTestNow, logger); err != nil {
+		t.Fatal(err)
+	}
+	check("one item client-resolved", "resolve it in a paired client", map[string]bool{
+		deputyPreflightItemPrefix: true, "system-health-execution-configuration-": false,
+		daemoncompose.AgentSelectionItemPrefix + daemoncompose.RoleCausePrefix: true,
+	})
 }
 
 func TestPrelaunchNamesTheFirstMissingPrerequisite(t *testing.T) {

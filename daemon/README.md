@@ -5024,14 +5024,25 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
 6. Serve. On a passing self-check the Claude driver is composed and
    execution is enabled. On a failure the daemon serves without it, and one
    blocking `system_health` card (`deputy_preflight_failed`) names the
-   failed checks and the manifest; a later passing start resolves it.
+   failed checks and the manifest. Only the daemon closes it, with the
+   driverless card (`execution_not_configured`), at the next deputy start
+   whose start-up checks pass; Acknowledge leaves it open. A writer role's
+   `agent_selection_inactive` card closes the same way, at the next start
+   whose writer-role check passes, which reruns the adapter conformance
+   proof. `scripts/exit-root.sh` starts the deputy once when these cards
+   are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
 to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig
-cleanup` proves. A failed proof, or a daemon that ended in
-error, abandons the lease instead, so the next start recovers it.
+cleanup` proves. A failed proof, or a daemon that served with the Claude
+driver and ended in error, abandons the lease instead, so the next start
+recovers it and files `deputy_run_interrupted`. A daemon whose startup
+failed, or one without the driver (a failed self-check), takes the clean
+release even when it ended in error: the driverless daemon runs no agent,
+and startup starts its engine loops only in its last steps and tears down
+what they resumed before it returns the error.
 
 **What it writes.** Under `<state-root>/daemon/`: `freeside.db`,
 `rig-acquisition.json` (the lease's acquisition record, `0600`) and
@@ -5253,7 +5264,13 @@ is `not_run`, and the rest still run.
 - **`state`**: the database is absent (a fresh root) or opens read-only at
   this build's schema; an older schema fails with both versions and the
   recovery text. `system_health` fails on every open item whose admission
-  `holds`, listed in `health_items`. `identities` compares the recorded
+  `holds`, listed in `health_items`; an item's `closes_on_deputy_start`
+  is true for `deputy_preflight_failed`, `execution_not_configured`, and a
+  writer role's `agent_selection_inactive` card, which the next deputy
+  start whose start-up checks pass closes. Prelaunch reads the database
+  read-only and closes nothing, so when every held item closes that way
+  and no operator stop is in force, the fix names one deputy start;
+  otherwise it names a paired client. `identities` compares the recorded
   identities with the settings' fixed bindings, and is `not_run` before
   the first start records them. `routing_policy` copies the current
   routing revision into the record's `routing_policy`, exactly as
@@ -5390,7 +5407,9 @@ as it is at the start of a fixture pass, which resets `main` to
 (`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same
 JSON to stdout. It records the settings digest, the daemon build, the
 composed manifest's digest (`manifest_digest`, the same with or without
-`-no-live`), every check, the walk, the health items, the lineup probe,
+`-no-live`), every check, the walk, the health items (each with `id`,
+`requested_decision`, `operator_stop`, and `closes_on_deputy_start`), the
+lineup probe,
 and `issue` (the target issue's `url`, `readable`, and `state`, null when
 `target_issue` did not read it). With live on it also writes
 `lineup-probe.json`, as `probe-lineup` does. It never writes, removes, or replaces

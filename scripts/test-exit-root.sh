@@ -180,12 +180,23 @@ prelaunch)
   elif [[ "$(jq -r '.approved_recipe' "$settings")" != "$FAKE_RECIPE" ]]; then
     missing=approved_recipe
   fi
+  # A deputy-owned card holds admission until the case's deputy has
+  # started FAKE_CARD_STARTS times, as a start whose checks pass closes it.
+  card=false
+  if [[ "$missing" == null && "${FAKE_PRELAUNCH_MODE:-}" == deputy-card ]] &&
+    (($(grep -cx deputy "$STUB_DIR/calls.log" || true) < FAKE_CARD_STARTS)); then
+    card=true
+  fi
   passed=false
-  [[ "$missing" != null || "${FAKE_PRELAUNCH_MODE:-}" == fail ]] || passed=true
-  jq -n --arg m "$missing" --argjson passed "$passed" '{
+  [[ "$missing" != null || "${FAKE_PRELAUNCH_MODE:-}" == fail || "$card" == true ]] || passed=true
+  jq -n --arg m "$missing" --argjson passed "$passed" --argjson card "$card" '{
     passed: $passed,
     first_missing: (if $m == "null" then null else {prerequisite: $m, evidence: "fake", fix: "fake"} end),
-    checks: (if $passed then [] else [{group: "rig", name: "rig", status: "failed", evidence: "fake failure"}] end)
+    checks: (if $passed then [] elif $card then
+      [{group: "state", name: "system_health", status: "failed", evidence: "open items hold unattended admission"}]
+    else [{group: "rig", name: "rig", status: "failed", evidence: "fake failure"}] end),
+    health_items: (if $card then [{id: "system-health-deputy-preflight-7", requested_decision: ["acknowledge"],
+      operator_stop: false, closes_on_deputy_start: true}] else [] end)
   }' | tee "$root/daemon/prelaunch.json"
   [[ "$passed" == true ]] || exit 1
   ;;
@@ -542,6 +553,20 @@ FAKE_PRELAUNCH_MODE=fail run_exit_root --pass fixture --build "$SHA2" --machine 
 assert_rc 1
 assert_contains 'prelaunch failed with nothing left to onboard'
 assert_contains 'rig rig: fake failure'
+assert_not_exists "$CASE_DIR/probe.args"
+
+begin_case "a deputy-owned card gets one deputy start, then prelaunch passes"
+FAKE_PRELAUNCH_MODE=deputy-card FAKE_CARD_STARTS=1 run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+assert_contains 'system-health-deputy-preflight-7 close on the next deputy start'
+assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts'
+if [[ -f "$CASE_DIR/probe.args" ]]; then ok; else report_failure "the run stopped before the probe"; fi
+
+begin_case "a deputy-owned card one start does not clear stops after that start"
+FAKE_PRELAUNCH_MODE=deputy-card FAKE_CARD_STARTS=2 run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 1
+assert_contains 'one deputy start did not clear system-health-deputy-preflight-7'
+assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts'
 assert_not_exists "$CASE_DIR/probe.args"
 
 begin_case "the seeded-routing overlay adds the second writer, routing, and pool limits"

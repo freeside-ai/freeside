@@ -171,11 +171,36 @@ type prelaunchMissing struct {
 
 // prelaunchHealthItem is an open system_health item that holds unattended
 // admission. OperatorStop is the read's: whether an operator stop is in
-// force as well.
+// force as well. ClosesOnDeputyStart says the daemon closes the item itself
+// at the next deputy start whose start-up checks pass, so a start, not a
+// client, clears it (closesOnDeputyStart).
 type prelaunchHealthItem struct {
-	ID                domain.ItemID   `json:"id"`
-	RequestedDecision []domain.Action `json:"requested_decision"`
-	OperatorStop      bool            `json:"operator_stop"`
+	ID                  domain.ItemID   `json:"id"`
+	RequestedDecision   []domain.Action `json:"requested_decision"`
+	OperatorStop        bool            `json:"operator_stop"`
+	ClosesOnDeputyStart bool            `json:"closes_on_deputy_start"`
+}
+
+// closesOnDeputyStart reports whether a deputy start that passes its
+// start-up checks closes the item: the deputy's preflight card, the
+// driverless card, and a writer role's agent-selection card. It goes by
+// diagnostic code rather than the execution-configuration id prefix, which
+// also carries app_authority_in_use, rig_lease_present, and
+// execution_paused, cards a deputy start leaves open. A retired identity's
+// agent-selection card needs the operator to adopt or retire it first, so
+// only the role cause counts.
+func closesOnDeputyStart(item systemHealthItem) bool {
+	if daemoncompose.IsWriterRoleItem(item.ID) {
+		return true
+	}
+	if item.HealthDiagnostic == nil {
+		return false
+	}
+	switch item.HealthDiagnostic.Code {
+	case deputyPreflightFailedCode, daemoncompose.ExecutionNotConfiguredCode:
+		return true
+	}
+	return false
 }
 
 func (r *prelaunchRecord) add(group prelaunchGroup, name string, status compositionStatus, evidence, fix string) {
@@ -760,10 +785,18 @@ func checkPrelaunchHealth(ctx context.Context, record *prelaunchRecord, st *stor
 		case *item.Admission == systemHealthHolds:
 			record.HealthItems = append(record.HealthItems, prelaunchHealthItem{
 				ID: item.ID, RequestedDecision: item.RequestedDecision, OperatorStop: health.OperatorStop != nil,
+				ClosesOnDeputyStart: closesOnDeputyStart(item),
 			})
 		}
 	}
 	fix := "resolve it in a paired client at the pairing checkpoint"
+	if len(record.HealthItems) != 0 && health.OperatorStop == nil &&
+		!slices.ContainsFunc(record.HealthItems, func(item prelaunchHealthItem) bool { return !item.ClosesOnDeputyStart }) {
+		// Prelaunch reads the database read-only, so it can't close these
+		// itself; a start reruns the checks that do.
+		fix = "these items close on the next deputy start whose start-up checks pass: start `freesided deputy -root` " +
+			"once on this root (exit-root does this), then rerun prelaunch"
+	}
 	switch {
 	case health.AdmissionError != nil:
 		record.fail(prelaunchGroupState, "system_health", "admission could not be evaluated: "+health.AdmissionError.Message,

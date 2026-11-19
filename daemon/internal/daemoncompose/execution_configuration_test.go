@@ -60,6 +60,7 @@ func TestExecutionConfigurationNoticeConverges(t *testing.T) {
 func TestExecutionStateReasonsNameTheirRemedy(t *testing.T) {
 	t.Parallel()
 	for state, wants := range map[ExecutionState][]string{
+		ExecutionNotConfigured:   {"README's real-run setup", "closes on the next deputy start whose start-up checks pass"},
 		ExecutionAuthorityInUse:  {"freesided execution resume"},
 		ExecutionRigLeasePresent: {"freesided execution resume", "freesided rig recover"},
 	} {

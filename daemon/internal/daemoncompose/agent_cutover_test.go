@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -78,5 +82,43 @@ func TestReviewCredentialReadsTheAdmittedGeneration(t *testing.T) {
 	codex := mustRoutedReviewProvider(domain.HarnessClientCodexCLI)
 	if _, err := reviewCredential(codex, read)(ctx, admission); !errors.Is(err, engine.ErrAgentNotAdmissible) || reads != nil {
 		t.Fatalf("a Codex source = %v after reads %v, want a refusal that reads nothing", err, reads)
+	}
+}
+
+// TestWriterRoleItemSaysWhatClosesIt: both producers of a writer role's item
+// tell the operator that the next start whose writer-role check passes
+// closes it and reruns the adapter proof, and the item's id is one prelaunch
+// counts as closing on a deputy start.
+func TestWriterRoleItemSaysWhatClosesIt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	failure := &RoleAdmissionError{Role: domain.RoleSpecifier, Err: errors.New("adapter proof ran 3m0s")}
+	for name, file := range map[string]func(context.Context, *store.Store) error{
+		"at activation": func(ctx context.Context, st *store.Store) error {
+			return ActivateAgentSelection(ctx, st, failure, now)
+		},
+		"before the engine": func(ctx context.Context, st *store.Store) error {
+			return ReportRoleFailure(ctx, st, failure, now)
+		},
+	} {
+		ctx := t.Context()
+		st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+		if err := file(ctx, st); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
+			if err != nil {
+				return err
+			}
+			if len(items) != 1 || !IsWriterRoleItem(items[0].ID) ||
+				!strings.Contains(items[0].Reason, "closes on the next start whose writer-role check passes") ||
+				!strings.Contains(items[0].Reason, "reruns the adapter conformance proof") {
+				t.Errorf("%s: items %+v", name, items)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
