@@ -19,9 +19,9 @@
 # The cases cover the settings rendering from the fixture template (every
 # fixture-table value and the machine file, nothing else), the tree commit on
 # its own branch, the stop at the onboarding approval and the resume after
-# it, the installation-intent stop, the rerun on a new build, port selection,
-# the seeded-routing overlay, the scenario pass, and the refusals that create
-# nothing.
+# it, the installation-intent stop, the rerun on a new build, the serve wait,
+# port selection, the seeded-routing overlay, the scenario pass, and the
+# refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -208,6 +208,23 @@ deputy)
     exit 2
   }
   echo "freesided deputy: build fake" >&2
+  case ${FAKE_DEPUTY_MODE:-} in
+  crash)
+    echo "freesided deputy: fake crash" >&2
+    exit 1
+    ;;
+  silent)
+    trap 'exit 0' TERM
+    while :; do sleep 0.1; done
+    ;;
+  slow)
+    # Longer than the case's stall limit in all, but never still for it.
+    for _ in $(seq 1 15); do
+      echo "freesided deputy: still checking" >&2
+      sleep 0.2
+    done
+    ;;
+  esac
   manifest=$root/daemon/composition-manifest.json
   rm -f "$manifest"
   # stop <status>: the real deputy's lease release removes the manifest
@@ -615,6 +632,27 @@ if [[ "$port" != 9100 ]]; then ok; else report_failure "scenario took a claimed 
 run_exit_root --pass scenario:quota-park --build "$SHA1" --machine "$MACHINE" park
 assert_rc 2
 assert_contains 'single-use'
+
+begin_case "a deputy whose log keeps growing is waited for past the stall limit"
+# The limit counts whole seconds, so 2 allows the fake's short silent steps
+# while its 3 s of logging still outlasts it.
+FAKE_DEPUTY_MODE=slow EXIT_ROOT_SERVE_STALL_SECONDS=2 run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" slow
+assert_rc 3
+assert_line "$CASE_DIR/stdout" "root=$ROOTS/slow"
+assert_not_contains 'timed out'
+
+begin_case "a deputy whose log stays still times out with its own message"
+FAKE_DEPUTY_MODE=silent EXIT_ROOT_SERVE_STALL_SECONDS=1 run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" silent
+assert_rc 1
+assert_contains 'the deputy timed out after'
+assert_contains "its log $ROOTS/silent/logs/deputy-setup.err stayed still for 1 s"
+assert_not_contains 'exited'
+
+begin_case "a deputy that exits before it serves says so, with its status"
+FAKE_DEPUTY_MODE=crash run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" crash
+assert_rc 1
+assert_contains 'the deputy exited before it served (status 1)'
+assert_not_contains 'timed out'
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild

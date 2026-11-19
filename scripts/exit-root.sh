@@ -51,7 +51,9 @@
 #      goes to the state file. A start that composes enables execution
 #      until it is stopped, so on a root that already ran tasks a rerun may
 #      resume one; reruns are for iterating, and a counted pass uses a
-#      fresh root.
+#      fresh root. The start waits as long as the deputy's log grows, and
+#      gives up once the log stays still for EXIT_ROOT_SERVE_STALL_SECONDS
+#      (default 900).
 #   6. Run `freesided prelaunch -no-live` and act on its first_missing:
 #      trust_profile: run the onboarding review (never -approve) with the
 #        state file's review digest and stop with the approval command;
@@ -123,6 +125,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ -n "$pass" && -n "$build" && -n "$name" ]] || usage
+serve_stall=${EXIT_ROOT_SERVE_STALL_SECONDS:-900}
+[[ "$serve_stall" =~ ^[1-9][0-9]*$ ]] || refuse "EXIT_ROOT_SERVE_STALL_SECONDS must be a positive number of seconds"
 
 repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 passes_dir="$repo_root/scripts/exit-root/passes"
@@ -442,24 +446,40 @@ deputy_owned_items() {
 start_result=''
 setup_start() {
   local out="$logs/deputy-setup.out" err="$logs/deputy-setup.err" manifest="$root/daemon/composition-manifest.json"
-  local copy="$logs/composition-manifest.json" pid rc=0 _ line
+  local copy="$logs/composition-manifest.json" pid rc=0 _ line size=-1 now_size started=$SECONDS still_since=$SECONDS
   say "starting the deputy once on $root (log: $err)"
   # The deputy removes an earlier manifest itself; removing it and the
   # copy here too keeps a stale one from passing for this start's.
   rm -f "$manifest" "$copy"
+  # Created here so the wait below never reads the log before the
+  # background job's redirect makes it.
+  : >"$out"
+  : >"$err"
   "$freesided" deputy -root "$root" >"$out" 2>"$err" &
   pid=$!
-  for _ in $(seq 1 4500); do
-    grep -q '"api_url"' "$out" 2>/dev/null && break
-    kill -0 "$pid" 2>/dev/null || break
+  # A cold base can take longer than any fixed deadline to build and check,
+  # so the wait lasts while the deputy's log grows and ends only once it
+  # has stayed still for the stall limit.
+  while ! grep -q '"api_url"' "$out" 2>/dev/null; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      # It may have served just before it exited.
+      grep -q '"api_url"' "$out" 2>/dev/null && break
+      wait "$pid" 2>/dev/null || rc=$?
+      tail -n 20 "$err" >&2
+      die "the deputy exited before it served (status $rc)"
+    fi
+    now_size=$(wc -c <"$err" | tr -d ' ')
+    if [[ "$now_size" != "$size" ]]; then
+      size=$now_size
+      still_since=$SECONDS
+    elif ((SECONDS - still_since >= serve_stall)); then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      tail -n 20 "$err" >&2
+      die "the deputy timed out after $((SECONDS - started)) s; its log $err stayed still for $serve_stall s"
+    fi
     sleep 0.2
   done
-  if ! grep -q '"api_url"' "$out" 2>/dev/null; then
-    kill -TERM "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || rc=$?
-    tail -n 20 "$err" >&2
-    die "the deputy exited or never served (status $rc)"
-  fi
   # Kept at the deputy's own mode, and outside daemon/, where
   # submit --require-composition would read it as this run's manifest.
   [[ ! -f "$manifest" ]] || (umask 077 && cp "$manifest" "$copy")
