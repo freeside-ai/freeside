@@ -1,0 +1,40 @@
+{
+  "version": "freeside-attention-item-v1",
+  "as_of_revision": 21,
+  "id": "question-inv-specify-run-freeside-question-1",
+  "error": null,
+  "type": "agent_question",
+  "status": "open",
+  "run_id": "run-freeside-question",
+  "created_at": "2026-09-01T14:08:00Z",
+  "reason": "The specification agent has a question.",
+  "requested_decision": [
+    "answer_and_retry",
+    "stop"
+  ],
+  "recommendation": null,
+  "conversation_id": null,
+  "agent_question": {
+    "scope_conflict": null,
+    "stage": "specification",
+    "invocation_id": "inv-specify-run-freeside-question-1",
+    "kind": null,
+    "decisions": [
+      {
+        "question": "Which compatibility target applies?",
+        "why_blocking": "The specification cannot fix the API surface without it.",
+        "options": [
+          {
+            "label": "Current and previous",
+            "tradeoffs": "Wider support, more adapters."
+          },
+          {
+            "label": "Current only",
+            "tradeoffs": "Less code, drops older clients."
+          }
+        ],
+        "recommendation": "Current and previous"
+      }
+    ]
+  }
+}
