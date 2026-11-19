@@ -22,10 +22,11 @@
 # fixture-table value and the machine file, nothing else), the tree commit on
 # its own branch and a later one against a checkout whose policy files
 # differ, the stop at the onboarding approval and the resume after it, the
-# installation-intent stop, the rerun on a new build or a new enrollment, the
-# serve wait, the re-onboarding after a moved base or review configuration,
-# the re-pin of a newer approval's image, port selection, the seeded-routing
-# overlay, the scenario pass, and the refusals that create nothing.
+# installation-intent stop, the rerun on a new build or a new enrollment,
+# the serve wait, the re-onboarding after a moved base or review
+# configuration, the re-pin of a newer approval's image, the submit line,
+# port selection, the seeded-routing overlay, the scenario pass, and the
+# refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -504,6 +505,9 @@ assert_not_exists "$CASE_DIR/go.log"
 assert_not_exists "$CASE_DIR/onboard-1.args"
 assert_line "$CASE_DIR/prelaunch.args" '-no-live'
 assert_line "$CASE_DIR/prelaunch.args" "$FIX/inputs/policy.json"
+assert_line "$CASE_DIR/stdout" "submit=$FIX/builds/$SHA1/freesided submit -db $FIX/daemon/freeside.db -require-composition \
+-project fixture -task $FIX/inputs/task.md -policy $FIX/inputs/policy.json -publication $FIX/inputs/publication.json \
+-work-unit $FIX/inputs/work-unit.json"
 
 begin_case "a rerun on a new build rebuilds, re-adopts, and keeps the root, database, and port"
 old_tip=$(git -C "$TREE" rev-parse exit-root/fixture)

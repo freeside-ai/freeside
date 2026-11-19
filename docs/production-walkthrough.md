@@ -589,7 +589,12 @@ one; it resumes where it stopped. In order:
    ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
    so a model the pinned CLIs refuse fails for the cost of one short call
    per role, not partway through the pass, and requires `freesided
-   prelaunch -no-live` to pass. It exits 0 and prints `root=` and `api_url=`.
+   prelaunch -no-live` to pass. It exits 0 and prints `root=`, `api_url=`,
+   and a `submit=` line, the exact `freesided submit ...
+   -require-composition` command for the pass's inputs. Start the deputy,
+   then run that command from a second terminal; it waits while the deputy
+   is still starting, and the deputy logs `ready for submissions` once it
+   can take one.
 
 The first start writes `<root>/daemon/composition-manifest.json`, whose
 `review_configuration_digest` the onboarding takes; until onboarding
@@ -1184,7 +1189,8 @@ running:
 freesided prelaunch -root <root> -task /absolute/seed-spec.md -policy /absolute/policy.json \
   -publication /absolute/publication.json -work-unit /absolute/work-unit.json
 freesided deputy -root <root>
-# in a second terminal, the visibility seed for a fresh root:
+# in a second terminal, the visibility seed for a fresh root (it waits while
+# the deputy is still starting):
 freesided submit -db <root>/daemon/freeside.db --require-composition \
   -project <project> -task /absolute/seed-spec.md -policy /absolute/policy.json \
   -publication /absolute/publication.json -work-unit /absolute/work-unit.json

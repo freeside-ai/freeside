@@ -83,9 +83,11 @@
 # foreground; a scenario instance is single-use, so a rerun is refused.
 #
 # Stdout: root=<root>, api_url=<url> once known, one approval=<step> per
-# approval still needed, and next=<command> for a step the operator runs
-# just before submit. A scenario pass prints its approval= line, then
-# dev-instance.sh's own root= (the instance), api_url=, and task= lines.
+# approval still needed, next=<command> for a step the operator runs
+# just before submit, and, on a ready root, submit=<command>, which submits
+# the pass's inputs once the deputy is started. A scenario pass prints its
+# approval= line, then dev-instance.sh's own root= (the instance), api_url=,
+# and task= lines.
 # Progress goes to stderr; logs go to <root>/logs.
 #
 # Exit codes: 0 when the root is ready, 3 when it stopped for an approval,
@@ -783,4 +785,7 @@ if [[ -n "$seed" ]]; then
     "$(printf '%q ' "$freesided" auth seed-exhausted -db "$root/daemon/freeside.db" -pool "identity:$seed_identity" \
       -window five_hour -model "$(setting .writers.specifier.model)")"
 fi
-say "ready: start the deputy with $freesided deputy -root $root; the submit inputs are in $root/inputs"
+printf 'submit=%s\n' "$(printf '%q ' "$freesided" submit -db "$root/daemon/freeside.db" -require-composition \
+  -project "$(setting .repository.project)" -task "$root/inputs/task.md" -policy "$root/inputs/policy.json" \
+  -publication "$root/inputs/publication.json" -work-unit "$root/inputs/work-unit.json" | sed 's/ $//')"
+say "ready: start the deputy with $freesided deputy -root $root, then run the submit= command, which waits for the deputy to finish starting"
