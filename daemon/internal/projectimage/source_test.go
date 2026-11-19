@@ -1,6 +1,7 @@
 package projectimage
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -60,6 +61,28 @@ func TestExecRunnerSeparatesHostExitStatusFromCommandOutput(t *testing.T) {
 	if err == nil || !output.exited || output.exitCode != 7 ||
 		!strings.Contains(string(output.bytes), "__FREESIDE_PROJECT_EXIT__:0") {
 		t.Fatalf("Run = %+v, %v; want host exit 7 independent of forged output", output, err)
+	}
+}
+
+func TestExecRunnerTeesWholeOutputWhileKeepingABoundedTail(t *testing.T) {
+	t.Parallel()
+	// Past the tail buffer on each stream, so the tee must carry bytes the
+	// tail drops.
+	var full bytes.Buffer
+	output, err := (execRunner{}).Run(t.Context(), commandSpec{
+		Path:   "/bin/sh",
+		Args:   []string{"-c", "head -c 1100000 /dev/zero; head -c 1100000 /dev/zero >&2; printf end"},
+		Output: &full,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Len() != 2*1100000+len("end") || !strings.HasSuffix(full.String(), "end") {
+		t.Fatalf("tee received %d bytes, want every byte of both streams", full.Len())
+	}
+	if len(output.bytes) != maxCommandOutputBytes || !output.truncated ||
+		!strings.HasSuffix(string(output.bytes), "end") {
+		t.Fatalf("tail = %d bytes truncated=%v, want the bounded tail", len(output.bytes), output.truncated)
 	}
 }
 

@@ -3873,6 +3873,26 @@ daemon first; onboarding refuses a database it holds. It:
    profile; a pending installation is promoted only after the image has been
    durably recorded and the review accepted.
 
+**Watch an onboarding build on stderr; read its whole output on disk.** The
+build can take most of an hour. As each step starts (source
+materialization, `container build`, provenance, allowlist, offline
+preflight, each hydration and recipe command by phase and index, each
+cache-masked probe, and publish), onboarding writes a `project-image:` line
+to stderr, and every minute while a step runs it writes another with the
+step's elapsed time and how long the same step took in the last recorded
+build of the image. The whole output of `container build` and of every proof
+run goes to its own `0600` file under
+`<state-dir>/project-image-logs/<image-name>/<build-dir>/` (with the standard
+layout, `<root>/daemon/project-image-logs`), and the step's line names the
+file, so `tail -f` follows a running step. A file stops at 256 MiB with a
+closing line. Each build directory also holds `steps.json`, every step's
+name, duration, and outcome, which the next build reads for its estimates.
+Nothing prunes these directories; delete old ones by hand. A failed proof's
+error lists up to 20 failing Go test lines (`--- FAIL:` and
+`FAIL<tab><package>`) from the whole output, then the last 2 KiB, then the
+log file's path. The daemon's rebuild and `freeside-project-image` print the
+step lines and failing tests too, but keep no files and send no heartbeat.
+
 The selected npm recipe is detected at `.freeside/verify.json` under `-source`,
 or may be supplied explicitly with `-recipe`. Run the command once without
 `-approve`, inspect the complete JSON review, then repeat it with the returned

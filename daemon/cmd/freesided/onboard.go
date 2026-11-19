@@ -342,6 +342,10 @@ func runOnboardCommand(
 		builder, builderErr := projectimage.New(projectimage.Options{
 			GitPath: cfg.GitPath, ContainerPath: cfg.ContainerPath,
 			TempDir: cfg.TempDir, Log: stderr, Tokens: tokens,
+			// An onboarding build can run for most of an hour: narrate it and
+			// keep every step's whole output for the operator (#3442).
+			LogDir:    filepath.Join(cfg.StateDir, "project-image-logs"),
+			Heartbeat: time.Minute,
 			Record: func(recordCtx context.Context, image domain.ProjectImage) error {
 				return st.WriteInternal(recordCtx, func(tx *store.InternalTx) error {
 					return tx.RecordProjectImage(recordCtx, image)
