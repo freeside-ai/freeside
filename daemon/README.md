@@ -5063,7 +5063,10 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
-to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
+to stderr. A start whose self-check passed then logs one
+`freesided deputy: ready for submissions on <db>` line, once its
+composition manifest and control address both exist; a start whose
+self-check failed logs none. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig
 cleanup` proves. A failed proof, or a daemon that served with the Claude
@@ -5093,7 +5096,12 @@ settings digest, the project, and the publication author instead. `submit
 `composition-manifest.json` beside `-db`. It refuses a submission whose
 project, commit author, or allowed paths differ from the ones the launch
 composed, and a launch manifest with no daemon serving `-db`: the manifest
-attests a running deputy, not a database. The deputy checks the same
+attests a running deputy, not a database. A deputy still starting on `-db`
+(its `rig-acquisition.json` exists, but its control address doesn't yet)
+makes `--require-composition` wait for it, up to
+`-deputy-start-wait` (default `15m`; `0` doesn't wait), then fail as still
+starting; with no deputy starting, it doesn't wait. The wait only delays
+the read: the manifest is checked as before. The deputy checks the same
 binding again when the submission reaches it, so new work submitted without
 `--require-composition`, or by any other control client, is refused unless it
 names this launch's passing manifest; a deputy whose start-up check failed

@@ -145,6 +145,9 @@ func runSubmitMain(args []string) {
 		"implementation writer-container budget, vetted against -supervision-timeout before the run is created; 0 uses the ward default")
 	supervisionTimeout := flags.Duration("supervision-timeout", 0,
 		"harness workflow supervision deadline the writer budget must stay below; 0 skips the check")
+	deputyStartWait := flags.Duration("deputy-start-wait", 15*time.Minute,
+		"with --require-composition, how long to wait for a deputy that is still starting on -db to finish its "+
+			"self-check and serve; 0 doesn't wait")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -154,6 +157,14 @@ func runSubmitMain(args []string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// The wait stays out of submitCommandConfig, whose JSON is the recovery
+	// journal, so it changes no journal's bytes.
+	if *requireComposition && *dbPath != "" {
+		if err := waitForStartingDeputy(ctx, *dbPath, *deputyStartWait, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(1)
+		}
+	}
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
 		SubmissionID: *submissionID, RetrySubmissionID: *retrySubmissionID,
 		DBPath: *dbPath, TaskPath: *taskPath, PolicyPath: *policyPath,
@@ -171,6 +182,59 @@ func runSubmitMain(args []string) {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
+}
+
+// deputyStartPoll is how often submit looks again for a starting deputy's
+// files.
+const deputyStartPoll = 500 * time.Millisecond
+
+// waitForStartingDeputy waits, up to bound, while a deputy on db is still
+// starting: its rig acquisition exists, but its control address doesn't yet.
+// A deputy start writes the acquisition first, then runs its self-check,
+// which writes the composition manifest only when the agent tree matches,
+// and publishes the control address once it serves, whatever the check
+// found. So the wait ends when the address exists, and at once when no
+// acquisition says a deputy is starting; submit then proceeds, or fails on a
+// missing manifest, exactly as it would without the wait. It only delays
+// the reads: submit validates the manifest as before. A bound of zero
+// doesn't wait.
+func waitForStartingDeputy(ctx context.Context, db string, bound time.Duration, stderr io.Writer) error {
+	// The control address sits beside the canonical path, where the daemon
+	// publishes it; a path that doesn't resolve is submit's to report.
+	canonical, err := canonicalDatabasePath(db)
+	if err != nil {
+		canonical = db
+	}
+	acquisition := newDeputyPaths(filepath.Dir(canonical)).Acquisition
+	ready := func() bool { return fileExists(canonical + ".control.json") }
+	if bound <= 0 || ready() || !fileExists(acquisition) {
+		return nil
+	}
+	_, _ = fmt.Fprintf(stderr, "freesided: waiting up to %s for the deputy on %s to finish starting\n", bound, db)
+	timeout := time.NewTimer(bound)
+	defer timeout.Stop()
+	poll := time.NewTicker(deputyStartPoll)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return fmt.Errorf("the deputy on %s is still starting after %s, or it stopped without removing %s; "+
+				"rerun once it logs \"ready for submissions\"", db, bound, acquisition)
+		case <-poll.C:
+			// A deputy that stopped while starting removes its acquisition;
+			// submit then reports what is missing.
+			if ready() || !fileExists(acquisition) {
+				return nil
+			}
+		}
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 type submitCommandConfig struct {

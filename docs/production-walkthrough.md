@@ -589,14 +589,26 @@ one; it resumes where it stopped. In order:
    ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
    so a model the pinned CLIs refuse fails for the cost of one short call
    per role, not partway through the pass, and requires `freesided
-   prelaunch -no-live` to pass. It exits 0 and prints `root=` and `api_url=`.
+   prelaunch -no-live` to pass. It exits 0 and prints `root=`, `api_url=`,
+   and a `submit=` line, the exact `freesided submit ...
+   -require-composition` command for the pass's inputs. Start the deputy,
+   then run that command from a second terminal; it waits while the deputy
+   is still starting, and the deputy logs `ready for submissions` once it
+   can take one.
 
 The first start writes `<root>/daemon/composition-manifest.json`, whose
 `review_configuration_digest` the onboarding takes; until onboarding
 completes, settings carry the machine file's placeholder image and recipe.
 A rerun with a new `--build` rebuilds and re-adopts on the same root,
 database, and port, which suits iterating on a build, but a pass counts only
-on a fresh root: give each counted pass a new `<name>`. Exit 2 is a refusal
+on a fresh root: give each counted pass a new `<name>`. Reruns also keep the
+root current on their own: one after an enrollment (such as `freesided
+enroll-codex`) starts the deputy again to re-adopt the tree, one after the
+review configuration digest or `repository.base_sha` moves runs the
+onboarding review again and stops for its approval, and one after a newer
+approval pins that approval's image and recipe. A setup start waits as long
+as the deputy's log keeps growing and gives up only once it has stayed
+still for 900 s. Exit 2 is a refusal
 (a supervised path, a root another pass made, a setting both files set) and
 exit 1 any other failure; the script's header lists every step and refusal.
 A setup start that exits nonzero says so with the `freesided rig recover`
@@ -1184,7 +1196,8 @@ running:
 freesided prelaunch -root <root> -task /absolute/seed-spec.md -policy /absolute/policy.json \
   -publication /absolute/publication.json -work-unit /absolute/work-unit.json
 freesided deputy -root <root>
-# in a second terminal, the visibility seed for a fresh root:
+# in a second terminal, the visibility seed for a fresh root (it waits while
+# the deputy is still starting):
 freesided submit -db <root>/daemon/freeside.db --require-composition \
   -project <project> -task /absolute/seed-spec.md -policy /absolute/policy.json \
   -publication /absolute/publication.json -work-unit /absolute/work-unit.json

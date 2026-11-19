@@ -39,9 +39,13 @@
 #      -X main.version=<sha> (preflight's daemon_build check needs the stamp).
 #   4. Render <root>/daemon/settings.json, mode 0600, from the machine file,
 #      the template, and the state file, on every run.
-#   5. When the settings differ from the last start that composed (a new
-#      root, a new build's prompt packages, a changed machine file, a new
-#      image), start the deputy once and stop it; on a tree mismatch, commit
+#   5. Pin images.agent and approved_recipe from
+#      <root>/daemon/onboard-approved.json whenever it holds a completed
+#      approval the script hasn't pinned from yet. When the settings or the
+#      root's enrollments (from `freesided auth list`) differ from the last
+#      start that composed (a new root, a new build's prompt packages, a
+#      changed machine file, a new image, an enrollment from enroll-codex),
+#      start the deputy once and stop it; on a tree mismatch, commit
 #      its patch on branch exit-root/<pass> of the agent-tree checkout, never
 #      touching the checkout's current branch or working tree, and start
 #      again. Prelaunch can't see such a change, since it compares the tree
@@ -51,12 +55,20 @@
 #      goes to the state file. A start that composes enables execution
 #      until it is stopped, so on a root that already ran tasks a rerun may
 #      resume one; reruns are for iterating, and a counted pass uses a
-#      fresh root.
-#   6. Run `freesided prelaunch -no-live` and act on its first_missing:
+#      fresh root. The start waits as long as the deputy's log grows, and
+#      gives up once the log stays still for EXIT_ROOT_SERVE_STALL_SECONDS
+#      (default 900).
+#   6. Once onboarded, run the onboarding review again when the review
+#      configuration digest or repository.base_sha differs from the ones
+#      the last review bound, since prelaunch keeps passing the old trust
+#      profile; before that review's approval, stop with its approval
+#      command. Then run `freesided prelaunch -no-live` and act on its
+#      first_missing:
 #      trust_profile: run the onboarding review (never -approve) with the
 #        state file's review digest and stop with the approval command;
-#      project_image, approved_recipe: take both from the approving run's
-#        output, <root>/daemon/onboard-approved.json.
+#      project_image, approved_recipe: stop with the approval command when
+#        the approving run's output, <root>/daemon/onboard-approved.json,
+#        is missing or incomplete.
 #      With nothing left to onboard, when prelaunch's only failure is
 #      system_health items that all close on a deputy start, start the
 #      deputy once to rerun its start-up checks and prelaunch again; a second
@@ -71,9 +83,11 @@
 # foreground; a scenario instance is single-use, so a rerun is refused.
 #
 # Stdout: root=<root>, api_url=<url> once known, one approval=<step> per
-# approval still needed, and next=<command> for a step the operator runs
-# just before submit. A scenario pass prints its approval= line, then
-# dev-instance.sh's own root= (the instance), api_url=, and task= lines.
+# approval still needed, next=<command> for a step the operator runs
+# just before submit, and, on a ready root, submit=<command>, which submits
+# the pass's inputs once the deputy is started. A scenario pass prints its
+# approval= line, then dev-instance.sh's own root= (the instance), api_url=,
+# and task= lines.
 # Progress goes to stderr; logs go to <root>/logs.
 #
 # Exit codes: 0 when the root is ready, 3 when it stopped for an approval,
@@ -123,6 +137,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ -n "$pass" && -n "$build" && -n "$name" ]] || usage
+serve_stall=${EXIT_ROOT_SERVE_STALL_SECONDS:-900}
+[[ "$serve_stall" =~ ^[1-9][0-9]*$ ]] || refuse "EXIT_ROOT_SERVE_STALL_SECONDS must be a positive number of seconds"
 
 repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 passes_dir="$repo_root/scripts/exit-root/passes"
@@ -442,24 +458,40 @@ deputy_owned_items() {
 start_result=''
 setup_start() {
   local out="$logs/deputy-setup.out" err="$logs/deputy-setup.err" manifest="$root/daemon/composition-manifest.json"
-  local copy="$logs/composition-manifest.json" pid rc=0 _ line
+  local copy="$logs/composition-manifest.json" pid rc=0 _ line size=-1 now_size started=$SECONDS still_since=$SECONDS
   say "starting the deputy once on $root (log: $err)"
   # The deputy removes an earlier manifest itself; removing it and the
   # copy here too keeps a stale one from passing for this start's.
   rm -f "$manifest" "$copy"
+  # Created here so the wait below never reads the log before the
+  # background job's redirect makes it.
+  : >"$out"
+  : >"$err"
   "$freesided" deputy -root "$root" >"$out" 2>"$err" &
   pid=$!
-  for _ in $(seq 1 4500); do
-    grep -q '"api_url"' "$out" 2>/dev/null && break
-    kill -0 "$pid" 2>/dev/null || break
+  # A cold base can take longer than any fixed deadline to build and check,
+  # so the wait lasts while the deputy's log grows and ends only once it
+  # has stayed still for the stall limit.
+  while ! grep -q '"api_url"' "$out" 2>/dev/null; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      # It may have served just before it exited.
+      grep -q '"api_url"' "$out" 2>/dev/null && break
+      wait "$pid" 2>/dev/null || rc=$?
+      tail -n 20 "$err" >&2
+      die "the deputy exited before it served (status $rc)"
+    fi
+    now_size=$(wc -c <"$err" | tr -d ' ')
+    if [[ "$now_size" != "$size" ]]; then
+      size=$now_size
+      still_since=$SECONDS
+    elif ((SECONDS - still_since >= serve_stall)); then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      tail -n 20 "$err" >&2
+      die "the deputy timed out after $((SECONDS - started)) s; its log $err stayed still for $serve_stall s"
+    fi
     sleep 0.2
   done
-  if ! grep -q '"api_url"' "$out" 2>/dev/null; then
-    kill -TERM "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || rc=$?
-    tail -n 20 "$err" >&2
-    die "the deputy exited or never served (status $rc)"
-  fi
   # Kept at the deputy's own mode, and outside daemon/, where
   # submit --require-composition would read it as this run's manifest.
   [[ ! -f "$manifest" ]] || (umask 077 && cp "$manifest" "$copy")
@@ -502,7 +534,11 @@ commit_tree() {
   index="$work/tree-index"
   rm -f "$index"
   GIT_INDEX_FILE=$index git -C "$tree_checkout" read-tree "$base"
-  GIT_INDEX_FILE=$index git -C "$tree_checkout" rm --cached -r -q --ignore-unmatch -- \
+  # The scratch index holds the branch tip, but git rm checks its entries
+  # against the checkout's HEAD and working tree, which needn't match the
+  # tip; -f skips that check, and with --cached it still touches only the
+  # scratch index.
+  GIT_INDEX_FILE=$index git -C "$tree_checkout" rm --cached -f -r -q --ignore-unmatch -- \
     policy/fragments policy/lineup policy/agents.lock
   GIT_INDEX_FILE=$index git -C "$tree_checkout" apply --cached "$patch"
   tree=$(GIT_INDEX_FILE=$index git -C "$tree_checkout" write-tree)
@@ -555,6 +591,9 @@ onboard_review() {
     local command
     command="$(printf '%q ' "$freesided" "${args[@]}" -approve "$(jq -r '.approval_digest' "$review")")> $(printf '%q' "$approved")"
     state_set approval_command "$(jq -n --arg c "$command" '$c')"
+    # What this review bound, so a later run sees when either moves.
+    state_set onboarded "$(jq -n --arg d "$digest" --arg b "$(setting .repository.base_sha)" \
+      '{review_configuration_digest: $d, base_sha: $b}')"
     emit_head
     say "read the review in $review before approving"
     printf 'approval=%s\n' "$command"
@@ -564,36 +603,100 @@ onboard_review() {
   esac
 }
 
-take_onboarding_image() {
-  local approved="$root/daemon/onboard-approved.json" image recipe
-  if [[ ! -s "$approved" ]] || [[ "$(jq -r '.status // empty' "$approved")" != complete ]]; then
-    emit_head
-    say "no completed onboarding approval at $approved; run the approval command, which writes it"
-    printf 'approval=%s\n' "$(state_get .approval_command)"
-    exit 3
-  fi
+approved_complete() {
+  local approved="$root/daemon/onboard-approved.json"
+  [[ -s "$approved" && "$(jq -r '.status // empty' "$approved" 2>/dev/null)" == complete ]]
+}
+
+# stop_for_approval: the review ran, but its approval hasn't; exit 3.
+stop_for_approval() {
+  emit_head
+  say "no completed onboarding approval at $root/daemon/onboard-approved.json; run the approval command, which writes it"
+  printf 'approval=%s\n' "$(state_get .approval_command)"
+  exit 3
+}
+
+# pin_approved_image: pins the image and recipe of a completed approval the
+# script hasn't pinned from yet. A re-onboarding's approval can name a new
+# image while prelaunch still passes on the old one, so this runs whenever
+# the approval changes, not only when prelaunch names the image missing.
+pin_approved_image() {
+  local approved="$root/daemon/onboard-approved.json" source image recipe
+  approved_complete || return 0
+  source=$(git -C "$repo_root" hash-object -- "$approved")
+  [[ "$source" != "$(state_get .image_source)" ]] || return 0
   image=$(jq -r '.project_image.image_ref // empty' "$approved")
   recipe=$(jq -r '.project_image.recipe_digest // empty' "$approved")
   [[ -n "$image" && -n "$recipe" ]] || die "$approved names no project_image"
-  if [[ "$image" == "$(state_get .image)" && "$recipe" == "$(state_get .recipe)" ]]; then
-    die "settings already carry the approved image, but prelaunch still reports $missing: $(jq -r '.first_missing.evidence' "$root/daemon/prelaunch.json")"
-  fi
   state_set image "\"$image\""
   state_set recipe "\"$recipe\""
+  state_set image_source "\"$source\""
   say "set images.agent to $image and approved_recipe to $recipe"
 }
 
+# take_onboarding_image: prelaunch names project_image or approved_recipe
+# missing, after pin_approved_image already pinned any completed approval.
+take_onboarding_image() {
+  approved_complete || stop_for_approval
+  die "settings already carry the approved image, but prelaunch still reports $missing: $(jq -r '.first_missing.evidence' "$root/daemon/prelaunch.json")"
+}
+
+# check_onboarding: prelaunch keeps passing a trust profile whose review
+# configuration or base has since moved, so the script compares both with
+# what its onboarding review bound and reviews again when either moved. A
+# review not yet approved stops for its approval rather than running again.
+# A root onboarded before the script recorded this skips the check.
+check_onboarding() {
+  local bound_digest bound_base digest base
+  [[ -n "$(state_get .onboarded)" ]] || return 0
+  bound_digest=$(state_get .onboarded.review_configuration_digest)
+  bound_base=$(state_get .onboarded.base_sha)
+  digest=$(state_get .review_configuration_digest)
+  base=$(setting .repository.base_sha)
+  if [[ "$digest" != "$bound_digest" ]]; then
+    say "the review configuration moved from $bound_digest to $digest since the onboarding review; reviewing again"
+    onboard_review
+  fi
+  if [[ "$base" != "$bound_base" ]]; then
+    say "repository.base_sha moved from $bound_base to $base since the onboarding review; reviewing again"
+    onboard_review
+  fi
+  approved_complete || stop_for_approval
+}
+
+# start_key: the inputs a deputy start adopts from, the rendered settings
+# and the root's enrollments, as one digest. The enrollment part keeps only
+# what adoption reads, leaving out generations, expiries, timestamps, pools,
+# and model catalogs, which change without changing the adopted tree. Prints
+# nothing when the enrollments can't be read, which forces a start.
+start_key() {
+  local settings_key enrollments db="$root/daemon/freeside.db"
+  settings_key=$(git -C "$repo_root" hash-object -- "$settings")
+  if [[ ! -f "$db" ]]; then
+    enrollments=none
+  elif ! enrollments=$("$freesided" auth list -db "$db" 2>"$logs/auth-list.err" | jq -cS '
+    [.identities | sort_by(.id)[] | {id, enabled, enrollments: (.enrollments | sort_by(.id)
+      | map({id, harness_client, route, auth_method, credential_mode}))}]'); then
+    say "could not read the enrollments in $db (log: $logs/auth-list.err); starting the deputy"
+    return 0
+  fi
+  printf '%s\n%s\n' "$settings_key" "$enrollments" | git -C "$repo_root" hash-object --stdin
+}
+
 # Prelaunch compares agent_tree.commit only with the patch the last start
-# wrote, and a new build's prompt packages or a changed machine file alter
-# what adoption emits without changing that patch. So any settings change
-# since the last start that composed gets a start of its own, before
-# prelaunch is trusted; the state file keeps that start's settings digest.
+# wrote, and a new build's prompt packages, a changed machine file, or a new
+# enrollment alter what adoption emits without changing that patch. So any
+# change to the start's inputs since the last start that composed gets a
+# start of its own, before prelaunch is trusted; the state file keeps the
+# inputs' digest as that start left them, since the start itself records
+# the settings' identities.
 committed=false
 rechecked=false
 for _ in 1 2 3 4 5 6 7 8; do
+  pin_approved_image
   render_settings
-  key=$(git -C "$repo_root" hash-object -- "$settings")
-  if [[ "$key" != "$(state_get .composed_settings)" ]]; then
+  key=$(start_key)
+  if [[ -z "$key" || "$key" != "$(state_get .composed_inputs)" ]]; then
     setup_start
     if [[ "$start_result" == tree_mismatch ]]; then
       [[ "$committed" == false ]] || die "the deputy still reports a tree mismatch after the commit; see $logs/deputy-setup.err"
@@ -601,8 +704,10 @@ for _ in 1 2 3 4 5 6 7 8; do
       committed=true
       continue
     fi
-    state_set composed_settings "\"$key\""
+    key=$(start_key)
+    [[ -z "$key" ]] || state_set composed_inputs "\"$key\""
   fi
+  check_onboarding
   run_prelaunch
   case $missing in
   agent_tree)
@@ -680,4 +785,7 @@ if [[ -n "$seed" ]]; then
     "$(printf '%q ' "$freesided" auth seed-exhausted -db "$root/daemon/freeside.db" -pool "identity:$seed_identity" \
       -window five_hour -model "$(setting .writers.specifier.model)")"
 fi
-say "ready: start the deputy with $freesided deputy -root $root; the submit inputs are in $root/inputs"
+printf 'submit=%s\n' "$(printf '%q ' "$freesided" submit -db "$root/daemon/freeside.db" -require-composition \
+  -project "$(setting .repository.project)" -task "$root/inputs/task.md" -policy "$root/inputs/policy.json" \
+  -publication "$root/inputs/publication.json" -work-unit "$root/inputs/work-unit.json" | sed 's/ $//')"
+say "ready: start the deputy with $freesided deputy -root $root, then run the submit= command, which waits for the deputy to finish starting"

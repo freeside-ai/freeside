@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -81,6 +82,13 @@ func openStoreOrControl(dbPath string) (_ storeAccess, err error) {
 		return storeAccess{}, err
 	}
 	client, err := newControlClient(canonical)
+	if errors.Is(err, fs.ErrNotExist) {
+		// A starting daemon holds the lock before it serves, so a missing
+		// address isn't proof of an old daemon.
+		return storeAccess{}, fmt.Errorf("%s.daemon.lock is held, but its daemon has published no control address yet: "+
+			"a daemon that is starting publishes it once it serves, so wait and rerun; "+
+			"a daemon too old to publish one needs a stop or an upgrade: %w", canonical, err)
+	}
 	if err != nil {
 		return storeAccess{}, fmt.Errorf("%s.daemon.lock is held, but the daemon control socket is unavailable (stop or upgrade the daemon): %w", canonical, err)
 	}

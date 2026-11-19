@@ -8,20 +8,25 @@
 # emits a tree patch derived from the settings' prompt package and second
 # writer, reports a mismatch until agent_tree.commit holds that tree, and,
 # as the real one does, writes its composition manifest before it serves
-# and removes it on every stop, clean or not;
-# `prelaunch` derives first_missing from the same tree, a trust marker that
-# `onboard -approve` writes, and the image and recipe that approval prints;
-# `routing`, `set-pool-limit`, and `probe-lineup` record their arguments.
+# and removes it on every stop, clean or not, and records the settings'
+# identities where `auth list` reads them; `prelaunch` derives
+# first_missing from the same tree, a trust marker that `onboard -approve`
+# writes, and the image and recipe that approval prints; `routing`,
+# `set-pool-limit`, and `probe-lineup` record their arguments, and
+# `probe-lineup` also stamps the enrollments as model discovery does.
 # A stand-in `lsof` reports the ports a case lists as listening. The
 # synthetic repository's dev-instance.sh is a stand-in too, since
 # test-dev-instance.sh covers the real one.
 #
 # The cases cover the settings rendering from the fixture template (every
 # fixture-table value and the machine file, nothing else), the tree commit on
-# its own branch, the stop at the onboarding approval and the resume after
-# it, the installation-intent stop, the rerun on a new build, port selection,
-# the seeded-routing overlay, the scenario pass, and the refusals that create
-# nothing.
+# its own branch and a later one against a checkout whose policy files
+# differ, the stop at the onboarding approval and the resume after it, the
+# installation-intent stop, the rerun on a new build or a new enrollment,
+# the serve wait, the re-onboarding after a moved base or review
+# configuration, the re-pin of a newer approval's image, the submit line,
+# port selection, the seeded-routing overlay, the scenario pass, and the
+# refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -89,10 +94,11 @@ assert_not_exists() {
 STUB_BIN=$TMP/bin
 mkdir -p "$STUB_BIN"
 FAKE_IMAGE="registry.test/fixture@sha256:$(printf 'b%.0s' $(seq 1 64))"
+FAKE_IMAGE2="registry.test/fixture@sha256:$(printf '9%.0s' $(seq 1 64))"
 FAKE_RECIPE="sha256:$(printf 'c%.0s' $(seq 1 64))"
 REVIEW_DIGEST="sha256:$(printf 'd%.0s' $(seq 1 64))"
 APPROVAL_DIGEST="sha256:$(printf 'a%.0s' $(seq 1 64))"
-export FAKE_IMAGE FAKE_RECIPE REVIEW_DIGEST APPROVAL_DIGEST
+export FAKE_IMAGE FAKE_IMAGE2 FAKE_RECIPE REVIEW_DIGEST APPROVAL_DIGEST
 
 cat >"$STUB_BIN/go" <<'GO_STUB'
 #!/usr/bin/env bash
@@ -175,7 +181,10 @@ prelaunch)
     missing=agent_tree
   elif [[ "$(cat "$root/daemon/fake-trust" 2>/dev/null)" != "$REVIEW_DIGEST" ]]; then
     missing=trust_profile
-  elif [[ "$(jq -r '.images.agent' "$settings")" != "$FAKE_IMAGE" ]]; then
+  elif [[ "$(jq -r '.images.agent' "$settings")" != "$FAKE_IMAGE" &&
+    "$(jq -r '.images.agent' "$settings")" != "$FAKE_IMAGE2" ]]; then
+    # Either approved image passes, so a stale one goes unseen, as a real
+    # image that still exists does.
     missing=project_image
   elif [[ "$(jq -r '.approved_recipe' "$settings")" != "$FAKE_RECIPE" ]]; then
     missing=approved_recipe
@@ -208,6 +217,23 @@ deputy)
     exit 2
   }
   echo "freesided deputy: build fake" >&2
+  case ${FAKE_DEPUTY_MODE:-} in
+  crash)
+    echo "freesided deputy: fake crash" >&2
+    exit 1
+    ;;
+  silent)
+    trap 'exit 0' TERM
+    while :; do sleep 0.1; done
+    ;;
+  slow)
+    # Longer than the case's stall limit in all, but never still for it.
+    for _ in $(seq 1 15); do
+      echo "freesided deputy: still checking" >&2
+      sleep 0.2
+    done
+    ;;
+  esac
   manifest=$root/daemon/composition-manifest.json
   rm -f "$manifest"
   # stop <status>: the real deputy's lease release removes the manifest
@@ -217,6 +243,18 @@ deputy)
     exit "$1"
   }
   : >"$root/daemon/freeside.db"
+  # Records the settings' identities as the real start does, keeping any
+  # other enrollment (an enroll-codex) and stamping a time each start
+  # changes, which adoption doesn't read.
+  enrollments=$root/daemon/fake-enrollments.json
+  [[ -f "$enrollments" ]] || echo '{"identities":[]}' >"$enrollments"
+  jq --argjson ids "$(jq -c '[.agent_tree.auth_identity, (.agent_tree.second_writer.auth_identity // empty)]' "$settings")" \
+    --arg now "$(date +%s)-$RANDOM" '
+    .identities |= reduce $ids[] as $id (.; if any(.[]; .id == $id) then . else . + [{id: $id, enabled: true,
+      enrollments: [{id: ($id + "/claude_code"), harness_client: "claude_code", route: "subscription",
+        auth_method: "setup_token", credential_mode: "volume"}]}] end)
+    | .identities[].enrollments[].recorded_at = $now' "$enrollments" >"$enrollments.tmp"
+  mv "$enrollments.tmp" "$enrollments"
   if [[ "${FAKE_DEPUTY_MODE:-}" == exporter ]]; then
     echo "freesided deputy: exporter_image failed; execution stays disabled (fake)" >&2
     trap 'stop 0' TERM
@@ -229,7 +267,9 @@ deputy)
   if ! tree_matches "$settings"; then
     echo "freesided deputy: agent_tree failed; execution stays disabled (fake mismatch)" >&2
   else
-    jq -n --arg d "$REVIEW_DIGEST" '{review_configuration_digest: $d}' >"$manifest"
+    # FAKE_MANIFEST_DIGEST moves the review configuration without moving
+    # the trust marker prelaunch checks, as a new exporter image does.
+    jq -n --arg d "${FAKE_MANIFEST_DIGEST:-$REVIEW_DIGEST}" '{review_configuration_digest: $d}' >"$manifest"
     if [[ "$(cat "$root/daemon/fake-trust" 2>/dev/null)" != "$REVIEW_DIGEST" ]]; then
       echo "freesided deputy: trust_profile failed; execution stays disabled (fake)" >&2
     else
@@ -251,8 +291,10 @@ onboard)
   printf '%s\n' "$@" >"$STUB_DIR/onboard-$((n + 1)).args"
   db=$(flag -db "$@")
   if [[ -n "$(flag -approve "$@")" ]]; then
-    printf '%s\n' "$(flag -review-config-digest "$@")" >"$(dirname "$db")/fake-trust"
-    jq -n --arg i "$FAKE_IMAGE" --arg r "$FAKE_RECIPE" \
+    # The trust marker stays REVIEW_DIGEST: prelaunch keeps passing the
+    # profile after the review configuration moves.
+    printf '%s\n' "$REVIEW_DIGEST" >"$(dirname "$db")/fake-trust"
+    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
       '{status: "complete", project_image: {image_ref: $i, recipe_digest: $r}}'
   elif [[ "${FAKE_ONBOARD_MODE:-}" == pending ]] && ! printf '%s\n' "$@" | grep -qx -- -resume; then
     jq -n '{status: "installation_pending", installation_url: "https://github.com/apps/fake/installations/new"}'
@@ -270,7 +312,24 @@ set-pool-limit)
   ;;
 probe-lineup)
   printf '%s\n' "$@" >"$STUB_DIR/probe.args"
+  # Model discovery updates what auth list shows without changing what
+  # adoption reads.
+  enrollments=$(flag -root "$@")/daemon/fake-enrollments.json
+  if [[ -f "$enrollments" ]]; then
+    jq --arg now "$(date +%s)-$RANDOM" '.identities[].enrollments[].model_catalog = {observed_at: $now}' \
+      "$enrollments" >"$enrollments.tmp"
+    mv "$enrollments.tmp" "$enrollments"
+  fi
   echo '{}'
+  ;;
+auth)
+  [[ "${1:-}" == list ]] || {
+    echo "fake freesided: no auth ${1:-}" >&2
+    exit 2
+  }
+  shift
+  db=$(flag -db "$@")
+  cat "$(dirname "$db")/fake-enrollments.json"
   ;;
 *)
   echo "fake freesided: no $cmd" >&2
@@ -446,6 +505,9 @@ assert_not_exists "$CASE_DIR/go.log"
 assert_not_exists "$CASE_DIR/onboard-1.args"
 assert_line "$CASE_DIR/prelaunch.args" '-no-live'
 assert_line "$CASE_DIR/prelaunch.args" "$FIX/inputs/policy.json"
+assert_line "$CASE_DIR/stdout" "submit=$FIX/builds/$SHA1/freesided submit -db $FIX/daemon/freeside.db -require-composition \
+-project fixture -task $FIX/inputs/task.md -policy $FIX/inputs/policy.json -publication $FIX/inputs/publication.json \
+-work-unit $FIX/inputs/work-unit.json"
 
 begin_case "a rerun on a new build rebuilds, re-adopts, and keeps the root, database, and port"
 old_tip=$(git -C "$TREE" rev-parse exit-root/fixture)
@@ -468,6 +530,19 @@ assert_rc 0
 if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "an unchanged rerun started the deputy"; else ok; fi
 assert_eq "$(git -C "$TREE" rev-parse exit-root/fixture)" "$old_tip" 'tree branch unchanged'
 assert_not_exists "$CASE_DIR/go.log"
+
+begin_case "a new enrollment starts the deputy once, and the rerun after it starts none"
+jq '.identities[0].enrollments += [{id: "claude-first/codex", harness_client: "codex", route: "subscription",
+  auth_method: "chatgpt", credential_mode: "volume", recorded_at: "enrolled"}]' "$FIX/daemon/fake-enrollments.json" \
+  >"$CASE_DIR/enrollments.json"
+cp "$CASE_DIR/enrollments.json" "$FIX/daemon/fake-enrollments.json"
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts after the enrollment'
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-1.log"
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "the rerun after the enrollment started the deputy"; else ok; fi
 
 begin_case "a rerun is refused while something listens on the root's port"
 FAKE_LISTENING=9100 run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
@@ -615,6 +690,87 @@ if [[ "$port" != 9100 ]]; then ok; else report_failure "scenario took a claimed 
 run_exit_root --pass scenario:quota-park --build "$SHA1" --machine "$MACHINE" park
 assert_rc 2
 assert_contains 'single-use'
+
+begin_case "a deputy whose log keeps growing is waited for past the stall limit"
+# The limit counts whole seconds, so 2 allows the fake's short silent steps
+# while its 3 s of logging still outlasts it.
+FAKE_DEPUTY_MODE=slow EXIT_ROOT_SERVE_STALL_SECONDS=2 run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" slow
+assert_rc 3
+assert_line "$CASE_DIR/stdout" "root=$ROOTS/slow"
+assert_not_contains 'timed out'
+
+begin_case "a deputy whose log stays still times out with its own message"
+FAKE_DEPUTY_MODE=silent EXIT_ROOT_SERVE_STALL_SECONDS=1 run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" silent
+assert_rc 1
+assert_contains 'the deputy timed out after'
+assert_contains "its log $ROOTS/silent/logs/deputy-setup.err stayed still for 1 s"
+assert_not_contains 'exited'
+
+begin_case "a deputy that exits before it serves says so, with its status"
+FAKE_DEPUTY_MODE=crash run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" crash
+assert_rc 1
+assert_contains 'the deputy exited before it served (status 1)'
+assert_not_contains 'timed out'
+
+begin_case "a second tree commit succeeds when the checkout's HEAD and working tree hold other policy files"
+OP_TREE=$TMP/operator-tree
+git_q init "$OP_TREE"
+mkdir -p "$OP_TREE/policy"
+printf 'operator lineup\n' >"$OP_TREE/policy/lineup"
+git_q -C "$OP_TREE" add -A
+git_q -C "$OP_TREE" commit -m 'Operator lineup'
+printf 'operator lineup, edited\n' >"$OP_TREE/policy/lineup"
+M=$CASE_DIR/machine.json
+make_machine "$M" "$ROOTS" ".settings.agent_tree.checkout = \"$OP_TREE\""
+run_exit_root --pass fixture --build "$SHA1" --machine "$M" optree
+assert_rc 3
+run_exit_root --pass fixture --build "$SHA2" --machine "$M" optree
+assert_rc 3
+tip=$(git -C "$OP_TREE" rev-parse --verify --quiet refs/heads/exit-root/fixture || true)
+assert_eq "$(git -C "$OP_TREE" log --format=%s exit-root/fixture | grep -c 'Adopt the fixture exit-root tree')" 2 'adopt commits'
+assert_eq "$(jq -r .tree_commit "$ROOTS/optree/exit-root.json")" "$tip" 'state tree commit follows the branch'
+assert_eq "$(git -C "$OP_TREE" show "$tip:policy/lineup")" \
+  "lineup $(cksum <"$ROOTS/optree/builds/$SHA2/src/prompts/phase-1a/implementer.md" | cut -d' ' -f1) none" 'tree holds the second patch'
+assert_eq "$(git -C "$OP_TREE" status --porcelain)" ' M policy/lineup' 'operator checkout unchanged'
+
+begin_case "a moved base re-onboards, and a rerun before its approval stops for that approval"
+TPL=$TMP/moves-template
+cp -R "$REPO/scripts/exit-root/passes/fixture" "$TPL"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+approve
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 0
+NEW_BASE=1111111111111111111111111111111111111111
+jq --arg b "$NEW_BASE" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
+mv "$CASE_DIR/t.json" "$TPL/settings.json"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+assert_contains "repository.base_sha moved from 584dba6120ee6e126460438032c3189762603306 to $NEW_BASE"
+# onboard-1 is the first review and onboard-2 the operator's approval.
+assert_line "$CASE_DIR/onboard-3.args" "$NEW_BASE"
+first_approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+assert_not_exists "$CASE_DIR/onboard-4.args"
+assert_eq "$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")" "$first_approval" 'stored approval command'
+MOVES_DIR=$CASE_DIR
+
+begin_case "an approval that names a new image is pinned though prelaunch passes on the old one"
+CASE_DIR=$MOVES_DIR FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 approve
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 0
+assert_eq "$(jq -r .images.agent "$ROOTS/moves/daemon/settings.json")" "$FAKE_IMAGE2" 'image from the new approval'
+assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts for the new image'
+
+begin_case "a moved review configuration re-onboards with the new digest"
+NEW_DIGEST="sha256:$(printf '7%.0s' $(seq 1 64))"
+jq '.writers.implementer.effort = "medium"' "$TPL/settings.json" >"$CASE_DIR/t.json"
+mv "$CASE_DIR/t.json" "$TPL/settings.json"
+FAKE_MANIFEST_DIGEST=$NEW_DIGEST run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+assert_contains "the review configuration moved from $REVIEW_DIGEST to $NEW_DIGEST"
+assert_line "$CASE_DIR/onboard-1.args" "$NEW_DIGEST"
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild
