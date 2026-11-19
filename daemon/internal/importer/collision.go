@@ -20,8 +20,9 @@ import (
 // fromBase mode-only change) keeps a path that already existed in base,
 // so neither can introduce a new fold-collision — any collision on a
 // modified path pre-existed in base and is not the candidate's doing. A
-// non-regular add (symlink, submodule, special, unusual mode) is already
-// publish-blocking on its own class, so a collision finding on it would
+// non-regular add (symlink, submodule, special, unusual mode) is either
+// publish-blocking on its own class or, when the base ignores it,
+// excluded from the tree (ignored.go), so a collision finding on it would
 // be redundant. The introducing add is tested against the full
 // post-import path set — base paths the candidate leaves in place
 // included — because a new file colliding with an untouched base entry
@@ -97,8 +98,8 @@ func detectCollisions(changes []plannedChange, base map[string]treeEntry) []Find
 		// Only a newly added regular-file path is queried: a modify keeps
 		// an existing path (any collision on it pre-existed in base), and
 		// a non-regular add (symlink, submodule, special, unusual mode)
-		// is already publish-blocking on its own, so layering a collision
-		// finding on it is redundant. Regular adds carry a git mode;
+		// is publish-blocking on its own or excluded from the tree, so
+		// layering a collision finding on it is redundant. Regular adds carry a git mode;
 		// non-regular changes do not.
 		if c.kind != ChangeAdded || c.mode == "" {
 			continue

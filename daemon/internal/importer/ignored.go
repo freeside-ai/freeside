@@ -19,8 +19,10 @@ import (
 
 // ignoredAdditions identifies additions the exact trusted base ignores and
 // does not track: a new regular file, including one whose blob the export caps
-// omitted, or a new nested repository (a submodule entry, such as a package
-// manager's checkout), with nothing tracked at or beneath its path. Only
+// omitted, a new symlink (such as the `.build/debug` link SwiftPM makes), or a
+// new nested repository (a submodule entry, such as a package manager's
+// checkout), with nothing tracked at or beneath its path. A symlink matches by
+// its own name as a file, as Git judges one; its target is never read. Only
 // base-owned ignore rules can exclude it from construction. Every returned
 // byte still passes the ordinary intake and security checks first; the caller
 // drops only the findings that describe content no commit will hold
@@ -40,7 +42,7 @@ func ignoredAdditions(ctx context.Context, g *gitRunner, base map[string]treeEnt
 		regular := c.mode == "100644" || c.mode == "100755"
 		// check-ignore reads its input as pathspecs: a leading ':' is magic
 		// that would match a different path than the candidate's.
-		if c.kind != ChangeAdded || (!regular && !c.nestedRepository) || strings.HasPrefix(c.path, ":") {
+		if c.kind != ChangeAdded || (!regular && !c.symlink && !c.nestedRepository) || strings.HasPrefix(c.path, ":") {
 			continue
 		}
 		if tracked == nil {

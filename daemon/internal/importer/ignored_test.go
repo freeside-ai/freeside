@@ -272,14 +272,13 @@ func TestIgnoredOutputRetainsNonRegularAndIntegrityChecks(t *testing.T) {
 	checkout, base := initBaseRepo(t, files)
 	opts := testImportOptions(base)
 	opts.Policy.Allowlist = []string{"src/*.ts"}
-	target := "../src/main.ts"
-	entries := []export.Entry{regularEntryFor(".gitignore", files[".gitignore"], false), {Path: "dist/link", Kind: export.EntrySymlink, Target: &target}}
+	entries := []export.Entry{regularEntryFor(".gitignore", files[".gitignore"], false), {Path: "dist/fifo", Kind: export.EntrySpecial}}
 	result, err := Import(t.Context(), handoffFromEntries(t, entries, files[".gitignore"]), cloneAtBase(t, checkout), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.CommitSHA != "" || !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingNonRegularChange && f.Path == "dist/link" }) {
-		t.Fatalf("ignored symlink lost its gate: %+v", result)
+	if result.CommitSHA != "" || !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingNonRegularChange && f.Path == "dist/fifo" }) {
+		t.Fatalf("ignored special file lost its gate: %+v", result)
 	}
 	files["dist/out.js"] = "generated"
 	handoff := ignoredFixtureHandoff(t, files)
@@ -388,11 +387,14 @@ func TestImportExcludesIgnoredHydrationDebris(t *testing.T) {
 			files := map[string]string{".gitignore": "/vendor/\n", "app/.gitignore": ".build/\n", "app/main.swift": "old"}
 			checkout, base := initBaseRepo(t, files)
 			pack, unscanned := strings.Repeat("p", 100), strings.Repeat("u", 40)
+			// SwiftPM links .build/debug to the triple's build directory.
+			debug := "arm64-apple-macosx/debug"
 			entries := []export.Entry{
 				regularEntryFor(".gitignore", files[".gitignore"], false),
 				regularEntryFor("app/.gitignore", files["app/.gitignore"], false),
 				regularEntryFor("app/main.swift", "new", false),
 				{Path: "app/.build/checkouts/Yams", Kind: export.EntrySubmodule},
+				{Path: "app/.build/debug", Kind: export.EntrySymlink, Target: &debug},
 				{Path: "vendor", Kind: export.EntrySubmodule},
 				regularEntryFor("app/.build/repositories/Yams/objects/pack/big.pack", pack, true),
 				regularEntryFor("app/.build/repositories/Yams/objects/pack/mid.pack", unscanned, false),
@@ -449,36 +451,46 @@ func TestImportExcludedAdditionKeepsSecretAndTotalSize(t *testing.T) {
 	}
 }
 
-func TestImportIgnoredNestedRepositoryStillBlocks(t *testing.T) {
+// An excludable non-regular addition keeps its gate when the base doesn't
+// ignore it, or when it sits over tracked content the ignore rule covers.
+func TestImportIgnoredNonRegularAdditionStillBlocks(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		files   map[string]string
-		tracked string
-	}{
-		{name: "not ignored", files: map[string]string{".gitignore": "dist/\n", "a.txt": "old"}},
-		{name: "over tracked content", files: map[string]string{".gitignore": "sub/\n", "a.txt": "old", "sub/inner.txt": "data"}, tracked: "sub/inner.txt"},
+	target := "elsewhere"
+	for _, entry := range []export.Entry{
+		{Path: "sub", Kind: export.EntrySubmodule},
+		{Path: "sub", Kind: export.EntrySymlink, Target: &target},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			checkout, base := initBaseRepo(t, tc.files)
-			if tc.tracked != "" {
-				rungit(t, checkout, "add", "-f", "--", tc.tracked)
-				rungit(t, checkout, "commit", "-qm", "track beneath ignored directory")
-				base = rungit(t, checkout, "rev-parse", "HEAD")
-			}
-			entries := []export.Entry{
-				regularEntryFor(".gitignore", tc.files[".gitignore"], false),
-				regularEntryFor("a.txt", "new", false),
-				{Path: "sub", Kind: export.EntrySubmodule},
-			}
-			result, err := Import(t.Context(), handoffFromEntries(t, entries, tc.files[".gitignore"], "new"), cloneAtBase(t, checkout), testImportOptions(base))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result.CommitSHA != "" || !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingNonRegularChange && f.Path == "sub" }) {
-				t.Fatalf("nested repository lost its gate: %+v", result)
-			}
-		})
+		for _, tc := range []struct {
+			name    string
+			files   map[string]string
+			tracked string
+		}{
+			{name: "not ignored", files: map[string]string{".gitignore": "dist/\n", "a.txt": "old"}},
+			// "sub" without a slash matches a symlink and a directory alike,
+			// so only the tracked-content guard keeps either candidate.
+			{name: "over tracked content", files: map[string]string{".gitignore": "sub\n", "a.txt": "old", "sub/inner.txt": "data"}, tracked: "sub/inner.txt"},
+		} {
+			t.Run(string(entry.Kind)+"/"+tc.name, func(t *testing.T) {
+				checkout, base := initBaseRepo(t, tc.files)
+				if tc.tracked != "" {
+					rungit(t, checkout, "add", "-f", "--", tc.tracked)
+					rungit(t, checkout, "commit", "-qm", "track beneath ignored directory")
+					base = rungit(t, checkout, "rev-parse", "HEAD")
+				}
+				entries := []export.Entry{
+					regularEntryFor(".gitignore", tc.files[".gitignore"], false),
+					regularEntryFor("a.txt", "new", false),
+					entry,
+				}
+				result, err := Import(t.Context(), handoffFromEntries(t, entries, tc.files[".gitignore"], "new"), cloneAtBase(t, checkout), testImportOptions(base))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.CommitSHA != "" || !slices.ContainsFunc(result.Findings, func(f Finding) bool { return f.Kind == FindingNonRegularChange && f.Path == "sub" }) {
+					t.Fatalf("%s lost its gate: %+v", entry.Kind, result)
+				}
+			})
+		}
 	}
 }
 

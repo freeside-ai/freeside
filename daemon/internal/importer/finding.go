@@ -150,10 +150,13 @@ func (k FindingKind) blocksCommit() bool {
 // inapplicableToExcludedAddition reports whether a finding on a base-ignored
 // addition the importer excludes stops applying once that addition leaves the
 // candidate. Each such kind describes a gap in content no commit will hold:
-// scope, a withheld or unscanned blob, a per-file size, or a nested
-// repository's opaque content. The importer keeps a secret match on scanned
-// content, the path-class and collision findings, and the change set's total
-// size, so excluding debris never hides those. The switch omits default so a
+// scope, a withheld or unscanned blob, a per-file size, or a symlink's or
+// nested repository's non-regular entry. The importer keeps a secret match
+// on scanned content, the path-class findings, a regular file's collision
+// finding, and the change set's total size, so excluding debris never hides
+// those. Collision detection never queries a non-regular addition, so an
+// excluded symlink or nested repository carries no collision finding; it
+// never enters the tree whose paths could collide. The switch omits default so a
 // new FindingKind must decide; the trailing return keeps the invalid zero value.
 func (k FindingKind) inapplicableToExcludedAddition() bool {
 	switch k {
