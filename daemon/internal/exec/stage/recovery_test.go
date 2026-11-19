@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -2220,5 +2222,117 @@ func TestRunningRecoveryIsNeverTerminalizedByGrace(t *testing.T) {
 	}
 	if len(exports.outcomes) != 0 {
 		t.Fatalf("grace terminalized a running intent: %d outcomes", len(exports.outcomes))
+	}
+}
+
+// TestMissingReleasedContentConcludesAtOnce: a released export that lacks a
+// blob its manifest stores, or its manifest file, can never import, so
+// recovery concludes the stage failed instead of retrying it for the whole
+// grace (#3428). The export directory is retained. While the export record can't be read, the record and not the
+// directory decides, so recovery stays retryable until it answers.
+func TestMissingReleasedContentConcludesAtOnce(t *testing.T) {
+	t.Parallel()
+	for name, remove := range map[string]string{
+		"blob":     filepath.Join("blobs", "sha256", "*"),
+		"manifest": export.ManifestFilename,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			repo := t.TempDir()
+			if err := runRecoveryGit(ctx, repo, "init", "-q"); err != nil {
+				t.Fatal(err)
+			}
+			if err := runRecoveryGit(ctx, repo, "commit", "-q", "--allow-empty", "-m", "base"); err != nil {
+				t.Fatal(err)
+			}
+			baseSHA, err := runRecoveryGitOutput(ctx, repo, "rev-parse", "HEAD")
+			if err != nil {
+				t.Fatalf("read fixture head: %v", err)
+			}
+			workspace := t.TempDir()
+			if err := os.WriteFile(filepath.Join(workspace, "candidate.txt"), []byte("recovered\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			outDir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(outDir) })
+			manifest, err := export.Export(os.DirFS(workspace), outDir, export.Options{})
+			if err != nil {
+				t.Fatalf("export fixture workspace: %v", err)
+			}
+			removed, err := filepath.Glob(filepath.Join(outDir, remove))
+			if err != nil || len(removed) != 1 {
+				t.Fatalf("exported %s = %v, %v; want one", remove, removed, err)
+			}
+			if err := os.Remove(removed[0]); err != nil {
+				t.Fatal(err)
+			}
+
+			exports := newStubExports()
+			exports.exportLookupErr = errors.New("database is locked")
+			d := newTestDriver(t, &stubGate{}, exports)
+			d.seeder = recoveryGitSeeder{repo: repo}
+			spec := testStartSpec()
+			spec.Base.BaseSHA = baseSHA
+			in := orphanWithSpec(t, d, phaseExported, &releasedExport{
+				Dir: outDir, Manifest: manifest, ObservedBaseSHA: spec.Base.BaseSHA,
+			}, spec)
+
+			if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
+				t.Fatalf("Inspect with the export record unread = %#v, %v; want running", insp, err)
+			}
+			exports.mu.Lock()
+			exports.exportLookupErr = nil
+			exports.mu.Unlock()
+			insp, err := inspectRecovered(t, ctx, d, in.InvocationID)
+			if err != nil || insp.Status != exec.StatusFailed {
+				t.Fatalf("Inspect of an export missing its %s = %#v, %v; want failed", name, insp, err)
+			}
+			result, err := d.Collect(ctx, in.InvocationID)
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if result.Status != exec.StatusFailed ||
+				!strings.Contains(result.Summary, "released export is missing content the import needs") ||
+				!strings.Contains(result.Summary, "export retained at "+outDir) {
+				t.Fatalf("result = %#v, want a failure naming the missing content and the retained export", result)
+			}
+			if _, err := os.Stat(outDir); err != nil {
+				t.Fatalf("export directory was not retained: %v", err)
+			}
+		})
+	}
+}
+
+// TestMissingReleasedContentClass keeps an operating-system failure to open
+// a blob retryable: the importer wraps it in ErrMissingBlob too, and only a
+// file that is not there proves the export lacks it.
+func TestMissingReleasedContentClass(t *testing.T) {
+	t.Parallel()
+	_, readErr := readDigestedFile(filepath.Join(t.TempDir(), "absent"), domain.Digest("sha256:"+strings.Repeat("ab", 32)))
+	cases := []struct {
+		name    string
+		err     error
+		missing bool
+	}{
+		{"importer audit", fmt.Errorf("repository manifest stores x but the handoff does not hold it: %w", importer.ErrMissingBlob), true},
+		{"blob not found", fmt.Errorf("open blob x: %w: %w", importer.ErrMissingBlob, syscall.ENOENT), true},
+		{"descriptor exhaustion", fmt.Errorf("open blob x: %w: %w", importer.ErrMissingBlob, syscall.EMFILE), false},
+		{"stat I/O error", fmt.Errorf("open blob x: %w: %w", importer.ErrMissingBlob,
+			&os.PathError{Op: "fstat", Path: "x", Err: syscall.EIO}), false},
+		{"released file absent", readErr, true},
+		{"released read I/O error", releasedReadError(&os.PathError{Op: "read", Path: "x", Err: syscall.EIO}), false},
+		{"other import failure", errors.New("fetch import base: network down"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := classifyExportCompletion(t.TempDir(), exec.StageResult{}, tc.err)
+			if retryable := errors.Is(err, ErrRecoveryRetryable); retryable == tc.missing {
+				t.Fatalf("classify(%v) = %v; retryable %v, want %v", tc.err, err, retryable, !tc.missing)
+			}
+		})
 	}
 }

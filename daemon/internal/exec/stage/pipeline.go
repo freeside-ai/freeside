@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
@@ -585,7 +587,7 @@ func readBoundedEvidenceBlob(dir string, digest domain.Digest, limit int64) ([]b
 	path := filepath.Join(dir, export.EvidenceBlobsDirname, "sha256", hexDigits)
 	f, err := os.Open(path) //nolint:gosec // G304: gate-released export path addressed by verified digest
 	if err != nil {
-		return nil, fmt.Errorf("read evidence blob %s: %w", digest, err)
+		return nil, fmt.Errorf("read evidence blob %s: %w", digest, releasedReadError(err))
 	}
 	defer func() { _ = f.Close() }()
 	body, err := io.ReadAll(io.LimitReader(f, limit+1))
@@ -746,15 +748,54 @@ func classifyExportCompletion(
 		removeReleasedExport(dir)
 		return result, err
 	}
+	if isMissingReleasedContent(err) {
+		// No retry can supply content the released export lacks, so the
+		// stage concludes failed now rather than after the recovery grace
+		// (#3428). The export may still hold the agent's work, so it is
+		// retained, not removed as a definitive rejection's is.
+		return result, fmt.Errorf(
+			"released export is missing content the import needs: %w; export retained at %s",
+			err, dir)
+	}
 	return result, fmt.Errorf("%w: finish released export: %w",
 		ErrRecoveryRetryable, err)
+}
+
+// errReleasedContentMissing marks a released file the import or its
+// persistence needs that the export directory does not hold, or a stored
+// manifest entry that names no content to hold.
+var errReleasedContentMissing = errors.New("released export does not hold the content")
+
+// isMissingReleasedContent reports whether err proves the released export
+// lacks content the import needs, so no retry can succeed. That is
+// errReleasedContentMissing, or importer.ErrMissingBlob unless it carries an
+// operating-system error other than "not found": the importer wraps a failed
+// blob open in that sentinel too, and an open that failed for want of
+// descriptors or on an I/O error may succeed later. Only this driver removes
+// a released export directory, under the invocation's recovery guard, so a
+// file it no longer finds was never released or was released without it.
+func isMissingReleasedContent(err error) bool {
+	if errors.Is(err, errReleasedContentMissing) {
+		return true
+	}
+	if !errors.Is(err, importer.ErrMissingBlob) {
+		return false
+	}
+	var errno syscall.Errno
+	var pathErr *fs.PathError
+	if errors.As(err, &errno) || errors.As(err, &pathErr) {
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	return true
 }
 
 // isDefinitiveImportRejection contains only candidate-controlled integrity
 // failures. Read/process/configuration errors and unknown classes default to
 // retryable because deleting a completed export on an ambiguous failure is
 // irreversible. ErrMissingBlob is intentionally excluded because importer
-// also wraps operating-system open failures in that sentinel.
+// also wraps operating-system open failures in that sentinel; a missing blob
+// concludes the stage with its export retained instead
+// (isMissingReleasedContent).
 func isDefinitiveImportRejection(err error) bool {
 	return errors.Is(err, importer.ErrManifestInvalid) ||
 		errors.Is(err, importer.ErrManifestTooLarge) ||
@@ -1001,7 +1042,8 @@ func (d *Driver) persistRepositoryBlobs(ctx context.Context, out exportOutcome) 
 			continue
 		}
 		if entry.Digest == nil {
-			return fmt.Errorf("persist repository blob for %q: manifest content is unavailable", entry.Path)
+			return fmt.Errorf("persist repository blob for %q: manifest content is unavailable: %w",
+				entry.Path, errReleasedContentMissing)
 		}
 		digest := domain.Digest(*entry.Digest)
 		hexDigits, ok := contentaddr.Parse(string(digest))
@@ -1086,7 +1128,7 @@ func validateReleasedExport(exportRoot string, in intent, out exportOutcome) err
 	}
 	onDisk, err := os.ReadFile(filepath.Join(clean, export.ManifestFilename)) //nolint:gosec // run-owned export directory authenticated above
 	if err != nil {
-		return fmt.Errorf("read released %s: %w", export.ManifestFilename, err)
+		return fmt.Errorf("read released %s: %w", export.ManifestFilename, releasedReadError(err))
 	}
 	if !bytes.Equal(onDisk, manifest) {
 		return fmt.Errorf("%w: released manifest disagrees with %s: %w",
@@ -1102,7 +1144,7 @@ func validateReleasedExport(exportRoot string, in intent, out exportOutcome) err
 		}
 		onDisk, err := os.ReadFile(evidencePath) //nolint:gosec // run-owned export directory authenticated above
 		if err != nil {
-			return fmt.Errorf("read released %s: %w", export.EvidenceFilename, err)
+			return fmt.Errorf("read released %s: %w", export.EvidenceFilename, releasedReadError(err))
 		}
 		if !bytes.Equal(onDisk, evidence) {
 			return fmt.Errorf("%w: released evidence disagrees with %s: %w",
@@ -1252,13 +1294,23 @@ func (d *Driver) persistManifests(
 func readDigestedFile(path string, digest domain.Digest) ([]byte, error) {
 	body, err := os.ReadFile(path) //nolint:gosec // G304: gate-released export path this driver just received
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
+		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), releasedReadError(err))
 	}
 	sum := sha256.Sum256(body)
 	if got := domain.Digest(contentaddr.Format(sum[:])); got != digest {
 		return nil, fmt.Errorf("%s hashes to %s, record names %s", filepath.Base(path), got, digest)
 	}
 	return body, nil
+}
+
+// releasedReadError marks a failed read of a released file as missing
+// content when the file is not there, and leaves any other read failure as
+// it is, so only an absent file concludes the stage (isMissingReleasedContent).
+func releasedReadError(err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %w", errReleasedContentMissing, err)
+	}
+	return err
 }
 
 // returnedEvidence lists, in manifest order, the evidence entries whose
@@ -1361,7 +1413,7 @@ func readEvidenceBlob(dir string, digest domain.Digest) ([]byte, error) {
 	path := filepath.Join(dir, export.EvidenceBlobsDirname, "sha256", hexDigits)
 	body, err := os.ReadFile(path) //nolint:gosec // G304: gate-released export path addressed by verified digest
 	if err != nil {
-		return nil, fmt.Errorf("read evidence blob %s: %w", digest, err)
+		return nil, fmt.Errorf("read evidence blob %s: %w", digest, releasedReadError(err))
 	}
 	if got := sha256.Sum256(body); hex.EncodeToString(got[:]) != hexDigits {
 		return nil, fmt.Errorf("evidence blob %s does not match its digest", digest)
@@ -2391,7 +2443,7 @@ func (d *Driver) commitRecoveredTerminal(
 func fileDigest(path string) (domain.Digest, error) {
 	body, err := os.ReadFile(path) //nolint:gosec // G304: gate-released export path this driver just received
 	if err != nil {
-		return "", fmt.Errorf("digest %s: %w", filepath.Base(path), err)
+		return "", fmt.Errorf("digest %s: %w", filepath.Base(path), releasedReadError(err))
 	}
 	sum := sha256.Sum256(body)
 	return domain.Digest(contentaddr.Format(sum[:])), nil
@@ -2519,6 +2571,28 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 					// it as retryable instead of returning success and letting the
 					// next pass record the rejected attempt as lost.
 					return fmt.Errorf("%w: commit recovered rejection: %w",
+						ErrRecoveryRetryable, commitErr)
+				}
+				return nil
+			}
+			// Missing content concludes the stage now instead of deferring
+			// (#3428). Commit it here rather than through reconcileIntent's
+			// catch-all, so the outcome keeps the usage extracted from the
+			// authenticated export, as an abandonment after the grace would.
+			// Only once the export-record lookup answered: a crash while a
+			// committed import's directory was being removed leaves it partial,
+			// and the record, not the directory, decides that invocation.
+			if !errors.Is(err, ErrRecoveryRetryable) && isMissingReleasedContent(err) {
+				if lookupErr != nil {
+					return fmt.Errorf("%w: released export is missing content and its export record is unread: %w",
+						ErrRecoveryRetryable, errors.Join(err, lookupErr))
+				}
+				if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
+					InvocationID: in.InvocationID, Status: exec.StatusFailed,
+					Summary: truncateFailureSummary("recovery failed: " + err.Error()),
+					Usage:   result.Usage, ClaudeUsage: result.ClaudeUsage,
+				}); commitErr != nil {
+					return fmt.Errorf("%w: commit missing-content failure: %w",
 						ErrRecoveryRetryable, commitErr)
 				}
 				return nil
