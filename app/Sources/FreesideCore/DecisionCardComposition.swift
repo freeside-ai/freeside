@@ -804,33 +804,26 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
-    /// The one action a card's row draws filled, or none (R6). A
+    /// The one action a card's row draws filled, or none (R6). Only a
+    /// recommendation earns a fill, because a fill reads as advice. The
     /// recommendation the card draws holds the fill in its own block, so the
     /// row fills nothing, unless the operator holds a pick, when the control
     /// that sends the picks is filled: on a finding adjudication a held route
     /// pick (`holdsPick`) moves the fill to Choose Another Route, because the
-    /// acceptance sends the proposed routes and drops the pick. Without a
-    /// recommendation the fill goes to the type's forward
-    /// action, where the row offers it and it needs no confirmation: a
-    /// destructive action is never filled. A stale final review fills
-    /// nothing: the proof no longer covers the head `View PR` would open. `requested_decision` may repeat
-    /// an action, so the row fills only the first and no card draws two.
+    /// acceptance sends the proposed routes and drops the pick. A card with
+    /// no recommendation fills nothing, and neither does a stale final
+    /// review: the proof no longer covers the head `View PR` would open.
+    /// `requested_decision` may repeat an action, so the row fills only the
+    /// first and no card draws two.
     static func filledAction(
         for item: Components.Schemas.AttentionItem, ranking: DecisionActionRanking,
         holdsPick: Bool = false
     ) -> Components.Schemas.Action? {
-        guard !isStale(item) else { return nil }
-        if ranking.recommended != nil {
-            let picksFill =
-                holdsPick && item._type == .finding_adjudication
-                && ranking.principal.contains(.choose_alternative_route)
-            return picksFill ? .choose_alternative_route : nil
-        }
-        guard let forward = forwardAction(for: item._type),
-            ranking.principal.contains(forward) || ranking.reviewing == forward,
-            AttentionDisplay.confirmationConsequence(forward, for: item) == nil
-        else { return nil }
-        return forward
+        guard !isStale(item), ranking.recommended != nil else { return nil }
+        let picksFill =
+            holdsPick && item._type == .finding_adjudication
+            && ranking.principal.contains(.choose_alternative_route)
+        return picksFill ? .choose_alternative_route : nil
     }
 
     /// Whether the recommendation's button takes the card's one fill (R6).
@@ -843,28 +836,6 @@ struct DecisionCardComposition: Equatable {
     ) -> Bool {
         ranking.recommended != nil
             && filledAction(for: item, ranking: ranking, holdsPick: holdsPick) == nil
-    }
-
-    /// The type's one forward action, as R6 lists them: the supported next
-    /// step a card with no recommendation still points at. A type whose
-    /// choices are peers (approve or request changes, one route or another)
-    /// has none, and neither do the three types with no frame. The switch is
-    /// exhaustive so a new type has to answer the question.
-    static func forwardAction(
-        for type: Components.Schemas.AttentionType
-    ) -> Components.Schemas.Action? {
-        switch type {
-        case .agent_question: return .answer_and_retry
-        case .ready_for_final_review: return .open_pr
-        case .execution_failure: return .retry
-        case .task_proposal: return .start
-        case .effect_proposal: return .approve
-        case .system_health: return .acknowledge
-        case .spec_approval, .review_dispute, .review_diminishing_returns,
-            .finding_adjudication, .review_contradiction, .review_configuration,
-            .publish_blocked, .blocked, .unknown:
-            return nil
-        }
     }
 
     /// The actions a type moves under More Actions beyond the set every
