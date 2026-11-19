@@ -3850,7 +3850,7 @@
             // The recommended effect-proposal card is not in the default
             // inbox, so it is rendered from its own store here, in the same
             // four variants as the verified card in the inbox loop above,
-            // validated as that card is so the recommendation draws filled.
+            // validated as that card is so its controls draw enabled.
             let recommendedEffect = AttentionFixtures.recommendedEffectProposal()
             let recommendedEffectValidated = await validatedDecision(recommendedEffect)
             let recommendedEffectDetail = DecisionDetailView(

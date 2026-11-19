@@ -1677,8 +1677,9 @@ extension View {
 /// Disabled is never the enabled look faded out, because opacity dims the
 /// border and the label together and leaves neither reliably legible.
 ///
-/// Weight means state (R6): the fill is the one forward action, an outline
-/// is any other command, the wax outline is destructive, and text is the
+/// Weight means state (R6): on a decision card the fill is the recommended
+/// action, and a card with no recommendation fills nothing; an outline is
+/// any other command, the wax outline is destructive, and text is the
 /// overflow. Every control is cut with the 6pt radius the rest of the card
 /// chrome uses, and takes the five interaction states of R19.
 struct FreesideActionButtonStyle: ButtonStyle {

@@ -754,13 +754,13 @@ import Testing
             alsoOverflowing: DecisionCardComposition.overflowActions(for: item._type))
     }
 
-    /// Visual audit D07: View PR is the final review's filled button, and a
-    /// card never shows two, so it yields to a recommendation block.
-    @Test func viewPRIsFilledUnlessARecommendationHoldsTheFilledButton() {
+    /// View PR is an outline on the final review: only a recommendation
+    /// earns a fill, and a recommendation block holds its own.
+    @Test func viewPRIsAnOutlineOnTheFinalReview() {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let plain = ranking(item)
         #expect(plain.reviewing == .open_pr)
-        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == .open_pr)
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == nil)
 
         let recommended = ranking(item, recommending: .return_to_agent)
         #expect(recommended.reviewing == .open_pr)
@@ -774,43 +774,31 @@ import Testing
         #expect(DecisionCardComposition.filledAction(for: stale, ranking: ranking(stale)) == nil)
     }
 
-    /// The question card fills Answer and Retry, and gives the fill up to a
-    /// recommendation block. The fill names an action, and the row fills
-    /// only its first button, so a repeated request never draws two.
-    @Test func answerAndRetryTakesTheQuestionCardsOneFill() {
+    /// The question card leaves Answer and Retry an outline: with no
+    /// recommendation nothing is filled, and a recommendation block holds
+    /// its own fill.
+    @Test func answerAndRetryIsAnOutlineOnTheQuestionCard() {
         var item = AttentionFixtures.fixture(type: .agent_question).item
         item.requested_decision = [.answer_without_retry, .answer_and_retry, .stop]
         let plain = ranking(item)
         #expect(plain.principal.contains(.answer_and_retry))
-        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == .answer_and_retry)
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: plain) == nil)
 
         #expect(
             DecisionCardComposition.filledAction(for: item, ranking: ranking(item, recommending: .stop))
                 == nil)
-
-        item.requested_decision = [.answer_without_retry, .stop]
-        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == nil)
     }
 
-    /// R6: one control is filled, or none. Without a recommendation the fill
-    /// goes to the type's one forward action; a type whose choices are peers,
-    /// and the three with no frame, fill nothing, so View PR is an outline
-    /// there.
+    /// R6: only a recommendation earns a fill, because a fill reads as
+    /// advice. A card with no recommendation fills nothing on any type,
+    /// whether or not it offers View PR.
     @Test(arguments: AttentionFixtures.fixtureTypes)
-    func theFillGoesToTheTypesForwardActionOrToNothing(type: Components.Schemas.AttentionType) {
-        let forward: [Components.Schemas.AttentionType: Components.Schemas.Action] = [
-            .agent_question: .answer_and_retry, .ready_for_final_review: .open_pr,
-            .execution_failure: .retry, .task_proposal: .start, .effect_proposal: .approve,
-            .system_health: .acknowledge,
-        ]
+    func aCardWithNoRecommendationFillsNothing(type: Components.Schemas.AttentionType) {
         var item = AttentionFixtures.fixture(type: type).item
-        #expect(DecisionCardComposition.forwardAction(for: type) == forward[type])
-        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == forward[type])
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == nil)
 
-        // A card that offers View PR beside peers leaves it an outline.
         item.requested_decision.append(.open_pr)
-        let withPullRequest = DecisionCardComposition.filledAction(for: item, ranking: ranking(item))
-        #expect(withPullRequest == forward[type])
+        #expect(DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) == nil)
     }
 
     /// A recommendation the card draws holds the fill in its own block, so
@@ -897,7 +885,7 @@ import Testing
     }
 
     /// A held pick moves the fill on a finding adjudication only: every
-    /// other type fills what it fills without one, recommended or not, and
+    /// other type's row fills nothing, recommended or not, and the card
     /// still draws at most one filled control.
     @Test(arguments: AttentionFixtures.fixtureTypes)
     func aHeldPickMovesNoFillOnOtherTypes(type: Components.Schemas.AttentionType) {
@@ -915,22 +903,6 @@ import Testing
                 for: item, ranking: candidate, holdsPick: true)
             #expect(recommendationFilled == (candidate.recommended != nil))
             #expect(!(filled != nil && recommendationFilled))
-        }
-    }
-
-    /// The fill is never a destructive action, and never one the row does
-    /// not draw: an action under More Actions cannot be the filled button.
-    @Test func theFillIsNeverDestructiveOrOutOfTheRow() {
-        var health = AttentionFixtures.fixture(type: .system_health).item
-        health.requested_decision = [.run_doctor, .resume_unattended, .stop_unattended]
-        #expect(DecisionCardComposition.filledAction(for: health, ranking: ranking(health)) == nil)
-
-        for type in AttentionFixtures.fixtureTypes {
-            let item = AttentionFixtures.fixture(type: type).item
-            if let filled = DecisionCardComposition.filledAction(for: item, ranking: ranking(item)) {
-                #expect(AttentionDisplay.confirmationConsequence(filled, for: item) == nil)
-                #expect(!ranking(item).overflow.contains(filled))
-            }
         }
     }
 
