@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,7 @@ func TestPrepareCodexReviewAuthRotatesUnderLease(t *testing.T) {
 	if bytes.Contains(body, []byte("old-refresh")) || !bytes.Contains(body, []byte("new-refresh")) {
 		t.Fatal("host auth store did not atomically advance to the rotated family")
 	}
+	assertNoCodex0167TokenMembers(t, body)
 	snapshot, _, err := codexReviewAgentAuthSnapshot(launch.AuthMode, body)
 	if err != nil {
 		t.Fatal(err)
@@ -237,6 +239,39 @@ func TestPrepareCodexReviewAuthRotatesUnderLease(t *testing.T) {
 	if state.marks != 0 {
 		t.Fatalf("re-enrollment marks = %d", state.marks)
 	}
+}
+
+// Codex 0.167 and later write oauth_provenance and login_owner_id under
+// tokens; a rotation must carry both through unchanged.
+func TestPrepareCodexReviewAuthKeepsCodex0167TokenMembers(t *testing.T) {
+	t.Parallel()
+	lifecycle, rt, cfg, launch, _ := testCodexReviewLifecycle(t)
+	host := marshalCodexHostAuthDocument(t, codex0167HostAuthDocument(
+		t, "old-refresh", codexReviewEpoch.Add(90*time.Minute), codexReviewEpoch,
+	))
+	if err := os.WriteFile(launch.AuthSnapshot, host, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refresher := &fakeCodexAuthRefresher{tokens: CodexAuthRefreshTokens{
+		IDToken: "new-id", AccessToken: codexReviewJWT(t, codexReviewEpoch.Add(4*time.Hour)),
+		RefreshToken: "new-refresh",
+	}}
+	cfg.AuthStoreLeaser = &fakeLeaser{rt: rt, volume: launch.AuthSnapshot}
+	cfg.AuthRefresher = refresher
+	cfg.AuthState = &fakeCodexAuthState{}
+	cfg.AccessTokenRefreshThreshold = 2 * time.Hour
+
+	if err := lifecycle.prepareCodexReviewAuth(context.Background(), cfg, launch); err != nil {
+		t.Fatalf("prepareCodexReviewAuth = %v", err)
+	}
+	body, err := os.ReadFile(launch.AuthSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refresher.calls != 1 || !bytes.Contains(body, []byte("new-refresh")) {
+		t.Fatalf("refresh calls = %d; store did not advance to the rotated family", refresher.calls)
+	}
+	assertCodex0167TokenMembers(t, body)
 }
 
 // The provider may rotate the access and refresh tokens without issuing a new
@@ -1169,18 +1204,85 @@ func codexHostAuthBody(
 	t *testing.T, refresh string, expires, lastRefresh time.Time,
 ) []byte {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{
+	return marshalCodexHostAuthDocument(t, codexHostAuthDocument(t, refresh, expires, lastRefresh))
+}
+
+// codexHostAuthDocument is the pre-0.167 host store as a generic document, for
+// a test to mutate before marshalling.
+func codexHostAuthDocument(
+	t *testing.T, refresh string, expires, lastRefresh time.Time,
+) map[string]any {
+	t.Helper()
+	return map[string]any{
 		"OPENAI_API_KEY": nil,
 		"tokens": map[string]any{
 			"id_token": "fixture-id-token", "access_token": codexReviewJWT(t, expires),
 			"refresh_token": refresh,
 		},
 		"last_refresh": lastRefresh.Format(time.RFC3339Nano),
-	})
+	}
+}
+
+// codex0167HostAuthDocument adds the two token members Codex 0.167 and later
+// write. The provenance is spelled out rather than built from the refresher's
+// constants, so a change to those constants fails against what Codex writes.
+func codex0167HostAuthDocument(
+	t *testing.T, refresh string, expires, lastRefresh time.Time,
+) map[string]any {
+	t.Helper()
+	doc := codexHostAuthDocument(t, refresh, expires, lastRefresh)
+	tokens := doc["tokens"].(map[string]any)
+	tokens["oauth_provenance"] = codex0167Provenance()
+	tokens["login_owner_id"] = "fixture-login-owner"
+	return doc
+}
+
+func codex0167Provenance() map[string]any {
+	return map[string]any{
+		"issuer": "https://auth.openai.com", "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+	}
+}
+
+func marshalCodexHostAuthDocument(t *testing.T, doc map[string]any) []byte {
+	t.Helper()
+	body, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return body
+}
+
+// codexAuthTokenMembers decodes the members under tokens as generic JSON, so a
+// test sees exactly what a re-encode kept or added.
+func codexAuthTokenMembers(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var doc struct {
+		Tokens map[string]any `json:"tokens"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc.Tokens
+}
+
+func assertCodex0167TokenMembers(t *testing.T, body []byte) {
+	t.Helper()
+	members := codexAuthTokenMembers(t, body)
+	if !reflect.DeepEqual(members["oauth_provenance"], codex0167Provenance()) ||
+		members["login_owner_id"] != "fixture-login-owner" {
+		t.Fatalf("Codex 0.167 token members = provenance %v, login owner %v; want unchanged",
+			members["oauth_provenance"], members["login_owner_id"])
+	}
+}
+
+func assertNoCodex0167TokenMembers(t *testing.T, body []byte) {
+	t.Helper()
+	members := codexAuthTokenMembers(t, body)
+	for _, name := range []string{"oauth_provenance", "login_owner_id"} {
+		if _, ok := members[name]; ok {
+			t.Fatalf("pre-0.167 store gained tokens.%s", name)
+		}
+	}
 }
 
 func setCodexHostAuth(

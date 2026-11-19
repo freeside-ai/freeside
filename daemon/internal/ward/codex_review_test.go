@@ -3048,6 +3048,95 @@ func TestCodexReviewDerivesAccessOnlySnapshotFromHostStore(t *testing.T) {
 	}
 }
 
+func TestCodexReviewSnapshotKeepsCodex0167TokenMembers(t *testing.T) {
+	t.Parallel()
+	hostBody := marshalCodexHostAuthDocument(t, codex0167HostAuthDocument(
+		t, "family-revoking", codexReviewEpoch.Add(2*time.Hour), codexReviewEpoch,
+	))
+	snapshotBody, _, err := codexReviewAgentAuthSnapshot(CodexAuthSubscription, hostBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(snapshotBody, []byte("family-revoking")) {
+		t.Fatal("derived agent snapshot carries the host refresh token")
+	}
+	if _, err := inspectCodexAuthSnapshot(CodexAuthSubscription, snapshotBody); err != nil {
+		t.Fatalf("derived agent snapshot = %v", err)
+	}
+	assertCodex0167TokenMembers(t, snapshotBody)
+}
+
+// The decoder models the Codex 0.167 token members and nothing more, and
+// accepts a provenance only when it names Freeside's own refresh authority.
+func TestInspectCodexHostAuthGatesCodex0167TokenMembers(t *testing.T) {
+	t.Parallel()
+	tokens := func(doc map[string]any) map[string]any { return doc["tokens"].(map[string]any) }
+	provenance := func(doc map[string]any) map[string]any {
+		return tokens(doc)["oauth_provenance"].(map[string]any)
+	}
+	tests := []struct {
+		name    string
+		refresh string
+		mutate  func(map[string]any)
+		// refusal is a fragment of the expected error; empty means accepted.
+		refusal string
+	}{
+		{name: "codex 0.167 store", mutate: func(map[string]any) {}},
+		{name: "issuer with trailing slash", mutate: func(doc map[string]any) {
+			provenance(doc)["issuer"] = "https://auth.openai.com/"
+		}},
+		{name: "unknown top-level member", refusal: "unknown field", mutate: func(doc map[string]any) {
+			doc["agent_identity"] = map[string]any{}
+		}},
+		{name: "unknown tokens member", refusal: "unknown field", mutate: func(doc map[string]any) {
+			tokens(doc)["login_owner"] = "fixture-login-owner"
+		}},
+		{name: "unknown provenance member", refusal: "unknown field", mutate: func(doc map[string]any) {
+			provenance(doc)["audience"] = "codex"
+		}},
+		{name: "empty issuer", refusal: "provenance is incomplete", mutate: func(doc map[string]any) {
+			provenance(doc)["issuer"] = ""
+		}},
+		{name: "empty client id", refusal: "provenance is incomplete", mutate: func(doc map[string]any) {
+			provenance(doc)["client_id"] = ""
+		}},
+		{name: "foreign issuer", refusal: "does not refresh against", mutate: func(doc map[string]any) {
+			provenance(doc)["issuer"] = "https://auth.example.com"
+		}},
+		{name: "issuer with a path", refusal: "does not refresh against", mutate: func(doc map[string]any) {
+			provenance(doc)["issuer"] = "https://auth.openai.com/tenant"
+		}},
+		{name: "foreign client id", refusal: "does not refresh against", mutate: func(doc map[string]any) {
+			provenance(doc)["client_id"] = "app_foreign"
+		}},
+		{name: "refresh token aliased into login owner", refusal: "aliased", mutate: func(doc map[string]any) {
+			tokens(doc)["login_owner_id"] = "owner-family-revoking"
+		}},
+		// The next two refresh tokens are substrings of the valid provenance, so
+		// only the aliasing check can refuse them.
+		{name: "refresh token aliased into issuer", refresh: "auth.openai.com", refusal: "aliased", mutate: func(map[string]any) {}},
+		{name: "refresh token aliased into client id", refresh: "EMoamEEZ73f0", refusal: "aliased", mutate: func(map[string]any) {}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			refresh := tc.refresh
+			if refresh == "" {
+				refresh = "family-revoking"
+			}
+			doc := codex0167HostAuthDocument(t, refresh, codexReviewEpoch.Add(2*time.Hour), codexReviewEpoch)
+			tc.mutate(doc)
+			_, _, err := inspectCodexHostAuth(CodexAuthSubscription, marshalCodexHostAuthDocument(t, doc))
+			switch {
+			case tc.refusal == "" && err != nil:
+				t.Fatalf("inspectCodexHostAuth = %v, want accepted", err)
+			case tc.refusal != "" && (err == nil || !strings.Contains(err.Error(), tc.refusal)):
+				t.Fatalf("inspectCodexHostAuth = %v, want refusal containing %q", err, tc.refusal)
+			}
+		})
+	}
+}
+
 func TestCodexReviewProviderOnlyIsExact(t *testing.T) {
 	t.Parallel()
 	for _, endpoints := range [][]string{

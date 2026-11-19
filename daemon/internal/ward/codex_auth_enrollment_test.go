@@ -145,6 +145,7 @@ func TestEnrollCodexAuthSpendsInputAndProjectsVerifiedRotation(t *testing.T) {
 		*auth.Tokens.RefreshToken != "rotated-refresh" {
 		t.Fatalf("stored refresh token was not the rotated family")
 	}
+	assertNoCodex0167TokenMembers(t, written)
 	input, err := os.ReadFile(inputPath) //nolint:gosec // test path is under t.TempDir
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +160,29 @@ func TestEnrollCodexAuthSpendsInputAndProjectsVerifiedRotation(t *testing.T) {
 		result.AttentionItemID != journal.item.ID || result.AttentionItemVersion != journal.item.ItemVersion {
 		t.Fatalf("result = %+v, journal = %+v", result, journal.verified)
 	}
+}
+
+func TestEnrollCodexAuthKeepsCodex0167TokenMembers(t *testing.T) {
+	t.Parallel()
+	cfg, _, _, refresher, inputPath, storePath := codexAuthEnrollmentFixture(t)
+	input := marshalCodexHostAuthDocument(t, codex0167HostAuthDocument(
+		t, "operator-refresh", codexReviewEpoch.Add(30*time.Minute), codexReviewEpoch,
+	))
+	if err := os.WriteFile(inputPath, input, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := EnrollCodexAuth(context.Background(), cfg); err != nil {
+		t.Fatalf("EnrollCodexAuth = %v", err)
+	}
+	written, err := os.ReadFile(storePath) //nolint:gosec // test path is under t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refresher.calls != 1 || !bytes.Contains(written, []byte("rotated-refresh")) {
+		t.Fatalf("refresh calls = %d; store did not hold the rotated family", refresher.calls)
+	}
+	assertCodex0167TokenMembers(t, written)
 }
 
 func TestEnrollCodexAuthDoesNotReplaceStoreAfterLeaseLoss(t *testing.T) {
