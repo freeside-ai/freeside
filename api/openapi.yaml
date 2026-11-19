@@ -3012,7 +3012,7 @@ components:
         determines WIP membership; wip is the authoritative slot state, derived
         from lifecycle facts and bound confirmed cancellation. Source is null only for legacy or demo
         work without a recoverable intake reference.
-      required: [id, project_id, display_names, source, created_at, last_activity_at,
+      required: [id, project_id, display_names, source, issue, created_at, last_activity_at,
                  lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts, cancellation,
                  task_lines, attachments]
       properties:
@@ -3028,6 +3028,16 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/SpecificationSource"
+        issue:
+          nullable: true
+          description: >
+            The issue the task works on: the intake issue for an issue_subject
+            source, or, for a submitted task whose text was exactly one
+            canonical issue URL in the project's managed repository, that
+            issue. Null for any other task, including one submitted before the
+            daemon recorded this field. Descriptive only; it grants nothing.
+          allOf:
+            - $ref: "#/components/schemas/IssueSubjectRef"
         created_at:
           type: string
           format: date-time
@@ -7440,8 +7450,11 @@ components:
 
     DisplayNameSource:
       type: string
-      description: Whether a display label is a chosen name or an explicit identifier fallback.
-      enum: [name, identifier, operator, agent, specification, unknown]
+      description: >
+        Whether a display label is a chosen name or an explicit identifier
+        fallback. A task's chosen name is the operator's, its source issue's
+        title (issue), its accepted specification's title, or an agent's.
+      enum: [name, identifier, operator, agent, specification, issue, unknown]
 
     DisplayName:
       type: object

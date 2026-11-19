@@ -20,16 +20,19 @@ type TaskSnapshot struct {
 // Task is the task's stored identity and name plus its ordered run history.
 // Lifecycle describes task terminal decisions or the newest run for display.
 type Task struct {
-	ID              domain.TaskID         `json:"id"`
-	ProjectID       domain.ProjectID      `json:"project_id"`
-	DisplayNames    domain.DisplayNames   `json:"display_names"`
-	Source          *TaskSource           `json:"source"`
-	CreatedAt       time.Time             `json:"created_at"`
-	LastActivityAt  time.Time             `json:"last_activity_at"`
-	Lifecycle       *domain.TaskLifecycle `json:"lifecycle"`
-	CurrentPosition *TaskPosition         `json:"current_position"`
-	CampaignIDs     []domain.CampaignID   `json:"campaign_ids"`
-	RunIDs          []domain.RunID        `json:"run_ids"`
+	ID           domain.TaskID       `json:"id"`
+	ProjectID    domain.ProjectID    `json:"project_id"`
+	DisplayNames domain.DisplayNames `json:"display_names"`
+	Source       *TaskSource         `json:"source"`
+	// Issue is the issue the task works on (domain.Task.Issue); descriptive,
+	// it grants nothing.
+	Issue           *domain.IssueSubjectRef `json:"issue"`
+	CreatedAt       time.Time               `json:"created_at"`
+	LastActivityAt  time.Time               `json:"last_activity_at"`
+	Lifecycle       *domain.TaskLifecycle   `json:"lifecycle"`
+	CurrentPosition *TaskPosition           `json:"current_position"`
+	CampaignIDs     []domain.CampaignID     `json:"campaign_ids"`
+	RunIDs          []domain.RunID          `json:"run_ids"`
 	// WIP is the authoritative admission-slot state, derived from lifecycle
 	// facts and bound confirmed cancellation; Lifecycle above is display only.
 	WIP            bool                     `json:"wip"`
@@ -102,7 +105,7 @@ func projectTaskSnapshot(
 		return TaskSnapshot{}, err
 	}
 	value := Task{
-		ID: task.ID, ProjectID: task.ProjectID, DisplayNames: *names, Source: projectTaskSource(task.Source),
+		ID: task.ID, ProjectID: task.ProjectID, DisplayNames: *names, Source: projectTaskSource(task.Source), Issue: task.Issue(),
 		CreatedAt: task.CreatedAt, LastActivityAt: task.CreatedAt, CampaignIDs: task.CampaignIDs, RunIDs: ids,
 		WIP: domain.TaskWIP(task), LifecycleFacts: projectTaskLifecycleFacts(task.LifecycleFacts), Cancellation: task.Cancellation,
 	}

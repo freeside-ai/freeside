@@ -755,6 +755,23 @@ func (tx *WriteTx) SetTaskName(ctx context.Context, id domain.TaskID, name domai
 	return err
 }
 
+// SetTaskSubmittedIssue records the issue a submitted task's text named. It
+// refuses a task whose source is not a work_item_artifact. The first record
+// stands: a later submission of the same text, even after the project's
+// repository was renamed, leaves it as it is, since the field is descriptive
+// and never worth refusing a submission over.
+func (tx *WriteTx) SetTaskSubmittedIssue(ctx context.Context, id domain.TaskID, issue domain.IssueSubjectRef) error {
+	task, err := tx.GetTask(ctx, id)
+	if err != nil || task.SubmittedIssue != nil {
+		return err
+	}
+	task.SubmittedIssue = &issue
+	if err := task.Validate(); err != nil {
+		return err
+	}
+	return tx.updateTask(ctx, task)
+}
+
 func (tx *ReadTx) TaskRunIDs(ctx context.Context, id domain.TaskID) ([]domain.RunID, error) {
 	rows, err := tx.tx.QueryContext(ctx, `SELECT run_id FROM task_runs WHERE task_id = ? ORDER BY ordinal`, id)
 	if err != nil {

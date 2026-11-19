@@ -166,6 +166,7 @@
           "work_item_artifact_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
           "issue_subject": null
         },
+        "issue": null,
         "created_at": "2026-08-10T12:34:56Z",
         "last_activity_at": "2026-08-10T15:34:56Z",
         "lifecycle": "finished",

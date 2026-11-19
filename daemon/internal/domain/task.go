@@ -10,12 +10,18 @@ import (
 // from the newest run. Source is absent only for legacy or demo work without
 // a recoverable intake reference. Lifecycle is a read projection, not authority.
 type Task struct {
-	ID          TaskID               `json:"id"`
-	ProjectID   ProjectID            `json:"project_id"`
-	Source      *SpecificationSource `json:"source"`
-	Name        DisplayName          `json:"name"`
-	CreatedAt   time.Time            `json:"created_at"`
-	CampaignIDs []CampaignID         `json:"campaign_ids"`
+	ID        TaskID               `json:"id"`
+	ProjectID ProjectID            `json:"project_id"`
+	Source    *SpecificationSource `json:"source"`
+	// SubmittedIssue is the issue a work_item_artifact task's submitted text
+	// named, recorded at its first submission when that text was exactly one
+	// canonical issue URL in the project's managed repository. It is
+	// descriptive and grants nothing. A task submitted before the field
+	// existed decodes with none and is never backfilled.
+	SubmittedIssue *IssueSubjectRef `json:"submitted_issue"`
+	Name           DisplayName      `json:"name"`
+	CreatedAt      time.Time        `json:"created_at"`
+	CampaignIDs    []CampaignID     `json:"campaign_ids"`
 	// LifecycleFacts is the task's append-only, ordinal-ordered lifecycle log
 	// (issue #1318). It is the authority for WIP admission counting; the store
 	// persists it in a side table and loads it with the task, so a decoded body
@@ -198,6 +204,15 @@ func (t Task) CurrentStart() *TaskLifecycleFact {
 	return start
 }
 
+// Issue returns the issue the task works on: the intake issue of an
+// issue_subject source, else the submitted issue, else nil.
+func (t Task) Issue() *IssueSubjectRef {
+	if t.Source != nil && t.Source.IssueSubject != nil {
+		return t.Source.IssueSubject
+	}
+	return t.SubmittedIssue
+}
+
 func (t Task) Validate() error {
 	if t.ID == "" || t.ProjectID == "" {
 		return fmt.Errorf("task identity: %w", ErrEmptyID)
@@ -207,6 +222,14 @@ func (t Task) Validate() error {
 	}
 	if t.Source != nil {
 		if err := t.Source.Validate(); err != nil {
+			return err
+		}
+	}
+	if t.SubmittedIssue != nil {
+		if t.Source == nil || t.Source.Kind != SpecificationSourceWorkItemArtifact {
+			return fmt.Errorf("task submitted issue without a submitted source: %w", ErrSpecificationSourceInconsistent)
+		}
+		if err := t.SubmittedIssue.Validate(); err != nil {
 			return err
 		}
 	}

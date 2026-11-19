@@ -223,11 +223,14 @@ public enum TaskFixtures {
 
     /// `snapshot` re-sourced from a submitted work item. The mock rejects the
     /// task unless its `attachments` hold bytes under `digest`, as the daemon's
-    /// blob store holds every submitted source.
+    /// blob store holds every submitted source. `issue` is the issue the
+    /// submitted text named, when it was a bare issue URL.
     public static func artifactSourced(
-        _ snapshot: Components.Schemas.TaskSnapshot, artifactID: String, digest: String
+        _ snapshot: Components.Schemas.TaskSnapshot, artifactID: String, digest: String,
+        issue: Components.Schemas.IssueSubjectRef? = nil
     ) -> Components.Schemas.TaskSnapshot {
         var sourced = snapshot
+        sourced.task.issue = issue.map { .init(value1: $0) }
         sourced.task.source = .init(
             value1: .work_item_artifact(
                 .init(
@@ -315,13 +318,11 @@ public enum TaskFixtures {
         let names = Components.Schemas.DisplayNames(
             project: newest.display_names?.value1.project ?? .init(text: newest.project_id, source: .identifier),
             task: newest.display_names?.value1.task ?? .init(text: id, source: .identifier))
-        let source: Components.Schemas.Task.sourcePayload? = issueNumbers[id].map { number in
-            .init(
-                value1: .issue_subject(
-                    .init(
-                        kind: .issue_subject,
-                        issue_subject: .init(
-                            repo: "freeside-ai/freeside", repository_id: 1, issue_number: number))))
+        let issue = issueNumbers[id].map {
+            Components.Schemas.IssueSubjectRef(repo: "freeside-ai/freeside", repository_id: 1, issue_number: $0)
+        }
+        let source: Components.Schemas.Task.sourcePayload? = issue.map {
+            .init(value1: .issue_subject(.init(kind: .issue_subject, issue_subject: $0)))
         }
         // A started fact opens the task's log; a finished task adds a
         // completion bound to the newest run, so wip reads false. Active
@@ -345,7 +346,7 @@ public enum TaskFixtures {
             entity_version: snapshots.map(\.entity_version).max() ?? 1,
             task: .init(
                 id: id, project_id: newest.project_id, display_names: names, source: source,
-                created_at: created, last_activity_at: lastActivity,
+                issue: issue.map { .init(value1: $0) }, created_at: created, last_activity_at: lastActivity,
                 lifecycle: .init(rawValue: newest.lifecycle.rawValue),
                 current_position: .init(
                     value1: .init(

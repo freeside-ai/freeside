@@ -154,15 +154,14 @@ import Testing
             var snapshot = base
             snapshot.task.id = id
             snapshot.task.display_names.task = name
-            snapshot.task.source = issue.map {
-                .init(
-                    value1: .issue_subject(
-                        .init(
-                            kind: .issue_subject,
-                            issue_subject: .init(
-                                repo: "freeside-ai/freeside", repository_id: $0.repositoryID, issue_number: $0.number)
-                        )))
+            let ref = issue.map {
+                Components.Schemas.IssueSubjectRef(
+                    repo: "freeside-ai/freeside", repository_id: $0.repositoryID, issue_number: $0.number)
             }
+            snapshot.task.source = ref.map {
+                .init(value1: .issue_subject(.init(kind: .issue_subject, issue_subject: $0)))
+            }
+            snapshot.task.issue = ref.map { .init(value1: $0) }
             return snapshot
         }
         let tasks = [

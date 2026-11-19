@@ -157,7 +157,8 @@ type SpecificationRunSpec struct {
 	WorkUnit            *domain.WorkUnitDeclarationInput
 	CampaignID          domain.CampaignID
 	AttemptNumber       int
-	// SourceBytes is the submitted document, used only for its operator heading.
+	// SourceBytes is the submitted document, used only for its operator heading
+	// and to record the issue a bare issue URL names.
 	SourceBytes []byte
 	// OperatorName is an optional operator-chosen task name, set only by the
 	// client task-submission path (plan §5.11). When non-empty it names the
@@ -746,7 +747,21 @@ func submitSpecificationRunTx(
 	// operator-supplied name (the client submission path, plan §5.11) takes
 	// precedence over the document-heading fallback; both are operator-sourced,
 	// so a later fetch of the same task keeps whichever the first submission won.
+	// A submitted text that is exactly one managed-repository issue URL records
+	// that issue on the task; the naming worker then names it from the issue's
+	// title.
 	if seed == nil {
+		if sourceRef.Kind == domain.SpecificationSourceWorkItemArtifact {
+			issue, err := managedSourceIssue(ctx, &tx.ReadTx, spec.ProjectID, spec.SourceBytes)
+			if err != nil {
+				return domain.Run{}, err
+			}
+			if issue != nil {
+				if err := tx.SetTaskSubmittedIssue(ctx, want.TaskID, *issue); err != nil {
+					return domain.Run{}, err
+				}
+			}
+		}
 		if spec.OperatorName != "" {
 			// Fail closed for any caller: the client path pre-canonicalizes and the
 			// helper is idempotent on the already-canonical name, but a future

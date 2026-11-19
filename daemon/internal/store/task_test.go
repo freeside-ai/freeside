@@ -354,6 +354,60 @@ func TestTaskNamePreservesOperatorChoice(t *testing.T) {
 	}
 }
 
+// A submitted issue is recorded once on a work-item task and survives a read;
+// a later record leaves the first, and an issue-subject task is refused.
+func TestTaskSubmittedIssue(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	s := openStore(t, store.Options{})
+	artifact := domain.Artifact{
+		ID: "source-a", Type: domain.ArtifactKindSpecification, Digest: "sha256:issue-url",
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "intake",
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
+		}, Metadata: runMeta(),
+	}
+	issue := domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		task, err := tx.GetOrCreateTask(ctx, "project", domain.SpecificationSource{
+			Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: artifact.ID,
+		})
+		if err != nil {
+			return err
+		}
+		for range 2 {
+			if err := tx.SetTaskSubmittedIssue(ctx, task.ID, issue); err != nil {
+				return err
+			}
+		}
+		other := issue
+		other.IssueNumber = 43
+		if err := tx.SetTaskSubmittedIssue(ctx, task.ID, other); err != nil {
+			return err
+		}
+		got, err := tx.GetTask(ctx, task.ID)
+		if err != nil {
+			return err
+		}
+		if got.SubmittedIssue == nil || *got.SubmittedIssue != issue || *got.Issue() != issue {
+			t.Fatalf("submitted issue = %+v", got.SubmittedIssue)
+		}
+		intake, err := tx.GetOrCreateTask(ctx, "project", taskIssueSource())
+		if err != nil {
+			return err
+		}
+		if err := tx.SetTaskSubmittedIssue(ctx, intake.ID, issue); !errors.Is(err, domain.ErrSpecificationSourceInconsistent) {
+			t.Fatalf("issue-subject task = %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTaskRetainsRetryAndLaterCampaignHistory(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

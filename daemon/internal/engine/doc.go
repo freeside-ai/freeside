@@ -62,6 +62,8 @@
 //     admits
 //   - task_submission.go, submission.go
 //     client task submission and its declared-path boundary
+//   - source_issue.go the managed-repository issue a submitted task's text
+//     names, which submission records and triage reads
 //   - proposal_admission.go admitting one proposal occurrence and its task
 //   - task_namer.go, display_names.go
 //     task names and the display names cards carry

@@ -5336,6 +5336,7 @@
                     .init(
                         kind: .work_item_artifact, work_item_artifact_id: "artifact-working",
                         work_item_artifact_digest: .init(value1: "sha256:" + String(repeating: "e", count: 64)))))
+            working.task.issue = nil
             working.task.task_lines = lines
             var finished = TaskStageFixtures.page(.review)
             finished.task.task_lines = lines
