@@ -2039,6 +2039,9 @@ func (d *Driver) quarantinedLocked(id domain.InvocationID) bool {
 var errIntentQuarantined = errors.New("stage intent is quarantined until a restart adopts it")
 
 func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
+	// Whatever this pass does, a deferral it ended (success, a permanent
+	// conclusion, abandonment, or loss) resolves its notice here.
+	defer d.resolveRecoveryNotices(ctx)
 	d.mu.Lock()
 	if _, live := d.running[in.InvocationID]; live {
 		d.mu.Unlock()
@@ -2083,7 +2086,7 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 			// grace. phaseSeeding and phaseRunning keep the existing unbounded
 			// retry (ward owns the running window; #385).
 			if in.Phase == phaseExported || in.Phase == phaseImportPending {
-				return d.deferExportRecovery(in, err)
+				return d.deferExportRecovery(ctx, in, err)
 			}
 			return err
 		}
@@ -2118,8 +2121,10 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 // execution_outcomes row frees the usage pool's slot, and the ordinary
 // collection path raises the operator's execution_failure card. The export
 // directory is never removed; the agent's work survives on disk for a later
-// retry or manual inspection.
-func (d *Driver) deferExportRecovery(in intent, cause error) error {
+// retry or manual inspection. Once the deferral has run for the notice bound,
+// it raises one stalled-recovery notice (#3428), so the operator hears of the
+// stall before the grace ends.
+func (d *Driver) deferExportRecovery(ctx context.Context, in intent, cause error) error {
 	now := d.now()
 	d.mu.Lock()
 	entry, existed := d.deferred[in.InvocationID]
@@ -2132,18 +2137,26 @@ func (d *Driver) deferExportRecovery(in intent, cause error) error {
 	changed := !existed || entry.lastError != cause.Error()
 	entry.phase = in.Phase
 	entry.lastError = cause.Error()
+	elapsed := now.Sub(entry.first)
+	notify := d.recoveryStall != nil && !entry.noticed &&
+		elapsed >= d.recoveryNoticeAfter && elapsed < d.recoveryGrace
+	if notify {
+		entry.noticed = true
+		d.recoveryNotices[in.InvocationID] = struct{}{}
+	}
 	d.deferred[in.InvocationID] = entry
-	first := entry.first
 	usage := entry.usage
 	d.mu.Unlock()
 
-	elapsed := now.Sub(first)
 	if elapsed < d.recoveryGrace {
 		if changed {
 			d.logger.Warn("stage recovery deferred",
 				"invocation", string(in.InvocationID), "run", in.RunID,
 				"phase", string(in.Phase), "elapsed", elapsed.String(),
 				"error", cause.Error())
+		}
+		if notify {
+			d.raiseRecoveryNotice(ctx, in, elapsed, cause)
 		}
 		return cause
 	}
@@ -2191,6 +2204,63 @@ func (d *Driver) clearDeferral(id domain.InvocationID) {
 	d.mu.Lock()
 	delete(d.deferred, id)
 	d.mu.Unlock()
+}
+
+// raiseRecoveryNotice tells recoveryStall that in's recovery has stalled.
+// The notice is advisory, so a failure only logs and clears the deferral's
+// noticed mark for the next failing pass to retry; the invocation stays in
+// recoveryNotices, so the deferral's end still resolves whatever the failed
+// raise may have filed.
+func (d *Driver) raiseRecoveryNotice(ctx context.Context, in intent, elapsed time.Duration, cause error) {
+	err := d.recoveryStall(ctx, RecoveryStall{
+		InvocationID: in.InvocationID, RunID: in.RunID, Phase: string(in.Phase),
+		Elapsed: elapsed, Grace: d.recoveryGrace,
+		Error: truncateFailureSummary(cause.Error()), Stalled: true,
+	})
+	if err == nil {
+		return
+	}
+	d.logger.Warn("stage recovery notice failed",
+		"invocation", string(in.InvocationID), "run", in.RunID, "error", err.Error())
+	d.mu.Lock()
+	if entry, deferred := d.deferred[in.InvocationID]; deferred {
+		entry.noticed = false
+		d.deferred[in.InvocationID] = entry
+	}
+	d.mu.Unlock()
+}
+
+// resolveRecoveryNotices tells recoveryStall that each deferral with a
+// possibly open notice has ended, whatever ended it. It reads the ended
+// deferrals under mu and calls the hook with mu released, and forgets an
+// invocation only once its resolve succeeds, so a failed resolve is retried
+// by the next call.
+func (d *Driver) resolveRecoveryNotices(ctx context.Context) {
+	if d.recoveryStall == nil {
+		return
+	}
+	d.mu.Lock()
+	var ended []domain.InvocationID
+	for id := range d.recoveryNotices {
+		if _, deferred := d.deferred[id]; !deferred {
+			ended = append(ended, id)
+		}
+	}
+	d.mu.Unlock()
+	for _, id := range ended {
+		if err := d.recoveryStall(ctx, RecoveryStall{InvocationID: id}); err != nil {
+			d.logger.Warn("stage recovery notice resolve failed",
+				"invocation", string(id), "error", err.Error())
+			continue
+		}
+		d.mu.Lock()
+		// A new deferral of the same invocation since the read keeps its
+		// entry for its own end to resolve.
+		if _, deferred := d.deferred[id]; !deferred {
+			delete(d.recoveryNotices, id)
+		}
+		d.mu.Unlock()
+	}
 }
 
 // recordDeferredUsage stashes the usage a recovery pass authenticated from the

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -1758,6 +1759,33 @@ func survivingExportDir(t *testing.T) string {
 	return dir
 }
 
+// recoveryStallRecorder records the driver's RecoveryStall calls and fails
+// each one while fail is set.
+type recoveryStallRecorder struct {
+	mu    sync.Mutex
+	calls []RecoveryStall
+	fail  error
+}
+
+func (r *recoveryStallRecorder) hook(_ context.Context, report RecoveryStall) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, report)
+	return r.fail
+}
+
+func (r *recoveryStallRecorder) snapshot() []RecoveryStall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]RecoveryStall(nil), r.calls...)
+}
+
+func (r *recoveryStallRecorder) setFail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fail = err
+}
+
 // TestStrandedExportRecoveryAbandonsAfterGrace is the regression for the
 // wave-7 deadlock (issue #1181): a released export whose import keeps failing
 // retryably was retried forever, permanently holding the identity's only
@@ -1765,6 +1793,11 @@ func survivingExportDir(t *testing.T) string {
 // grace has not elapsed, then commits a failed outcome once it has, which frees
 // the slot and raises the operator's execution_failure card through the
 // ordinary collection path. The export directory is retained either way.
+//
+// The operator hears of the stall before the grace ends (#3428): once
+// recovery has failed for the notice bound the driver raises one notice,
+// later passes raise none even when the error changes, and abandonment
+// resolves it.
 func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 	for _, ph := range []phase{phaseExported, phaseImportPending} {
 		t.Run(string(ph), func(t *testing.T) {
@@ -1777,6 +1810,8 @@ func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 			d.logger = slog.New(handler)
 			now := fixedNow
 			d.now = func() time.Time { return now }
+			notices := &recoveryStallRecorder{}
+			d.recoveryStall = notices.hook
 
 			dir := survivingExportDir(t)
 			in := orphan(t, d, ph, &releasedExport{
@@ -1785,8 +1820,22 @@ func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 			})
 
 			// Before the grace elapses the invocation is still running and no
-			// terminal outcome is recorded.
-			for i := 0; i < 3; i++ {
+			// terminal outcome is recorded. Recovery passes before the notice
+			// bound, then at it, then with a changed error after it.
+			passes := []struct {
+				at  time.Duration
+				err error
+			}{
+				{0, importErr},
+				{0, importErr},
+				{defaultRecoveryNoticeAfter - time.Second, importErr},
+				{defaultRecoveryNoticeAfter, importErr},
+				{defaultRecoveryNoticeAfter + time.Minute, errors.New("fetch import base: disk full")},
+				{defaultRecoveryNoticeAfter + 2*time.Minute, importErr},
+			}
+			for i, pass := range passes {
+				now = fixedNow.Add(pass.at)
+				d.seeder = stubSeeder{err: pass.err}
 				insp, err := inspectRecovered(t, ctx, d, in.InvocationID)
 				if err != nil {
 					t.Fatalf("Inspect before grace: %v", err)
@@ -1794,13 +1843,29 @@ func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 				if insp.Status != exec.StatusRunning {
 					t.Fatalf("status before grace = %v, want running", insp.Status)
 				}
+				calls := notices.snapshot()
+				if pass.at < defaultRecoveryNoticeAfter && len(calls) != 0 {
+					t.Fatalf("pass %d at %s raised %+v before the notice bound", i, pass.at, calls)
+				}
+			}
+			calls := notices.snapshot()
+			if len(calls) != 1 {
+				t.Fatalf("notices before grace = %+v, want one raise", calls)
+			}
+			want := RecoveryStall{
+				InvocationID: in.InvocationID, RunID: in.RunID, Phase: string(ph),
+				Elapsed: defaultRecoveryNoticeAfter, Grace: defaultRecoveryGrace,
+				Error: calls[0].Error, Stalled: true,
+			}
+			if calls[0] != want || !strings.HasSuffix(calls[0].Error, importErr.Error()) {
+				t.Fatalf("raised notice = %+v, want %+v", calls[0], want)
 			}
 			if len(exports.outcomes) != 0 {
 				t.Fatalf("terminal outcome recorded before grace: %d", len(exports.outcomes))
 			}
 
 			// Past the grace the driver commits a failed outcome.
-			now = now.Add(defaultRecoveryGrace + time.Minute)
+			now = fixedNow.Add(defaultRecoveryGrace + time.Minute)
 			insp, err := inspectRecovered(t, ctx, d, in.InvocationID)
 			if err != nil {
 				t.Fatalf("Inspect after grace: %v", err)
@@ -1854,6 +1919,12 @@ func TestStrandedExportRecoveryAbandonsAfterGrace(t *testing.T) {
 			}
 			if !sawError {
 				t.Error("no abandonment error was logged")
+			}
+			// Abandonment resolves the notice; the execution-failure card
+			// takes over.
+			calls = notices.snapshot()
+			if len(calls) != 2 || calls[1] != (RecoveryStall{InvocationID: in.InvocationID}) {
+				t.Fatalf("notices after abandonment = %+v, want the raise then one resolve", calls)
 			}
 		})
 	}
@@ -1971,11 +2042,11 @@ func TestStrandedExportRecoveryDoesNotExtractUnauthenticatedUsage(t *testing.T) 
 	// passes never authenticated the export (the cause is a release-authentication
 	// failure), so no authenticated usage exists to carry forward.
 	cause := fmt.Errorf("%w: authenticate released export: journal read error", ErrRecoveryRetryable)
-	if err := d.deferExportRecovery(in, cause); !errors.Is(err, cause) {
+	if err := d.deferExportRecovery(ctx, in, cause); !errors.Is(err, cause) {
 		t.Fatalf("deferExportRecovery before grace = %v, want the retryable cause", err)
 	}
 	now = now.Add(defaultRecoveryGrace + time.Minute)
-	if err := d.deferExportRecovery(in, cause); err != nil {
+	if err := d.deferExportRecovery(ctx, in, cause); err != nil {
 		t.Fatalf("deferExportRecovery after grace = %v, want nil", err)
 	}
 
@@ -2025,7 +2096,7 @@ func TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace(t *tes
 	cause := fmt.Errorf("%w: fetch import base: network down", ErrRecoveryRetryable)
 
 	// A first pass under the grace records the deferral at t0.
-	if err := d.deferExportRecovery(in, cause); !errors.Is(err, cause) {
+	if err := d.deferExportRecovery(ctx, in, cause); !errors.Is(err, cause) {
 		t.Fatalf("deferExportRecovery before grace = %v, want the retryable cause", err)
 	}
 
@@ -2033,7 +2104,7 @@ func TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace(t *tes
 	// deferral without moving its first-seen timestamp.
 	now = t0.Add(defaultRecoveryGrace + time.Minute)
 	release := holdIntentAfterOutcome(t, d, records, in.RunID)
-	commitErr := d.deferExportRecovery(in, cause)
+	commitErr := d.deferExportRecovery(ctx, in, cause)
 	release()
 	if !errors.Is(commitErr, ErrRecoveryRetryable) {
 		t.Fatalf("transient commit failure = %v, want a retryable error", commitErr)
@@ -2054,7 +2125,7 @@ func TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace(t *tes
 
 	// The next pass, at the same instant, must commit immediately rather than
 	// deferring afresh: the grace was never reset.
-	if err := d.deferExportRecovery(in, cause); err != nil {
+	if err := d.deferExportRecovery(ctx, in, cause); err != nil {
 		t.Fatalf("deferExportRecovery retry = %v, want nil (committed)", err)
 	}
 	if n := abandonmentLogs(); n != 1 {
@@ -2165,12 +2236,30 @@ func TestTransientExportRecoveryClearsBeforeGrace(t *testing.T) {
 		Dir: outDir, Manifest: manifest, ObservedBaseSHA: spec.Base.BaseSHA,
 	}, spec)
 
+	notices := &recoveryStallRecorder{}
+	d.recoveryStall = notices.hook
+
 	// A first pass under the grace records the deferral and keeps running.
 	if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
 		t.Fatalf("Inspect during transient failure = %#v, %v; want running", insp, err)
 	}
 
-	// The fault clears while still under the grace; recovery now completes.
+	// Past the notice bound the raise fails; it is advisory, so recovery
+	// still reports running, and the next pass raises again.
+	now = now.Add(defaultRecoveryNoticeAfter)
+	notices.setFail(errors.New("store busy"))
+	for range 2 {
+		if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil || insp.Status != exec.StatusRunning {
+			t.Fatalf("Inspect past the notice bound = %#v, %v; want running", insp, err)
+		}
+		notices.setFail(nil)
+	}
+	if calls := notices.snapshot(); len(calls) != 2 || !calls[0].Stalled || !calls[1].Stalled {
+		t.Fatalf("notices past the bound = %+v, want a failed raise and its retry", calls)
+	}
+
+	// The fault clears while still under the grace; recovery now completes
+	// and resolves the notice.
 	now = now.Add(defaultRecoveryGrace / 2)
 	d.seeder = recoveryGitSeeder{repo: repo}
 	if insp, err := inspectRecovered(t, ctx, d, in.InvocationID); err != nil {
@@ -2187,6 +2276,9 @@ func TestTransientExportRecoveryClearsBeforeGrace(t *testing.T) {
 	}
 	if len(exports.outcomes) != 0 {
 		t.Fatalf("a cleared transient failure recorded %d failed outcomes", len(exports.outcomes))
+	}
+	if calls := notices.snapshot(); len(calls) != 3 || calls[2] != (RecoveryStall{InvocationID: in.InvocationID}) {
+		t.Fatalf("notices after recovery = %+v, want the raises then one resolve", calls)
 	}
 }
 
@@ -2228,7 +2320,8 @@ func TestRunningRecoveryIsNeverTerminalizedByGrace(t *testing.T) {
 // TestMissingReleasedContentConcludesAtOnce: a released export that lacks a
 // blob its manifest stores, or its manifest file, can never import, so
 // recovery concludes the stage failed instead of retrying it for the whole
-// grace (#3428). The export directory is retained. While the export record can't be read, the record and not the
+// grace (#3428). The export directory is retained and no stall notice is
+// raised. While the export record can't be read, the record and not the
 // directory decides, so recovery stays retryable until it answers.
 func TestMissingReleasedContentConcludesAtOnce(t *testing.T) {
 	t.Parallel()
@@ -2275,6 +2368,8 @@ func TestMissingReleasedContentConcludesAtOnce(t *testing.T) {
 			exports.exportLookupErr = errors.New("database is locked")
 			d := newTestDriver(t, &stubGate{}, exports)
 			d.seeder = recoveryGitSeeder{repo: repo}
+			notices := &recoveryStallRecorder{}
+			d.recoveryStall = notices.hook
 			spec := testStartSpec()
 			spec.Base.BaseSHA = baseSHA
 			in := orphanWithSpec(t, d, phaseExported, &releasedExport{
@@ -2302,6 +2397,9 @@ func TestMissingReleasedContentConcludesAtOnce(t *testing.T) {
 			}
 			if _, err := os.Stat(outDir); err != nil {
 				t.Fatalf("export directory was not retained: %v", err)
+			}
+			if calls := notices.snapshot(); len(calls) != 0 {
+				t.Fatalf("a concluded export raised notices %+v", calls)
 			}
 		})
 	}

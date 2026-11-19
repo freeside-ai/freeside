@@ -68,10 +68,12 @@ type Config struct {
 	Volumes      AuthStoreVolumes
 	PreJob       func(context.Context, domain.InvocationID, domain.ImageRef) error
 	Stall        func(context.Context, domain.InvocationID, bool) error
-	Import       importer.Options
-	Preparation  []string
-	Now          func() time.Time
-	Logger       *slog.Logger
+	// RecoveryStall is stage.Config.RecoveryStall.
+	RecoveryStall func(context.Context, stage.RecoveryStall) error
+	Import        importer.Options
+	Preparation   []string
+	Now           func() time.Time
+	Logger        *slog.Logger
 
 	// AdoptedRegistryHosts is stage.Config.AdoptedRegistryHosts.
 	AdoptedRegistryHosts func(context.Context, int64) ([]string, error)
@@ -104,6 +106,7 @@ func New(cfg Config) (*Driver, error) {
 		Artifacts:           cfg.Artifacts,
 		PreJob:              cfg.PreJob,
 		Stall:               cfg.Stall,
+		RecoveryStall:       cfg.RecoveryStall,
 		Import:              cfg.Import,
 		Preparation:         cfg.Preparation,
 		Now:                 cfg.Now,

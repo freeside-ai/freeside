@@ -1185,7 +1185,8 @@ func composeClaudeDriver(
 			releasePreJobContainer(ctx, runtime, wardConfig.ReleaseRuntimeResources, id, logger)
 			return nil
 		},
-		Stall: InvocationStallNotice(st, StallInterval(cfg.WriterStallInterval), time.Now),
+		Stall:         InvocationStallNotice(st, StallInterval(cfg.WriterStallInterval), time.Now),
+		RecoveryStall: StageRecoveryNotice(st, time.Now),
 		AdoptedRegistryHosts: func(ctx context.Context, repositoryID int64) ([]string, error) {
 			var hosts []string
 			err := st.Read(ctx, func(tx *store.ReadTx) error {
