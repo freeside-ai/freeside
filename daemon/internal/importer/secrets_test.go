@@ -2,6 +2,7 @@ package importer
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -120,13 +121,12 @@ func TestScanTextLongLine(t *testing.T) {
 // numbering and CRLF handling with no length cap.
 func TestSplitLinesNoLimit(t *testing.T) {
 	t.Parallel()
-	lines := splitLines([]byte("a\r\nb\nc"))
-	got := make([]string, len(lines))
-	for i, l := range lines {
-		got[i] = string(l)
+	var got []string
+	for i, l := range splitLines([]byte("a\r\nb\nc")) {
+		got = append(got, fmt.Sprintf("%d:%s", i, l))
 	}
-	if strings.Join(got, "|") != "a|b|c" {
-		t.Fatalf("splitLines = %v, want [a b c]", got)
+	if strings.Join(got, "|") != "0:a|1:b|2:c" {
+		t.Fatalf("splitLines = %v, want [0:a 1:b 2:c]", got)
 	}
 }
 
@@ -231,36 +231,30 @@ func TestImportSecretScanReplaysDeduplicatedBlobFindings(t *testing.T) {
 	}
 }
 
-// TestImportSecretScanOverCapSurfaced is the Codex round-4 regression:
-// an added file over the scan cap but under the size policy is not
-// silently skipped; it produces a publish-blocking secret_scan_skipped
-// finding without withholding commit construction, so a clean import never
-// hides an unscanned file.
-func TestImportSecretScanOverCapSurfaced(t *testing.T) {
+// TestImportSecretScanCoversLargeFiles: a changed file over the evidence
+// scan cap is scanned whole, not skipped (#3396). A clean one imports with
+// no finding, and a token past the first MiB is still found on its line.
+// It supersedes TestImportSecretScanOverCapSurfaced, which asserted the
+// skip finding the importer no longer emits.
+func TestImportSecretScanCoversLargeFiles(t *testing.T) {
 	t.Parallel()
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
-	big := strings.Repeat("x", 4096) + "\n"
+	filler := strings.Repeat(strings.Repeat("x", 1023)+"\n", 1100) // 1100 KiB of lines
+	token := "ghp_" + strings.Repeat("D", 36)
+	clean, leaked := filler, filler+"token = "+token+"\n"
 	handoff := handoffFromEntries(t, []export.Entry{
-		regularEntryFor("big.txt", big, false),
-	}, big)
-	clone := cloneAtBase(t, checkout)
+		regularEntryFor("clean.swift", clean, false),
+		regularEntryFor("leaked.swift", leaked, false),
+	}, clean, leaked)
 	opts := testImportOptions(base)
-	opts.Policy.SecretMaxScanBytes = 1024 // below the file, above nothing else
-	res, err := Import(t.Context(), handoff, clone, opts)
+	opts.Policy.SecretMaxScanBytes = 1024 // the evidence cap no longer bounds repository content
+	res, err := Import(t.Context(), handoff, cloneAtBase(t, checkout), opts)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	skipped := 0
-	for _, f := range res.Findings {
-		if f.Kind == FindingSecretScanSkipped && f.Path == "big.txt" {
-			skipped++
-		}
-	}
-	if skipped != 1 {
-		t.Fatalf("expected one secret_scan_skipped finding for big.txt, got %+v", res.Findings)
-	}
-	if res.CommitSHA == "" {
-		t.Fatal("an unscanned-file finding must not withhold commit construction")
+	if len(res.Findings) != 1 || res.Findings[0].Kind != FindingSecret ||
+		res.Findings[0].Path != "leaked.swift" || res.Findings[0].Line != 1101 {
+		t.Fatalf("findings = %+v, want one secret on leaked.swift line 1101", res.Findings)
 	}
 }
 
