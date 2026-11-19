@@ -29,6 +29,7 @@ public final class PairingModel {
             // daemon answers for the new one.
             if Self.canonicalPairingCode(pairingCode) != Self.canonicalPairingCode(oldValue) {
                 facts = nil
+                codeRefused = false
             }
         }
     }
@@ -39,6 +40,10 @@ public final class PairingModel {
     /// and again whenever the code changes or the daemon rejects it. Display
     /// facts only: nothing here is a credential.
     public private(set) var facts: Components.Schemas.PairingFacts?
+    /// Whether the daemon refused to preview the current code (403): it is
+    /// invalid, expired, or spent, and the daemon never says which. Cleared
+    /// when the code changes. A preview that failed in transit sets nothing.
+    public private(set) var codeRefused = false
     /// Get Code's progress, apart from the pairing exchange's `phase`.
     public private(set) var codeRequest: CodeRequestState = .idle
 
@@ -119,9 +124,10 @@ public final class PairingModel {
     }
 
     /// Asks the daemon what the current code would join, without redeeming
-    /// it. Any rejection or failure clears the facts rather than explaining
-    /// itself: the daemon never says why a code is dead (test 13), and the
-    /// pairing attempt is where that outcome is reported.
+    /// it. Any rejection or failure clears the facts. A refusal also sets
+    /// `codeRefused`, so the screen can say the code is dead and how to get
+    /// another instead of waiting on a preview that will never come; it
+    /// still can't say why, because the daemon never does (test 13).
     public func refreshFacts() async {
         let code = Self.canonicalPairingCode(pairingCode)
         guard !code.isEmpty else {
@@ -129,11 +135,15 @@ public final class PairingModel {
             return
         }
         let previewed: Components.Schemas.PairingFacts?
+        var refused = false
         do {
-            let output = try await client.previewPairing(body: .json(.init(pairing_code: code)))
-            if case .ok(let ok) = output {
+            switch try await client.previewPairing(body: .json(.init(pairing_code: code))) {
+            case .ok(let ok):
                 previewed = try ok.body.json
-            } else {
+            case .forbidden:
+                previewed = nil
+                refused = true
+            case .undocumented:
                 previewed = nil
             }
         } catch {
@@ -143,6 +153,7 @@ public final class PairingModel {
         // meanwhile keeps its own (cleared) state.
         guard Self.canonicalPairingCode(pairingCode) == code else { return }
         facts = previewed
+        codeRefused = refused
     }
 
     /// Fixed copy for a connection mode (plan §5.14): how this device is

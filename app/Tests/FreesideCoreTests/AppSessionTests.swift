@@ -100,10 +100,17 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             PairingModel.scopeLabel(facts.granted_scope)
                 == "Full operator control, revocable from the host")
 
+        #expect(!model.codeRefused)
+
         model.pairingCode = "USEDUP"
         #expect(model.facts == nil)
         await model.refreshFacts()
         #expect(model.facts == nil)
+        // A refused preview says so (F64), where it once left the screen
+        // waiting on host details that never came, and a new code clears it.
+        #expect(model.codeRefused)
+        model.pairingCode = "483912"
+        #expect(!model.codeRefused)
 
         // The previewed code is still redeemable.
         model.pairingCode = "483911"
