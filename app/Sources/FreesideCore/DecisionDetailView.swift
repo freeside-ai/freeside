@@ -703,10 +703,8 @@ struct DecisionDetailView: View {
                     now: now,
                     rendersInteractiveControls: rendersInteractiveControls
                 )
-                // Seated in a task page, the thread is where the
-                // outline's Conversation chip lands, and a message arriving
-                // in it moves the controls under it.
-                .background(alignment: .top) { TaskPageConversationAnchor() }
+                // Seated in a task page, a message arriving in the thread
+                // moves the controls under it.
                 .background(alignment: .bottom) { pageHoldMarker?("thread") }
             }
 
@@ -1854,7 +1852,6 @@ struct DecisionDetailView: View {
                 now: now,
                 rendersInteractiveControls: rendersInteractiveControls
             )
-            .background(alignment: .top) { TaskPageConversationAnchor() }
             .background(alignment: .bottom) { pageHoldMarker?("thread") }
         }
     }

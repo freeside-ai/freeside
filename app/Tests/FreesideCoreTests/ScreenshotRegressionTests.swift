@@ -3383,7 +3383,7 @@
                         size_bytes: 412_000)
                 }
             // The files sit in the page head as one fold under the
-            // documents line: `task-page-attachments` draws it open,
+            // status line: `task-page-attachments` draws it open,
             // `-folded` closed, as a task first shows it.
             for (base, open) in [("task-page-attachments", true), ("task-page-attachments-folded", false)] {
                 let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
@@ -5289,7 +5289,7 @@
         /// The task page in each state the 30 Oct canvas draws, at Mac and
         /// phone width and in both appearances: a card leading alone
         /// (bands 3, 4), with others under it (band 3), working and finished
-        /// (band 5), and with the outline row pinned (band 3).
+        /// (band 5), and with the header scrolled away under the pinned row (band 3).
         private func taskPageSurfaces(at dynamicTypeSize: DynamicTypeSize) throws -> [Surface] {
             let lines = [
                 TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
@@ -5304,7 +5304,7 @@
             open.items = [question]
             var several = open
             several.items = [question, approval, adjudication]
-            // A typed task, so the documents line leads with Prompt (#2612).
+            // A typed task, so the pinned row leads with Prompt (#2612).
             var working = TaskStageFixtures.page(.implementation)
             working.task.source = .init(
                 value1: .work_item_artifact(
@@ -5426,7 +5426,7 @@
             return surfaces
         }
 
-        /// The specification reader the task page's documents line opens:
+        /// The specification reader the task page's pinned row opens:
         /// the approved bytes, and the unavailable state that names the
         /// digest when the daemon has none.
         private func taskSpecificationReaderSurfaces() -> [Surface] {
@@ -5463,7 +5463,7 @@
             return surfaces
         }
 
-        /// The prompt reader a typed task's documents line opens (#2612):
+        /// The prompt reader a typed task's pinned row opens (#2612):
         /// the submitted text in the plain card, and the unavailable state
         /// that names the digest when the daemon has none.
         private func taskPromptReaderSurfaces() -> [Surface] {
@@ -5547,8 +5547,9 @@
                                 VStack(alignment: .leading, spacing: 16) {
                                     Text(snapshot.task.display_names.task.text).font(FreesideFont.title)
                                     Text(TaskDisplay.projectName(snapshot.task)).font(FreesideFont.callout)
-                                    // The menu as the outline row draws it,
-                                    // so each state shows its enablement.
+                                    // The menu as the iPhone navigation bar
+                                    // draws it, so each state shows its
+                                    // enablement.
                                     TaskActionsMenu(
                                         coordinator: coordinator, taskID: snapshot.task.id,
                                         confirmation: .constant(nil), lineChange: .constant(nil),

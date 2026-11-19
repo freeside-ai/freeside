@@ -23,90 +23,27 @@ struct PageHeader<Detail: View>: View {
     }
 }
 
-/// The places the outline row jumps to, in page order.
+/// The sections the page keeps the reader's place by, in page order: each
+/// draws a jump target the page reads its place from and lands moves on.
 enum TaskPageSection: Hashable {
     case decisions
-    case task
     case conversation
     case timeline
-    case runs
-
-    /// The outline row's chips, in page order. Decisions draws only with
-    /// an open item. Conversation sits where its thread is: before the
-    /// Timeline for the leading card's, after Runs for Earlier
-    /// Conversations, and nowhere with neither.
-    static func outline(decisions: Int, conversation: OutlineConversation?) -> [TaskPageSection] {
-        (decisions > 0 ? [.decisions] : []) + [.task]
-            + (conversation?.isInCard == true ? [.conversation] : []) + [.timeline, .runs]
-            + (conversation?.isInCard == false ? [.conversation] : [])
-    }
 }
 
-/// Where the outline's Conversation chip jumps, with the messages it
-/// counts there.
-enum OutlineConversation: Equatable {
-    /// The leading card's thread.
-    case inCard(messages: Int)
-    /// The Earlier Conversations section under the Timeline.
-    case earlier(messages: Int)
-
-    var isInCard: Bool {
-        switch self {
-        case .inCard: true
-        case .earlier: false
-        }
-    }
-
-    var messages: Int {
-        switch self {
-        case .inCard(let messages), .earlier(let messages): messages
-        }
-    }
-}
-
-/// The page's one pinned element: a row of keyword chips over a hairline.
-/// Selection records the last chip chosen and doesn't follow scrolling.
-/// Decisions draws at one open item or more, Conversation where a thread
-/// is, and Decisions and Runs are native popups when they hold several.
-/// One line at every text size: the chips scroll sideways where the column
-/// can't hold them, and the trailing slot (the task's menu) stays put.
-struct OutlineRow<Trailing: View>: View {
-    struct Entry: Identifiable, Equatable {
-        let id: String
-        let title: String
-    }
-
-    let decisions: [Entry]
-    /// The decision whose card leads, which its popup checks.
-    let leadingItemID: String?
-    /// Where the Conversation chip goes and what it counts; nil draws none.
-    let conversation: OutlineConversation?
-    let runs: [Entry]
-    let selected: TaskPageSection
-    var rendersInteractiveControls = true
-    let onSelect: (TaskPageSection) -> Void
-    let onChooseDecision: (String) -> Void
-    let onChooseRun: (String) -> Void
-    /// Drawn at the row's end, outside the chips' sideways scroll.
+/// The page's one pinned element, over a hairline: the task's documents as
+/// quiet outlined buttons, wrapping where the column can't hold them, and
+/// the trailing slot (the task's menu on the Mac), which stays on the
+/// first line. It draws, and holds its hairline, even with nothing in it.
+struct OutlineRow<Documents: View, Trailing: View>: View {
+    @ViewBuilder let documents: () -> Documents
+    /// Drawn at the row's trailing end, on its first line.
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        HStack(spacing: 8) {
-            Group {
-                if rendersInteractiveControls {
-                    ViewThatFits(in: .horizontal) {
-                        chips
-                        ScrollView(.horizontal, showsIndicators: false) { chips }
-                    }
-                } else {
-                    // A renderer can't draw a scroll view: the drawn row clips
-                    // where the live row scrolls.
-                    chips
-                        .fixedSize(horizontal: true, vertical: false)
-                        // No minimum, so the column can't grow to fit the chips.
-                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                        .clipped()
-                }
+        HStack(alignment: .top, spacing: 8) {
+            WrappingHStack(horizontalSpacing: 7, verticalSpacing: 6) {
+                documents()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trailing()
@@ -119,116 +56,34 @@ struct OutlineRow<Trailing: View>: View {
         }
         .padding(.horizontal, -Self.bleed)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Page outline")
+        .accessibilityLabel("Task documents and actions")
     }
 
     /// How far the ground and hairline reach past the column, so a card
     /// scrolling under the pinned row never shows at its edges.
     private static var bleed: CGFloat { 8 }
-
-    private var chips: some View {
-        HStack(spacing: 4) {
-            ForEach(
-                TaskPageSection.outline(decisions: decisions.count, conversation: conversation),
-                id: \.self
-            ) { section in
-                switch section {
-                case .decisions:
-                    menuChip(
-                        "Decisions", section: .decisions, entries: decisions, checked: leadingItemID,
-                        choose: onChooseDecision)
-                case .task: chip("Task", section: .task)
-                case .conversation: chip("Conversation", count: conversation?.messages, section: .conversation)
-                case .timeline: chip("Timeline", section: .timeline)
-                case .runs: menuChip("Runs", section: .runs, entries: runs, checked: nil, choose: onChooseRun)
-                }
-            }
-        }
-    }
-
-    private func chip(_ title: String, count: Int? = nil, section: TaskPageSection) -> some View {
-        Button {
-            onSelect(section)
-        } label: {
-            OutlineChip(title: title, count: count, isSelected: selected == section)
-        }
-        .buttonStyle(.plain)
-        .freesideFocusRing(cornerRadius: 4)
-    }
-
-    /// A chip that counts `entries`, and with more than one is a popup of
-    /// them. With one it jumps to its section, where that entry is.
-    @ViewBuilder
-    private func menuChip(
-        _ title: String, section: TaskPageSection, entries: [Entry], checked: String?,
-        choose: @escaping (String) -> Void
-    ) -> some View {
-        if entries.count > 1 {
-            let label = OutlineChip(
-                title: title, count: entries.count, isSelected: selected == section, opensMenu: true)
-            if rendersInteractiveControls {
-                Menu {
-                    ForEach(entries) { entry in
-                        Button {
-                            choose(entry.id)
-                        } label: {
-                            if entry.id == checked {
-                                Label(entry.title, systemImage: "checkmark")
-                            } else {
-                                Text(entry.title)
-                            }
-                        }
-                    }
-                } label: {
-                    label
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            } else {
-                label
-            }
-        } else {
-            chip(title, count: entries.count, section: section)
-        }
-    }
 }
 
-/// One outline chip: a keyword on the selected fill, with its count, and the
-/// popup mark where it opens one.
-private struct OutlineChip: View {
-    let title: String
-    var count: Int? = nil
-    let isSelected: Bool
-    var opensMenu = false
+/// The pinned row's quiet outlined button (issue #3377): a `ground2` fill
+/// and a 1pt `secondaryBorder` outline at a 5pt radius, quieter than R6's
+/// `ruleStrong` outlined action, which the owner chose for the row. A
+/// disabled button fades its outline to `rule`, as an outlined action's does.
+struct PinnedRowButtonFrame: ViewModifier {
+    var isDisabled = false
 
-    var body: some View {
-        let tone = isSelected ? Color.ink : Color.inkDim
-        HStack(spacing: 6) {
-            KeywordLabel(text: title, color: tone)
-            if let count {
-                Text("\(count)")
-                    .font(FreesideFont.keyword)
-                    .foregroundStyle(tone)
-            }
-            if opensMenu {
-                Image(systemName: "arrowtriangle.down.fill")
-                    .font(FreesideFont.disclosureGlyph)
-                    .foregroundStyle(Color.accentText)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 4).fill(Color.segmentSelected)
-            }
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    static let cornerRadius: CGFloat = 5
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, 3)
+            .padding(.leading, 10)
+            .padding(.trailing, 9)
+            .background(Color.ground2, in: RoundedRectangle(cornerRadius: Self.cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.cornerRadius)
+                    .strokeBorder(isDisabled ? Color.rule : Color.secondaryBorder, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
     }
 }
 

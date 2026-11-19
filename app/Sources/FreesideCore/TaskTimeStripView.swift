@@ -95,7 +95,8 @@ struct TaskTimeStripView: View {
     }
 
     /// The task's runs: a menu of them, or with one run a button to it.
-    /// Either opens what the outline row's `Runs` popup opens.
+    /// Either opens the chosen run: its card, or its run page when the
+    /// task page draws none.
     private var runsControl: some View {
         runsControlContent
             // The label's padding widens the press and the focus ring, as
@@ -139,8 +140,8 @@ struct TaskTimeStripView: View {
     }
 
     /// Dim at the label step, semibold, with the menu mark the task's
-    /// actions menu draws when it is a menu. One run's button has none, as
-    /// the outline row's chip with one entry has none.
+    /// actions menu draws when it is a menu. One run's button has none,
+    /// since it opens no menu.
     private var runsLabel: some View {
         Text(runs.count > 1 ? "Runs \(runs.count) \u{25BE}" : "Runs \(runs.count)")
             .font(FreesideFont.textMenu)
