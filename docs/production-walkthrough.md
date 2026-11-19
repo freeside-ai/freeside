@@ -39,7 +39,9 @@ section it links.
 3. Prepare the operator's devices
    ([Prepare The Operator's Devices](#prepare-the-operators-devices)),
    then run any seeded pass the operator checks on a device.
-4. Start the deputy on the real root, pair both clients, set up and test
+4. Enroll the reviewer when the real root's review store doesn't exist yet
+   ([Enroll The Reviewer Before The First Start](#enroll-the-reviewer-before-the-first-start)),
+   then start the deputy on the real root, pair both clients, set up and test
    the iPhone's notifications when a gate names one, and resolve a retained
    root's health items
    ([Start And Verify](#start-and-verify)). When the exit contract routes,
@@ -569,7 +571,17 @@ and runs the onboarding review, stopping with exit 3 and an `approval=` line
 at each step only the operator can take. Rerun the same command after each
 one; it resumes where it stopped. In order:
 
-1. **Installation, until the fixture is trusted in `prod`'s App authority.**
+1. **Reviewer enrollment, when the review store doesn't exist.** Before
+   the first start, a Codex reviewer whose `review.auth_snapshot` doesn't
+   exist stops the run with `approval=codex_enrollment:` and the commands
+   [Enroll The Reviewer Before The First Start](#enroll-the-reviewer-before-the-first-start)
+   gives, filled in from the settings: `codex login` into a fresh
+   `<root>/codex-login`, then `enroll-codex` against the root's database.
+   `codex login` is interactive, so run them yourself, then rerun. Enroll
+   once per machine: later roots use the same store and don't stop here.
+   Don't enroll it again from another root, which replaces the store every
+   root on the machine reads.
+2. **Installation, until the fixture is trusted in `prod`'s App authority.**
    The review opens an installation intent and prints its URL; complete the
    installation and rerun. The script passes `-resume` on every later
    onboarding call. An intent expires (the daemon guide's `freesided
@@ -578,12 +590,12 @@ one; it resumes where it stopped. In order:
    by hand as that guide says, then rerun. The intent belongs to the App, so
    finish one root's installation before another root's onboarding starts:
    a new root's first call doesn't pass `-resume`.
-2. **The onboarding approval.** The `approval=` line is the full `freesided
+3. **The onboarding approval.** The `approval=` line is the full `freesided
    onboard ... -approve <approval_digest>` command. Read the review in
    `<root>/daemon/onboard-review.json`, then run that command yourself; it
    writes `<root>/daemon/onboard-approved.json`. The approval stays the
    operator's: the script never passes `-approve`.
-3. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
+4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
    the approving run, applies the pass's routing and pool limits, runs
    `freesided probe-lineup -root <root>`
    ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
@@ -728,7 +740,10 @@ and how to fix it. The app's commands are the operator's to run
   against the deputy's `api_url`, so a fresh root has no paired endpoint to
   check yet.
 - **Credentials need nothing from the operator** once preflight passes
-  `claude_credentials` and `codex_credentials`. A Codex chain that renewal
+  `claude_credentials` and `codex_credentials`. A Codex reviewer's first
+  store comes from enrollment before the first start
+  ([Enroll The Reviewer Before The First Start](#enroll-the-reviewer-before-the-first-start)),
+  which leaves no hold. A Codex chain that renewal
   reports as revoked needs `codex login` and a paired client's **Resolve
   re-enrollment**
   ([Replace A Revoked Chain And Resolve Its Hold](#replace-a-revoked-chain-and-resolve-its-hold))
@@ -756,7 +771,10 @@ composition preflight:
 
 1. **Record.** It records the two identities `agent_tree.auth_identity` and
    `agent_tree.review_auth_identity` name, once. A later settings file that
-   names other ones is refused.
+   names other ones is refused. A Codex reviewer's `review.auth_snapshot`
+   must already exist; when it doesn't, the start refuses before recording
+   anything and names the path and the `enroll-codex` step
+   ([Enroll The Reviewer Before The First Start](#enroll-the-reviewer-before-the-first-start)).
 2. **Adopt.** It runs `freesided auth adopt` on that root, writing
    `<root>/daemon/auth-adopt.json` and `auth-adopt.log`. A root that was
    already adopted changes nothing.
@@ -792,6 +810,53 @@ of shared logs.
 
 When adoption itself fails or writes no patch, the check fails the same way
 and names those two files instead.
+
+### Enroll The Reviewer Before The First Start
+
+A Codex reviewer (`agent_tree.review_harness` `codex_cli`, the default)
+needs its live store at `review.auth_snapshot` before the deputy's first
+start. Only `freesided enroll-codex` creates it: it spends the login's
+refresh token in a real rotation, verifies the result, and writes the
+rotated store. Never put a raw `codex login` result at
+`review.auth_snapshot`: the first refresh spends its token without
+enrolling the reviewer, and enrollment then needs a new login.
+
+With the deputy stopped, using the `freesided` the deputy will run:
+
+```sh
+install -d -m 700 <login-root> <review.input_root>
+CODEX_HOME=<login-root> codex login
+chmod 600 <login-root>/auth.json
+freesided enroll-codex \
+  -db <root>/daemon/freeside.db \
+  -project <repository.project> \
+  -auth-identity <agent_tree.review_auth_identity> \
+  -input-root <login-root> \
+  -input-file <login-root>/auth.json \
+  -auth-store-root <review.input_root> \
+  -auth-store <review.auth_snapshot>
+rm -rf <login-root>
+```
+
+`<login-root>` is a new private directory outside `review.input_root`, never
+`~/.codex`
+([Enroll A Codex Subscription Identity](../daemon/README.md#enroll-a-codex-subscription-identity)
+says why). The command creates the root's database when it has none yet. A
+fresh database holds no recipe-gated evidence, so it needs no
+`-approved-recipe`. Success prints `"attention_item_status": "resolved"`: a
+first enrollment verifies its store and the daemon closes its recovery item,
+so no paired client is needed. Remove the login root then; its refresh token
+is spent.
+
+The first start then records the reviewer identity, adopts the store, and
+passes `agent_selection`, and preflight's `codex_credentials` finds no hold.
+`bash scripts/exit-root.sh` stops before its first start with these commands
+filled in ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
+
+Running `enroll-codex` again while the store is as enrollment left it
+reports the same result and spends nothing. Once a refresh has rotated the
+store, or after a revocation, it replaces the store and leaves a hold
+([Replace A Revoked Chain And Resolve Its Hold](#replace-a-revoked-chain-and-resolve-its-hold)).
 
 ### The First Start
 
@@ -962,8 +1027,11 @@ interrupted, rerun it first to recover any pending rotation.
 When renewal reports a rejected or unavailable refresh chain, follow
 [Enroll A Codex Subscription Identity](../daemon/README.md#enroll-a-codex-subscription-identity):
 run `codex login`, stage its output in a separate private input root, and run
-`enroll-codex` against the deputy's database and live store. Enrollment
-leaves a hold that requires a paired-device command.
+`enroll-codex` against the deputy's database and live store. Replacing a
+revoked chain leaves a hold that requires a paired-device command, unlike a
+first enrollment
+([Enroll The Reviewer Before The First Start](#enroll-the-reviewer-before-the-first-start)):
+the output's `attention_item_status` is `open`.
 
 Serve the deputy's root with a driverless daemon:
 
