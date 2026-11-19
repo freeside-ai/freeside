@@ -345,6 +345,28 @@ import Testing
         #expect(row("Stopping", stage: .review).keyword == "Stopping")
     }
 
+    /// Acceptance (#3456): each ended lifecycle has its outcome and a live
+    /// task none; attempts submitted for one issue share a context line and
+    /// read as look-alikes by that issue even when their names differ, and
+    /// a task with no issue draws no context line.
+    @Test func issueRetriesShowTheirOutcomeAndShareTheirIssue() {
+        #expect(
+            [.finished, .stopped, .abandoned, .active].map { TaskDisplay.outcome(task("t", lifecycle: $0).task) }
+                == [.finished, .stopped, .abandoned, nil])
+
+        var retries = TaskFixtures.issueRetries()
+        retries[0].task.display_names.task = .init(text: "An earlier agent name", source: .agent)
+        #expect(retries.map { TaskDisplay.finishedContext($0.task) } == Array(repeating: "freeside · #80", count: 3))
+        var other = task("task-other", lifecycle: .finished)
+        other.task.source = nil
+        other.task.issue = nil
+        #expect(TaskDisplay.finishedContext(other.task) == nil)
+        #expect(TaskDisplay.ambiguousTaskIDs(retries + [other]) == Set(retries.map(\.task.id)))
+
+        let list = UnifiedList(open: [], closed: [], tasks: retries, projectFilter: nil)
+        #expect(list.finished.map(\.id) == retries.reversed().map { .task($0.task.id) })
+    }
+
     @Test func aParkedRowNamesItsHoldAndAFinishedRowIsFaint() {
         var snapshot = TaskFixtures.defaultTasks()[0].task
         snapshot.cancellation = nil

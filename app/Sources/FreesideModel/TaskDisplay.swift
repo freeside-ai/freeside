@@ -222,6 +222,21 @@ package enum TaskDisplay {
         }
     }
 
+    /// How a task ended, as its Finished row's marker draws it (#3456).
+    package enum Outcome: Equatable {
+        case finished, stopped, abandoned
+    }
+
+    /// The outcome of a task that has ended, nil for one still active.
+    package static func outcome(_ task: Components.Schemas.Task) -> Outcome? {
+        switch task.lifecycle {
+        case .finished: .finished
+        case .stopped: .stopped
+        case .abandoned: .abandoned
+        case .active, ._empty, .unknown, nil: nil
+        }
+    }
+
     package static func lifecycleLabel(_ task: Components.Schemas.Task) -> (text: String, systemImage: String) {
         switch task.lifecycle {
         case .finished: ("Finished", "checkmark.circle")
@@ -663,6 +678,12 @@ package enum TaskDisplay {
     /// issue its submitted text named.
     package static func issueReference(_ task: Components.Schemas.Task) -> String? {
         task.issue.map { "#\($0.value1.issue_number)" }
+    }
+
+    /// A Finished row's context line: project, then the issue, for an
+    /// issue-backed task; nil for any other, which draws no context line.
+    package static func finishedContext(_ task: Components.Schemas.Task) -> String? {
+        task.issue == nil ? nil : pageIdentity(task)
     }
 
     /// The row's meta line: project, the issue when the task has one,

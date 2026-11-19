@@ -239,6 +239,33 @@ public enum TaskFixtures {
         return sourced
     }
 
+    /// Three tasks submitted as the URL of one issue (#3456), oldest first:
+    /// the operator abandoned the first, stopped the second, and the third
+    /// finished. Each takes the issue's title as its name and carries the
+    /// issue as `Task.issue`, an hour after the one before.
+    public static func issueRetries() -> [Components.Schemas.TaskSnapshot] {
+        guard let base = defaultTasks().first(where: { $0.task.id == "task-campaign-freeside-completed" }),
+            let start = base.task.lifecycle_facts.first
+        else { preconditionFailure("The issue retries require the completed campaign's task") }
+        let issue = Components.Schemas.IssueSubjectRef(
+            repo: "freeside-ai/freeside", repository_id: 1, issue_number: 80)
+        let ids = ["task-3f2a9c1e", "task-7b41d0a5", "task-c09e6f18"]
+        return ids.enumerated().map { index, id in
+            var snapshot = artifactSourced(
+                base, artifactID: "artifact-\(id)", digest: "sha256:\(id)", issue: issue)
+            snapshot.task.id = id
+            snapshot.task.display_names.task = .init(text: base.task.display_names.task.text, source: .issue)
+            snapshot.task.last_activity_at = base.task.last_activity_at
+                .addingTimeInterval(TimeInterval(index - (ids.count - 1)) * 3600)
+            guard index < ids.count - 1 else { return snapshot }
+            // The two earlier attempts ended before any completion.
+            snapshot.task.lifecycle_facts = [start]
+            snapshot.task.lifecycle = .active
+            snapshot.task.wip = true
+            return index == 0 ? explicitlyAbandoned(snapshot) : confirmedStopped(snapshot)
+        }
+    }
+
     public static func defaultTaskIDs() -> [String] {
         defaultTasks().map(\.task.id)
     }
