@@ -622,7 +622,11 @@ import Testing
         }
 
         @Test func aSeatedCardGrowingOrLeavingHoldsTheReader() async throws {
-            let page = try await Page()
+            // Short enough that a reader in the rail has page below them:
+            // with Current Run above the Timeline (#3375), the default
+            // height leaves them at the page's end, where a refresh that
+            // shrinks the page for a frame (63pt here) clamps them back.
+            let page = try await Page(height: 220)
             defer { page.close() }
             let scroll = try page.scrollView
             let document = try #require(scroll.documentView)

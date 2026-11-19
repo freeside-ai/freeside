@@ -3,8 +3,8 @@ import SwiftUI
 
 /// One page per task, in every state: the header, the pinned row, the
 /// leading card and the other open items, then the body, split by tense
-/// (◆C): Current Run, what is happening, then the Stop states, the
-/// Timeline, and Earlier Conversations, what happened. The current thread
+/// (◆C): the Stop states and Current Run, what is happening, then Elapsed,
+/// the Timeline, and Earlier Conversations, what happened. The current thread
 /// draws in its card only. The body's history is as the daemon computes
 /// it (`GET /tasks/{id}/timeline`): the task's events as one open rail
 /// that marks where each stage began, then every earlier campaign folds
@@ -378,9 +378,11 @@ struct TaskPageView: View {
         }
     }
 
-    /// Everything under the pinned row. Each part a refresh can change
-    /// carries a hold point, so a reader below it holds their place as it
-    /// changes above them.
+    /// Everything under the pinned row: the leading card and the other
+    /// open items, the Stop and line-change states when they draw, Current
+    /// Run, then Elapsed and the Timeline, earlier conversations, and the
+    /// identifiers. Each part a refresh can change carries a hold point, so
+    /// a reader below it holds their place as it changes above them.
     private func sections(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         VStack(alignment: .leading, spacing: Self.contentGap) {
             let earlier = earlierConversations
@@ -410,6 +412,12 @@ struct TaskPageView: View {
                     .background(alignment: .top) { bodyMarker("stop") }
                 lineChangeStates
                     .background(alignment: .top) { bodyMarker("line-change") }
+                // Outside the Timeline's block, so the Timeline's place
+                // starts at Elapsed, not here.
+                if let timeline, let current = currentRun(timeline) {
+                    currentRunSection(current, in: timeline)
+                        .background(alignment: .top) { jumpTarget(.run(current.run.run_id)) }
+                }
                 timelineSection(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.timeline)) }
                 // Absent when it lists none.
@@ -695,8 +703,6 @@ struct TaskPageView: View {
         switch TaskTimelinePresentation.runTarget(runID, task: snapshot.task, timeline: timeline) {
         case .currentRun:
             break
-        case .earlierAttempt:
-            fold(.run(runID)).wrappedValue = true
         case .earlierCampaign(let campaignID):
             fold(.campaign(campaignID)).wrappedValue = true
             fold(.run(runID)).wrappedValue = true
@@ -957,48 +963,108 @@ struct TaskPageView: View {
         _ timeline: Components.Schemas.TaskTimeline
     ) -> TaskTimelinePresentation.CurrentRun? {
         TaskTimelinePresentation.currentRunSection(
-            snapshot.task, timeline: timeline, runTimelines: coordinator.timelinesByRunID,
-            schedules: coordinator.schedules)
+            snapshot.task, timeline: timeline, runTimelines: coordinator.timelinesByRunID)
     }
 
-    /// Current Run (◆C): the attempt the task is on now, always open, as a
-    /// full item: its title, chip, and `Open run history`, the mono line
-    /// naming what runs it, its Review, and Run Details. The current
-    /// campaign's other attempts follow as one-line items. What it holds
-    /// changes with the stage; its place does not.
+    /// Current Run (◆C, #3375): what is running, as whom, and how review is
+    /// going, as one outlined item that leads the body. Its keyword and
+    /// `Open run history` share the first line, inside the outline, so the
+    /// item can't be read as part of Elapsed or the Timeline. Then the
+    /// attempt and why it started, an Agent row, and, once a round exists,
+    /// a Review row. Everything else about the run (its state chip, round
+    /// facts, details, and the campaign's earlier attempts) is in run
+    /// history: the head's chip already says its state.
     private func currentRunSection(
         _ current: TaskTimelinePresentation.CurrentRun, in timeline: Components.Schemas.TaskTimeline
     ) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            KeywordLabel(text: "Current Run")
-                .accessibilityAddTraits(.isHeader)
+        item(verticalPadding: 16, horizontalPadding: 18) {
             VStack(alignment: .leading, spacing: 12) {
-                item(verticalPadding: 18, horizontalPadding: 20) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            openRunButton(current.run, in: timeline, showsTitle: true)
-                            // The run page's face for an invocation's
-                            // admission line.
-                            if let line = current.line {
-                                Text(line)
-                                    .font(FreesideFont.trailingSummary)
-                                    .foregroundStyle(Color.inkDim)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        runBody(
-                            current.run, in: timeline, showsReview: current.showsReview,
-                            schedules: current.schedules)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        currentRunKeyword
+                        Spacer(minLength: 8)
+                        openRunButton(current.run, in: timeline)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        currentRunKeyword
+                        openRunButton(current.run, in: timeline)
                     }
                 }
-                .background(alignment: .top) { jumpTarget(.run(current.run.run_id)) }
-                ForEach(current.earlierAttempts, id: \.run_id) { run in
-                    item(verticalPadding: 12, horizontalPadding: 18) { priorRun(run, in: timeline) }
-                        .background(alignment: .top) { jumpTarget(.run(run.run_id)) }
+                currentRunLead(current.run)
+                // Only with a row to hold, so an empty block adds no gap
+                // under the lead before the run has an agent.
+                if current.line != nil || current.showsReview {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let line = current.line {
+                            currentRunRow("Agent") {
+                                Text(line)
+                                    .font(FreesideFont.monoValue)
+                                    .foregroundStyle(Color.ink)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                        if current.showsReview {
+                            currentRunRow("Review") {
+                                CurrentRunReview(
+                                    coordinator: coordinator, runID: current.run.run_id,
+                                    facts: coordinator.timelinesByRunID[current.run.run_id]?.review?.value1)
+                            }
+                            .accessibilityElement(children: .contain)
+                        }
+                    }
                 }
             }
         }
+        .accessibilityElement(children: .contain)
     }
+
+    private var currentRunKeyword: some View {
+        KeywordLabel(text: "Current Run")
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// The attempt in the statement face, then why it started, dim, when
+    /// the daemon recorded a reason.
+    private func currentRunLead(_ run: Components.Schemas.TaskTimelineRun) -> some View {
+        var lead = Text(TaskTimelinePresentation.runTitle(run))
+            .font(FreesideFont.statement)
+            .foregroundStyle(Color.ink)
+        if let reason = run.attempt_reason {
+            lead =
+                lead
+                + Text(" · \(reason)")
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.inkDim)
+        }
+        return lead.fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// One of Current Run's rows: a dim label, then its value. The labels
+    /// share one column, as wide as the widest; at an accessibility size
+    /// the value stacks under its label.
+    @ViewBuilder
+    private func currentRunRow<Value: View>(_ label: String, @ViewBuilder value: () -> Value) -> some View {
+        let labelText = Text(label).font(FreesideFont.factLabel).foregroundStyle(Color.inkDim)
+        if dynamicTypeSize >= .accessibility1 {
+            VStack(alignment: .leading, spacing: 4) {
+                labelText
+                value()
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                ZStack(alignment: .leading) {
+                    ForEach(Self.currentRunRowLabels, id: \.self) {
+                        Text($0).font(FreesideFont.factLabel).hidden().accessibilityHidden(true)
+                    }
+                    labelText
+                }
+                value()
+            }
+        }
+    }
+
+    private static let currentRunRowLabels = ["Agent", "Review"]
 
     /// What the task's Stop says, drawn only while there is a Stop state
     /// to state; Stop itself starts from the Task Actions menu.
@@ -1172,13 +1238,12 @@ struct TaskPageView: View {
             boxed: true)
     }
 
-    /// The Timeline is the task's events, always open: the rail that says
-    /// which stage the task is in and how it got there, the current
-    /// campaign's included, with no fold around them. Current Run follows
-    /// the rail, for when the glance is not enough: the rail says where the
-    /// task stands, and the run's review and admission say how it is going.
-    /// Under it each earlier campaign is one folded disclosure row, and the
-    /// page's exact identifiers close it under one hairline.
+    /// Elapsed, then the Timeline: the task's events, always open, the rail
+    /// that says which stage the task is in and how it got there, the
+    /// current campaign's included, with no fold around them. Current Run
+    /// sits above this block (#3375). Under the rail each earlier campaign
+    /// is one folded disclosure row, and the page's exact identifiers close
+    /// it under one hairline.
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
         let rows = TaskTimelinePresentation.rows(
             timeline,
@@ -1207,9 +1272,6 @@ struct TaskPageView: View {
                 } else {
                     TimelineRail(rows: rows, onOpenItem: onOpenItem, rowMarker: rowMarker)
                 }
-            }
-            if let current = currentRun(timeline) {
-                currentRunSection(current, in: timeline)
             }
             if timeline.sections.isEmpty {
                 Text("No campaigns or runs in this history.")
@@ -1375,32 +1437,20 @@ struct TaskPageView: View {
             synced: coordinator.runs.first { $0.run.id == run.run_id }?.run)
     }
 
-    /// The run's way into its own history. With the title it is the full
-    /// card's title row; without, it is the link alone under a prior run's
-    /// fold. Either way the whole row is the button and says what it said.
+    /// The run's way into its own history: the link alone, trailing
+    /// Current Run's keyword or leading a prior run's open fold, where it
+    /// fills the row so the whole row is the button. Either way it says
+    /// what it said.
     private func openRunButton(
-        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline, showsTitle: Bool
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline,
+        fillsRow: Bool = false
     ) -> some View {
         Button {
             onOpenRun(run.run_id)
         } label: {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    // Under a prior run's fold the link stands alone, so it
-                    // leads; beside a title it trails.
-                    if showsTitle {
-                        runTitle(run, in: timeline, dimmed: false)
-                        Spacer(minLength: 8)
-                    }
-                    FreesideLink(title: "Open run history", face: FreesideFont.noticeAction)
-                    if !showsTitle { Spacer(minLength: 0) }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    if showsTitle { runTitle(run, in: timeline, dimmed: false) }
-                    FreesideLink(title: "Open run history", face: FreesideFont.noticeAction)
-                }
-            }
-            .contentShape(Rectangle())
+            FreesideLink(title: "Open run history", face: FreesideFont.noticeAction)
+                .frame(maxWidth: fillsRow ? .infinity : nil, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .copyMenu { copyItems(TaskTimelinePresentation.technicalRows(run: run, in: timeline)) }
@@ -1408,16 +1458,16 @@ struct TaskPageView: View {
         .accessibilityHint("Shows this run's recorded milestones and invocation observations.")
     }
 
-    /// The run's title (`Specification`, `Implementation · Attempt N`) with
-    /// its chip beside it: the title is fixed vocabulary that cannot wrap,
-    /// which is the one case a chip sits beside a title.
+    /// A prior run's title (`Specification`, `Implementation · Attempt N`),
+    /// dim, with its chip beside it: the title is fixed vocabulary that
+    /// cannot wrap, which is the one case a chip sits beside a title.
     private func runTitle(
-        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline, dimmed: Bool
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> some View {
         WrappingHStack(horizontalSpacing: 10, verticalSpacing: 4) {
             Text(TaskTimelinePresentation.runTitle(run))
-                .font(dimmed ? FreesideFont.factLabel : FreesideFont.statement)
-                .foregroundStyle(dimmed ? Color.inkDim : Color.ink)
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.inkDim)
             if let chip = chip(run, in: timeline) {
                 StateChip(label: chip.label, cut: chip.cut)
             }
@@ -1442,12 +1492,12 @@ struct TaskPageView: View {
                         .accessibilityHidden(true)
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            runTitle(run, in: timeline, dimmed: true)
+                            runTitle(run, in: timeline)
                             Spacer(minLength: 8)
                             milestoneTime(run)
                         }
                         VStack(alignment: .leading, spacing: 4) {
-                            runTitle(run, in: timeline, dimmed: true)
+                            runTitle(run, in: timeline)
                             milestoneTime(run)
                         }
                     }
@@ -1460,7 +1510,7 @@ struct TaskPageView: View {
             .copyMenu { copyItems(TaskTimelinePresentation.technicalRows(run: run, in: timeline)) }
             .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
             if isExpanded.wrappedValue {
-                openRunButton(run, in: timeline, showsTitle: false)
+                openRunButton(run, in: timeline, fillsRow: true)
                 runBody(
                     run, in: timeline, showsReview: run.role == nil || run.role?.value1 == .implementation)
             }
@@ -1484,14 +1534,11 @@ struct TaskPageView: View {
         coordinator.runs.first { $0.run.id == runID }?.run.stages ?? []
     }
 
-    /// Everything under a run's title: its review, then its details. The
-    /// run timeline draws its milestones, one click away. `schedules` are
-    /// the task's armed schedules, which only the current run's details
-    /// carry.
+    /// Everything under an earlier campaign's run title: its review, then
+    /// its details. The run timeline draws its milestones, one click away.
     @ViewBuilder
     private func runBody(
-        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline,
-        showsReview: Bool, schedules: [Components.Schemas.ScheduleSnapshot] = []
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline, showsReview: Bool
     ) -> some View {
         if showsReview {
             RunReviewSection(
@@ -1503,14 +1550,13 @@ struct TaskPageView: View {
                 folds: .init(
                     facts: { fold(.roundFacts($0)) }, priorRounds: fold(.priorRounds(run.run_id))))
         }
-        if TaskTimelinePresentation.hasRunDetails(run, schedules: schedules) {
+        if TaskTimelinePresentation.hasRunDetails(run) {
             SentenceDisclosure(
                 label: "Run Details",
-                summary: TaskTimelinePresentation.runDetailsSummary(
-                    run, schedules: schedules, now: now, locale: locale, timeZone: timeZone),
+                summary: TaskTimelinePresentation.runDetailsSummary(run),
                 isExpanded: fold(.runDetails(run.run_id))
             ) {
-                runDetails(run, in: timeline, schedules: schedules)
+                runDetails(run, in: timeline)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             // Under the Review section, whose rounds a refresh adds.
@@ -1518,13 +1564,11 @@ struct TaskPageView: View {
         }
     }
 
-    /// The run's role, lineage, and recorded hold as facts, then each armed
-    /// schedule against its next fire time (the kind alone when none is
-    /// recorded). A run this history holds is a link to its own timeline;
-    /// one it doesn't hold is named by its short id, with nowhere to go.
+    /// The run's role, lineage, and recorded hold as facts. A run this
+    /// history holds is a link to its own timeline; one it doesn't hold is
+    /// named by its short id, with nowhere to go.
     private func runDetails(
-        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline,
-        schedules: [Components.Schemas.ScheduleSnapshot]
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> some View {
         FactGroup(spacing: 8) {
             if let role = run.role?.value1 {
@@ -1545,19 +1589,6 @@ struct TaskPageView: View {
                     FactRow(label: "Hold Detail", value: fact)
                 }
                 FactRow(label: "Hold Code", value: hold.reason.rawValue, valueColor: .inkDim)
-            }
-            ForEach(schedules, id: \.schedule.id) { snapshot in
-                let schedule = snapshot.schedule
-                if let fireAt = schedule.fire_at {
-                    FactRow(
-                        label: RunDisplay.label(schedule.kind),
-                        value: FreesideFormat.shortTime(fireAt, now: now, locale: locale, timeZone: timeZone)
-                    )
-                    .exactInstant(fireAt)
-                } else {
-                    Text(RunDisplay.label(schedule.kind))
-                        .font(FreesideFont.factLabel)
-                }
             }
         }
     }
@@ -1849,9 +1880,9 @@ enum TaskTimelinePresentation {
     }
 
     /// The page's elements flattened in render order, so a test can pin the
-    /// order without a view: the event rail's rows by their words, then the
-    /// current run and the current campaign's other attempts, then each
-    /// earlier campaign and its runs.
+    /// order without a view: the current run, then the event rail's rows by
+    /// their words, then each earlier campaign and its runs. Any other run
+    /// opens its run page (`runTarget`).
     enum Entry: Equatable {
         case row(String)
         case section(campaignID: String?)
@@ -1859,10 +1890,11 @@ enum TaskTimelinePresentation {
     }
 
     static func entries(_ timeline: Components.Schemas.TaskTimeline, task: Components.Schemas.Task) -> [Entry] {
-        var entries: [Entry] = rows(timeline).map { .row($0.label) }
-        if let current = currentRunSection(task, timeline: timeline, runTimelines: [:], schedules: []) {
-            entries += ([current.run] + current.earlierAttempts).map { .run($0.run_id) }
+        var entries: [Entry] = []
+        if let current = currentRunSection(task, timeline: timeline, runTimelines: [:]) {
+            entries.append(.run(current.run.run_id))
         }
+        entries += rows(timeline).map { .row($0.label) }
         for section in earlierSections(task, in: timeline) {
             entries.append(.section(campaignID: section.campaign_id))
             entries += section.runs.map { .run($0.run_id) }
@@ -2114,7 +2146,8 @@ enum TaskTimelinePresentation {
 
     /// Every campaign but the current one, newest first: each folds below
     /// the rail. The current campaign has no fold; its attempts are the
-    /// rail's own events, and Current Run's while the task is active.
+    /// rail's own events, its current run is Current Run's while the task
+    /// is active, and each attempt opens its run page.
     static func earlierSections(
         _ task: Components.Schemas.Task, in timeline: Components.Schemas.TaskTimeline
     ) -> [Components.Schemas.TaskTimelineSection] {
@@ -2122,7 +2155,9 @@ enum TaskTimelinePresentation {
         return timeline.sections.indices.filter { $0 != current }.map { timeline.sections[$0] }
     }
 
-    /// What the Current Run section holds (◆C).
+    /// What the Current Run section holds (◆C): the run the task is on and
+    /// nothing else. The current campaign's earlier attempts open their run
+    /// pages from the Elapsed line's runs menu (#3375).
     struct CurrentRun {
         let run: Components.Schemas.TaskTimelineRun
         /// What runs it, in the run page's grammar; nil when nothing names it.
@@ -2130,10 +2165,6 @@ enum TaskTimelinePresentation {
         /// Whether its Review draws: an implementation run whose timeline
         /// holds a round.
         let showsReview: Bool
-        /// Every armed schedule the task has, which its Run Details carry.
-        let schedules: [Components.Schemas.ScheduleSnapshot]
-        /// The current campaign's other runs, in section order.
-        let earlierAttempts: [Components.Schemas.TaskTimelineRun]
     }
 
     /// Current Run for an active task whose loaded history holds a current
@@ -2141,20 +2172,15 @@ enum TaskTimelinePresentation {
     /// newest campaign's runs and each run page holds the rest.
     static func currentRunSection(
         _ task: Components.Schemas.Task, timeline: Components.Schemas.TaskTimeline?,
-        runTimelines: [String: Components.Schemas.RunTimeline],
-        schedules: [Components.Schemas.ScheduleSnapshot]
+        runTimelines: [String: Components.Schemas.RunTimeline]
     ) -> CurrentRun? {
-        guard TaskDisplay.isActive(task), let timeline, let run = currentRun(task, in: timeline),
-            let index = currentSectionIndex(task, in: timeline)
-        else { return nil }
+        guard TaskDisplay.isActive(task), let timeline, let run = currentRun(task, in: timeline) else { return nil }
         let runTimeline = runTimelines[run.run_id]
         let reviews = run.role == nil || run.role?.value1 == .implementation
         return CurrentRun(
             run: run,
             line: currentRunLine(task, run: run, runTimeline: runTimeline),
-            showsReview: reviews && runTimeline?.review?.value1.rounds.isEmpty == false,
-            schedules: TaskDisplay.armedSchedules(for: task, in: schedules),
-            earlierAttempts: timeline.sections[index].runs.filter { $0.run_id != run.run_id })
+            showsReview: reviews && runTimeline?.review?.value1.rounds.isEmpty == false)
     }
 
     /// Current Run's mono line, in the run page's grammar: the harness,
@@ -2188,22 +2214,21 @@ enum TaskTimelinePresentation {
 
     /// Where choosing a run from the Elapsed line's runs menu goes.
     enum RunTarget: Equatable {
-        /// The current run's card in Current Run.
+        /// The current run's item, Current Run.
         case currentRun
-        /// An earlier attempt's fold in Current Run, opened.
-        case earlierAttempt
         /// A run in an earlier campaign's fold, with both folds opened.
         case earlierCampaign(String?)
-        /// No card on the page draws the run, so its run page opens.
+        /// No item on the page draws the run, so its run page opens: the
+        /// current campaign's earlier attempts, and a finished task's
+        /// newest campaign.
         case runPage
     }
 
     static func runTarget(
         _ runID: String, task: Components.Schemas.Task, timeline: Components.Schemas.TaskTimeline
     ) -> RunTarget {
-        if let current = currentRunSection(task, timeline: timeline, runTimelines: [:], schedules: []) {
-            if current.run.run_id == runID { return .currentRun }
-            if current.earlierAttempts.contains(where: { $0.run_id == runID }) { return .earlierAttempt }
+        if currentRunSection(task, timeline: timeline, runTimelines: [:])?.run.run_id == runID {
+            return .currentRun
         }
         if let section = earlierSections(task, in: timeline).first(where: {
             $0.runs.contains { $0.run_id == runID }
@@ -2787,23 +2812,14 @@ enum TaskTimelinePresentation {
         return (["\(count) \(count == 1 ? "run" : "runs")"] + [start].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// The closed summary of a run's details: role, attempt reason, the
-    /// recorded hold, and, from `schedules`, the soonest one to fire
-    /// (`next checks 4:40 AM`). Nil when none of them is known, and then
-    /// the disclosure has nothing to fold unless it holds lineage.
-    static func runDetailsSummary(
-        _ run: Components.Schemas.TaskTimelineRun, schedules: [Components.Schemas.ScheduleSnapshot] = [],
-        now: Date = .now, locale: Locale = .current, timeZone: TimeZone = .current
-    ) -> String? {
-        let next = schedules.compactMap { snapshot in snapshot.schedule.fire_at.map { (snapshot.schedule, $0) } }
-            .min { $0.1 < $1.1 }
-            .map { schedule, fireAt in
-                "next \(RunDisplay.label(schedule.kind).lowercased()) "
-                    + FreesideFormat.shortTime(fireAt, now: now, locale: locale, timeZone: timeZone)
-            }
-        let parts =
-            [run.role.map { label($0.value1) }, run.attempt_reason]
-            + [run.hold.map { "hold: \(RunDisplay.label($0.value1.reason))" }, next]
+    /// The closed summary of a run's details: role, attempt reason, and
+    /// the recorded hold. Nil when none of them is known, and then the
+    /// disclosure has nothing to fold unless it holds lineage.
+    static func runDetailsSummary(_ run: Components.Schemas.TaskTimelineRun) -> String? {
+        let parts = [
+            run.role.map { label($0.value1) }, run.attempt_reason,
+            run.hold.map { "hold: \(RunDisplay.label($0.value1.reason))" },
+        ]
         let present = parts.compactMap { $0 }
         return present.isEmpty ? nil : present.joined(separator: " · ")
     }
@@ -2903,10 +2919,8 @@ enum TaskTimelinePresentation {
         .joined(separator: "\n\n")
     }
 
-    static func hasRunDetails(
-        _ run: Components.Schemas.TaskTimelineRun, schedules: [Components.Schemas.ScheduleSnapshot] = []
-    ) -> Bool {
-        runDetailsSummary(run) != nil || run.superseded_by != nil || run.parent_run_id != nil || !schedules.isEmpty
+    static func hasRunDetails(_ run: Components.Schemas.TaskTimelineRun) -> Bool {
+        runDetailsSummary(run) != nil || run.superseded_by != nil || run.parent_run_id != nil
     }
 
     /// A run card's chip. The run the task currently stands on repeats the

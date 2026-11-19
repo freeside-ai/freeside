@@ -326,8 +326,8 @@ import Testing
     }
 
     /// Acceptance 1 (#2611): an active task's Current Run holds its current
-    /// run at every stage, the run's line, its Review only once a round
-    /// exists, and the current campaign's other runs as earlier attempts.
+    /// run at every stage, the run's line, and its Review only once a round
+    /// exists. Since #3375 it holds no earlier attempts.
     @Test(arguments: [
         TaskStageFixtures.Scenario.specification, .implementation, .review, .verification, .retry, .returned,
         .remediation,
@@ -343,14 +343,12 @@ import Testing
             uniqueKeysWithValues: TaskStageFixtures.script(scenario).runTimelines.map { ($0.run_id, $0) })
         let current = try #require(
             TaskTimelinePresentation.currentRunSection(
-                page.task, timeline: history, runTimelines: runTimelines, schedules: []))
+                page.task, timeline: history, runTimelines: runTimelines))
 
         #expect(current.run.run_id == page.task.current_position?.value1.run_id)
         let specifies = scenario == .specification
         #expect(current.run.role?.value1 == (specifies ? .specification : .implementation))
         #expect(current.line == (specifies ? "codex · pool S" : "claude · pool A"))
-        #expect(current.earlierAttempts.map(\.run_id) == history.sections[0].runs.dropFirst().map(\.run_id))
-        #expect(current.schedules.isEmpty)
 
         // Review draws only once the run's timeline holds a round, and
         // never for a specification run. The scripts record rounds only
@@ -365,7 +363,7 @@ import Testing
             admissions: [], outcomes: RunFixtures.noOutcomes)
         let withRound = try #require(
             TaskTimelinePresentation.currentRunSection(
-                page.task, timeline: history, runTimelines: [current.run.run_id: reviewed], schedules: []))
+                page.task, timeline: history, runTimelines: [current.run.run_id: reviewed]))
         #expect(withRound.showsReview == !specifies)
     }
 
@@ -374,13 +372,10 @@ import Testing
         var page = TaskStageFixtures.page(.verification)
         let history = try #require(page.history)
         #expect(
-            TaskTimelinePresentation.currentRunSection(page.task, timeline: nil, runTimelines: [:], schedules: [])
-                == nil)
+            TaskTimelinePresentation.currentRunSection(page.task, timeline: nil, runTimelines: [:]) == nil)
         for lifecycle in [Components.Schemas.Task.lifecyclePayload.finished, .stopped, .abandoned] {
             page.task.lifecycle = lifecycle
-            #expect(
-                TaskTimelinePresentation.currentRunSection(
-                    page.task, timeline: history, runTimelines: [:], schedules: []) == nil)
+            #expect(TaskTimelinePresentation.currentRunSection(page.task, timeline: history, runTimelines: [:]) == nil)
         }
         // Its page draws the rail, then the earlier campaigns, with no
         // run of the newest drawn as a card.
@@ -419,47 +414,9 @@ import Testing
                 == [history.sections[1].campaign_id])
     }
 
-    /// Acceptance 5 (#2611): the task's armed schedules sit in Current
-    /// Run's Run Details, whose summary names the soonest to fire.
-    @Test func runDetailsCarryTheTasksArmedSchedules() throws {
-        let page = TaskStageFixtures.page(.implementation)
-        let runID = try #require(page.task.current_position?.value1.run_id)
-        var checks = try #require(RunFixtures.defaultSchedules().first { $0.schedule.kind == .pr_checks_deadline })
-        checks.schedule.run_id = runID
-        var later = checks
-        later.schedule.id = "schedule-later"
-        later.schedule.kind = .review_wait_threshold
-        later.schedule.fire_at = checks.schedule.fire_at?.addingTimeInterval(3_600)
-        var fired = checks
-        fired.schedule.id = "schedule-fired"
-        fired.schedule.status = .fired
-        var elsewhere = checks
-        elsewhere.schedule.id = "schedule-elsewhere"
-        elsewhere.schedule.run_id = "run-of-another-task"
-
-        let current = try #require(
-            TaskTimelinePresentation.currentRunSection(
-                page.task, timeline: page.history, runTimelines: [:], schedules: [later, fired, checks, elsewhere]))
-        #expect(current.schedules.map(\.schedule.id) == ["schedule-later", checks.schedule.id])
-        let fireAt = try #require(checks.schedule.fire_at)
-        let time = FreesideFormat.shortTime(fireAt, now: fireAt, locale: enUS, timeZone: utc)
-        let summary = try #require(
-            TaskTimelinePresentation.runDetailsSummary(
-                current.run, schedules: current.schedules, now: fireAt, locale: enUS, timeZone: utc))
-        #expect(summary.hasSuffix("next checks \(time)"))
-
-        var bare = current.run
-        bare.role = nil
-        bare.attempt_reason = nil
-        bare.hold = nil
-        bare.parent_run_id = nil
-        bare.superseded_by = nil
-        #expect(!TaskTimelinePresentation.hasRunDetails(bare))
-        #expect(TaskTimelinePresentation.hasRunDetails(bare, schedules: current.schedules))
-    }
-
     /// Acceptance 7 (#2611): the Runs chip goes to the run's card where the
     /// page draws one, opening the folds around it, else to its run page.
+    /// Since #3375 the current campaign's earlier attempts have no card.
     @Test func theRunsChipGoesWhereTheRunIsDrawn() throws {
         let page = TaskStageFixtures.page(.secondCampaign)
         let history = try #require(page.history)
@@ -476,7 +433,7 @@ import Testing
         #expect(
             TaskTimelinePresentation.runTarget(
                 attempts[1].run_id, task: implementation.task, timeline: try #require(implementation.history))
-                == .earlierAttempt)
+                == .runPage)
 
         // A finished task draws no card for its newest campaign's runs.
         var finished = page.task
