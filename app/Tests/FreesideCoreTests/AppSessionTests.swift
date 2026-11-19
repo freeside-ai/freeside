@@ -595,6 +595,13 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 try tierLaunchMode(
                     environment, persistedServerURL: "https://daemon.example", readPaths: &readPaths)
                     == .live(try #require(URL(string: "https://daemon.example")), pairingCode: ""))
+            // An expired code in a supervised tier's file is no readiness:
+            // the persisted deployment still wins.
+            #expect(
+                try tierLaunchMode(
+                    environment, persistedServerURL: "https://daemon.example", readiness: .expired(readiness),
+                    readPaths: &readPaths)
+                    == .live(try #require(URL(string: "https://daemon.example")), pairingCode: ""))
         }
     }
 
@@ -622,8 +629,19 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 readPaths: &readPaths)
                 == .live(runURL, pairingCode: "483911"))
         #expect(readPaths == ["/tmp/run-1/readiness.json"])
-        // A run that has not published (or whose code aged out) asks rather
-        // than falling back to any other daemon.
+        // A run whose code expired is still the run to reach: the directory
+        // may hold its credential, and if not, the operator pairs with it
+        // using a fresh code.
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, readinessDirectory: "/tmp/run-1",
+                persistedServerURL: prodDaemonURL.absoluteString,
+                readiness: .expired(
+                    DaemonReadiness(apiURL: runURL, pairingCode: "483911", environment: .ephemeral, runID: "test-run")),
+                readPaths: &readPaths)
+                == .live(runURL, pairingCode: ""))
+        // A run that has not published asks rather than falling back to any
+        // other daemon.
         #expect(
             try tierLaunchMode(
                 .ephemeral, readinessDirectory: "/tmp/run-1",

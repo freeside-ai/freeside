@@ -487,13 +487,21 @@ public final class AppSession {
         } else {
             readinessDirectoryURL = environment.daemonStateDirectory()
         }
+        var readiness =
+            readinessDirectoryURL.map {
+                readReadiness(DaemonReadinessReader.fileURL(inStateDirectory: $0))
+            } ?? .absent
+        if readinessDirectory != nil, case .expired(let expired) = readiness {
+            readiness = .ready(
+                DaemonReadiness(
+                    apiURL: expired.apiURL, pairingCode: "", environment: expired.environment,
+                    runID: expired.runID, expiresAt: expired.expiresAt))
+        }
         return launchMode(
             argumentServerURL: argumentServerURL,
             pairingDemo: pairingDemo,
             mockMode: mockMode,
-            readiness: readinessDirectoryURL.map {
-                readReadiness(DaemonReadinessReader.fileURL(inStateDirectory: $0))
-            } ?? .absent,
+            readiness: readiness,
             persistedServerURL: environment.isSupervised ? persistedServerURL : nil,
             localDaemonURL: environment.supervisedAPIURL,
             hasCredential: environment.isSupervised ? hasCredential : { _ in false })

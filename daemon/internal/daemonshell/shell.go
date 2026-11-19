@@ -72,6 +72,10 @@ type Readiness struct {
 	// RunID names one daemon process start, not a workflow run (domain.RunID).
 	// It lets a script tell a fresh start from a stale file.
 	RunID string `json:"run_id"`
+	// ExpiresAt is when PairingCode stops redeeming, in UTC to the second,
+	// so a reader can tell an expired code from a refused one without
+	// guessing from the file's age.
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // Shell runs the process run() composes: it serves the API and pairing
@@ -92,6 +96,7 @@ type Shell struct {
 	closeOnce     sync.Once
 	closeErr      error
 	pairingCode   string
+	codeExpiresAt time.Time
 	environment   string
 	runID         string
 	logger        *slog.Logger
@@ -154,6 +159,7 @@ func (s *Shell) Readiness() Readiness {
 		PairingCode: s.pairingCode,
 		Environment: s.environment,
 		RunID:       s.runID,
+		ExpiresAt:   s.codeExpiresAt,
 	}
 }
 
@@ -175,12 +181,15 @@ func (s *Shell) sameHostReadiness() Readiness {
 	return ready
 }
 
-// PublishReadiness mints this start's run ID, records the pairing code and
-// environment it reports, and writes the readiness file under stateDir.
+// PublishReadiness mints this start's run ID, records the pairing code, its
+// expiry, and the environment it reports, and writes the readiness file
+// under stateDir. The expiry is truncated to the second: a reader then sees
+// the code expire no later than it does.
 // The file's same-host app reader uses loopback; stdout and pairing keep the
 // primary URL for remote devices (plan §5.2 Reachability).
-func (s *Shell) PublishReadiness(stateDir, pairingCode, environment string) error {
+func (s *Shell) PublishReadiness(stateDir, pairingCode string, codeExpiresAt time.Time, environment string) error {
 	s.pairingCode = pairingCode
+	s.codeExpiresAt = codeExpiresAt.UTC().Truncate(time.Second)
 	runID, err := newDaemonRunID()
 	if err != nil {
 		return err
