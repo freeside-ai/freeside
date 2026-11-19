@@ -52,7 +52,9 @@ type Service struct {
 	effectiveReviewConfig func() domain.Digest
 	// agentCatalogFunc reports the committed agent tree's catalog for the
 	// bootstrap and heartbeat. A nil func or a nil result means the daemon
-	// holds no admitted lineup (the fake driver), and both serve null.
+	// holds no admitted lineup (the fake driver): the bootstrap's catalog
+	// then has an empty lineup and a null lineup_revision beside the stored
+	// enrollments, and the heartbeat's lineup_revision is null.
 	agentCatalogFunc func() *AgentCatalog
 	doctorSchedule   domain.ScheduleID
 	doctorAvailable  func() bool

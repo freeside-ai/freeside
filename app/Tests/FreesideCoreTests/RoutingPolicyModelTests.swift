@@ -472,7 +472,7 @@ private let codexMac = UsageFixtures.unsupportedCollectorID
         #expect(model.failure?.message.contains("status \(status)") == true)
     }
 
-    @Test(arguments: [401, 403, 500, 503])
+    @Test(arguments: [401, 403, 413, 500, 503])
     func anUnresolvedAnswerKeepsTheSavedCommand(status: Int) async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)

@@ -1114,6 +1114,13 @@ func isCommandRequestError(err error) bool {
 		domain.ErrRoutingPolicyRoleUnbound,
 		// A workflow policy change names a project the daemon serves.
 		domain.ErrWorkflowPolicyProjectUnserved,
+		// An operator hook the daemon has not bound, such as one that needs
+		// a committed agent tree, is returned inside the command's
+		// transaction before anything is written: the transaction rolls
+		// back and nothing is recorded, so the outcome is definite, and the
+		// refusal may clear once the daemon's state changes. That makes it
+		// a 400, never an ambiguous 500.
+		ErrOperatorSettingUnavailable, ErrUsageOperationUnavailable,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

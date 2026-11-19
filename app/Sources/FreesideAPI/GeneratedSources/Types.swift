@@ -305,23 +305,34 @@ public protocol APIProtocol: Sendable {
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
-    /// records a receipt with recorded false and moves no entity. An unknown
-    /// pool, enrollment, or task is 404. An enrollment whose identity meters
-    /// another pool (reassign_collector) and an agent the daemon's agent tree
-    /// does not carry (set_routing_policy) are 400. A role whose attempt is
-    /// running (change_task_line) is 409 with the current task snapshot, and
-    /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A set_workflow_policy with
-    /// an unknown key or scope, a value its key does not take, or a project
-    /// the daemon does not serve is 400; one whose expected_revision is not
-    /// the current workflow policy revision is 409 with the current workflow
-    /// policy. A move_parked_task for a
-    /// task with no attempt parked on an exhausted quota window, or naming
-    /// an agent the park no longer offers, is 400 and records nothing, as is
-    /// a retry_with_alternate_agent decision whose agent no longer
-    /// qualifies. Until the daemon routes
-    /// refresh_usage and reassign_collector to its collection lifecycle, it
-    /// answers them with 500 and records nothing.
+    /// records a receipt with recorded false and moves no entity. Every
+    /// refusal below records nothing. For refresh_usage and
+    /// reassign_collector, an unknown pool is 404, and so is a
+    /// reassign_collector enrollment the daemon does not hold; an enrollment
+    /// whose identity meters another pool is 400. For change_task_line and
+    /// move_parked_task, an unknown task is 404. A change_task_line for a
+    /// role that takes no task line, or whose selection names an enrollment
+    /// the daemon does not hold or a model or effort the enrollment's
+    /// discovered catalog does not list, is 400; one for a role whose
+    /// attempt is running is 409 with the current task snapshot. A
+    /// set_routing_policy that orders an enrollment the daemon does not
+    /// hold, one whose identity is disabled, or one that cannot serve its
+    /// role's lineup model and effort is 400, as are a role the lineup
+    /// leaves unbound and a drain_first_account that is not the usage pool
+    /// of an ordered enrollment; one whose expected_revision is not the
+    /// current policy revision is 409 with the current policy. A
+    /// set_workflow_policy with an unknown key or scope, a value its key
+    /// does not take, or a project the daemon does not serve is 400; one
+    /// whose expected_revision is not the current workflow policy revision
+    /// is 409 with the current workflow policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or whose
+    /// choice is an enrollment the park does not offer now or a model or
+    /// effort that enrollment does not serve, is 400, as is a
+    /// retry_with_alternate_agent decision whose chosen enrollment no
+    /// longer qualifies. A daemon with no committed agent tree answers 400
+    /// to set_routing_policy, move_parked_task, and a
+    /// retry_with_alternate_agent decision, and records nothing; the same
+    /// command can succeed once the daemon has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -882,23 +893,34 @@ extension APIProtocol {
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
-    /// records a receipt with recorded false and moves no entity. An unknown
-    /// pool, enrollment, or task is 404. An enrollment whose identity meters
-    /// another pool (reassign_collector) and an agent the daemon's agent tree
-    /// does not carry (set_routing_policy) are 400. A role whose attempt is
-    /// running (change_task_line) is 409 with the current task snapshot, and
-    /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A set_workflow_policy with
-    /// an unknown key or scope, a value its key does not take, or a project
-    /// the daemon does not serve is 400; one whose expected_revision is not
-    /// the current workflow policy revision is 409 with the current workflow
-    /// policy. A move_parked_task for a
-    /// task with no attempt parked on an exhausted quota window, or naming
-    /// an agent the park no longer offers, is 400 and records nothing, as is
-    /// a retry_with_alternate_agent decision whose agent no longer
-    /// qualifies. Until the daemon routes
-    /// refresh_usage and reassign_collector to its collection lifecycle, it
-    /// answers them with 500 and records nothing.
+    /// records a receipt with recorded false and moves no entity. Every
+    /// refusal below records nothing. For refresh_usage and
+    /// reassign_collector, an unknown pool is 404, and so is a
+    /// reassign_collector enrollment the daemon does not hold; an enrollment
+    /// whose identity meters another pool is 400. For change_task_line and
+    /// move_parked_task, an unknown task is 404. A change_task_line for a
+    /// role that takes no task line, or whose selection names an enrollment
+    /// the daemon does not hold or a model or effort the enrollment's
+    /// discovered catalog does not list, is 400; one for a role whose
+    /// attempt is running is 409 with the current task snapshot. A
+    /// set_routing_policy that orders an enrollment the daemon does not
+    /// hold, one whose identity is disabled, or one that cannot serve its
+    /// role's lineup model and effort is 400, as are a role the lineup
+    /// leaves unbound and a drain_first_account that is not the usage pool
+    /// of an ordered enrollment; one whose expected_revision is not the
+    /// current policy revision is 409 with the current policy. A
+    /// set_workflow_policy with an unknown key or scope, a value its key
+    /// does not take, or a project the daemon does not serve is 400; one
+    /// whose expected_revision is not the current workflow policy revision
+    /// is 409 with the current workflow policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or whose
+    /// choice is an enrollment the park does not offer now or a model or
+    /// effort that enrollment does not serve, is 400, as is a
+    /// retry_with_alternate_agent decision whose chosen enrollment no
+    /// longer qualifies. A daemon with no committed agent tree answers 400
+    /// to set_routing_policy, move_parked_task, and a
+    /// retry_with_alternate_agent decision, and records nothing; the same
+    /// command can succeed once the daemon has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -21194,23 +21216,34 @@ public enum Operations {
     /// and are rejected as malformed if they do. Each records a receipt in
     /// the transaction that applies it, and a replay returns that receipt and
     /// its revision. A request for the line or the role orders already held
-    /// records a receipt with recorded false and moves no entity. An unknown
-    /// pool, enrollment, or task is 404. An enrollment whose identity meters
-    /// another pool (reassign_collector) and an agent the daemon's agent tree
-    /// does not carry (set_routing_policy) are 400. A role whose attempt is
-    /// running (change_task_line) is 409 with the current task snapshot, and
-    /// a set_routing_policy whose expected_revision is not the current policy
-    /// revision is 409 with the current policy. A set_workflow_policy with
-    /// an unknown key or scope, a value its key does not take, or a project
-    /// the daemon does not serve is 400; one whose expected_revision is not
-    /// the current workflow policy revision is 409 with the current workflow
-    /// policy. A move_parked_task for a
-    /// task with no attempt parked on an exhausted quota window, or naming
-    /// an agent the park no longer offers, is 400 and records nothing, as is
-    /// a retry_with_alternate_agent decision whose agent no longer
-    /// qualifies. Until the daemon routes
-    /// refresh_usage and reassign_collector to its collection lifecycle, it
-    /// answers them with 500 and records nothing.
+    /// records a receipt with recorded false and moves no entity. Every
+    /// refusal below records nothing. For refresh_usage and
+    /// reassign_collector, an unknown pool is 404, and so is a
+    /// reassign_collector enrollment the daemon does not hold; an enrollment
+    /// whose identity meters another pool is 400. For change_task_line and
+    /// move_parked_task, an unknown task is 404. A change_task_line for a
+    /// role that takes no task line, or whose selection names an enrollment
+    /// the daemon does not hold or a model or effort the enrollment's
+    /// discovered catalog does not list, is 400; one for a role whose
+    /// attempt is running is 409 with the current task snapshot. A
+    /// set_routing_policy that orders an enrollment the daemon does not
+    /// hold, one whose identity is disabled, or one that cannot serve its
+    /// role's lineup model and effort is 400, as are a role the lineup
+    /// leaves unbound and a drain_first_account that is not the usage pool
+    /// of an ordered enrollment; one whose expected_revision is not the
+    /// current policy revision is 409 with the current policy. A
+    /// set_workflow_policy with an unknown key or scope, a value its key
+    /// does not take, or a project the daemon does not serve is 400; one
+    /// whose expected_revision is not the current workflow policy revision
+    /// is 409 with the current workflow policy. A move_parked_task for a
+    /// task with no attempt parked on an exhausted quota window, or whose
+    /// choice is an enrollment the park does not offer now or a model or
+    /// effort that enrollment does not serve, is 400, as is a
+    /// retry_with_alternate_agent decision whose chosen enrollment no
+    /// longer qualifies. A daemon with no committed agent tree answers 400
+    /// to set_routing_policy, move_parked_task, and a
+    /// retry_with_alternate_agent decision, and records nothing; the same
+    /// command can succeed once the daemon has a tree.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -21330,7 +21363,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The daemon refused the request without applying or recording anything. `reason` names a refusal the client acts on; a 400 without one is one of the malformed or invalid commands this operation's description lists, and carries `message` alone.
+            /// The daemon refused the request without applying or recording anything. `reason` names a refusal the client acts on; a 400 without one is one of the malformed or invalid commands this operation's description lists, or a command whose operator hook the daemon cannot apply yet, such as one that needs a committed agent tree, and carries `message` alone. A hook refusal can clear once the daemon's state changes.
             ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/400`.
@@ -21349,6 +21382,110 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct Forbidden: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/commands/POST/responses/403/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/commands/POST/responses/403/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.submitCommand.Output.Forbidden.Body
+                /// Creates a new `Forbidden`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.submitCommand.Output.Forbidden.Body) {
+                    self.body = body
+                }
+            }
+            /// The command's `device_id` does not match the authenticated device, or the device is no longer active: the active-device gate runs again inside the accepting transaction. Nothing was applied or recorded.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Operations.submitCommand.Output.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Operations.submitCommand.Output.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct NotFound: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/commands/POST/responses/404/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/commands/POST/responses/404/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.submitCommand.Output.NotFound.Body
+                /// Creates a new `NotFound`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.submitCommand.Output.NotFound.Body) {
+                    self.body = body
+                }
+            }
+            /// An entity the command names does not exist, such as the decided attention item or the task or pool an operator command names; this operation's description lists each operator command's cases. Nothing was applied or recorded.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Operations.submitCommand.Output.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Operations.submitCommand.Output.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
                             response: self
                         )
                     }
@@ -21401,6 +21538,109 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct ContentTooLarge: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/commands/POST/responses/413/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/commands/POST/responses/413/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.submitCommand.Output.ContentTooLarge.Body
+                /// Creates a new `ContentTooLarge`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.submitCommand.Output.ContentTooLarge.Body) {
+                    self.body = body
+                }
+            }
+            /// The request body is too large. Nothing was applied or recorded.
+            ///
+            /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/413`.
+            ///
+            /// HTTP response code: `413 contentTooLarge`.
+            case contentTooLarge(Operations.submitCommand.Output.ContentTooLarge)
+            /// The associated value of the enum case if `self` is `.contentTooLarge`.
+            ///
+            /// - Throws: An error if `self` is not `.contentTooLarge`.
+            /// - SeeAlso: `.contentTooLarge`.
+            public var contentTooLarge: Operations.submitCommand.Output.ContentTooLarge {
+                get throws {
+                    switch self {
+                    case let .contentTooLarge(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "contentTooLarge",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct InternalServerError: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/commands/POST/responses/500/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/commands/POST/responses/500/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.submitCommand.Output.InternalServerError.Body
+                /// Creates a new `InternalServerError`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.submitCommand.Output.InternalServerError.Body) {
+                    self.body = body
+                }
+            }
+            /// The daemon could not report a definite outcome: the command may or may not have committed. The client resolves it by retrying the same `command_id`, which returns the recorded result when the command committed. A submit_task to a daemon that serves no task submission also answers 500, and a retry meets the same answer.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Operations.submitCommand.Output.InternalServerError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Operations.submitCommand.Output.InternalServerError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
                             response: self
                         )
                     }

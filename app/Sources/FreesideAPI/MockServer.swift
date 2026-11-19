@@ -30,7 +30,8 @@ public actor MockServer {
     /// thrown error, which the transport lets propagate as a
     /// transport-level outage; this one comes back as an answered
     /// response. A non-2xx code (e.g. 500) surfaces to the generated
-    /// client as `.undocumented`; a 2xx code (e.g. 200) pairs a success
+    /// client as that status, `.undocumented` when the operation doesn't
+    /// declare it; a 2xx code (e.g. 200) pairs a success
     /// status with that error-shaped body, so the client's schema decode
     /// throws — a schema-skew stand-in for an incompatible 200 body.
     public struct ForcedStatus: Error, Sendable {
@@ -2482,7 +2483,8 @@ public actor MockServer {
 
     /// A set_routing_policy against a daemon that holds no committed agent
     /// tree: the daemon's hook fails closed with
-    /// signet.ErrOperatorSettingUnavailable, which it answers as a 500.
+    /// signet.ErrOperatorSettingUnavailable, which it answers as a 400 that
+    /// records nothing.
     public struct OperatorSettingUnavailableError: Error {}
 
     /// Marks whether an attempt of a task's role is running; while it runs,

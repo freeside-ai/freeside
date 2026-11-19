@@ -395,11 +395,10 @@ private func client(server: MockServer, token: String? = nil) -> Client {
         var command = MockServerTests.command(id: "cmd-imposter", against: item)
         command.device_id = "device-someone-else"
         let output = try await paired.submitCommand(body: .json(command))
-        guard case .undocumented(let status, _) = output else {
+        guard case .forbidden = output else {
             Issue.record("expected 403, got \(output)")
             return
         }
-        #expect(status == 403)
 
         // The matching identity is accepted.
         var honest = MockServerTests.command(id: "cmd-honest", against: item)

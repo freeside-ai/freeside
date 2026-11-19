@@ -861,7 +861,9 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 	unwired, _, _ := newOperatorService(t)
 	response = authenticatedRequest(t, signet.NewHTTPHandler(unwired, testAuthorizer), http.MethodPost, "/commands",
 		bytes.NewReader([]byte(command("h-unwired", `{"kind":"refresh_usage","pool":"pool-a"}`))))
-	if response.Code != 500 {
+	// An unbound hook refuses inside the transaction, before anything is
+	// written, so the refusal is a definite 400, not an ambiguous 500.
+	if response.Code != 400 {
 		t.Fatalf("unwired refresh: %d %s", response.Code, response.Body.String())
 	}
 }

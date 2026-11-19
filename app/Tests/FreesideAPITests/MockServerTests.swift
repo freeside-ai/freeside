@@ -1050,11 +1050,10 @@ import Testing
         command.payload.asDecision.item_id = "item-none"
 
         let output = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let statusCode, _) = output else {
-            Issue.record("expected an authoritative rejection, got \(output)")
+        guard case .notFound = output else {
+            Issue.record("expected an authoritative 404, got \(output)")
             return
         }
-        #expect(statusCode == 404)
     }
 
     @Test func retryWithRefreshedExpectationsStillReplays() async throws {
@@ -1406,11 +1405,10 @@ import Testing
         command.payload.asDecision.item_id = "item-unknown"
 
         let output = try await client.submitCommand(body: .json(command))
-        guard case .undocumented(let statusCode, _) = output else {
-            Issue.record("expected an authoritative rejection, got \(output)")
+        guard case .notFound = output else {
+            Issue.record("expected an authoritative 404, got \(output)")
             return
         }
-        #expect(statusCode == 404)
     }
 
     @Test func seededRevisionNeverRunsBackwards() async throws {

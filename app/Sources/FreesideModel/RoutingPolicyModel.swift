@@ -378,7 +378,8 @@ package final class RoutingPolicyModel {
         failure = nil
         defer { coordinator.routingPolicySending = false }
         do {
-            switch try await coordinator.store.client.submitCommand(body: .json(entry.command)) {
+            let output = try await coordinator.store.client.submitCommand(body: .json(entry.command))
+            switch output {
             case .ok(let ok):
                 let receipt = try ok.body.json
                 guard CommandResultTrust.accepts(receipt, for: entry.command) else { return }
@@ -407,7 +408,8 @@ package final class RoutingPolicyModel {
                     message: CommandRefusal.message(
                         refusal, otherwise: "The daemon rejected the change (status 400). Nothing was changed."))
                 await coordinator.refreshAfterCommit()
-            case .undocumented(let status, _):
+            case .forbidden, .notFound, .contentTooLarge, .internalServerError, .undocumented:
+                let status = output.statusCode
                 switch status {
                 case 404:
                     // The daemon refused the command before accepting it.

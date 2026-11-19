@@ -48,6 +48,30 @@ func TestWriteCommandErrorClassifiesAuthorityRejections(t *testing.T) {
 	}
 }
 
+// TestWriteCommandErrorClassifiesUnavailableHooks: an operator hook the
+// daemon has not bound refuses inside the command's transaction before any
+// write, so its sentinels are a definite 400 with a message alone, matched
+// through any wrapping, while an unclassified error stays an ambiguous 500.
+func TestWriteCommandErrorClassifiesUnavailableHooks(t *testing.T) {
+	t.Parallel()
+	for _, sentinel := range []error{ErrOperatorSettingUnavailable, ErrUsageOperationUnavailable} {
+		recorder := httptest.NewRecorder()
+		writeCommandError(recorder, nil, fmt.Errorf("submit command %q: %w", "command-1", fmt.Errorf("hook: %w", sentinel)))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%v -> %d, want %d", sentinel, recorder.Code, http.StatusBadRequest)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || len(body) != 1 || body["message"] == "" {
+			t.Fatalf("%v body = %q, %v; want a message alone", sentinel, recorder.Body.String(), err)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	writeCommandError(recorder, nil, errors.New("disk unplugged"))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("ambiguous error -> %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+}
+
 // TestWriteCommandErrorClassifiesOversizedRequestChanges guards that an
 // over-limit request_changes message, rejected by validateCommandContent
 // before the write, is reported as a 400 rather than an ambiguous 500.
