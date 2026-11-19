@@ -1717,8 +1717,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 		// A ready item recovered below is compared with one rebuilt from
-		// this readiness, so its detail names the same handoff tip.
-		readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
+		// this readiness, so its detail names the same handoff tip, and the
+		// recovered candidate names the tip its publication was decided
+		// against: the sealed check's.
+		readiness, handoff, err := w.withPublishedHandoff(ctx, task, binding, readiness)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -1726,19 +1728,8 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if err != nil {
 			return productionTaskOutcome{}, productionPublicationRetryableError(err)
 		}
-		// A recovered candidate names the tip its publication was decided
-		// against: the sealed check's, or the evidence base for an intent
-		// committed before handoff checks existed.
-		sealed, found, err := w.loadHandoffCheck(ctx, task)
-		if err != nil {
-			return productionTaskOutcome{}, err
-		}
-		var handoff *domain.HandoffCheck
-		if found {
-			handoff = &sealed
-		}
 		candidate, heldCandidate, err := w.composePublicationCandidate(
-			ctx, task, binding, checkpoint, adoptedProfile, report, reviewInstructions, handoff,
+			ctx, task, binding, checkpoint, adoptedProfile, report, reviewInstructions, &handoff,
 		)
 		if err != nil || heldCandidate != nil {
 			return derefOutcome(heldCandidate), err
@@ -2330,7 +2321,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		}
 		return productionTaskOutcome{}, err
 	}
-	readiness, err = w.withPublishedHandoff(ctx, task, binding, readiness)
+	readiness, _, err = w.withPublishedHandoff(ctx, task, binding, readiness)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -2985,8 +2976,8 @@ func (w *productionPublicationWorkflow) supersedeBlockedHold(
 // The handoff check is an input because the branches choose it differently.
 // Forward passes the check reconcileHandoff just returned. Recovery passes
 // the publication's sealed check, so the body and closure it renders name
-// the tip the publication was decided against, or nil for an intent
-// committed before handoff checks existed, which keeps its evidence base.
+// the tip the publication was decided against. Both always pass one; a nil
+// check, which only tests pass, leaves the candidate at its evidence base.
 // Authoring and closure admission run before this, on forward only.
 func (w *productionPublicationWorkflow) composePublicationCandidate(
 	ctx context.Context,
