@@ -2327,6 +2327,16 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 		// the execution_failure item, under a per-chain limit (issue #3105);
 		// a loss the starting process sees, or of any other invocation,
 		// keeps the item.
+		//
+		// A lost outcome carries no summary, so the cause of a loss forced
+		// by a refused adoption (such as the export scan naming the rule and
+		// file it matched) is logged here or nowhere. Ward builds it from a
+		// ConformanceFailure reason or a fixed string, never raw content.
+		if recovered.LossCause != "" {
+			d.logger.Error("stage recovery lost the invocation",
+				"invocation", string(in.InvocationID), "run", in.RunID,
+				"cause", recovered.LossCause)
+		}
 		return d.commitLost(ctx, in.InvocationID)
 	case ward.RecoveryFailed:
 		result, err := d.failedWriterResult(ctx, in, recovered, hs.Size)

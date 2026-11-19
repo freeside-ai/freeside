@@ -207,6 +207,36 @@ func TestRecoveryErrorPreservesTheRunningIntent(t *testing.T) {
 	}
 }
 
+// TestRecoveredLossLogsItsCause covers the one place a refused adoption's
+// cause can surface: a lost outcome carries no summary, so the driver logs it.
+func TestRecoveredLossLogsItsCause(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const cause = "adoption failed at the export verification: output scan refused the export: " +
+		`workspace file "key.pem" matched credential rule pem_private_key`
+	gate := &stubGate{
+		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+			return &ward.RecoveryResult{Outcome: ward.RecoveryLoss, LossCause: cause}, nil
+		},
+	}
+	d := newTestDriver(t, gate, newStubExports())
+	handler := &captureHandler{}
+	d.logger = slog.New(handler)
+	orphan(t, d, phaseRunning, nil)
+
+	reconcileClean(t, ctx, d)
+	if _, err := d.Collect(ctx, testInvoke); !errors.Is(err, exec.ErrNoResult) {
+		t.Fatalf("Collect after recovered loss = %v, want ErrNoResult", err)
+	}
+	for _, rec := range handler.snapshot() {
+		if rec.level == slog.LevelError && rec.attrs["cause"] == cause &&
+			rec.attrs["invocation"] == string(testInvoke) {
+			return
+		}
+	}
+	t.Fatalf("no error log carried the loss cause; logs = %+v", handler.snapshot())
+}
+
 func TestRecoveredWriterFailureCommitsCanonicalOutcome(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
