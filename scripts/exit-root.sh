@@ -57,6 +57,10 @@
 #        state file's review digest and stop with the approval command;
 #      project_image, approved_recipe: take both from the approving run's
 #        output, <root>/daemon/onboard-approved.json.
+#      With nothing left to onboard, when prelaunch's only failure is
+#      system_health items that all close on a deputy start, start the
+#      deputy once to rerun its start-up checks and prelaunch again; a second
+#      such failure stops with the items' ids.
 #   7. Apply the pass's routing order and pool limits, run
 #      `freesided probe-lineup` (one short call per role), and require
 #      `prelaunch -no-live` to pass.
@@ -414,6 +418,19 @@ prelaunch_failures() {
   jq -r '.checks[] | select(.status == "failed") | "  \(.group) \(.name): \(.evidence)"' "$root/daemon/prelaunch.json" >&2
 }
 
+# deputy_owned_items: prints the held system_health items' ids, comma
+# separated, when they are prelaunch's only failure, each closes on a deputy
+# start, and no operator stop is in force; fails otherwise. Prelaunch reads
+# the database read-only, so a deputy start is what reruns the checks that
+# close these items.
+deputy_owned_items() {
+  jq -er '
+    select([.checks[] | select(.status == "failed") | "\(.group) \(.name)"] == ["state system_health"]
+      and (.health_items | length > 0)
+      and all(.health_items[]; .closes_on_deputy_start == true and .operator_stop == false))
+    | [.health_items[].id] | join(", ")' "$root/daemon/prelaunch.json"
+}
+
 # setup_start: one deputy start, stopped once it serves. It adopts the
 # identities and the tree and, when the tree matches, writes the composition
 # manifest. Sets start_result to tree_mismatch or composed (the manifest was
@@ -572,6 +589,7 @@ take_onboarding_image() {
 # since the last start that composed gets a start of its own, before
 # prelaunch is trusted; the state file keeps that start's settings digest.
 committed=false
+rechecked=false
 for _ in 1 2 3 4 5 6 7 8; do
   render_settings
   key=$(git -C "$repo_root" hash-object -- "$settings")
@@ -593,11 +611,20 @@ for _ in 1 2 3 4 5 6 7 8; do
   trust_profile) onboard_review ;;
   project_image | approved_recipe) take_onboarding_image ;;
   '')
-    [[ "$passed" == true ]] || {
-      prelaunch_failures
-      die "prelaunch failed with nothing left to onboard; see $root/daemon/prelaunch.json"
-    }
-    break
+    [[ "$passed" != true ]] || break
+    if items=$(deputy_owned_items); then
+      [[ "$rechecked" == false ]] || {
+        prelaunch_failures
+        die "one deputy start did not clear $items; see $logs/deputy-setup.err"
+      }
+      say "$items close on the next deputy start whose start-up checks pass; starting it once to recheck"
+      setup_start
+      [[ "$start_result" == composed ]] || die "the recheck start reported a tree mismatch; see $logs/deputy-setup.err"
+      rechecked=true
+      continue
+    fi
+    prelaunch_failures
+    die "prelaunch failed with nothing left to onboard; see $root/daemon/prelaunch.json"
     ;;
   *) die "prelaunch reports an unknown first_missing \"$missing\"" ;;
   esac

@@ -5029,7 +5029,8 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    whose start-up checks pass; Acknowledge leaves it open. A writer role's
    `agent_selection_inactive` card closes the same way, at the next start
    whose writer-role check passes, which reruns the adapter conformance
-   proof.
+   proof. `scripts/exit-root.sh` starts the deputy once when these cards
+   are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
 to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
