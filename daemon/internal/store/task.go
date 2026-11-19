@@ -729,15 +729,23 @@ func (tx *WriteTx) updateTask(ctx context.Context, task domain.Task) error {
 	return err
 }
 
-// SetTaskName applies the task-name source order. Approval can replace an
-// identifier or agent name; an operator or approved name is permanent. The
-// engine limits agent refinement to the task's first accepted specification.
+// SetTaskName applies the task-name source order: operator, then issue, then
+// specification, then agent, then identifier. An operator or issue name is
+// permanent. An issue name replaces a specification, agent, or identifier
+// name whenever it lands, so every task for one issue ends with one name;
+// otherwise an approved specification name is permanent and approval can
+// replace an identifier or agent name. The engine limits agent refinement to
+// the task's first accepted specification.
 func (tx *WriteTx) SetTaskName(ctx context.Context, id domain.TaskID, name domain.DisplayName) error {
 	task, err := tx.GetTask(ctx, id)
 	if err != nil {
 		return err
 	}
-	if task.Name == name || task.Name.Source == domain.DisplayNameSourceOperator || task.Name.Source == domain.DisplayNameSourceSpecification {
+	switch {
+	case task.Name == name,
+		task.Name.Source == domain.DisplayNameSourceOperator,
+		task.Name.Source == domain.DisplayNameSourceIssue,
+		task.Name.Source == domain.DisplayNameSourceSpecification && name.Source != domain.DisplayNameSourceIssue:
 		return nil
 	}
 	if name.Source == domain.DisplayNameSourceIdentifier {

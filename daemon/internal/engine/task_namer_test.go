@@ -583,14 +583,11 @@ func TestTaskNamerFetchesIssueEvidence(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || name != (domain.DisplayName{Text: "Bound requests", Source: domain.DisplayNameSourceAgent}) {
+			if err != nil || name != (domain.DisplayName{Text: "Bound requests", Source: domain.DisplayNameSourceIssue}) {
 				t.Fatalf("issue name = %+v, %v", name, err)
 			}
-			requests := namer.Requests()
-			if len(requests) != 1 || len(requests[0].Fields) != 6 || requests[0].Fields["repository"] != "freeasinbird/freeside" ||
-				requests[0].Fields["issue_number"] != "7" || requests[0].Fields["issue_title"] != "Bound requests" ||
-				requests[0].Fields["issue_body"] == "" || !strings.HasPrefix(tc.body, requests[0].Fields["issue_body"]) || requests[0].Fields["source_text"] != "" {
-				t.Fatalf("issue inputs = %+v", requests)
+			if requests := namer.Requests(); len(requests) != 0 {
+				t.Fatalf("namer model called for an issue title: %+v", requests)
 			}
 			var artifact domain.Artifact
 			if err := r.store.Read(t.Context(), func(tx *store.ReadTx) error {
@@ -608,7 +605,7 @@ func TestTaskNamerFetchesIssueEvidence(t *testing.T) {
 			if err != nil || strings.Contains(workItem, "Bound requests") || strings.Contains(workItem, "request body limit") {
 				t.Fatalf("issue content copied into intake: %q, %v", workItem, err)
 			}
-			if err := e.nameTaskIfUnnamed(t.Context(), run); err != nil || fetches != 1 || len(namer.Requests()) != 1 {
+			if err := e.nameTaskIfUnnamed(t.Context(), run); err != nil || fetches != 1 || len(namer.Requests()) != 0 {
 				t.Fatalf("named issue was fetched or named again: %v", err)
 			}
 		})
@@ -796,5 +793,188 @@ func TestSpecificationRevisionKeepsRefinedTaskName(t *testing.T) {
 	want := domain.DisplayName{Text: firstTitle, Source: domain.DisplayNameSourceAgent}
 	if got := taskNameForRun(t, f.store, "specification-run"); got != want || item.DisplayNames.Task != want {
 		t.Fatalf("revision renamed task: task=%+v item=%+v, want %+v", got, item.DisplayNames.Task, want)
+	}
+}
+
+// issueTitleFetcher is a research fetcher that answers every request with an
+// issue titled title, counting the requests.
+func issueTitleFetcher(t *testing.T, st *store.Store, blobs *signet.BlobStore, title string) (*specify.Fetcher, *int) {
+	t.Helper()
+	response, err := json.Marshal(map[string]any{"title": title, "body": "Enforce the request body limit."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetches := new(int)
+	fetcher, err := specify.NewFetcher(st, blobs, specificationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		*fetches++
+		return &http.Response{
+			StatusCode: http.StatusOK, Request: request,
+			Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body:   io.NopCloser(bytes.NewReader(response)),
+		}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fetcher, fetches
+}
+
+// Two submissions of one issue URL are two tasks that carry the same issue
+// and, once named, the issue's title, without the namer model and with the
+// namer site unconfigured.
+func TestIssueURLSubmissionsShareTheIssueTitle(t *testing.T) {
+	t.Parallel()
+	const url = "https://github.com/freeasinbird/freeside/issues/7"
+	st, blobs, runs := submitClientTasks(t, url, url)
+	fetcher, fetches := issueTitleFetcher(t, st, blobs, "Bound request bodies\nsecond line")
+	e := &Engine{store: st, specification: &specificationWorkflow{fetcher: fetcher, blobs: blobs}}
+	want := domain.DisplayName{Text: "Bound request bodies", Source: domain.DisplayNameSourceIssue}
+	var tasks []domain.Task
+	for _, run := range runs {
+		if err := e.nameTaskIfUnnamed(t.Context(), run); err != nil {
+			t.Fatal(err)
+		}
+		tasks = append(tasks, taskForRun(t, st, run))
+	}
+	if tasks[0].ID == tasks[1].ID {
+		t.Fatalf("one task for two submissions: %s", tasks[0].ID)
+	}
+	for _, task := range tasks {
+		if task.Name != want || task.SubmittedIssue == nil || *task.SubmittedIssue != *tasks[0].SubmittedIssue {
+			t.Fatalf("task %s name = %+v, issue = %+v", task.ID, task.Name, task.SubmittedIssue)
+		}
+	}
+	if *fetches != 2 {
+		t.Fatalf("issue reads = %d, want one per task", *fetches)
+	}
+}
+
+// An issue title replaces an agent or specification name whenever it lands,
+// and never an operator's.
+func TestIssueTitleReplacesAllButOperatorName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		initial domain.DisplayNameSource
+		renamed bool
+	}{
+		{domain.DisplayNameSourceAgent, true},
+		{domain.DisplayNameSourceSpecification, true},
+		{domain.DisplayNameSourceOperator, false},
+	} {
+		t.Run(string(tc.initial), func(t *testing.T) {
+			t.Parallel()
+			r := newIssueSubjectReservation(t)
+			submitted, err := SubmitSpecificationRun(t.Context(), r.store, r.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial := domain.DisplayName{Text: "Initial name", Source: tc.initial}
+			if err := r.store.Write(t.Context(), func(tx *store.WriteTx) error {
+				return tx.SetTaskName(t.Context(), submitted.Run.TaskID, initial)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			fetcher, _ := issueTitleFetcher(t, r.store, r.blobs, "Bound request bodies")
+			e := &Engine{store: r.store, specification: &specificationWorkflow{fetcher: fetcher, blobs: r.blobs}}
+			if err := e.nameTaskIfUnnamed(t.Context(), submitted.Run); err != nil {
+				t.Fatal(err)
+			}
+			want := initial
+			if tc.renamed {
+				want = domain.DisplayName{Text: "Bound request bodies", Source: domain.DisplayNameSourceIssue}
+			}
+			if got := taskNameForRun(t, r.store, submitted.Run.ID); got != want {
+				t.Fatalf("name = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+// An unusable issue title falls back to the agent namer, which reads the
+// issue the title read already stored rather than fetching it again.
+func TestUnusableIssueTitleFallsBackToAgentName(t *testing.T) {
+	t.Parallel()
+	for name, title := range map[string]string{
+		"blank":      " \n\t",
+		"credential": "Rotate ghp_" + strings.Repeat("x", 36),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newIssueSubjectReservation(t)
+			submitted, err := SubmitSpecificationRun(t.Context(), r.store, r.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fetcher, fetches := issueTitleFetcher(t, r.store, r.blobs, title)
+			namer := inferencefake.New()
+			namer.Script(inference.TaskNamerSiteID, inferencefake.Script{Response: inference.Response{Output: []byte(`{"name":"Bound requests"}`)}})
+			e := &Engine{store: r.store, inference: taskNamingClient(t, namer), specification: &specificationWorkflow{fetcher: fetcher, blobs: r.blobs}}
+			if err := e.nameTaskIfUnnamed(t.Context(), submitted.Run); err != nil {
+				t.Fatal(err)
+			}
+			if got := taskNameForRun(t, r.store, submitted.Run.ID); got != (domain.DisplayName{Text: "Bound requests", Source: domain.DisplayNameSourceAgent}) {
+				t.Fatalf("name = %+v", got)
+			}
+			requests := namer.Requests()
+			if *fetches != 1 || len(requests) != 1 || requests[0].Fields["repository"] != "freeasinbird/freeside" ||
+				requests[0].Fields["issue_number"] != "7" || requests[0].Fields["issue_body"] != "Enforce the request body limit." {
+				t.Fatalf("fetches = %d, namer inputs = %+v", *fetches, requests)
+			}
+		})
+	}
+}
+
+// A failed issue read leaves a submitted-URL task to the agent namer, which
+// names it from its text; the issue title replaces that name once a later
+// dispatch reads the issue.
+func TestFailedIssueReadFallsBackToAgentName(t *testing.T) {
+	t.Parallel()
+	st, blobs, runs := submitClientTasks(t, "https://github.com/freeasinbird/freeside/issues/7")
+	failing, err := specify.NewFetcher(st, blobs, specificationRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("github unavailable")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	namer := inferencefake.New()
+	namer.Script(inference.TaskNamerSiteID, inferencefake.Script{Response: inference.Response{Output: []byte(`{"name":"Bound requests"}`)}})
+	e := &Engine{store: st, inference: taskNamingClient(t, namer), specification: &specificationWorkflow{fetcher: failing, blobs: blobs}}
+	if err := e.nameTaskIfUnnamed(t.Context(), runs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if got := taskForRun(t, st, runs[0]).Name; got != (domain.DisplayName{Text: "Bound requests", Source: domain.DisplayNameSourceAgent}) {
+		t.Fatalf("name after a failed read = %+v", got)
+	}
+
+	fetcher, _ := issueTitleFetcher(t, st, blobs, "Bound request bodies")
+	e.specification = &specificationWorkflow{fetcher: fetcher, blobs: blobs}
+	if err := e.nameTaskIfUnnamed(t.Context(), runs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if got := taskForRun(t, st, runs[0]).Name; got != (domain.DisplayName{Text: "Bound request bodies", Source: domain.DisplayNameSourceIssue}) {
+		t.Fatalf("name after a later read = %+v", got)
+	}
+}
+
+func TestIssueTaskName(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("界", maxTaskNameRunes+5)
+	for _, tc := range []struct {
+		title string
+		want  string
+		ok    bool
+	}{
+		{"  Bound request bodies  ", "Bound request bodies", true},
+		{"\n\nFirst line\nSecond line", "First line", true},
+		{long, strings.Repeat("界", maxTaskNameRunes), true},
+		{" \n ", "", false},
+		{"", "", false},
+		{"bad \xff byte", "", false},
+		{"Rotate ghp_" + strings.Repeat("x", 36), "", false},
+	} {
+		got, ok := issueTaskName(tc.title)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("issueTaskName(%q) = %q, %t; want %q, %t", tc.title, got, ok, tc.want, tc.ok)
+		}
 	}
 }

@@ -354,6 +354,63 @@ func TestTaskNamePreservesOperatorChoice(t *testing.T) {
 	}
 }
 
+// An issue name outranks every name but an operator's: it replaces an
+// identifier, agent, or specification name whenever it lands, and no later
+// specification or agent name replaces it.
+func TestTaskNameIssuePrecedence(t *testing.T) {
+	t.Parallel()
+	issue := domain.DisplayName{Text: "Resolve the flaky sync", Source: domain.DisplayNameSourceIssue}
+	for name, tc := range map[string]struct {
+		before []domain.DisplayName
+		after  []domain.DisplayName
+		want   domain.DisplayName
+	}{
+		"replaces identifier": {want: issue},
+		"replaces agent": {
+			before: []domain.DisplayName{{Text: "Fix sync", Source: domain.DisplayNameSourceAgent}}, want: issue,
+		},
+		"replaces specification": {
+			before: []domain.DisplayName{{Text: "Approved title", Source: domain.DisplayNameSourceSpecification}}, want: issue,
+		},
+		"survives later names": {
+			after: []domain.DisplayName{
+				{Text: "Approved title", Source: domain.DisplayNameSourceSpecification},
+				{Text: "Fix sync", Source: domain.DisplayNameSourceAgent},
+			},
+			want: issue,
+		},
+		"never replaces operator": {
+			before: []domain.DisplayName{{Text: "My task", Source: domain.DisplayNameSourceOperator}},
+			want:   domain.DisplayName{Text: "My task", Source: domain.DisplayNameSourceOperator},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			s := openStore(t, store.Options{})
+			if err := s.Write(ctx, func(tx *store.WriteTx) error {
+				task, err := tx.GetOrCreateTask(ctx, "project", taskIssueSource())
+				if err != nil {
+					return err
+				}
+				names := append(append(slices.Clone(tc.before), issue), tc.after...)
+				for _, n := range names {
+					if err := tx.SetTaskName(ctx, task.ID, n); err != nil {
+						return err
+					}
+				}
+				got, err := tx.GetTask(ctx, task.ID)
+				if err == nil && got.Name != tc.want {
+					t.Fatalf("name = %+v, want %+v", got.Name, tc.want)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // A submitted issue is recorded once on a work-item task and survives a read;
 // a later record leaves the first, and an issue-subject task is refused.
 func TestTaskSubmittedIssue(t *testing.T) {
