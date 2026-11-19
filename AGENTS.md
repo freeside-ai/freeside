@@ -895,7 +895,7 @@ bot reviews pull requests.
   past PRs, and waits on the PR's CI checks only. Keep the record here: the
   skill doesn't treat the landing record's `Reviewer: none` as one.
 - **Before pushing:** follow `docs/agent-workflow.md` §pre-push-review, which
-  chooses fresh-context review by risk when delegation is available and
+  asks for one fresh-context reviewer when delegation is available and
   otherwise relies on the owner. The owner's review is the final one.
 - **No new record from stray activity:** an old summary comment or an
   on-demand `@codex review` is not a reviewer to record; a new record needs
