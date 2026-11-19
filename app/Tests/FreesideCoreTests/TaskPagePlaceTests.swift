@@ -108,6 +108,67 @@ import Testing
         #expect(memory.cardOpenings == 2)
     }
 
+    /// An earlier card opened from the Timeline keeps the page's place for
+    /// Back to Task, through any card that replaces it, and opens at its
+    /// own top. It counts no opened card: the iPhone page left under the
+    /// layer must not move to its own card.
+    @Test func anEarlierCardKeepsThePagesPlaceForBackToTask() {
+        let memory = TaskPageMemory()
+        memory.reset(forRoutedTaskID: taskID)
+        memory.anchor = .section(.timeline)
+
+        memory.openEarlierCard(overPage: true)
+        #expect(memory.anchor == nil)
+        #expect(memory.cardOpenings == 0)
+        // The layer's own page records its place; another card replaces it.
+        memory.anchor = .section(.conversation)
+        memory.openEarlierCard(overPage: false)
+        #expect(memory.anchor == nil)
+
+        memory.returnFromEarlierCard()
+        #expect(memory.anchor == .section(.timeline))
+
+        // A route to another task drops the kept place with the entry.
+        memory.openEarlierCard(overPage: true)
+        memory.reset(forRoutedTaskID: "another-task")
+        memory.returnFromEarlierCard()
+        #expect(memory.anchor == nil)
+    }
+
+    /// The Timeline's route moves: a card the route already shows opens no
+    /// layer, and moves only the page that leads it; a run from a layer
+    /// returns to the page's place, not the layer's.
+    @Test func timelineMovesKeepOneLayerAndThePagesPlace() {
+        let memory = TaskPageMemory()
+        memory.reset(forRoutedTaskID: taskID)
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem("item-a"))
+
+        memory.openTimelineItem("item-a", in: navigation)
+        #expect(navigation.path == [.attentionItem("item-a")])
+        #expect(memory.cardOpenings == 1)
+        #expect(memory.openedCardLead == "item-a")
+
+        memory.anchor = .section(.timeline)
+        memory.openTimelineItem("item-b", in: navigation)
+        memory.openTimelineItem("item-b", in: navigation)
+        #expect(navigation.path == [.attentionItem("item-a"), .attentionItem("item-b")])
+        #expect(memory.openedCardLead == "item-b", "only the layer's page moves")
+
+        // The page's own lead, chosen from the layer, closes the layer.
+        memory.openTimelineItem("item-a", in: navigation)
+        #expect(navigation.path == [.attentionItem("item-a")])
+        #expect(memory.anchor == nil)
+        #expect(memory.openedCardLead == "item-a")
+
+        memory.anchor = .section(.timeline)
+        memory.openTimelineItem("item-b", in: navigation)
+        memory.anchor = .section(.conversation)
+        memory.openRun("run-a", taskID: taskID, in: navigation)
+        #expect(navigation.path == [.attentionItem("item-a"), .run(taskID: taskID, runID: "run-a")])
+        #expect(memory.anchor == .section(.timeline))
+    }
+
     // MARK: Stop
 
     /// Stop Task… hands its confirmation to the page, which presents it
@@ -209,6 +270,9 @@ import Testing
                     snapshot: coordinator.tasks.first { $0.task.id == task.task.id } ?? task,
                     leadingItemID: lead, memory: memory,
                     onOpenRun: { _ in }, onOpenItem: { Page.openItem($0, memory: memory, navigation: navigation) },
+                    onOpenTimelineItem: { memory.openTimelineItem($0, in: navigation) },
+                    onReturnToTask: navigation.earlierCardSelection == nil
+                        ? nil : { memory.closeEarlierCard(in: navigation) },
                     disclosures: disclosures, probe: probe,
                     card: { itemID, seat in
                         DecisionDetailView(
@@ -219,6 +283,9 @@ import Testing
                             sectionPreferences: preferences, seat: seat)
                     }
                 )
+                // An earlier card's layer is its own mount, as the Mac's
+                // detail column keys it.
+                .id(navigation.earlierCardSelection)
                 .opensLinkedCards(from: navigation, in: memory)
             }
         }
@@ -430,7 +497,7 @@ import Testing
             }
 
             /// Scrolls the way a reader does until a row of the Timeline's
-            /// rail is under the pinned row, then `further` into the rail.
+            /// rail is at the view's top, then `further` into the rail.
             func scrollIntoTheRail(further: CGFloat = 40) async throws {
                 var steps = 0
                 while probe.reading.map({ !$0.key.contains("|") }) ?? true, steps < 600 {
@@ -884,6 +951,30 @@ import Testing
             try await page.settle(until: { page.reveal.request == nil && page.offset > beforeReveal })
             #expect(page.disclosures.isExpanded(.identifiers, taskID: page.task.task.id))
             #expect(page.offset > beforeReveal)
+        }
+
+        /// Back to Task from an earlier card opened off the Timeline mounts
+        /// the page again at the section the reader left, as the Mac's
+        /// detail column does; the card's own page opens at its top (#3454).
+        @Test func backToTaskFromAnEarlierCardReturnsToTheReadersPlace() async throws {
+            let page = try await Page()
+            defer { page.close() }
+            try await page.scrollIntoTheRail()
+            try await page.settle(until: { page.memory.anchor == .section(.timeline) })
+            // The page space starts at the content's top, so the offset that
+            // puts the Timeline at the view's top is its top in the page.
+            // Read now: the probe is the page's, and a remount clears it.
+            let timelineTop = try #require(page.probe.holdTops["\(TaskPageAnchor.section(.timeline))"])
+
+            page.memory.openTimelineItem(Page.approval.item.id, in: page.navigation)
+            try await page.settle(until: { page.lead == Page.approval.item.id && page.offset <= 0.5 })
+            #expect(page.memory.anchor == nil, "the card's page reads from its top")
+
+            page.memory.closeEarlierCard(in: page.navigation)
+            try await page.settle(until: { page.lead == nil && abs(page.offset - timelineTop) <= 1 })
+            #expect(abs(page.offset - timelineTop) <= 1, "\(page.geometry)")
+            #expect(page.memory.anchor == .section(.timeline))
+            #expect(page.navigation.path == [.task(page.task.task.id)])
         }
 
         @Test func foldsSurviveARefresh() async throws {

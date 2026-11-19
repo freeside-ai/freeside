@@ -684,7 +684,7 @@ struct DecisionDetailView: View {
                 DecisionReasonLine(text: lead)
             }
 
-            outcome(item, rendersInteractiveControls: rendersInteractiveControls)
+            outcome(item, rendersInteractiveControls: rendersInteractiveControls, onPage: onPage)
 
             // A stale final review says what moved before anything else on
             // the card (frame 7.3). The notice carries no action: the
@@ -862,9 +862,11 @@ struct DecisionDetailView: View {
     /// A closed card's Outcome facts and the link to the task timeline,
     /// where what followed the close is told (#2097). An item closed
     /// before conclusions existed has no facts and draws only the link.
+    /// A card seated on its task's page draws no link: it is on that page
+    /// already (#3454). A card alone keeps it, its only route to the task.
     @ViewBuilder
     private func outcome(
-        _ item: Components.Schemas.AttentionItem, rendersInteractiveControls: Bool
+        _ item: Components.Schemas.AttentionItem, rendersInteractiveControls: Bool, onPage: Bool
     ) -> some View {
         TimeFormatEnvironment { locale, timeZone in
             let facts = ConclusionDisplay.facts(
@@ -877,7 +879,7 @@ struct DecisionDetailView: View {
                 }
             }
         }
-        if item.status != .open, let taskID = ConclusionDisplay.timelineTaskID(for: item, in: tasks) {
+        if item.status != .open, !onPage, let taskID = ConclusionDisplay.timelineTaskID(for: item, in: tasks) {
             let link = FreesideLink(title: "Open task page", face: FreesideFont.noticeAction)
             if rendersInteractiveControls {
                 Button {

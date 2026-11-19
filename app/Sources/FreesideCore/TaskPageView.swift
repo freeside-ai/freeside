@@ -1,7 +1,7 @@
 import FreesideAPI
 import SwiftUI
 
-/// One page per task, in every state: the header, the pinned row, the
+/// One page per task, in every state: the header, the document row, the
 /// leading card and the other open items, then the body, split by tense
 /// (◆C): the Stop states and Current Run, what is happening, then Elapsed,
 /// the Timeline, and Earlier Conversations, what happened. The current thread
@@ -41,10 +41,16 @@ struct TaskPageView: View {
     /// it, the macOS detail column shows it in place of this view.
     let onOpenRun: (String) -> Void
     /// Routes to an item by id, which leads this page with its card: a
-    /// one-line row, the Decisions popup, a linked timeline row, and the
-    /// header's guidance. Nil (a screenshot) draws plain text, never a link
-    /// that goes nowhere.
+    /// one-line row, the Decisions popup, and the header's guidance, and a
+    /// linked timeline row when `onOpenTimelineItem` is nil. Nil (a
+    /// screenshot) draws plain text, never a link that goes nowhere.
     var onOpenItem: ((String) -> Void)?
+    /// Opens a Timeline row's item over this page, with a way back to it
+    /// (#3454), where `onOpenItem` replaces the route.
+    var onOpenTimelineItem: ((String) -> Void)?
+    /// Back to Task, drawn above the leading card when the Mac shows the
+    /// page as an earlier card's layer. Nil draws no row.
+    var onReturnToTask: (() -> Void)?
     /// The item whose card `leadingCard` draws.
     private let leadingItemID: String?
     private let leadingCard: AnyView?
@@ -72,9 +78,6 @@ struct TaskPageView: View {
     /// a scroll viewport. Rendering through body installs environment values
     /// before the content helpers read locale, time zone, and text size.
     var screenshotTimeline: Components.Schemas.TaskTimeline?
-    /// Draws the row as pinned: at the page's top, with the header
-    /// scrolled away. A renderer can't scroll to that state.
-    private let screenshotPinned: Bool
     /// The gap above the page where a standing notice sits over it. Nil
     /// keeps the detail column's top margin.
     private let topMargin: CGFloat?
@@ -86,7 +89,6 @@ struct TaskPageView: View {
     /// Which folds are open, per task id on this device. A screenshot
     /// passes its own instance over throwaway defaults.
     @State private var disclosures: TaskTimelineDisclosurePreferences
-    @State private var outlineHeight: CGFloat = 0
     /// The Stop confirmation and the What Happened fold, held here because
     /// the lazy stack can drop the Stop controls, and their state with them,
     /// while a card leaving shrinks the document under the reader.
@@ -95,7 +97,7 @@ struct TaskPageView: View {
     /// reason.
     @State private var lineChangeRequest: TaskLineChangeRequest?
     @State private var showsStopExplanation = false
-    /// The document the pinned row opened in a reader, presented outside the
+    /// The document the document row opened in a reader, presented outside the
     /// lazy stack for the same reason.
     @State private var documentRequest: TaskDocumentRequest?
     /// The attached folders the operator opened, by name; each starts
@@ -113,7 +115,7 @@ struct TaskPageView: View {
     @MainActor private final class PlaceTracker {
         var targetTops: [TaskPageAnchor: CGFloat] = [:]
         var rowTop: CGFloat = 0
-        /// The section or run the reader has under the pinned row.
+        /// The section or run the reader has at the scroll view's top.
         /// Nil while the header is in view.
         var anchor: TaskPageAnchor?
         /// Set once the mount has returned to the place the memory held.
@@ -196,6 +198,7 @@ struct TaskPageView: View {
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
+        onOpenTimelineItem: ((String) -> Void)? = nil, onReturnToTask: (() -> Void)? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil, scrollProxy: ScrollViewProxy? = nil,
         scrollBy: ((CGFloat) -> Void)? = nil, forgetCorrections: @escaping () -> Void = {},
         probe: TaskPagePlaceProbe? = nil,
@@ -203,7 +206,6 @@ struct TaskPageView: View {
         identifiersOpenAtLaunch: Bool = false,
         topMargin: CGFloat? = nil, memory: TaskPageMemory? = nil,
         screenshotTimeline: Components.Schemas.TaskTimeline? = nil,
-        screenshotPinned: Bool = false,
         disclosures: TaskTimelineDisclosurePreferences? = nil
     ) {
         self.memory = memory
@@ -211,6 +213,8 @@ struct TaskPageView: View {
         self.snapshot = snapshot
         self.onOpenRun = onOpenRun
         self.onOpenItem = onOpenItem
+        self.onOpenTimelineItem = onOpenTimelineItem
+        self.onReturnToTask = onReturnToTask
         self.leadingItemID = leadingItemID
         self.leadingCard = leadingCard
         self.decisionIdentifiers = decisionIdentifiers
@@ -222,7 +226,6 @@ struct TaskPageView: View {
         self.probe = probe
         self.topMargin = topMargin
         self.screenshotTimeline = screenshotTimeline
-        self.screenshotPinned = screenshotPinned
         _disclosures = State(initialValue: disclosures ?? .shared)
     }
 
@@ -258,45 +261,40 @@ struct TaskPageView: View {
         }
     }
 
-    /// The gap between the page's parts: header, pinned row, card, one-line
+    /// The gap between the page's parts: header, document row, card, one-line
     /// rows, and body.
     private static let contentGap: CGFloat = 16
 
     @ViewBuilder var body: some View {
         if let screenshotTimeline {
             VStack(alignment: .leading, spacing: 0) {
-                if !screenshotPinned {
-                    header(screenshotTimeline)
-                        .padding(.bottom, Self.contentGap - 6)
-                }
+                header(screenshotTimeline)
+                    .padding(.bottom, Self.contentGap - 6)
                 outlineRow(screenshotTimeline)
                 sections(screenshotTimeline)
                     .padding(.top, Self.contentGap)
             }
             .pageColumn(compact: compact, topMargin: topMargin)
         } else {
-            // A plain stack, with the row under the header pinned by drawing it lower
-            // as the page scrolls past it. A lazy stack's pinned header
-            // would cost the page its body whenever a shrinking document
-            // leaves the offset past its end for a moment, and the tops it
-            // estimates meanwhile would move the reader (#1460). The scroll
-            // view's space starts below its top content inset (the Mac
-            // toolbar, the iOS navigation bar), so the row pins at zero.
+            // A plain stack, not a lazy one: a lazy stack would cost the
+            // page its body whenever a shrinking document leaves the offset
+            // past its end for a moment, and the tops it estimates
+            // meanwhile would move the reader (#1460). The document row
+            // scrolls with the header (#3454, reversing #3377's pinning),
+            // so nothing draws over the content. The scroll view's space
+            // starts below its top content inset (the Mac toolbar, the iOS
+            // navigation bar), so the row's top, held at zero once it
+            // scrolls away, is where the reader's place is read.
             VStack(alignment: .leading, spacing: 0) {
                 header(timeline)
                     .padding(.bottom, Self.contentGap - 6)
                 outlineRow(timeline)
-                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { outlineHeight = $0 }
                     .onGeometryChange(for: CGFloat.self, of: { max(0, $0.frame(in: .scrollView).minY) }) {
                         top in
                         place.rowTop = top
                         probe?.rowTop = top
                         recordPlace()
                     }
-                    .visualEffect { content, geometry in
-                        content.offset(y: max(0, -geometry.frame(in: .scrollView).minY))
-                    }
-                    .zIndex(1)
                 sections(timeline)
                     .padding(.top, Self.contentGap)
             }
@@ -321,7 +319,11 @@ struct TaskPageView: View {
             // started it.
             .onAppear { place.lead = leadingItemID }
             .task { await restorePlace() }
-            .onChange(of: memory?.cardOpenings) { moveToOpenedCard() }
+            .onChange(of: memory?.cardOpenings) {
+                // An opening aimed at another page's lead leaves this one.
+                if let lead = memory?.openedCardLead, lead != leadingItemID { return }
+                moveToOpenedCard()
+            }
             .onChange(of: leadingItemID) { previous, current in
                 place.lead = current
                 // An open the memory counted has already started the move.
@@ -358,7 +360,7 @@ struct TaskPageView: View {
             )
             #if os(iOS)
                 // A sheet on the phone, so it needs no anchor; the Mac's
-                // popover anchors on the menu in the pinned row.
+                // popover anchors on the menu in the document row.
                 .taskLineChangePicker(
                     $lineChangeRequest, coordinator: coordinator, dynamicTypeSize: dynamicTypeSize)
             #endif
@@ -378,7 +380,7 @@ struct TaskPageView: View {
         }
     }
 
-    /// Everything under the pinned row: the leading card and the other
+    /// Everything under the document row: the leading card and the other
     /// open items, the Stop and line-change states when they draw, Current
     /// Run, then Elapsed and the Timeline, earlier conversations, and the
     /// identifiers. Each part a refresh can change carries a hold point, so
@@ -387,9 +389,16 @@ struct TaskPageView: View {
         VStack(alignment: .leading, spacing: Self.contentGap) {
             let earlier = earlierConversations
             if let leadingCard {
-                leadingCard
-                    .environment(\.taskPageHoldMarker, cardHoldMarker)
-                    .background(alignment: .top) { jumpTarget(.section(.decisions)) }
+                // Back to Task sits inside the Decisions target, so a move
+                // to the card shows the way back too.
+                VStack(alignment: .leading, spacing: 10) {
+                    if let onReturnToTask {
+                        BackToTaskLink(action: onReturnToTask)
+                    }
+                    leadingCard
+                        .environment(\.taskPageHoldMarker, cardHoldMarker)
+                }
+                .background(alignment: .top) { jumpTarget(.section(.decisions)) }
             }
             let others = openItems.filter { $0.item.id != leadingItemID }
             if !others.isEmpty {
@@ -443,24 +452,25 @@ struct TaskPageView: View {
     func screenshotContent(
         _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil,
-        decisionIdentifiers: [AttentionDisplay.BindingRow] = [], pinned: Bool = false
+        decisionIdentifiers: [AttentionDisplay.BindingRow] = [], returnsToTask: Bool = false
     ) -> some View {
         TaskPageView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun,
-            onOpenItem: onOpenItem, leadingItemID: leadingItemID, leadingCard: leadingCard,
+            onOpenItem: onOpenItem, onReturnToTask: returnsToTask ? {} : nil,
+            leadingItemID: leadingItemID, leadingCard: leadingCard,
             decisionIdentifiers: decisionIdentifiers,
-            screenshotTimeline: timeline, screenshotPinned: pinned,
+            screenshotTimeline: timeline,
             disclosures: disclosures ?? TaskTimelineDisclosurePreferences(defaults: nil))
     }
 
     // MARK: Jumps
 
-    /// A target above its view by the pinned row's height, so a jump lands
-    /// clear of the row pinned over the scroll view's top. It reports its
-    /// top as the page scrolls, which is how the page knows its place.
+    /// A target at its view's top, so a jump lands the view at the scroll
+    /// view's top. It reports its top as the page scrolls, which is how the
+    /// page knows its place.
     private func jumpTarget(_ target: TaskPageAnchor) -> some View {
         Color.clear
-            .frame(height: outlineHeight)
+            .frame(height: 0)
             .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).minY }) { top in
                 place.targetTops[target] = top
                 recordPlace()
@@ -468,24 +478,22 @@ struct TaskPageView: View {
             .holdsPlace(scrollBy == nil ? nil : .anchor(target), report: reportHoldTop)
             .onDisappear { place.targetTops[target] = nil }
             .id(target)
-            .padding(.top, -outlineHeight)
             .accessibilityHidden(true)
     }
 
-    /// A hold point keyed by `key`, set the pinned row's height above
-    /// where it is placed, as a jump target is, so it reads as reached
-    /// where a target would. Draws nothing where the page holds nothing.
+    /// A hold point keyed by `key`, at the top of where it is placed, as a
+    /// jump target is, so it reads as reached where a target would. Draws
+    /// nothing where the page holds nothing.
     private func holdMarker(_ key: String) -> AnyView {
         guard scrollBy != nil else { return AnyView(EmptyView()) }
         return AnyView(
             Color.clear
-                .frame(height: outlineHeight)
+                .frame(height: 0)
                 .holdsPlace(.marker(key), report: reportHoldTop)
                 // A rail row arriving above moves each key to the next
                 // marker down; a marker that takes a new key is a new view,
                 // so the key reports from where it now draws.
                 .id(key)
-                .padding(.top, -outlineHeight)
                 .accessibilityHidden(true))
     }
 
@@ -614,7 +622,7 @@ struct TaskPageView: View {
     }
 
     /// Picks the point that holds the reader's place after a scroll: the
-    /// lowest at or above the pinned row's top, as `TaskPageAnchor.reading`
+    /// lowest at or above the row's top, as `TaskPageAnchor.reading`
     /// picks the section. Waits for the layout pass to end, so a scroll the
     /// pass caused, as a shrinking document clamps the offset, isn't read
     /// against tops it hasn't reported yet.
@@ -834,7 +842,7 @@ struct TaskPageView: View {
         return TaskDisplay.lookAlikeMarker(task, now: now, locale: locale, timeZone: timeZone)
     }
 
-    /// The task's documents in the pinned row, in the order
+    /// The task's documents in the document row, in the order
     /// `documentLinks` gives (issue #3377, revising ◆D): each a quiet
     /// outlined button, which wraps where the row can't hold it.
     @ViewBuilder
@@ -919,10 +927,11 @@ struct TaskPageView: View {
             openAttachmentFolders.union(showsStopExplanation ? [TaskPagePlaceProbe.whatHappened] : [])
     }
 
-    /// Where the task's menu draws. Both are pinned, so Stop stays in reach
-    /// while the page scrolls.
+    /// Where the task's menu draws. On the Mac it scrolls away with the
+    /// head, a cost the owner accepted for a row that covers nothing
+    /// (#3454); the phone's navigation bar keeps it in reach.
     enum TaskActionsSlot {
-        /// The pinned row's trailing slot, on its first line.
+        /// The document row's trailing slot, on its first line.
         case outlineRow
         /// The navigation bar's trailing slot: a phone's row has no room.
         case navigationBar
@@ -944,7 +953,7 @@ struct TaskPageView: View {
     }
 
     /// The task's one menu (◆B): its own items, then Stop. `outlined`
-    /// draws it as the pinned row's outlined button.
+    /// draws it as the document row's outlined button.
     private func taskActionsMenu(
         _ timeline: Components.Schemas.TaskTimeline?, outlined: Bool
     ) -> TaskActionsMenu {
@@ -1270,7 +1279,7 @@ struct TaskPageView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    TimelineRail(rows: rows, onOpenItem: onOpenItem, rowMarker: rowMarker)
+                    TimelineRail(rows: rows, onOpenItem: onOpenTimelineItem ?? onOpenItem, rowMarker: rowMarker)
                 }
             }
             if timeline.sections.isEmpty {
@@ -1315,12 +1324,10 @@ struct TaskPageView: View {
         .overlay(alignment: .top) {
             Color.rule.frame(height: 1)
         }
-        // A reveal lands clear of the row pinned over the top.
         .background(alignment: .top) {
             Color.clear
-                .frame(height: outlineHeight)
+                .frame(height: 0)
                 .id(IdentifiersFooter.top)
-                .padding(.top, -outlineHeight)
                 .accessibilityHidden(true)
         }
     }
@@ -1607,6 +1614,23 @@ struct TaskPageView: View {
 
 /// Where a jump lands, and the reader's place the page keeps: a section, or
 /// a run inside the Timeline.
+/// The way back to the task page from a page reached through it: a run on
+/// the Mac, and an earlier card opened from the Timeline (#3454). One
+/// control, so both read and act alike.
+struct BackToTaskLink: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Back to Task", systemImage: "chevron.left")
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.accentText)
+        }
+        .buttonStyle(.plain)
+        .help("Back to Task")
+    }
+}
+
 extension EnvironmentValues {
     /// Draws a hold point of the task page a seated card sits in, keyed
     /// within the card, so a reader inside the card holds their place as
@@ -1619,11 +1643,11 @@ enum TaskPageAnchor: Hashable {
     case run(String)
 
     /// The anchor the reader is at, from each jump target's top measured
-    /// from the pinned row's top. A jump target sits the row's height above
-    /// its view, so a target at or above the row's top has its view under
-    /// the pinned row; the lowest such target is the one being read. Nil
-    /// while every target is below the row, which is where the row sits
-    /// while the header is in view.
+    /// from the document row's top, which holds at the scroll view's top
+    /// once the row scrolls away. A target at or above it has its view
+    /// at the top of the view; the lowest such target is the one being
+    /// read. Nil while every target is below the row, which is where they
+    /// all sit while the header is in view.
     static func reading(offsets: [TaskPageAnchor: CGFloat]) -> TaskPageAnchor? {
         // A jump lands its target on the row's top, give or take rounding.
         let tolerance: CGFloat = 1
@@ -1645,7 +1669,8 @@ enum TaskPageAnchor: Hashable {
     /// rail key, and the page's top in the scroll view.
     var holdTops: [String: CGFloat] = [:]
     var pageTop: CGFloat = 0
-    /// The pinned row's top in the scroll view.
+    /// The document row's top in the scroll view, held at zero once the
+    /// row scrolls away.
     var rowTop: CGFloat = 0
     /// Each hold point's top in the scroll view, where the reader sees it.
     var viewTops: [String: CGFloat] { holdTops.mapValues { $0 + pageTop } }
@@ -1654,7 +1679,7 @@ enum TaskPageAnchor: Hashable {
     /// Opens What Happened or an attachment folder.
     var openStateFold: ((String) -> Void)?
 
-    /// The point the reader has under the pinned row, by the rule the page
+    /// The point the reader has at the view's top, by the rule the page
     /// holds by, and its top.
     var reading: (key: String, top: CGFloat)? {
         viewTops.filter { $0.value - rowTop <= 1 }.max { $0.value < $1.value }.map { ($0.key, $0.value) }
@@ -1727,6 +1752,8 @@ struct TaskPageHost: View {
     var memory: TaskPageMemory? = nil
     let onOpenRun: (String) -> Void
     let onOpenItem: (String) -> Void
+    var onOpenTimelineItem: ((String) -> Void)? = nil
+    var onReturnToTask: (() -> Void)? = nil
     /// The launch input that opens a card's identifiers; on a page with a
     /// card it opens the footer that holds them.
     var identifiersOpenAtLaunch = false
@@ -1754,6 +1781,7 @@ struct TaskPageHost: View {
             ScrollView {
                 TaskPageView(
                     coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
+                    onOpenTimelineItem: onOpenTimelineItem, onReturnToTask: onReturnToTask,
                     leadingItemID: leadingItemID,
                     leadingCard: leadingItemID.map { AnyView(card($0, seat(proxy)).id($0)) },
                     scrollProxy: proxy,
@@ -2243,7 +2271,7 @@ enum TaskTimelinePresentation {
         events(timeline).first { $0.kind == .pr_opened }?.pr_number
     }
 
-    /// One of the task's documents in the pinned row, in the order it draws.
+    /// One of the task's documents in the document row, in the order it draws.
     enum DocumentLink: Equatable {
         /// The intake issue, linked when its repository names a GitHub URL.
         case issue(number: Int, url: URL?)
@@ -2304,7 +2332,7 @@ enum TaskTimelinePresentation {
         }
     }
 
-    /// The documents the pinned row draws: Issue for an
+    /// The documents the document row draws: Issue for an
     /// issue-sourced task or Prompt for a typed one, the approved
     /// Specification, and the Pull Request.
     /// The PR is the current run's (its completion, else the history's

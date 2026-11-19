@@ -446,8 +446,10 @@ public struct FreesideRootView: View {
         TaskPageHost(
             coordinator: coordinator, snapshot: task, leadingItemID: leadingItemID, topMargin: topMargin,
             memory: pageMemory,
-            onOpenRun: { navigation.openRun(taskID: task.task.id, runID: $0) },
+            onOpenRun: { pageMemory.openRun($0, taskID: task.task.id, in: navigation) },
             onOpenItem: openItem,
+            onOpenTimelineItem: { pageMemory.openTimelineItem($0, in: navigation) },
+            onReturnToTask: earlierCardReturn,
             identifiersOpenAtLaunch: launchDetailsExpanded,
             card: { itemID, seat in decisionCard(itemID, coordinator: coordinator, seat: seat) })
     }
@@ -656,9 +658,11 @@ public struct FreesideRootView: View {
             case .taskPage(let taskID, let leadingItemID):
                 if let task = coordinator.tasks.first(where: { $0.task.id == taskID }) {
                     // The stack keeps a destination's identity when a route
-                    // replaces it in place, so another task's page starts fresh.
+                    // replaces it in place, so another task's page starts
+                    // fresh, and so does an earlier card's layer that
+                    // another Timeline open replaces.
                     taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator)
-                        .id(taskID)
+                        .id(destination == navigation.path.first ? AnyHashable(taskID) : AnyHashable(destination))
                 } else {
                     unavailableDetail
                 }
@@ -735,8 +739,10 @@ public struct FreesideRootView: View {
             } else if case .taskPage(let taskID, let leadingItemID) = surface,
                 let task = coordinator.tasks.first(where: { $0.task.id == taskID })
             {
+                // An earlier card's layer is its own mount, as a run is, so
+                // Back to Task mounts the page under it again at its place.
                 taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator, topMargin: topMargin)
-                    .id(taskID)
+                    .id(TaskPageMount(taskID: taskID, earlierCardID: navigation.earlierCardSelection))
             } else if surface == .workStatus {
                 workStatus(coordinator, topMargin: topMargin)
             } else if showsInboxClearResult {
@@ -755,17 +761,14 @@ public struct FreesideRootView: View {
             }
         }
 
+        private struct TaskPageMount: Hashable {
+            let taskID: String
+            let earlierCardID: String?
+        }
+
         private func runReturnRow(topMargin: CGFloat?) -> some View {
             HStack {
-                Button {
-                    navigation.closeRun()
-                } label: {
-                    Label("Back to Task", systemImage: "chevron.left")
-                        .font(FreesideFont.callout)
-                        .foregroundStyle(Color.accentText)
-                }
-                .buttonStyle(.plain)
-                .help("Back to Task")
+                BackToTaskLink { navigation.closeRun() }
                 Spacer()
             }
             // The detail column's x, width, and top margin (R18): the row is
@@ -784,6 +787,18 @@ public struct FreesideRootView: View {
     private func openItem(_ itemID: String) {
         pageMemory.openCard()
         navigation.route(to: .attentionItem(itemID))
+    }
+
+    /// Back to Task over an earlier card, on the Mac: the column has no
+    /// stack to pop. The iPhone's back button pops the layer to the page
+    /// under it, still mounted at its own place, so it draws no row.
+    private var earlierCardReturn: (() -> Void)? {
+        #if os(macOS)
+            guard navigation.earlierCardSelection != nil else { return nil }
+            return { pageMemory.closeEarlierCard(in: navigation) }
+        #else
+            return nil
+        #endif
     }
 
     /// The task the route holds a page for, whether the page or a run over

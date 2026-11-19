@@ -51,10 +51,11 @@ enum TaskPageSection: Hashable {
     case timeline
 }
 
-/// The page's one pinned element, over a hairline: the task's documents as
-/// quiet outlined buttons, wrapping where the column can't hold them, and
-/// the trailing slot (the task's menu on the Mac), which stays on the
-/// first line. It draws, and holds its hairline, even with nothing in it.
+/// The row under the head, over a hairline, at the column's width: the
+/// task's documents as quiet outlined buttons, wrapping where the column
+/// can't hold them, and the trailing slot (the task's menu on the Mac),
+/// which stays on the first line. It scrolls with the page (#3454), and
+/// draws, and holds its hairline, even with nothing in it.
 struct OutlineRow<Documents: View, Trailing: View>: View {
     @ViewBuilder let documents: () -> Documents
     /// Drawn at the row's trailing end, on its first line.
@@ -68,23 +69,16 @@ struct OutlineRow<Documents: View, Trailing: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             trailing()
         }
-        .padding(.horizontal, Self.bleed)
         .padding(.vertical, 6)
-        .background(Color.ground)
         .overlay(alignment: .bottom) {
             Color.rule.frame(height: 1)
         }
-        .padding(.horizontal, -Self.bleed)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Task documents and actions")
     }
-
-    /// How far the ground and hairline reach past the column, so a card
-    /// scrolling under the pinned row never shows at its edges.
-    private static var bleed: CGFloat { 8 }
 }
 
-/// The pinned row's quiet outlined button (issue #3377): a `ground2` fill
+/// The document row's quiet outlined button (issue #3377): a `ground2` fill
 /// and a 1pt `secondaryBorder` outline at a 5pt radius, quieter than R6's
 /// `ruleStrong` outlined action, which the owner chose for the row. A
 /// disabled button fades its outline to `rule`, as an outlined action's does.

@@ -911,6 +911,57 @@ import Testing
                 == .taskPage(taskID: task.task.id, leadingItemID: "item-b"))
     }
 
+    /// A Timeline row's item opens over the page as a run does (#3454), so
+    /// the page under it is the one to return to; another such open
+    /// replaces the layer, and the selection stays the page's.
+    @Test func anEarlierCardOpensOverThePageAndReturnsToIt() {
+        let (store, task) = task(holding: ["item-a", "item-b"])
+        let rows = list(store, tasks: [task])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .task(task.task.id))
+        #expect(navigation.earlierCardSelection == nil)
+
+        navigation.openEarlierCard(itemID: "item-b")
+        #expect(navigation.path == [.task(task.task.id), .attentionItem("item-b")])
+        #expect(navigation.earlierCardSelection == "item-b")
+        #expect(navigation.taskSelection == task.task.id)
+        #expect(navigation.holdsCard(in: rows), "the layer's card is work in progress")
+        #expect(
+            navigation.detailSurface(in: rows) == .taskPage(taskID: task.task.id, leadingItemID: "item-b"))
+        // The iPhone stack pushes the layer over the page.
+        #expect(navigation.phoneRoute == [.destination(.task(task.task.id)), .destination(.attentionItem("item-b"))])
+
+        navigation.openEarlierCard(itemID: "item-a")
+        #expect(navigation.path == [.task(task.task.id), .attentionItem("item-a")])
+
+        navigation.closeEarlierCard()
+        #expect(navigation.path == [.task(task.task.id)])
+        let revision = navigation.operatorNavigationRevision
+        navigation.closeEarlierCard()
+        #expect(navigation.operatorNavigationRevision == revision, "no layer, nothing to close")
+
+        // Over an item's page the item stays selected under the layer.
+        navigation.route(to: .attentionItem("item-a"))
+        navigation.openEarlierCard(itemID: "item-b")
+        #expect(navigation.attentionSelection == "item-a")
+        #expect(navigation.earlierCardSelection == "item-b")
+    }
+
+    /// A run opened from an earlier card's page opens over the route's page,
+    /// as from any page, and is no layer `closeEarlierCard` closes.
+    @Test func aRunOpenedFromAnEarlierCardReplacesTheLayer() {
+        let (_, task) = task()
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .task(task.task.id))
+        navigation.openEarlierCard(itemID: "item-a")
+
+        navigation.openRun(taskID: task.task.id, runID: "run-a")
+        #expect(navigation.path == [.task(task.task.id), .run(taskID: task.task.id, runID: "run-a")])
+        #expect(navigation.earlierCardSelection == nil)
+        navigation.closeEarlierCard()
+        #expect(navigation.runSelection == "run-a")
+    }
+
     @Test func anItemResolvingUnderARunKeepsTheRunOpen() {
         let (store, task) = task()
         let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))

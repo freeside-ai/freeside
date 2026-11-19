@@ -8,7 +8,7 @@ import Testing
 @testable import FreesideModel
 
 /// The task page's head (#2609), the documents and Task Actions in the
-/// pinned row (#3377), and the specification and prompt readers the
+/// document row (#3377), and the specification and prompt readers the
 /// documents open (#2612).
 @Suite @MainActor struct TaskPageHeadTests {
     private let approvedDigest = "sha256:" + String(repeating: "c", count: 64)
@@ -219,13 +219,13 @@ import Testing
         )
     }
 
-    // MARK: Pinned Row and Task Actions
+    // MARK: Document Row and Task Actions
 
-    /// Task Actions sits in the pinned row at regular width and in the
+    /// Task Actions sits in the document row at regular width and in the
     /// navigation bar on a phone, so the phone's row holds no menu. Its own
     /// item draws while the Identifiers footer does: once the history
     /// loads, or while the leading decision names identifiers.
-    @Test func taskActionsSitWherePinnedAndHoldTodaysItems() {
+    @Test func taskActionsSitInTheRowAndHoldTodaysItems() {
         #expect(TaskPageView.TaskActionsSlot(compact: false) == .outlineRow)
         #expect(TaskPageView.TaskActionsSlot(compact: true) == .navigationBar)
         #expect(TaskPageView.taskActions(nil, task: .init(taskID: "task-1")).isEmpty)
