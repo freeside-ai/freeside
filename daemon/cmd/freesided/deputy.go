@@ -42,6 +42,9 @@ const (
 	deputyReviewWorkspaceSizeMB = 8192
 	deputyPreflightItemPrefix   = "system-health-deputy-preflight-"
 	deputyInterruptedItemPrefix = "system-health-deputy-interrupted-"
+	// deputyPreflightFailedCode is the preflight card's diagnostic code;
+	// prelaunch reads it to say a deputy start closes the card.
+	deputyPreflightFailedCode = "deputy_preflight_failed"
 	// deputyCompositionManifestName sits beside the database, where submit
 	// looks for it under --require-composition.
 	deputyCompositionManifestName = "composition-manifest.json"
@@ -889,8 +892,9 @@ func convergeDeputyPreflightCard(
 			return nil
 		}
 		return putDeputyCard(ctx, tx, deputyPreflightItemPrefix, domain.HealthPostureBlocking,
-			domain.HealthDiagnostic{Code: "deputy_preflight_failed", Impairs: domain.ImpairedCapabilityUnattendedAdmission},
-			fmt.Sprintf("The deputy's start-up checks failed, so agent execution stays disabled: %s. %s.",
+			domain.HealthDiagnostic{Code: deputyPreflightFailedCode, Impairs: domain.ImpairedCapabilityUnattendedAdmission},
+			fmt.Sprintf("The deputy's start-up checks failed, so agent execution stays disabled: %s. %s. "+
+				"This card closes on the next deputy start whose start-up checks pass; Acknowledge leaves it open.",
 				strings.Join(check.Failed, ", "), check.Remediation), now)
 	})
 }

@@ -255,7 +255,9 @@ func TestDeputyPreflightCardNamesFailedChecksAndClearsOnPass(t *testing.T) {
 	}
 	item := items[0]
 	if item.HealthDiagnostic.Code != "deputy_preflight_failed" || *item.Posture != domain.HealthPostureBlocking ||
-		!strings.Contains(item.Reason, "images, codex_credential") || !strings.Contains(item.Reason, "pull the images") {
+		!strings.Contains(item.Reason, "images, codex_credential") || !strings.Contains(item.Reason, "pull the images") ||
+		!strings.Contains(item.Reason, "closes on the next deputy start whose start-up checks pass") ||
+		!strings.Contains(item.Reason, "Acknowledge leaves it open") {
 		t.Fatalf("card %+v", item)
 	}
 	if err := convergeDeputyPreflightCard(ctx, st, deputySelfCheckResult{}, deputyTestNow); err != nil {

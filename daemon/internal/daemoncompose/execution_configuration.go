@@ -12,6 +12,11 @@ import (
 
 const executionConfigurationItemPrefix = "system-health-execution-configuration-"
 
+// ExecutionNotConfiguredCode is the driverless card's diagnostic code.
+// Prelaunch reads it: on a deputy, the next start that passes its start-up
+// checks closes the card.
+const ExecutionNotConfiguredCode = "execution_not_configured"
+
 // The installed daemon remains useful for pairing and state without pretending
 // to execute work. Keep that limitation, and why it holds, visible until a
 // driver runs: a card whose reason no longer matches the state is concluded
@@ -96,8 +101,9 @@ func executionStateDiagnostic(state ExecutionState) (code, reason string) {
 	case ExecutionConfigured:
 		return "", ""
 	case ExecutionNotConfigured:
-		return "execution_not_configured", "Agent execution is not configured. " + executionDriverlessScope +
-			" Follow the README's real-run setup instructions to enable execution."
+		return ExecutionNotConfiguredCode, "Agent execution is not configured. " + executionDriverlessScope +
+			" Follow the README's real-run setup instructions to enable execution. On a deputy, this card " +
+			"closes on the next deputy start whose start-up checks pass."
 	case ExecutionAuthorityInUse:
 		return "app_authority_in_use", "Agent execution is off: another process, most likely a deputy run, " +
 			"held the App authority when this daemon started. " + executionDriverlessScope +

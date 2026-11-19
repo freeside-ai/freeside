@@ -462,8 +462,8 @@ func ActivateAgentSelection(
 	if failure != nil {
 		causes[RoleCausePrefix+string(failure.Role)] = fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon admits no work "+
-				"until the agent tree and the store agree; fix the line or the enrollment and restart.",
-			failure.Role, failure.Err)
+				"until the agent tree and the store agree; fix the line or the enrollment and restart. "+
+				roleItemCloses, failure.Role, failure.Err)
 	}
 	for _, retired := range work {
 		ids := make([]string, 0, len(retired.Tasks))
@@ -481,6 +481,19 @@ func ActivateAgentSelection(
 	return convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(causes), nil, now)
 }
 
+// roleItemCloses tells the operator what clears a writer role's item. The
+// start reruns the adapter conformance proof, so a proof that failed only
+// because load killed it needs nothing but that start.
+const roleItemCloses = "This item closes on the next start whose writer-role check passes; that start reruns " +
+	"the adapter conformance proof, so a proof that load killed needs only the start."
+
+// IsWriterRoleItem reports whether id names a writer role's agent-selection
+// item, which the next start whose writer-role check passes closes. A
+// retired identity's item is not one: it waits on the operator.
+func IsWriterRoleItem(id domain.ItemID) bool {
+	return strings.HasPrefix(string(id), AgentSelectionItemPrefix+RoleCausePrefix)
+}
+
 // ReportRoleFailure records the item for a role failure that stopped startup
 // before the engine existed. The retirement items are left as they are: the
 // next start that composes converges them.
@@ -488,7 +501,7 @@ func ReportRoleFailure(ctx context.Context, st *store.Store, failure *RoleAdmiss
 	return convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(map[string]string{
 		RoleCausePrefix + string(failure.Role): fmt.Sprintf(
 			"Agent selection is not active: role %s cannot be admitted (%v). The daemon did not start; "+
-				"fix the line or the enrollment and restart.", failure.Role, failure.Err),
+				"fix the line or the enrollment and restart. "+roleItemCloses, failure.Role, failure.Err),
 	}), func(cause string) bool { return strings.HasPrefix(cause, retiredCausePrefix) }, now)
 }
 
