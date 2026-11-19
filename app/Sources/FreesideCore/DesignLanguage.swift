@@ -534,9 +534,6 @@ enum FreesideFont {
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", ladder.actionLabel, relativeTo: .body) }
     /// A text action: the link's size, medium.
     static var noticeAction: Font { fixed("IBMPlexSans-Medm", ladder.link, relativeTo: .body) }
-    /// A menu drawn as its text, such as the Elapsed line's runs menu: the
-    /// fact label's size, semibold.
-    static var textMenu: Font { fixed("IBMPlexSans-SmBld", ladder.label, relativeTo: .callout) }
     /// A rail entry's title: the fact label's size, semibold on the entry
     /// the rail stands on.
     static func railTitle(emphasized: Bool) -> Font {
@@ -546,6 +543,10 @@ enum FreesideFont {
     /// and digest: mono at the keyword's size, the ladder's floor (frame
     /// 6.9). The platform caption styles these lines used are 10pt on macOS.
     static var attachmentFact: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
+    /// A stage's name in the task page's stage strip over Elapsed: the
+    /// mono label face at the keyword's size, regular, so the name labels
+    /// its block without reading as a heading.
+    static var stageName: Font { fixed("IBMPlexMono", keywordSize, relativeTo: .caption2) }
     /// An attachment row's state lines (not an image, loading, failed):
     /// sans at the same size, semibold on the line that names the state.
     static func attachmentState(emphasized: Bool = false) -> Font {

@@ -554,25 +554,24 @@ import Testing
         let task = TaskHistoryFixtures.snapshot(history).task
         let entries = TaskTimelinePresentation.entries(history, task: task)
         #expect(history.events.last?.kind == .task_created)
-        // An active task's Current Run leads; the event rail follows and
-        // ends at the task's creation; every earlier campaign follows it.
+        // An active task's Current Run leads; the Runs section's rows
+        // follow, one per run; the event rail follows them and ends at the
+        // task's creation; every earlier campaign follows it.
         let current = TaskTimelinePresentation.currentRunSection(task, timeline: history, runTimelines: [:])
-        let leading: [TaskTimelinePresentation.Entry] = current.map { [.run($0.run.run_id)] } ?? []
+        let runs = history.sections.flatMap(\.runs)
+        let leading: [TaskTimelinePresentation.Entry] =
+            (current.map { [.run($0.run.run_id)] } ?? []) + runs.map { .runsRow($0.run_id) }
         #expect(Array(entries.prefix(leading.count)) == leading)
         let rows = TaskTimelinePresentation.rows(history)
         #expect(Array(entries.dropFirst(leading.count).prefix(rows.count)) == rows.map { .row($0.label) })
         #expect(rows.last?.label == "Task created")
         #expect(
             entries.dropFirst(leading.count + rows.count).allSatisfy { if case .row = $0 { false } else { true } })
-        // Every run is drawn at most once, in Current Run or in its
-        // campaign's fold, and any run the page doesn't draw opens its run
-        // page (#3375), so every run stays reachable.
-        let runs = history.sections.flatMap(\.runs)
+        // Every run is drawn as a card at most once, in Current Run or in
+        // its campaign's fold, and every run has a Runs row (#3455), so
+        // every run stays reachable.
         let drawn = entries.compactMap { if case .run(let id) = $0 { id } else { nil } }
         #expect(Set(drawn).count == drawn.count)
-        for run in runs where !drawn.contains(run.run_id) {
-            #expect(TaskTimelinePresentation.runTarget(run.run_id, task: task, timeline: history) == .runPage)
-        }
         #expect(Set(drawn).isSubset(of: runs.map(\.run_id)))
         #expect(TaskHistoryFixtures.snapshot(history).task.run_ids.count == runs.count)
         for section in history.sections {
@@ -755,17 +754,17 @@ import Testing
         let task = TaskHistoryFixtures.snapshot(timeline).task
 
         // Current Run leads with the current campaign's current run; the
-        // rail follows; the earlier campaign folds below it. The current
-        // campaign's earlier attempt, run-2, opens its run page.
+        // Runs section lists every run; the rail follows; the earlier
+        // campaign folds below it.
         #expect(
             TaskTimelinePresentation.entries(timeline, task: task) == [
                 .run("run-1"),
+                .runsRow("run-1"), .runsRow("run-2"), .runsRow("run-0"),
                 .row("Task created"),
                 .row("Specification approved"),
                 .section(campaignID: nil),
                 .run("run-0"),
             ])
-        #expect(TaskTimelinePresentation.runTarget("run-2", task: task, timeline: timeline) == .runPage)
 
         // Reversing every list the daemon sent reverses the render order of
         // that list, so no timestamp sort is hiding behind the fixture order.
@@ -776,6 +775,7 @@ import Testing
         #expect(
             TaskTimelinePresentation.entries(reversed, task: task) == [
                 .run("run-0"),
+                .runsRow("run-0"), .runsRow("run-2"), .runsRow("run-1"),
                 .row("Specification approved"),
                 .row("Task created"),
                 .section(campaignID: "campaign-a"),

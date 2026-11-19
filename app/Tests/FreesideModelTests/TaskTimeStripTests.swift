@@ -243,6 +243,28 @@ import Testing
         #expect(strip?.total(.waitingOnYou) == TimeInterval(15 * 60))
     }
 
+    // MARK: Run spans
+
+    private static func spans(_ runs: [TaskTimeStrip.Run], now: Int) -> [String: String] {
+        TaskTimeStrip.runSpans(runs: runs, attentionItems: [], now: at(now)).mapValues {
+            "\(minute($0.start))-\(minute($0.end))"
+        }
+    }
+
+    /// One span per run, whole where another run cuts its part of the
+    /// bar, and a live run's ending at now; a run with no strip has none.
+    @Test func eachRunSpansItsOwnStrip() {
+        let runs = [
+            Self.run("c", submitted: 40, working: 41, finished: false),
+            Self.run("b", submitted: 5, working: 6, ended: 10),
+            Self.run("a", submitted: 0, working: 2, ended: 30),
+            .init(runID: "empty", finished: false, milestones: []),
+        ]
+        #expect(Self.spans(runs, now: 60) == ["a": "0-30", "b": "5-10", "c": "40-60"])
+        // The bar cuts `a` around `b`; its span stays whole.
+        #expect(Self.shape(Self.strip(runs, now: 60)).first == "a: other 0-2, agent 2-5")
+    }
+
     /// Each run's hold history and clocks reach its part (#3237): the
     /// clocks' end finishes the run whatever `finished` says, and its hold
     /// keeps its reason.
