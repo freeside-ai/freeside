@@ -3,6 +3,7 @@
 #
 # Usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME]
 #                        [--root DIR] [--listen ADDR]
+#        dev-instance.sh --attach ROOT
 #
 # Builds freesided from daemon/ and the Debug FreesideMac app, then starts
 # freesided as an `ephemeral` daemon in a fresh root,
@@ -32,6 +33,18 @@
 #                    pass the operator's devices reach
 #   --listen ADDR    listen on ADDR instead of 127.0.0.1:0; freesided accepts a
 #                    loopback or Tailscale address (its -listen flag)
+#   --attach ROOT    attach only an app to a daemon that already runs, or is
+#                    starting, in ROOT (a deputy's root, or another run's
+#                    --root): build the Debug app, wait with no deadline until
+#                    ROOT/daemon/readiness.json names an api_url that answers
+#                    /health (a stopped deputy's file stays behind, so a
+#                    restarting one is waited for), then run the app on it
+#                    as above, logging to ROOT/app.log. It never
+#                    starts, stops, or removes a daemon or ROOT, takes no
+#                    other option, and prints nothing on stdout. The app keeps
+#                    its pairing in ROOT/daemon, so it reopens paired until
+#                    ROOT is deleted. scripts/exit-root.sh prints this command
+#                    from the deputy's own source tree, so the app matches it.
 #
 # The app needs macOS and Xcode. Its derived data stays in the ignored
 # app/DerivedData/dev-instance so rebuilds are incremental. ntfy points at a
@@ -48,11 +61,13 @@
 #
 # Exit codes: 0 when the app quits normally, 130 after Ctrl-C, 143 after
 # SIGTERM, 1 on a build or daemon failure or an abnormal app exit, 2 on a
-# usage error or refusal. A failed scenario submission exits 1.
+# usage error or refusal. A failed scenario submission exits 1. --attach
+# exits as the app does, and 2 when ROOT is missing or refused.
 set -euo pipefail
 
 usage() {
   echo 'usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME] [--root DIR] [--listen ADDR]' >&2
+  echo '       dev-instance.sh --attach ROOT' >&2
   exit 2
 }
 
@@ -61,35 +76,55 @@ seed=true
 scenario=''
 root_arg=''
 listen=127.0.0.1:0
+attach_root=''
+# Any option but --attach; --attach refuses them all.
+instance_option=false
 while [[ $# -gt 0 ]]; do
   case $1 in
-  --daemon-only) daemon_only=true ;;
-  --no-seed) seed=false ;;
+  --daemon-only) daemon_only=true instance_option=true ;;
+  --no-seed) seed=false instance_option=true ;;
   --scenario)
     [[ $# -ge 2 && -n "$2" ]] || usage
-    scenario=$2
+    scenario=$2 instance_option=true
     shift
     ;;
   --root)
     [[ $# -ge 2 && -n "$2" ]] || usage
-    root_arg=$2
+    root_arg=$2 instance_option=true
     [[ "$root_arg" == /* ]] || root_arg="$PWD/$root_arg"
     shift
     ;;
   --listen)
     [[ $# -ge 2 && -n "$2" ]] || usage
-    listen=$2
+    listen=$2 instance_option=true
+    shift
+    ;;
+  --attach)
+    [[ $# -ge 2 && -n "$2" && -z "$attach_root" ]] || usage
+    attach_root=$2
+    [[ "$attach_root" == /* ]] || attach_root="$PWD/$attach_root"
     shift
     ;;
   *) usage ;;
   esac
   shift
 done
+if [[ -n "$attach_root" && "$instance_option" == true ]]; then
+  echo 'dev-instance: --attach takes no other option' >&2
+  usage
+fi
 
 repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=scripts/supervised-paths.sh
 source "$repo_root/scripts/supervised-paths.sh"
 refuse_supervised_path "dev-instance worktree" "$repo_root" || exit 2
+if [[ -n "$attach_root" ]]; then
+  refuse_supervised_path "dev-instance attach root" "$attach_root" || exit 2
+  if [[ ! -d "$attach_root" ]]; then
+    echo "dev-instance: --attach $attach_root is not a directory; name a running daemon's root" >&2
+    exit 2
+  fi
+fi
 if [[ -n "$root_arg" ]]; then
   refuse_supervised_path "dev-instance root" "$root_arg" || exit 2
   if [[ -e "$root_arg" || -L "$root_arg" ]]; then
@@ -98,7 +133,11 @@ if [[ -n "$root_arg" ]]; then
   fi
 fi
 if [[ "$daemon_only" == false && "$(uname)" != Darwin ]]; then
-  echo 'dev-instance: the app needs macOS; use --daemon-only elsewhere' >&2
+  if [[ -n "$attach_root" ]]; then
+    echo 'dev-instance: --attach runs the app, which needs macOS' >&2
+  else
+    echo 'dev-instance: the app needs macOS; use --daemon-only elsewhere' >&2
+  fi
   exit 2
 fi
 
@@ -138,6 +177,72 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# build_app: builds the Debug app and prints its executable's path.
+build_app() {
+  local derived="$repo_root/app/DerivedData/dev-instance" exe
+  echo "dev-instance: building FreesideMac (Debug) into $derived" >&2
+  # Callers run this in $(...), where set -e does not stop it, so a failed
+  # build must exit here or an earlier build's app would launch.
+  xcodebuild -project "$repo_root/app/Freeside.xcodeproj" -scheme FreesideMac \
+    -configuration Debug -destination 'platform=macOS' -skipPackagePluginValidation \
+    CODE_SIGNING_ALLOWED=NO -derivedDataPath "$derived" -quiet build >&2 ||
+    { echo 'dev-instance: the FreesideMac build failed' >&2; exit 1; }
+  exe="$derived/Build/Products/Debug/FreesideMac.app/Contents/MacOS/FreesideMac"
+  [[ -x "$exe" ]] || { echo "dev-instance: no app executable at $exe" >&2; exit 1; }
+  printf '%s\n' "$exe"
+}
+
+# launch_app <exec> <root>: runs the app on <root>/daemon in the background.
+# FREESIDE_ENV overrides a stray value in the caller's shell; any tier but
+# ephemeral makes the app refuse -FreesideReadinessDir.
+launch_app() {
+  echo "dev-instance: launching FreesideMac (log: $2/app.log)" >&2
+  FREESIDE_ENV=ephemeral "$1" -FreesideReadinessDir "$2/daemon" >"$2/app.log" 2>&1 &
+  app_pid=$!
+}
+
+# app_exited: reports how the app ended and exits with the script's status.
+app_exited() {
+  local app_status=0
+  wait "$app_pid" || app_status=$?
+  app_pid=''
+  if ((app_status == 0)); then
+    echo 'dev-instance: FreesideMac quit' >&2
+    exit 0
+  fi
+  echo "dev-instance: FreesideMac exited with status $app_status; last lines of $1/app.log:" >&2
+  tail -n 20 "$1/app.log" >&2 || true
+  exit 1
+}
+
+if [[ -n "$attach_root" ]]; then
+  root_physical="$(cd -P "$attach_root" && pwd -P)"
+  app_exec="$(build_app)"
+  # A deputy serves only after its checks and ward conformance, which can
+  # take minutes, so the wait has no deadline; Ctrl-C ends it. A stopped
+  # daemon leaves its readiness file behind, so the file's URL must also
+  # answer: the app reads the file once, and a dead daemon's code is useless.
+  readiness="$root_physical/daemon/readiness.json"
+  waited=0
+  while :; do
+    url=$(sed -n 's/.*"api_url":"\([^"]*\)".*/\1/p' "$readiness" 2>/dev/null || true)
+    if [[ -n "$url" ]] && curl -fsS --max-time 2 -o /dev/null "$url/health" 2>/dev/null; then
+      break
+    fi
+    if ((waited % 30 == 0)); then
+      echo "dev-instance: waiting for $readiness to name a serving daemon (it publishes the file once it serves)" >&2
+    fi
+    waited=$((waited + 1))
+    sleep 1
+  done
+  launch_app "$app_exec" "$root_physical"
+  echo "dev-instance: attached; quitting the app or Ctrl-C leaves the daemon and $root_physical alone" >&2
+  while kill -0 "$app_pid" 2>/dev/null; do
+    sleep 1
+  done
+  app_exited "$root_physical"
+fi
+
 if [[ -n "$root_arg" ]]; then
   mkdir "$root_arg"
   root="$(cd -P "$root_arg" && pwd -P)"
@@ -156,13 +261,7 @@ echo "dev-instance: building freesided" >&2
 
 app_exec=''
 if [[ "$daemon_only" == false ]]; then
-  derived="$repo_root/app/DerivedData/dev-instance"
-  echo "dev-instance: building FreesideMac (Debug) into $derived" >&2
-  xcodebuild -project "$repo_root/app/Freeside.xcodeproj" -scheme FreesideMac \
-    -configuration Debug -destination 'platform=macOS' -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO -derivedDataPath "$derived" -quiet build >&2
-  app_exec="$derived/Build/Products/Debug/FreesideMac.app/Contents/MacOS/FreesideMac"
-  [[ -x "$app_exec" ]] || { echo "dev-instance: no app executable at $app_exec" >&2; exit 1; }
+  app_exec="$(build_app)"
 fi
 
 # -driver stays at its default, disabled, which -seed-fixture requires; a
@@ -221,12 +320,7 @@ if [[ -n "$scenario" ]]; then
 fi
 
 if [[ -n "$app_exec" ]]; then
-  # FREESIDE_ENV overrides a stray value in the caller's shell; any tier but
-  # ephemeral makes the app refuse -FreesideReadinessDir.
-  echo "dev-instance: launching FreesideMac (log: $root/app.log)" >&2
-  FREESIDE_ENV=ephemeral "$app_exec" -FreesideReadinessDir "$root/daemon" \
-    >"$root/app.log" 2>&1 &
-  app_pid=$!
+  launch_app "$app_exec" "$root"
 fi
 if [[ "$remove_root" == true ]]; then
   echo "dev-instance: ready; Ctrl-C stops everything and removes the root" >&2
@@ -238,17 +332,9 @@ fi
 while :; do
   kill -0 "$daemon_pid" 2>/dev/null || daemon_failed 'freesided exited'
   if [[ -n "$app_pid" ]] && ! kill -0 "$app_pid" 2>/dev/null; then
-    app_status=0
-    wait "$app_pid" || app_status=$?
-    app_pid=''
-    if ((app_status == 0)); then
-      echo 'dev-instance: FreesideMac quit' >&2
-      exit 0
-    fi
-    # The log goes with the root, so show its tail before cleanup removes it.
-    echo "dev-instance: FreesideMac exited with status $app_status; last lines of $root/app.log:" >&2
-    tail -n 20 "$root/app.log" >&2 || true
-    exit 1
+    # The log goes with the root, so app_exited shows its tail before
+    # cleanup removes it.
+    app_exited "$root"
   fi
   sleep 1
 done

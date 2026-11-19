@@ -447,6 +447,7 @@ run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" fix
 assert_rc 3
 assert_line "$CASE_DIR/stdout" "root=$FIX"
 assert_line "$CASE_DIR/stdout" 'api_url=http://100.64.0.9:9100'
+assert_line "$CASE_DIR/stdout" "client=bash $FIX/builds/$SHA1/src/scripts/dev-instance.sh --attach $FIX"
 approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
 case $approval in
 *" onboard $REPO_SLUG "*"-approve $APPROVAL_DIGEST > $FIX/daemon/onboard-approved.json") ok ;;

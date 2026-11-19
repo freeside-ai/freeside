@@ -1425,7 +1425,11 @@ the authority; this section says which command to reach for.
   ([Run A Scenario](#run-a-scenario)). Stopping it (Ctrl-C, or the app or
   daemon exiting) removes the root. A SIGKILL to the script skips that
   cleanup and can leave the daemon and app running; stop them before you
-  delete the root by hand.
+  delete the root by hand. `--attach ROOT` runs only the app against a
+  daemon already running or starting in `ROOT` (a deputy's root, or a kept
+  `--root`): it waits until `ROOT/daemon/readiness.json` names a daemon
+  that answers, and never starts, stops, or removes a daemon or root. The app keeps its pairing in
+  `ROOT/daemon`, so it reopens paired until the root is deleted.
 - **Never run `app/scripts/install-mac-app.sh` from an agent or script.**
   Both of its tiers are the operator's: omitting the tier installs `prod`,
   and the `dev` install is the operator's own too. Its `--prod` flag lets a

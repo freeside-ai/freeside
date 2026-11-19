@@ -10,7 +10,9 @@
 # The fake freesided also answers `submit`, recording its arguments and
 # printing a task id. The cases cover the daemon and app arguments, the
 # printed root and URL, --no-seed, --daemon-only, --scenario and its
-# submission, --root (kept on exit) and --listen, cleanup of both processes
+# submission, --root (kept on exit) and --listen, --attach (waits for an
+# existing root's readiness, runs only the app, leaves the root, and refuses
+# other options, a missing or supervised root, and Linux), cleanup of both processes
 # and the root on SIGTERM
 # (also when a second one arrives mid-cleanup), on an early daemon exit, and
 # when the app quits, and the refusals that
@@ -102,6 +104,10 @@ cat >"$STUB_BIN/xcodebuild" <<'XCODE_STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${STUB_DIR:?}/xcodebuild.log"
+if [[ "${FAKE_XCODE_MODE:-}" == fail ]]; then
+  echo '** BUILD FAILED **'
+  exit 65
+fi
 derived=''
 while [[ $# -gt 0 ]]; do
   [[ "$1" != -derivedDataPath ]] || derived=$2
@@ -129,7 +135,14 @@ cat >"$STUB_BIN/uname" <<'UNAME_STUB'
 #!/usr/bin/env bash
 printf '%s\n' "${FAKE_UNAME:-Darwin}"
 UNAME_STUB
-chmod +x "$STUB_BIN/go" "$STUB_BIN/xcodebuild" "$STUB_BIN/uname"
+
+# curl answers every health check unless the case marks its daemon down.
+cat >"$STUB_BIN/curl" <<'CURL_STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${STUB_DIR:?}/curl.log"
+[[ ! -e "$STUB_DIR/daemon-down" ]] || exit 7
+CURL_STUB
+chmod +x "$STUB_BIN/go" "$STUB_BIN/xcodebuild" "$STUB_BIN/uname" "$STUB_BIN/curl"
 
 # make_repo <dir>: a synthetic worktree holding the scripts under test.
 make_repo() {
@@ -464,6 +477,118 @@ run_instance "$REPO" --bogus
 assert_rc 2
 assert_contains "usage: dev-instance.sh"
 assert_no_roots "$REPO"
+
+begin_case "--attach waits for readiness, runs only the app on the root, and leaves the root alone"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+ATTACH=$CASE_DIR/deputy-root
+mkdir -p "$ATTACH/daemon"
+start_instance "$REPO" --attach "$ATTACH"
+if wait_for "$CASE_DIR/stderr" 'waiting for'; then ok; else report_failure "never waited for readiness"; fi
+assert_not_exists "$CASE_DIR/app.pid"
+printf '{"api_url":"http://127.0.0.1:43210","pairing_code":"ABCD-2345"}\n' >"$ATTACH/daemon/readiness.json"
+if wait_for "$CASE_DIR/app.pid" '.'; then ok; else report_failure "app never launched"; fi
+attach_physical=$(cd -P "$ATTACH" && pwd -P)
+assert_line "$CASE_DIR/app.args" '-FreesideReadinessDir'
+assert_line "$CASE_DIR/app.args" "$attach_physical/daemon"
+assert_line "$CASE_DIR/app.env" 'ephemeral'
+kill -TERM "$INSTANCE_PID"
+finish_instance
+assert_rc 143
+assert_stopped "$CASE_DIR/app.pid"
+assert_not_exists "$CASE_DIR/go.log"
+if [[ -f "$ATTACH/daemon/readiness.json" && -f "$ATTACH/app.log" ]]; then ok; else report_failure "--attach did not leave the root and its app log"; fi
+if [[ ! -s "$CASE_DIR/stdout" ]]; then ok; else report_failure "--attach printed on stdout"; fi
+
+begin_case "--attach waits past a stopped daemon's readiness file until its URL serves"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+ATTACH=$CASE_DIR/deputy-root
+mkdir -p "$ATTACH/daemon"
+printf '{"api_url":"http://127.0.0.1:43210","pairing_code":"OLD"}\n' >"$ATTACH/daemon/readiness.json"
+touch "$CASE_DIR/daemon-down"
+start_instance "$REPO" --attach "$ATTACH"
+if wait_for "$CASE_DIR/stderr" 'name a serving daemon'; then ok; else report_failure "never waited for a serving daemon"; fi
+if wait_for "$CASE_DIR/curl.log" 'http://127.0.0.1:43210/health'; then ok; else report_failure "never checked the file's URL"; fi
+assert_not_exists "$CASE_DIR/app.pid"
+rm "$CASE_DIR/daemon-down"
+if wait_for "$CASE_DIR/app.pid" '.'; then ok; else report_failure "app never launched once the URL served"; fi
+kill -TERM "$INSTANCE_PID"
+finish_instance
+assert_rc 143
+
+begin_case "a failed app build fails and never launches an earlier build's app"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+ATTACH=$CASE_DIR/deputy-root
+mkdir -p "$ATTACH/daemon"
+printf '{"api_url":"http://127.0.0.1:43210"}\n' >"$ATTACH/daemon/readiness.json"
+stale="$REPO/app/DerivedData/dev-instance/Build/Products/Debug/FreesideMac.app/Contents/MacOS/FreesideMac"
+mkdir -p "$(dirname "$stale")"
+cat >"$stale" <<'STALE_APP'
+#!/usr/bin/env bash
+touch "$STUB_DIR/stale-app.ran"
+STALE_APP
+chmod +x "$stale"
+FAKE_XCODE_MODE=fail run_instance "$REPO" --attach "$ATTACH"
+assert_rc 1
+assert_contains "the FreesideMac build failed"
+assert_not_exists "$CASE_DIR/stale-app.ran"
+FAKE_XCODE_MODE=fail run_instance "$REPO" --no-seed
+assert_rc 1
+assert_not_exists "$CASE_DIR/stale-app.ran"
+assert_not_exists "$CASE_DIR/daemon.pid"
+
+begin_case "--attach exits with the app and keeps the root"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+ATTACH=$CASE_DIR/deputy-root
+mkdir -p "$ATTACH/daemon"
+printf '{"api_url":"http://127.0.0.1:43210"}\n' >"$ATTACH/daemon/readiness.json"
+FAKE_APP_MODE=quit run_instance "$REPO" --attach "$ATTACH"
+assert_rc 0
+assert_contains "FreesideMac quit"
+if [[ -f "$ATTACH/daemon/readiness.json" ]]; then ok; else report_failure "--attach removed the root"; fi
+
+begin_case "--attach refuses any other option and builds nothing"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+mkdir -p "$CASE_DIR/deputy-root/daemon"
+for other in --daemon-only --no-seed "--scenario fixture" "--root $CASE_DIR/new" "--listen 127.0.0.1:0" "--attach $CASE_DIR/deputy-root"; do
+  # shellcheck disable=SC2086 # split the option from its value
+  run_instance "$REPO" --attach "$CASE_DIR/deputy-root" $other
+  assert_rc 2
+  assert_contains "usage: dev-instance.sh"
+done
+run_instance "$REPO" --no-seed --attach "$CASE_DIR/deputy-root"
+assert_rc 2
+assert_contains "--attach takes no other option"
+run_instance "$REPO" --attach
+assert_rc 2
+assert_not_exists "$CASE_DIR/xcodebuild.log"
+assert_not_exists "$CASE_DIR/go.log"
+assert_not_exists "$CASE_DIR/new"
+
+begin_case "--attach refuses a missing root, a supervised root, and Linux, and builds nothing"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+run_instance "$REPO" --attach "$CASE_DIR/missing"
+assert_rc 2
+assert_contains "is not a directory"
+assert_not_exists "$CASE_DIR/missing"
+FAKE_HOME=$CASE_DIR/home
+SUPERVISED="$FAKE_HOME/Library/Application Support/Freeside"
+mkdir -p "$SUPERVISED/daemon"
+HOME=$FAKE_HOME run_instance "$REPO" --attach "$SUPERVISED"
+assert_rc 2
+assert_contains "refusing dev-instance attach root"
+mkdir -p "$CASE_DIR/deputy-root/daemon"
+FAKE_UNAME=Linux run_instance "$REPO" --attach "$CASE_DIR/deputy-root"
+assert_rc 2
+assert_contains "--attach runs the app, which needs macOS"
+assert_not_exists "$CASE_DIR/xcodebuild.log"
+assert_not_exists "$CASE_DIR/go.log"
+assert_not_exists "$CASE_DIR/deputy-root/app.log"
 
 echo
 echo "passed $pass assertion(s), failed $fail"
