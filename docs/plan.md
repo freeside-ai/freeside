@@ -3245,7 +3245,7 @@ injection is a unit of its own, held with #2175 and filed once #2175
 merges; until it lands every execution host runs under `subscription_contained` with the volume above. It is
 required on any execution host the owner does not physically hold, so the Linux
 host waits for it and no such host is enrolled while the hold stands; the
-MacBook does not wait. Why relaying the writer's tunnel without termination
+owner-held Mac mini does not wait. Why relaying the writer's tunnel without termination
 is no credential measure is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
 
 **Placement.** Admission chooses the host in the launch transaction. A host is
@@ -3293,7 +3293,8 @@ yet, #3112 on tracker #2161). A host that holds a launch stays under the rule
 above.
 
 **Start triggers.** The units are filed fenced (tracker #2161). The first
-increment, the M1 Max MacBook on the same runtime and backend class, starts when
+increment, an owner-held Mac mini on the same runtime and backend class
+([note](../devlog/2026-11-18-2202-mac-mini-first-host.md)), starts when
 any one of these holds; capacity is measured from recorded holds, so it needs
 the host memory budget (#1598) merged first:
 
