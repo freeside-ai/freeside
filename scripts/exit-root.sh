@@ -39,11 +39,13 @@
 #      -X main.version=<sha> (preflight's daemon_build check needs the stamp).
 #   4. Render <root>/daemon/settings.json, mode 0600, from the machine file,
 #      the template, and the state file, on every run.
-#   5. When the settings or the root's enrollments (from `freesided auth
-#      list`) differ from the last start that composed (a new root, a new
-#      build's prompt packages, a changed machine file, a new image, an
-#      enrollment from enroll-codex), start the deputy once and stop it; on
-#      a tree mismatch, commit
+#   5. Pin images.agent and approved_recipe from
+#      <root>/daemon/onboard-approved.json whenever it holds a completed
+#      approval the script hasn't pinned from yet. When the settings or the
+#      root's enrollments (from `freesided auth list`) differ from the last
+#      start that composed (a new root, a new build's prompt packages, a
+#      changed machine file, a new image, an enrollment from enroll-codex),
+#      start the deputy once and stop it; on a tree mismatch, commit
 #      its patch on branch exit-root/<pass> of the agent-tree checkout, never
 #      touching the checkout's current branch or working tree, and start
 #      again. Prelaunch can't see such a change, since it compares the tree
@@ -56,11 +58,17 @@
 #      fresh root. The start waits as long as the deputy's log grows, and
 #      gives up once the log stays still for EXIT_ROOT_SERVE_STALL_SECONDS
 #      (default 900).
-#   6. Run `freesided prelaunch -no-live` and act on its first_missing:
+#   6. Once onboarded, run the onboarding review again when the review
+#      configuration digest or repository.base_sha differs from the ones
+#      the last review bound, since prelaunch keeps passing the old trust
+#      profile; before that review's approval, stop with its approval
+#      command. Then run `freesided prelaunch -no-live` and act on its
+#      first_missing:
 #      trust_profile: run the onboarding review (never -approve) with the
 #        state file's review digest and stop with the approval command;
-#      project_image, approved_recipe: take both from the approving run's
-#        output, <root>/daemon/onboard-approved.json.
+#      project_image, approved_recipe: stop with the approval command when
+#        the approving run's output, <root>/daemon/onboard-approved.json,
+#        is missing or incomplete.
 #      With nothing left to onboard, when prelaunch's only failure is
 #      system_health items that all close on a deputy start, start the
 #      deputy once to rerun its start-up checks and prelaunch again; a second
@@ -581,6 +589,9 @@ onboard_review() {
     local command
     command="$(printf '%q ' "$freesided" "${args[@]}" -approve "$(jq -r '.approval_digest' "$review")")> $(printf '%q' "$approved")"
     state_set approval_command "$(jq -n --arg c "$command" '$c')"
+    # What this review bound, so a later run sees when either moves.
+    state_set onboarded "$(jq -n --arg d "$digest" --arg b "$(setting .repository.base_sha)" \
+      '{review_configuration_digest: $d, base_sha: $b}')"
     emit_head
     say "read the review in $review before approving"
     printf 'approval=%s\n' "$command"
@@ -590,23 +601,65 @@ onboard_review() {
   esac
 }
 
-take_onboarding_image() {
-  local approved="$root/daemon/onboard-approved.json" image recipe
-  if [[ ! -s "$approved" ]] || [[ "$(jq -r '.status // empty' "$approved")" != complete ]]; then
-    emit_head
-    say "no completed onboarding approval at $approved; run the approval command, which writes it"
-    printf 'approval=%s\n' "$(state_get .approval_command)"
-    exit 3
-  fi
+approved_complete() {
+  local approved="$root/daemon/onboard-approved.json"
+  [[ -s "$approved" && "$(jq -r '.status // empty' "$approved" 2>/dev/null)" == complete ]]
+}
+
+# stop_for_approval: the review ran, but its approval hasn't; exit 3.
+stop_for_approval() {
+  emit_head
+  say "no completed onboarding approval at $root/daemon/onboard-approved.json; run the approval command, which writes it"
+  printf 'approval=%s\n' "$(state_get .approval_command)"
+  exit 3
+}
+
+# pin_approved_image: pins the image and recipe of a completed approval the
+# script hasn't pinned from yet. A re-onboarding's approval can name a new
+# image while prelaunch still passes on the old one, so this runs whenever
+# the approval changes, not only when prelaunch names the image missing.
+pin_approved_image() {
+  local approved="$root/daemon/onboard-approved.json" source image recipe
+  approved_complete || return 0
+  source=$(git -C "$repo_root" hash-object -- "$approved")
+  [[ "$source" != "$(state_get .image_source)" ]] || return 0
   image=$(jq -r '.project_image.image_ref // empty' "$approved")
   recipe=$(jq -r '.project_image.recipe_digest // empty' "$approved")
   [[ -n "$image" && -n "$recipe" ]] || die "$approved names no project_image"
-  if [[ "$image" == "$(state_get .image)" && "$recipe" == "$(state_get .recipe)" ]]; then
-    die "settings already carry the approved image, but prelaunch still reports $missing: $(jq -r '.first_missing.evidence' "$root/daemon/prelaunch.json")"
-  fi
   state_set image "\"$image\""
   state_set recipe "\"$recipe\""
+  state_set image_source "\"$source\""
   say "set images.agent to $image and approved_recipe to $recipe"
+}
+
+# take_onboarding_image: prelaunch names project_image or approved_recipe
+# missing, after pin_approved_image already pinned any completed approval.
+take_onboarding_image() {
+  approved_complete || stop_for_approval
+  die "settings already carry the approved image, but prelaunch still reports $missing: $(jq -r '.first_missing.evidence' "$root/daemon/prelaunch.json")"
+}
+
+# check_onboarding: prelaunch keeps passing a trust profile whose review
+# configuration or base has since moved, so the script compares both with
+# what its onboarding review bound and reviews again when either moved. A
+# review not yet approved stops for its approval rather than running again.
+# A root onboarded before the script recorded this skips the check.
+check_onboarding() {
+  local bound_digest bound_base digest base
+  [[ -n "$(state_get .onboarded)" ]] || return 0
+  bound_digest=$(state_get .onboarded.review_configuration_digest)
+  bound_base=$(state_get .onboarded.base_sha)
+  digest=$(state_get .review_configuration_digest)
+  base=$(setting .repository.base_sha)
+  if [[ "$digest" != "$bound_digest" ]]; then
+    say "the review configuration moved from $bound_digest to $digest since the onboarding review; reviewing again"
+    onboard_review
+  fi
+  if [[ "$base" != "$bound_base" ]]; then
+    say "repository.base_sha moved from $bound_base to $base since the onboarding review; reviewing again"
+    onboard_review
+  fi
+  approved_complete || stop_for_approval
 }
 
 # start_key: the inputs a deputy start adopts from, the rendered settings
@@ -638,6 +691,7 @@ start_key() {
 committed=false
 rechecked=false
 for _ in 1 2 3 4 5 6 7 8; do
+  pin_approved_image
   render_settings
   key=$(start_key)
   if [[ -z "$key" || "$key" != "$(state_get .composed_inputs)" ]]; then
@@ -651,6 +705,7 @@ for _ in 1 2 3 4 5 6 7 8; do
     key=$(start_key)
     [[ -z "$key" ]] || state_set composed_inputs "\"$key\""
   fi
+  check_onboarding
   run_prelaunch
   case $missing in
   agent_tree)

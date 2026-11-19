@@ -23,8 +23,9 @@
 # its own branch and a later one against a checkout whose policy files
 # differ, the stop at the onboarding approval and the resume after it, the
 # installation-intent stop, the rerun on a new build or a new enrollment, the
-# serve wait, port selection, the seeded-routing overlay, the scenario pass,
-# and the refusals that create nothing.
+# serve wait, the re-onboarding after a moved base or review configuration,
+# the re-pin of a newer approval's image, port selection, the seeded-routing
+# overlay, the scenario pass, and the refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -92,10 +93,11 @@ assert_not_exists() {
 STUB_BIN=$TMP/bin
 mkdir -p "$STUB_BIN"
 FAKE_IMAGE="registry.test/fixture@sha256:$(printf 'b%.0s' $(seq 1 64))"
+FAKE_IMAGE2="registry.test/fixture@sha256:$(printf '9%.0s' $(seq 1 64))"
 FAKE_RECIPE="sha256:$(printf 'c%.0s' $(seq 1 64))"
 REVIEW_DIGEST="sha256:$(printf 'd%.0s' $(seq 1 64))"
 APPROVAL_DIGEST="sha256:$(printf 'a%.0s' $(seq 1 64))"
-export FAKE_IMAGE FAKE_RECIPE REVIEW_DIGEST APPROVAL_DIGEST
+export FAKE_IMAGE FAKE_IMAGE2 FAKE_RECIPE REVIEW_DIGEST APPROVAL_DIGEST
 
 cat >"$STUB_BIN/go" <<'GO_STUB'
 #!/usr/bin/env bash
@@ -178,7 +180,10 @@ prelaunch)
     missing=agent_tree
   elif [[ "$(cat "$root/daemon/fake-trust" 2>/dev/null)" != "$REVIEW_DIGEST" ]]; then
     missing=trust_profile
-  elif [[ "$(jq -r '.images.agent' "$settings")" != "$FAKE_IMAGE" ]]; then
+  elif [[ "$(jq -r '.images.agent' "$settings")" != "$FAKE_IMAGE" &&
+    "$(jq -r '.images.agent' "$settings")" != "$FAKE_IMAGE2" ]]; then
+    # Either approved image passes, so a stale one goes unseen, as a real
+    # image that still exists does.
     missing=project_image
   elif [[ "$(jq -r '.approved_recipe' "$settings")" != "$FAKE_RECIPE" ]]; then
     missing=approved_recipe
@@ -261,7 +266,9 @@ deputy)
   if ! tree_matches "$settings"; then
     echo "freesided deputy: agent_tree failed; execution stays disabled (fake mismatch)" >&2
   else
-    jq -n --arg d "$REVIEW_DIGEST" '{review_configuration_digest: $d}' >"$manifest"
+    # FAKE_MANIFEST_DIGEST moves the review configuration without moving
+    # the trust marker prelaunch checks, as a new exporter image does.
+    jq -n --arg d "${FAKE_MANIFEST_DIGEST:-$REVIEW_DIGEST}" '{review_configuration_digest: $d}' >"$manifest"
     if [[ "$(cat "$root/daemon/fake-trust" 2>/dev/null)" != "$REVIEW_DIGEST" ]]; then
       echo "freesided deputy: trust_profile failed; execution stays disabled (fake)" >&2
     else
@@ -283,8 +290,10 @@ onboard)
   printf '%s\n' "$@" >"$STUB_DIR/onboard-$((n + 1)).args"
   db=$(flag -db "$@")
   if [[ -n "$(flag -approve "$@")" ]]; then
-    printf '%s\n' "$(flag -review-config-digest "$@")" >"$(dirname "$db")/fake-trust"
-    jq -n --arg i "$FAKE_IMAGE" --arg r "$FAKE_RECIPE" \
+    # The trust marker stays REVIEW_DIGEST: prelaunch keeps passing the
+    # profile after the review configuration moves.
+    printf '%s\n' "$REVIEW_DIGEST" >"$(dirname "$db")/fake-trust"
+    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
       '{status: "complete", project_image: {image_ref: $i, recipe_digest: $r}}'
   elif [[ "${FAKE_ONBOARD_MODE:-}" == pending ]] && ! printf '%s\n' "$@" | grep -qx -- -resume; then
     jq -n '{status: "installation_pending", installation_url: "https://github.com/apps/fake/installations/new"}'
@@ -719,6 +728,45 @@ assert_eq "$(jq -r .tree_commit "$ROOTS/optree/exit-root.json")" "$tip" 'state t
 assert_eq "$(git -C "$OP_TREE" show "$tip:policy/lineup")" \
   "lineup $(cksum <"$ROOTS/optree/builds/$SHA2/src/prompts/phase-1a/implementer.md" | cut -d' ' -f1) none" 'tree holds the second patch'
 assert_eq "$(git -C "$OP_TREE" status --porcelain)" ' M policy/lineup' 'operator checkout unchanged'
+
+begin_case "a moved base re-onboards, and a rerun before its approval stops for that approval"
+TPL=$TMP/moves-template
+cp -R "$REPO/scripts/exit-root/passes/fixture" "$TPL"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+approve
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 0
+NEW_BASE=1111111111111111111111111111111111111111
+jq --arg b "$NEW_BASE" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
+mv "$CASE_DIR/t.json" "$TPL/settings.json"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+assert_contains "repository.base_sha moved from 584dba6120ee6e126460438032c3189762603306 to $NEW_BASE"
+# onboard-1 is the first review and onboard-2 the operator's approval.
+assert_line "$CASE_DIR/onboard-3.args" "$NEW_BASE"
+first_approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+assert_not_exists "$CASE_DIR/onboard-4.args"
+assert_eq "$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")" "$first_approval" 'stored approval command'
+MOVES_DIR=$CASE_DIR
+
+begin_case "an approval that names a new image is pinned though prelaunch passes on the old one"
+CASE_DIR=$MOVES_DIR FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 approve
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 0
+assert_eq "$(jq -r .images.agent "$ROOTS/moves/daemon/settings.json")" "$FAKE_IMAGE2" 'image from the new approval'
+assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts for the new image'
+
+begin_case "a moved review configuration re-onboards with the new digest"
+NEW_DIGEST="sha256:$(printf '7%.0s' $(seq 1 64))"
+jq '.writers.implementer.effort = "medium"' "$TPL/settings.json" >"$CASE_DIR/t.json"
+mv "$CASE_DIR/t.json" "$TPL/settings.json"
+FAKE_MANIFEST_DIGEST=$NEW_DIGEST run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
+assert_rc 3
+assert_contains "the review configuration moved from $REVIEW_DIGEST to $NEW_DIGEST"
+assert_line "$CASE_DIR/onboard-1.args" "$NEW_DIGEST"
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild
