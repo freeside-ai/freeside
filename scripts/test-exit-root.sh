@@ -8,10 +8,12 @@
 # emits a tree patch derived from the settings' prompt package and second
 # writer, reports a mismatch until agent_tree.commit holds that tree, and,
 # as the real one does, writes its composition manifest before it serves
-# and removes it on every stop, clean or not;
-# `prelaunch` derives first_missing from the same tree, a trust marker that
-# `onboard -approve` writes, and the image and recipe that approval prints;
-# `routing`, `set-pool-limit`, and `probe-lineup` record their arguments.
+# and removes it on every stop, clean or not, and records the settings'
+# identities where `auth list` reads them; `prelaunch` derives
+# first_missing from the same tree, a trust marker that `onboard -approve`
+# writes, and the image and recipe that approval prints; `routing`,
+# `set-pool-limit`, and `probe-lineup` record their arguments, and
+# `probe-lineup` also stamps the enrollments as model discovery does.
 # A stand-in `lsof` reports the ports a case lists as listening. The
 # synthetic repository's dev-instance.sh is a stand-in too, since
 # test-dev-instance.sh covers the real one.
@@ -20,9 +22,9 @@
 # fixture-table value and the machine file, nothing else), the tree commit on
 # its own branch and a later one against a checkout whose policy files
 # differ, the stop at the onboarding approval and the resume after it, the
-# installation-intent stop, the rerun on a new build, the serve wait, port
-# selection, the seeded-routing overlay, the scenario pass, and the refusals
-# that create nothing.
+# installation-intent stop, the rerun on a new build or a new enrollment, the
+# serve wait, port selection, the seeded-routing overlay, the scenario pass,
+# and the refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -235,6 +237,18 @@ deputy)
     exit "$1"
   }
   : >"$root/daemon/freeside.db"
+  # Records the settings' identities as the real start does, keeping any
+  # other enrollment (an enroll-codex) and stamping a time each start
+  # changes, which adoption doesn't read.
+  enrollments=$root/daemon/fake-enrollments.json
+  [[ -f "$enrollments" ]] || echo '{"identities":[]}' >"$enrollments"
+  jq --argjson ids "$(jq -c '[.agent_tree.auth_identity, (.agent_tree.second_writer.auth_identity // empty)]' "$settings")" \
+    --arg now "$(date +%s)-$RANDOM" '
+    .identities |= reduce $ids[] as $id (.; if any(.[]; .id == $id) then . else . + [{id: $id, enabled: true,
+      enrollments: [{id: ($id + "/claude_code"), harness_client: "claude_code", route: "subscription",
+        auth_method: "setup_token", credential_mode: "volume"}]}] end)
+    | .identities[].enrollments[].recorded_at = $now' "$enrollments" >"$enrollments.tmp"
+  mv "$enrollments.tmp" "$enrollments"
   if [[ "${FAKE_DEPUTY_MODE:-}" == exporter ]]; then
     echo "freesided deputy: exporter_image failed; execution stays disabled (fake)" >&2
     trap 'stop 0' TERM
@@ -288,7 +302,24 @@ set-pool-limit)
   ;;
 probe-lineup)
   printf '%s\n' "$@" >"$STUB_DIR/probe.args"
+  # Model discovery updates what auth list shows without changing what
+  # adoption reads.
+  enrollments=$(flag -root "$@")/daemon/fake-enrollments.json
+  if [[ -f "$enrollments" ]]; then
+    jq --arg now "$(date +%s)-$RANDOM" '.identities[].enrollments[].model_catalog = {observed_at: $now}' \
+      "$enrollments" >"$enrollments.tmp"
+    mv "$enrollments.tmp" "$enrollments"
+  fi
   echo '{}'
+  ;;
+auth)
+  [[ "${1:-}" == list ]] || {
+    echo "fake freesided: no auth ${1:-}" >&2
+    exit 2
+  }
+  shift
+  db=$(flag -db "$@")
+  cat "$(dirname "$db")/fake-enrollments.json"
   ;;
 *)
   echo "fake freesided: no $cmd" >&2
@@ -486,6 +517,19 @@ assert_rc 0
 if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "an unchanged rerun started the deputy"; else ok; fi
 assert_eq "$(git -C "$TREE" rev-parse exit-root/fixture)" "$old_tip" 'tree branch unchanged'
 assert_not_exists "$CASE_DIR/go.log"
+
+begin_case "a new enrollment starts the deputy once, and the rerun after it starts none"
+jq '.identities[0].enrollments += [{id: "claude-first/codex", harness_client: "codex", route: "subscription",
+  auth_method: "chatgpt", credential_mode: "volume", recorded_at: "enrolled"}]' "$FIX/daemon/fake-enrollments.json" \
+  >"$CASE_DIR/enrollments.json"
+cp "$CASE_DIR/enrollments.json" "$FIX/daemon/fake-enrollments.json"
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts after the enrollment'
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-1.log"
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "the rerun after the enrollment started the deputy"; else ok; fi
 
 begin_case "a rerun is refused while something listens on the root's port"
 FAKE_LISTENING=9100 run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix

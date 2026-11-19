@@ -39,9 +39,11 @@
 #      -X main.version=<sha> (preflight's daemon_build check needs the stamp).
 #   4. Render <root>/daemon/settings.json, mode 0600, from the machine file,
 #      the template, and the state file, on every run.
-#   5. When the settings differ from the last start that composed (a new
-#      root, a new build's prompt packages, a changed machine file, a new
-#      image), start the deputy once and stop it; on a tree mismatch, commit
+#   5. When the settings or the root's enrollments (from `freesided auth
+#      list`) differ from the last start that composed (a new root, a new
+#      build's prompt packages, a changed machine file, a new image, an
+#      enrollment from enroll-codex), start the deputy once and stop it; on
+#      a tree mismatch, commit
 #      its patch on branch exit-root/<pass> of the agent-tree checkout, never
 #      touching the checkout's current branch or working tree, and start
 #      again. Prelaunch can't see such a change, since it compares the tree
@@ -607,17 +609,38 @@ take_onboarding_image() {
   say "set images.agent to $image and approved_recipe to $recipe"
 }
 
+# start_key: the inputs a deputy start adopts from, the rendered settings
+# and the root's enrollments, as one digest. The enrollment part keeps only
+# what adoption reads, leaving out generations, expiries, timestamps, pools,
+# and model catalogs, which change without changing the adopted tree. Prints
+# nothing when the enrollments can't be read, which forces a start.
+start_key() {
+  local settings_key enrollments db="$root/daemon/freeside.db"
+  settings_key=$(git -C "$repo_root" hash-object -- "$settings")
+  if [[ ! -f "$db" ]]; then
+    enrollments=none
+  elif ! enrollments=$("$freesided" auth list -db "$db" 2>"$logs/auth-list.err" | jq -cS '
+    [.identities | sort_by(.id)[] | {id, enabled, enrollments: (.enrollments | sort_by(.id)
+      | map({id, harness_client, route, auth_method, credential_mode}))}]'); then
+    say "could not read the enrollments in $db (log: $logs/auth-list.err); starting the deputy"
+    return 0
+  fi
+  printf '%s\n%s\n' "$settings_key" "$enrollments" | git -C "$repo_root" hash-object --stdin
+}
+
 # Prelaunch compares agent_tree.commit only with the patch the last start
-# wrote, and a new build's prompt packages or a changed machine file alter
-# what adoption emits without changing that patch. So any settings change
-# since the last start that composed gets a start of its own, before
-# prelaunch is trusted; the state file keeps that start's settings digest.
+# wrote, and a new build's prompt packages, a changed machine file, or a new
+# enrollment alter what adoption emits without changing that patch. So any
+# change to the start's inputs since the last start that composed gets a
+# start of its own, before prelaunch is trusted; the state file keeps the
+# inputs' digest as that start left them, since the start itself records
+# the settings' identities.
 committed=false
 rechecked=false
 for _ in 1 2 3 4 5 6 7 8; do
   render_settings
-  key=$(git -C "$repo_root" hash-object -- "$settings")
-  if [[ "$key" != "$(state_get .composed_settings)" ]]; then
+  key=$(start_key)
+  if [[ -z "$key" || "$key" != "$(state_get .composed_inputs)" ]]; then
     setup_start
     if [[ "$start_result" == tree_mismatch ]]; then
       [[ "$committed" == false ]] || die "the deputy still reports a tree mismatch after the commit; see $logs/deputy-setup.err"
@@ -625,7 +648,8 @@ for _ in 1 2 3 4 5 6 7 8; do
       committed=true
       continue
     fi
-    state_set composed_settings "\"$key\""
+    key=$(start_key)
+    [[ -z "$key" ]] || state_set composed_inputs "\"$key\""
   fi
   run_prelaunch
   case $missing in
