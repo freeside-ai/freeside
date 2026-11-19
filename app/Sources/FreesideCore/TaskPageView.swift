@@ -1249,7 +1249,8 @@ struct TaskPageView: View {
 
     /// Elapsed, then the Timeline: the task's events, always open, the rail
     /// that says which stage the task is in and how it got there, the
-    /// current campaign's included, with no fold around them. Current Run
+    /// current campaign's included, with no fold around them but each
+    /// event's explanation, folded behind its marker (#3455). Current Run
     /// sits above this block (#3375). Under the rail each earlier campaign
     /// is one folded disclosure row, and the page's exact identifiers close
     /// it under one hairline.
@@ -1279,7 +1280,9 @@ struct TaskPageView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    TimelineRail(rows: rows, onOpenItem: onOpenTimelineItem ?? onOpenItem, rowMarker: rowMarker)
+                    TimelineRail(
+                        rows: rows, onOpenItem: onOpenTimelineItem ?? onOpenItem, rowMarker: rowMarker,
+                        explanationFold: { fold(.explanation(TaskTimelinePresentation.explanationKey($0))) })
                 }
             }
             if timeline.sections.isEmpty {
@@ -2088,13 +2091,18 @@ enum TaskTimelinePresentation {
             // A start event names nothing that failed (`recordsFailure`), so
             // the merged row never needs the failure kind.
             let words = rowLabel(event, run: source?.run, pass: pass, startsStage: start != nil)
+            // A triage's reason explains the tier it chose, which folds; a
+            // triage that got no answer says why, which stays printed.
+            let triage = event.triage?.value1
+            let answered = triage?.outcome == .answered
             oldestFirst.append(
                 TimelineRail.Row(
                     kind: start.map { .stageStart($0) } ?? (recordsFailure(event) ? .failure : .event),
                     label: start.map { stage in
                         ["\(AttentionDisplay.label(stage)) started", words].compactMap { $0 }.joined(separator: " · ")
                     } ?? words ?? "",
-                    recordedAt: event.recorded_at, context: event.triage?.value1.reason,
+                    recordedAt: event.recorded_at, context: answered ? nil : triage?.reason,
+                    explanation: answered ? triage?.reason : nil,
                     itemID: linkedItemID(event, items: items)))
         }
         oldestFirst += unstarted.map { decidedRow($0.round, $0.remediation, items: items) }
@@ -2264,6 +2272,13 @@ enum TaskTimelinePresentation {
             return .earlierCampaign(section.campaign_id)
         }
         return .runPage
+    }
+
+    /// The key a Timeline row's explanation fold keeps its state by: the
+    /// row's words and recorded instant, which name the event without the
+    /// explanation's own words.
+    static func explanationKey(_ row: TimelineRail.Row) -> String {
+        "\(row.label)|\(row.recordedAt.map { "\($0.timeIntervalSince1970)" } ?? "-")"
     }
 
     /// The pull request the task opened, by the history's newest record of it.

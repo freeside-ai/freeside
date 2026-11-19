@@ -27,10 +27,16 @@ struct TimelineRail: View {
         /// Nil when the record holds no instant for the entry; the row then
         /// draws no time.
         let recordedAt: Date?
-        /// A dim sub line under the label: the attempt the entry belongs
-        /// to on a run's rail. The task's events name their attempt in the
-        /// label; only a triage event carries one, its advisory reason.
+        /// A dim sub line under the label, never folded: the attempt the
+        /// entry belongs to on a run's rail (the task's events name theirs
+        /// in the label), and on the task's events the reason a triage got
+        /// no answer.
         var context: String?
+        /// Why the entry happened, in the daemon's words: today a triage
+        /// event's advisory reason. A rail given `explanationFold` folds it
+        /// behind the entry's marker, except on a failure, whose reason is
+        /// what the reader came for; otherwise it prints under the label.
+        var explanation: String?
         /// The newest entry, which reads as the head of the rail. On the
         /// task's events a stage start merges into the event it is read
         /// from, so the newest entry can be a stage start.
@@ -40,13 +46,14 @@ struct TimelineRail: View {
         var itemID: String?
 
         init(
-            kind: Kind, label: String, recordedAt: Date?, context: String? = nil, isNewest: Bool = false,
-            itemID: String? = nil
+            kind: Kind, label: String, recordedAt: Date?, context: String? = nil, explanation: String? = nil,
+            isNewest: Bool = false, itemID: String? = nil
         ) {
             self.kind = kind
             self.label = label
             self.recordedAt = recordedAt
             self.context = context
+            self.explanation = explanation
             self.isNewest = isNewest
             self.itemID = itemID
         }
@@ -67,6 +74,11 @@ struct TimelineRail: View {
     /// can bring a row into view: the run page's time strip does. Off by
     /// default, which leaves every row's identity as it was.
     var identifiesRows = false
+    /// Where a row's explanation fold keeps its state. Nil (a run's page)
+    /// prints every explanation; set, an entry with one folds it
+    /// (`folds(_:)`).
+    var explanationFold: ((Row) -> Binding<Bool>)? = nil
+    @State private var hoveredRow: Int?
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
     @Environment(\.pinnedNow) private var pinnedNow
@@ -88,7 +100,7 @@ struct TimelineRail: View {
         return rows.reversed().map { row in
             let content = [
                 "\(row.kind)", row.label, row.recordedAt.map { "\($0.timeIntervalSince1970)" } ?? "-",
-                row.context ?? "-",
+                row.context ?? "-", row.explanation ?? "-",
             ].joined(separator: "|")
             let count = seen[content, default: 0]
             seen[content] = count + 1
@@ -101,31 +113,97 @@ struct TimelineRail: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 let isLast = index == rows.count - 1
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    ChronologyMarker(kind: Self.marker(row))
-                        .background { connector(above: index > 0, below: !isLast) }
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            label(row)
-                            Spacer(minLength: 8)
-                            time(row)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            label(row)
-                            time(row)
-                        }
+                let fold = explanationFold.flatMap { Self.folds(row) ? $0(row) : nil }
+                rowContent(row, index: index, isLast: isLast, fold: fold)
+                    .padding(.bottom, isLast ? 0 : row.isStageStart ? Self.railGapUnderStageStart : Self.railGap)
+                    // Cuts the connector off at the row's edges, where the
+                    // next row's connector takes over.
+                    .clipped()
+                    .background(alignment: .top) {
+                        if let rowMarker, index < keys.count { rowMarker(keys[index]) }
+                    }
+                    .rowID(identifiesRows && index < keys.count ? keys[index] : nil)
+            }
+        }
+    }
+
+    /// Whether a rail that folds explanations folds this row's: it has one
+    /// and it isn't a failure, whose reason stays printed.
+    nonisolated static func folds(_ row: Row) -> Bool {
+        row.explanation != nil && row.kind != .failure
+    }
+
+    /// A row as one element. A folding row is one button that opens and
+    /// closes its explanation, its marker the disclosure triangle.
+    @ViewBuilder
+    private func rowContent(_ row: Row, index: Int, isLast: Bool, fold: Binding<Bool>?) -> some View {
+        if let fold {
+            Button {
+                fold.wrappedValue.toggle()
+            } label: {
+                line(row, index: index, isLast: isLast, disclosure: fold.wrappedValue ? .open : .closed)
+                    .contentShape(Rectangle())
+                    // Under the marker and its connector, inside the row,
+                    // which clips everything past its edges.
+                    .background {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.hover)
+                            .opacity(hoveredRow == index ? 1 : 0)
+                    }
+            }
+            .buttonStyle(.plain)
+            .freesideFocusRing(cornerRadius: 4)
+            // A button's label can't be selected, so the row's menu copies
+            // what it draws (app/README.md, Copyable Text).
+            .copyMenu {
+                Button("Copy event") { Clipboard.copy(row.label) }
+                if let explanation = row.explanation {
+                    Button("Copy reason") { Clipboard.copy(explanation) }
+                }
+            }
+            .onHover { hovering in
+                if hovering {
+                    hoveredRow = index
+                } else if hoveredRow == index {
+                    hoveredRow = nil
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(fold.wrappedValue ? "Expanded" : "Collapsed")
+            .accessibilityHint(fold.wrappedValue ? "Hides why it happened." : "Shows why it happened.")
+        } else {
+            line(row, index: index, isLast: isLast, disclosure: nil)
+                .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func line(
+        _ row: Row, index: Int, isLast: Bool, disclosure: ChronologyMarker.Disclosure?
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            ChronologyMarker(kind: Self.marker(row), disclosure: disclosure)
+                .background { connector(above: index > 0, below: !isLast) }
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+            VStack(alignment: .leading, spacing: 2) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        label(row)
+                        Spacer(minLength: 8)
+                        time(row)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        label(row)
+                        time(row)
                     }
                 }
-                .padding(.bottom, isLast ? 0 : row.isStageStart ? Self.railGapUnderStageStart : Self.railGap)
-                // Cuts the connector off at the row's edges, where the next
-                // row's connector takes over.
-                .clipped()
-                .background(alignment: .top) {
-                    if let rowMarker, index < keys.count { rowMarker(keys[index]) }
+                // Under the label and its time, so a long explanation
+                // wraps beneath them rather than pushing the time down.
+                if disclosure != .closed, let explanation = row.explanation {
+                    Text(explanation)
+                        .font(FreesideFont.trailingSummary)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .accessibilityElement(children: .combine)
-                .rowID(identifiesRows && index < keys.count ? keys[index] : nil)
             }
         }
     }

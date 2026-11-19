@@ -388,13 +388,16 @@ import Testing
 
     @Test func aTriageEventNamesTheTierOrTheFailureAndItsReason() throws {
         // The task proceeds whatever the outcome, so the row is an event, and
-        // the triager's advisory reason is its sub line.
+        // the triager's advisory reason is its explanation, which the page
+        // folds behind the row's marker (#3455), not a printed sub line.
         let rows = TaskTimelinePresentation.rows(TaskStageFixtures.history(.specification))
         let row = try #require(rows.first { $0.label.hasPrefix("Specifying tier") })
         #expect(row.label == "Specifying tier · Escalated")
         #expect(row.kind == .event)
-        #expect(row.context == "Changes the API schema and its generated clients.")
-        #expect(rows.filter { $0.context != nil }.count == 1)
+        #expect(row.explanation == "Changes the API schema and its generated clients.")
+        #expect(rows.filter { $0.explanation != nil }.count == 1)
+        #expect(rows.allSatisfy { $0.context == nil })
+        #expect(TimelineRail.folds(row))
         func label(
             _ outcome: Components.Schemas.TriageOutcome, _ tier: Components.Schemas.TriageTier? = nil
         ) -> String {
@@ -409,6 +412,21 @@ import Testing
         #expect(label(.budget_spent) == "Specifying tier escalated · budget spent")
         #expect(label(.no_triager_line) == "Specifying tier escalated · no triager line")
         #expect(TaskTimelinePresentation.label(.specifier_triaged) == "Specifying tier chosen")
+    }
+
+    /// #3455: a reason that says why something failed is never folded. A
+    /// triage that got no answer prints its reason as the row's context,
+    /// and a failure row's explanation never folds.
+    @Test func aFailureReasonStaysPrinted() throws {
+        var history = TaskStageFixtures.history(.specification)
+        let index = try #require(history.events.firstIndex { $0.kind == .specifier_triaged })
+        history.events[index].triage = .init(
+            value1: .init(outcome: .call_failed, reason: "The triager timed out.", escalated: true))
+        let row = try #require(TaskTimelinePresentation.rows(history).first { $0.label.hasPrefix("Specifying tier") })
+        #expect(row.context == "The triager timed out.")
+        #expect(row.explanation == nil)
+        #expect(!TimelineRail.folds(row))
+        #expect(!TimelineRail.folds(Row(kind: .failure, label: "Review failed", recordedAt: nil, explanation: "Why")))
     }
 
     @Test func aClearedLineReadsAsBackToTheLineup() {

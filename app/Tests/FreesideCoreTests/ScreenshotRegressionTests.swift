@@ -3546,6 +3546,29 @@
                                 .environment(\.pinnedNow, RunFixtures.taskStripNow))))
                 }
             }
+            // A Timeline event with an explanation (#3455): the triager's
+            // reason folded behind its marker, then open.
+            let explained = TaskFixtures.taskStripExplained()
+            let explainedRow = try #require(
+                TaskTimelinePresentation.rows(explained.history).first { $0.explanation != nil })
+            for (suffix, open) in [("", false), ("-open", true)] {
+                for scheme in [ColorScheme.light, .dark] {
+                    let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
+                    disclosures.setExpanded(
+                        open, .explanation(TaskTimelinePresentation.explanationKey(explainedRow)),
+                        taskID: explained.task.task.id)
+                    surfaces.append(
+                        Surface(
+                            name: "task-page-explanation-820-\(scheme)\(suffix)", width: 820,
+                            colorScheme: scheme, nativeAppearance: true,
+                            view: AnyView(
+                                TaskPageView(
+                                    coordinator: taskStripCoordinator, snapshot: explained.task, onOpenRun: { _ in }
+                                )
+                                .screenshotContent(explained.history, disclosures: disclosures)
+                                .environment(\.pinnedNow, RunFixtures.taskStripNow))))
+                }
+            }
             // Attempt-ordered history (#1263): two early attempts re-observed
             // after a later completed attempt, plus a review round, so the
             // ordering does not follow observation time.
