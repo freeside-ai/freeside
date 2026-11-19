@@ -100,6 +100,8 @@ type fakeBackend struct {
 	maskedFailure string
 	maskedRunErr  bool
 	failRecipe    string
+	// recipeOutput, when set, is the failing recipe command's whole output.
+	recipeOutput []byte
 	// runFault, when it holds for a run, makes the runtime fail to run it.
 	runFault      func(runSpec) bool
 	preflightExit int
@@ -207,9 +209,26 @@ func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 		return runResult{Output: output, ExitCode: exitCode}, nil
 	}
 	if len(spec.Argv) > 0 && spec.Argv[0] == f.failRecipe {
-		return runResult{Output: []byte("recipe failed"), ExitCode: 1}, nil
+		output := []byte("recipe failed")
+		if f.recipeOutput != nil {
+			output = f.recipeOutput
+		}
+		return f.emit(spec, runResult{Output: output, ExitCode: 1}), nil
 	}
 	return runResult{Output: []byte("ok")}, nil
+}
+
+// emit writes a run's whole output to the step's writer, as the runner's tee
+// does, and returns the result with its output cut to the runner's tail.
+func (f *fakeBackend) emit(spec runSpec, result runResult) runResult {
+	if spec.Output != nil {
+		_, _ = spec.Output.Write(result.Output)
+	}
+	if len(result.Output) > maxCommandOutputBytes {
+		result.Output = result.Output[len(result.Output)-maxCommandOutputBytes:]
+		result.Truncated = true
+	}
+	return result
 }
 
 func (f *fakeBackend) Publish(_ context.Context, spec publishSpec) (publication, error) {
@@ -565,6 +584,24 @@ func TestBuildRefutesProofFailures(t *testing.T) {
 				t.Fatal("failed cache-independent proof reached publication")
 			}
 		})
+	}
+}
+
+// The bounded tail often starts past the failing test, so the error lists the
+// failing Go tests from the whole stream (#3442, F63).
+func TestBuildListsFailingGoTestsTheTailCutOff(t *testing.T) {
+	t.Parallel()
+	backend := newFakeBackend()
+	backend.failRecipe = "npm"
+	backend.recipeOutput = []byte("=== RUN   TestCut\n    --- FAIL: TestCut/child (0.00s)\n" +
+		"FAIL\tgithub.com/example/cut\t0.2s\n" + strings.Repeat("ok  \tgithub.com/example/fine\t0.1s\n", 200))
+	_, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest())
+	if !errors.Is(err, ErrProofFailed) {
+		t.Fatalf("Build = %v, want ErrProofFailed", err)
+	}
+	want := "failing Go tests:\n    --- FAIL: TestCut/child (0.00s)\nFAIL\tgithub.com/example/cut\t0.2s\noutput tail:\n"
+	if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "github.com/example/fine") {
+		t.Fatalf("Build error = %v, want the failing tests before the tail", err)
 	}
 }
 

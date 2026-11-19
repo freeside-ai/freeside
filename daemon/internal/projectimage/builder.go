@@ -702,25 +702,29 @@ func (b *Builder) proveRecipe(
 		if err := b.source.Copy(ctx, sourceDir, commit, workspace); err != nil {
 			return fmt.Errorf("materialize positive workspace %d: %w", index, err)
 		}
+		var hydrationTests failingTests
 		preparation, err := b.backend.Run(ctx, runSpec{
 			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath}, MaskedCache: maskedCache,
+			Output: &hydrationTests,
 		})
 		if err != nil {
 			return fmt.Errorf("hydrate positive workspace %d: %w", index, err)
 		}
 		if preparation.ExitCode != 0 {
 			return fmt.Errorf("hydrate positive workspace %d exited %d (%s): %w",
-				index, preparation.ExitCode, boundedOutput(preparation.Output), ErrProofFailed)
+				index, preparation.ExitCode, proofOutput(&hydrationTests, preparation.Output), ErrProofFailed)
 		}
+		var recipeTests failingTests
 		result, err := b.backend.Run(ctx, runSpec{
 			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...), MaskedCache: maskedCache,
+			Output: &recipeTests,
 		})
 		if err != nil {
 			return fmt.Errorf("recipe command %d %q: %w", index, argv[0], err)
 		}
 		if result.ExitCode != 0 {
 			return fmt.Errorf("recipe command %d %q exited %d (%s): %w",
-				index, argv[0], result.ExitCode, boundedOutput(result.Output), ErrProofFailed)
+				index, argv[0], result.ExitCode, proofOutput(&recipeTests, result.Output), ErrProofFailed)
 		}
 	}
 	return nil
@@ -1126,6 +1130,18 @@ func imageDigest(ref domain.ImageRef) string {
 
 func validDigest(digest string) bool {
 	return contentaddr.Valid(digest)
+}
+
+// proofOutput describes a failed proof command's output: the failing Go
+// tests from its whole stream, when there are any, then its bounded tail.
+// The tail alone often starts past the failing test (#3442).
+func proofOutput(tests *failingTests, output []byte) string {
+	tail := boundedOutput(output)
+	summary := tests.summary()
+	if summary == "" {
+		return tail
+	}
+	return "failing Go tests:\n" + summary + "\noutput tail:\n" + tail
 }
 
 func boundedOutput(output []byte) string {
