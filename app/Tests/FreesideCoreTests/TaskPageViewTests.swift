@@ -1253,13 +1253,13 @@ import Testing
 
     private func status(
         _ page: TaskProgressFixtures.Case,
+        stage: TaskDisplay.CurrentStage? = nil,
         open: [Components.Schemas.AttentionItemSnapshot] = [],
         completion: Components.Schemas.WorkUnitCompletionFacts? = nil
-    ) -> String {
+    ) -> TaskTimelinePresentation.StatusLine {
         TaskTimelinePresentation.statusLine(
-            page.task, position: page.position, stage: nil, openItems: open.map(\.item),
-            run: TaskTimelinePresentation.currentRun(page.task, in: page.history), completion: completion,
-            now: now, locale: locale, timeZone: timeZone)
+            page.task, position: page.position, stage: stage, openItems: open.map(\.item),
+            completion: completion, now: now, locale: locale, timeZone: timeZone)
     }
 
     private func question(_ id: String, hoursOld: Double) -> Components.Schemas.AttentionItemSnapshot {
@@ -1268,31 +1268,47 @@ import Testing
         return snapshot
     }
 
-    @Test func theStatusLineCountsOpenDecisionsFromTheOldest() {
+    /// #3376: a task with an open decision leads with the washed waiting
+    /// chip and its stage, aged from the oldest decision. The count goes:
+    /// the cards are on the page.
+    @Test func aWaitingStatusLineLeadsWithTheWaitingAndStageChips() {
+        // The page builds its position at the task's current stage, as
+        // `TaskPageView.position(_:)` does.
         let page = TaskStageFixtures.page(.review)
+        let review = TaskDisplay.CurrentStage(stage: .review, round: "Round 1")
+        let open = [question("newest", hoursOld: 1), question("oldest", hoursOld: 6)]
+        let line = TaskTimelinePresentation.statusLine(
+            page.task,
+            position: TaskDisplay.position(page.task, runs: page.runs, history: page.history, stage: review),
+            stage: review, openItems: open.map(\.item), completion: nil, now: now, locale: locale,
+            timeZone: timeZone)
         #expect(
-            status(page, open: [question("newest", hoursOld: 1), question("oldest", hoursOld: 6)])
-                == "Waiting on you since 6h · 2 open decisions")
-        #expect(status(page, open: [question("only", hoursOld: 2)]) == "Waiting on you since 2h · 1 open decision")
+            line == .init(state: "Waiting on You", cut: .attention, stage: "Review · Round 1", remaining: "since 6h"))
+        #expect(line.spoken == "Waiting on You, Review · Round 1, since 6h")
     }
 
-    @Test func theStatusLineNamesTheRunAgentAndPoolWhileWorking() {
+    /// #3376: a working task reads its row's keyword and stage, and names
+    /// no attempt, agent, or pool, which Current Run carries.
+    @Test func aWorkingStatusLineLeavesTheRunToCurrentRun() {
         var page = TaskStageFixtures.page(.implementation)
         page.task.task_lines = [
             TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
             TaskStageFixtures.line(.reviewer, agent: "codex", pool: "B"),
         ]
-        let stage = TaskDisplay.CurrentStage(stage: .implementation, round: nil)
+        let line = status(page, stage: TaskDisplay.CurrentStage(stage: .implementation, round: nil))
         #expect(
-            TaskTimelinePresentation.statusLine(
-                page.task, position: page.position, stage: stage, openItems: [],
-                run: TaskTimelinePresentation.currentRun(page.task, in: page.history), completion: nil,
-                now: now, locale: locale, timeZone: timeZone) == "Implementing · run 1 · claude · pool A")
+            line == .init(state: "Implementing", cut: .ink, stage: "Implementation · Round 1", remaining: nil))
+        #expect(line.spoken == "Implementing, Implementation · Round 1")
     }
 
     @Test func aParkedStatusLineNamesWhatParkedIt() {
-        let page = TaskStageFixtures.page(.verification)
-        #expect(status(page) == "Parked · Verification findings block publication")
+        let line = status(TaskStageFixtures.page(.verification))
+        #expect(
+            line
+                == .init(
+                    state: "Parked", cut: .ink, stage: "Verification · Round 1",
+                    remaining: "Verification findings block publication"))
+        #expect(line.spoken == "Parked, Verification · Round 1, Verification findings block publication")
     }
 
     @Test func aMergedTaskNamesItsPullRequest() {
@@ -1300,8 +1316,35 @@ import Testing
         page.task.lifecycle = .finished
         let completion = Components.Schemas.WorkUnitCompletionFacts(
             pr_number: 2431, merge_commit_sha: "4be1d0a7", recorded_at: now.addingTimeInterval(-3600))
+        let merged = FreesideFormat.shortTime(
+            completion.recorded_at, now: now, locale: locale, timeZone: timeZone)
         let line = status(page, completion: completion)
-        #expect(line.hasPrefix("Merged as PR #2431 · "))
+        #expect(line == .init(state: "Merged", cut: .faint, stage: nil, remaining: "PR #2431 · \(merged)"))
+        #expect(line.spoken == "Merged, PR #2431 · \(merged)")
+    }
+
+    /// #3376: a task finished without a recorded merge reads its Finished
+    /// row's keyword and its last activity, with no stage chip.
+    @Test func aTaskFinishedAnotherWayReadsItsRowKeywordAndLastActivity() {
+        var page = TaskStageFixtures.page(.review)
+        page.task.lifecycle = .finished
+        let keyword = TaskDisplay.finishedRow(page.task, position: page.position).keyword
+        let finished = FreesideFormat.shortTime(
+            page.task.last_activity_at, now: now, locale: locale, timeZone: timeZone)
+        let line = status(page)
+        #expect(line == .init(state: keyword, cut: .faint, stage: nil, remaining: finished))
+        #expect(line.spoken == "\(keyword), \(finished)")
+        // A finished task draws no stage chip even with an item still open.
+        #expect(status(page, open: [question("open", hoursOld: 2)]).stage == nil)
+    }
+
+    /// #3376: the page's eyebrow drops the stage the list row's context
+    /// line still carries.
+    @Test func theEyebrowNamesTheProjectAndIssueOnly() {
+        let page = TaskStageFixtures.page(.review)
+        let identity = TaskDisplay.pageIdentity(page.task)
+        #expect(identity == "freeside · #654")
+        #expect(TaskDisplay.rowContext(page.task, position: page.position) == identity + " · Implementation · Round 1")
     }
 
     /// Acceptance 1 (#2611): Current Run's mono line reads the run's latest

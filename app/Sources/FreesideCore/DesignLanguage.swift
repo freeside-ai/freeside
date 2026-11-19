@@ -589,6 +589,10 @@ enum FreesideFont {
 /// A `cut` chip is the task surfaces' status chip: the same shape, free to
 /// wrap (a task status is the daemon's full phrase), with the border and
 /// text toned separately.
+///
+/// A `fill` washes the bordered chip; nil, the default, draws none. At an
+/// accessibility text size the chip is plain colored text, so no fill
+/// draws there either.
 struct StateChip: View {
     typealias Cut = StateChipCut
 
@@ -599,6 +603,7 @@ struct StateChip: View {
     /// label alone.
     var glyph: String? = nil
     var cut: Cut? = nil
+    var fill: Color? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -614,6 +619,7 @@ struct StateChip: View {
                     .fixedSize(horizontal: cut == nil, vertical: true)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
+                    .background(fill.map { RoundedRectangle(cornerRadius: 3).fill($0) })
                     .overlay(
                         RoundedRectangle(cornerRadius: 3)
                             .strokeBorder(
@@ -651,8 +657,8 @@ extension StateChipCut {
 
 extension StateChip {
     /// A task-status chip in one of the three cuts.
-    init(label: String, cut: Cut) {
-        self.init(label: label, color: cut.text, cut: cut)
+    init(label: String, cut: Cut, fill: Color? = nil) {
+        self.init(label: label, color: cut.text, cut: cut, fill: fill)
     }
 }
 

@@ -703,13 +703,19 @@ package enum TaskDisplay {
         return position.historical || heading.label == position.status ? heading.round : heading.text
     }
 
+    /// The task's identity: project, then the issue when the source names
+    /// one. The task page's eyebrow reads it alone; its stage draws as a
+    /// chip on the status line instead (#3376).
+    package static func pageIdentity(_ task: Components.Schemas.Task) -> String {
+        ([projectName(task)] + [issueReference(task)].compactMap { $0 }).joined(separator: " · ")
+    }
+
     /// The row's context line: project, the issue when the source names
     /// one, then the current phase and round. The four-phase sentence and
     /// the hold stay with VoiceOver and the task timeline (`rowLines`,
     /// `holdCallout`).
     package static func rowContext(_ task: Components.Schemas.Task, position: Position?) -> String {
-        ([projectName(task)] + [issueReference(task), currentPhaseAndRound(position)].compactMap { $0 })
-            .joined(separator: " · ")
+        ([pageIdentity(task)] + [currentPhaseAndRound(position)].compactMap { $0 }).joined(separator: " · ")
     }
 
     /// The exact last-activity instant behind the row's coarse segment,

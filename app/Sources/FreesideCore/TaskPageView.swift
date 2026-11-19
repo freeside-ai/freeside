@@ -749,8 +749,9 @@ struct TaskPageView: View {
     }
 
     /// Layer 0: what the work is and where it stands, without scrolling
-    /// (5.6): the task's project, issue, and stage over its name, one status
-    /// line, the hold when there is one, and where to act. The task id lives
+    /// (5.6): the task's project and issue over its name, one status line
+    /// that leads with its state and stage chips, the hold when there is
+    /// one, and where to act. The task id lives
     /// in the page's Identifiers footer; the copy menu keeps a quick path to
     /// it. A look-alike task's header leads its detail with the marker its
     /// row draws, so a card on the page says which task it belongs to.
@@ -765,11 +766,10 @@ struct TaskPageView: View {
         let open = openItems
         let status = TaskTimelinePresentation.statusLine(
             task, position: position, stage: currentStage(timeline), openItems: open.map(\.item),
-            run: TaskTimelinePresentation.currentRun(task, in: timeline),
             completion: TaskTimelinePresentation.completion(task, runs: coordinator.runs),
             now: now, locale: locale, timeZone: timeZone)
         return PageHeader(
-            eyebrow: TaskDisplay.rowContext(task, position: position),
+            eyebrow: TaskDisplay.pageIdentity(task),
             title: TaskNameLabel(
                 name: TaskTimelinePresentation.headerName(timeline: timeline, snapshot: snapshot),
                 font: FreesideFont.ask,
@@ -783,7 +783,7 @@ struct TaskPageView: View {
             attachmentsFold
             // A parked status line already names the hold.
             if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage),
-                position?.hold.map(status.hasSuffix) != true
+                position?.hold == nil || status.remaining != position?.hold
             {
                 holdCallout(hold)
             }
@@ -2364,56 +2364,56 @@ enum TaskTimelinePresentation {
         }.first
     }
 
-    /// The choice the task's line for `stage` records, and its pool. The line
-    /// is what the next admission reads: the wire names no agent for a run
-    /// in progress, so this is the nearest fact, and a remediation reads as
-    /// its stage's implementer. The daemon records a pool only on a router
-    /// line, as the pool its routing chose.
-    private static func agentAndPool(
-        _ task: Components.Schemas.Task, stage: Components.Schemas.StageName?
-    ) -> [String] {
-        let role: Components.Schemas.TaskLineRole =
-            switch stage {
-            case .specification: .specifier
-            case .review: .reviewer
-            case .implementation, .verification, .unknown, nil: .implementer
-            }
-        guard let line = task.task_lines.first(where: { $0.role == role }) else { return [] }
-        return [
-            TaskDisplay.lineLabel(agent: line.agent, selection: line.selection?.value1),
-            line.provenance.map { "pool \($0.value1.pool)" },
-        ]
-        .compactMap { $0 }
+    /// The header's status line in parts (#3376): a state chip, a stage
+    /// chip, then the words that remain. The state reads the keyword the
+    /// task's list row keys on, except that a task waiting on the operator
+    /// reads `Waiting on You` and a merged one `Merged`.
+    struct StatusLine: Equatable {
+        let state: String
+        /// The state chip's cut: `.attention` while waiting on the
+        /// operator, `.ink` for any other active state, `.faint` once
+        /// finished.
+        let cut: StateChipCut
+        /// The current phase and round the eyebrow no longer carries; nil
+        /// once finished, or when the position names none.
+        let stage: String?
+        let remaining: String?
+
+        /// The one sentence VoiceOver reads for the line.
+        var spoken: String {
+            [state, stage, remaining].compactMap { $0 }.joined(separator: ", ")
+        }
     }
 
-    /// The header's one status line, which reads the same words the task's
-    /// list row keys on. No resume time reaches the client, so a parked task
-    /// says what parked it and not until when.
+    /// The header's status line. The open decisions are cards on the page
+    /// and the run's agent and pool are Current Run's, so neither repeats
+    /// here. No resume time reaches the client, so a parked task says what
+    /// parked it and not until when.
     static func statusLine(
         _ task: Components.Schemas.Task, position: TaskDisplay.Position?, stage: TaskDisplay.CurrentStage?,
-        openItems: [Components.Schemas.AttentionItem], run: Components.Schemas.TaskTimelineRun?,
+        openItems: [Components.Schemas.AttentionItem],
         completion: Components.Schemas.WorkUnitCompletionFacts?, now: Date, locale: Locale, timeZone: TimeZone
-    ) -> String {
+    ) -> StatusLine {
+        // A finished task has no stage chip, whatever it still holds open.
+        let phase = TaskDisplay.isActive(task) ? TaskDisplay.currentPhaseAndRound(position) : nil
         if let oldest = openItems.compactMap(\.created_at).min() {
             let age = AttentionDisplay.relativeRowTime(oldest, now: now)
-            let count = openItems.count == 1 ? "1 open decision" : "\(openItems.count) open decisions"
-            return "Waiting on you since \(age) · \(count)"
+            return StatusLine(state: "Waiting on You", cut: .attention, stage: phase, remaining: "since \(age)")
         }
         if TaskDisplay.isActive(task) {
             let row = TaskDisplay.workingRow(task, position: position, stage: stage)
-            if row.keyword == TaskDisplay.parked {
-                return ([row.keyword] + [position?.hold].compactMap { $0 }).joined(separator: " · ")
-            }
-            let attempt = run?.attempt_number.map { "run \($0)" }
-            return ([row.keyword] + [attempt].compactMap { $0 } + agentAndPool(task, stage: stage?.stage)).joined(
-                separator: " · ")
+            let hold = row.keyword == TaskDisplay.parked ? position?.hold : nil
+            return StatusLine(state: row.keyword, cut: .ink, stage: phase, remaining: hold)
         }
         if let completion {
             let merged = FreesideFormat.shortTime(completion.recorded_at, now: now, locale: locale, timeZone: timeZone)
-            return "Merged as PR #\(completion.pr_number) · \(merged)"
+            return StatusLine(
+                state: "Merged", cut: .faint, stage: nil, remaining: "PR #\(completion.pr_number) · \(merged)")
         }
         let finished = FreesideFormat.shortTime(task.last_activity_at, now: now, locale: locale, timeZone: timeZone)
-        return "\(TaskDisplay.finishedRow(task, position: position).keyword) · \(finished)"
+        return StatusLine(
+            state: TaskDisplay.finishedRow(task, position: position).keyword, cut: .faint, stage: nil,
+            remaining: finished)
     }
 
     /// A thread the page folds under the Timeline, with the item it
