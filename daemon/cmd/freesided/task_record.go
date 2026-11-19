@@ -964,10 +964,11 @@ func readTaskRecordItems(
 }
 
 // taskRecordOwnsItem reports whether an item belongs to the task: its
-// subject names the task or one of its runs, or it is the stall notice of
-// one of the task's invocations. A stall notice has the system as its
-// subject, so only its id ties it to an invocation; the invocation ids come
-// from the run's admissions and observations, whichever were read.
+// subject names the task or one of its runs, or it is the writer-stall or
+// stalled-recovery notice of one of the task's invocations. Both notices have
+// the system as their subject, so only the id ties one to an invocation; the
+// invocation ids come from the run's admissions and observations, whichever
+// were read.
 func taskRecordOwnsItem(
 	itemID domain.ItemID, subjectTaskID *domain.TaskID, subjectRunID *domain.RunID,
 	id domain.TaskID, runs []taskRecordRun,
@@ -980,17 +981,24 @@ func taskRecordOwnsItem(
 			return true
 		}
 		for _, admission := range run.Admissions {
-			if daemoncompose.IsInvocationStallNotice(string(itemID), admission.InvocationID) {
+			if isInvocationNotice(itemID, admission.InvocationID) {
 				return true
 			}
 		}
 		for _, invocation := range run.Invocations {
-			if daemoncompose.IsInvocationStallNotice(string(itemID), invocation.InvocationID) {
+			if isInvocationNotice(itemID, invocation.InvocationID) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// isInvocationNotice reports whether itemID is a system-subject notice filed
+// for exactly this invocation.
+func isInvocationNotice(itemID domain.ItemID, id domain.InvocationID) bool {
+	return daemoncompose.IsInvocationStallNotice(string(itemID), id) ||
+		daemoncompose.IsStageRecoveryNotice(string(itemID), id)
 }
 
 // countTaskRecordItems counts the items that were read by type, listing

@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
 	"github.com/freeside-ai/freeside/daemon/internal/seedfixture"
@@ -695,7 +696,19 @@ func TestTaskRecordJoinsStallNotices(t *testing.T) {
 	st, _ := openSeededStore(t)
 	ctx := t.Context()
 	id := taskOfRun(t, st, fixtureActiveRunID)
-	var own, foreign, longer domain.ItemID
+	notices := map[string]func(*store.WriteTx, domain.InvocationID) (domain.AttentionItem, error){
+		"invocation_stalled": func(tx *store.WriteTx, target domain.InvocationID) (domain.AttentionItem, error) {
+			return daemoncompose.InvocationStalledItem(ctx, tx, target, 5*time.Minute, taskRecordAsOf)
+		},
+		"stage_recovery_stalled": func(tx *store.WriteTx, target domain.InvocationID) (domain.AttentionItem, error) {
+			return daemoncompose.StageRecoveryStalledItem(ctx, tx, stage.RecoveryStall{
+				InvocationID: target, RunID: "run", Phase: "exported", Elapsed: 5 * time.Minute,
+				Grace: 30 * time.Minute, Error: "import failed", Stalled: true,
+			}, taskRecordAsOf)
+		},
+	}
+	own := map[string]domain.ItemID{}
+	var others []domain.ItemID
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		admissions, err := tx.ListRunExecutionAdmissionRecords(ctx, fixtureActiveRunID)
 		if err != nil {
@@ -704,31 +717,39 @@ func TestTaskRecordJoinsStallNotices(t *testing.T) {
 		invocation := admissions[0].InvocationID
 		// A notice for another task's invocation, and one whose invocation id
 		// merely extends this task's, both stay off the record.
-		for target, itemID := range map[domain.InvocationID]*domain.ItemID{
-			invocation: &own, "inv-of-no-task": &foreign, invocation + "-b": &longer,
-		} {
-			notice, err := daemoncompose.InvocationStalledItem(ctx, tx, target, 5*time.Minute, taskRecordAsOf)
-			if err != nil {
-				return err
+		for code, file := range notices {
+			for _, target := range []domain.InvocationID{invocation, "inv-of-no-task", invocation + "-b"} {
+				notice, err := file(tx, target)
+				if err != nil {
+					return err
+				}
+				if err := tx.PutAttentionItem(ctx, notice); err != nil {
+					return err
+				}
+				if target == invocation {
+					own[code] = notice.ID
+				} else {
+					others = append(others, notice.ID)
+				}
 			}
-			if err := tx.PutAttentionItem(ctx, notice); err != nil {
-				return err
-			}
-			*itemID = notice.ID
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	record := readRecord(t, st, id)
-	notice := recordItem(record, own)
-	if notice == nil || notice.HealthDiagnostic == nil || notice.HealthDiagnostic.Code != "invocation_stalled" {
-		t.Fatalf("stall notice = %+v", notice)
+	for code, itemID := range own {
+		notice := recordItem(record, itemID)
+		if notice == nil || notice.HealthDiagnostic == nil || notice.HealthDiagnostic.Code != code {
+			t.Fatalf("%s notice = %+v", code, notice)
+		}
 	}
-	if recordItem(record, foreign) != nil || recordItem(record, longer) != nil {
-		t.Fatal("the record carries another invocation's stall notice")
+	for _, itemID := range others {
+		if recordItem(record, itemID) != nil {
+			t.Fatalf("the record carries another invocation's notice %s", itemID)
+		}
 	}
-	want := []taskRecordCodeCount{{Code: "invocation_stalled", Count: 1}}
+	want := []taskRecordCodeCount{{Code: "invocation_stalled", Count: 1}, {Code: "stage_recovery_stalled", Count: 1}}
 	if !slices.Equal(record.Counts.HealthNoticesByCode, want) {
 		t.Fatalf("health notices = %+v, want %+v", record.Counts.HealthNoticesByCode, want)
 	}

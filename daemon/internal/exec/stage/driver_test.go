@@ -481,6 +481,8 @@ type stubExports struct {
 	rejectErr    error
 	outcomeErr   error
 	lookupErr    error
+	// exportLookupErr fails only the export-record lookup.
+	exportLookupErr error
 	// afterOutcome, when set, runs under mu once an outcome is stored.
 	afterOutcome func()
 }
@@ -523,6 +525,9 @@ func (e *stubExports) LookupExecutionExport(
 	defer e.mu.Unlock()
 	if e.lookupErr != nil {
 		return domain.ExecutionExport{}, false, e.lookupErr
+	}
+	if e.exportLookupErr != nil {
+		return domain.ExecutionExport{}, false, e.exportLookupErr
 	}
 	record, ok := e.records[id]
 	if !ok {

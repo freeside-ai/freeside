@@ -105,6 +105,20 @@ type Config struct {
 	// execution slot (issue #1181). Zero selects defaultRecoveryGrace; the
 	// freesided composition leaves it zero.
 	RecoveryGrace time.Duration
+	// RecoveryStall, when set, hears when recovery of a released export has
+	// kept failing retryably for RecoveryNoticeAfter, and again when that
+	// deferral ends for any reason: success, a permanent conclusion,
+	// abandonment after RecoveryGrace, or loss (#3428). It is advisory, like
+	// Stall: it never changes the recovery's result or the grace, and a
+	// failed raise is retried on the next failing pass. The driver calls it
+	// with no lock held.
+	RecoveryStall func(context.Context, RecoveryStall) error
+	// RecoveryNoticeAfter is how long recovery of a released export may fail
+	// retryably before RecoveryStall hears of it. Zero selects
+	// defaultRecoveryNoticeAfter; the freesided composition leaves it zero.
+	// A bound at or past RecoveryGrace raises no notice: abandonment comes
+	// first and its execution-failure card replaces it.
+	RecoveryNoticeAfter time.Duration
 	// Logger reports what the asynchronous pipeline does. The pipeline has
 	// no caller to return an error to once a handoff is running, so without
 	// it a retained terminal-write failure stays invisible until the next
@@ -145,6 +159,7 @@ type Driver struct {
 	credentialMount   CredentialMountPolicy
 	preJob            func(context.Context, domain.InvocationID, domain.ImageRef) error
 	stall             func(context.Context, domain.InvocationID, bool) error
+	recoveryStall     func(context.Context, RecoveryStall) error
 	adoptedHosts      func(context.Context, int64) ([]string, error)
 	imports           importer.Options
 	prepare           []string
@@ -155,6 +170,10 @@ type Driver struct {
 	// abandoned as failed (issue #1181); resolved from Config.RecoveryGrace or
 	// defaultRecoveryGrace.
 	recoveryGrace time.Duration
+	// recoveryNoticeAfter is how long a deferral runs before recoveryStall
+	// hears of it; resolved from Config.RecoveryNoticeAfter or
+	// defaultRecoveryNoticeAfter.
+	recoveryNoticeAfter time.Duration
 
 	// mu serializes state transitions per invocation. StartWithInputs owns
 	// duplicate arbitration (exec.MaterializedStageDriver), and the pipeline
@@ -169,6 +188,12 @@ type Driver struct {
 	// (issue #1181). Guarded by mu. In memory only: a restart restarts the
 	// clock, and a persistent fault re-accumulates within one more grace.
 	deferred map[domain.InvocationID]recoveryDeferral
+	// recoveryNotices holds the invocations whose stalled-recovery notice
+	// may be open: a raise was attempted and no resolve has succeeded since.
+	// resolveRecoveryNotices resolves each one whose deferral has ended.
+	// Guarded by mu. In memory only, like deferred: the daemon's startup
+	// sweep resolves whatever notice a restart left open.
+	recoveryNotices map[domain.InvocationID]struct{}
 	// quarantined holds the intent file names the last Reconcile pass
 	// quarantined (#386). Guarded by mu. In memory only: each start
 	// re-derives it, so a repaired intent is adopted at the next start.
@@ -219,6 +244,27 @@ type recoveryDeferral struct {
 	phase     phase
 	lastError string
 	usage     []exec.UsageMeasurement
+	// noticed is set once this deferral's stalled-recovery notice was
+	// raised, so later passes, even with a changed error, raise no second
+	// one. A failed raise clears it again for the next pass to retry.
+	noticed bool
+}
+
+// RecoveryStall is what Config.RecoveryStall hears about one released
+// export's recovery. With Stalled set, recovery has failed retryably for
+// Elapsed and every field is set; Error is the latest failure, truncated as
+// a failure summary is. With Stalled clear, the deferral has ended and only
+// InvocationID is set.
+type RecoveryStall struct {
+	InvocationID domain.InvocationID
+	// RunID is the ward run id of the invocation's handoff.
+	RunID   string
+	Phase   string
+	Elapsed time.Duration
+	// Grace is how long after the first failure recovery is abandoned.
+	Grace   time.Duration
+	Error   string
+	Stalled bool
 }
 
 // defaultRecoveryGrace bounds retryable recovery of a released export before
@@ -226,6 +272,11 @@ type recoveryDeferral struct {
 // disk, or network fault across many reconcile passes; short enough that an
 // identity's only execution slot is not lost for a working day (issue #1181).
 const defaultRecoveryGrace = 30 * time.Minute
+
+// defaultRecoveryNoticeAfter is how long recovery of a released export fails
+// retryably before the operator hears of it (#3428): long enough that a
+// transient fault clears without a notice, well short of the grace.
+const defaultRecoveryNoticeAfter = 5 * time.Minute
 
 // session is one in-flight handoff in this process.
 type session struct {
@@ -580,6 +631,10 @@ func New(cfg Config) (*Driver, error) {
 	if recoveryGrace <= 0 {
 		recoveryGrace = defaultRecoveryGrace
 	}
+	recoveryNoticeAfter := cfg.RecoveryNoticeAfter
+	if recoveryNoticeAfter <= 0 {
+		recoveryNoticeAfter = defaultRecoveryNoticeAfter
+	}
 	return &Driver{
 		errorPrefix: cfg.ErrorPrefix, displayName: cfg.DisplayName,
 		dir: cfg.Dir, seedRoot: cfg.SeedRoot, exportRoot: cfg.ExportRoot,
@@ -591,19 +646,22 @@ func New(cfg Config) (*Driver, error) {
 		credentialMount: cfg.CredentialMount,
 		preJob:          cfg.PreJob,
 		stall:           cfg.Stall,
+		recoveryStall:   cfg.RecoveryStall,
 		adoptedHosts:    cfg.AdoptedRegistryHosts,
 		imports:         cfg.Import, prepare: slices.Clone(cfg.Preparation),
 		now: cfg.Now, lifetime: cfg.Lifetime,
 		logger: pipelineLogger(
 			cfg.Logger, strings.ReplaceAll(cfg.ErrorPrefix, " ", "-"),
 		),
-		recoveryGrace:     recoveryGrace,
-		running:           map[domain.InvocationID]*session{},
-		recovering:        map[domain.InvocationID]struct{}{},
-		deferred:          map[domain.InvocationID]recoveryDeferral{},
-		recoveryFailures:  map[domain.InvocationID]error{},
-		currentChecks:     map[domain.InvocationID]currentCheck{},
-		seedCleanupWarned: map[domain.InvocationID]string{},
+		recoveryGrace:       recoveryGrace,
+		recoveryNoticeAfter: recoveryNoticeAfter,
+		running:             map[domain.InvocationID]*session{},
+		recovering:          map[domain.InvocationID]struct{}{},
+		deferred:            map[domain.InvocationID]recoveryDeferral{},
+		recoveryNotices:     map[domain.InvocationID]struct{}{},
+		recoveryFailures:    map[domain.InvocationID]error{},
+		currentChecks:       map[domain.InvocationID]currentCheck{},
+		seedCleanupWarned:   map[domain.InvocationID]string{},
 	}, nil
 }
 
@@ -932,6 +990,11 @@ func (d *Driver) Close(ctx context.Context) error {
 // output: status derives from the durable intent and the driver's own
 // pipeline state, per the §5.6 containment guarantee.
 func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Inspection, error) {
+	// A deferral can also end outside a recovery pass (a Cancel, or a
+	// terminal reconstructed below), and the engine keeps inspecting a
+	// running invocation, so each Inspect resolves the notices such an end
+	// left open. It runs after every return, with mu released.
+	defer d.resolveRecoveryNotices(ctx)
 	// A quarantined intent is neither reconstructed nor adopted: answering
 	// running keeps its invocation open, as for a window recovery owns,
 	// without an error that would abort every engine pass (#386).
