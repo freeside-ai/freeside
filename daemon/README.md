@@ -638,6 +638,10 @@ output and the daemon log never name a topic: a topic is the capability to
 read that device's notifications. A test notice records no delivery and
 changes no item.
 
+While no device is active, each delivery pass logs a warning, once per open
+item per process, naming the item and `freesided pairing-code`: with nobody
+paired, a card reaches no one.
+
 The sender that notifies each active device whose notifications switch is on,
 once for each item opened since the switch went on, lives in `internal/signet`
 (`RunDeliveries`), with up to six attempts per item and device on waits of 1,

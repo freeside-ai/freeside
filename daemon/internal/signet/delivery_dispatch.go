@@ -124,6 +124,34 @@ func owedDeliveries(
 	return owed
 }
 
+// warnUnseenItems logs each open item once per process while no device is
+// active: no client shows it and no notification can reach anyone, which a
+// deputy started without a paired client otherwise leaves silent. The
+// warning names the command that mints a pairing code.
+func (s *Service) warnUnseenItems(items []domain.AttentionItem, devices []domain.Device) {
+	for _, device := range devices {
+		if device.Status == domain.DeviceActive {
+			return
+		}
+	}
+	s.unseenMu.Lock()
+	defer s.unseenMu.Unlock()
+	for _, item := range items {
+		if item.Status != domain.StatusOpen {
+			continue
+		}
+		if _, warned := s.unseenWarned[item.ID]; warned {
+			continue
+		}
+		if s.unseenWarned == nil {
+			s.unseenWarned = map[domain.ItemID]struct{}{}
+		}
+		s.unseenWarned[item.ID] = struct{}{}
+		s.logger.Warn("attention item open with no paired device; pair a client with freesided pairing-code",
+			"item_id", item.ID, "item_type", item.Type)
+	}
+}
+
 // deliveryRetryWait is how long the sender waits after the failed-th
 // consecutive failed attempt before the next: 1, 2, 4, 8, then 16 minutes.
 func deliveryRetryWait(failed int) time.Duration {
@@ -204,6 +232,7 @@ func (s *Service) DeliverOwed(ctx context.Context, report func(error)) error {
 	if err != nil {
 		return fmt.Errorf("attention deliveries: read state: %w", err)
 	}
+	s.warnUnseenItems(items, devices)
 
 	for _, owed := range owedDeliveries(items, devices, preferences, deliveries, now) {
 		if err := ctx.Err(); err != nil {

@@ -1,8 +1,10 @@
 package signet_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -92,6 +94,34 @@ func TestDeliverOwedNotifiesEachDeviceOnce(t *testing.T) {
 	}
 	if rows := f.deliveries(t); len(rows) != 1 {
 		t.Errorf("delivery rows = %+v, want the one accepted attempt and no other", rows)
+	}
+}
+
+// TestDeliverOwedWarnsOnceWhenNoDeviceIsActive: an open item with an active
+// device logs nothing; once no device is active, the sender logs the item
+// once, naming it and the pairing command, and not again on the next pass.
+func TestDeliverOwedWarnsOnceWhenNoDeviceIsActive(t *testing.T) {
+	t.Parallel()
+	f := newDispatchFixture(t)
+	var logged bytes.Buffer
+	service := signet.NewService(f.store,
+		signet.WithClock(func() time.Time { return *f.now }),
+		signet.WithNtfy(signet.NtfyConfig{BaseURL: f.server.URL, Client: f.server.Client(), TopicKey: testTopicKey}),
+		signet.WithLogger(slog.New(slog.NewTextHandler(&logged, nil))))
+
+	f.pass(t, service)
+	if logged.Len() != 0 {
+		t.Fatalf("active device: logged %q, want nothing", logged.String())
+	}
+	if _, err := service.Revoke(context.Background(), f.device.ID, f.device.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	f.pass(t, service)
+	f.pass(t, service)
+	lines := strings.Split(strings.TrimSpace(logged.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], "item_id="+string(f.item.ID)) ||
+		!strings.Contains(lines[0], "freesided pairing-code") {
+		t.Fatalf("no active device: logged %q, want one warning naming %s and freesided pairing-code", logged.String(), f.item.ID)
 	}
 }
 
