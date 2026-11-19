@@ -57,7 +57,8 @@ func TestInspectIndexNamesItsReads(t *testing.T) {
 		}
 	}
 	if versions["inspect"] != inspectIndexVersion || versions["inspect task"] != taskRecordVersion ||
-		versions["inspect health"] != systemHealthVersion || versions["inspect proposals"] != proposalCardsVersion {
+		versions["inspect health"] != systemHealthVersion || versions["inspect proposals"] != proposalCardsVersion ||
+		versions["inspect item"] != attentionItemReadVersion {
 		t.Fatalf("versions = %v", versions)
 	}
 }
@@ -131,11 +132,25 @@ func TestInspectReadsThroughRunningDaemon(t *testing.T) {
 		proposals.Cards == nil || proposals.RefusedRows == nil {
 		t.Errorf("proposals = %+v", proposals)
 	}
-	for _, verb := range []string{"task", "conversations"} {
-		err := runInspectCommand(ctx, []string{verb, "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
+	item := inspect[attentionItemRead](t, ctx, "item", "-db", dbPath, "-item", string(seededQuestionItemID))
+	if item.Version != attentionItemReadVersion || item.ID != seededQuestionItemID || item.Error != nil ||
+		item.AgentQuestion == nil {
+		t.Errorf("item = %+v", item)
+	}
+	for _, args := range unknownInspectReads(dbPath) {
+		err := runInspectCommand(ctx, args, io.Discard, io.Discard)
 		if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
-			t.Fatalf("%s of an unknown task over the socket: %v", verb, err)
+			t.Fatalf("%s of an unknown id over the socket: %v", args[0], err)
 		}
+	}
+}
+
+// unknownInspectReads are the reads by id, each naming an id the seed lacks.
+func unknownInspectReads(dbPath string) [][]string {
+	return [][]string{
+		{"task", "-db", dbPath, "-task", "task-unknown"},
+		{"conversations", "-db", dbPath, "-task", "task-unknown"},
+		{"item", "-db", dbPath, "-item", "item-unknown"},
 	}
 }
 
@@ -157,6 +172,8 @@ func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
 		servedConversations[task.TaskID] = inspect[taskConversations](t, ctx,
 			"conversations", "-db", dbPath, "-task", string(task.TaskID))
 	}
+	itemArgs := []string{"item", "-db", dbPath, "-item", string(seededQuestionItemID)}
+	servedItem := inspect[attentionItemRead](t, ctx, itemArgs...)
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -181,10 +198,16 @@ func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
 				id, mustJSON(t, gotConversations), mustJSON(t, wantConversations))
 		}
 	}
-	for _, verb := range []string{"task", "conversations"} {
-		err := runInspectCommand(ctx, []string{verb, "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
+	directItem := inspect[attentionItemRead](t, ctx, itemArgs...)
+	directItem.AsOfRevision, servedItem.AsOfRevision = 0, 0
+	if !bytes.Equal(mustJSON(t, directItem), mustJSON(t, servedItem)) || servedItem.AgentQuestion == nil {
+		t.Errorf("direct item differs from the served one\ndirect: %s\nserved: %s",
+			mustJSON(t, directItem), mustJSON(t, servedItem))
+	}
+	for _, args := range unknownInspectReads(dbPath) {
+		err := runInspectCommand(ctx, args, io.Discard, io.Discard)
 		if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
-			t.Fatalf("%s of an unknown task with no daemon: %v", verb, err)
+			t.Fatalf("%s of an unknown id with no daemon: %v", args[0], err)
 		}
 	}
 	// The reads above moved nothing.
@@ -250,6 +273,31 @@ func TestInspectReadsStoppedRootWithRecipeEvidence(t *testing.T) {
 	}
 	if note := stderr.String(); !strings.Contains(note, "-approved-recipe") || !strings.Contains(note, "approved 0 ") {
 		t.Fatalf("stderr = %q, want the approved-recipe note", note)
+	}
+
+	// The item read refuses the same item the same way: its id and error,
+	// every other field null, and the same note.
+	stdout.Reset()
+	stderr.Reset()
+	if err := runInspectCommand(ctx, []string{"item", "-db", dbPath, "-item", string(own)}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), `{"version":"`+attentionItemReadVersion+`","as_of_revision":`; !strings.HasPrefix(got, want) {
+		t.Fatalf("item read = %s", got)
+	}
+	var refusedItem attentionItemRead
+	if err := strictjson.Decode(stdout.Bytes(), &refusedItem, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatal(err)
+	}
+	if refusedItem.ID != own || refusedItem.Error == nil || refusedItem.Error.Kind != taskRecordErrorUnapprovedRecipe {
+		t.Fatalf("refused item = %+v", refusedItem)
+	}
+	refusedItem.Version, refusedItem.AsOfRevision, refusedItem.ID, refusedItem.Error = "", 0, "", nil
+	if !bytes.Equal(mustJSON(t, refusedItem), mustJSON(t, attentionItemRead{})) {
+		t.Fatalf("refused item carries fields beyond its id and error: %s", mustJSON(t, refusedItem))
+	}
+	if note := stderr.String(); !strings.Contains(note, "-approved-recipe") {
+		t.Fatalf("item stderr = %q, want the approved-recipe note", note)
 	}
 
 	stdout.Reset()
@@ -363,6 +411,9 @@ func TestInspectUsageErrors(t *testing.T) {
 		"conversations with no id": {"conversations", "-db", dbPath},
 		"conversations positional": {"conversations", "-db", dbPath, "-task", "task-1", "extra"},
 		"task flag on index":       {"-db", dbPath, "-task", "task-1"},
+		"item with no id":          {"item", "-db", dbPath},
+		"task flag on item":        {"item", "-db", dbPath, "-item", "item-1", "-task", "task-1"},
+		"item flag on task":        {"task", "-db", dbPath, "-task", "task-1", "-item", "item-1"},
 		"unknown verb":             {"run", "-db", dbPath},
 		"positional":               {"-db", dbPath, "task"},
 		"unknown flag":             {"-db", dbPath, "-follow"},

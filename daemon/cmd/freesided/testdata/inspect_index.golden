@@ -25,6 +25,14 @@
       "version": "freeside-task-conversations-v1"
     },
     {
+      "name": "inspect item",
+      "command": "freesided inspect item -db PATH -item ITEM_ID",
+      "ids": [
+        "item_id"
+      ],
+      "version": "freeside-attention-item-v1"
+    },
+    {
       "name": "inspect health",
       "command": "freesided inspect health -db PATH",
       "ids": [],
