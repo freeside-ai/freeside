@@ -657,7 +657,10 @@ result.
 Every tracker takes the shape in [`docs/tracker-format.md`](tracker-format.md):
 a wave tracker, and an ad hoc tracker over a set of units (a feature or
 backlog tracker) alike. That file is the owner's shared format, copied
-verbatim from the agent-setup skill; don't edit it here. Read it before
+verbatim from the agent-setup skill except one sentence in its `label`
+section, which states that the §11 resolver reads the `tracker` label
+(`devlog/2026-11-18-2135-tracker-label-local-rule.md`); don't edit it
+otherwise. Read it before
 creating, rewriting, or refreshing a tracker. It fixes the title, intro,
 Status diagram and legend, Units, Exit, Notes, the merge-time refresh, and
 style. A tracker carries start order only: it has no **Mergeable next**

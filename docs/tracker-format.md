@@ -12,9 +12,18 @@ trackers instead of restating the shape.
 ## title
 
 - Title a wave tracker `Wave N: <Name>`, such as `Wave 3: Sync Rebuild`.
-  Tooling finds a wave tracker by its milestone and the `tracker` label, never
-  by title text.
+  A wave tracker also carries its milestone.
 - Title a feature or backlog tracker by its subject.
+
+## label
+
+Every tracker, whether wave, feature, or backlog, carries the `tracker`
+label. The label lets people list a project's trackers on the forge.
+Freeside's §11 resolver also reads it: it finds the wave tracker by this label
+and a milestone (`docs/coordination.md`). No tooling selects a tracker by
+title text. A tracker kept in a comment can't carry a label, so leave its host
+issue unlabeled unless that issue is itself a tracker. Create the label once
+if the project lacks it.
 
 ## intro
 
@@ -40,8 +49,9 @@ Notes.
 - Draw `==>` thick arrows along the critical path.
 - Draw `[[ ]]` double-bordered nodes for merged units.
 - Give class `startable` (green outline) to an open unit whose prerequisites
-  have all merged and that no fence holds. A claim or an open PR doesn't
-  remove the class; only the unit's merge does.
+  have all merged, that no fence holds, and that isn't in class `owner`. A
+  unit in class `owner` is never startable, whatever its prerequisites. A
+  claim or an open PR doesn't remove the class; only the unit's merge does.
 - Give class `contract` (orange fill) to a contract unit.
 - Give class `owner` (grey dashed) to an owner-run or needs-human unit.
 - Give class `fenced` (dashed outline) to an externally fenced unit. A fenced
@@ -58,10 +68,10 @@ Then add labeled bullets:
   The parenthetical carries only the qualifiers that apply: the unit's
   primary lane when the project has lanes, and `contract` for a contract
   unit. A project without lanes writes `#N (contract)` or a bare `#N`. A
-  unit stays listed until its PR merges. When no unit is startable, keep the
-  bullet and state why in a few words, such as `all units merged` or
-  `every open unit waits on #N`. This is the one bullet that carries an empty
-  value.
+  unit stays listed until its PR merges. A unit in class `owner` is never
+  listed. When no unit is startable, keep the bullet and state why in a few
+  words, such as `all units merged` or `every open unit waits on #N`. This is
+  the one bullet that carries an empty value.
 - **Owner:** only when the owner holds something.
 - **Fenced:** or **Blocked:** only when non-empty.
 
@@ -102,8 +112,8 @@ At merge, cleanup does this and nothing more:
 
 1. Tick the unit's line under Units.
 2. Give its node the double border and remove it from the `startable` class.
-3. Add `startable` to every open, unfenced unit whose prerequisites have now
-   all merged.
+3. Add `startable` to every open, unfenced unit outside class `owner` whose
+   prerequisites have now all merged.
 4. Rewrite the **Startable now** bullet.
 
 A unit closed as not planned isn't merged: its line stays unticked and its
@@ -126,6 +136,7 @@ Replace the angle-bracket text. Delete an optional bullet rather than writing
 "none". For a wave tracker the bold name is `Wave <N>: <Name>`; a feature or
 backlog tracker names its subject and drops the **Gate** bullet. A project
 without lanes drops the `### lane:<name>` subhead and the `<lane>` qualifier.
+Apply the `tracker` label when you create the issue.
 
 ````markdown
 **<Tracker name>.** <One sentence naming the scope.>
