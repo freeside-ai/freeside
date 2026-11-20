@@ -53,10 +53,7 @@ func executionFailureFacts(
 			return nil, fmt.Errorf("execution outcome %q disagrees with terminal status: %w",
 				invocationID, domain.ErrParentKeyMismatch)
 		}
-		return &domain.ExecutionFailureFacts{
-			Outcome: mapped, Cause: outcome.Cause, Stage: stage, InvocationID: invocationID,
-			Admitted: admittedFacts(admission, role),
-		}, nil
+		return failureFactsOf(ctx, tx, outcome, stage, admittedFacts(admission, role))
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
@@ -72,17 +69,42 @@ func executionFailureFacts(
 	if mapped == domain.ExecutionOutcomeLost {
 		summary = ""
 	}
-	cause = domain.CanonicalFailureCause(mapped, cause)
-	if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+	outcome = domain.ExecutionOutcome{
 		InvocationID: invocationID, AdmissionID: admission.ID,
-		Status: mapped, Summary: summary, Cause: cause, RecordedAt: recordedAt,
-	}); err != nil {
+		Status: mapped, Summary: summary, Cause: domain.CanonicalFailureCause(mapped, cause),
+		RecordedAt: recordedAt,
+	}
+	if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {
 		return nil, err
 	}
-	return &domain.ExecutionFailureFacts{
-		Outcome: mapped, Cause: cause, Stage: stage, InvocationID: invocationID,
-		Admitted: admittedFacts(admission, role),
-	}, nil
+	return failureFactsOf(ctx, tx, outcome, stage, admittedFacts(admission, role))
+}
+
+// failureFactsOf builds a card's execution-failure facts from the
+// invocation's outcome record: its status, cause, and handoff check, the
+// first gauntlet findings of an export rejection, and the retry outlook
+// derived from them. The rejection record is written best-effort before the
+// outcome, so a missing one leaves the card without findings.
+func failureFactsOf(
+	ctx context.Context, tx *store.WriteTx, outcome domain.ExecutionOutcome,
+	stage domain.StageName, admitted *domain.InvocationAdmissionFacts,
+) (*domain.ExecutionFailureFacts, error) {
+	facts := &domain.ExecutionFailureFacts{
+		Outcome: outcome.Status, Cause: outcome.Cause, Stage: stage, InvocationID: outcome.InvocationID,
+		Admitted: admitted, CheckFailure: outcome.CheckFailure,
+		RetryOutlook: domain.DecideRetryOutlook(outcome.Status, outcome.Cause, outcome.CheckFailure),
+	}
+	if outcome.Status == domain.ExecutionOutcomeFailed && outcome.Cause == domain.FailureCauseExportRejected {
+		rejection, err := tx.GetExportRejection(ctx, outcome.InvocationID)
+		switch {
+		case err == nil:
+			projected := domain.NewExportRejectionFacts(rejection)
+			facts.ExportRejection = &projected
+		case !errors.Is(err, store.ErrNotFound):
+			return nil, err
+		}
+	}
+	return facts, nil
 }
 
 // admittedFacts is what ran the failed invocation, as its admission recorded

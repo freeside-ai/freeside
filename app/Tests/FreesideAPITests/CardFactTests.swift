@@ -222,6 +222,42 @@ import Testing
         #expect(MockContractValidation.itemPolicyBreach(item) == nil)
     }
 
+    @Test func failureDiagnosisFixturesAreValid() {
+        for item in [
+            AttentionFixtures.handoffCheckLossFailure().item, AttentionFixtures.exportRejectedFailure().item,
+        ] {
+            #expect(MockContractValidation.itemValidityBreach(item) == nil)
+            #expect(MockContractValidation.itemPolicyBreach(item) == nil)
+        }
+    }
+
+    /// The mock refuses what domain ExecutionFailureFacts.Validate refuses
+    /// (#3440): a misplaced check or findings, and an outlook other than
+    /// the one the failure derives.
+    @Test func failureDiagnosisBreachesAreRefused() {
+        var checkOnFailure = AttentionFixtures.handoffCheckLossFailure().item
+        checkOnFailure.execution_failure?.value1.outcome = .failed
+        checkOnFailure.execution_failure?.value1.cause = .unknown
+        var causeWithoutCheck = AttentionFixtures.handoffCheckLossFailure().item
+        causeWithoutCheck.execution_failure?.value1.outcome = .failed
+        causeWithoutCheck.execution_failure?.value1.cause = .handoff_check
+        causeWithoutCheck.execution_failure?.value1.handoff_check = nil
+        causeWithoutCheck.execution_failure?.value1.retry_outlook = nil
+        var misplacedFindings = AttentionFixtures.exportRejectedFailure().item
+        misplacedFindings.execution_failure?.value1.cause = .unknown
+        misplacedFindings.execution_failure?.value1.retry_outlook = nil
+        var wrongOutlook = AttentionFixtures.exportRejectedFailure().item
+        wrongOutlook.execution_failure?.value1.retry_outlook = .init(value1: .may_succeed)
+        for (item, breach) in [
+            (checkOnFailure, "execution_failure handoff_check outside a handoff_check failure or a loss"),
+            (causeWithoutCheck, "execution_failure handoff_check cause without its check"),
+            (misplacedFindings, "execution_failure export_rejection outside an export_rejected failure"),
+            (wrongOutlook, "execution_failure retry_outlook disagrees with the failure"),
+        ] {
+            #expect(MockContractValidation.itemValidityBreach(item) == breach)
+        }
+    }
+
     /// The notice rides only a ready item, holds exactly one of an omission
     /// beside no guide and trims beside the guide, and names only places
     /// the guide has (domain AttentionItem.validateReviewGuideNotice).

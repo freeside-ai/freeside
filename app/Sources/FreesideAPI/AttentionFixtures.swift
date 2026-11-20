@@ -1262,6 +1262,49 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// F42 (#3440): export verification refused the handoff over the entry
+    /// cap, which lost the run. The loss names the check and its screened
+    /// evidence, and since the content itself decided the refusal, a retry
+    /// would repeat it: the card offers no Retry and says so.
+    public static func handoffCheckLossFailure() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .execution_failure)
+        snapshot.item.id = "item-execution_failure-handoff_check"
+        snapshot.item.reason = "the implementation run was lost after a handoff check refused its export"
+        snapshot.item.execution_failure?.value1.outcome = .lost
+        snapshot.item.execution_failure?.value1.cause = nil
+        snapshot.item.execution_failure?.value1.offered_manifests = nil
+        snapshot.item.execution_failure?.value1.handoff_check = .init(
+            check: .export_verification, evidence: "handoff output exceeds the entry cap",
+            content_evidence: true)
+        snapshot.item.execution_failure?.value1.retry_outlook = .init(value1: .would_repeat)
+        snapshot.item.requested_decision = [.discuss, .stop]
+        return snapshot
+    }
+
+    /// F60 (#3440): the gauntlet rejected the export. The card lists the
+    /// first five findings of twelve, and a credential-shaped path shows
+    /// only as its `path:` token.
+    public static func exportRejectedFailure() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .execution_failure)
+        snapshot.item.id = "item-execution_failure-export_rejected"
+        snapshot.item.reason = "the gauntlet rejected the implementation export"
+        snapshot.item.execution_failure?.value1.cause = .export_rejected
+        snapshot.item.execution_failure?.value1.offered_manifests = nil
+        snapshot.item.execution_failure?.value1.export_rejection = .init(
+            value1: .init(
+                findings: [
+                    .init(kind: "secret", path: "path:3f9a27c41be0d865"),
+                    .init(kind: "allowlist_violation", path: ".github/workflows/release.yml"),
+                    .init(kind: "size_violation", path: "fixtures/recording.bin"),
+                    .init(kind: "path_collision", path: "Sources/Model/Item.swift"),
+                    .init(kind: "non_regular_change"),
+                ],
+                total: 12))
+        snapshot.item.execution_failure?.value1.retry_outlook = .init(value1: .would_repeat)
+        snapshot.item.requested_decision = [.discuss, .stop]
+        return snapshot
+    }
+
     /// The default inbox with the invalid-configuration failure replaced by
     /// the quota failure, offering `UsageFixtures.alternateAgentOffers()`,
     /// for `-FreesideAlternates` (#1722). The item keeps its id, so

@@ -756,6 +756,97 @@ func TestAttentionItemReadAuthenticatesExecutionFailure(t *testing.T) {
 		attentionItemFactMutation{"$.execution_failure.cause", "quota"})
 }
 
+// TestAttentionItemReadAuthenticatesFailureDiagnosis (#3440): the card's
+// handoff check must be the outcome's, and its export rejection findings the
+// projection of the stored rejection, so a row edited to show other evidence
+// fails closed on read.
+func TestAttentionItemReadAuthenticatesFailureDiagnosis(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		outcome   func(domain.ExecutionAdmission) domain.ExecutionOutcome
+		rejection bool
+		mutation  attentionItemFactMutation
+	}{
+		"handoff check": {
+			outcome: func(admission domain.ExecutionAdmission) domain.ExecutionOutcome {
+				return domain.ExecutionOutcome{
+					InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+					Status: domain.ExecutionOutcomeLost, RecordedAt: admission.AdmittedAt.Add(time.Minute),
+					CheckFailure: &domain.HandoffCheckFailure{
+						Check: domain.WardCheckExportVerification, Evidence: "over the entry cap", ContentEvidence: true,
+					},
+				}
+			},
+			mutation: attentionItemFactMutation{"$.execution_failure.handoff_check.evidence", "a retry will pass"},
+		},
+		"export rejection": {
+			outcome: func(admission domain.ExecutionAdmission) domain.ExecutionOutcome {
+				return domain.ExecutionOutcome{
+					InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+					Status: domain.ExecutionOutcomeFailed, Summary: "export rejected",
+					Cause: domain.FailureCauseExportRejected, RecordedAt: admission.AdmittedAt.Add(time.Minute),
+				}
+			},
+			rejection: true,
+			mutation:  attentionItemFactMutation{"$.execution_failure.export_rejection.findings[0].path", "other.txt"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st, admission := seedAdmission(t, nil)
+			if _, err := st.db.ExecContext(ctx,
+				`UPDATE runs SET body = json_set(body, '$.stages[0].name', 'implement') WHERE id = ?`,
+				admission.RunID); err != nil {
+				t.Fatal(err)
+			}
+			outcome := tc.outcome(admission)
+			facts := &domain.ExecutionFailureFacts{
+				Outcome: outcome.Status, Cause: outcome.Cause, Stage: domain.StageNameImplementation,
+				InvocationID: admission.InvocationID, CheckFailure: outcome.CheckFailure,
+				RetryOutlook: domain.DecideRetryOutlook(outcome.Status, outcome.Cause, outcome.CheckFailure),
+			}
+			if err := st.Write(ctx, func(tx *WriteTx) error {
+				if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {
+					return err
+				}
+				if !tc.rejection {
+					return nil
+				}
+				rejection := domain.ExportRejection{
+					InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+					Findings:      []domain.ExportRejectionFinding{{Kind: "secret", Path: "config.yaml"}},
+					TotalFindings: 3, RecordedAt: outcome.RecordedAt,
+				}
+				projected := domain.NewExportRejectionFacts(rejection)
+				facts.ExportRejection = &projected
+				return tx.RecordExportRejection(ctx, rejection)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runID := admission.RunID
+			at := outcome.RecordedAt
+			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID: "item-failure-diagnosis", ProjectID: "proj-1",
+				Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+				Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
+				Reason: "implementation failed", RequestedDecision: []domain.Action{domain.ActionDiscuss},
+				ExecutionFailure: facts, ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+				CreatedAt: &at, Status: domain.StatusOpen,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Write(ctx, func(tx *WriteTx) error {
+				return putTestAttentionItem(ctx, tx, &item)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			assertAttentionItemFactReadGate(t, st, item.ID, tc.mutation)
+		})
+	}
+}
+
 // TestAttentionItemReadAuthenticatesInterpretationFailure: a stored
 // interpretation fact is re-gated against the export and the admission on
 // every read, so a row edited to name another invocation or stage fails

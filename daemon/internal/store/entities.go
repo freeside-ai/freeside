@@ -1338,8 +1338,12 @@ func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.Atte
 			}
 			return err
 		}
-		if outcome.Status != facts.Outcome || outcome.Cause != facts.Cause {
+		if outcome.Status != facts.Outcome || outcome.Cause != facts.Cause ||
+			!outcome.CheckFailure.Equal(facts.CheckFailure) {
 			return domain.ErrParentKeyMismatch
+		}
+		if err := tx.gateExportRejectionFacts(ctx, facts); err != nil {
+			return err
 		}
 		if err := tx.gateAdmittedStage(ctx, item, facts.InvocationID, facts.Stage); err != nil {
 			return err
@@ -1355,6 +1359,27 @@ func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.Atte
 		if err := tx.gateAdmittedStage(ctx, item, facts.InvocationID, facts.Stage); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// gateExportRejectionFacts re-derives an item's export rejection facts from
+// the invocation's rejection record. The record is written best-effort, so an
+// item without the facts passes; an item with them needs the record and its
+// exact projection.
+func (tx *ReadTx) gateExportRejectionFacts(ctx context.Context, facts *domain.ExecutionFailureFacts) error {
+	if facts.ExportRejection == nil {
+		return nil
+	}
+	rejection, err := tx.GetExportRejection(ctx, facts.InvocationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return domain.ErrParentKeyMismatch
+		}
+		return err
+	}
+	if !reflect.DeepEqual(domain.NewExportRejectionFacts(rejection), *facts.ExportRejection) {
+		return domain.ErrParentKeyMismatch
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,25 @@ type SpecificationRetryFact struct {
 func RetrySpecificationRun(
 	ctx context.Context, st *store.Store, spec SpecificationRetrySpec,
 ) (SpecificationRetry, error) {
+	return retrySpecificationRun(ctx, st, spec, "")
+}
+
+// operatorSpecificationRetryReason is the reason a Retry command's iteration
+// records. It names the command, so a replayed pass finds the iteration the
+// command already added, and the chain check finds the command.
+func operatorSpecificationRetryReason(commandID string) string {
+	return "operator retry " + commandID
+}
+
+// retrySpecificationRun is RetrySpecificationRun, or with commandID the
+// iteration an accepted Retry command on the failure card asks for (#3440).
+// The command already concluded the card, so the card must be the one it
+// resolved and is left as it is; and any iteration that already records the
+// command's reason is a replay, pending or ended, so the command starts at
+// most one iteration.
+func retrySpecificationRun(
+	ctx context.Context, st *store.Store, spec SpecificationRetrySpec, commandID string,
+) (SpecificationRetry, error) {
 	if st == nil {
 		return SpecificationRetry{}, errors.New("retry specification run: nil store")
 	}
@@ -78,9 +98,6 @@ func RetrySpecificationRun(
 		if !ok || len(run.Stages) != 1 {
 			return fmt.Errorf("run %q is not a specification run: %w", run.ID, ErrSpecificationNotRetryable)
 		}
-		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
-			return err
-		}
 		requests, err := specificationRequests(ctx, &tx.ReadTx, run.ID)
 		if err != nil {
 			return err
@@ -89,6 +106,25 @@ func RetrySpecificationRun(
 			return fmt.Errorf("specification run %q has not started: %w", run.ID, ErrSpecificationNotRetryable)
 		}
 		latest := requests[len(requests)-1]
+		if commandID != "" {
+			for index, request := range requests {
+				if index > 0 && request.RetryReason == spec.Reason {
+					out = SpecificationRetry{
+						Run: run, StageID: stage.ID, InvocationID: request.InvocationID,
+						RetriedInvocationID: requests[index-1].InvocationID,
+						SourceArtifactID:    request.InputArtifactIDs[0], PolicyArtifactID: request.PolicyArtifactID,
+						PublicationDigest: request.PublicationDigest, CampaignID: request.CampaignID,
+						Reason: spec.Reason,
+					}
+					return errReplay
+				}
+			}
+		}
+		// A command's replay above holds after its task closed; any new
+		// iteration needs the task open.
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, run.ID); err != nil {
+			return err
+		}
 		verified, err := verifySpecificationChain(ctx, &tx.ReadTx, latest)
 		if err != nil {
 			return err
@@ -129,7 +165,11 @@ func RetrySpecificationRun(
 		if !specificationFailureCardBinds(card, run) {
 			return fmt.Errorf("specification failure card %q binding disagrees: %w", card.ID, domain.ErrParentKeyMismatch)
 		}
-		if card.Status != domain.StatusOpen {
+		if commandID != "" {
+			if err := requireRetryCommandResolved(ctx, &tx.ReadTx, card, commandID); err != nil {
+				return err
+			}
+		} else if card.Status != domain.StatusOpen {
 			return fmt.Errorf("specification failure card %q is %q: %w", card.ID, card.Status, ErrSpecificationNotRetryable)
 		}
 		next := nextSpecificationRetryRequest(latest, spec.Reason)
@@ -155,19 +195,21 @@ func RetrySpecificationRun(
 		if !inserted && (stored.Kind != KindSpecificationInvocationRequested || !bytes.Equal(stored.Payload, payload)) {
 			return fmt.Errorf("specification retry %q disagrees: %w", next.InvocationID, domain.ErrImmutableTransition)
 		}
-		card.Reason += fmt.Sprintf(
-			" Superseded by specification iteration %d (retry reason: %s); no recovery choice is needed.",
-			next.Iteration, spec.Reason)
-		card.ItemVersion++
-		// As for a superseded attempt's card, the conclusion leaves out the
-		// operator's reason, which the item's reason already carries.
-		card, err = card.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
-			fmt.Sprintf("Superseded by specification iteration %d; no recovery choice is needed.", next.Iteration), nil)
-		if err != nil {
-			return err
-		}
-		if err := tx.PutAttentionItem(ctx, card); err != nil {
-			return err
+		if commandID == "" {
+			card.Reason += fmt.Sprintf(
+				" Superseded by specification iteration %d (retry reason: %s); no recovery choice is needed.",
+				next.Iteration, spec.Reason)
+			card.ItemVersion++
+			// As for a superseded attempt's card, the conclusion leaves out the
+			// operator's reason, which the item's reason already carries.
+			card, err = card.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
+				fmt.Sprintf("Superseded by specification iteration %d; no recovery choice is needed.", next.Iteration), nil)
+			if err != nil {
+				return err
+			}
+			if err := tx.PutAttentionItem(ctx, card); err != nil {
+				return err
+			}
 		}
 		// Refuse to commit an iteration dispatch would quarantine.
 		if _, err := verifySpecificationChain(ctx, &tx.ReadTx, next); err != nil {
@@ -288,8 +330,9 @@ func retryableSpecificationStatus(status exec.Status) bool {
 
 // authenticateSpecificationRetryTransition accepts next as request's retry
 // only when it repeats request with a reason and the failed invocation's
-// card was concluded by supersession, which only RetrySpecificationRun does
-// to a specification failure card.
+// card was concluded for it: by supersession, which only RetrySpecificationRun
+// does to a specification failure card, or by the accepted Retry command
+// that next's reason names.
 func authenticateSpecificationRetryTransition(
 	ctx context.Context, tx *store.ReadTx, run domain.Run, request, next specificationRequest,
 ) error {
@@ -302,12 +345,68 @@ func authenticateSpecificationRetryTransition(
 	if err != nil {
 		return err
 	}
-	if !specificationFailureCardBinds(card, run) || card.Status != domain.StatusSuperseded ||
-		card.Conclusion == nil || card.Conclusion.Cause != domain.ConcludedBySupersession {
-		return fmt.Errorf("specification retry %q has no superseded failure card: %w",
+	if !specificationFailureCardBinds(card, run) {
+		return fmt.Errorf("specification retry %q failure card binding disagrees: %w",
 			next.InvocationID, domain.ErrParentKeyMismatch)
 	}
+	if card.Status == domain.StatusSuperseded &&
+		card.Conclusion != nil && card.Conclusion.Cause == domain.ConcludedBySupersession {
+		return nil
+	}
+	if decision := card.Conclusion; decision != nil && decision.Decision != nil &&
+		next.RetryReason == operatorSpecificationRetryReason(decision.Decision.CommandID) {
+		return requireRetryCommandResolved(ctx, tx, card, decision.Decision.CommandID)
+	}
+	return fmt.Errorf("specification retry %q has no superseded failure card: %w",
+		next.InvocationID, domain.ErrParentKeyMismatch)
+}
+
+// requireRetryCommandResolved checks that commandID is the accepted Retry
+// command that resolved the failure card: the command names the card and
+// the version it decided, the card offered Retry, and its conclusion is
+// that command's decision.
+func requireRetryCommandResolved(
+	ctx context.Context, tx *store.ReadTx, card domain.AttentionItem, commandID string,
+) error {
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return err
+	}
+	if !retryCommandResolved(command, card) {
+		return fmt.Errorf("retry command %q did not resolve failure card %q: %w",
+			commandID, card.ID, domain.ErrParentKeyMismatch)
+	}
 	return nil
+}
+
+// retryCommandResolved reports whether command is the accepted Retry that
+// concluded card, which offered it and whose facts still offer it.
+func retryCommandResolved(command domain.Command, card domain.AttentionItem) bool {
+	return command.Action == domain.ActionRetry && command.ItemID == card.ID &&
+		command.ItemVersion+1 == card.ItemVersion && command.PRHeadSHA == card.PRHeadSHA &&
+		slices.Equal(command.ArtifactDigests, card.ArtifactDigests) &&
+		command.Message == "" && len(command.Attachments) == 0 &&
+		card.Type == domain.AttentionExecutionFailure && card.ExecutionFailure != nil &&
+		card.ExecutionFailure.OffersSameAgentRetry() && card.Offers(domain.ActionRetry) &&
+		card.Status == domain.StatusResolved && card.DecidedAt != nil &&
+		card.Conclusion != nil && card.Conclusion.Cause == domain.ConcludedByDecision &&
+		card.Conclusion.Decision != nil && card.Conclusion.Decision.CommandID == command.CommandID &&
+		card.Conclusion.Decision.Action == domain.ActionRetry
+}
+
+// specificationRetryWithinBudget reports whether one more iteration of
+// request's run fits the policy's maximum, so its failure card may offer
+// Retry: an accepted Retry concludes the card, so an offer the budget could
+// not honor would drop the operator's decision.
+func specificationRetryWithinBudget(
+	ctx context.Context, tx *store.ReadTx, request specificationRequest,
+) (bool, error) {
+	verified, err := verifySpecificationChain(ctx, tx, request)
+	if err != nil {
+		return false, err
+	}
+	next := nextSpecificationRetryRequest(request, "budget")
+	return next.Iteration-next.firstIteration()+1 <= verified.settings.MaxIterations, nil
 }
 
 func specificationFailureItemID(invocationID domain.InvocationID) domain.ItemID {

@@ -431,7 +431,10 @@ package enum AttentionDisplay {
     /// without matching rows by label. `cardFacts` returns them joined in
     /// this order.
     package struct ExecutionFailureFacts: Equatable {
-        /// What failed: Outcome, Cause when the outcome has one, Stage.
+        /// What failed: Outcome, Cause when the outcome has one, Stage,
+        /// then what the daemon recorded about why (#3440): the handoff
+        /// Check and its Evidence, the gauntlet's Findings, and a Retry row
+        /// when a retry would repeat the failure.
         package let failure: [FactRow]
         /// What ran: Invocation, then the failed attempt's admission when
         /// the item records it.
@@ -453,6 +456,14 @@ package enum AttentionDisplay {
             .init("Outcome", label(failure.outcome)),
             failure.cause.map { .init("Cause", label($0)) },
             .init("Stage", label(failure.stage)),
+            failure.handoff_check.map { .init("Check", label($0.check)) },
+            failure.handoff_check.map { .init("Evidence", prose: $0.evidence) },
+            failure.export_rejection.map { .init("Findings", prose: exportFindings($0.value1)) },
+            // Only the outlook that withholds Retry gets a row: the card
+            // must say why the action is missing, while a retry that may
+            // succeed shows as the action itself.
+            failure.retry_outlook?.value1 == .would_repeat
+                ? .init("Retry", "Would repeat this failure") : nil,
         ].compactMap { $0 }
         // The enrollments Retry With Another Agent offers, in the
         // daemon's order, each with the reading the chooser prints for
@@ -473,6 +484,18 @@ package enum AttentionDisplay {
             run: [.init("Invocation", failure.invocation_id, monospaced: true)]
                 + admittedFailureRows(failure.admitted?.value1),
             otherAgents: offers.isEmpty ? nil : .init("Other Agents", offers: offers))
+    }
+
+    /// A rejected export's first findings, one line each as kind and path,
+    /// then how many more the gauntlet reported. The daemon screens each
+    /// path and sends at most five findings.
+    static func exportFindings(_ rejection: Components.Schemas.ExportRejectionFacts) -> String {
+        let lines = rejection.findings.map { finding in
+            let kind = finding.kind.replacingOccurrences(of: "_", with: " ")
+            return finding.path.map { "\(kind): \($0)" } ?? kind
+        }
+        let more = rejection.total - rejection.findings.count
+        return (lines + (more > 0 ? ["and \(more) more"] : [])).joined(separator: "\n")
     }
 
     /// The Section 9 "leads with" facts for one item type, read from the
@@ -1191,6 +1214,32 @@ package enum AttentionDisplay {
         case .contract_contradiction: return "Contract contradiction"
         case .memory_limit: return "Memory limit reached"
         case .invalid_evidence: return "Invalid evidence"
+        case .handoff_check: return "Handoff check refused"
+        case .export_rejected: return "Export rejected"
+        case .unknown: return "Unknown"
+        }
+    }
+
+    /// The ward handoff check that refused a run, named for what it checks.
+    static func label(_ check: Components.Schemas.WardCheck) -> String {
+        switch check {
+        case .credential_separation: return "Credential separation"
+        case .control_plane_isolation: return "Control-plane isolation"
+        case .writer_termination: return "Writer termination"
+        case .exporter_allowlist: return "Exporter allowlist"
+        case .in_exporter_verification: return "In-exporter verification"
+        case .export_verification: return "Export verification"
+        case .teardown: return "Teardown"
+        case .writer_volume_exclusion: return "Writer volume exclusion"
+        case .credential_containment: return "Credential containment"
+        case .same_vm_refutation: return "Same-VM refutation"
+        case .pre_job_probe: return "Pre-job probe"
+        case .networkless_export: return "Networkless export"
+        case .agent_egress: return "Agent egress"
+        case .workspace_seeding: return "Workspace seeding"
+        case .observed_base_identity: return "Observed base identity"
+        case .auth_store_mutation_lease: return "Auth store mutation lease"
+        case .recovery: return "Recovery"
         case .unknown: return "Unknown"
         }
     }

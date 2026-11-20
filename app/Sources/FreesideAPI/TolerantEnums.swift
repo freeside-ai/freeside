@@ -45,6 +45,8 @@ extension Components.Schemas.RunLifecycle: UnknownTolerantEnum {}
 extension Components.Schemas.ObservedInvocationStatus: UnknownTolerantEnum {}
 extension Components.Schemas.ExecutionOutcomeStatus: UnknownTolerantEnum {}
 extension Components.Schemas.FailureCause: UnknownTolerantEnum {}
+extension Components.Schemas.WardCheck: UnknownTolerantEnum {}
+extension Components.Schemas.RetryOutlook: UnknownTolerantEnum {}
 extension Components.Schemas.InterpretationFailureCause: UnknownTolerantEnum {}
 extension Components.Schemas.ScheduleKind: UnknownTolerantEnum {}
 extension Components.Schemas.ScheduleStatus: UnknownTolerantEnum {}
@@ -161,6 +163,8 @@ public enum TolerantEnums {
         Components.Schemas.ObservedInvocationStatus.self,
         Components.Schemas.ExecutionOutcomeStatus.self,
         Components.Schemas.FailureCause.self,
+        Components.Schemas.WardCheck.self,
+        Components.Schemas.RetryOutlook.self,
         Components.Schemas.InterpretationFailureCause.self,
         Components.Schemas.ScheduleKind.self,
         Components.Schemas.ScheduleStatus.self,

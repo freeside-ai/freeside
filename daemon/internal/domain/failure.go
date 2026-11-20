@@ -38,7 +38,17 @@ const (
 	// media type. The fault is in what the run wrote, not in the agent's
 	// service, so no alternate escapes it and it needs the operator.
 	FailureCauseInvalidEvidence FailureCause = "invalid_evidence"
-	FailureCauseUnknown         FailureCause = "unknown"
+	// FailureCauseHandoffCheck: a ward handoff check refused the run's
+	// workspace or export (ward.ConformanceFailure), such as an export past
+	// the entry cap. The outcome's HandoffCheck names the check and its
+	// evidence. The refusal is about the run's handoff, not the agent's
+	// service, so no alternate escapes it.
+	FailureCauseHandoffCheck FailureCause = "handoff_check"
+	// FailureCauseExportRejected: the gauntlet definitively rejected the
+	// export (domain.ExportRejection). The findings are in the task's
+	// export_rejections row; the card carries the first few.
+	FailureCauseExportRejected FailureCause = "export_rejected"
+	FailureCauseUnknown        FailureCause = "unknown"
 )
 
 // AllFailureCauses lists every valid FailureCause; it is the single
@@ -53,6 +63,8 @@ var AllFailureCauses = []FailureCause{
 	FailureCauseContractContradiction,
 	FailureCauseMemoryLimit,
 	FailureCauseInvalidEvidence,
+	FailureCauseHandoffCheck,
+	FailureCauseExportRejected,
 	FailureCauseUnknown,
 }
 
@@ -61,7 +73,8 @@ func (c FailureCause) valid() bool {
 	case FailureCauseQuota, FailureCauseCredentialExpired, FailureCauseCredentialRevoked,
 		FailureCauseServiceCapacity, FailureCauseProviderUnavailable,
 		FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
-		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseUnknown:
+		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseHandoffCheck,
+		FailureCauseExportRejected, FailureCauseUnknown:
 		return true
 	default:
 		return false
@@ -171,7 +184,8 @@ func DecideFailureDisposition(cause FailureCause, facts FailureFacts) FailureDis
 		return FailureDispositionWait
 	case FailureCauseProviderUnavailable:
 		return FailureDispositionRetrySameAgent
-	case FailureCauseInvalidConfiguration, FailureCauseInvalidEvidence, FailureCauseUnknown:
+	case FailureCauseInvalidConfiguration, FailureCauseInvalidEvidence, FailureCauseHandoffCheck,
+		FailureCauseExportRejected, FailureCauseUnknown:
 		return FailureDispositionAttention
 	case FailureCauseContractContradiction:
 		return FailureDispositionFailLoud

@@ -214,9 +214,11 @@ func TestReconcileReleasesTerminalIntentsInOneCall(t *testing.T) {
 		if id == committed {
 			result := exec.StageResult{InvocationID: id, Status: exec.StatusFailed, Summary: "failed"}
 			in.Phase, in.Result = phaseCommitted, &result
-			record = func(ctx context.Context, in intent) error { return d.recordOutcome(ctx, in, result) }
+			record = func(ctx context.Context, in intent, _ *domain.HandoffCheckFailure) error {
+				return d.recordOutcome(ctx, in, result)
+			}
 		}
-		if err := record(ctx, in); err != nil {
+		if err := record(ctx, in, nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := d.saveIntent(in); err != nil {

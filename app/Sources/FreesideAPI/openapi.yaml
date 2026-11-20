@@ -4620,7 +4620,11 @@ components:
         unknown is a real member: nothing positively classified the failure.
         invalid_evidence: import refused what the run wrote to its evidence
         channel (a malformed entry, or bytes that are not the declared
-        media type), so no other agent escapes it.
+        media type), so no other agent escapes it. handoff_check: a ward
+        handoff check refused the run's workspace or export; the facts'
+        handoff_check names it. export_rejected: the gauntlet definitively
+        rejected the export; the facts' export_rejection carries the first
+        findings.
       enum:
         - quota
         - credential_expired
@@ -4631,7 +4635,97 @@ components:
         - contract_contradiction
         - memory_limit
         - invalid_evidence
+        - handoff_check
+        - export_rejected
         - unknown
+
+    WardCheck:
+      type: string
+      description: >
+        The ward handoff check that refused a run's workspace or export. A
+        client decodes a check it doesn't know as unknown; the daemon never
+        sends unknown.
+      enum:
+        - credential_separation
+        - control_plane_isolation
+        - writer_termination
+        - exporter_allowlist
+        - in_exporter_verification
+        - export_verification
+        - teardown
+        - writer_volume_exclusion
+        - credential_containment
+        - same_vm_refutation
+        - pre_job_probe
+        - networkless_export
+        - agent_egress
+        - workspace_seeding
+        - observed_base_identity
+        - auth_store_mutation_lease
+        - recovery
+        - unknown
+
+    HandoffCheckFailure:
+      type: object
+      description: >
+        The ward handoff check behind a failed or lost invocation. evidence
+        is the check's own reason, screened: it never carries the underlying
+        error's text, any credential-shaped token is replaced by
+        [redacted], and it is at most 512 bytes. content_evidence is true
+        when the refusal derives from the run's content itself, so a retry
+        would be refused the same way.
+      required: [check, evidence, content_evidence]
+      properties:
+        check:
+          $ref: "#/components/schemas/WardCheck"
+        evidence:
+          type: string
+          minLength: 1
+          maxLength: 512
+        content_evidence:
+          type: boolean
+
+    ExportRejectionFacts:
+      type: object
+      description: >
+        The first gauntlet findings of a rejected export, fatal ones first,
+        and the total the gauntlet reported. A path is the workspace path the
+        finding names; a credential-shaped path shows only as a path:<digest>
+        token, and a finding that names no representable path has none.
+      required: [findings, total]
+      properties:
+        findings:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            $ref: "#/components/schemas/ExportRejectionFinding"
+        total:
+          type: integer
+          minimum: 1
+
+    ExportRejectionFinding:
+      type: object
+      description: One gauntlet finding's kind and the path it names, when it names one.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          minLength: 1
+        path:
+          type: string
+          maxLength: 512
+
+    RetryOutlook:
+      type: string
+      description: >
+        Whether a retry of the failed attempt on the same agent could
+        succeed, derived by the daemon from the recorded failure.
+        would_repeat: the failure follows from what the run produced or from
+        its configuration, so a retry would fail the same way. may_succeed:
+        nothing recorded shows the failure would recur. A client decodes an
+        outlook it doesn't know as unknown; the daemon never sends unknown.
+      enum: [would_repeat, may_succeed, unknown]
 
     InterpretationFailureCause:
       type: string
@@ -8057,6 +8151,8 @@ components:
         The terminal execution outcome and invocation that failed within a
         workflow stage. cause is present exactly when outcome is failed,
         copied from the recorded outcome, and absent for canceled and lost.
+        handoff_check is present when cause is handoff_check and may be
+        present on a lost outcome, when a handoff check's refusal lost it.
       required: [outcome, stage, invocation_id]
       properties:
         outcome:
@@ -8082,6 +8178,21 @@ components:
           description: >
             What ran the failed attempt, as its admission recorded it. Absent
             on items recorded before the field existed.
+        handoff_check:
+          $ref: "#/components/schemas/HandoffCheckFailure"
+        export_rejection:
+          allOf:
+            - $ref: "#/components/schemas/ExportRejectionFacts"
+          description: >
+            The first gauntlet findings when cause is export_rejected. The
+            daemon records the findings best-effort, so a card whose record
+            failed to write has none.
+        retry_outlook:
+          allOf:
+            - $ref: "#/components/schemas/RetryOutlook"
+          description: >
+            Whether a same-agent retry could succeed. Present on every item
+            raised since the field existed.
 
     InterpretationFailureFacts:
       type: object

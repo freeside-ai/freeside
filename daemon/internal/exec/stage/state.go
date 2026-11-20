@@ -111,6 +111,13 @@ type intent struct {
 	// non-completed terminals. The public outcome remains the status authority;
 	// these private measurements only complete its reconstructed StageResult.
 	PendingUsage []exec.UsageMeasurement `json:"pending_usage,omitempty"`
+	// HandoffCheck is the handoff check the live handoff last failed on,
+	// screened. A failed handoff leaves the running phase to ward recovery,
+	// which may later prove the run lost from a journal that kept no reason;
+	// this is what that lost outcome then names. Diagnostic only: it decides
+	// nothing about recovery, and omitempty keeps every intent written
+	// without one byte-identical.
+	HandoffCheck *domain.HandoffCheckFailure `json:"handoff_check,omitempty"`
 }
 
 type durableInputs struct {
@@ -229,6 +236,11 @@ func (i intent) validate() error {
 	if i.Export != nil && i.Export.Replay != nil && i.Export.Replay.CommitPlanDigest != nil &&
 		!contentaddr.Valid(string(*i.Export.Replay.CommitPlanDigest)) {
 		return fmt.Errorf("driver intent %q replay commit-plan digest is invalid", i.InvocationID)
+	}
+	if i.HandoffCheck != nil {
+		if err := i.HandoffCheck.Validate(); err != nil {
+			return fmt.Errorf("driver intent %q: %w", i.InvocationID, err)
+		}
 	}
 	if i.Result != nil {
 		return i.Result.Validate()
@@ -450,6 +462,7 @@ func (d *Driver) restoreDurableOutcome(
 			Status:       exec.StatusFailed,
 			Summary:      stored.Summary,
 			Cause:        stored.Cause,
+			CheckFailure: stored.CheckFailure,
 			Usage:        usage,
 			Artifacts:    artifacts,
 		}

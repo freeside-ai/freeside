@@ -362,6 +362,11 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		return ReconcileResult{}, fmt.Errorf("reconcile alternate agent retries: %w", err)
 	}
 	runTransitions += alternateRetries
+	failureRetries, err := e.reconcileFailureRetries(ctx)
+	if err != nil {
+		return ReconcileResult{}, fmt.Errorf("reconcile failure retries: %w", err)
+	}
+	runTransitions += failureRetries
 	started, accepted, err := e.reconcileInvocations(ctx)
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile invocations: %w", err)

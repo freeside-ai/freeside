@@ -570,7 +570,11 @@ directory named before it in the same bullet. All under `daemon/`:
   final parent run and writes the retry choice an attempt cites) and
   `internal/engine/production_workflow.go` (re-checks that final parent
   and the specification grant at submission, and authenticates a run's
-  terminal).
+  terminal). The plain Retry on a failure card joins them:
+  `internal/engine/failure_retry.go` (starts one attempt or iteration for
+  an accepted Retry only while its card still offers one) and
+  `internal/engine/specification_retry.go` (authenticates the Retry
+  command a specification iteration cites).
 - **GitHub publish, app keys, tokens, and janitor deletes:**
   `internal/publish/`.
 - **GitHub tokens outside `publish`:** files that reveal or send an
@@ -659,6 +663,9 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/store/handoff_journal.go`, `internal/exportscan/` (the export
   credential scan that refuses a handoff), `internal/credentialpattern/`
   (the credential rules both the export scan and the importer apply),
+  `internal/domain/handoff_check_failure.go` (screens a handoff check's
+  evidence and a rejected export's paths with those rules before either
+  reaches a card),
   `internal/exec/stage/state.go`
   (the restart reconstruction gate on a decoded intent),
   `internal/exec/stage/pipeline.go` (released-export authentication and

@@ -134,17 +134,18 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 		return
 	}
 	var cause domain.FailureCause
+	var check *domain.HandoffCheckFailure
 	var refusal handoffSpecRefusal
 	if status == exec.StatusFailed {
-		cause = importRefusalCause(err)
+		cause, check = failureCause(err)
 		if errors.As(err, &refusal) {
-			cause = domain.FailureCauseInvalidConfiguration
+			cause, check = domain.FailureCauseInvalidConfiguration, nil
 		}
 	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateFailureSummary(err.Error()), Cause: cause, Usage: result.Usage, Artifacts: result.Artifacts,
-		ClaudeUsage: result.ClaudeUsage,
+		Summary: truncateFailureSummary(err.Error()), Cause: cause, CheckFailure: check,
+		Usage: result.Usage, Artifacts: result.Artifacts, ClaudeUsage: result.ClaudeUsage,
 	})
 }
 
@@ -178,17 +179,22 @@ func (r handoffSpecRefusal) Error() string { return r.err.Error() }
 
 func (r handoffSpecRefusal) Unwrap() error { return r.err }
 
-// importRefusalCause classifies an import refusal for the failed outcome it
-// ends in: a refused evidence channel (importer.ErrEvidenceInvalid or
-// ErrEvidenceMediaMismatch) is invalid_evidence. Every other error returns
-// the empty cause, which the outcome records as unknown. The importer is
-// the daemon's own judgment of the export, so the cause is trusted; the
-// summary keeps naming the entry and the rule.
-func importRefusalCause(err error) domain.FailureCause {
+// failureCause classifies an error for the failed outcome it ends in: a
+// refused evidence channel (importer.ErrEvidenceInvalid or
+// ErrEvidenceMediaMismatch) is invalid_evidence, and a ward handoff check
+// (ward.ConformanceFailure) is handoff_check with the check's screened
+// record. Every other error returns the empty cause, which the outcome
+// records as unknown. The importer and ward are the daemon's own judgment of
+// the export, so the cause is trusted; the summary keeps naming the entry and
+// the rule.
+func failureCause(err error) (domain.FailureCause, *domain.HandoffCheckFailure) {
 	if errors.Is(err, importer.ErrEvidenceInvalid) || errors.Is(err, importer.ErrEvidenceMediaMismatch) {
-		return domain.FailureCauseInvalidEvidence
+		return domain.FailureCauseInvalidEvidence, nil
 	}
-	return ""
+	if check := ward.HandoffCheckFailureOf(err); check != nil {
+		return domain.FailureCauseHandoffCheck, check
+	}
+	return "", nil
 }
 
 // commit writes the terminal result and reports a write that failed. The
@@ -232,17 +238,27 @@ func (d *Driver) commitRejection(
 	ctx context.Context, log *slog.Logger, in intent, status exec.Status, rej *definitiveRejection,
 	usage []exec.UsageMeasurement, capture *exec.ClaudeUsageCapture,
 ) error {
-	if err := d.commitResult(in.InvocationID, exec.StageResult{
-		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateFailureSummary(rej.Error()), Usage: usage, ClaudeUsage: capture,
-	}); err != nil {
-		return err
+	// A canceled result carries no cause: the shutdown, not the rejection,
+	// is what ended it.
+	var cause domain.FailureCause
+	if status == exec.StatusFailed {
+		cause = domain.FailureCauseExportRejected
 	}
-	log.Debug("terminal result committed", "status", string(status))
+	// The detail goes first: the engine may collect the terminal and raise
+	// the failure card as soon as the outcome commits, and the card reads
+	// its findings once (#3440). The detail binds only to the admission, so
+	// it needs no outcome, and a replay converges on the write-once row.
 	detailCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx), rejectionDetailWriteTimeout)
 	defer cancel()
 	d.recordRejectionDetail(detailCtx, in, rej)
+	if err := d.commitResult(in.InvocationID, exec.StageResult{
+		InvocationID: in.InvocationID, Status: status,
+		Summary: truncateFailureSummary(rej.Error()), Cause: cause, Usage: usage, ClaudeUsage: capture,
+	}); err != nil {
+		return err
+	}
+	log.Debug("terminal result committed", "status", string(status))
 	return nil
 }
 
@@ -1652,6 +1668,7 @@ func (d *Driver) commitResultLocked(
 		// Handoff errors do not prove teardown succeeded. The writer may still
 		// hold the credential volume, so only ward recovery may turn this phase
 		// into an explicit export or loss outcome.
+		d.keepHandoffCheck(in, result.CheckFailure)
 		return false, nil
 	}
 	if result.Status != exec.StatusCompleted {
@@ -1679,6 +1696,21 @@ func (d *Driver) commitResultLocked(
 	delete(d.deferred, id)
 	d.reportTerminalSeedCleanup(in)
 	return true, nil
+}
+
+// keepHandoffCheck records the handoff check a live handoff failed on, so a
+// loss ward recovery later proves from this running phase can name it: the
+// journal ward closes keeps no reason. It is diagnostic, so a failed write is
+// logged and dropped rather than holding the terminal for retry. d.mu is held.
+func (d *Driver) keepHandoffCheck(in intent, check *domain.HandoffCheckFailure) {
+	if check == nil || check.Equal(in.HandoffCheck) {
+		return
+	}
+	in.HandoffCheck = check
+	if err := d.saveIntent(in); err != nil {
+		d.logger.Warn("handoff check for a later loss not kept",
+			"invocation", string(in.InvocationID), "check", string(check.Check), "error", err)
+	}
 }
 
 // retryPendingResultLocked gives a terminal intent write that failed after
@@ -1718,8 +1750,10 @@ func (d *Driver) retryPendingResultLocked(id domain.InvocationID) error {
 // commitLost records a proven recovery loss from the current durable phase.
 // Like commitResult, it accepts only identity from its caller: a recovery
 // operation may have advanced the record after the caller took its snapshot,
-// and an older value must never erase that progress.
-func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
+// and an older value must never erase that progress. check is the handoff
+// check that forced the loss, when ward named one; a loss proven from the
+// running phase without one names the check the live handoff failed on.
+func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID, check *domain.HandoffCheckFailure) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	in, err := d.loadIntentAdmission(ctx, id)
@@ -1736,7 +1770,10 @@ func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
 		return fmt.Errorf("cannot record invocation %s lost before handoff: %w",
 			id, exec.ErrInvalidStatus)
 	}
-	if err := d.recordLost(ctx, in); err != nil {
+	if check == nil && in.Phase == phaseRunning {
+		check = in.HandoffCheck
+	}
+	if err := d.recordLost(ctx, in, check); err != nil {
 		return err
 	}
 	delete(d.deferred, id)
@@ -1775,16 +1812,18 @@ func (d *Driver) recordOutcome(
 		Status:       status,
 		Summary:      result.Summary,
 		Cause:        domain.CanonicalFailureCause(status, result.Cause),
+		CheckFailure: result.CheckFailure,
 		RecordedAt:   d.now().UTC(),
 	}
 	return d.recordOrConvergeOutcome(ctx, want)
 }
 
-func (d *Driver) recordLost(ctx context.Context, in intent) error {
+func (d *Driver) recordLost(ctx context.Context, in intent, check *domain.HandoffCheckFailure) error {
 	return d.recordOrConvergeOutcome(ctx, domain.ExecutionOutcome{
 		InvocationID: in.InvocationID,
 		AdmissionID:  in.Spec.AdmissionID,
 		Status:       domain.ExecutionOutcomeLost,
+		CheckFailure: check,
 		RecordedAt:   d.now().UTC(),
 	})
 }
@@ -1821,14 +1860,20 @@ func (d *Driver) recordOrConvergeOutcome(
 }
 
 // sameOutcome compares canonical causes, so an outcome stored before causes
-// existed converges with a replay that records unknown.
+// existed converges with a replay that records unknown. A failed outcome's
+// handoff check derives from the same error as its summary, so it is
+// compared. A lost outcome's is not: once ward closes its journal as a loss,
+// a replayed recovery reports the loss without the check, so a crash between
+// recording the loss and saving the phase would otherwise refuse every
+// replay. The first record's check stands; the status is the authority.
 func sameOutcome(a, b domain.ExecutionOutcome) bool {
 	return a.InvocationID == b.InvocationID &&
 		a.AdmissionID == b.AdmissionID &&
 		a.Status == b.Status &&
 		a.Summary == b.Summary &&
 		domain.CanonicalFailureCause(a.Status, a.Cause) ==
-			domain.CanonicalFailureCause(b.Status, b.Cause)
+			domain.CanonicalFailureCause(b.Status, b.Cause) &&
+		(a.Status == domain.ExecutionOutcomeLost || a.CheckFailure.Equal(b.CheckFailure))
 }
 
 func (d *Driver) authenticateOutcome(
@@ -1849,6 +1894,7 @@ func (d *Driver) authenticateOutcome(
 		Status:       status,
 		Summary:      result.Summary,
 		Cause:        result.Cause,
+		CheckFailure: result.CheckFailure,
 	}
 	if !found || !sameOutcome(stored, want) {
 		return fmt.Errorf("%w: committed intent %s has no matching durable outcome",
@@ -2096,10 +2142,11 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 		// handoff refuses this transition until ward proves export or loss.
 		// A definitive import refusal from a surviving export reaches here
 		// (recoverExported returns it), so it keeps its cause.
+		cause, check := failureCause(err)
 		if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: exec.StatusFailed,
 			Summary: truncateFailureSummary("recovery failed: " + err.Error()),
-			Cause:   importRefusalCause(err),
+			Cause:   cause, CheckFailure: check,
 		}); commitErr != nil {
 			return fmt.Errorf("%w: commit recovery failure: %w",
 				ErrRecoveryRetryable, commitErr)
@@ -2422,13 +2469,14 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 				return nil
 			}
 			var cause domain.FailureCause
+			var check *domain.HandoffCheckFailure
 			if status == exec.StatusFailed {
-				cause = importRefusalCause(err)
+				cause, check = failureCause(err)
 			}
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
 				Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
-				ClaudeUsage: result.ClaudeUsage, Cause: cause,
+				ClaudeUsage: result.ClaudeUsage, Cause: cause, CheckFailure: check,
 			}); commitErr != nil {
 				return fmt.Errorf("%w: commit recovery result: %w",
 					ErrRecoveryRetryable, commitErr)
@@ -2450,16 +2498,17 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 		// a loss the starting process sees, or of any other invocation,
 		// keeps the item.
 		//
-		// A lost outcome carries no summary, so the cause of a loss forced
-		// by a refused adoption (such as the export scan naming the rule and
-		// file it matched) is logged here or nowhere. Ward builds it from a
-		// ConformanceFailure reason or a fixed string, never raw content.
+		// A lost outcome carries no summary. The typed check behind a loss
+		// forced by a refused adoption (such as the export scan naming the
+		// rule and file it matched) goes on the outcome, screened; the full
+		// cause is logged here. Ward builds it from a ConformanceFailure
+		// reason or a fixed string, never raw content.
 		if recovered.LossCause != "" {
 			d.logger.Error("stage recovery lost the invocation",
 				"invocation", string(in.InvocationID), "run", in.RunID,
 				"cause", recovered.LossCause)
 		}
-		return d.commitLost(ctx, in.InvocationID)
+		return d.commitLost(ctx, in.InvocationID, recovered.LossCheck)
 	case ward.RecoveryFailed:
 		result, err := d.failedWriterResult(ctx, in, recovered, hs.Size)
 		if err != nil {
@@ -2695,7 +2744,7 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 	// Neither a durable export record, a terminal outcome, a rejection, nor the
 	// released directory survived, so nothing was published and the attempt is
 	// rerun-safe.
-	return d.commitLost(ctx, in.InvocationID)
+	return d.commitLost(ctx, in.InvocationID, nil)
 }
 
 // adoptRecordedOutcome commits the intent phase to match a terminal outcome
@@ -2708,7 +2757,7 @@ func (d *Driver) adoptRecordedOutcome(
 ) error {
 	switch outcome.Status {
 	case domain.ExecutionOutcomeLost:
-		return d.commitLost(ctx, in.InvocationID)
+		return d.commitLost(ctx, in.InvocationID, nil)
 	case domain.ExecutionOutcomeFailed, domain.ExecutionOutcomeCanceled, domain.ExecutionOutcomeBlocked:
 		status := exec.StatusFailed
 		switch outcome.Status {
@@ -2720,7 +2769,7 @@ func (d *Driver) adoptRecordedOutcome(
 		}
 		if err := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: status, Summary: outcome.Summary,
-			Cause: outcome.Cause,
+			Cause: outcome.Cause, CheckFailure: outcome.CheckFailure,
 		}); err != nil {
 			return fmt.Errorf("%w: adopt recorded outcome: %w", ErrRecoveryRetryable, err)
 		}

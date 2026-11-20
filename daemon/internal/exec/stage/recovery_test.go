@@ -905,7 +905,7 @@ func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 				}
 			case phaseLost:
 				orphan(t, d, phaseRunning, nil)
-				if err := d.commitLost(ctx, testInvoke); err != nil {
+				if err := d.commitLost(ctx, testInvoke, nil); err != nil {
 					t.Fatalf("commit lost result: %v", err)
 				}
 			case phaseSeeding, phaseRunning, phaseExported, phaseImportPending:

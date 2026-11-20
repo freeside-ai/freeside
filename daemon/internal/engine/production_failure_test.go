@@ -990,3 +990,32 @@ func TestPolicyRefusalRecoveryClearsRunHoldOnTerminal(t *testing.T) {
 		t.Fatalf("hold after terminal = %+v, want no hold", hold)
 	}
 }
+
+// TestImplementationRetryNeedsACampaign: Retry starts a campaign attempt,
+// so a lost implementation run outside a campaign offers none, where the
+// same loss inside one does (#3440).
+func TestImplementationRetryNeedsACampaign(t *testing.T) {
+	t.Parallel()
+	role := domain.RoleImplementer
+	facts := &domain.ExecutionFailureFacts{
+		Outcome: domain.ExecutionOutcomeLost, Stage: domain.StageNameImplementation,
+		InvocationID: "inv-implement", RetryOutlook: domain.RetryOutlookMaySucceed,
+		Admitted: &domain.InvocationAdmissionFacts{
+			InvocationID: "inv-implement", Kind: domain.AdmissionKindExecution, Role: &role,
+			AdmittedAt: time.Unix(0, 0).UTC(),
+		},
+	}
+	terminal := productionTerminalRecord{
+		InvocationID: "inv-implement", RunID: "run-1", Status: exec.StatusGone,
+	}
+	for campaign, want := range map[domain.CampaignID]bool{"": false, "campaign-1": true} {
+		run := domain.Run{ID: "run-1", ProjectID: "project-1", CampaignID: campaign}
+		item, err := productionFailureItem(run, terminal, time.Unix(0, 0).UTC(), facts, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("campaign %q: %v", campaign, err)
+		}
+		if got := item.Offers(domain.ActionRetry); got != want {
+			t.Errorf("campaign %q offers retry = %v, want %v", campaign, got, want)
+		}
+	}
+}

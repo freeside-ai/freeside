@@ -1217,8 +1217,15 @@ type ExecutionOutcome struct {
 	// nothing classified the failure. omitempty rather than a pointer keeps
 	// the stored body of every other status byte-identical to the rows
 	// written before causes existed, which write-once convergence compares.
-	Cause      FailureCause `json:"cause,omitempty"`
-	RecordedAt time.Time    `json:"recorded_at"`
+	Cause FailureCause `json:"cause,omitempty"`
+	// HandoffCheck names the ward handoff check behind the outcome and its
+	// screened evidence. A failed outcome carries it exactly when its cause
+	// is handoff_check; a lost outcome may carry it, when the check's
+	// refusal is what lost the attempt, though a lost outcome still carries
+	// no summary and no cause. omitempty keeps every row written without one
+	// byte-identical to its stored body.
+	CheckFailure *HandoffCheckFailure `json:"handoff_check,omitempty"`
+	RecordedAt   time.Time            `json:"recorded_at"`
 }
 
 func (x ExecutionOutcome) Validate() error {
@@ -1245,6 +1252,9 @@ func (x ExecutionOutcome) Validate() error {
 		return fmt.Errorf("execution outcome %s %s with cause %q: %w",
 			x.InvocationID, x.Status, x.Cause, ErrOutcomeInconsistent)
 	}
+	if err := validateOutcomeHandoffCheck(x.Status, x.Cause, x.CheckFailure); err != nil {
+		return fmt.Errorf("execution outcome %s: %w", x.InvocationID, err)
+	}
 	if x.RecordedAt.IsZero() {
 		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrMissingTimestamp)
 	}
@@ -1252,6 +1262,25 @@ func (x ExecutionOutcome) Validate() error {
 		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrTimestampNotUTC)
 	}
 	return nil
+}
+
+// validateOutcomeHandoffCheck holds the rule an outcome and the card facts
+// copied from it share: a failed outcome carries a handoff check exactly when
+// its cause is handoff_check, a lost outcome may carry one, and no other
+// status carries one.
+func validateOutcomeHandoffCheck(status ExecutionOutcomeStatus, cause FailureCause, check *HandoffCheckFailure) error {
+	switch {
+	case status == ExecutionOutcomeFailed && cause == FailureCauseHandoffCheck:
+		if check == nil {
+			return fmt.Errorf("cause %q without a handoff check: %w", cause, ErrOutcomeInconsistent)
+		}
+	case check == nil:
+		return nil
+	case status == ExecutionOutcomeLost:
+	default:
+		return fmt.Errorf("%s with cause %q and a handoff check: %w", status, cause, ErrOutcomeInconsistent)
+	}
+	return check.Validate()
 }
 
 // CanonicalizeStoredRow gives a failed outcome stored before causes existed

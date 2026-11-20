@@ -3514,9 +3514,17 @@ func (e *Engine) recordSpecificationFailureWithCause(
 		if err != nil {
 			return err
 		}
+		// Only a card that could offer Retry reads the chain for its budget.
+		withinBudget := false
+		if facts != nil && facts.OffersSameAgentRetry() {
+			withinBudget, err = specificationRetryWithinBudget(ctx, &tx.ReadTx, request)
+			if err != nil {
+				return err
+			}
+		}
 		item, err := specificationFailureItem(run,
 			specificationFailureItemID(request.InvocationID), status, summary,
-			createdAt, facts, interpretationFacts, names, claims)
+			createdAt, facts, interpretationFacts, names, claims, withinBudget)
 		if err != nil {
 			return err
 		}
@@ -3572,7 +3580,7 @@ func (e *Engine) specificationRevisionFailureItem(
 		return domain.AttentionItem{}, err
 	}
 	return specificationFailureItem(run, id, exec.StatusFailed, summary, e.specification.now().UTC(),
-		nil, facts, names, nil)
+		nil, facts, names, nil, false)
 }
 
 func specificationRevisionFailureItemID(request specificationRequest) domain.ItemID {
@@ -3611,18 +3619,22 @@ func validSpecificationRevisionFailureDecisionSet(actions []domain.Action) bool 
 func specificationFailureItem(
 	run domain.Run, id domain.ItemID, status exec.Status, summary string, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, interpretation *domain.InterpretationFailureFacts,
-	displayNames *domain.DisplayNames, claims []domain.AgentClaim,
+	displayNames *domain.DisplayNames, claims []domain.AgentClaim, retryWithinBudget bool,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Specification ended %q without an accepted specification.", status)
 	if summary != "" {
 		reason += " Driver summary: " + summary
 	}
+	actions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+	if facts != nil && facts.OffersSameAgentRetry() && retryWithinBudget {
+		actions = append([]domain.Action{domain.ActionRetry}, actions...)
+	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: reason,
-		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, ItemVersion: 1,
+		RequestedDecision: actions, ItemVersion: 1,
 		ExecutionFailure: facts, InterpretationFailure: interpretation,
 		DisplayNames: displayNames, AgentClaims: claims,
 		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,

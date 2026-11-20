@@ -132,7 +132,11 @@ func (a ProductionAttempt) Validate() error {
 					ErrProductionAttemptInconsistent)
 			}
 		}
-		if bindingCount != 0 && bindingCount != 3 {
+		// An operator retry binds its command and the failed invocation,
+		// plus one choice for a capability or alternate-agent retry; a plain
+		// Retry (#3440) repeats the attempt as it was and carries none.
+		plainRetry := bindingCount == 2 && a.OperatorCommandID != nil && a.RetryOfInvocationID != nil
+		if bindingCount != 0 && bindingCount != 3 && !plainRetry {
 			return fmt.Errorf("retry carries partial operator bindings: %w", ErrProductionAttemptInconsistent)
 		}
 	}

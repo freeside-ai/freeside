@@ -82,6 +82,8 @@
 //   - production_question.go a blocked implementation's agent question
 //   - production_scope_conflict.go parking a candidate whose work exceeds its paths
 //   - execution_failure.go the facts and claims a failed invocation's card carries
+//   - failure_retry.go the accepted Retry on a failure card, started as one
+//     command-bound specification iteration or implementation attempt
 //   - usage.go, claude_usage.go
 //     usage observations, the card's spend figure, and the Claude usage sink
 //   - summary_claims.go the renderable summary claim of an invocation

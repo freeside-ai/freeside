@@ -58,7 +58,8 @@ func QualifyAlternate(cause FailureCause, facts FailureFacts, alt FailureAlterna
 	case FailureCauseServiceCapacity:
 		return AlternateAgentDifferentRoute, facts.Route != "" && alt.Route != "" && alt.Route != facts.Route
 	case FailureCauseProviderUnavailable, FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
-		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseUnknown:
+		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseHandoffCheck,
+		FailureCauseExportRejected, FailureCauseUnknown:
 	}
 	return "", false
 }
@@ -374,3 +375,42 @@ func (r AlternateAgentRetry) Validate() error {
 // ParkedMove reports whether the record moved a parked task rather than
 // answering a card.
 func (r AlternateAgentRetry) ParkedMove() bool { return r.ItemID == "" }
+
+// OffersSameAgentRetry reports whether a failure card offers a plain Retry:
+// one more attempt on the same agent, bound to the operator's command
+// (#3440). The outlook must be may_succeed, which an older card without one
+// never is, and the failure must be one a repeat can clear: a loss or
+// cancellation, or a failure the provider caused or nobody typed. A
+// quota, credential, or capacity cause has its own remedy (the quota park,
+// re-enrollment, an alternate agent), so a plain repeat is not offered for
+// it. An implementation retry restarts the run, so it is offered only for
+// the implementer, whose failure lost no reviewed work. The store's attempt
+// gate and the engine's command check call it again on the stored card, so
+// an offer the card made under older rules authorizes nothing.
+func (f ExecutionFailureFacts) OffersSameAgentRetry() bool {
+	if f.RetryOutlook != RetryOutlookMaySucceed {
+		return false
+	}
+	switch f.Stage {
+	case StageNameSpecification:
+		return f.repeatCanClear()
+	case StageNameImplementation:
+		return f.Admitted != nil && f.Admitted.Role != nil && *f.Admitted.Role == RoleImplementer &&
+			f.repeatCanClear()
+	case StageNameReview, StageNameVerification:
+		return false
+	}
+	return false
+}
+
+func (f ExecutionFailureFacts) repeatCanClear() bool {
+	switch f.Outcome {
+	case ExecutionOutcomeLost, ExecutionOutcomeCanceled:
+		return true
+	case ExecutionOutcomeFailed:
+		return f.Cause == FailureCauseProviderUnavailable || f.Cause == FailureCauseUnknown
+	case ExecutionOutcomeBlocked:
+		return false
+	}
+	return false
+}

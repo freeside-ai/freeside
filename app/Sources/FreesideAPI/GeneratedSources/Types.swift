@@ -7137,7 +7137,7 @@ public enum Components {
             case blocked = "blocked"
             case unknown = "unknown"
         }
-        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure. invalid_evidence: import refused what the run wrote to its evidence channel (a malformed entry, or bytes that are not the declared media type), so no other agent escapes it.
+        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure. invalid_evidence: import refused what the run wrote to its evidence channel (a malformed entry, or bytes that are not the declared media type), so no other agent escapes it. handoff_check: a ward handoff check refused the run's workspace or export; the facts' handoff_check names it. export_rejected: the gauntlet definitively rejected the export; the facts' export_rejection carries the first findings.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/FailureCause`.
@@ -7151,6 +7151,124 @@ public enum Components {
             case contract_contradiction = "contract_contradiction"
             case memory_limit = "memory_limit"
             case invalid_evidence = "invalid_evidence"
+            case handoff_check = "handoff_check"
+            case export_rejected = "export_rejected"
+            case unknown = "unknown"
+        }
+        /// The ward handoff check that refused a run's workspace or export. A client decodes a check it doesn't know as unknown; the daemon never sends unknown.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/WardCheck`.
+        @frozen public enum WardCheck: String, Codable, Hashable, Sendable, CaseIterable {
+            case credential_separation = "credential_separation"
+            case control_plane_isolation = "control_plane_isolation"
+            case writer_termination = "writer_termination"
+            case exporter_allowlist = "exporter_allowlist"
+            case in_exporter_verification = "in_exporter_verification"
+            case export_verification = "export_verification"
+            case teardown = "teardown"
+            case writer_volume_exclusion = "writer_volume_exclusion"
+            case credential_containment = "credential_containment"
+            case same_vm_refutation = "same_vm_refutation"
+            case pre_job_probe = "pre_job_probe"
+            case networkless_export = "networkless_export"
+            case agent_egress = "agent_egress"
+            case workspace_seeding = "workspace_seeding"
+            case observed_base_identity = "observed_base_identity"
+            case auth_store_mutation_lease = "auth_store_mutation_lease"
+            case recovery = "recovery"
+            case unknown = "unknown"
+        }
+        /// The ward handoff check behind a failed or lost invocation. evidence is the check's own reason, screened: it never carries the underlying error's text, any credential-shaped token is replaced by [redacted], and it is at most 512 bytes. content_evidence is true when the refusal derives from the run's content itself, so a retry would be refused the same way.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/HandoffCheckFailure`.
+        public struct HandoffCheckFailure: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HandoffCheckFailure/check`.
+            public var check: Components.Schemas.WardCheck
+            /// - Remark: Generated from `#/components/schemas/HandoffCheckFailure/evidence`.
+            public var evidence: Swift.String
+            /// - Remark: Generated from `#/components/schemas/HandoffCheckFailure/content_evidence`.
+            public var content_evidence: Swift.Bool
+            /// Creates a new `HandoffCheckFailure`.
+            ///
+            /// - Parameters:
+            ///   - check:
+            ///   - evidence:
+            ///   - content_evidence:
+            public init(
+                check: Components.Schemas.WardCheck,
+                evidence: Swift.String,
+                content_evidence: Swift.Bool
+            ) {
+                self.check = check
+                self.evidence = evidence
+                self.content_evidence = content_evidence
+            }
+            public enum CodingKeys: String, CodingKey {
+                case check
+                case evidence
+                case content_evidence
+            }
+        }
+        /// The first gauntlet findings of a rejected export, fatal ones first, and the total the gauntlet reported. A path is the workspace path the finding names; a credential-shaped path shows only as a path:<digest> token, and a finding that names no representable path has none.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExportRejectionFacts`.
+        public struct ExportRejectionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ExportRejectionFacts/findings`.
+            public var findings: [Components.Schemas.ExportRejectionFinding]
+            /// - Remark: Generated from `#/components/schemas/ExportRejectionFacts/total`.
+            public var total: Swift.Int
+            /// Creates a new `ExportRejectionFacts`.
+            ///
+            /// - Parameters:
+            ///   - findings:
+            ///   - total:
+            public init(
+                findings: [Components.Schemas.ExportRejectionFinding],
+                total: Swift.Int
+            ) {
+                self.findings = findings
+                self.total = total
+            }
+            public enum CodingKeys: String, CodingKey {
+                case findings
+                case total
+            }
+        }
+        /// One gauntlet finding's kind and the path it names, when it names one.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExportRejectionFinding`.
+        public struct ExportRejectionFinding: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ExportRejectionFinding/kind`.
+            public var kind: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ExportRejectionFinding/path`.
+            public var path: Swift.String?
+            /// Creates a new `ExportRejectionFinding`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - path:
+            public init(
+                kind: Swift.String,
+                path: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.path = path
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case path
+            }
+        }
+        /// Whether a retry of the failed attempt on the same agent could succeed, derived by the daemon from the recorded failure. would_repeat: the failure follows from what the run produced or from its configuration, so a retry would fail the same way. may_succeed: nothing recorded shows the failure would recur. A client decodes an outlook it doesn't know as unknown; the daemon never sends unknown.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RetryOutlook`.
+        @frozen public enum RetryOutlook: String, Codable, Hashable, Sendable, CaseIterable {
+            case would_repeat = "would_repeat"
+            case may_succeed = "may_succeed"
             case unknown = "unknown"
         }
         /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. Every writer names its cause, so the daemon never sends unknown; a client decodes a cause it doesn't know as unknown.
@@ -13213,7 +13331,7 @@ public enum Components {
             case unattended = "unattended"
             case unknown = "unknown"
         }
-        /// The terminal execution outcome and invocation that failed within a workflow stage. cause is present exactly when outcome is failed, copied from the recorded outcome, and absent for canceled and lost.
+        /// The terminal execution outcome and invocation that failed within a workflow stage. cause is present exactly when outcome is failed, copied from the recorded outcome, and absent for canceled and lost. handoff_check is present when cause is handoff_check and may be present on a lost outcome, when a handoff check's refusal lost it.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts`.
@@ -13257,6 +13375,60 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/admitted`.
             public var admitted: Components.Schemas.ExecutionFailureFacts.admittedPayload?
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/handoff_check`.
+            public var handoff_check: Components.Schemas.HandoffCheckFailure?
+            /// The first gauntlet findings when cause is export_rejected. The daemon records the findings best-effort, so a card whose record failed to write has none.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/export_rejection`.
+            public struct export_rejectionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/export_rejection/value1`.
+                public var value1: Components.Schemas.ExportRejectionFacts
+                /// Creates a new `export_rejectionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ExportRejectionFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The first gauntlet findings when cause is export_rejected. The daemon records the findings best-effort, so a card whose record failed to write has none.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/export_rejection`.
+            public var export_rejection: Components.Schemas.ExecutionFailureFacts.export_rejectionPayload?
+            /// Whether a same-agent retry could succeed. Present on every item raised since the field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/retry_outlook`.
+            public struct retry_outlookPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/retry_outlook/value1`.
+                public var value1: Components.Schemas.RetryOutlook
+                /// Creates a new `retry_outlookPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RetryOutlook) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// Whether a same-agent retry could succeed. Present on every item raised since the field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/retry_outlook`.
+            public var retry_outlook: Components.Schemas.ExecutionFailureFacts.retry_outlookPayload?
             /// Creates a new `ExecutionFailureFacts`.
             ///
             /// - Parameters:
@@ -13266,13 +13438,19 @@ public enum Components {
             ///   - invocation_id:
             ///   - offered_manifests: Canonically name-sorted capability alternatives that the current daemon composition can enforce and that differ from the failed admission. Presence is what authorizes retry_with_capabilities.
             ///   - admitted: What ran the failed attempt, as its admission recorded it. Absent on items recorded before the field existed.
+            ///   - handoff_check:
+            ///   - export_rejection: The first gauntlet findings when cause is export_rejected. The daemon records the findings best-effort, so a card whose record failed to write has none.
+            ///   - retry_outlook: Whether a same-agent retry could succeed. Present on every item raised since the field existed.
             public init(
                 outcome: Components.Schemas.ExecutionOutcomeStatus,
                 cause: Components.Schemas.FailureCause? = nil,
                 stage: Components.Schemas.StageName,
                 invocation_id: Swift.String,
                 offered_manifests: [Components.Schemas.CapabilityManifestOffer]? = nil,
-                admitted: Components.Schemas.ExecutionFailureFacts.admittedPayload? = nil
+                admitted: Components.Schemas.ExecutionFailureFacts.admittedPayload? = nil,
+                handoff_check: Components.Schemas.HandoffCheckFailure? = nil,
+                export_rejection: Components.Schemas.ExecutionFailureFacts.export_rejectionPayload? = nil,
+                retry_outlook: Components.Schemas.ExecutionFailureFacts.retry_outlookPayload? = nil
             ) {
                 self.outcome = outcome
                 self.cause = cause
@@ -13280,6 +13458,9 @@ public enum Components {
                 self.invocation_id = invocation_id
                 self.offered_manifests = offered_manifests
                 self.admitted = admitted
+                self.handoff_check = handoff_check
+                self.export_rejection = export_rejection
+                self.retry_outlook = retry_outlook
             }
             public enum CodingKeys: String, CodingKey {
                 case outcome
@@ -13288,6 +13469,9 @@ public enum Components {
                 case invocation_id
                 case offered_manifests
                 case admitted
+                case handoff_check
+                case export_rejection
+                case retry_outlook
             }
         }
         /// A failure the daemon found after the invocation completed and exported, while it read that output. The export is the invocation's terminal authority, so an item carries these facts or ExecutionFailureFacts, never both.

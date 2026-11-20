@@ -88,13 +88,13 @@ func reattemptProductionRunTx(
 	if spec.CapabilityManifestDigest != "" && spec.AlternateAgentRetryID != "" {
 		return ProductionReattempt{}, errors.New("an operator retry carries one choice")
 	}
-	if choice := spec.CapabilityManifestDigest + spec.AlternateAgentRetryID; choice != "" {
-		operatorBindings++
-		if !contentaddr.Valid(string(choice)) {
-			return ProductionReattempt{}, errors.New("operator retry choice digest is invalid")
-		}
+	choice := spec.CapabilityManifestDigest + spec.AlternateAgentRetryID
+	if choice != "" && !contentaddr.Valid(string(choice)) {
+		return ProductionReattempt{}, errors.New("operator retry choice digest is invalid")
 	}
-	if operatorBindings != 0 && operatorBindings != 3 {
+	// A choice needs the command and failed invocation it answers; a plain
+	// Retry command (#3440) binds those two and no choice.
+	if operatorBindings == 1 || (choice != "" && operatorBindings != 2) {
 		return ProductionReattempt{}, errors.New("partial operator retry bindings")
 	}
 	if operatorBindings != 0 && spec.ParentRunID == "" {
