@@ -1,6 +1,16 @@
 {
   "status": "review_required",
   "approval_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "changes": [
+    {
+      "field": "workflow_audit_digest",
+      "approved": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+      "proposed": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132"
+    },
+    {
+      "reason": "the admitted image does not serve the commit: package-lock.json differs"
+    }
+  ],
   "profile": {
     "repo": "example/repo",
     "repository_id": 44,

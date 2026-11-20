@@ -3959,17 +3959,48 @@ daemon first; onboarding refuses a database it holds. It:
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
    requires its resolved commit to equal `-commit`, and retains that exact
-   evidence;
+   evidence. When the tip has moved past `-commit`, it refuses and prints
+   the review to run next: the same arguments with `-commit` naming the tip
+   and no `-approve`;
 4. derives a conservative profile from the fresh retained audit and returns
    the installation- and image-request-bound approval digest as
    `review_required`; the `-commit-plan` owner-policy flag selects
-   `single_commit` (the conservative default) or `plan_preferred`;
+   `single_commit` (the conservative default) or `plan_preferred`. A
+   repository already onboarded may instead carry its approval forward
+   (below);
 5. accepts only `-approve <approval_digest>` from that review; and
-6. invokes `internal/projectimage` directly, requires the returned preparation
-   command and registry/image destination to match the approved request, then
-   rechecks the exact authority and reconciled grant before activating the
-   profile; a pending installation is promoted only after the image has been
-   durably recorded and the review accepted.
+6. reuses the admitted project image when it serves the commit (below), or
+   else invokes `internal/projectimage` directly, requires the returned
+   preparation command and registry/image destination to match the approved
+   request, and advances the admitted-image pointer to it; then it rechecks
+   the exact authority and reconciled grant before activating the profile.
+   A pending installation is promoted only after the image has been durably
+   recorded and the review accepted.
+
+**A review that changes nothing the approval trusts completes on its own.**
+After the base moves, rerun the review at the new tip. When the
+installation is already trusted, the proposed profile's digest equals the
+active profile's, and the admitted image serves the commit, the review
+re-activates the active profile and returns `status: "complete"` with
+`carried: true` and that image as `project_image`, with no `-approve` and no
+build. The profile digest binds the workflow audit, every `allow_*`
+privilege, the `issue_comment` workflows, the review configuration,
+protected paths, and external reviewers; the commit enters only the
+approval digest. The admitted image (the Claude harness's pointer) serves
+the commit when it bakes the requested recipe on the requested base, sits at
+the requested registry and image name, bakes the requested Go module and
+Swift package directories, was built with this binary's toolchain and
+preparation sources, and is admissible at the commit: the commit's
+dependency manifests, as read from the `-source` checkout, equal the baked
+ones (the rule run admission applies). An `-approve` pass whose image serves
+the commit reuses it too and leaves the pointer where it is. Any other
+review returns `review_required` with `changes`: each top-level profile
+field that differs from the active profile, with its `approved` and
+`proposed` values; a recipe digest or base image that differs from the
+admitted image's; and otherwise a `reason`, such as a changed manifest, a
+moved destination, a pending installation, or a commit the checkout can't
+read. Onboarding also prints one `onboard:` line per change to stderr. A
+first onboarding shows no changes.
 
 **Watch an onboarding build on stderr; read its whole output on disk.** The
 build can take most of an hour. As each step starts (source
@@ -4001,9 +4032,10 @@ of its file and the local workflows and actions it uses, and sets
 comments Freeside will post over exactly those workflows. A profile approved
 before these keys existed keeps its digest and publishes as before, but
 approves no comment until onboarding runs again and the owner approves the
-new review. A changed workflow head or installation coordinate produces a
-different review, as does replacement of the bounded pending intent, and
-invalidates the earlier approval. Only `-replace-intent` replaces the intent,
+new review. A changed workflow head, owner policy, recipe, agent base,
+image destination, or dependency manifest needs a new approval, as does a
+pending installation or the replacement of the bounded pending intent; a
+commit that changes none of these carries the approval forward. Only `-replace-intent` replaces the intent,
 live or expired, and it takes no `-resume` or `-approve`: it records a new
 intent revision and returns `installation_pending`, so the next review carries
 a new approval digest. That is the one Freeside manual review; a GitHub
