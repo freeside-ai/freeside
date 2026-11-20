@@ -186,13 +186,48 @@ package enum RunTimeStrip {
         milestones.indices.compactMap { index in
             let started = milestones[index]
             guard started.kind == .invocation_started else { return nil }
-            let later = milestones[(index + 1)...]
             let ending =
-                started.invocation_id.flatMap { invocation in
-                    later.first { $0.invocation_id == invocation && invocationEndings.contains($0.kind) }
-                }
-                ?? later.first { $0.kind == .invocation_started }
+                ownEnding(of: index, in: milestones)
+                ?? milestones[(index + 1)...].first { $0.kind == .invocation_started }
             return Span(start: started.recorded_at, end: ending?.recorded_at ?? barEnd)
+        }
+    }
+
+    /// How long one invocation worked, by the span the strip draws for it:
+    /// its served active interval, or without `clocks` its
+    /// `invocation_started` to the first later ending milestone on the same
+    /// invocation. Nil while it is still working or when neither is there,
+    /// so a reader shows no time rather than a guess. The transcript
+    /// sheet's `Worked for` and `Failed after` read it, so they agree with
+    /// the strip (#3231).
+    package static func invocationDuration(
+        _ invocationID: String, milestones: [Components.Schemas.RunMilestone],
+        clocks: Components.Schemas.RunClocks? = nil
+    ) -> TimeInterval? {
+        if let clocks {
+            guard let interval = clocks.active_intervals.first(where: { $0.invocation_id == invocationID }),
+                let ended = interval.ended_at
+            else { return nil }
+            return ended.timeIntervalSince(interval.started_at)
+        }
+        guard
+            let index = milestones.firstIndex(where: {
+                $0.kind == .invocation_started && $0.invocation_id == invocationID
+            }),
+            let ending = ownEnding(of: index, in: milestones)
+        else { return nil }
+        return ending.recorded_at.timeIntervalSince(milestones[index].recorded_at)
+    }
+
+    /// The first ending milestone after `index` on the invocation that
+    /// `milestones[index]` started.
+    private static func ownEnding(
+        of index: Int, in milestones: [Components.Schemas.RunMilestone]
+    ) -> Components.Schemas.RunMilestone? {
+        milestones[index].invocation_id.flatMap { invocation in
+            milestones[(index + 1)...].first {
+                $0.invocation_id == invocation && invocationEndings.contains($0.kind)
+            }
         }
     }
 
