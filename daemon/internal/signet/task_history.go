@@ -74,12 +74,16 @@ func taskHistoryEvents(
 		for _, milestone := range input.observation.Milestones {
 			switch milestone.Kind {
 			case domain.MilestoneRunSubmitted, domain.MilestoneInvocationStarted, domain.MilestoneTerminalRecorded,
-				domain.MilestonePublicationReady, domain.MilestonePublicationBlocked:
+				domain.MilestonePublicationReady, domain.MilestonePublicationBlocked,
+				// The export marks the writer finishing with its import
+				// passed; the verification kinds show the run verifying.
+				domain.MilestoneExecutionExportRecorded, domain.MilestoneVerificationStarted,
+				domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
 				events = append(events, domain.TaskEvent{Kind: domain.TaskEventRunMilestone, RecordedAt: milestone.RecordedAt, RunID: &input.run.ID, Milestone: &milestone})
-			case domain.MilestoneInvocationAdmitted, domain.MilestoneExecutionExportRecorded, domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneWorkUnitCompleted,
-				domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
-				// The exact execution authority remains in run detail. Task and
-				// PR completion already have their own summary events.
+			case domain.MilestoneInvocationAdmitted, domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneWorkUnitCompleted:
+				// The exact execution authority remains in run detail. A failed
+				// attempt's outcome already shows as its terminal_recorded, and
+				// task and PR completion have their own summary events.
 			}
 		}
 		if review := input.facts.review; review != nil {
