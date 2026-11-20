@@ -4042,13 +4042,25 @@ daemon first; onboarding refuses a database it holds. It:
    repository already onboarded may instead carry its approval forward
    (below);
 5. accepts only `-approve <approval_digest>` from that review; and
-6. reuses the admitted project image when it serves the commit (below), or
-   else invokes `internal/projectimage` directly, requires the returned
-   preparation command and registry/image destination to match the approved
-   request, and advances the admitted-image pointer to it; then it rechecks
-   the exact authority and reconciled grant before activating the profile.
-   A pending installation is promoted only after the image has been durably
-   recorded and the review accepted.
+6. promotes a pending installation as soon as it accepts the approval,
+   before any image work, and waits up to a minute for the janitor to
+   cover the repository under the promoted binding, so a build that
+   outlasts the intent's expiry still completes. A repository that already
+   has a trust profile promotes after the image instead and activates at
+   once, because that profile could otherwise mint through the promoted
+   binding before this approval's profile activates. It then reuses the
+   admitted project image when it serves the commit (below), or else
+   invokes `internal/projectimage` directly, requires the returned
+   preparation command and registry/image destination to match the
+   approved request, and advances the admitted-image pointer to it; then it
+   rechecks the exact authority and reconciled grant before activating the
+   profile. Early promotion grants no runtime authority: the runtime
+   minter, publication, and attention all need the profile, which comes
+   last. Until then only `freesided preflight`'s read-only inspection token
+   can mint for the promoted installation. A build that fails after it
+   leaves the installation trusted and no profile active; rerun the review,
+   which now sees a trusted installation and returns a new approval
+   digest.
 
 **A review that changes nothing the approval trusts completes on its own.**
 After the base moves, rerun the review at the new tip. When the
