@@ -661,7 +661,7 @@ enum RunHistoryPresentation {
         case .publication_blocked:
             return .failure
         case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded, .publication_ready,
-            .work_unit_completed, .unknown:
+            .work_unit_completed, .verification_started, .verification_passed, .verification_failed, .unknown:
             return .event
         }
     }

@@ -2027,6 +2027,11 @@ func authenticateRunObservation(
 			if err := authenticateStatusMilestone(ctx, tx, run.ID, attempts, milestone); err != nil {
 				return err
 			}
+		case domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed,
+			domain.MilestoneVerificationFailed:
+			// Projection only: they show when the run verified and grant
+			// nothing. The verdict's authority stays on the verification
+			// checkpoint and the readiness item, which publication re-gates.
 		case domain.MilestonePublicationReady:
 			if invocation == currentPublication {
 				readyMilestone = true
@@ -2141,7 +2146,9 @@ func authenticateStatusMilestone(
 		}
 	case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
 		domain.MilestoneInvocationStarted, domain.MilestonePublicationReady,
-		domain.MilestonePublicationBlocked, domain.MilestoneWorkUnitCompleted:
+		domain.MilestonePublicationBlocked, domain.MilestoneWorkUnitCompleted,
+		domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed,
+		domain.MilestoneVerificationFailed:
 	}
 	return nil
 }
@@ -2205,7 +2212,9 @@ func withAuthoritativeInvocationStatuses(observation domain.RunObservation) doma
 			terminalByInvocation[invocation] = *milestone.Terminal
 		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
 			domain.MilestoneInvocationStarted, domain.MilestonePublicationReady,
-			domain.MilestonePublicationBlocked, domain.MilestoneWorkUnitCompleted:
+			domain.MilestonePublicationBlocked, domain.MilestoneWorkUnitCompleted,
+			domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed,
+			domain.MilestoneVerificationFailed:
 		}
 	}
 	if len(terminalByInvocation) == 0 || len(observation.Invocations) == 0 {

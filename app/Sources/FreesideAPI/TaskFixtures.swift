@@ -169,7 +169,8 @@ public enum TaskFixtures {
                                 milestone: .init(value1: milestone), kind: .run_milestone,
                                 recorded_at: milestone.recorded_at, run_id: run.run_id))
                     case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded,
-                        .work_unit_completed, .unknown:
+                        .work_unit_completed, .verification_started, .verification_passed, .verification_failed,
+                        .unknown:
                         break
                     }
                 }

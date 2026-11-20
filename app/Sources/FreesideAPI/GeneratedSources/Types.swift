@@ -6790,6 +6790,9 @@ public enum Components {
             case publication_ready = "publication_ready"
             case publication_blocked = "publication_blocked"
             case work_unit_completed = "work_unit_completed"
+            case verification_started = "verification_started"
+            case verification_passed = "verification_passed"
+            case verification_failed = "verification_failed"
             case unknown = "unknown"
         }
         /// The closed, operator-safe hold vocabulary mirrored from domain.RunHoldReason. Values are typed daemon observations, never free text.

@@ -824,7 +824,8 @@ func publicationReadyOrder(observation domain.RunObservation) (bool, bool) {
 		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
 			domain.MilestoneInvocationStarted, domain.MilestoneExecutionExportRecorded,
 			domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneTerminalRecorded,
-			domain.MilestoneWorkUnitCompleted:
+			domain.MilestoneWorkUnitCompleted, domain.MilestoneVerificationStarted,
+			domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
 		}
 	}
 	if lastBlock < 0 || lastReady < 0 {

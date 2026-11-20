@@ -76,7 +76,8 @@ func taskHistoryEvents(
 			case domain.MilestoneRunSubmitted, domain.MilestoneInvocationStarted, domain.MilestoneTerminalRecorded,
 				domain.MilestonePublicationReady, domain.MilestonePublicationBlocked:
 				events = append(events, domain.TaskEvent{Kind: domain.TaskEventRunMilestone, RecordedAt: milestone.RecordedAt, RunID: &input.run.ID, Milestone: &milestone})
-			case domain.MilestoneInvocationAdmitted, domain.MilestoneExecutionExportRecorded, domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneWorkUnitCompleted:
+			case domain.MilestoneInvocationAdmitted, domain.MilestoneExecutionExportRecorded, domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneWorkUnitCompleted,
+				domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
 				// The exact execution authority remains in run detail. Task and
 				// PR completion already have their own summary events.
 			}

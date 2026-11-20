@@ -26,7 +26,8 @@ func TestRunClocksOf(t *testing.T) {
 			reason := domain.HoldVerificationFindings
 			m.Reason = &reason
 		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted, domain.MilestoneInvocationStarted,
-			domain.MilestoneExecutionExportRecorded, domain.MilestonePublicationReady, domain.MilestoneWorkUnitCompleted:
+			domain.MilestoneExecutionExportRecorded, domain.MilestonePublicationReady, domain.MilestoneWorkUnitCompleted,
+			domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
 		}
 		return m
 	}

@@ -26,7 +26,9 @@ func validMilestone(kind RunMilestoneKind) RunMilestone {
 		m.Reason = &reason
 	case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
 		MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
-		MilestonePublicationReady, MilestoneWorkUnitCompleted:
+		MilestonePublicationReady, MilestoneWorkUnitCompleted,
+		MilestoneVerificationStarted, MilestoneVerificationPassed,
+		MilestoneVerificationFailed:
 	}
 	return m
 }

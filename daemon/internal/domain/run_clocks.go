@@ -138,7 +138,8 @@ func invocationEnding(after []RunMilestone, invocation InvocationID) (time.Time,
 				next = i
 			}
 		case MilestoneRunSubmitted, MilestoneInvocationAdmitted, MilestonePublicationReady,
-			MilestonePublicationBlocked, MilestoneWorkUnitCompleted:
+			MilestonePublicationBlocked, MilestoneWorkUnitCompleted, MilestoneVerificationStarted,
+			MilestoneVerificationPassed, MilestoneVerificationFailed:
 		}
 	}
 	if next < 0 {

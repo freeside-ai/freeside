@@ -173,6 +173,16 @@ func TestRunHoldObservationLifecycle(t *testing.T) {
 	if got = observeRun(t, s, f.run.ID); got.Hold == nil {
 		t.Error("a converged milestone replay cleared a standing hold")
 	}
+	// A verification milestone only shows the run verifying, so even a new
+	// one leaves the hold to its owner.
+	verification := domain.InvocationID("verify-1")
+	appendMilestone(t, s, domain.RunMilestone{
+		RunID: f.run.ID, Kind: domain.MilestoneVerificationStarted,
+		InvocationID: &verification, RecordedAt: admissionEpoch.Add(5 * time.Minute),
+	})
+	if got = observeRun(t, s, f.run.ID); got.Hold == nil {
+		t.Error("a verification milestone cleared a standing hold")
+	}
 
 	// A clock stepped back below the recorded first instant restarts the
 	// span by overwrite instead of failing the pass that carries the write.
