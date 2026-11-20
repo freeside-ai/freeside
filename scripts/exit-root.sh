@@ -359,7 +359,9 @@ if [[ ! -d "$build_dir" ]]; then
   partial=$(mktemp -d "$root/builds/.partial.XXXXXX")
   mkdir "$partial/src"
   say "extracting $build_sha"
-  git -C "$repo_root" archive "$build_sha" | tar -x -C "$partial/src"
+  # tar can exit at the end-of-archive marker before git writes the last
+  # padding; draining the rest keeps that from failing the pipe on SIGPIPE.
+  git -C "$repo_root" archive "$build_sha" | { tar -x -C "$partial/src" && cat >/dev/null; }
   if [[ -z "$scenario" ]]; then
     say "building freesided at $build_sha (log: $logs/build.log)"
     (cd "$partial/src/daemon" && go build -ldflags "-X main.version=$build_sha" -o "$partial/freesided" ./cmd/freesided) \

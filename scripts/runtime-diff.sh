@@ -116,7 +116,9 @@ done <"$TMP/names"
 build() { # <sha> <name>; prints the built binary's digest
   local sha=$1 name=$2
   mkdir "$TMP/$name"
-  git archive --format=tar "$sha" -- daemon | tar -x -C "$TMP/$name" \
+  # tar can exit at the end-of-archive marker before git writes the last
+  # padding; draining the rest keeps that from failing the pipe on SIGPIPE.
+  git archive --format=tar "$sha" -- daemon | { tar -x -C "$TMP/$name" && cat >/dev/null; } \
     || fail_git "cannot extract daemon/ at $sha"
   (cd "$TMP/$name/daemon" \
     && env -u GOFLAGS GOWORK=off go build -trimpath -buildvcs=false -ldflags "-X main.version=runtime-diff" \
