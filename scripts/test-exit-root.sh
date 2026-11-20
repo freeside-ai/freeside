@@ -30,10 +30,11 @@
 # new enrollment, the serve wait, the review at the base ref's tip fetched
 # just before it (after a template pin older than the tip, and after a
 # deputy start that moved the tip), a root recorded before the template's
-# pin was kept, the base ref moving alone asking for no review, the
-# re-onboarding after a moved review configuration, the re-pin of a newer
-# approval's image, the submit line, port selection, the seeded-routing
-# overlay, the scenario pass, and the refusals that create nothing.
+# pin was kept, the base ref moving alone asking for no review, a review
+# refused at a moved tip keeping the approval, the re-onboarding after a
+# moved review configuration, the re-pin of a newer approval's image, the
+# submit line, port selection, the seeded-routing overlay, the scenario
+# pass, and the refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -929,6 +930,28 @@ assert_rc 0
 assert_not_exists "$CASE_DIR/onboard-1.args"
 if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "a moved tip alone started the deputy"; else ok; fi
 assert_eq "$(jq -r .repository.base_sha "$ROOTS/carry/daemon/settings.json")" "$reviewed" 'deputy stays at the reviewed tip'
+
+begin_case "a review refused because the tip moved keeps the approval, and a rerun reviews at once"
+APPROVED=$ROOTS/carry/daemon/onboard-approved.json
+cp "$APPROVED" "$CASE_DIR/approved-before.json"
+superseded() { find "$ROOTS/carry/daemon" -name 'onboard-approved.superseded-*' | wc -l | tr -d ' '; }
+superseded_before=$(superseded)
+NEW_BASE2=2222222222222222222222222222222222222222
+jq --arg b "$NEW_BASE2" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
+mv "$CASE_DIR/t.json" "$TPL/settings.json"
+FAKE_ONBOARD_MODE=moves run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 1
+assert_contains "the base ref's live tip is $(upstream_tip)"
+assert_contains 'the completed approval, if any, stays in place'
+if cmp -s "$APPROVED" "$CASE_DIR/approved-before.json"; then ok; else report_failure "the refused review moved or changed the approval"; fi
+assert_eq "$(superseded)" "$superseded_before" 'superseded approvals after a refusal'
+if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "the refused run started the deputy"; else ok; fi
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-refused.log"
+FAKE_ONBOARD_MODE=carry run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 0
+assert_line "$CASE_DIR/onboard-2.args" "$(upstream_tip)"
+assert_eq "$(deputy_calls_before_review)" 0 'deputy starts before the rerun review'
+assert_eq "$(jq -r .onboarded.template_base_sha "$ROOTS/carry/exit-root.json")" "$NEW_BASE2" 'rerun answered the new pin'
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild

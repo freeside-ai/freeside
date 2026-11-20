@@ -67,8 +67,8 @@
 #      repository checkout's origin just before `freesided onboard` runs
 #      (which refuses any other -commit), with no deputy start in between;
 #      the state file records that tip, and step 4 pins the deputy to it.
-#      A review refused because the tip moved in those seconds needs only
-#      a rerun, which reviews the new tip with no deputy
+#      A review refused because the tip moved in those seconds keeps the
+#      completed approval in place, and a rerun reviews the new tip with no
 #      start first. Once onboarded, run the review again when the review
 #      configuration digest or the template's repository.base_sha differs
 #      from the ones the last review answered, since prelaunch keeps passing
@@ -615,14 +615,15 @@ onboard_review() {
   while IFS= read -r arg; do args+=("$arg"); done < <(jq -r --arg r "$repo" \
     '(.exit_root.onboard_args // [])[], (.exit_root.repositories[$r].onboard_args // [])[]' "$machine")
   [[ "$(state_get .onboard_resume)" != true ]] || args+=(-resume)
-  # An approval from before this review binds an older review; keep it, but
-  # out of the way of the step that reads the new one.
-  [[ ! -e "$approved" ]] || mv "$approved" "$root/daemon/onboard-approved.superseded-$(date +%s).json"
   say "running the onboarding review at $tip (log: $logs/onboard-review.err)"
   "$freesided" "${args[@]}" >"$review" 2>"$logs/onboard-review.err" || {
     tail -n 20 "$logs/onboard-review.err" >&2
-    die 'the onboarding review failed'
+    die 'the onboarding review failed; the completed approval, if any, stays in place, and a rerun reviews the tip again'
   }
+  # An approval from before this review binds an older review; keep it, but
+  # out of the way of the step that reads the new one. A refused review
+  # leaves it where it is.
+  [[ ! -e "$approved" ]] || mv "$approved" "$root/daemon/onboard-approved.superseded-$(date +%s).json"
   # What this review bound, so a later run sees when either moves.
   bound=$(jq -n --arg d "$digest" --arg b "$tip" --arg t "$template_base" \
     '{review_configuration_digest: $d, base_sha: $b, template_base_sha: $t}')

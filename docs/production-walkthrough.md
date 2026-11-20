@@ -633,7 +633,8 @@ one; it resumes where it stopped. In order:
    `repository.base_sha` asks for a new review, which runs before any
    deputy start; `main` moving on its own asks for none. If a merge lands
    in the seconds between the fetch and the review, the review is refused,
-   and a rerun reviews the new tip at once.
+   the root keeps its completed approval, and a rerun reviews the new tip
+   at once.
 4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
    the approving run, applies the pass's routing and pool limits, runs
    `freesided probe-lineup -root <root>`
