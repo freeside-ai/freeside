@@ -8056,6 +8056,54 @@ components:
           maxItems: 8
           items:
             $ref: "#/components/schemas/Decision"
+        previous_answers:
+          type: array
+          maxItems: 8
+          description: >
+            The owner's earlier answers to decisions this specification
+            question asks again (#3443), at most one per decision, from an
+            earlier question on this task or on another task in the same
+            project that holds the same submitted source. Absent when no
+            decision matches one. A client shows each as the answer it
+            starts with; the owner still chooses. Earlier answers are a
+            default, outside the Question claim's digest.
+          items:
+            $ref: "#/components/schemas/PreviousAnswer"
+
+    PreviousAnswer:
+      type: object
+      description: >
+        The owner's earlier answer to one decision of an agent_question.
+        Exactly one of option_label and note is set. A decision matches an
+        earlier one with the same set of option labels, in any order, and
+        otherwise one with the same question text; the newest earlier
+        question decides.
+      required: [decision_index, option_label, note, item_id]
+      properties:
+        decision_index:
+          type: integer
+          minimum: 0
+          maximum: 7
+          description: The decision's 0-based position in agent_question.decisions.
+        option_label:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 4096
+          description: >
+            The exact label of the option the owner chose before, which the
+            decision still offers. Null when the owner typed the answer.
+        note:
+          type: string
+          nullable: true
+          minLength: 1
+          description: >
+            The text the owner typed as the answer before. Null when the
+            owner chose an option.
+        item_id:
+          type: string
+          minLength: 1
+          description: The earlier agent_question item the answer was given on.
 
     InvocationAdmissionFacts:
       type: object

@@ -176,6 +176,28 @@ func TestAttentionItemAgentQuestionFacts(t *testing.T) {
 	badDecision.AgentQuestion.Decisions = nil
 	tamperedDecisions := validItemInput(domain.AttentionAgentQuestion)
 	tamperedDecisions.AgentQuestion.Decisions[0].Recommendation = "1 year"
+	label, note, blank := "1 year", "Keep them for 90 days.", " "
+	unknownLabel := "6 months"
+	withPrevious := func(previous ...domain.PreviousAnswer) domain.AttentionItemInput {
+		in := validItemInput(domain.AttentionAgentQuestion)
+		in.AgentQuestion.PreviousAnswers = previous
+		return in
+	}
+	implPrevious := implementation
+	implPrevious.AgentQuestion = &domain.AgentQuestionFacts{
+		Stage: domain.StageNameImplementation, InvocationID: "inv-implementation-1",
+		Kind: &kind, Decisions: validDecisions(),
+		PreviousAnswers: []domain.PreviousAnswer{{DecisionIndex: 0, OptionLabel: &label, ItemID: "earlier"}},
+	}
+	// The claim digests the decisions only, so the item's own claim fits.
+	for _, in := range []domain.AttentionItemInput{
+		withPrevious(domain.PreviousAnswer{DecisionIndex: 0, OptionLabel: &label, ItemID: "earlier"}),
+		withPrevious(domain.PreviousAnswer{DecisionIndex: 0, Note: &note, ItemID: "earlier"}),
+	} {
+		if _, err := domain.NewAttentionItem(in, nil); err != nil {
+			t.Errorf("valid previous answer %+v rejected: %v", in.AgentQuestion.PreviousAnswers, err)
+		}
+	}
 	tamperedKind := implementation
 	otherKind := domain.BlockedKindCapabilityUnavailable
 	tamperedKind.AgentQuestion = &domain.AgentQuestionFacts{
@@ -200,6 +222,17 @@ func TestAttentionItemAgentQuestionFacts(t *testing.T) {
 		{"invalid decisions", badDecision, domain.ErrDecisionInvalid},
 		{"decisions disagree with claim digest", tamperedDecisions, domain.ErrCardFactInconsistent},
 		{"blocked kind disagrees with claim digest", tamperedKind, domain.ErrCardFactInconsistent},
+		{"previous answer on implementation stage", implPrevious, domain.ErrCardFactInconsistent},
+		{"previous answer index out of range", withPrevious(domain.PreviousAnswer{DecisionIndex: 1, OptionLabel: &label, ItemID: "earlier"}), domain.ErrCardFactInconsistent},
+		{"previous answer index repeated", withPrevious(
+			domain.PreviousAnswer{DecisionIndex: 0, OptionLabel: &label, ItemID: "earlier"},
+			domain.PreviousAnswer{DecisionIndex: 0, Note: &note, ItemID: "earlier"}), domain.ErrCardFactInconsistent},
+		{"previous answer names no item", withPrevious(domain.PreviousAnswer{DecisionIndex: 0, OptionLabel: &label}), domain.ErrCardFactInconsistent},
+		{"previous answer label the decision lacks", withPrevious(domain.PreviousAnswer{DecisionIndex: 0, OptionLabel: &unknownLabel, ItemID: "earlier"}), domain.ErrCardFactInconsistent},
+		{"previous answer with label and note", withPrevious(domain.PreviousAnswer{DecisionIndex: 0, OptionLabel: &label, Note: &note, ItemID: "earlier"}), domain.ErrCardFactInconsistent},
+		{"previous answer with neither", withPrevious(domain.PreviousAnswer{DecisionIndex: 0, ItemID: "earlier"}), domain.ErrCardFactInconsistent},
+		{"previous answer blank note", withPrevious(domain.PreviousAnswer{DecisionIndex: 0, Note: &blank, ItemID: "earlier"}), domain.ErrCardFactInconsistent},
+		{"previous answer note over an answer note's bound", withPrevious(domain.PreviousAnswer{DecisionIndex: 0, Note: new(strings.Repeat("x", domain.MaxQuestionAnswerNoteBytes+1)), ItemID: "earlier"}), domain.ErrCardFactInconsistent},
 	}
 	for _, test := range invalid {
 		if _, err := domain.NewAttentionItem(test.in, nil); !errors.Is(err, test.want) {

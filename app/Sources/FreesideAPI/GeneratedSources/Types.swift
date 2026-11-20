@@ -13005,6 +13005,11 @@ public enum Components {
             public var kind: Components.Schemas.AgentQuestionFacts.kindPayload?
             /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/decisions`.
             public var decisions: [Components.Schemas.Decision]
+            /// The owner's earlier answers to decisions this specification question asks again (#3443), at most one per decision, from an earlier question on this task or on another task in the same project that holds the same submitted source. Absent when no decision matches one. A client shows each as the answer it starts with; the owner still chooses. Earlier answers are a default, outside the Question claim's digest.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentQuestionFacts/previous_answers`.
+            public var previous_answers: [Components.Schemas.PreviousAnswer]?
             /// Creates a new `AgentQuestionFacts`.
             ///
             /// - Parameters:
@@ -13013,18 +13018,21 @@ public enum Components {
             ///   - invocation_id:
             ///   - kind:
             ///   - decisions:
+            ///   - previous_answers: The owner's earlier answers to decisions this specification question asks again (#3443), at most one per decision, from an earlier question on this task or on another task in the same project that holds the same submitted source. Absent when no decision matches one. A client shows each as the answer it starts with; the owner still chooses. Earlier answers are a default, outside the Question claim's digest.
             public init(
                 scope_conflict: Components.Schemas.AgentQuestionFacts.scope_conflictPayload? = nil,
                 stage: Components.Schemas.StageName,
                 invocation_id: Swift.String,
                 kind: Components.Schemas.AgentQuestionFacts.kindPayload? = nil,
-                decisions: [Components.Schemas.Decision]
+                decisions: [Components.Schemas.Decision],
+                previous_answers: [Components.Schemas.PreviousAnswer]? = nil
             ) {
                 self.scope_conflict = scope_conflict
                 self.stage = stage
                 self.invocation_id = invocation_id
                 self.kind = kind
                 self.decisions = decisions
+                self.previous_answers = previous_answers
             }
             public enum CodingKeys: String, CodingKey {
                 case scope_conflict
@@ -13032,6 +13040,55 @@ public enum Components {
                 case invocation_id
                 case kind
                 case decisions
+                case previous_answers
+            }
+        }
+        /// The owner's earlier answer to one decision of an agent_question. Exactly one of option_label and note is set. A decision matches an earlier one with the same set of option labels, in any order, and otherwise one with the same question text; the newest earlier question decides.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/PreviousAnswer`.
+        public struct PreviousAnswer: Codable, Hashable, Sendable {
+            /// The decision's 0-based position in agent_question.decisions.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PreviousAnswer/decision_index`.
+            public var decision_index: Swift.Int
+            /// The exact label of the option the owner chose before, which the decision still offers. Null when the owner typed the answer.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/PreviousAnswer/option_label`.
+            public var option_label: Swift.String?
+            /// The text the owner typed as the answer before. Null when the owner chose an option.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/PreviousAnswer/note`.
+            public var note: Swift.String?
+            /// The earlier agent_question item the answer was given on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PreviousAnswer/item_id`.
+            public var item_id: Swift.String
+            /// Creates a new `PreviousAnswer`.
+            ///
+            /// - Parameters:
+            ///   - decision_index: The decision's 0-based position in agent_question.decisions.
+            ///   - option_label: The exact label of the option the owner chose before, which the decision still offers. Null when the owner typed the answer.
+            ///   - note: The text the owner typed as the answer before. Null when the owner chose an option.
+            ///   - item_id: The earlier agent_question item the answer was given on.
+            public init(
+                decision_index: Swift.Int,
+                option_label: Swift.String? = nil,
+                note: Swift.String? = nil,
+                item_id: Swift.String
+            ) {
+                self.decision_index = decision_index
+                self.option_label = option_label
+                self.note = note
+                self.item_id = item_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case decision_index
+                case option_label
+                case note
+                case item_id
             }
         }
         /// What ran one invocation, as its admission recorded it (plan §5.4, §7). Every value is read from the admission record. A field the record does not carry is null and never filled from current configuration: a legacy execution admission has no agent binding; a binding admitted before harness, lineage group, and cost owner were recorded lacks those; a review admission never records credential mode, egress profile, operating mode, or isolation class. Clients render null as unavailable.
