@@ -525,6 +525,14 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		// proceeds to the specification instead of re-asking to the iteration
 		// limit. Pinned so a later edit cannot silently drop the exit.
 		"with no answering `human_feedback`",
+		// The planned-issue rule (#3405): the specifier asks for the bound
+		// issue's comments, and the daemon's plan_comment_id makes the issue a
+		// contract and plan rather than a sketch without ever suppressing a
+		// question the specifier finds.
+		"request the issue and its comments (`https://api.github.com/repos/<owner>/<name>/issues/<n>/comments?per_page=100`)",
+		"`plan_comment_id`, set only by the daemon, names the issue's one current implementation plan",
+		"so the source is no sketch",
+		"Return `decisions` only if contract and plan conflict with each other, the code, or policy, name a path or symbol missing at the base, or leave an owner choice open.",
 		// The shape guidance (#3017): a model the output tool refused sent
 		// `specification` as a string of JSON, then a placeholder that
 		// validated. Pinned so a later edit cannot drop how to recover.
