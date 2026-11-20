@@ -1000,6 +1000,20 @@ import Testing
         #expect(!DecisionCardComposition.rendersAsk(for: item))
     }
 
+    /// #3443: a re-asked specification question names each earlier answer
+    /// under its question and offers the picker that starts with it chosen.
+    @Test func aPreviouslyAnsweredQuestionNamesTheEarlierAnswers() throws {
+        let item = AttentionFixtures.previouslyAnsweredQuestion().item
+        let presentation = try #require(AgentQuestionPresentation(item))
+        #expect(DecisionDetailView.offersQuestionOptionChoice(item, served: true, isOpen: true))
+        #expect(
+            presentation.decisions.compactMap { $0.previousAnswer.map(DecisionDetailView.previousAnswerLine) } == [
+                "You answered this before: Rewrite rows in place",
+                "You answered this before: \(AttentionFixtures.previousTypedAnswer)",
+            ])
+        #expect(presentation.decisions.map(\.previousChoice) == [.option("Rewrite rows in place"), .other])
+    }
+
     /// A quoted claim folds its identifiers; every one of them stays one
     /// disclosure away, exact.
     @Test func foldedClaimSourceKeepsEveryIdentifier() throws {

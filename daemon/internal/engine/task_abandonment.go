@@ -35,16 +35,13 @@ func RetireAbandonedTaskItems(ctx context.Context, tx *store.WriteTx, taskID dom
 	return RetireClosedTaskWorkflowItems(ctx, tx, taskID, task.CurrentStart().Ordinal)
 }
 
-// RetireClosedTaskWorkflowItems expires only decisions owned by a durable
-// closure. Expiry is not an operator decision and never sets decided_at.
-func RetireClosedTaskWorkflowItems(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID, ordinal int) ([]domain.ItemID, error) {
-	closure, err := tx.GetTaskWorkflowClosure(ctx, taskID, ordinal)
-	if err != nil {
-		return nil, err
-	}
-	reason := "Expired when the task's workflow was closed. " + closure.Reason
-	retired := []domain.ItemID{}
-	items, err := tx.ListOpenAttentionItemRecordsForTask(ctx, taskID)
+// OpenTaskWorkflowItems lists the open items the task's workflow episode
+// owns: those bound to the task, and the effect and task proposals that
+// resolve to it through their declaring run though their subject names no
+// task. These are what closing the episode retires, so submit --replace
+// reads the same set before it abandons (#3443).
+func OpenTaskWorkflowItems(ctx context.Context, tx *store.ReadTx, taskID domain.TaskID, ordinal int) ([]domain.AttentionItem, error) {
+	candidates, err := tx.ListOpenAttentionItemRecordsForTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -55,18 +52,37 @@ func RetireClosedTaskWorkflowItems(ctx context.Context, tx *store.WriteTx, taskI
 		}
 		for _, item := range proposals {
 			if item.Subject.TaskID == nil || *item.Subject.TaskID != taskID {
-				items = append(items, item)
+				candidates = append(candidates, item)
 			}
 		}
 	}
-	for _, item := range items {
+	owned := []domain.AttentionItem{}
+	for _, item := range candidates {
 		owner, episode, err := tx.AttentionItemWorkflowEpisode(ctx, item)
 		if err != nil {
 			return nil, err
 		}
-		if owner != taskID || episode != ordinal {
-			continue
+		if owner == taskID && episode == ordinal {
+			owned = append(owned, item)
 		}
+	}
+	return owned, nil
+}
+
+// RetireClosedTaskWorkflowItems expires only decisions owned by a durable
+// closure. Expiry is not an operator decision and never sets decided_at.
+func RetireClosedTaskWorkflowItems(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID, ordinal int) ([]domain.ItemID, error) {
+	closure, err := tx.GetTaskWorkflowClosure(ctx, taskID, ordinal)
+	if err != nil {
+		return nil, err
+	}
+	reason := "Expired when the task's workflow was closed. " + closure.Reason
+	retired := []domain.ItemID{}
+	items, err := OpenTaskWorkflowItems(ctx, &tx.ReadTx, taskID, ordinal)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
 		item.ItemVersion++
 		// Some readers authenticate structured reason suffixes. The closure
 		// record carries the retirement reason without rewriting those bytes,

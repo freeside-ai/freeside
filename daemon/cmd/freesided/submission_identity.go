@@ -26,7 +26,7 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 	if cfg.RetrySubmissionID != "" {
 		if cfg.SubmissionID != "" || cfg.TaskPath != "" || cfg.PolicyPath != "" || cfg.PublicationPath != "" ||
 			cfg.WorkUnitPath != "" || cfg.CompositionPath != "" || cfg.ProjectID != "" || cfg.RequireComposition ||
-			len(cfg.TaskLines) != 0 || len(cfg.AttachPaths) != 0 {
+			len(cfg.TaskLines) != 0 || len(cfg.AttachPaths) != 0 || cfg.ReplaceTaskID != "" {
 			return cfg, errors.New("submit: manual retry takes only --db and --retry-submission-id; it uses the saved inputs")
 		}
 		if !validSubmissionID(cfg.RetrySubmissionID) {
@@ -135,7 +135,7 @@ func matchingRetainedSubmission(cfg submitCommandConfig) (submitCommandConfig, e
 	}
 	if saved.DBPath != cfg.DBPath || saved.SubmissionID != cfg.SubmissionID || saved.ProjectID != cfg.ProjectID ||
 		saved.RequireComposition != cfg.RequireComposition || !slices.EqualFunc(saved.TaskLines, cfg.TaskLines, domain.TaskLineChoice.Same) ||
-		!slices.Equal(saved.Attachments, cfg.Attachments) ||
+		!slices.Equal(saved.Attachments, cfg.Attachments) || saved.ReplaceTaskID != cfg.ReplaceTaskID ||
 		!sameSubmissionInputs(saved.SavedInputs, cfg.SavedInputs) {
 		return cfg, fmt.Errorf("submit: saved submission inputs changed: %w", store.ErrImmutableConflict)
 	}

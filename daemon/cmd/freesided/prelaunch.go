@@ -760,7 +760,11 @@ func checkPrelaunchDuplicateSource(
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		return refuseUnfinishedDuplicate(ctx, tx, project, inputs.source)
 	})
+	var duplicate duplicateSourceError
 	switch {
+	case errors.As(err, &duplicate) && duplicate.replaceable:
+		record.fail(prelaunchGroupInputs, name, err.Error(),
+			"submit with `--replace "+string(duplicate.task)+"`, which abandons that task in the same write, or submit other work")
 	case errors.Is(err, errDuplicateSource):
 		record.fail(prelaunchGroupInputs, name, err.Error(), "finish or abandon that task, or submit other work")
 	case err != nil:

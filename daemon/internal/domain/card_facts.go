@@ -311,6 +311,26 @@ type AgentQuestionFacts struct {
 	InvocationID  InvocationID        `json:"invocation_id"`
 	Kind          *BlockedKind        `json:"kind"`
 	Decisions     []Decision          `json:"decisions"`
+	// PreviousAnswers are the owner's earlier answers to decisions that
+	// match these, from earlier specification questions on the same
+	// project and source (#3443), at most one per decision. They are a
+	// default the owner confirms on the card, never an answer: the answer
+	// command and ComputeDigest ignore them. omitempty keeps a question
+	// without them at its stored bytes, and an app that predates the field
+	// decodes it.
+	PreviousAnswers []PreviousAnswer `json:"previous_answers,omitempty"`
+}
+
+// PreviousAnswer is an earlier answer carried onto one decision of a
+// re-asked specification question. Exactly one of OptionLabel and Note is
+// set: the exact label of the option the owner chose, which the decision
+// still offers, or the text the owner typed when they answered in the note.
+// ItemID is the earlier question item the answer came from.
+type PreviousAnswer struct {
+	DecisionIndex int     `json:"decision_index"`
+	OptionLabel   *string `json:"option_label"`
+	Note          *string `json:"note"`
+	ItemID        ItemID  `json:"item_id"`
 }
 
 func (f AgentQuestionFacts) Validate() error {
@@ -341,6 +361,44 @@ func (f AgentQuestionFacts) Validate() error {
 	if err := ValidateDecisions(f.Decisions); err != nil {
 		return fmt.Errorf("agent question: %w", err)
 	}
+	return f.validatePreviousAnswers()
+}
+
+// validatePreviousAnswers allows previous answers on a specification
+// question only, one per decision, each naming an option that decision
+// offers or carrying a non-blank note within the answer message's bound.
+func (f AgentQuestionFacts) validatePreviousAnswers() error {
+	if len(f.PreviousAnswers) == 0 {
+		return nil
+	}
+	if f.Stage != StageNameSpecification {
+		return fmt.Errorf("agent question previous answers on stage %q: %w", f.Stage, ErrCardFactInconsistent)
+	}
+	seen := make(map[int]bool, len(f.PreviousAnswers))
+	for position, previous := range f.PreviousAnswers {
+		index := previous.DecisionIndex
+		if index < 0 || index >= len(f.Decisions) || seen[index] || previous.ItemID == "" {
+			return fmt.Errorf("agent question previous_answers[%d] decision %d item %q: %w",
+				position, index, previous.ItemID, ErrCardFactInconsistent)
+		}
+		seen[index] = true
+		switch {
+		case (previous.OptionLabel == nil) == (previous.Note == nil):
+			return fmt.Errorf("agent question previous_answers[%d] sets %s: %w",
+				position, "both or neither of option_label and note", ErrCardFactInconsistent)
+		case previous.OptionLabel != nil:
+			label := *previous.OptionLabel
+			if !slices.ContainsFunc(f.Decisions[index].Options, func(option DecisionOption) bool { return option.Label == label }) {
+				return fmt.Errorf("agent question previous_answers[%d] option_label for decision %d: %w",
+					position, index, ErrCardFactInconsistent)
+			}
+		case strings.TrimSpace(*previous.Note) == "" || len(*previous.Note) > MaxQuestionAnswerNoteBytes:
+			// The card offers the note again as the answer's note, so it
+			// keeps the bound an answer's note has.
+			return fmt.Errorf("agent question previous_answers[%d] note is blank or over %d bytes: %w",
+				position, MaxQuestionAnswerNoteBytes, ErrCardFactInconsistent)
+		}
+	}
 	return nil
 }
 
@@ -352,6 +410,14 @@ func cloneAgentQuestionFacts(in *AgentQuestionFacts) *AgentQuestionFacts {
 	out.Kind = clonePtr(in.Kind)
 	out.ScopeConflict = cloneScopeConflictFacts(in.ScopeConflict)
 	out.Decisions = cloneDecisions(in.Decisions)
+	if in.PreviousAnswers != nil {
+		out.PreviousAnswers = make([]PreviousAnswer, len(in.PreviousAnswers))
+		for i, previous := range in.PreviousAnswers {
+			previous.OptionLabel = clonePtr(previous.OptionLabel)
+			previous.Note = clonePtr(previous.Note)
+			out.PreviousAnswers[i] = previous
+		}
+	}
 	return &out
 }
 

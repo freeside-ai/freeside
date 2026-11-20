@@ -618,6 +618,31 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The long question asked again at the specification stage, where the
+    /// owner answered both decisions before (#3443): the first with an
+    /// option the agent didn't recommend, the second with typed text.
+    public static let previousTypedAnswer =
+        "Translate for clients older than 2.4 only, and log each translated request so we can chase them."
+
+    public static func previouslyAnsweredQuestion() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = longQuestion()
+        snapshot.item.id = "item-previously-answered-question"
+        guard var facts = snapshot.item.agent_question?.value1 else { return snapshot }
+        facts.stage = .specification
+        facts.kind = nil
+        facts.invocation_id = "inv-previously-answered-question"
+        facts.previous_answers = [
+            .init(
+                decision_index: 0, option_label: "Rewrite rows in place", note: nil,
+                item_id: "item-long-question-earlier"),
+            .init(
+                decision_index: 1, option_label: nil, note: previousTypedAnswer,
+                item_id: "item-long-question-earlier"),
+        ]
+        snapshot.item.agent_question = .init(value1: facts)
+        return snapshot
+    }
+
     /// A review_diminishing_returns item that parked on `cause`. The base
     /// fixture carries low_value_streak; this names any other cause.
     /// `verdict` shapes the drift facts and matters only under drift_audit,

@@ -176,7 +176,10 @@ struct DecisionDetailView: View {
     @State private var lostResponseExpanded = false
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute]
     /// The option picked for each decision of an agent_question, by decision
-    /// index. Empty until the operator picks: nothing is preselected.
+    /// index. Empty until the operator picks; a decision the owner answered
+    /// before (#3443) shows that answer chosen until then, read from the item
+    /// each time rather than copied here, so a new item never keeps an old
+    /// one.
     @State private var questionChoices: [Int: AgentQuestionPresentation.Choice]
     /// The reply reason the operator typed for each external finding, by
     /// finding id. Kept when the route changes, so picking Decline again
@@ -451,7 +454,8 @@ struct DecisionDetailView: View {
                         byteLimit: answers == nil ? 8192 : Components.Schemas.QuestionAnswer.maxNoteBytes,
                         routeOptions: AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item),
                         choiceLines: answers.map(AgentQuestionPresentation.choiceLines) ?? [],
-                        requiresMessage: answers.map(AgentQuestionPresentation.needsNote) ?? true
+                        requiresMessage: answers.map(AgentQuestionPresentation.needsNote) ?? true,
+                        initialMessage: previousQuestionNote(model.snapshot?.item) ?? ""
                     ) { message, route in
                         await model.submitAnswer(
                             .answer_and_retry, message: message,
@@ -471,7 +475,8 @@ struct DecisionDetailView: View {
                             ?? "Record Answer",
                         byteLimit: answers == nil ? 8192 : Components.Schemas.QuestionAnswer.maxNoteBytes,
                         choiceLines: answers.map(AgentQuestionPresentation.choiceLines) ?? [],
-                        requiresMessage: answers.map(AgentQuestionPresentation.needsNote) ?? true
+                        requiresMessage: answers.map(AgentQuestionPresentation.needsNote) ?? true,
+                        initialMessage: previousQuestionNote(model.snapshot?.item) ?? ""
                     ) { message, _ in
                         await model.submitAnswer(.answer_without_retry, message: message, questionAnswers: answers)
                     }
@@ -1774,6 +1779,13 @@ struct DecisionDetailView: View {
                                 .foregroundStyle(Color.ink)
                                 .fixedSize(horizontal: false, vertical: true)
                             DecisionReasonLine(text: decision.whyBlocking)
+                            if let previous = decision.previousAnswer {
+                                Text(Self.previousAnswerLine(previous))
+                                    .font(FreesideFont.cardBody)
+                                    .foregroundStyle(Color.inkDim)
+                                    .lineLimit(3)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .proseMeasure()
                     }
@@ -1882,7 +1894,7 @@ struct DecisionDetailView: View {
             accessibilityLabel: "Answer to \(decision.question)",
             options: options,
             selection: Binding(
-                get: { questionChoices[index] },
+                get: { questionChoices[index] ?? decision.previousChoice },
                 set: { questionChoices[index] = $0 })
         )
         .disabled(!model.actionsEnabled)
@@ -1896,7 +1908,21 @@ struct DecisionDetailView: View {
         guard let item, offersQuestionOptionChoice(item),
             let presentation = AgentQuestionPresentation(item)
         else { return nil }
-        return presentation.answers(questionChoices)
+        return presentation.answers(presentation.choices(picked: questionChoices))
+    }
+
+    /// The text the answer sheet starts with: what the owner typed before
+    /// for each decision still answered "Other answer" (#3443).
+    private func previousQuestionNote(_ item: Components.Schemas.AttentionItem?) -> String? {
+        guard let item, offersQuestionOptionChoice(item),
+            let presentation = AgentQuestionPresentation(item)
+        else { return nil }
+        return presentation.previousNote(presentation.choices(picked: questionChoices))
+    }
+
+    /// The line under a question the owner answered before (#3443).
+    nonisolated static func previousAnswerLine(_ previous: AgentQuestionPresentation.PreviousAnswer) -> String {
+        "You answered this before: \(previous.text)"
     }
 
     /// The answer sheet's ask: the answer itself, or with options chosen, the

@@ -3175,25 +3175,31 @@ func (e *Engine) acceptSpecificationDecisions(
 		return false, err
 	}
 	itemID := specificationQuestionItemID(request)
-	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: itemID, ProjectID: run.ProjectID, Subject: subject,
-		Type: domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
-		Reason:            decisions[0].Question,
-		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
-		AgentClaims: []domain.AgentClaim{{
-			Label: domain.AgentQuestionClaimLabel, Artifact: artifact.ID, Digest: artifact.Digest,
-			Provenance: artifact.Provenance,
-			Metadata: domain.EvidenceMetadata{
-				MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
-				CreatedAt: createdAt, Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+	questionItem := func(previous []domain.PreviousAnswer) (domain.AttentionItem, error) {
+		return domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: itemID, ProjectID: run.ProjectID, Subject: subject,
+			Type: domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+			Reason:            decisions[0].Question,
+			RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
+			AgentClaims: []domain.AgentClaim{{
+				Label: domain.AgentQuestionClaimLabel, Artifact: artifact.ID, Digest: artifact.Digest,
+				Provenance: artifact.Provenance,
+				Metadata: domain.EvidenceMetadata{
+					MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: int64(len(body)),
+					CreatedAt: createdAt, Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+				},
+			}},
+			AgentQuestion: &domain.AgentQuestionFacts{
+				Stage: domain.StageNameSpecification, InvocationID: request.InvocationID, Decisions: decisions,
+				PreviousAnswers: previous,
 			},
-		}},
-		AgentQuestion: &domain.AgentQuestionFacts{
-			Stage: domain.StageNameSpecification, InvocationID: request.InvocationID, Decisions: decisions,
-		},
-		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
-		CreatedAt: &createdAt, DisplayNames: names,
-	}, nil)
+			ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+			CreatedAt: &createdAt, DisplayNames: names,
+		}, nil)
+	}
+	// Built once without previous answers before the write, so a decision
+	// set the item refuses fails before anything durable.
+	item, err := questionItem(nil)
 	if err != nil {
 		return false, err
 	}
@@ -3237,7 +3243,21 @@ func (e *Engine) acceptSpecificationDecisions(
 		if err := tx.PutArtifact(ctx, artifact); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		// Looked up here, once per invocation: a replay returned above, so a
+		// later answer can't make a replay's item disagree with the stored
+		// one. The answers are only defaults, so a failed lookup, or
+		// defaults the item refuses, records the question without them
+		// rather than fail it.
+		asked := item
+		previous, err := specificationPreviousAnswers(ctx, &tx.ReadTx, run, decisions)
+		if err == nil && len(previous) != 0 {
+			asked, err = questionItem(previous)
+		}
+		if err != nil {
+			e.logger.Warn("specification question records no previous answers", "item", itemID, "error", err)
+			asked = item
+		}
+		return tx.PutAttentionItem(ctx, asked)
 	})
 	if errors.Is(err, errReplay) {
 		return false, nil

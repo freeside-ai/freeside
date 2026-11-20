@@ -952,6 +952,30 @@
                                 requiresMessage: AgentQuestionPresentation.needsNote(chosenAnswers),
                                 submit: { _, _ in true }))))
             }
+            // #3443: the same sheet on a question the owner answered before,
+            // opened with the text they typed for "Other answer".
+            if let previous = AgentQuestionPresentation(AttentionFixtures.previouslyAnsweredQuestion().item),
+                let previousAnswers = previous.answers(previous.previousChoices)
+            {
+                for (suffix, width) in [("", CGFloat(480)), ("-phone", CGFloat(390))] {
+                    surfaces.append(
+                        Surface(
+                            name: "message-composer-previous-answer\(suffix)",
+                            width: width,
+                            view: AnyView(
+                                MessageComposerSheet(
+                                    eyebrow: AttentionDisplay.label(.answer_and_retry),
+                                    ask: DecisionDetailView.answerAsk(previousAnswers),
+                                    submitLabel: AgentQuestionPresentation.confirmLabel(
+                                        .answer_and_retry, answers: previousAnswers),
+                                    byteLimit: Components.Schemas.QuestionAnswer.maxNoteBytes,
+                                    rendersInteractiveControls: false,
+                                    choiceLines: AgentQuestionPresentation.choiceLines(previousAnswers),
+                                    requiresMessage: AgentQuestionPresentation.needsNote(previousAnswers),
+                                    initialMessage: previous.previousNote(previous.previousChoices) ?? "",
+                                    submit: { _, _ in true }))))
+                }
+            }
             surfaces.append(
                 Surface(
                     name: "message-composer-phone",
@@ -2012,6 +2036,30 @@
                                 view: AnyView(
                                     choosing.screenshotCard(
                                         AttentionFixtures.longQuestion().item,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
+                    // #3443: a re-asked specification question opens with the
+                    // owner's earlier answers chosen, each named under its
+                    // question: an option, and typed text as "Other answer".
+                    let answeredBefore = DecisionDetailView(
+                        store: validated.store,
+                        itemID: snapshot.item.id,
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow,
+                        servesQuestionOptionAnswers: true,
+                        model: validated.model
+                    )
+                    for (suffix, width) in [("previous", canvasWidth), ("previous-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-agent_question-\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    answeredBefore.screenshotCard(
+                                        AttentionFixtures.previouslyAnsweredQuestion().item,
                                         at: dynamicTypeSize,
                                         compactLayout: width < canvasWidth))))
                     }

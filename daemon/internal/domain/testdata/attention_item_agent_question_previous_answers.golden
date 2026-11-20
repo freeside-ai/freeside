@@ -1,0 +1,145 @@
+{
+  "id": "item-agent-question-again",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1",
+    "task_id": null
+  },
+  "type": "agent_question",
+  "priority": "normal",
+  "reason": "the specifier needs an owner decision",
+  "requested_decision": [
+    "answer_and_retry",
+    "stop"
+  ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:5cc93048c114746be2e4ffdaf2fc5c852d10e5bca9a6ba8a32f81a9cbeaaa9af"
+  },
+  "evidence_snapshot": null,
+  "agent_claims": [
+    {
+      "label": "Question",
+      "artifact_id": "decisions-inv-specify-2",
+      "digest": "sha256:cc999ae7a327eb6305a60a205bbafd7b05db014a98d19c70ef6813facc211e72",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-specify-2",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null,
+      "metadata": {
+        "media_type": "application/json",
+        "size_bytes": 512,
+        "created_at": "2026-01-02T03:04:05Z",
+        "source": "claim",
+        "availability": "available"
+      }
+    }
+  ],
+  "artifact_digests": [
+    "sha256:cc999ae7a327eb6305a60a205bbafd7b05db014a98d19c70ef6813facc211e72"
+  ],
+  "pr_head_sha": "",
+  "pr_reference": null,
+  "readiness": null,
+  "readiness_detail": null,
+  "yield_history": null,
+  "commit_plan_notice": null,
+  "scope_decision": null,
+  "readiness_invalidation": null,
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "display_names": null,
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "interpretation_failure": null,
+  "publish_block": null,
+  "diff_stats": null,
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
+  "spec_revision": null,
+  "agent_question": {
+    "scope_conflict": null,
+    "stage": "specification",
+    "invocation_id": "inv-specify-2",
+    "kind": null,
+    "decisions": [
+      {
+        "question": "Which retention period applies to exported logs?",
+        "why_blocking": "The specification cannot fix the schema without it.",
+        "options": [
+          {
+            "label": "30 days",
+            "tradeoffs": "Cheaper storage, shorter audit window."
+          },
+          {
+            "label": "1 year",
+            "tradeoffs": "Longer audit window, higher storage cost."
+          }
+        ],
+        "recommendation": "30 days"
+      },
+      {
+        "question": "Where are exported logs stored?",
+        "why_blocking": "The export target decides the storage schema.",
+        "options": [
+          {
+            "label": "Object storage",
+            "tradeoffs": "Cheap, slower to query."
+          },
+          {
+            "label": "Warehouse",
+            "tradeoffs": "Fast to query, costlier."
+          }
+        ],
+        "recommendation": "Object storage"
+      }
+    ],
+    "previous_answers": [
+      {
+        "decision_index": 0,
+        "option_label": "1 year",
+        "note": null,
+        "item_id": "item-agent-question"
+      },
+      {
+        "decision_index": 1,
+        "option_label": null,
+        "note": "Keep them for 90 days; legal asked.",
+        "item_id": "item-agent-question-earlier"
+      }
+    ]
+  },
+  "review_diminishing": null,
+  "review_guide": null,
+  "review_guide_notice": null,
+  "alternate_agents": null,
+  "elapsed_deadlines": null,
+  "item_version": 1,
+  "interruption_class": "exceptional",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "created_at": "2026-01-02T03:04:05Z",
+  "expires_when": null,
+  "decided_at": null,
+  "surface_first_opened_at": null,
+  "conclusion": null,
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "open"
+}

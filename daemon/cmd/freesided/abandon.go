@@ -137,15 +137,24 @@ func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonRe
 		result.CleanupComplete = true
 		return result, nil
 	}
-	partial := func(step string, cause error) (abandonResult, error) {
+	return result, finishAbandonedEpisode(ctx, st, &result)
+}
+
+// finishAbandonedEpisode runs what follows an abandonment's slot release:
+// it durably closes the episode's workflow, then retires its decisions.
+// Each step commits on its own and repeats as a no-op, so `abandon -task X
+// -episode N` and a retried `submit --replace` rerun it safely. On failure
+// result.Error carries the returned error, which names that repair command.
+func finishAbandonedEpisode(ctx context.Context, st *store.Store, result *abandonResult) error {
+	partial := func(step string, cause error) error {
 		err := fmt.Errorf("abandon: task %q episode %d: released_by_this_call=%t; workflow_closed=%t; %s: %w; repair with abandon -task %s -episode %d",
-			cfg.TaskID, result.Episode, result.Released, result.WorkflowClosed, step, cause, cfg.TaskID, result.Episode)
+			result.TaskID, result.Episode, result.Released, result.WorkflowClosed, step, cause, result.TaskID, result.Episode)
 		result.Error = err.Error()
-		return result, err
+		return err
 	}
 	commitClosure := func() error {
 		return st.Write(ctx, func(tx *store.WriteTx) error {
-			_, created, err := tx.CloseTaskWorkflow(ctx, cfg.TaskID, result.Episode, time.Now().UTC())
+			_, created, err := tx.CloseTaskWorkflow(ctx, result.TaskID, result.Episode, time.Now().UTC())
 			if err != nil {
 				return err
 			}
@@ -157,7 +166,7 @@ func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonRe
 	}
 	var closureErr error
 	if daemon, ok := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); ok && daemon.commitWorkflowClosure != nil {
-		closureErr = daemon.commitWorkflowClosure(ctx, cfg.TaskID, commitClosure)
+		closureErr = daemon.commitWorkflowClosure(ctx, result.TaskID, commitClosure)
 	} else {
 		closureErr = commitClosure()
 	}
@@ -168,7 +177,7 @@ func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonRe
 	// Retirement policy cannot undo either the slot release or the closure.
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		var err error
-		result.RetiredItems, err = engine.RetireClosedTaskWorkflowItems(ctx, tx, cfg.TaskID, result.Episode)
+		result.RetiredItems, err = engine.RetireClosedTaskWorkflowItems(ctx, tx, result.TaskID, result.Episode)
 		if err != nil {
 			return err
 		}
@@ -181,7 +190,7 @@ func runAbandonCommand(ctx context.Context, cfg abandonCommandConfig) (abandonRe
 		return partial("retire items", err)
 	}
 	result.CleanupComplete = true
-	return result, nil
+	return nil
 }
 
 func validateAbandonConfig(cfg abandonCommandConfig) error {

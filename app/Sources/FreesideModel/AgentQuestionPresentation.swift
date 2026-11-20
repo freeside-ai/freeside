@@ -25,6 +25,33 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         /// order, and an option is named by its label, never its position.
         public let options: [Option]
         public let recommendation: String
+        /// The owner's earlier answer to this decision, which the daemon
+        /// found on an earlier ask of the same source (#3443), or nil.
+        public let previousAnswer: PreviousAnswer?
+
+        /// The choice the earlier answer makes: its option, or "Other
+        /// answer" for typed text.
+        public var previousChoice: Choice? {
+            switch previousAnswer {
+            case .option(let label)?: .option(label)
+            case .note?: .other
+            case nil: nil
+            }
+        }
+    }
+
+    /// An earlier answer to a decision: an option this decision still
+    /// offers, named by its exact label, or the text the owner typed.
+    public enum PreviousAnswer: Equatable, Sendable {
+        case option(String)
+        case note(String)
+
+        /// What the card shows after "You answered this before:".
+        public var text: String {
+            switch self {
+            case .option(let label), .note(let label): label
+            }
+        }
     }
 
     /// The owner's choice for one decision on the card: an option, named by
@@ -50,7 +77,14 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
         stage = facts.stage
         kind = facts.kind?.value1
         scopeConflict = facts.scope_conflict?.value1
-        decisions = facts.decisions.map { decision in
+        let previous = Dictionary(
+            (facts.previous_answers ?? []).compactMap { answer -> (Int, PreviousAnswer)? in
+                if let label = answer.option_label { return (answer.decision_index, .option(label)) }
+                if let note = answer.note { return (answer.decision_index, .note(note)) }
+                return nil
+            },
+            uniquingKeysWith: { first, _ in first })
+        decisions = facts.decisions.enumerated().map { index, decision in
             Decision(
                 question: decision.question,
                 whyBlocking: decision.why_blocking,
@@ -60,8 +94,40 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
                             label: option.label, tradeoffs: option.tradeoffs,
                             recommended: option.label == decision.recommendation, number: index + 1)
                     }),
-                recommendation: decision.recommendation)
+                recommendation: decision.recommendation,
+                previousAnswer: previous[index])
         }
+    }
+
+    /// The choices the card starts with, by decision index: each earlier
+    /// answer, as its option or as "Other answer" for typed text. The owner
+    /// still confirms, and a pick of their own replaces it.
+    public var previousChoices: [Int: Choice] {
+        var choices: [Int: Choice] = [:]
+        for (index, decision) in decisions.enumerated() {
+            choices[index] = decision.previousChoice
+        }
+        return choices
+    }
+
+    /// The owner's picks over the earlier answers: what the card shows as
+    /// chosen and what an answer sends.
+    public func choices(picked: [Int: Choice]) -> [Int: Choice] {
+        previousChoices.merging(picked) { _, picked in picked }
+    }
+
+    /// The note the answer sheet starts with: the earlier typed text of each
+    /// decision still answered "Other answer", once each, in decision order,
+    /// or nil when there is none.
+    public func previousNote(_ choices: [Int: Choice]) -> String? {
+        var notes: [String] = []
+        for (index, decision) in decisions.enumerated() {
+            guard choices[index] == .other, case .note(let note)? = decision.previousAnswer,
+                !notes.contains(note)
+            else { continue }
+            notes.append(note)
+        }
+        return notes.isEmpty ? nil : notes.joined(separator: "\n\n")
     }
 
     /// The recommended option, then the others in their order. A stable

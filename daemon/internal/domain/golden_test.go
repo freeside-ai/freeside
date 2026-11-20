@@ -537,6 +537,49 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	previousLabel, previousNote := "1 year", "Keep them for 90 days; legal asked."
+	previousFacts := &domain.AgentQuestionFacts{
+		Stage: domain.StageNameSpecification, InvocationID: "inv-specify-2",
+		Decisions: append(slices.Clone(agentQuestionFacts.Decisions), domain.Decision{
+			Question:    "Where are exported logs stored?",
+			WhyBlocking: "The export target decides the storage schema.",
+			Options: []domain.DecisionOption{
+				{Label: "Object storage", Tradeoffs: "Cheap, slower to query."},
+				{Label: "Warehouse", Tradeoffs: "Fast to query, costlier."},
+			},
+			Recommendation: "Object storage",
+		}),
+		PreviousAnswers: []domain.PreviousAnswer{
+			{DecisionIndex: 0, OptionLabel: &previousLabel, ItemID: "item-agent-question"},
+			{DecisionIndex: 1, Note: &previousNote, ItemID: "item-agent-question-earlier"},
+		},
+	}
+	previousDigest, err := previousFacts.ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousProvenance := questionProvenance
+	previousProvenance.ProducerInvocationID = "inv-specify-2"
+	agentQuestionPreviousItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-agent-question-again", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionAgentQuestion, Priority: domain.PriorityNormal,
+		Reason:            "the specifier needs an owner decision",
+		RequestedDecision: []domain.Action{domain.ActionAnswerAndRetry, domain.ActionStop},
+		AgentClaims: []domain.AgentClaim{{
+			Label: domain.AgentQuestionClaimLabel, Artifact: "decisions-inv-specify-2",
+			Digest: previousDigest, Provenance: previousProvenance,
+			Metadata: domain.EvidenceMetadata{
+				MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 512, CreatedAt: ts,
+				Source: domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+			},
+		}},
+		AgentQuestion: previousFacts,
+		ItemVersion:   1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	blockedKind := domain.BlockedKindOwnerDecision
 	blockedOutcome := domain.BlockedOutcome{
 		Version: domain.BlockedOutcomeEncodingVersion, Kind: blockedKind,
@@ -2709,6 +2752,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_review_dispute", reviewDisputeItem},
 		{"attention_item_spec_revision", specRevisionItem},
 		{"attention_item_agent_question", agentQuestionItem},
+		{"attention_item_agent_question_previous_answers", agentQuestionPreviousItem},
 		{"blocked_outcome", blockedOutcome},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_surface_viewed", surfaceViewedItem},
