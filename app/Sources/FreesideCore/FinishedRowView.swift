@@ -4,10 +4,16 @@ import SwiftUI
 /// A Finished row in its compact form (owner decision, 11 Nov 2026): the
 /// task's name, or a closed item's summary, on one dim serif line with the
 /// time it finished trailing, and no card. Finished work is a log to look
-/// back through, so it gives up the keyword and context lines a row that
-/// still asks something of the operator needs. The status the full row's
-/// keyword drew is spoken, not drawn. Selection and hover follow the full
-/// row: the accent wash under a 4pt bar, the hover cut on the Mac.
+/// back through, so it gives up the keyword line a row that still asks
+/// something of the operator needs. A task row draws its outcome as a
+/// timeline marker before its name, and an issue-backed task names its
+/// issue on a context line under the title, so retries of one issue read
+/// as one issue's attempts (owner decision, 19 Nov 2026,
+/// devlog/2026-11-19-1259-issue-backed-task-names.md). The outcome is
+/// spoken too, since two of the markers differ by color alone, and so is
+/// the recorded status the full row's keyword drew when it says more.
+/// Selection and hover follow the full row: the accent wash under a 4pt
+/// bar, the hover cut on the Mac.
 struct FinishedRowView: View {
     enum Subject {
         /// `status` is the recorded status the full row's keyword drew;
@@ -45,7 +51,16 @@ struct FinishedRowView: View {
     private func line(at now: Date) -> some View {
         let time = time(at: now)
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            title
+            if let marker {
+                ChronologyMarker(kind: marker)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                title
+                if let context {
+                    SidebarRowContext(text: context)
+                }
+            }
             Spacer(minLength: 8)
             if let time {
                 timeText(time)
@@ -60,7 +75,34 @@ struct FinishedRowView: View {
         .modifier(Surface(isSelected: isSelected))
         .textSelection(.disabled)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([titleText(at: now), status, time?.text].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(
+            ([titleText(at: now)] + spokenStatus + [context, time?.text].compactMap { $0 }).joined(separator: ", "))
+    }
+
+    /// The outcome marker a task row draws; nil for an item, or a task
+    /// that hasn't ended.
+    var marker: ChronologyMarker.Kind? {
+        guard case .task(let task, _, _) = subject, let outcome = TaskDisplay.outcome(task) else { return nil }
+        switch outcome {
+        case .finished: return .stageStart
+        case .stopped: return .failure
+        case .abandoned: return .prior
+        }
+    }
+
+    /// A task's context line: project, then its issue, for an issue-backed
+    /// task alone.
+    var context: String? {
+        guard case .task(let task, _, _) = subject else { return nil }
+        return TaskDisplay.finishedContext(task)
+    }
+
+    /// What VoiceOver reads after the title: a task's outcome, then its
+    /// recorded status when that says something else; an item's status.
+    var spokenStatus: [String] {
+        guard case .task(let task, _, _) = subject, TaskDisplay.outcome(task) != nil else { return [status] }
+        let outcome = TaskDisplay.lifecycleLabel(task).text
+        return outcome.localizedCaseInsensitiveCompare(status) == .orderedSame ? [outcome] : [outcome, status]
     }
 
     /// One line at the standard sizes; an accessibility size lifts the cap,

@@ -58,16 +58,21 @@ func operatorTaskName(raw string) (string, error) {
 	return name, nil
 }
 
+// taskNamerPurpose is the research purpose of the namer's one issue read. The
+// issue-title name and the agent namer read the issue under the same
+// invocation and ordinal, so they must share the purpose: the fetcher
+// recovers a stored read only when its purpose matches.
+const taskNamerPurpose = "Name the task from the issue's requested outcome"
+
 // enqueueTaskName queues run's task for naming unless it is already queued or
 // in the worker. Every dispatch pass re-enqueues the runs it touched, including
 // ones it started earlier; that re-enqueue is what names a task after a
 // fallback or a restart, and the dedupe keeps it from filling the queue with
 // copies of one task. The send never blocks, so holding the mutex across it
 // cannot stall dispatch. A full queue warns once until an enqueue succeeds.
+// It queues whether or not the namer site is configured, because an
+// issue-backed task is named from its issue's title without the site.
 func (e *Engine) enqueueTaskName(run domain.Run) {
-	if !e.inference.SupportsSite(inference.TaskNamerSiteID) {
-		return
-	}
 	e.taskNamesMu.Lock()
 	defer e.taskNamesMu.Unlock()
 	if _, active := e.taskNamesActive[run.TaskID]; active {
@@ -121,10 +126,36 @@ func taskHeadingName(body []byte) (string, string) {
 	return strings.TrimSpace(title), failure
 }
 
+// issueTaskName bounds an issue title into a stored task name: its first
+// non-blank line, trimmed and cut to maxTaskNameRunes code points. It reports
+// false for a title with no usable line, invalid UTF-8, or a credential-shaped
+// token, so the caller falls back to agent naming.
+func issueTaskName(title string) (string, bool) {
+	if !utf8.ValidString(title) || importer.ContainsSecret([]byte(title)) {
+		return "", false
+	}
+	for line := range strings.Lines(title) {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if runes := []rune(name); len(runes) > maxTaskNameRunes {
+			name = strings.TrimSpace(string(runes[:maxTaskNameRunes]))
+		}
+		return name, true
+	}
+	return "", false
+}
+
 // nameTaskIfUnnamed runs only after a durable dispatch, outside transactions.
 // Its caller logs failures without changing the workflow's dispatch result.
+// An issue-backed task takes its issue's title (source issue) whatever its
+// current name, unless an operator or the issue already named it; it never
+// calls the namer model, and a failed issue read names nothing. Any other
+// task, or one whose title is unusable, gets today's agent name when it still
+// has only its identifier and the namer site is configured.
 func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
-	if !e.inference.SupportsSite(inference.TaskNamerSiteID) || e.specification == nil {
+	if e.specification == nil {
 		return nil
 	}
 	ctx, finish, err := e.beginTaskWork(ctx, run)
@@ -143,11 +174,27 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 	}); err != nil {
 		return err
 	}
-	if task.Name.Source != domain.DisplayNameSourceIdentifier || task.Source == nil {
+	invocation := domain.InvocationID("task-namer-" + string(task.ID))
+	if issue := task.Issue(); issue != nil &&
+		task.Name.Source != domain.DisplayNameSourceOperator && task.Name.Source != domain.DisplayNameSourceIssue {
+		named, err := e.nameTaskFromIssue(ctx, run, task.ID, *issue, invocation)
+		if named {
+			return nil
+		}
+		// An unreadable issue leaves a submitted task to an agent name from
+		// its text, which the issue title replaces once a later dispatch
+		// reads the issue. An intake task's agent name needs that same
+		// issue, so it waits for the retry.
+		if err != nil && (task.Source.Kind == domain.SpecificationSourceIssueSubject ||
+			!errors.Is(err, errTaskSourceUnavailable)) {
+			return err
+		}
+	}
+	if !e.inference.SupportsSite(inference.TaskNamerSiteID) ||
+		task.Name.Source != domain.DisplayNameSourceIdentifier || task.Source == nil {
 		return nil
 	}
-	source, err := e.readTaskSource(ctx, run, task, domain.InvocationID("task-namer-"+string(task.ID)),
-		"Name the task from the issue's requested outcome")
+	source, err := e.readTaskSource(ctx, run, task, invocation, taskNamerPurpose)
 	if err != nil {
 		return err
 	}
@@ -179,6 +226,28 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 		return nil
 	}
 	return err
+}
+
+// nameTaskFromIssue stores the issue's title as the task's name. It reports
+// false with no error when the title isn't a usable name, so the caller falls
+// back to agent naming. A failed issue read returns its error and names
+// nothing; the task's next dispatch retries it, since only an issue or
+// operator name stops the retry.
+func (e *Engine) nameTaskFromIssue(
+	ctx context.Context, run domain.Run, taskID domain.TaskID, issue domain.IssueSubjectRef, invocation domain.InvocationID,
+) (bool, error) {
+	source, err := e.readIssueSource(ctx, run, issue, invocation, taskNamerPurpose)
+	if err != nil {
+		return false, err
+	}
+	name, ok := issueTaskName(source.IssueTitle)
+	if !ok {
+		return false, nil
+	}
+	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.SetTaskName(ctx, taskID, domain.DisplayName{Text: name, Source: domain.DisplayNameSourceIssue})
+	})
+	return err == nil, err
 }
 
 // taskSource is a task's source as a judgment site reads it: the work item's

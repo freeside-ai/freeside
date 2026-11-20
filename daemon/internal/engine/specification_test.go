@@ -4406,3 +4406,101 @@ func TestSpecificationFailureRecordsDriverCause(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// submitClientTasks submits each text as its own client task on one store,
+// with project-1 registered as freeasinbird/freeside (repository 42), and
+// returns each submission's specification run.
+func submitClientTasks(t *testing.T, texts ...string) (*store.Store, *signet.BlobStore, []domain.Run) {
+	t.Helper()
+	root := t.TempDir()
+	st := storetest.Open(t, filepath.Join(root, "state.db"), store.Options{})
+	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance := domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: domain.Digest(contentaddr.Sum([]byte("issue-name-policy")))}
+	initiator := ManualInitiator{
+		PolicyKeys: []domain.PolicyKey{
+			{Key: specify.PolicySpecApproval, Value: "true", Provenance: provenance},
+			{Key: specify.PolicyMaxIterations, Value: "4", Provenance: provenance},
+			{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
+			{Key: specify.PolicyResearchAllowlist, Value: "https://api.github.com", Provenance: provenance},
+			{Key: specify.PolicyResearchMaxBytes, Value: "131072", Provenance: provenance},
+			{Key: "paths", Value: "daemon/**", Provenance: provenance},
+		},
+		CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+	}
+	submitter := NewTaskSubmitter(blobs, func(domain.ProjectID) (ManualInitiator, bool) { return initiator, true }, nil)
+	runs := make([]domain.Run, 0, len(texts))
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.RegisterProject(t.Context(), domain.Project{ID: "project-1", Repo: "freeasinbird/freeside", RepositoryID: 42}); err != nil {
+			return err
+		}
+		for i, text := range texts {
+			// The submission door stores the source before submitting it.
+			digest := domain.Digest(contentaddr.Sum([]byte(text)))
+			if _, err := blobs.Put(digest, strings.NewReader(text)); err != nil {
+				return err
+			}
+			result, err := submitter.SubmitTask(t.Context(), tx, signet.TaskSubmissionInput{
+				CommandID: fmt.Sprintf("cmd-%d", i), Origin: domain.TaskSubmissionOriginDevice,
+				RequestDigest: domain.Digest(contentaddr.Sum(fmt.Appendf(nil, "request-%d", i))),
+				ProjectID:     "project-1", Source: []byte(text), SourceDigest: digest,
+			})
+			if err != nil {
+				return err
+			}
+			run, err := tx.GetRun(t.Context(), result.SpecificationRunID)
+			if err != nil {
+				return err
+			}
+			runs = append(runs, run)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return st, blobs, runs
+}
+
+func taskForRun(t *testing.T, st *store.Store, run domain.Run) domain.Task {
+	t.Helper()
+	var task domain.Task
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		task, err = tx.GetTask(t.Context(), run.TaskID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+// Submission records the issue only for a text that is exactly one canonical
+// issue URL in the project's managed repository, under the project's own
+// repository name and ID.
+func TestSubmissionRecordsSubmittedIssue(t *testing.T) {
+	t.Parallel()
+	want := &domain.IssueSubjectRef{Repo: "freeasinbird/freeside", RepositoryID: 42, IssueNumber: 7}
+	cases := []struct {
+		name string
+		text string
+		want *domain.IssueSubjectRef
+	}{
+		{"bare URL", "https://github.com/freeasinbird/freeside/issues/7", want},
+		{"surrounding whitespace", "\n  https://github.com/FreeAsInBird/freeside/issues/7  \n", want},
+		{"another repository", "https://github.com/freeasinbird/other/issues/7", nil},
+		{"ordinary text", "Fix https://github.com/freeasinbird/freeside/issues/7 soon.", nil},
+	}
+	texts := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		texts = append(texts, tc.text)
+	}
+	st, _, runs := submitClientTasks(t, texts...)
+	for i, tc := range cases {
+		task := taskForRun(t, st, runs[i])
+		if (task.SubmittedIssue == nil) != (tc.want == nil) || (tc.want != nil && *task.SubmittedIssue != *tc.want) {
+			t.Errorf("%s: submitted issue = %+v, want %+v", tc.name, task.SubmittedIssue, tc.want)
+		}
+	}
+}

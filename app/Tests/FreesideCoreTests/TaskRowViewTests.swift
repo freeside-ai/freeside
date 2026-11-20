@@ -154,15 +154,14 @@ import Testing
             var snapshot = base
             snapshot.task.id = id
             snapshot.task.display_names.task = name
-            snapshot.task.source = issue.map {
-                .init(
-                    value1: .issue_subject(
-                        .init(
-                            kind: .issue_subject,
-                            issue_subject: .init(
-                                repo: "freeside-ai/freeside", repository_id: $0.repositoryID, issue_number: $0.number)
-                        )))
+            let ref = issue.map {
+                Components.Schemas.IssueSubjectRef(
+                    repo: "freeside-ai/freeside", repository_id: $0.repositoryID, issue_number: $0.number)
             }
+            snapshot.task.source = ref.map {
+                .init(value1: .issue_subject(.init(kind: .issue_subject, issue_subject: $0)))
+            }
+            snapshot.task.issue = ref.map { .init(value1: $0) }
             return snapshot
         }
         let tasks = [
@@ -179,6 +178,28 @@ import Testing
             snapshot("task-g", .init(text: "Other issue", source: ._operator), issue: (1, 725)),
         ]
         #expect(TaskDisplay.ambiguousTaskIDs(tasks) == ["task-a", "task-b", "task-d", "task-e"])
+    }
+
+    /// Acceptance (#3456): a Finished task row draws its outcome's marker
+    /// and speaks the outcome, adding the recorded status only when it says
+    /// more; an issue-backed row names its issue, and an item row does
+    /// neither.
+    @Test @MainActor func finishedRowsDrawAndSpeakTheirOutcome() throws {
+        let retries = TaskFixtures.issueRetries().map(\.task)
+        let rows = retries.map {
+            FinishedRowView(subject: .task($0, status: TaskDisplay.lifecycleLabel($0).text, showsIdentifier: true))
+        }
+        #expect(rows.map(\.marker) == [.prior, .failure, .stageStart])
+        #expect(rows.map(\.spokenStatus) == [["Abandoned"], ["Stopped"], ["Finished"]])
+        #expect(rows.map(\.context) == Array(repeating: "freeside · #80", count: 3))
+
+        let failed = FinishedRowView(subject: .task(retries[1], status: "Execution Failed", showsIdentifier: false))
+        #expect(failed.spokenStatus == ["Stopped", "Execution Failed"])
+        let legacy = try #require(TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.legacyTaskID }).task
+        #expect(FinishedRowView(subject: .task(legacy, status: "Finished", showsIdentifier: false)).context == nil)
+        let item = FinishedRowView(subject: .item(AttentionFixtures.fixture(type: .agent_question).item))
+        #expect(item.marker == nil)
+        #expect(item.context == nil)
     }
 
     /// Acceptance (#1922): the marker is the creation time in the short

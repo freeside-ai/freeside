@@ -9,7 +9,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
-	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -266,22 +265,16 @@ func (e *Engine) readTriageSource(
 	if err != nil || task.Source == nil || task.Source.Kind != domain.SpecificationSourceWorkItemArtifact {
 		return source, err
 	}
-	ownerRepo, number, ok := parseSourceIssueURL(TaskSourceIssue([]byte(source.Text)))
-	if !ok {
-		return source, nil
-	}
-	var scope specify.ManagedRepository
+	var issue *domain.IssueSubjectRef
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		scope, err = researchScope(ctx, tx, run.ProjectID)
+		issue, err = managedSourceIssue(ctx, tx, run.ProjectID, []byte(source.Text))
 		return err
 	}); err != nil {
 		return taskSource{}, err
 	}
-	if scope.RepositoryID <= 0 || !strings.EqualFold(ownerRepo, scope.Repo) {
+	if issue == nil {
 		return source, nil
 	}
-	return e.readIssueSource(ctx, run, domain.IssueSubjectRef{
-		Repo: scope.Repo, RepositoryID: scope.RepositoryID, IssueNumber: number,
-	}, invocation, purpose)
+	return e.readIssueSource(ctx, run, *issue, invocation, purpose)
 }

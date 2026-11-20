@@ -18,6 +18,12 @@ func TestTaskValidation(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	submittedIssue := domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7}
+	withIssue := valid
+	withIssue.SubmittedIssue = &submittedIssue
+	if err := withIssue.Validate(); err != nil {
+		t.Fatalf("submitted issue: %v", err)
+	}
 	for name, mutate := range map[string]func(*domain.Task){
 		"missing ID":               func(task *domain.Task) { task.ID = "" },
 		"missing project":          func(task *domain.Task) { task.ProjectID = "" },
@@ -27,6 +33,16 @@ func TestTaskValidation(t *testing.T) {
 		"project-only name source": func(task *domain.Task) { task.Name.Source = domain.DisplayNameSourceName },
 		"invalid source union": func(task *domain.Task) {
 			task.Source = &domain.SpecificationSource{Kind: domain.SpecificationSourceIssueSubject}
+		},
+		"submitted issue without a source": func(task *domain.Task) {
+			task.Source, task.SubmittedIssue = nil, &submittedIssue
+		},
+		"submitted issue on an issue subject": func(task *domain.Task) {
+			task.Source = &domain.SpecificationSource{Kind: domain.SpecificationSourceIssueSubject, IssueSubject: &submittedIssue}
+			task.SubmittedIssue = &submittedIssue
+		},
+		"invalid submitted issue": func(task *domain.Task) {
+			task.SubmittedIssue = &domain.IssueSubjectRef{Repo: "owner/repo", IssueNumber: 7}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

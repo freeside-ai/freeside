@@ -103,6 +103,15 @@ enum MockContractValidation {
                 if issue.repo.isEmpty || issue.repository_id < 1 || issue.issue_number < 1 {
                     return "invalid task issue source"
                 }
+                if task.issue?.value1 != issue { return "task issue differs from its intake issue" }
+            }
+        }
+        // The daemon projects an issue_subject task's intake issue, a submitted
+        // task's recorded issue, and nothing for a task with no source.
+        if let issue = task.issue?.value1 {
+            if task.source == nil { return "task issue without a source" }
+            if issue.repo.isEmpty || issue.repository_id < 1 || issue.issue_number < 1 {
+                return "invalid task issue"
             }
         }
         return nil

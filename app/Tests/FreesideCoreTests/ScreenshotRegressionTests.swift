@@ -752,6 +752,19 @@
                             store: clear, tasks: tasks, runs: runs,
                             navigation: screenshotNavigation(selecting: nil), preferences: finishedOnly
                         ).screenshotContent(now: screenshotNow, sidebarHeight: 640, finishedLimit: 2))))
+            // Three attempts at one issue in Finished (#3456): each names
+            // the issue on its context line and draws its outcome.
+            for colorScheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "unified-list-finished-issue-retries" + (colorScheme == .dark ? "-dark" : ""),
+                        width: 320, colorScheme: colorScheme,
+                        view: AnyView(
+                            UnifiedListView(
+                                store: clear, tasks: TaskFixtures.issueRetries(), runs: runs,
+                                navigation: screenshotNavigation(selecting: nil), preferences: finishedOnly
+                            ).screenshotContent(now: screenshotNow, sidebarHeight: 320))))
+            }
             try surfaces += workStatusSurfaces()
             return surfaces
         }
@@ -5336,6 +5349,7 @@
                     .init(
                         kind: .work_item_artifact, work_item_artifact_id: "artifact-working",
                         work_item_artifact_digest: .init(value1: "sha256:" + String(repeating: "e", count: 64)))))
+            working.task.issue = nil
             working.task.task_lines = lines
             var finished = TaskStageFixtures.page(.review)
             finished.task.task_lines = lines

@@ -60,6 +60,10 @@ import Testing
                 .init(
                     kind: .issue_subject, issue_subject: .init(repo: "owner/repo", repository_id: 123, issue_number: 42)
                 )))
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
+                == "task issue differs from its intake issue")
+        malformed.task.issue = .init(value1: .init(repo: "owner/repo", repository_id: 123, issue_number: 42))
         #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: []) == nil)
         malformed.task.source = .init(
             value1: .issue_subject(
@@ -69,6 +73,21 @@ import Testing
         #expect(
             MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
                 == "invalid task issue source")
+        // A submitted task may carry the issue its text named; a task with no
+        // source carries none.
+        let submittedIssue = Components.Schemas.IssueSubjectRef(repo: "owner/repo", repository_id: 123, issue_number: 7)
+        malformed = TaskFixtures.artifactSourced(
+            baseline, artifactID: "source-1", digest: "sha256:source-1", issue: submittedIssue)
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served) == nil)
+        malformed.task.issue = .init(value1: .init(repo: "owner/repo", repository_id: 0, issue_number: 7))
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served)
+                == "invalid task issue")
+        malformed.task.source = nil
+        malformed.task.issue = .init(value1: submittedIssue)
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
+                == "task issue without a source")
     }
 
     @Test func taskSubjectBindsItsIdentity() {

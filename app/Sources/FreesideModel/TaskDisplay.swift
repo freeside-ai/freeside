@@ -174,8 +174,8 @@ package enum TaskDisplay {
     }
 
     /// The ids of look-alike tasks (#1922): a task whose displayed name text
-    /// equals another visible task's, or whose source issue (repository and
-    /// issue number) is another's, whatever their names. Rows and the task
+    /// equals another visible task's, or whose issue (repository and issue
+    /// number) is another's, whatever their names. Rows and the task
     /// page draw `lookAlikeMarker` only for these, so it appears only where
     /// two tasks would otherwise read alike. An identifier-fallback name is
     /// the task id, which is unique, so those rows never collide by name.
@@ -185,8 +185,7 @@ package enum TaskDisplay {
         for snapshot in tasks {
             let task = snapshot.task
             idsByName[task.display_names.task.text, default: []].append(task.id)
-            if case .issue_subject(let source)? = task.source?.value1 {
-                let issue = source.issue_subject
+            if let issue = task.issue?.value1 {
                 idsByIssue[.init(repositoryID: issue.repository_id, number: issue.issue_number), default: []]
                     .append(task.id)
             }
@@ -195,7 +194,7 @@ package enum TaskDisplay {
         return Set(groups.filter { $0.count > 1 }.flatMap { $0 })
     }
 
-    /// The daemon's key for an issue-sourced task: the repository's id,
+    /// The daemon's key for an issue-backed task: the repository's id,
     /// which survives a rename, and the issue number.
     private struct SourceIssue: Hashable {
         let repositoryID: Int64
@@ -220,6 +219,21 @@ package enum TaskDisplay {
         switch task.lifecycle {
         case .finished, .stopped, .abandoned: false
         case .active, ._empty, .unknown, nil: true
+        }
+    }
+
+    /// How a task ended, as its Finished row's marker draws it (#3456).
+    package enum Outcome: Equatable {
+        case finished, stopped, abandoned
+    }
+
+    /// The outcome of a task that has ended, nil for one still active.
+    package static func outcome(_ task: Components.Schemas.Task) -> Outcome? {
+        switch task.lifecycle {
+        case .finished: .finished
+        case .stopped: .stopped
+        case .abandoned: .abandoned
+        case .active, ._empty, .unknown, nil: nil
         }
     }
 
@@ -660,13 +674,19 @@ package enum TaskDisplay {
         return project.isEmpty ? task.project_id : project
     }
 
-    /// The intake issue behind the task, when its source is an issue.
+    /// The issue the task works on (`Task.issue`): its intake issue, or the
+    /// issue its submitted text named.
     package static func issueReference(_ task: Components.Schemas.Task) -> String? {
-        guard case .issue_subject(let source)? = task.source?.value1 else { return nil }
-        return "#\(source.issue_subject.issue_number)"
+        task.issue.map { "#\($0.value1.issue_number)" }
     }
 
-    /// The row's meta line: project, the issue when the source names one,
+    /// A Finished row's context line: project, then the issue, for an
+    /// issue-backed task; nil for any other, which draws no context line.
+    package static func finishedContext(_ task: Components.Schemas.Task) -> String? {
+        task.issue == nil ? nil : pageIdentity(task)
+    }
+
+    /// The row's meta line: project, the issue when the task has one,
     /// and when the task was last active, in the run row's time grammar
     /// (coarse under a day, dated from a day on).
     ///
@@ -703,15 +723,15 @@ package enum TaskDisplay {
         return position.historical || heading.label == position.status ? heading.round : heading.text
     }
 
-    /// The task's identity: project, then the issue when the source names
-    /// one. The task page's eyebrow reads it alone; its stage draws as a
+    /// The task's identity: project, then the issue when the task has one.
+    /// The task page's eyebrow reads it alone; its stage draws as a
     /// chip on the status line instead (#3376).
     package static func pageIdentity(_ task: Components.Schemas.Task) -> String {
         ([projectName(task)] + [issueReference(task)].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// The row's context line: project, the issue when the source names
-    /// one, then the current phase and round. The four-phase sentence and
+    /// The row's context line: project, the issue when the task has one,
+    /// then the current phase and round. The four-phase sentence and
     /// the hold stay with VoiceOver and the task timeline (`rowLines`,
     /// `holdCallout`).
     package static func rowContext(_ task: Components.Schemas.Task, position: Position?) -> String {

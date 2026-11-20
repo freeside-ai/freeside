@@ -4031,6 +4031,32 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/Task/source`.
             public var source: Components.Schemas.Task.sourcePayload?
+            /// The issue the task works on: the intake issue for an issue_subject source, or, for a submitted task whose text was exactly one canonical issue URL in the project's managed repository, that issue. Null for any other task, including one submitted before the daemon recorded this field. Descriptive only; it grants nothing.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/issue`.
+            public struct issuePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/Task/issue/value1`.
+                public var value1: Components.Schemas.IssueSubjectRef
+                /// Creates a new `issuePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.IssueSubjectRef) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The issue the task works on: the intake issue for an issue_subject source, or, for a submitted task whose text was exactly one canonical issue URL in the project's managed repository, that issue. Null for any other task, including one submitted before the daemon recorded this field. Descriptive only; it grants nothing.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/issue`.
+            public var issue: Components.Schemas.Task.issuePayload?
             /// - Remark: Generated from `#/components/schemas/Task/created_at`.
             public var created_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/Task/last_activity_at`.
@@ -4127,6 +4153,7 @@ public enum Components {
             ///   - project_id:
             ///   - display_names:
             ///   - source:
+            ///   - issue: The issue the task works on: the intake issue for an issue_subject source, or, for a submitted task whose text was exactly one canonical issue URL in the project's managed repository, that issue. Null for any other task, including one submitted before the daemon recorded this field. Descriptive only; it grants nothing.
             ///   - created_at:
             ///   - last_activity_at:
             ///   - lifecycle: A completed current episode is finished. Otherwise bound confirmed cancellation is stopped, explicit current-episode abandonment is abandoned, and unaffected tasks keep the newest run's display state. Null means no run or terminal decision. A stopped task may have no run or current_position. A finished run alone proves neither task completion nor execution quiescence. Pending or failed cancellation does not supply a terminal override.
@@ -4143,6 +4170,7 @@ public enum Components {
                 project_id: Swift.String,
                 display_names: Components.Schemas.DisplayNames,
                 source: Components.Schemas.Task.sourcePayload? = nil,
+                issue: Components.Schemas.Task.issuePayload? = nil,
                 created_at: Foundation.Date,
                 last_activity_at: Foundation.Date,
                 lifecycle: Components.Schemas.Task.lifecyclePayload? = nil,
@@ -4159,6 +4187,7 @@ public enum Components {
                 self.project_id = project_id
                 self.display_names = display_names
                 self.source = source
+                self.issue = issue
                 self.created_at = created_at
                 self.last_activity_at = last_activity_at
                 self.lifecycle = lifecycle
@@ -4176,6 +4205,7 @@ public enum Components {
                 case project_id
                 case display_names
                 case source
+                case issue
                 case created_at
                 case last_activity_at
                 case lifecycle
@@ -12056,7 +12086,8 @@ public enum Components {
                 case digest
             }
         }
-        /// Whether a display label is a chosen name or an explicit identifier fallback.
+        /// Whether a display label is a chosen name or an explicit identifier fallback. A task's chosen name is the operator's, its source issue's title (issue), its accepted specification's title, or an agent's.
+        ///
         ///
         /// - Remark: Generated from `#/components/schemas/DisplayNameSource`.
         @frozen public enum DisplayNameSource: String, Codable, Hashable, Sendable, CaseIterable {
@@ -12065,6 +12096,7 @@ public enum Components {
             case _operator = "operator"
             case agent = "agent"
             case specification = "specification"
+            case issue = "issue"
             case unknown = "unknown"
         }
         /// One daemon-authored display label and whether it is a name or identifier fallback.

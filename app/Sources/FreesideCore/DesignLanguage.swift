@@ -98,10 +98,12 @@ enum FreesidePalette {
     static let factStripe = FreesideColorCuts(
         day: 0xE9E9E5, dusk: 0x202226, dayIC: ground3.day, duskIC: ground3.dusk)
 
-    // Diff counts and diff lines (R28), and one use beyond them: diffAdd
+    // Diff counts and diff lines (R28), and two uses beyond them: diffAdd
     // fills the marker on a stage start in the task timeline
-    // (devlog/2026-10-11-1140-task-stage-timeline.md). Each cut holds the
-    // 4.5:1 text floor on the grounds and on its own wash.
+    // (devlog/2026-10-11-1140-task-stage-timeline.md) and the marker of a
+    // finished task in the Finished list
+    // (devlog/2026-11-19-1259-issue-backed-task-names.md). Each cut holds
+    // the 4.5:1 text floor on the grounds and on its own wash.
     static let diffAdd = FreesideColorCuts(day: 0x357040, dusk: 0x82B78E)
     static let diffRemove = FreesideColorCuts(day: 0xA83D2C, dusk: 0xE27E66)
     static let diffAddWash = FreesideColorCuts(day: 0xDDE8DA, dusk: 0x17281B)
@@ -195,7 +197,8 @@ extension Color {
     static let hover = freeside(FreesidePalette.hover)
     /// The wash behind every other row of a fact group.
     static let factStripe = freeside(FreesidePalette.factStripe)
-    /// Additions and removals, in a diff count or a diff line and nowhere else.
+    /// Additions and removals, in a diff count or a diff line, and the two
+    /// markers `FreesidePalette.diffAdd` names.
     static let diffAdd = freeside(FreesidePalette.diffAdd)
     static let diffRemove = freeside(FreesidePalette.diffRemove)
     static let diffAddWash = freeside(FreesidePalette.diffAddWash)
@@ -1373,7 +1376,10 @@ private struct ChoiceOptionSurface<Value: Hashable, Label: View>: View {
 /// entry with a hollow ring. The stage rail draws the same two markers.
 /// The task timeline draws two more: the start of a stage in the diff
 /// green, and an entry that records a failure in wax. Neither color is the
-/// only signal, since the entry's words say the same.
+/// only signal, since the entry's words say the same. The Finished list
+/// draws three of them before each task to say how it ended
+/// (`FinishedRowView`): the diff green for finished, wax for stopped, and
+/// the hollow ring for abandoned; the row speaks the outcome too.
 ///
 /// An entry that folds an explanation draws its marker as a disclosure
 /// triangle of the same size, color, and fill (hollow where the dot is a

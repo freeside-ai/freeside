@@ -223,17 +223,47 @@ public enum TaskFixtures {
 
     /// `snapshot` re-sourced from a submitted work item. The mock rejects the
     /// task unless its `attachments` hold bytes under `digest`, as the daemon's
-    /// blob store holds every submitted source.
+    /// blob store holds every submitted source. `issue` is the issue the
+    /// submitted text named, when it was a bare issue URL.
     public static func artifactSourced(
-        _ snapshot: Components.Schemas.TaskSnapshot, artifactID: String, digest: String
+        _ snapshot: Components.Schemas.TaskSnapshot, artifactID: String, digest: String,
+        issue: Components.Schemas.IssueSubjectRef? = nil
     ) -> Components.Schemas.TaskSnapshot {
         var sourced = snapshot
+        sourced.task.issue = issue.map { .init(value1: $0) }
         sourced.task.source = .init(
             value1: .work_item_artifact(
                 .init(
                     kind: .work_item_artifact, work_item_artifact_id: artifactID,
                     work_item_artifact_digest: .init(value1: digest))))
         return sourced
+    }
+
+    /// Three tasks submitted as the URL of one issue (#3456), oldest first:
+    /// the operator abandoned the first, stopped the second, and the third
+    /// finished. Each takes the issue's title as its name and carries the
+    /// issue as `Task.issue`, an hour after the one before.
+    public static func issueRetries() -> [Components.Schemas.TaskSnapshot] {
+        guard let base = defaultTasks().first(where: { $0.task.id == "task-campaign-freeside-completed" }),
+            let start = base.task.lifecycle_facts.first
+        else { preconditionFailure("The issue retries require the completed campaign's task") }
+        let issue = Components.Schemas.IssueSubjectRef(
+            repo: "freeside-ai/freeside", repository_id: 1, issue_number: 80)
+        let ids = ["task-3f2a9c1e", "task-7b41d0a5", "task-c09e6f18"]
+        return ids.enumerated().map { index, id in
+            var snapshot = artifactSourced(
+                base, artifactID: "artifact-\(id)", digest: "sha256:\(id)", issue: issue)
+            snapshot.task.id = id
+            snapshot.task.display_names.task = .init(text: base.task.display_names.task.text, source: .issue)
+            snapshot.task.last_activity_at = base.task.last_activity_at
+                .addingTimeInterval(TimeInterval(index - (ids.count - 1)) * 3600)
+            guard index < ids.count - 1 else { return snapshot }
+            // The two earlier attempts ended before any completion.
+            snapshot.task.lifecycle_facts = [start]
+            snapshot.task.lifecycle = .active
+            snapshot.task.wip = true
+            return index == 0 ? explicitlyAbandoned(snapshot) : confirmedStopped(snapshot)
+        }
     }
 
     public static func defaultTaskIDs() -> [String] {
@@ -315,13 +345,11 @@ public enum TaskFixtures {
         let names = Components.Schemas.DisplayNames(
             project: newest.display_names?.value1.project ?? .init(text: newest.project_id, source: .identifier),
             task: newest.display_names?.value1.task ?? .init(text: id, source: .identifier))
-        let source: Components.Schemas.Task.sourcePayload? = issueNumbers[id].map { number in
-            .init(
-                value1: .issue_subject(
-                    .init(
-                        kind: .issue_subject,
-                        issue_subject: .init(
-                            repo: "freeside-ai/freeside", repository_id: 1, issue_number: number))))
+        let issue = issueNumbers[id].map {
+            Components.Schemas.IssueSubjectRef(repo: "freeside-ai/freeside", repository_id: 1, issue_number: $0)
+        }
+        let source: Components.Schemas.Task.sourcePayload? = issue.map {
+            .init(value1: .issue_subject(.init(kind: .issue_subject, issue_subject: $0)))
         }
         // A started fact opens the task's log; a finished task adds a
         // completion bound to the newest run, so wip reads false. Active
@@ -345,7 +373,7 @@ public enum TaskFixtures {
             entity_version: snapshots.map(\.entity_version).max() ?? 1,
             task: .init(
                 id: id, project_id: newest.project_id, display_names: names, source: source,
-                created_at: created, last_activity_at: lastActivity,
+                issue: issue.map { .init(value1: $0) }, created_at: created, last_activity_at: lastActivity,
                 lifecycle: .init(rawValue: newest.lifecycle.rawValue),
                 current_position: .init(
                     value1: .init(

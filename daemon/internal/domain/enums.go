@@ -474,6 +474,8 @@ const (
 	DisplayNameSourceOperator      DisplayNameSource = "operator"
 	DisplayNameSourceAgent         DisplayNameSource = "agent"
 	DisplayNameSourceSpecification DisplayNameSource = "specification"
+	// DisplayNameSourceIssue is an issue-backed task's source issue title.
+	DisplayNameSourceIssue DisplayNameSource = "issue"
 )
 
 // AllDisplayNameSources lists every valid DisplayNameSource.
@@ -483,11 +485,13 @@ var AllDisplayNameSources = []DisplayNameSource{
 	DisplayNameSourceOperator,
 	DisplayNameSourceAgent,
 	DisplayNameSourceSpecification,
+	DisplayNameSourceIssue,
 }
 
 func (s DisplayNameSource) valid() bool {
 	switch s {
-	case DisplayNameSourceName, DisplayNameSourceIdentifier, DisplayNameSourceOperator, DisplayNameSourceAgent, DisplayNameSourceSpecification:
+	case DisplayNameSourceName, DisplayNameSourceIdentifier, DisplayNameSourceOperator, DisplayNameSourceAgent, DisplayNameSourceSpecification,
+		DisplayNameSourceIssue:
 		return true
 	default:
 		return false

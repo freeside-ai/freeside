@@ -96,7 +96,8 @@ func (tr *privateIssueTransport) requests() []privateIssueRequest {
 
 // TestTaskNamerReadsAPrivateIssue drives label intake's first read of the
 // source issue: the namer fetches the issue by repository ID, authenticated
-// to the run's registered project.
+// to the run's registered project, and names the task from its title without
+// the namer model.
 func TestTaskNamerReadsAPrivateIssue(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -146,10 +147,17 @@ func TestTaskNamerReadsAPrivateIssue(t *testing.T) {
 			if err != nil || !seen[0].authorized {
 				t.Fatalf("private issue naming = %v, authorized = %t", err, seen[0].authorized)
 			}
-			requests := namer.Requests()
-			if len(requests) != 1 || requests[0].Fields["issue_title"] != "Private work" ||
-				requests[0].Fields["issue_body"] != "Private issue text." {
-				t.Fatalf("namer inputs = %+v", requests)
+			if requests := namer.Requests(); len(requests) != 0 {
+				t.Fatalf("namer model called for an issue-backed task: %+v", requests)
+			}
+			if err := r.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				task, err := tx.GetTask(t.Context(), run.TaskID)
+				if err == nil && task.Name != (domain.DisplayName{Text: "Private work", Source: domain.DisplayNameSourceIssue}) {
+					t.Fatalf("task name = %+v", task.Name)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

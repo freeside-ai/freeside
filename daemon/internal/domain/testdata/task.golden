@@ -6,9 +6,14 @@
     "work_item_artifact_id": "spec-art-1",
     "issue_subject": null
   },
+  "submitted_issue": {
+    "repo": "owner/repo",
+    "repository_id": 42,
+    "issue_number": 7
+  },
   "name": {
     "text": "Improve task navigation",
-    "source": "specification"
+    "source": "issue"
   },
   "created_at": "2026-01-02T03:04:05Z",
   "campaign_ids": [

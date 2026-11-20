@@ -2819,8 +2819,9 @@ func TestGolden(t *testing.T) {
 		{"run_unadmitted", domaintest.Run(func(r *domain.Run) { r.Base, r.Stages[0].Attempts = nil, nil })},
 		{"task", domain.Task{
 			ID: "task-1", ProjectID: "proj-1", Source: &intakeSpecSource,
-			Name:      domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceSpecification},
-			CreatedAt: ts, CampaignIDs: []domain.CampaignID{"campaign-1"},
+			SubmittedIssue: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7},
+			Name:           domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceIssue},
+			CreatedAt:      ts, CampaignIDs: []domain.CampaignID{"campaign-1"},
 			LifecycleFacts: []domain.TaskLifecycleFact{
 				{Ordinal: 1, Kind: domain.TaskLifecycleStarted, RunID: "run-1", CampaignID: new(domain.CampaignID("campaign-1")), SourceID: "start:run-1", RecordedAt: ts},
 				{Ordinal: 2, Kind: domain.TaskLifecycleCompleted, RunID: "run-1", CampaignID: new(domain.CampaignID("campaign-1")), BindingUnitID: new(domain.WorkUnitID("workunit-run-1")), SourceID: "complete:workunit-run-1", RecordedAt: ts},
