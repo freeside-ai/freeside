@@ -1,0 +1,77 @@
+;; The cordon rule file the #3463 spike ended with: a Claude writer runs on
+;; the host under this file, as the owner's account. It allows by default and
+;; denies a short list (#3464): reads of places that hold secrets, launchd
+;; jobs, and Launch Services opens. Network and writes stay open; the network
+;; rule is #3477. Paths arrive as sandbox-exec -D parameters, as
+;; daemon/internal/macverify/profile.sb takes them, so the file's bytes stay
+;; fixed. Seatbelt applies the last rule that matches, so each allow that
+;; carves a hole follows the deny it narrows. Report: cordoned-writer.md.
+(version 1)
+(allow default)
+
+;; A launchd job runs outside this file and outlives the run. A plist in
+;; LaunchAgents is one too, loaded at the owner's next login.
+(deny job-creation)
+(deny lsopen)
+(deny file-write*
+  (subpath (string-append (param "HOME") "/Library/LaunchAgents")))
+
+;; Credentials the owner's tools keep in their home directory.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (subpath (string-append (param "HOME") "/.config/gh"))
+  (literal (string-append (param "HOME") "/.git-credentials"))
+  (literal (string-append (param "HOME") "/.netrc"))
+  (subpath (string-append (param "HOME") "/.aws"))
+  (subpath (string-append (param "HOME") "/.config/gcloud"))
+  (subpath (string-append (param "HOME") "/.azure"))
+  (subpath (string-append (param "HOME") "/.kube"))
+  (literal (string-append (param "HOME") "/.docker/config.json"))
+  (subpath (string-append (param "HOME") "/.codex")))
+
+;; Browser profiles and cookies.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/Google/Chrome"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Firefox"))
+  (subpath (string-append (param "HOME") "/Library/Safari"))
+  (subpath (string-append (param "HOME") "/Library/Cookies")))
+
+;; The owner's own Claude configuration. The run's CLAUDE_CONFIG_DIR is
+;; Freeside's, under RUN_ROOT, so the CLI never needs these.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/.claude"))
+  (literal (string-append (param "HOME") "/.claude.json"))
+  (subpath (param "OWNER_CLAUDE_CONFIG")))
+
+;; Freeside's own state: the daemon roots (database, blob store, keys), the
+;; operator's run roots, and the Apple container volume images, which hold
+;; every enrolled setup token.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/com.apple.container"))
+  (subpath (string-append (param "HOME") "/.freeside")))
+;; The daemon roots keep metadata readable: freesided resolves its default
+;; root with lstat to refuse a caller's path inside it, and its own tests do
+;; that on a writer's run. Listing and contents stay denied.
+(deny file-read-data file-read-xattr file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/Freeside"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Freeside Dev")))
+
+;; The login keychain. Under the rest of this file a tool reads any item
+;; whose access list trusts /usr/bin/security, the owner's own Claude Code
+;; credential among them, with no prompt. Either rule alone closes that; both
+;; stay so a client that reaches securityd another way still meets the file
+;; rule. Nothing a writer needs breaks: the CLI authenticates from its own
+;; token, and git and gh credentials are already out of reach.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Keychains")))
+(deny mach-lookup
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd.xpc"))
+
+;; Other projects' .env, .env.* and .envrc files. The run's own root is carved
+;; back out. PROJECTS goes into the regex as is, so it must hold no regex
+;; metacharacters.
+(deny file-read* file-write*
+  (regex (string-append "^" (param "PROJECTS") "/.*/\\.env(rc|\\..*)?$")))
+(allow file-read* file-write*
+  (subpath (param "WORKTREE")))
