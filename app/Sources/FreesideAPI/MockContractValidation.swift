@@ -1756,6 +1756,11 @@ enum MockContractValidation {
         if payload.action != .retry_with_alternate_agent && payload.alternate_agent_choice != nil {
             throw malformed("alternate_agent_choice on unrelated action")
         }
+        if payload.question_answers != nil && payload.action != .answer_and_retry
+            && payload.action != .answer_without_retry
+        {
+            throw malformed("question_answers on unrelated action")
+        }
         switch payload.action {
         case .adjudicate_findings:
             guard let choices = payload.finding_routes, !choices.isEmpty,
@@ -1821,7 +1826,13 @@ enum MockContractValidation {
                 payload.alternative_choices == nil
             else { throw malformed("invalid request_changes message") }
         case .answer_and_retry, .answer_without_retry, .return_to_agent:
-            guard let message = payload.message,
+            // With chosen options the message is an optional note under its
+            // own limit, and the rendered answer always fits the 8 KiB bound
+            // (signet decisionMessage, domain.RenderQuestionAnswers).
+            let rendered = payload.question_answers.map {
+                Components.Schemas.QuestionAnswer.renderedMessage($0, note: payload.message ?? "")
+            }
+            guard let message = rendered ?? payload.message,
                 !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 message.lengthOfBytes(using: .utf8) <= 8192,
                 command.command_id.lengthOfBytes(using: .utf8) <= 256,

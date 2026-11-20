@@ -175,6 +175,9 @@ struct DecisionDetailView: View {
     @State private var provenanceExpanded = false
     @State private var lostResponseExpanded = false
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute]
+    /// The option picked for each decision of an agent_question, by decision
+    /// index. Empty until the operator picks: nothing is preselected.
+    @State private var questionChoices: [Int: AgentQuestionPresentation.Choice]
     /// The reply reason the operator typed for each external finding, by
     /// finding id. Kept when the route changes, so picking Decline again
     /// brings the draft back; only a route that replies sends it.
@@ -214,6 +217,12 @@ struct DecisionDetailView: View {
     /// the sync coordinator, so the pools come in as a value.
     private let usagePools: [Components.Schemas.UsagePoolSnapshot]
     private let runTimelines: RunTimelines
+    /// Whether the daemon accepts the options an answer chooses (`/health`
+    /// lists `question_option_answers`). The card is built from an
+    /// `InboxStore`, not the sync coordinator, so this comes in as a value;
+    /// without it an answer is typed in the composer, as an older daemon
+    /// requires.
+    private let servesQuestionOptionAnswers: Bool
 
     @MainActor
     init(
@@ -222,6 +231,7 @@ struct DecisionDetailView: View {
         detailsExpanded: Bool = false,
         expandedFindings: Set<String> = [],
         alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:],
+        questionChoices: [Int: AgentQuestionPresentation.Choice] = [:],
         findingReasons: [String: String] = [:],
         expandsSummaryReports: Bool = false,
         expandedDisclosures: Set<DecisionDisclosure> = [],
@@ -242,6 +252,7 @@ struct DecisionDetailView: View {
         onSelectTask: @escaping (String) -> Void = { _ in },
         usagePools: [Components.Schemas.UsagePoolSnapshot] = [],
         runTimelines: RunTimelines = .init(),
+        servesQuestionOptionAnswers: Bool = false,
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in },
         model: DecisionModel? = nil
     ) {
@@ -265,6 +276,7 @@ struct DecisionDetailView: View {
         _findingReasonPreferences = State(
             initialValue: findingReasonPreferences ?? FindingReasonPreferences(defaults: nil))
         _alternativeSelections = State(initialValue: alternativeSelections)
+        _questionChoices = State(initialValue: questionChoices)
         _findingReasons = State(initialValue: findingReasons)
         _expandedDisclosures = State(initialValue: expandedDisclosures)
         attachments = store.attachments
@@ -281,6 +293,7 @@ struct DecisionDetailView: View {
         self.onSelectTask = onSelectTask
         self.usagePools = usagePools
         self.runTimelines = runTimelines
+        self.servesQuestionOptionAnswers = servesQuestionOptionAnswers
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
@@ -427,25 +440,40 @@ struct DecisionDetailView: View {
                         await model.submitRequestChanges(message: message)
                     }
                 case .answerAndRetry:
+                    let answers = chosenQuestionAnswers(model.snapshot?.item)
                     MessageComposerSheet(
                         eyebrow: AttentionDisplay.label(.answer_and_retry),
-                        ask: "What is your answer?",
-                        submitLabel: AttentionDisplay.label(.answer_and_retry), byteLimit: 8192,
-                        routeOptions: AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item)
+                        ask: Self.answerAsk(answers),
+                        submitLabel: answers.map {
+                            AgentQuestionPresentation.confirmLabel(.answer_and_retry, answers: $0)
+                        }
+                            ?? AttentionDisplay.label(.answer_and_retry),
+                        byteLimit: answers == nil ? 8192 : Components.Schemas.QuestionAnswer.maxNoteBytes,
+                        routeOptions: AgentQuestionPresentation.answerRoutes(for: model.snapshot?.item),
+                        choiceLines: answers.map(AgentQuestionPresentation.choiceLines) ?? [],
+                        requiresMessage: answers.map(AgentQuestionPresentation.needsNote) ?? true
                     ) { message, route in
                         await model.submitAnswer(
                             .answer_and_retry, message: message,
                             answerRoute: route
-                                ?? AgentQuestionPresentation.answerRoute(for: model.snapshot?.item))
+                                ?? AgentQuestionPresentation.answerRoute(for: model.snapshot?.item),
+                            questionAnswers: answers)
                     }
                 case .answerWithoutRetry:
+                    let answers = chosenQuestionAnswers(model.snapshot?.item)
                     MessageComposerSheet(
                         eyebrow: AttentionDisplay.label(.answer_without_retry),
-                        ask: "What is your answer?",
+                        ask: Self.answerAsk(answers),
                         consequence: "The question concludes without restarting work.",
-                        submitLabel: "Record Answer", byteLimit: 8192
+                        submitLabel: answers.map {
+                            AgentQuestionPresentation.confirmLabel(.answer_without_retry, answers: $0)
+                        }
+                            ?? "Record Answer",
+                        byteLimit: answers == nil ? 8192 : Components.Schemas.QuestionAnswer.maxNoteBytes,
+                        choiceLines: answers.map(AgentQuestionPresentation.choiceLines) ?? [],
+                        requiresMessage: answers.map(AgentQuestionPresentation.needsNote) ?? true
                     ) { message, _ in
-                        await model.submitAnswer(.answer_without_retry, message: message)
+                        await model.submitAnswer(.answer_without_retry, message: message, questionAnswers: answers)
                     }
                 case .returnToAgent:
                     MessageComposerSheet(
@@ -1749,10 +1777,12 @@ struct DecisionDetailView: View {
                         }
                         .proseMeasure()
                     }
-                    if !decision.options.isEmpty {
+                    if offersQuestionOptionChoice(item) {
+                        questionChoiceList(decision, index: index)
+                    } else if !decision.options.isEmpty {
                         VStack(alignment: .leading, spacing: CardScale.moduleGap) {
-                            ForEach(Array(decision.options.enumerated()), id: \.offset) { optionIndex, option in
-                                agentQuestionOption(option, number: optionIndex + 1)
+                            ForEach(decision.options, id: \.number) { option in
+                                agentQuestionOption(option, number: option.number)
                             }
                         }
                     }
@@ -1810,6 +1840,72 @@ struct DecisionDetailView: View {
     }
 
     static let recommendedOptionMark = "Agent recommends"
+
+    /// Whether the card lets the operator pick each decision's option: an
+    /// open question with typed decisions that offers an answer, from a
+    /// daemon that accepts the options an answer chooses. A closed card
+    /// keeps the quotes, and a question without typed decisions keeps the
+    /// typed answer, since it has nothing to pick. So does a scope
+    /// conflict: its actions already decide (Record Answer keeps the
+    /// approved scope), and a picked option could contradict the action
+    /// the published scope decision names.
+    private func offersQuestionOptionChoice(_ item: Components.Schemas.AttentionItem) -> Bool {
+        Self.offersQuestionOptionChoice(item, served: servesQuestionOptionAnswers, isOpen: closedItem == nil)
+    }
+
+    nonisolated static func offersQuestionOptionChoice(
+        _ item: Components.Schemas.AttentionItem, served: Bool, isOpen: Bool
+    ) -> Bool {
+        served && isOpen
+            && item.requested_decision.contains { $0 == .answer_and_retry || $0 == .answer_without_retry }
+            && AgentQuestionPresentation(item).map { !$0.decisions.isEmpty && $0.scopeConflict == nil } == true
+    }
+
+    /// The decision's options as the choice list (R29), as the dispute card
+    /// draws a finding's routes: the agent's options as quotes, the
+    /// recommended one first and marked, then the operator's own answer.
+    /// Picking only moves the selection; the answer actions send it.
+    private func questionChoiceList(
+        _ decision: AgentQuestionPresentation.Decision, index: Int
+    ) -> some View {
+        let options: [ChoiceList<AgentQuestionPresentation.Choice?>.Option] =
+            decision.options.map {
+                .init(
+                    value: .option($0.label), label: $0.label, consequence: $0.tradeoffs,
+                    mark: $0.recommended ? Self.recommendedOptionMark : nil, register: .quote)
+            } + [
+                .init(
+                    value: .other, label: AgentQuestionPresentation.otherAnswerLabel,
+                    consequence: "Write your own answer in the note.", register: .item)
+            ]
+        return ChoiceList(
+            accessibilityLabel: "Answer to \(decision.question)",
+            options: options,
+            selection: Binding(
+                get: { questionChoices[index] },
+                set: { questionChoices[index] = $0 })
+        )
+        .disabled(!model.actionsEnabled)
+    }
+
+    /// The answers the card's picks make, or nil where the card offers no
+    /// choice or a decision is still unpicked.
+    private func chosenQuestionAnswers(
+        _ item: Components.Schemas.AttentionItem?
+    ) -> [Components.Schemas.QuestionAnswer]? {
+        guard let item, offersQuestionOptionChoice(item),
+            let presentation = AgentQuestionPresentation(item)
+        else { return nil }
+        return presentation.answers(questionChoices)
+    }
+
+    /// The answer sheet's ask: the answer itself, or with options chosen, the
+    /// note that goes with them.
+    static func answerAsk(_ answers: [Components.Schemas.QuestionAnswer]?) -> String {
+        guard let answers else { return "What is your answer?" }
+        return AgentQuestionPresentation.needsNote(answers)
+            ? "What is your other answer?" : "Anything to add for the agent?"
+    }
 
     /// What VoiceOver reads for one option. The compact mark prints no
     /// "(unverified)" (R21), so the spoken label keeps it, in the order the
@@ -3036,6 +3132,9 @@ struct DecisionDetailView: View {
         if action == .adjudicate_findings {
             guard let findings = item.review_dispute?.value1.findings else { return false }
             return Self.findingRoutesReady(findings, selections: alternativeSelections, reasons: findingReasons)
+        }
+        if action == .answer_and_retry || action == .answer_without_retry, offersQuestionOptionChoice(item) {
+            return chosenQuestionAnswers(item) != nil
         }
         guard action == .choose_alternative_route else { return true }
         guard let binding = item.finding_adjudication?.value1 else { return false }

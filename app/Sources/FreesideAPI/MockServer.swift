@@ -73,6 +73,7 @@ public actor MockServer {
         let artifactDigests: [String]
         let message: String
         let attachments: [String]
+        let questionAnswers: [Components.Schemas.QuestionAnswer]?
 
         init(
             _ command: Components.Schemas.ClientCommand,
@@ -91,6 +92,7 @@ public actor MockServer {
             // sent, never canonicalized.
             self.message = message
             attachments = payload.attachments ?? []
+            questionAnswers = payload.question_answers.map(CommandResultTrust.recordedQuestionAnswers)
         }
     }
 
@@ -1828,6 +1830,13 @@ public actor MockServer {
         if let feature = Self.feature(of: command.payload), !(healthFeatures ?? []).contains(feature) {
             return .unservedKind
         }
+        // A daemon that predates question_answers refuses the member when it
+        // decodes the payload strictly, so withholding the feature reaches it.
+        if case .decision(let payload) = command.payload, payload.question_answers != nil,
+            !(healthFeatures ?? []).contains(.question_option_answers)
+        {
+            throw MalformedCommandError(commandID: command.command_id, reason: "unknown member question_answers")
+        }
         convergeProposalSnoozes()
         // Structural well-formedness precedes every lookup, as the signet
         // boundary orders it (domain.NewCommand, then
@@ -1999,6 +2008,17 @@ public actor MockServer {
         } else if payload.answer_route != nil {
             throw MalformedCommandError(
                 commandID: command.command_id, reason: "answer_route is not allowed for this command")
+        }
+        // signet validateQuestionAnswers: chosen options ride only on an
+        // agent_question and answer each of its decisions exactly.
+        if let answers = payload.question_answers {
+            guard current.item._type == .agent_question, let question = current.item.agent_question?.value1 else {
+                throw MalformedCommandError(
+                    commandID: command.command_id, reason: "question_answers are not allowed for this item")
+            }
+            if let fault = Components.Schemas.QuestionAnswer.questionFault(answers, decisions: question.decisions) {
+                throw MalformedCommandError(commandID: command.command_id, reason: fault)
+            }
         }
         switch ActionOutcome.of(payload.action) {
         case .discusses:
@@ -2399,6 +2419,7 @@ public actor MockServer {
                     message: recordedMessage,
                     attachments: payload.attachments ?? [],
                     answer_route: payload.answer_route.map { .init(value1: $0.value1) },
+                    question_answers: payload.question_answers.map(CommandResultTrust.recordedQuestionAnswers),
                     decision_evidence: stampedEvidence.map { .init(value1: $0) }
                 )),
             revision: revision

@@ -397,7 +397,8 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			ItemVersion: in.Payload.ItemVersion, PRHeadSHA: in.Payload.PRHeadSHA,
 			ArtifactDigests: in.Payload.ArtifactDigests, Action: in.Payload.Action,
 			Message: message, Attachments: in.Payload.Attachments,
-			AnswerRoute: in.Payload.AnswerRoute,
+			AnswerRoute:     in.Payload.AnswerRoute,
+			QuestionAnswers: in.Payload.QuestionAnswers,
 		})
 	}
 	// Build the structural command first, without interpreting parameterized
@@ -482,6 +483,9 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 			}
 			if err := validateAnswerRoute(command, item); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
+			if err := validateQuestionAnswers(command, item); err != nil {
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 			}
 			// revise_specification starts a fresh campaign under the blocked run's

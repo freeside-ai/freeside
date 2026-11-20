@@ -405,6 +405,13 @@ struct MessageComposerSheet: View {
     /// files to an agent. `nil` for every other use, which draws no attach
     /// control. The presenter owns the draft and sends it with the message.
     var attachments: Binding<TaskAttachmentDraft>? = nil
+    /// The options an answer chose on the card, one `Decision N: <label>`
+    /// line each, drawn above the field so the operator sends them with the
+    /// note in view. Empty for every other composer.
+    var choiceLines: [String] = []
+    /// Whether Send needs text in the field. An answer whose options all
+    /// came from the card may go without a note.
+    var requiresMessage = true
     let submit: (String, Components.Schemas.AnswerRoute?) async -> Bool
     @State private var isSubmitting = false
     @State private var chosenRoute: Components.Schemas.AnswerRoute?
@@ -448,7 +455,7 @@ struct MessageComposerSheet: View {
     }
 
     private var canSubmit: Bool {
-        !trimmedMessage.isEmpty && byteLimit.map { byteCount <= $0 } != false
+        (!requiresMessage || !trimmedMessage.isEmpty) && byteLimit.map { byteCount <= $0 } != false
     }
 
     var body: some View {
@@ -495,6 +502,18 @@ struct MessageComposerSheet: View {
                         loadsAttachments: thread.loadsAttachments,
                         now: thread.now,
                         rendersInteractiveControls: rendersInteractiveControls)
+                }
+                if !choiceLines.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        KeywordLabel(text: "Answers")
+                        ForEach(choiceLines, id: \.self) { line in
+                            Text(line)
+                                .font(FreesideFont.callout)
+                                .foregroundStyle(Color.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
                 }
                 messageField
                 if routeOptions.count > 1, let defaultRoute = routeOptions.first {

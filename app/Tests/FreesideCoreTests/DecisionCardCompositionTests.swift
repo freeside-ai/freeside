@@ -774,6 +774,28 @@ import Testing
         #expect(DecisionCardComposition.filledAction(for: stale, ranking: ranking(stale)) == nil)
     }
 
+    /// #3444: the card offers each decision's options to pick only for an
+    /// open question with typed decisions that offers an answer, and only
+    /// from a daemon that takes chosen options. A question without typed
+    /// decisions keeps the typed answer, or its answer actions could never
+    /// be sent.
+    @Test func questionOptionsArePickableOnlyWhereAnAnswerCanCarryThem() {
+        let item = AttentionFixtures.longQuestion().item
+        #expect(DecisionDetailView.offersQuestionOptionChoice(item, served: true, isOpen: true))
+        #expect(!DecisionDetailView.offersQuestionOptionChoice(item, served: false, isOpen: true))
+        #expect(!DecisionDetailView.offersQuestionOptionChoice(item, served: true, isOpen: false))
+        var untyped = item
+        untyped.agent_question = nil
+        #expect(!DecisionDetailView.offersQuestionOptionChoice(untyped, served: true, isOpen: true))
+        var stopOnly = item
+        stopOnly.requested_decision = [.stop]
+        #expect(!DecisionDetailView.offersQuestionOptionChoice(stopOnly, served: true, isOpen: true))
+        // A scope conflict's actions decide; a pick could contradict them.
+        #expect(
+            !DecisionDetailView.offersQuestionOptionChoice(
+                AttentionFixtures.scopeConflictQuestion().item, served: true, isOpen: true))
+    }
+
     /// The question card leaves Answer and Retry an outline: with no
     /// recommendation nothing is filled, and a recommendation block holds
     /// its own fill.
@@ -965,12 +987,12 @@ import Testing
 
         #expect(facts.decisions.count == 2)
         #expect(presentation.decisions.map(\.question) == facts.decisions.map(\.question))
+        // Each decision keeps its own options with their tradeoffs; the
+        // card draws the recommended one first (#3444), which
+        // AgentQuestionPresentationTests pins.
         #expect(
-            presentation.decisions.map { $0.options.map(\.label) }
-                == facts.decisions.map { $0.options.map(\.label) })
-        #expect(
-            presentation.decisions.map { $0.options.map(\.tradeoffs) }
-                == facts.decisions.map { $0.options.map(\.tradeoffs) })
+            presentation.decisions.map { Set($0.options.map { [$0.label, $0.tradeoffs] }) }
+                == facts.decisions.map { Set($0.options.map { [$0.label, $0.tradeoffs] }) })
         // One recommended option per decision, the one the agent named.
         #expect(
             presentation.decisions.map { $0.options.filter(\.recommended).map(\.label) }
@@ -2018,9 +2040,11 @@ import Testing
     /// the order the option is drawn.
     @Test func theRecommendedOptionStillReadsAsUnverified() {
         let recommended = AgentQuestionPresentation.Option(
-            label: "Store first, then API", tradeoffs: "Existing rows migrate first.", recommended: true)
+            label: "Store first, then API", tradeoffs: "Existing rows migrate first.", recommended: true,
+            number: 1)
         let other = AgentQuestionPresentation.Option(
-            label: "API first, then store", tradeoffs: "Clients move immediately.", recommended: false)
+            label: "API first, then store", tradeoffs: "Clients move immediately.", recommended: false,
+            number: 2)
         #expect(
             DecisionDetailView.agentQuestionOptionAccessibilityLabel(recommended, number: 1)
                 == "Option 1, Store first, then API, Agent recommends (unverified), Existing rows migrate first.")

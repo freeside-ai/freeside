@@ -57,3 +57,62 @@ struct AgentQuestionPresentationTests {
         #expect(AgentQuestionPresentation.answerRoutes(for: nil) == [])
     }
 }
+
+extension AgentQuestionPresentationTests {
+    @Test func drawsTheRecommendedOptionFirstAndKeepsTheRestInOrder() throws {
+        let item = AttentionFixtures.longQuestion().item
+        let presentation = try #require(AgentQuestionPresentation(item))
+        #expect(
+            presentation.decisions.map { $0.options.map(\.label) } == [
+                ["Copy to a new table, then switch readers", "Rewrite rows in place"],
+                ["Translate for one release", "Reject the old shape", "Translate indefinitely"],
+            ])
+        // Each option keeps the agent's number, so a typed "option 2" still
+        // means the agent's second option.
+        #expect(presentation.decisions.map { $0.options.map(\.number) } == [[2, 1], [2, 1, 3]])
+        // The item keeps the agent's order; only the card sorts.
+        #expect(item.agent_question?.value1.decisions[0].options[0].label == "Rewrite rows in place")
+    }
+
+    @Test func answersNeedAValidChoiceForEveryDecision() throws {
+        let presentation = try #require(AgentQuestionPresentation(AttentionFixtures.longQuestion().item))
+        let first = AgentQuestionPresentation.Choice.option("Rewrite rows in place")
+        #expect(presentation.answers([:]) == nil)
+        #expect(presentation.answers([0: first]) == nil)
+        // A label from another decision, or an index past the decisions, is no choice.
+        #expect(presentation.answers([0: first, 1: .option("Rewrite rows in place")]) == nil)
+        #expect(presentation.answers([0: first, 2: .other]) == nil)
+
+        let answers = try #require(presentation.answers([1: .other, 0: first]))
+        #expect(
+            answers == [
+                .init(decision_index: 0, option_label: "Rewrite rows in place"),
+                .init(decision_index: 1, option_label: nil),
+            ])
+        #expect(AgentQuestionPresentation.needsNote(answers))
+        #expect(!AgentQuestionPresentation.needsNote([answers[0]]))
+        #expect(
+            AgentQuestionPresentation.choiceLines(answers)
+                == ["Decision 1: Rewrite rows in place", "Decision 2: Other answer"])
+    }
+
+    @Test func confirmLabelNamesTheOneChoiceOrCountsThem() {
+        let one: [Components.Schemas.QuestionAnswer] = [.init(decision_index: 0, option_label: "Store first, then API")]
+        #expect(
+            AgentQuestionPresentation.confirmLabel(.answer_and_retry, answers: one)
+                == "Answer and Retry: Store first, then API")
+        #expect(
+            AgentQuestionPresentation.confirmLabel(
+                .answer_without_retry, answers: [.init(decision_index: 0, option_label: nil)])
+                == "Record: Other answer")
+        let long = String(repeating: "x", count: 41)
+        #expect(
+            AgentQuestionPresentation.confirmLabel(
+                .answer_and_retry, answers: [.init(decision_index: 0, option_label: long)])
+                == "Answer and Retry: \(String(repeating: "x", count: 39))\u{2026}")
+        #expect(
+            AgentQuestionPresentation.confirmLabel(
+                .answer_without_retry, answers: one + [.init(decision_index: 1, option_label: nil)])
+                == "Record with 2 Answers")
+    }
+}

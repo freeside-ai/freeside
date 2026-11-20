@@ -10151,7 +10151,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/artifact_digests`.
             public var artifact_digests: [Components.Schemas.Digest]
-            /// Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy.
+            /// Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy. With question_answers it is the owner's note: optional unless an answer names no option, at most 6144 bytes, and the record's message is the daemon-rendered answer instead.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/message`.
@@ -10234,6 +10234,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/answer_route`.
             public var answer_route: Components.Schemas.DecisionPayload.answer_routePayload?
+            /// The option the owner chose for each decision of an agent_question. Allowed only on answer_and_retry and answer_without_retry against an agent_question, and only when the daemon lists question_option_answers in `/health`'s features. The set must be complete and exact: one answer per decision, no duplicate or out-of-range decision_index, and every non-null option_label equal to one of that decision's option labels. A null or absent option_label requires a non-blank message. The daemon renders the answers and the message into the record's message.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DecisionPayload/question_answers`.
+            public var question_answers: [Components.Schemas.QuestionAnswer]?
             /// Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
             ///
             ///
@@ -10325,10 +10330,11 @@ public enum Components {
             ///   - item_version: The accepted item_version the decision was rendered against.
             ///   - pr_head_sha: The PR head the decision bound to; empty when the item names no PR (e.g. a spec awaiting approval).
             ///   - artifact_digests: The canonical (sorted, deduplicated) binding set: exactly the digests rendered in the item's evidence_snapshot and agent_claims.
-            ///   - message: Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy.
+            ///   - message: Human-authored text for message-carrying decisions. Required for discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent; absent for pure decisions. The daemon binds it to the versioned command and applies each action's size and attachment policy. With question_answers it is the owner's note: optional unless an answer names no option, at most 6144 bytes, and the record's message is the daemon-rendered answer instead.
             ///   - capability_manifest_digest: The offered capability manifest selected by retry_with_capabilities. Required only for that action; the daemon re-derives the manifest from the run's current resolved policy.
             ///   - alternate_agent_choice: The choice retry_with_alternate_agent makes from the item's alternate_agents. Required only for that action; the daemon re-derives that the enrollment still escapes the failure and would pass admission, and that its catalog serves the model and effort, before it records the choice.
             ///   - answer_route: Where the answer goes. Required for answer_and_retry on an agent_question whose facts name the implementation stage, and absent for every other command. retry_implementation re-invokes the implementer with the answer as operator feedback against the unchanged specification; revise_specification files the answer as specification feedback and starts a fresh campaign under the same task, whose revised specification, once approved, begins a new implementation run.
+            ///   - question_answers: The option the owner chose for each decision of an agent_question. Allowed only on answer_and_retry and answer_without_retry against an agent_question, and only when the daemon lists question_option_answers in `/health`'s features. The set must be complete and exact: one answer per decision, no duplicate or out-of-range decision_index, and every non-null option_label equal to one of that decision's option labels. A null or absent option_label requires a non-blank message. The daemon renders the answers and the message into the record's message.
             ///   - attachments: Digest addresses of attachments already uploaded via PUT /attachments/{digest}, referenced by the appended message. Unlike artifact_digests this is ordered message content, not a binding set: order is preserved, never canonicalized.
             ///   - task_proposal_revision: Typed replacement parameters, present only for start_with_changes. The daemon preserves the current opaque subject handle, re-resolves its declaration and policy, and computes the revised digest inside the accepting transaction.
             ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
@@ -10348,6 +10354,7 @@ public enum Components {
                 capability_manifest_digest: Components.Schemas.DecisionPayload.capability_manifest_digestPayload? = nil,
                 alternate_agent_choice: Components.Schemas.DecisionPayload.alternate_agent_choicePayload? = nil,
                 answer_route: Components.Schemas.DecisionPayload.answer_routePayload? = nil,
+                question_answers: [Components.Schemas.QuestionAnswer]? = nil,
                 attachments: [Components.Schemas.Digest]? = nil,
                 task_proposal_revision: Components.Schemas.DecisionPayload.task_proposal_revisionPayload? = nil,
                 effect_proposal_revision: Components.Schemas.DecisionPayload.effect_proposal_revisionPayload? = nil,
@@ -10367,6 +10374,7 @@ public enum Components {
                 self.capability_manifest_digest = capability_manifest_digest
                 self.alternate_agent_choice = alternate_agent_choice
                 self.answer_route = answer_route
+                self.question_answers = question_answers
                 self.attachments = attachments
                 self.task_proposal_revision = task_proposal_revision
                 self.effect_proposal_revision = effect_proposal_revision
@@ -10387,6 +10395,7 @@ public enum Components {
                 case capability_manifest_digest
                 case alternate_agent_choice
                 case answer_route
+                case question_answers
                 case attachments
                 case task_proposal_revision
                 case effect_proposal_revision
@@ -10438,6 +10447,10 @@ public enum Components {
                     Components.Schemas.DecisionPayload.answer_routePayload.self,
                     forKey: .answer_route
                 )
+                self.question_answers = try container.decodeIfPresent(
+                    [Components.Schemas.QuestionAnswer].self,
+                    forKey: .question_answers
+                )
                 self.attachments = try container.decodeIfPresent(
                     [Components.Schemas.Digest].self,
                     forKey: .attachments
@@ -10481,6 +10494,7 @@ public enum Components {
                     "capability_manifest_digest",
                     "alternate_agent_choice",
                     "answer_route",
+                    "question_answers",
                     "attachments",
                     "task_proposal_revision",
                     "effect_proposal_revision",
@@ -10619,7 +10633,7 @@ public enum Components {
             public var artifact_digests: [Components.Schemas.Digest]
             /// - Remark: Generated from `#/components/schemas/CommandRecord/action`.
             public var action: Components.Schemas.Action
-            /// The command's message, whose content depends on the action. discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent carry the human's text. Seven actions carry their decision's canonical parameter here, so a retry under the same command_id meets the same write-once record: adjudicate_findings, the finding routes as JSON sorted by finding id; choose_alternative_route, the alternative choices as JSON sorted by finding id; start_with_changes, the task proposal revision as JSON; approve_with_changes, the effect proposal revision as JSON ({"resolves": <bool>}); snooze, the UTC snooze time in RFC 3339 with up to nine fractional digits and trailing zeros trimmed (Go's time.RFC3339Nano); retry_with_capabilities, the chosen capability manifest digest; and retry_with_alternate_agent, the chosen agent's tree name. Every other action, accept_recommended_route included, leaves it empty. decisionMessage in daemon/internal/signet/command.go is the source of truth for each action's byte form. The record always renders both content fields, empty or not, so the write-once body has one byte-form.
+            /// The command's message, whose content depends on the action. discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent carry the human's text. Seven actions carry their decision's canonical parameter here, so a retry under the same command_id meets the same write-once record: adjudicate_findings, the finding routes as JSON sorted by finding id; choose_alternative_route, the alternative choices as JSON sorted by finding id; start_with_changes, the task proposal revision as JSON; approve_with_changes, the effect proposal revision as JSON ({"resolves": <bool>}); snooze, the UTC snooze time in RFC 3339 with up to nine fractional digits and trailing zeros trimmed (Go's time.RFC3339Nano); retry_with_capabilities, the chosen capability manifest digest; and retry_with_alternate_agent, the chosen agent's tree name. Every other action, accept_recommended_route included, leaves it empty. An answer that carried question_answers holds the daemon-rendered answer: one `Decision N: <label>` line per decision in decision order (N counts from 1, a label over 200 bytes is cut on a UTF-8 boundary to at most 200 bytes ending in an ellipsis, and a null or absent option_label reads `Decision N: Other answer, see the note below`), then a blank line and the owner's note when there is one. decisionMessage in daemon/internal/signet/command.go is the source of truth for each action's byte form. The record always renders both content fields, empty or not, so the write-once body has one byte-form.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/CommandRecord/message`.
@@ -10655,6 +10669,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/CommandRecord/answer_route`.
             public var answer_route: Components.Schemas.CommandRecord.answer_routePayload?
+            /// The option choices an agent_question answer carried, in decision order, exactly as accepted. Absent for every other command, so a command without answers keeps its byte-form.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/CommandRecord/question_answers`.
+            public var question_answers: [Components.Schemas.QuestionAnswer]?
             /// The daemon-stamped decision context (plan §8): the accepted action surface digest and the item's recommendation at acceptance. Comprehension telemetry read by the §9 override query; never an authorization input. Null when the command referenced no surface and the item had no recommendation.
             ///
             ///
@@ -10692,9 +10711,10 @@ public enum Components {
             ///   - pr_head_sha:
             ///   - artifact_digests:
             ///   - action:
-            ///   - message: The command's message, whose content depends on the action. discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent carry the human's text. Seven actions carry their decision's canonical parameter here, so a retry under the same command_id meets the same write-once record: adjudicate_findings, the finding routes as JSON sorted by finding id; choose_alternative_route, the alternative choices as JSON sorted by finding id; start_with_changes, the task proposal revision as JSON; approve_with_changes, the effect proposal revision as JSON ({"resolves": <bool>}); snooze, the UTC snooze time in RFC 3339 with up to nine fractional digits and trailing zeros trimmed (Go's time.RFC3339Nano); retry_with_capabilities, the chosen capability manifest digest; and retry_with_alternate_agent, the chosen agent's tree name. Every other action, accept_recommended_route included, leaves it empty. decisionMessage in daemon/internal/signet/command.go is the source of truth for each action's byte form. The record always renders both content fields, empty or not, so the write-once body has one byte-form.
+            ///   - message: The command's message, whose content depends on the action. discuss, request_changes, answer_and_retry, answer_without_retry, and return_to_agent carry the human's text. Seven actions carry their decision's canonical parameter here, so a retry under the same command_id meets the same write-once record: adjudicate_findings, the finding routes as JSON sorted by finding id; choose_alternative_route, the alternative choices as JSON sorted by finding id; start_with_changes, the task proposal revision as JSON; approve_with_changes, the effect proposal revision as JSON ({"resolves": <bool>}); snooze, the UTC snooze time in RFC 3339 with up to nine fractional digits and trailing zeros trimmed (Go's time.RFC3339Nano); retry_with_capabilities, the chosen capability manifest digest; and retry_with_alternate_agent, the chosen agent's tree name. Every other action, accept_recommended_route included, leaves it empty. An answer that carried question_answers holds the daemon-rendered answer: one `Decision N: <label>` line per decision in decision order (N counts from 1, a label over 200 bytes is cut on a UTF-8 boundary to at most 200 bytes ending in an ellipsis, and a null or absent option_label reads `Decision N: Other answer, see the note below`), then a blank line and the owner's note when there is one. decisionMessage in daemon/internal/signet/command.go is the source of truth for each action's byte form. The record always renders both content fields, empty or not, so the write-once body has one byte-form.
             ///   - attachments: The appended message's attachment digests in authored order; empty for pure decisions.
             ///   - answer_route: The route an implementation-stage answer named; null for every other command. Always rendered, so the record keeps one byte-form.
+            ///   - question_answers: The option choices an agent_question answer carried, in decision order, exactly as accepted. Absent for every other command, so a command without answers keeps its byte-form.
             ///   - decision_evidence: The daemon-stamped decision context (plan §8): the accepted action surface digest and the item's recommendation at acceptance. Comprehension telemetry read by the §9 override query; never an authorization input. Null when the command referenced no surface and the item had no recommendation.
             public init(
                 kind: Components.Schemas.CommandRecord.kindPayload,
@@ -10708,6 +10728,7 @@ public enum Components {
                 message: Swift.String,
                 attachments: [Components.Schemas.Digest],
                 answer_route: Components.Schemas.CommandRecord.answer_routePayload? = nil,
+                question_answers: [Components.Schemas.QuestionAnswer]? = nil,
                 decision_evidence: Components.Schemas.CommandRecord.decision_evidencePayload? = nil
             ) {
                 self.kind = kind
@@ -10721,6 +10742,7 @@ public enum Components {
                 self.message = message
                 self.attachments = attachments
                 self.answer_route = answer_route
+                self.question_answers = question_answers
                 self.decision_evidence = decision_evidence
             }
             public enum CodingKeys: String, CodingKey {
@@ -10735,6 +10757,7 @@ public enum Components {
                 case message
                 case attachments
                 case answer_route
+                case question_answers
                 case decision_evidence
             }
         }
@@ -11177,13 +11200,14 @@ public enum Components {
                 case started_at
             }
         }
-        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read.
+        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read. `question_option_answers`: `question_answers` on an agent_question answer.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/DaemonFeature`.
         @frozen public enum DaemonFeature: String, Codable, Hashable, Sendable, CaseIterable {
             case parked_task_move = "parked_task_move"
             case work_hours = "work_hours"
+            case question_option_answers = "question_option_answers"
             case unknown = "unknown"
         }
         /// The pairing exchange's input: the short-lived code read off the daemon host and the human label the new device will carry.
@@ -17937,6 +17961,37 @@ public enum Components {
                 case path
                 case start_line
                 case end_line
+            }
+        }
+        /// The owner's choice for one decision of an agent_question. The option is named by its exact label, which is unique within its decision and stays the same when a re-asked question reorders its options.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/QuestionAnswer`.
+        public struct QuestionAnswer: Codable, Hashable, Sendable {
+            /// The decision's 0-based position in agent_question.decisions.
+            ///
+            /// - Remark: Generated from `#/components/schemas/QuestionAnswer/decision_index`.
+            public var decision_index: Swift.Int
+            /// The chosen option's exact label. Null or absent when the owner answers this decision in the message instead; a generated client omits a nil optional rather than writing null, so both forms mean the same.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/QuestionAnswer/option_label`.
+            public var option_label: Swift.String?
+            /// Creates a new `QuestionAnswer`.
+            ///
+            /// - Parameters:
+            ///   - decision_index: The decision's 0-based position in agent_question.decisions.
+            ///   - option_label: The chosen option's exact label. Null or absent when the owner answers this decision in the message instead; a generated client omits a nil optional rather than writing null, so both forms mean the same.
+            public init(
+                decision_index: Swift.Int,
+                option_label: Swift.String? = nil
+            ) {
+                self.decision_index = decision_index
+                self.option_label = option_label
+            }
+            public enum CodingKeys: String, CodingKey {
+                case decision_index
+                case option_label
             }
         }
         /// The operator-selected offered route for one finding.

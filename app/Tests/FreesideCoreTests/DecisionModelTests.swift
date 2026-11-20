@@ -3305,6 +3305,33 @@ import Testing
         }
     }
 
+    /// With options chosen on the card, the answer sends them with the
+    /// trimmed note, and the record the daemon renders from them passes the
+    /// client's result-trust check. A note-less answer is allowed unless a
+    /// decision is left to the note.
+    @Test func agentQuestionAnswersSendTheChosenOptions() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-agent_question")
+        await model.validate()
+        let reviewed = try #require(model.snapshot)
+        let other: [Components.Schemas.QuestionAnswer] = [.init(decision_index: 0, option_label: nil)]
+
+        #expect(!(await model.submitAnswer(.answer_without_retry, message: "  ", questionAnswers: other)))
+        #expect(model.submissionError == "write the other answer in the note before sending")
+
+        let chosen: [Components.Schemas.QuestionAnswer] = [
+            .init(decision_index: 0, option_label: "API first, then store")
+        ]
+        let sent = try await commandSent(server: server, store: store, itemID: reviewed.item.id) {
+            _ = await model.submitAnswer(.answer_without_retry, message: " ", questionAnswers: chosen)
+        }
+        expectBound(sent, to: reviewed, action: .answer_without_retry, message: "")
+        #expect(sent.question_answers == chosen)
+        #expect(model.appliedRecord?.message == "Decision 1: API first, then store\n")
+        #expect(model.appliedRecord?.question_answers == chosen)
+    }
+
     @Test func finalReviewActionsSendTheirBoundCommands() async throws {
         for action in [Components.Schemas.Action.open_pr, .mark_seen] {
             let server = MockServer()

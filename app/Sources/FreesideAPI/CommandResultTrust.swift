@@ -23,6 +23,7 @@ public enum CommandResultTrust {
                 && record.action == payload.action
                 && record.message == expectedMessage
                 && record.attachments == (payload.attachments ?? [])
+                && record.question_answers == payload.question_answers.map(recordedQuestionAnswers)
         case .stop_task(let payload):
             guard case .stop_task(let record) = result.record else { return false }
             return record.command_id == command.command_id && record.device_id == command.device_id
@@ -180,9 +181,28 @@ public enum CommandResultTrust {
         case .adjudicate_findings:
             guard let routes = payload.finding_routes else { return payload.message ?? "" }
             return findingRoutesMessage(routes)
+        case .answer_and_retry, .answer_without_retry:
+            // With chosen options the daemon renders them and the note into
+            // the message (signet decisionMessage).
+            guard let answers = payload.question_answers else { return payload.message ?? "" }
+            guard
+                let rendered = Components.Schemas.QuestionAnswer.renderedMessage(
+                    answers, note: payload.message ?? "")
+            else { throw QuestionAnswersRefused() }
+            return rendered
         default:
             return payload.message ?? ""
         }
+    }
+
+    struct QuestionAnswersRefused: Error {}
+
+    /// The answers as the daemon records them: in decision order
+    /// (domain.NewCommand).
+    static func recordedQuestionAnswers(
+        _ answers: [Components.Schemas.QuestionAnswer]
+    ) -> [Components.Schemas.QuestionAnswer] {
+        answers.sorted { $0.decision_index < $1.decision_index }
     }
 
     /// Mirrors Go's `json.Marshal([]signet.FindingRouteChoice)` byte-for-byte:

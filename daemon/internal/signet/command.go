@@ -130,6 +130,12 @@ type DecisionPayload struct {
 	// AnswerRoute is required for answer_and_retry on an implementation-stage
 	// agent_question and forbidden everywhere else (validateAnswerRoute).
 	AnswerRoute *domain.AnswerRoute
+	// QuestionAnswers are the options an answer chose on an agent_question
+	// card, allowed only on answer_and_retry and answer_without_retry. With
+	// them Message is the owner's note, and decisionMessage renders the two
+	// into the durable message; validateQuestionAnswers holds them to the
+	// question. Nil means absent; a present, empty list is malformed.
+	QuestionAnswers []domain.QuestionAnswer
 	// DecisionActionSurfaceDigest optionally references the daemon-derived
 	// DecisionActionSurface the client rendered the decision from (plan §8). It
 	// is telemetry evidence: acceptance revalidates it and stamps it onto the
@@ -190,6 +196,10 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 	}
 	if payload.Action != domain.ActionRetryWithAlternateAgent && payload.AlternateAgentChoice != nil {
 		return "", ErrInvalidAlternateAgentDecisionPayload
+	}
+	answers := payload.Action == domain.ActionAnswerAndRetry || payload.Action == domain.ActionAnswerWithoutRetry
+	if payload.QuestionAnswers != nil && !answers {
+		return "", fmt.Errorf("action %q question_answers: %w", payload.Action, ErrContentNotAllowed)
 	}
 	switch payload.Action {
 	case domain.ActionAdjudicateFindings:
@@ -282,6 +292,16 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 			payload.SnoozeUntil != nil ||
 			payload.AlternativeChoices != nil || payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidProposalDecisionPayload
+		}
+		if payload.QuestionAnswers != nil {
+			// The rendered answer is the durable message, so every engine
+			// consumer keeps reading Command.Message and a retry renders the
+			// same bytes.
+			message, err := domain.RenderQuestionAnswers(payload.QuestionAnswers, payload.Message)
+			if err != nil {
+				return "", fmt.Errorf("action %q question_answers: %w", payload.Action, err)
+			}
+			return message, nil
 		}
 		return payload.Message, nil
 	}
