@@ -111,6 +111,9 @@ func runAuthAddCommand(
 			Journal: adapters.Enrollment, AuthStoreLeaser: adapters.Leaser,
 			AuthRefresher: deps.codexRefresher,
 		})
+		if errors.Is(err, ward.ErrCodexAuthAlreadyEnrolled) {
+			result, err = adoptEnrolledCodexStore(ctx, adapters, cfg, identityID, enrollmentID, stderr)
+		}
 		if err == nil {
 			discoverCodexAfterAuthChange(ctx, st, deps.runtime, deps.codexModelDiscovery, cfg.ContainerBin, cfg.AgentImage,
 				cfg.AuthStoreRoot, cfg.AuthStorePath, []domain.ClientEnrollmentID{enrollmentID}, stderr)
@@ -140,6 +143,70 @@ func runAuthAddCommand(
 		return fmt.Errorf("write enrollment result: %w", err)
 	}
 	return nil
+}
+
+// adoptEnrolledCodexStore records the Codex client enrollment over the live
+// store of an identity whose first enrollment already finished (an
+// enroll-codex run, or an earlier auth add), as auth adopt does. That store is verified and its login is spent, so the input
+// login is never read: writing it over the store would break the reviewer.
+// Adoption binds the account the store's own tokens name, and reuses the
+// enrollment when an earlier auth add already recorded it.
+func adoptEnrolledCodexStore(
+	ctx context.Context, adapters *wardstore.Adapters, cfg authAddConfig,
+	identityID domain.AuthIdentityID, enrollmentID domain.ClientEnrollmentID, stderr io.Writer,
+) (ward.CodexAuthEnrollmentResult, error) {
+	stored, err := adapters.Leaser.GetIdentity(ctx, identityID)
+	if err != nil {
+		return ward.CodexAuthEnrollmentResult{}, err
+	}
+	// auth add keeps an owned identity's cost owner when none is given;
+	// adoption takes it explicitly.
+	costOwner := cfg.CostOwner
+	if costOwner == "" {
+		costOwner = stored.CostOwner
+	}
+	if costOwner == "" {
+		return ward.CodexAuthEnrollmentResult{}, fmt.Errorf(
+			"auth identity %s has no cost owner; name one with -cost-owner to enroll it", identityID)
+	}
+	identity, err := adoptableIdentity(ctx, adapters, identityID, costOwner)
+	if err != nil {
+		return ward.CodexAuthEnrollmentResult{}, err
+	}
+	adopted, err := ward.AdoptCodexAuth(ctx, ward.CodexAuthAdoptionConfig{
+		AuthAdoptionConfig: ward.AuthAdoptionConfig{
+			Identity: identity, EnrollmentID: enrollmentID, Route: cfg.Route, CostOwner: costOwner,
+			Store: adapters.Adoption, AuthStoreLeaser: adapters.Leaser,
+		},
+		AuthStoreRoot: cfg.AuthStoreRoot,
+	})
+	if err != nil {
+		return ward.CodexAuthEnrollmentResult{}, err
+	}
+	verb := "recorded"
+	if adopted.Reused {
+		// Reuse records nothing, so a different route would be reported as
+		// enrolled without being so.
+		if adopted.Enrollment.Route != cfg.Route {
+			return ward.CodexAuthEnrollmentResult{}, fmt.Errorf(
+				"auth identity %s is already enrolled as %s on route %q, not %q",
+				identityID, adopted.Enrollment.ID, adopted.Enrollment.Route, cfg.Route)
+		}
+		verb = "reused"
+	}
+	_, _ = fmt.Fprintf(stderr, "auth identity %s's first enrollment already finished; auth add %s "+
+		"client enrollment %s over its live store and did not use the login at -input-file\n",
+		identityID, verb, adopted.Enrollment.ID)
+	generation := adopted.Generation
+	result := ward.CodexAuthEnrollmentResult{
+		AuthIdentityID: identityID, AuthStorePath: generation.AuthStoreVolume,
+		LeaseFence: generation.LeaseFence, AuthStoreDigest: generation.StoreManifestDigest,
+		EnrollmentID: adopted.Enrollment.ID,
+	}
+	if generation.TokenExpiry != nil {
+		result.AccessTokenExpiresAt = *generation.TokenExpiry
+	}
+	return result, nil
 }
 
 func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) {
