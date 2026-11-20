@@ -227,6 +227,19 @@ func TestReentryReusesItsPredecessorsCleanVerification(t *testing.T) {
 		stats.FilesChanged != 1 || stats.Additions != 1 {
 		t.Fatalf("reused diff stats = %+v, want this cycle's diff of the head", stats)
 	}
+	// It ran no verifier, so it records no verification of its own.
+	if err := f.st.Read(t.Context(), func(tx *store.ReadTx) error {
+		milestones, err := tx.ListRunMilestones(t.Context(), f.task.RunID)
+		for _, m := range milestones {
+			if m.Kind == domain.MilestoneVerificationStarted || m.Kind == domain.MilestoneVerificationPassed ||
+				m.Kind == domain.MilestoneVerificationFailed {
+				t.Errorf("reused cycle recorded %s, want no verification milestone", m.Kind)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	loaded, found, err := f.load(t, f.task.reentryCheckpointKey())
 	if err != nil || !found || !reflect.DeepEqual(loaded, checkpoint) {

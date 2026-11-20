@@ -333,6 +333,9 @@ func TestReadinessReentersAfterHeadChange(t *testing.T) {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0",
 			p.room.runs, p.transport.MergeCount())
 	}
+	// The first cycle and the re-entry each record their own pair.
+	assertVerificationResults(t, p.store, p.runID,
+		domain.MilestoneVerificationPassed, domain.MilestoneVerificationPassed)
 	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 ||
 		result.PublicationTasksCompleted != 0 {
@@ -854,6 +857,8 @@ func TestReadinessReentryStopsOnFailedVerification(t *testing.T) {
 	if len(stop.EvidenceSnapshot) == 0 || !strings.Contains(stop.Reason, pushed) {
 		t.Fatalf("stop item = %#v", stop)
 	}
+	assertVerificationResults(t, p.store, p.runID,
+		domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed)
 	var review domain.ReviewRecord
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -903,6 +908,10 @@ func TestReadinessReentryStopsOnTreeVerificationRefuses(t *testing.T) {
 	if p.room.runs != runs {
 		t.Fatalf("a refused tree ran %d verification commands", p.room.runs-runs)
 	}
+	// The stopped re-entry records its failure, so the run doesn't read as
+	// verifying while the stop waits on a person.
+	assertVerificationResults(t, p.store, p.runID,
+		domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed)
 	// The task is retired: later passes neither fail nor repeat the stop.
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 0 {
 		t.Fatalf("pass after the stop = %#v, %v", result, err)

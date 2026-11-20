@@ -181,6 +181,12 @@ func TestHandoffAtAMovedTipPublishesTheVerifiedHead(t *testing.T) {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 1",
 			p.room.runs, p.transport.MergeCount())
 	}
+	// The handoff verifies the merge under its own invocation.
+	if steps := assertVerificationResults(t, p.store, p.runID,
+		domain.MilestoneVerificationPassed, domain.MilestoneVerificationPassed,
+	); !strings.HasPrefix(string(steps[1].invocation), "verify-handoff-") {
+		t.Fatalf("second verification = %s, want the handoff's", steps[1].invocation)
+	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		chain, err := tx.PublicationSuccessorChain(p.ctx, p.runID)
 		if err != nil {
@@ -538,6 +544,8 @@ func TestHandoffVerificationMemoryLimitBlocks(t *testing.T) {
 	if p.room.runs != 2 {
 		t.Fatalf("killed handoff verified %d times, want 2", p.room.runs)
 	}
+	assertVerificationResults(t, p.store, p.runID,
+		domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed)
 }
 
 // TestHandoffDoesNotReresolveAnAdvanceAfterTheSeal: the tip is resolved once

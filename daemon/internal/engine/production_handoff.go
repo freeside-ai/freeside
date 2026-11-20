@@ -204,6 +204,9 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 	if !found {
 		stored, err = w.verifyReentry(ctx, key, verifyTask, cycle, checkoutDir)
 		if verificationMemoryLimit(err) {
+			if err := w.recordVerificationStopped(ctx, verifyTask); err != nil {
+				return domain.HandoffCheck{}, nil, err
+			}
 			return block(productionBlockMemoryLimit, checkpoint.Artifacts)
 		}
 		// The tip itself decides these: a merged tree the image cannot
@@ -213,6 +216,9 @@ func (w *productionPublicationWorkflow) reconcileHandoff(
 		// cause. While upkeep has a resolution pending, verifyReentry returns
 		// a retryable error the lane holds the task under instead.
 		if account, stop := handoffStopAccount(task, check.TipSHA, merge, binding.image.ImageRef, err); stop {
+			if err := w.recordVerificationStopped(ctx, verifyTask); err != nil {
+				return domain.HandoffCheck{}, nil, err
+			}
 			artifacts, err := w.recordHandoffStop(ctx, task, binding, check, merge, account, createdAt)
 			if err != nil {
 				return domain.HandoffCheck{}, nil, err

@@ -484,19 +484,10 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if err == nil && !reused {
 			stored, err = w.verifyReentry(ctx, task.reentryCheckpointKey(), task, binding, checkoutDir)
 		}
-		if reason, stop := reentryUnverifiableTreeReason(task, base.BaseSHA, err); stop {
-			return w.stopReentryCycle(ctx, task, reason, nil)
-		}
-		if reason, stop := reentryRebuildRefusedReason(task, base.BaseSHA, err); stop {
-			return w.stopReentryCycle(ctx, task, reason, nil)
-		}
-		if reason, stop := reentryHostVerificationRefusedReason(task, base.BaseSHA, err); stop {
-			return w.stopReentryCycle(ctx, task, reason, nil)
-		}
-		if reason, stop := reentryUnservedBaseReason(task, base.BaseSHA, err); stop {
-			return w.stopReentryCycle(ctx, task, reason, nil)
-		}
-		if reason, stop := reentryMemoryLimitReason(task, base.BaseSHA, err); stop {
+		if reason, stop := reentryVerificationStopReason(task, base.BaseSHA, err); stop {
+			if err := w.recordVerificationStopped(ctx, task); err != nil {
+				return productionTaskOutcome{}, err
+			}
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
 		if err != nil {
@@ -609,6 +600,21 @@ func quotedWithin(text string, limit int) string {
 // state and stop the lane. A re-entry evaluates a commit the importer never
 // saw: returned, the error would stop the lane for every run, on every pass,
 // for as long as the push stands.
+// reentryVerificationStopReason is the reason a re-entry verification error
+// stops the cycle, from the first of the stop classifiers that matches.
+func reentryVerificationStopReason(task productionPublicationTask, baseSHA string, err error) (string, bool) {
+	for _, classify := range []func(productionPublicationTask, string, error) (string, bool){
+		reentryUnverifiableTreeReason, reentryRebuildRefusedReason,
+		reentryHostVerificationRefusedReason, reentryUnservedBaseReason,
+		reentryMemoryLimitReason,
+	} {
+		if reason, stop := classify(task, baseSHA, err); stop {
+			return reason, true
+		}
+	}
+	return "", false
+}
+
 func reentryUnverifiableTreeReason(
 	task productionPublicationTask, baseSHA string, err error,
 ) (string, bool) {
@@ -906,6 +912,9 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, nil))
 	}
+	if err := w.recordVerificationStarted(ctx, task); err != nil {
+		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, nil))
+	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: task.HeadSHA, BaseSHA: baseSHA, EvaluatedSHA: binding.evaluatedSHA,
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
@@ -958,7 +967,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
 		return productionReentryCheckpoint{}, err
 	}
-	if err := w.persistReentryCheckpoint(ctx, checkpointKey, checkpoint); err != nil {
+	if err := w.persistReentryCheckpoint(ctx, checkpointKey, task, checkpoint); err != nil {
 		return productionReentryCheckpoint{}, err
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -1091,7 +1100,7 @@ func (w *productionPublicationWorkflow) reuseReentryVerification(
 		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
 		return productionReentryCheckpoint{}, false, err
 	}
-	if err := w.persistReentryCheckpoint(ctx, task.reentryCheckpointKey(), checkpoint); err != nil {
+	if err := w.persistReentryCheckpoint(ctx, task.reentryCheckpointKey(), task, checkpoint); err != nil {
 		return productionReentryCheckpoint{}, false, err
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -1322,6 +1331,7 @@ func parseNameStatus(out []byte) ([]importer.Change, error) {
 func (w *productionPublicationWorkflow) persistReentryCheckpoint(
 	ctx context.Context,
 	checkpointKey string,
+	task productionPublicationTask,
 	checkpoint productionReentryCheckpoint,
 ) error {
 	payload, err := json.Marshal(checkpoint)
@@ -1343,7 +1353,12 @@ func (w *productionPublicationWorkflow) persistReentryCheckpoint(
 			return fmt.Errorf("production re-entry checkpoint disagrees with stored row: %w",
 				domain.ErrImmutableTransition)
 		}
-		return nil
+		// A reused verification ran no verifier in this cycle, so it records
+		// no result; the predecessor's verifier recorded its own.
+		if checkpoint.ReusedInvocationID != "" {
+			return nil
+		}
+		return tx.AppendRunMilestone(ctx, verificationResultMilestone(task, checkpoint.Outcome, w.now().UTC()))
 	})
 }
 

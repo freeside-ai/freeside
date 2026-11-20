@@ -5675,6 +5675,9 @@ func TestProductionVerificationMemoryLimitKillBlocksDefinitively(t *testing.T) {
 				conclusion.Reason == nil || *conclusion.Reason != domain.HoldVerificationMemoryLimit {
 				t.Fatalf("memory-limit block conclusion = %#v", conclusion)
 			}
+			// The killed verifier records its failure, so the blocked run
+			// doesn't read as verifying while it waits on a person.
+			assertVerificationResults(t, p.store, p.runID, domain.MilestoneVerificationFailed)
 			runs := p.room.runs
 			p.now = p.now.Add(time.Hour)
 			if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
@@ -6132,6 +6135,12 @@ func TestProductionPublicationReevaluationCanBlockAgainAndStop(t *testing.T) {
 	}
 	if second.EntityVersion != created.EntityVersion || !reflect.DeepEqual(second.Item, created.Item) {
 		t.Fatalf("reevaluation block changed across recovery: before=%#v after=%#v", created, second)
+	}
+	// The reevaluation verifies again under its own invocation.
+	if steps := assertVerificationResults(t, p.store, p.runID,
+		domain.MilestoneVerificationFailed, domain.MilestoneVerificationFailed,
+	); !strings.HasSuffix(string(steps[1].invocation), "/reevaluation/"+commandID) {
+		t.Fatalf("second verification = %s, want the reevaluation's", steps[1].invocation)
 	}
 	items, err := p.attention.ListAttentionItems(p.ctx)
 	if err != nil {

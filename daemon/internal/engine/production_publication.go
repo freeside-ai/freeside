@@ -1799,6 +1799,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	case productionPublicationProgressUnverified:
 		checkpoint, err = w.verifyAndCheckpoint(ctx, task, binding, imported, checkoutDir)
 		if verificationMemoryLimit(err) {
+			if err := w.recordVerificationStopped(ctx, task); err != nil {
+				return productionTaskOutcome{}, err
+			}
 			return w.completeBlockedTask(
 				ctx, task, binding.run, imported, nil,
 				productionBlockMemoryLimit, productionRerunnableBlockActions,
