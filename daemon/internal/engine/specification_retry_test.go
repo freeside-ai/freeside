@@ -469,3 +469,111 @@ func TestSpecificationRequestRefusesRetryReasonOnFirstIteration(t *testing.T) {
 		t.Fatalf("untrimmed retry reason = %v, want ErrParentKeyMismatch", err)
 	}
 }
+
+// TestRetryCommandStartsOneSpecificationIteration is the specification half
+// of the F5/F30 proof (#3440): a failure card whose facts say a repeat may
+// succeed offers Retry, accepting it adds exactly one iteration bound to the
+// command, a replayed pass adds nothing, and the iteration dispatches
+// through the ordinary chain check. With the iteration budget spent, the
+// next failure card offers no Retry.
+func TestRetryCommandStartsOneSpecificationIteration(t *testing.T) {
+	t.Parallel()
+	f := newSpecificationFixture(t, true, 2)
+	driver := f.newDriver(t)
+	e := f.newEngine(t, driver)
+	f.submit(t)
+	failSpecificationIteration(t, f, driver, e, 1)
+	failed := specificationInvocationID("specification-run", 1)
+	card, snapshot := f.item(t, specificationFailureItemID(failed))
+	if card.ExecutionFailure == nil || card.ExecutionFailure.RetryOutlook != domain.RetryOutlookMaySucceed ||
+		!card.Offers(domain.ActionRetry) {
+		t.Fatalf("failure card = %+v offering %v, want retry", card.ExecutionFailure, card.RequestedDecision)
+	}
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "retry-specification", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{ItemID: card.ID, Action: domain.ActionRetry, ItemVersion: card.ItemVersion},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	second := specificationInvocationID("specification-run", 2)
+	failSpecificationIteration(t, f, driver, e, 2)
+	if next := f.request(t, 2); next.RetryReason != operatorSpecificationRetryReason("retry-specification") {
+		t.Fatalf("retry request reason = %q", next.RetryReason)
+	}
+	before := f.revision(t)
+	if made, err := e.reconcileFailureRetries(t.Context()); err != nil || made != 0 {
+		t.Fatalf("replayed retry pass = %d, %v; want nothing", made, err)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("replayed retry moved the store revision from %d to %d", before, after)
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		requests, err := specificationRequests(t.Context(), tx, "specification-run")
+		if len(requests) != 2 || requests[1].InvocationID != second {
+			t.Errorf("iterations = %d, want the one the command added", len(requests))
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Two iterations spend the budget of two, so the second card offers no
+	// retry it could not honor.
+	exhausted, _ := f.item(t, specificationFailureItemID(second))
+	if exhausted.Offers(domain.ActionRetry) {
+		t.Fatalf("exhausted card offers %v", exhausted.RequestedDecision)
+	}
+}
+
+// TestRetryCommandResolvedRefusesOtherDecisions: the specification chain
+// check and the reconciler accept a retry only for the accepted Retry that
+// resolved a card whose facts still offer it (#3440). A command that
+// resolved the card with another action, another command, or a card whose
+// facts don't offer Retry starts nothing.
+func TestRetryCommandResolvedRefusesOtherDecisions(t *testing.T) {
+	t.Parallel()
+	decidedAt := time.Unix(100, 0).UTC()
+	resolved := func(action domain.Action, commandID string, outlook domain.RetryOutlook) domain.AttentionItem {
+		return domain.AttentionItem{
+			ID: "item-execution_failure-inv-spec-2", Type: domain.AttentionExecutionFailure,
+			RequestedDecision: []domain.Action{domain.ActionRetry, domain.ActionDiscuss, domain.ActionStop},
+			ExecutionFailure: &domain.ExecutionFailureFacts{
+				Outcome: domain.ExecutionOutcomeLost, Stage: domain.StageNameSpecification,
+				InvocationID: "inv-spec-2", RetryOutlook: outlook,
+			},
+			ItemVersion: 2, Status: domain.StatusResolved, DecidedAt: &decidedAt,
+			Conclusion: &domain.Conclusion{
+				Cause:    domain.ConcludedByDecision,
+				Decision: &domain.ConclusionDecision{CommandID: commandID, Action: action},
+			},
+		}
+	}
+	command := domain.Command{
+		CommandID: "command-retry", ItemID: "item-execution_failure-inv-spec-2", ItemVersion: 1,
+		Action: domain.ActionRetry,
+	}
+	if !retryCommandResolved(command, resolved(domain.ActionRetry, command.CommandID, domain.RetryOutlookMaySucceed)) {
+		t.Fatal("the accepted Retry that resolved an offering card was refused")
+	}
+	stop := command
+	stop.Action = domain.ActionStop
+	for name, tc := range map[string]struct {
+		command domain.Command
+		card    domain.AttentionItem
+	}{
+		"command for another action": {stop, resolved(domain.ActionStop, command.CommandID, domain.RetryOutlookMaySucceed)},
+		"card resolved by another command": {
+			command,
+			resolved(domain.ActionRetry, "command-other", domain.RetryOutlookMaySucceed),
+		},
+		"card whose facts don't offer retry": {
+			command,
+			resolved(domain.ActionRetry, command.CommandID, domain.RetryOutlookWouldRepeat),
+		},
+		"card from before outlooks": {command, resolved(domain.ActionRetry, command.CommandID, "")},
+	} {
+		if retryCommandResolved(tc.command, tc.card) {
+			t.Errorf("%s: retryCommandResolved accepted it", name)
+		}
+	}
+}

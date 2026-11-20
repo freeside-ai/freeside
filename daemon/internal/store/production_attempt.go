@@ -866,8 +866,46 @@ func (tx *ReadTx) authenticateOperatorRetryAttempt(
 		return nil
 	case attempt.AlternateAgentRetryID != nil:
 		return tx.authenticateAlternateAgentRetryAttempt(ctx, attempt)
+	case attempt.CapabilityManifestDigest == nil:
+		return tx.authenticatePlainRetryAttempt(ctx, attempt)
 	}
 	return tx.authenticateCapabilityRetryAttempt(ctx, attempt)
+}
+
+// authenticatePlainRetryAttempt binds a plain Retry (#3440) to the command
+// that asked for it and the failure card it resolved: an accepted retry
+// command that decided the card's prior version, a card for the failed
+// implementation invocation the attempt retries on the attempt's parent run,
+// and a card that offered Retry and whose facts, which Validate checks
+// against the derived outlook, still offer it.
+func (tx *ReadTx) authenticatePlainRetryAttempt(
+	ctx context.Context, attempt domain.ProductionAttempt,
+) error {
+	command, err := tx.GetCommand(ctx, *attempt.OperatorCommandID)
+	if err != nil {
+		return err
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	if command.Action != domain.ActionRetry || attempt.RetryOfInvocationID == nil ||
+		command.Message != "" || len(command.Attachments) != 0 ||
+		command.ItemID != item.ID || command.ItemVersion+1 != item.ItemVersion ||
+		command.PRHeadSHA != item.PRHeadSHA ||
+		!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) ||
+		item.Status != domain.StatusResolved || item.DecidedAt == nil ||
+		item.Conclusion == nil || item.Conclusion.Decision == nil ||
+		item.Conclusion.Decision.CommandID != command.CommandID ||
+		item.Type != domain.AttentionExecutionFailure || item.ExecutionFailure == nil ||
+		domain.IsOperatorFeedbackExecutionFailureItemID(item.ID) ||
+		!item.Offers(domain.ActionRetry) || !item.ExecutionFailure.OffersSameAgentRetry() ||
+		item.ExecutionFailure.Stage != domain.StageNameImplementation ||
+		item.ExecutionFailure.InvocationID != *attempt.RetryOfInvocationID ||
+		item.Subject.RunID == nil || *item.Subject.RunID != attempt.ParentRunID {
+		return domain.ErrParentKeyMismatch
+	}
+	return nil
 }
 
 // authenticateAlternateAgentRetryAttempt binds an alternate-agent retry to

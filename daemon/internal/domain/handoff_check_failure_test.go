@@ -135,6 +135,38 @@ func TestDecideRetryOutlook(t *testing.T) {
 	}
 }
 
+func TestOffersSameAgentRetry(t *testing.T) {
+	t.Parallel()
+	implementer, reviewer := RoleImplementer, RoleName("reviewer")
+	facts := func(stage StageName, role *RoleName, outcome ExecutionOutcomeStatus, cause FailureCause) ExecutionFailureFacts {
+		f := ExecutionFailureFacts{Outcome: outcome, Cause: cause, Stage: stage, InvocationID: "inv"}
+		if role != nil {
+			f.Admitted = &InvocationAdmissionFacts{Role: role}
+		}
+		f.RetryOutlook = DecideRetryOutlook(outcome, cause, nil)
+		return f
+	}
+	for name, tc := range map[string]struct {
+		facts ExecutionFailureFacts
+		want  bool
+	}{
+		"lost specification":         {facts(StageNameSpecification, nil, ExecutionOutcomeLost, ""), true},
+		"canceled implementer":       {facts(StageNameImplementation, &implementer, ExecutionOutcomeCanceled, ""), true},
+		"provider unavailable":       {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseProviderUnavailable), true},
+		"unknown failure":            {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseUnknown), true},
+		"quota has its own remedy":   {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseQuota), false},
+		"would repeat":               {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseExportRejected), false},
+		"remediation round":          {facts(StageNameImplementation, &reviewer, ExecutionOutcomeLost, ""), false},
+		"implementation without one": {facts(StageNameImplementation, nil, ExecutionOutcomeLost, ""), false},
+		"review stage":               {facts(StageNameReview, nil, ExecutionOutcomeLost, ""), false},
+		"older card without outlook": {ExecutionFailureFacts{Outcome: ExecutionOutcomeLost, Stage: StageNameSpecification, InvocationID: "inv"}, false},
+	} {
+		if got := tc.facts.OffersSameAgentRetry(); got != tc.want {
+			t.Errorf("%s: offers = %t, want %t", name, got, tc.want)
+		}
+	}
+}
+
 // TestExportRejectionFactsBoundAndScreen is F60's projection: at most five
 // findings plus the true total, and a credential-shaped path only as its
 // redaction token.

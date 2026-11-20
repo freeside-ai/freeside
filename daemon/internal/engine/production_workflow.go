@@ -1976,6 +1976,13 @@ func productionFailureItem(
 		reason += " Summary: " + terminal.Summary
 	}
 	actions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+	// An operator feedback card gets Retry from its own reconciler, which
+	// first checks the feedback lineage. Retry starts a campaign attempt, so
+	// a run outside a campaign can't take one.
+	if facts != nil && facts.OffersSameAgentRetry() && run.CampaignID != "" &&
+		!domain.HasOperatorFeedbackInvocationPrefix(terminal.InvocationID) {
+		actions = append([]domain.Action{domain.ActionRetry}, actions...)
+	}
 	if facts != nil && len(facts.OfferedManifests) != 0 {
 		actions = append([]domain.Action{domain.ActionRetryWithCapability}, actions...)
 	}

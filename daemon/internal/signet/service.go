@@ -502,10 +502,13 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 					return err
 				}
 			}
-			if command.Action == domain.ActionRetry && item.ExecutionFailure != nil {
-				if command.Message != "" || len(command.Attachments) != 0 {
-					return domain.ErrParentKeyMismatch
-				}
+			if err := validateFailureRetry(command, item); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
+			// A feedback card's Retry re-sends the feedback, so its parent
+			// must still authenticate.
+			if command.Action == domain.ActionRetry && item.ExecutionFailure != nil &&
+				domain.IsOperatorFeedbackExecutionFailureItemID(item.ID) {
 				if _, err := tx.OperatorFeedbackRetryParent(ctx, item); err != nil {
 					return fmt.Errorf("authenticate feedback retry: %w", err)
 				}
@@ -759,6 +762,38 @@ func decisionOutcome(itemType domain.AttentionType, action domain.Action) (domai
 		return domain.StatusResolved, outcomeStartsProposal
 	}
 	return actionOutcome(action)
+}
+
+// validateFailureRetry holds a retry on an execution failure card to what
+// its reconciler can act on (#3440). Each retry reconciler writes the
+// command id into the new attempt's reason, which must be trimmed, so an
+// untrimmed id would be accepted, then fail every reconcile pass and stop
+// dispatch. A plain Retry carries no message, and on a card other than an
+// operator feedback card the stored facts must still offer it, so a card
+// written before #3440 that lists Retry authorizes nothing.
+func validateFailureRetry(command domain.Command, item domain.AttentionItem) error {
+	facts := item.ExecutionFailure
+	if facts == nil {
+		return nil
+	}
+	retry := command.Action == domain.ActionRetry
+	if !retry && command.Action != domain.ActionRetryWithCapability &&
+		command.Action != domain.ActionRetryWithAlternateAgent {
+		return nil
+	}
+	if command.CommandID != strings.TrimSpace(command.CommandID) {
+		return fmt.Errorf("retry command id is not trimmed: %w", domain.ErrParentKeyMismatch)
+	}
+	if !retry {
+		return nil
+	}
+	if command.Message != "" || len(command.Attachments) != 0 {
+		return domain.ErrParentKeyMismatch
+	}
+	if !domain.IsOperatorFeedbackExecutionFailureItemID(item.ID) && !facts.OffersSameAgentRetry() {
+		return fmt.Errorf("authenticate failure retry: %w", domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 // actionOutcome maps an action to what its acceptance does, following plan
