@@ -246,6 +246,9 @@ func (a Authority) admission(
 // daemon moves to B. The digest is a pure function of this process's
 // configuration and the image, so the check reads no proof state; whether
 // A is proven is the store's question. Attended admissions bind no digest.
+// An attempt the driver never started does not wait here for ever: the
+// engine re-admits it under the running configuration before it starts
+// (engine.readmitStaleAdmission), and this gate then checks that admission.
 func (a Authority) requireRunnableConfiguration(admission domain.ExecutionAdmission) error {
 	if admission.OperatingMode != domain.ModeUnattended {
 		return nil

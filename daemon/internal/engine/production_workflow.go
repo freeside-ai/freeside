@@ -2335,6 +2335,10 @@ func productionQuarantineNoticeFor(prefix, reason string) bool {
 		// fixed text names it; the prefix is this notice's alone.
 		return reason != ""
 	}
+	if prefix == admissionConfigurationChangedPrefix {
+		// Its reason names the invocation, so no fixed text names it.
+		return reason != ""
+	}
 	if prefix == hostSlotsQuarantinedPrefix {
 		// Its reason carries the executor root and slot count, so no fixed
 		// text names it either.

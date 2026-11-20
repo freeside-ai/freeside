@@ -812,6 +812,22 @@ func (e *Engine) dispatchAdmittedIntent(
 		if admitted {
 			fresh, admittedBase = &admission, base
 		}
+	} else if reserved, err := e.readmitStaleAdmission(ctx, binding, stage, invocationID); err != nil {
+		// A recorded attempt that never started and was admitted under a
+		// configuration this daemon no longer yields is admitted again here,
+		// so the replay below starts under the fresh admission (#3433). A
+		// refusal leaves the state the start authority's refusal of the
+		// stored admission left: an operating-state refusal holds as
+		// recordAttempt's does below, and any other returns the dispatch
+		// reservation the stored admission holds, so a held attempt keeps
+		// no pool slot.
+		if reason, ok := operatingGateHold(err); ok {
+			if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason, holdDetailFor(err)); obsErr != nil {
+				return false, false, obsErr
+			}
+			return false, true, nil
+		}
+		return false, false, e.refuseStart(ctx, entry, invocationID, reserved, err)
 	}
 	// recordAttempt reports the admission that is actually durable: on a
 	// replay it is the stored one, not a freshly built value whose
@@ -914,6 +930,13 @@ func (e *Engine) dispatchAdmittedIntent(
 	// reason returning inside the refresh interval is a new wait, and
 	// skipping it would leave the run showing no hold at all (#727).
 	e.pace.forget("hold:" + string(binding.run.ID))
+	// The driver holds the invocation now, so a notice that this daemon could
+	// not run it (readmitStaleAdmission) no longer describes the run.
+	if err := releaseProductionQuarantine(
+		ctx, e.store, e.signet, admissionConfigurationChangedPrefix, binding.run.ID,
+	); err != nil {
+		return startedNow, false, err
+	}
 	return startedNow, false, nil
 }
 

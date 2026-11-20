@@ -46,6 +46,9 @@
 //   - daemon_memory.go the daemon's own work's reservations, which wait ahead
 //     of task launches and release only on proof (#3206)
 //   - quota_park.go   the refused window's hold on a parked attempt
+//   - readmission.go  the fresh admission of a never-started attempt after
+//     the backend configuration changed, and the notice for a started one
+//     (#3433)
 //   - daemon_rerun.go the next attempt of a root implementation invocation
 //     the daemon's own restart, shutdown, or forced drain ended (#3105)
 //   - update_drain.go, running_work.go
