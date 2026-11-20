@@ -41,6 +41,8 @@ const (
 			status = excluded.status,
 			live = excluded.live,
 			observed_at = excluded.observed_at`
+	selectInvocationObservationSQL = `SELECT run_id, status, live, observed_at
+		FROM invocation_observations WHERE invocation_id = ?`
 	listInvocationObservationsSQL = `SELECT invocation_id, run_id, status,
 			live, observed_at
 		FROM invocation_observations WHERE run_id = ? ORDER BY invocation_id`
@@ -143,13 +145,20 @@ func (tx *WriteTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone
 }
 
 // RecordInvocationObservation records the daemon's latest observation of one
-// invocation, last write wins — including the run binding. The incoming
-// value derives from the durable run and attempt records the engine just
-// joined; the stored row is projection. Trusting the stored row enough to
-// refuse the write would let a forged or corrupt projection row fail the
-// reconcile pass that carries this write, which is exactly the authority the
-// trust boundary denies it: a divergent stored binding is repaired by
-// overwrite, never believed (the refute pass demonstrated the wedge).
+// invocation, last write wins — including the run binding — with one
+// exception: re-observing an unchanged concluded observation keeps its first
+// instant. A concluded status never decays in domain.DeriveInvocationLiveness,
+// so refreshing its time would only move RunObservation.LastObservedAt and
+// with it the task's last activity, making a finished task read as active.
+// The incoming value derives from the durable run and attempt records the
+// engine just joined; the stored row is projection. Trusting the stored row
+// enough to refuse the write would let a forged or corrupt projection row
+// fail the reconcile pass that carries this write, which is exactly the
+// authority the trust boundary denies it: a divergent stored binding is
+// repaired by overwrite, never believed (the refute pass demonstrated the
+// wedge). So the stored row is only compared with: a changed run, status, or
+// live bit, an unparsable stored instant, or a stored instant after the
+// incoming one (a stepped-back clock) all fall through to the overwrite.
 func (tx *WriteTx) RecordInvocationObservation(
 	ctx context.Context, o domain.InvocationObservation,
 ) error {
@@ -159,6 +168,21 @@ func (tx *WriteTx) RecordInvocationObservation(
 	live := 0
 	if o.Live {
 		live = 1
+	}
+	if o.Status.Concluded() {
+		var storedRun, storedStatus, storedAt string
+		var storedLive int
+		err := tx.tx.QueryRowContext(ctx, selectInvocationObservationSQL, o.InvocationID).
+			Scan(&storedRun, &storedStatus, &storedLive, &storedAt)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("record invocation observation %s: %w", o.InvocationID, err)
+		case storedRun == string(o.RunID) && storedStatus == string(o.Status) && storedLive == live:
+			if at, parseErr := parseTime(storedAt); parseErr == nil && !at.After(o.ObservedAt) {
+				return nil
+			}
+		}
 	}
 	if _, err := tx.tx.ExecContext(ctx, upsertInvocationObservationSQL,
 		o.InvocationID, o.RunID, o.Status, live, formatTime(o.ObservedAt)); err != nil {
