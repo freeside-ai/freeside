@@ -127,6 +127,12 @@ struct PairingView: View {
                     FactGroup(spacing: 11) {
                         Self.detailsContent(facts, now: now)
                     }
+                } else if model.codeRefused {
+                    // The daemon refused the preview; without this the screen
+                    // would wait on host details that never come.
+                    Text("This code isn't valid or has expired; run `freesided pairing-code`")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
                 } else {
                     Text("Enter a code to see host details")
                         .font(FreesideFont.cardBody)

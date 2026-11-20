@@ -167,9 +167,25 @@ freesided deputy -root <root>
 It prints its build, the settings digest, and the repository it publishes to
 on stderr, then the self-check's result: `composition passed; manifest <path>`,
 or the failed checks and their remediation with execution left disabled. Once
-the daemon serves, its readiness line on stdout gives the `api_url` and a
-pairing code. Everything under `<root>/daemon` is private: the database, the
-adoption report and log, and the agent-tree patch. Do not upload it.
+the daemon serves, its readiness line on stdout gives the `api_url`, a
+pairing code, and the code's `expires_at`, and stderr names the
+`pairing-code` command that mints a new one. Everything under `<root>/daemon`
+is private: the database, the adoption report and log, the agent-tree patch,
+and the attached app's credential. Do not upload it.
+
+Attach the Mac client before the submit, from a second terminal, with the
+`client=` command `exit-root.sh` printed:
+
+```sh
+bash <root>/builds/<sha>/src/scripts/dev-instance.sh --attach <root>
+```
+
+It builds the Debug app from the deputy's own source tree, waits for the
+deputy to serve, and opens the app on it with the startup code filled in.
+Pair it; the app keeps that pairing in `<root>/daemon`, so it reconnects
+after a deputy restart and reopens paired after it quits, until the root is
+deleted. The deputy logs a warning for each card it opens while no device
+is paired.
 
 When the exit contract routes the real task, set the routing policy now,
 from a second terminal, and read it back before the submit. The router
@@ -217,14 +233,17 @@ the CLI nor the clients automatically resend unresolved submissions. A second
 unfinished task for the same specification in the same project is refused;
 the refusal names the first task and the commands that settle it.
 
-If pairing has not finished before the startup code expires, request a fresh
-code as the deputy's OS user:
+If pairing has not finished before the startup code expires (the pairing
+screen then says the code isn't valid or has expired), request a fresh code
+as the deputy's OS user:
 
 ```sh
 freesided pairing-code -state-dir <root>/daemon
 ```
 
-Use the returned `api_url`, not the normal installed service's endpoint. The
+Until the deputy serves, the command says it is still starting; rerun it
+once the readiness line appears. Use the returned `api_url`, not the normal
+installed service's endpoint. The
 command prints a private code and its ten-minute expiry. Keep that output out
 of shared logs and evidence; record a redacted mint/preview receipt and
 successful client pairing instead. Renewal does not consume or create a
@@ -602,11 +621,11 @@ one; it resumes where it stopped. In order:
    so a model the pinned CLIs refuse fails for the cost of one short call
    per role, not partway through the pass, and requires `freesided
    prelaunch -no-live` to pass. It exits 0 and prints `root=`, `api_url=`,
-   and a `submit=` line, the exact `freesided submit ...
+   `client=`, and a `submit=` line, the exact `freesided submit ...
    -require-composition` command for the pass's inputs. Start the deputy,
-   then run that command from a second terminal; it waits while the deputy
-   is still starting, and the deputy logs `ready for submissions` once it
-   can take one.
+   attach the client, then run that command from a second terminal; it
+   waits while the deputy is still starting, and the deputy logs `ready for
+   submissions` once it can take one.
 
 The first start writes `<root>/daemon/composition-manifest.json`, whose
 `review_configuration_digest` the onboarding takes; until onboarding

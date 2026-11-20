@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -387,6 +388,46 @@ func TestPairingCodeRefusesUnavailableDaemon(t *testing.T) {
 	}
 	if err := replacement.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPairingCodeExplainsAbsentControl: before a daemon publishes its
+// pairing control address, the command says whether one is starting (it
+// holds the pairing control lock) or none serves the directory, and the
+// probe creates nothing in the state directory.
+func TestPairingCodeExplainsAbsentControl(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	pairingCode := func() string {
+		t.Helper()
+		var stdout bytes.Buffer
+		err := runPairingCodeCommand(t.Context(), []string{"-state-dir", stateDir}, &stdout, io.Discard)
+		if err == nil || stdout.Len() != 0 {
+			t.Fatal("pairing-code succeeded with no pairing control address")
+		}
+		return err.Error()
+	}
+	const absent, starting = "no daemon serves", "is still starting"
+
+	if got := pairingCode(); !strings.Contains(got, absent) {
+		t.Fatalf("no daemon: error = %q, want %q", got, absent)
+	}
+	if entries, err := os.ReadDir(stateDir); err != nil || len(entries) != 0 {
+		t.Fatalf("probe left state directory entries %v (err %v)", entries, err)
+	}
+
+	lock, err := daemonlock.Acquire(filepath.Join(stateDir, pairingControlFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pairingCode(); !strings.Contains(got, starting) || !strings.Contains(got, "api_url") {
+		t.Fatalf("starting daemon: error = %q, want %q", got, starting)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := pairingCode(); !strings.Contains(got, absent) {
+		t.Fatalf("released lock: error = %q, want %q", got, absent)
 	}
 }
 

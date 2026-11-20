@@ -972,10 +972,11 @@ implementation exists.
   on the exact verified Tailscale-owned address with its loopback twin
   (Reachability above). Bare foreground runs keep `127.0.0.1:0`.
 - The daemon durably publishes readiness
-  (`{api_url, pairing_code, environment, run_id}`, the same fields as its
-  one-shot stdout line) to a `0600` runtime file in the state directory on
-  every start. `environment` stamps the daemon's tier (Section [10](#10-operations-and-onboarding),
-  Environments) and `run_id` is new on every start. Under a supervisor there
+  (`{api_url, pairing_code, environment, run_id, expires_at}`, the same
+  fields as its one-shot stdout line) to a `0600` runtime file in the state
+  directory on every start. `environment` stamps the daemon's tier (Section [10](#10-operations-and-onboarding),
+  Environments), `run_id` is new on every start, and `expires_at` is the
+  startup code's expiry, so a client never offers a code it knows is dead. Under a supervisor there
   is no terminal to read stdout, and same-user file readability is the same
   trust boundary as today's terminal. The stdout line remains for foreground
   runs. The app refuses a readiness file stamped for another environment, or
@@ -7082,7 +7083,9 @@ scopes are not the Workflow settings layers of Section
 - **Supervised tiers keep fixed ports.** The app keys its Keychain device
   credential by a hash of the daemon URL, so moving a supervised port orphans
   the pairing. `ephemeral` listens on port `0` by default and pairs afresh on
-  each run. It may take an explicit fixed nonzero port when a paired client
+  each root: it keeps its credential beside the daemon's state, never in the
+  Keychain, so a restart on the same root and port keeps the pairing and a
+  new root needs a new one. It may take an explicit fixed nonzero port when a paired client
   must reach the run (the deputy's `listen` setting pins its listener for
   the specification-approval gate), but never `7331` or `7332`, the supervised
   tiers' ports.

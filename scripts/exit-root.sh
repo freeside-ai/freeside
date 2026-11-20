@@ -85,10 +85,12 @@
 # <root>/instance --listen <listen_host>:<port>, which stays in the
 # foreground; a scenario instance is single-use, so a rerun is refused.
 #
-# Stdout: root=<root>, api_url=<url> once known, one approval=<step> per
-# approval still needed, next=<command> for a step the operator runs
-# just before submit, and, on a ready root, submit=<command>, which submits
-# the pass's inputs once the deputy is started. A scenario pass prints its
+# Stdout: root=<root>, api_url=<url> once known, client=<command> (attaches
+# the Debug app, built from the same <sha> source tree as the deputy, once
+# the deputy serves: dev-instance.sh --attach), one approval=<step> per
+# approval still needed, next=<command> for a step the operator runs just
+# before submit, and, on a ready root, submit=<command>, which submits the
+# pass's inputs once the deputy is started. A scenario pass prints its
 # approval= line, then dev-instance.sh's own root= (the instance), api_url=,
 # and task= lines.
 # Progress goes to stderr; logs go to <root>/logs.
@@ -558,6 +560,9 @@ emit_head() {
   local url
   url=$(state_get .api_url)
   [[ -z "$url" ]] || printf 'api_url=%s\n' "$url"
+  # The deputy's first question reaches no one until a client pairs, so
+  # every stop names the command that attaches one from the same tree.
+  printf 'client=bash %s --attach %s\n' "$(printf '%q' "$src/scripts/dev-instance.sh")" "$(printf '%q' "$root")"
 }
 
 # onboard_review: the one-time review, never -approve; stops with exit 3.
@@ -817,4 +822,4 @@ fi
 printf 'submit=%s\n' "$(printf '%q ' "$freesided" submit -db "$root/daemon/freeside.db" -require-composition \
   -project "$(setting .repository.project)" -task "$root/inputs/task.md" -policy "$root/inputs/policy.json" \
   -publication "$root/inputs/publication.json" -work-unit "$root/inputs/work-unit.json" | sed 's/ $//')"
-say "ready: start the deputy with $freesided deputy -root $root, then run the submit= command, which waits for the deputy to finish starting"
+say "ready: start the deputy with $freesided deputy -root $root, attach a client with the client= command, then run the submit= command, which waits for the deputy to finish starting"

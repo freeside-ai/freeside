@@ -103,6 +103,11 @@ type Service struct {
 	// daemon shuts down; closeOnce makes Shutdown idempotent.
 	closing   chan struct{}
 	closeOnce sync.Once
+	// unseenMu guards unseenWarned, the open items the delivery sender has
+	// already logged as reaching no device (warnUnseenItems), so each is
+	// logged once per process.
+	unseenMu     sync.Mutex
+	unseenWarned map[domain.ItemID]struct{}
 }
 
 // FollowUpFiler is the dispatcher that files approved follow-up issues and

@@ -570,11 +570,11 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if scenarioWiring != nil {
 		d.startScenarioLoops(parent, ctx, cfg, scenarioWiring, workflow)
 	}
-	pairingCode, _, err := attention.MintPairingCode(parent)
+	pairingCode, minted, err := attention.MintPairingCode(parent)
 	if err != nil {
 		return nil, fmt.Errorf("mint startup pairing code: %w", err)
 	}
-	if err := d.PublishReadiness(cfg.StateDir, pairingCode, cfg.ReadinessEnvironment); err != nil {
+	if err := d.PublishReadiness(cfg.StateDir, pairingCode, minted.ExpiresAt, cfg.ReadinessEnvironment); err != nil {
 		return nil, err
 	}
 	if pairing != nil {

@@ -593,8 +593,13 @@ If the startup code expires, run this command as the daemon's OS user:
 freesided pairing-code -state-dir /path/to/existing/daemon-state
 ```
 
-The daemon must already be running with that `-state-dir`. The command prints
-one JSON object with `api_url`, `pairing_code` and `expires_at`. Treat stdout
+The daemon must already be running with that `-state-dir`. Before it
+advertises `pairing-control.json`, the command says the daemon is still
+starting when the state directory's pairing-control lock is held (a deputy's
+ward conformance can take minutes before it serves), and otherwise that no
+daemon serves the directory yet; the check creates nothing. The command prints
+one JSON object with `api_url`, `pairing_code` and `expires_at`. The startup
+code's readiness line and `readiness.json` carry the same `expires_at`. Treat stdout
 as private pairing material. The code expires after ten minutes and can enroll
 one device; ordinary daemon logs do not contain it. Existing codes retain
 their original expiry and redemption state.
@@ -632,6 +637,10 @@ the phone's side of the setup is in `app/README.md` (Phone Notifications). The
 output and the daemon log never name a topic: a topic is the capability to
 read that device's notifications. A test notice records no delivery and
 changes no item.
+
+While no device is active, each delivery pass logs a warning, once per open
+item per process, naming the item and `freesided pairing-code`: with nobody
+paired, a card reaches no one.
 
 The sender that notifies each active device whose notifications switch is on,
 once for each item opened since the switch went on, lives in `internal/signet`
@@ -1416,7 +1425,11 @@ the authority; this section says which command to reach for.
   ([Run A Scenario](#run-a-scenario)). Stopping it (Ctrl-C, or the app or
   daemon exiting) removes the root. A SIGKILL to the script skips that
   cleanup and can leave the daemon and app running; stop them before you
-  delete the root by hand.
+  delete the root by hand. `--attach ROOT` runs only the app against a
+  daemon already running or starting in `ROOT` (a deputy's root, or a kept
+  `--root`): it waits until `ROOT/daemon/readiness.json` names a daemon
+  that answers, and never starts, stops, or removes a daemon or root. The app keeps its pairing in
+  `ROOT/daemon`, so it reopens paired until the root is deleted.
 - **Never run `app/scripts/install-mac-app.sh` from an agent or script.**
   Both of its tiers are the operator's: omitting the tier installs `prod`,
   and the `dev` install is the operator's own too. Its `--prod` flag lets a
@@ -5114,9 +5127,10 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
-to stderr. A start whose self-check passed then logs one
-`freesided deputy: ready for submissions on <db>` line, once its
-composition manifest and control address both exist; a start whose
+to stderr, including the startup code's expiry and the exact `pairing-code
+-state-dir` command that mints a new one. A start whose self-check passed
+then logs one `freesided deputy: ready for submissions on <db>` line, once
+its composition manifest and control address both exist; a start whose
 self-check failed logs none. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig

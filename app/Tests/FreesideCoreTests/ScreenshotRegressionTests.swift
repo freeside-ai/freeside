@@ -3796,12 +3796,27 @@
                 pairingCode: "000000"
             )
             awaitingFacts.displayName = "Operator's iPhone"
-            await awaitingFacts.refreshFacts()
             surfaces.append(
                 Surface(
                     name: "pairing-awaiting-facts",
                     view: AnyView(
                         PairingView(model: awaitingFacts) { _ in }.screenshotContent(now: screenshotNow))
+                ))
+            // The daemon refused the code's preview: the facts slot says the
+            // code is dead and names the command that mints another.
+            let refusedCode = PairingModel(
+                client: client,
+                credentials: InMemoryCredentialStore(),
+                pairingCode: "000000"
+            )
+            refusedCode.displayName = "Operator's iPhone"
+            await refusedCode.refreshFacts()
+            #expect(refusedCode.codeRefused)
+            surfaces.append(
+                Surface(
+                    name: "pairing-refused-code",
+                    view: AnyView(
+                        PairingView(model: refusedCode) { _ in }.screenshotContent(now: screenshotNow))
                 ))
             // The Mac pairing with its own daemon: Get Code beside the
             // field, after a request that failed, so the notice draws too.

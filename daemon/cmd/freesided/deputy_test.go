@@ -1234,3 +1234,26 @@ func TestAnnounceDeputyReadyOnlyAfterAPassingCheck(t *testing.T) {
 		t.Fatalf("failed check logged %q", failed.String())
 	}
 }
+
+// TestReportDeputyPairingNamesTheCommand: once the deputy serves, stderr
+// names the startup code's expiry and the exact pairing-code command for
+// its state directory.
+func TestReportDeputyPairingNamesTheCommand(t *testing.T) {
+	t.Parallel()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	reportDeputyPairing(&stderr, "/roots/exit/daemon", daemonshell.Readiness{
+		ExpiresAt: time.Date(2026, 11, 19, 20, 30, 0, 0, time.UTC),
+	})
+	for _, want := range []string{
+		"expires 2026-11-19T20:30:00Z",
+		executable + " pairing-code -state-dir /roots/exit/daemon\n",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr %q lacks %q", stderr.String(), want)
+		}
+	}
+}

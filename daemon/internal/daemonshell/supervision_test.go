@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
@@ -53,6 +54,7 @@ func TestReadinessGolden(t *testing.T) {
 		PairingCode: "ABCD-2345",
 		Environment: "dev",
 		RunID:       "0123456789abcdef0123456789abcdef",
+		ExpiresAt:   time.Date(2026, 1, 2, 3, 14, 5, 0, time.UTC),
 	}, "", "  ")
 	if err != nil {
 		t.Fatal(err)

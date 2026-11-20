@@ -100,10 +100,17 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             PairingModel.scopeLabel(facts.granted_scope)
                 == "Full operator control, revocable from the host")
 
+        #expect(!model.codeRefused)
+
         model.pairingCode = "USEDUP"
         #expect(model.facts == nil)
         await model.refreshFacts()
         #expect(model.facts == nil)
+        // A refused preview says so (F64), where it once left the screen
+        // waiting on host details that never came, and a new code clears it.
+        #expect(model.codeRefused)
+        model.pairingCode = "483912"
+        #expect(!model.codeRefused)
 
         // The previewed code is still redeemable.
         model.pairingCode = "483911"
@@ -595,6 +602,13 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 try tierLaunchMode(
                     environment, persistedServerURL: "https://daemon.example", readPaths: &readPaths)
                     == .live(try #require(URL(string: "https://daemon.example")), pairingCode: ""))
+            // An expired code in a supervised tier's file is no readiness:
+            // the persisted deployment still wins.
+            #expect(
+                try tierLaunchMode(
+                    environment, persistedServerURL: "https://daemon.example", readiness: .expired(readiness),
+                    readPaths: &readPaths)
+                    == .live(try #require(URL(string: "https://daemon.example")), pairingCode: ""))
         }
     }
 
@@ -622,8 +636,19 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
                 readPaths: &readPaths)
                 == .live(runURL, pairingCode: "483911"))
         #expect(readPaths == ["/tmp/run-1/readiness.json"])
-        // A run that has not published (or whose code aged out) asks rather
-        // than falling back to any other daemon.
+        // A run whose code expired is still the run to reach: the directory
+        // may hold its credential, and if not, the operator pairs with it
+        // using a fresh code.
+        #expect(
+            try tierLaunchMode(
+                .ephemeral, readinessDirectory: "/tmp/run-1",
+                persistedServerURL: prodDaemonURL.absoluteString,
+                readiness: .expired(
+                    DaemonReadiness(apiURL: runURL, pairingCode: "483911", environment: .ephemeral, runID: "test-run")),
+                readPaths: &readPaths)
+                == .live(runURL, pairingCode: ""))
+        // A run that has not published asks rather than falling back to any
+        // other daemon.
         #expect(
             try tierLaunchMode(
                 .ephemeral, readinessDirectory: "/tmp/run-1",
@@ -1135,10 +1160,12 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(session.readinessDirectory == directory)
     }
 
-    @Test func ephemeralKeepsDeviceCredentialsInMemory() {
+    @Test func ephemeralKeepsDeviceCredentialsOutOfTheKeychain() {
         // An ephemeral run may reuse a fixed port with a fresh credential
         // database; a Keychain credential from an earlier run would skip
         // that run's pairing, so only the supervised tiers use the Keychain.
+        // An ephemeral launch that followed a readiness directory keeps that
+        // run's credential in the directory, so it lasts as long as the root.
         let url = URL(string: "http://127.0.0.1:7400")!
         let keychain = InMemoryCredentialStore()
         func store(_ environment: FreesideEnvironment) -> InMemoryCredentialStore? {
@@ -1149,6 +1176,75 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(store(.prod) === keychain)
         #expect(store(.dev) === keychain)
         #expect(AppSession.keychainCredentialStore(for: url) is KeychainCredentialStore)
+
+        let directory = URL(fileURLWithPath: "/tmp/roots/exit/daemon", isDirectory: true)
+        let followed = AppSession.credentialStore(
+            for: .ephemeral, keychainStore: { _ in keychain },
+            readinessRun: AppSession.ReadinessRun(directory: directory, deploymentURL: url))
+        let runStore = followed(URL(string: "http://127.0.0.1:7400/")!) as? ReadinessDirectoryCredentialStore
+        #expect(runStore?.fileURL == directory.appendingPathComponent(ReadinessDirectoryCredentialStore.fileName))
+        // A server typed later in the same window is another deployment.
+        #expect(followed(URL(string: "http://127.0.0.1:7401")!) is InMemoryCredentialStore)
+        // The supervised tiers ignore a readiness run.
+        let supervised = AppSession.credentialStore(
+            for: .dev, keychainStore: { _ in keychain },
+            readinessRun: AppSession.ReadinessRun(directory: directory, deploymentURL: url))
+        #expect(supervised(url) as? InMemoryCredentialStore === keychain)
+    }
+
+    /// #3448: an ephemeral app relaunched on the same root with no code (how
+    /// it launches once the root's code expired) opens paired with the
+    /// credential its first launch stored there; a new root pairs afresh;
+    /// and a rejected credential's re-pair removes it, so the next launch
+    /// pairs too.
+    @Test func ephemeralPairingLastsAsLongAsTheRoot() throws {
+        let runURL = try #require(URL(string: "http://127.0.0.1:52811"))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let otherRoot = root.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func launch(_ directory: URL) -> AppSession {
+            AppSession.session(
+                for: .live(runURL, pairingCode: ""), localDaemonURL: nil, cacheRoot: nil,
+                credentialStore: AppSession.credentialStore(
+                    for: .ephemeral,
+                    keychainStore: { _ in
+                        Issue.record("an ephemeral launch must not reach the Keychain")
+                        return InMemoryCredentialStore()
+                    },
+                    readinessRun: AppSession.ReadinessRun(directory: directory, deploymentURL: runURL)),
+                persistServerURL: { _ in })
+        }
+        try ReadinessDirectoryCredentialStore(directory: root, deploymentURL: runURL).save(
+            DeviceCredential(
+                deviceID: "device-7", token: testDeviceToken(for: "device-7"), ntfySubscription: .mock)!)
+
+        let relaunched = launch(root)
+        guard case .ready(let coordinator) = relaunched.phase else {
+            Issue.record("expected a relaunch on the same root to open paired, got \(relaunched.phase)")
+            return
+        }
+        #expect(coordinator.store.device.deviceID == "device-7")
+
+        guard case .needsPairing = launch(otherRoot).phase else {
+            Issue.record("expected a new root to pair afresh")
+            return
+        }
+
+        // The daemon refused the token (a 401 marks the store
+        // unauthenticated); the operator's re-pair removes the file.
+        coordinator.store.publish(.unauthenticated)
+        try relaunched.rePair()
+        guard case .needsPairing = relaunched.phase else {
+            Issue.record("expected pairing after re-pair, got \(relaunched.phase)")
+            return
+        }
+        #expect(try ReadinessDirectoryCredentialStore(directory: root, deploymentURL: runURL).load() == nil)
+        guard case .needsPairing = launch(root).phase else {
+            Issue.record("expected the next launch after a re-pair to pair")
+            return
+        }
     }
 
     @Test func aTypedServerUsesTheSessionsCredentialStore() {
