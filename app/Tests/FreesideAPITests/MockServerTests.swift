@@ -2528,3 +2528,71 @@ extension Components.Schemas.CommandResult.recordPayload {
         return record
     }
 }
+
+extension MockServerTests {
+    /// The mock holds question_answers to the daemon's rules
+    /// (signet TestSubmitQuestionAnswersPolicy) and records the message the
+    /// daemon renders, so the client's result-trust check accepts it.
+    @Test func questionAnswersFollowTheDaemonsRules() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
+        let label = try #require(before.item.agent_question?.value1.decisions.first?.options.last?.label)
+
+        func command(
+            _ id: String, action: Components.Schemas.Action = .answer_and_retry,
+            answers: [Components.Schemas.QuestionAnswer], note: String
+        ) -> Components.Schemas.ClientCommand {
+            var command = Self.command(id: id, against: before, action: action)
+            command.payload.asDecision.question_answers = answers
+            command.payload.asDecision.message = note
+            if action == .answer_and_retry {
+                command.payload.asDecision.answer_route = .init(value1: .retry_implementation)
+            }
+            return command
+        }
+        for (name, refused) in [
+            ("empty set", command("cmd-qa-empty", answers: [], note: "")),
+            (
+                "unknown label",
+                command("cmd-qa-unknown", answers: [.init(decision_index: 0, option_label: "Neither")], note: "")
+            ),
+            (
+                "past the decisions",
+                command("cmd-qa-past", answers: [.init(decision_index: 1, option_label: label)], note: "")
+            ),
+            (
+                "other without a note",
+                command("cmd-qa-other", answers: [.init(decision_index: 0, option_label: nil)], note: " ")
+            ),
+            (
+                "note over the limit",
+                command(
+                    "cmd-qa-long", answers: [.init(decision_index: 0, option_label: label)],
+                    note: String(repeating: "n", count: Components.Schemas.QuestionAnswer.maxNoteBytes + 1))
+            ),
+            (
+                "stop",
+                command(
+                    "cmd-qa-stop", action: .stop, answers: [.init(decision_index: 0, option_label: label)], note: "")
+            ),
+        ] {
+            let output = try await client.submitCommand(body: .json(refused))
+            #expect(output.refusalStatus == 400, "\(name): \(output)")
+        }
+
+        let accepted = try await client.submitCommand(
+            body: .json(command("cmd-qa", answers: [.init(decision_index: 0, option_label: label)], note: ""))
+        ).ok.body.json
+        #expect(accepted.record.asDecision.message == "Decision 1: \(label)\n")
+        #expect(accepted.record.asDecision.question_answers == [.init(decision_index: 0, option_label: label)])
+
+        // A daemon that doesn't list the feature predates the member.
+        let older = MockServer()
+        await older.setHealthFeatures(MockServer.servedFeatures.filter { $0 != .question_option_answers })
+        let olderClient = APIClientFactory.mock(server: older)
+        let unserved = try await olderClient.submitCommand(
+            body: .json(command("cmd-qa-older", answers: [.init(decision_index: 0, option_label: label)], note: "")))
+        #expect(unserved.refusalStatus == 400)
+    }
+}
