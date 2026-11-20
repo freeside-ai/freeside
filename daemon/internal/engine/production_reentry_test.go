@@ -179,17 +179,26 @@ func TestReentryCheckpointLoaderAcceptsAPreUpgradeRow(t *testing.T) {
 		EvidenceSnapshotDigest: evidence, Artifacts: artifacts,
 	}
 	v2 := v1
-	v2.Version, v2.TreeSHA = productionReentryCheckpointVersion, strings.Repeat("7", 40)
-	v1WithTree, v2WithoutTree := v1, v2
-	v1WithTree.TreeSHA, v2WithoutTree.TreeSHA = v2.TreeSHA, ""
+	v2.Version, v2.TreeSHA = productionReentryCheckpointVersionV2, strings.Repeat("7", 40)
+	v3 := v2
+	v3.Version = productionReentryCheckpointVersion
+	v1WithTree, v2WithoutTree, v3WithoutTree := v1, v2, v3
+	v1WithTree.TreeSHA, v2WithoutTree.TreeSHA, v3WithoutTree.TreeSHA = v2.TreeSHA, "", ""
+	// Only v3 may name a reused verification; the report is the cycle's own,
+	// so the name is all that differs.
+	v2Reusing := v2
+	v2Reusing.ReusedInvocationID = task.verificationInvocationID()
 	for name, tc := range map[string]struct {
 		checkpoint productionReentryCheckpoint
 		want       error
 	}{
-		"v1 without a tree": {v1, nil},
-		"v2 with a tree":    {v2, nil},
-		"v1 with a tree":    {v1WithTree, domain.ErrParentKeyMismatch},
-		"v2 without a tree": {v2WithoutTree, domain.ErrParentKeyMismatch},
+		"v1 without a tree":  {v1, nil},
+		"v2 with a tree":     {v2, nil},
+		"v3 with a tree":     {v3, nil},
+		"v1 with a tree":     {v1WithTree, domain.ErrParentKeyMismatch},
+		"v2 without a tree":  {v2WithoutTree, domain.ErrParentKeyMismatch},
+		"v3 without a tree":  {v3WithoutTree, domain.ErrParentKeyMismatch},
+		"v2 naming a reused": {v2Reusing, domain.ErrParentKeyMismatch},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

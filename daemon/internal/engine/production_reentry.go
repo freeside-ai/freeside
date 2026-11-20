@@ -37,12 +37,14 @@ import (
 // bound in place to the same pull request.
 
 const (
-	// v2 added TreeSHA. The cycle still accepts a v1 checkpoint, which has
-	// no tree: the inbox never replaces a row, so refusing one would stall
-	// a cycle verified before the upgrade on every pass. Only a remediation
-	// needs the tree, and loadReentryRemediationSourceTree refuses a
-	// checkpoint without one.
-	productionReentryCheckpointVersion   = "freeside.production-reentry-verification/v2"
+	// v2 added TreeSHA, and v3 added ReusedInvocationID. The cycle still
+	// accepts a v1 or v2 checkpoint, neither of which reuses a
+	// verification: the inbox never replaces a row, so refusing one would
+	// stall a cycle verified before the upgrade on every pass. Only a
+	// remediation needs the tree, and loadReentryRemediationSourceTree
+	// refuses a checkpoint without one.
+	productionReentryCheckpointVersion   = "freeside.production-reentry-verification/v3"
+	productionReentryCheckpointVersionV2 = "freeside.production-reentry-verification/v2"
 	productionReentryCheckpointVersionV1 = "freeside.production-reentry-verification/v1"
 	// A re-entered cycle's checkpoint has its own kind because it carries no
 	// import account and no stored authorization, so a reader of the original
@@ -106,6 +108,21 @@ type productionReentryCheckpoint struct {
 	Findings               []domain.CandidateFinding  `json:"findings"`
 	Artifacts              []domain.Artifact          `json:"artifacts"`
 	DiffStats              *domain.DiffStats          `json:"diff_stats"`
+	// ReusedInvocationID names the verification whose report the cycle
+	// reused from its predecessor's ready item instead of verifying again,
+	// and is empty when the cycle verified under its own invocation. Every
+	// reader reads the report under it.
+	ReusedInvocationID domain.InvocationID `json:"reused_invocation_id,omitempty"`
+}
+
+// reportInvocation is the invocation whose verification report the
+// checkpoint's artifacts hold: the reused one, or else own, the invocation
+// the reader's cycle verifies under.
+func (c productionReentryCheckpoint) reportInvocation(own domain.InvocationID) domain.InvocationID {
+	if c.ReusedInvocationID != "" {
+		return c.ReusedInvocationID
+	}
+	return own
 }
 
 // clean reports whether verification passed with nothing flagged, the same
@@ -1228,7 +1245,10 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 	baseSHA := binding.admission.Base.BaseSHA
 	versionAgrees := (checkpoint.Version == productionReentryCheckpointVersion &&
 		validCommitSHA(checkpoint.TreeSHA)) ||
-		(checkpoint.Version == productionReentryCheckpointVersionV1 && checkpoint.TreeSHA == "")
+		(checkpoint.Version == productionReentryCheckpointVersionV2 &&
+			validCommitSHA(checkpoint.TreeSHA) && checkpoint.ReusedInvocationID == "") ||
+		(checkpoint.Version == productionReentryCheckpointVersionV1 &&
+			checkpoint.TreeSHA == "" && checkpoint.ReusedInvocationID == "")
 	if !versionAgrees ||
 		checkpoint.TaskKey != task.intentKey() ||
 		checkpoint.ProjectImage != binding.verificationImage().ID ||
@@ -1261,7 +1281,10 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 	// the verifier's own report, never trusted as the row decoded them. A
 	// first cycle compares its checkpoint with the stored candidate
 	// authorization; this cycle records none, so the report is its witness.
-	raw, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts, task.verificationInvocationID())
+	// A reused verification's report is read under the invocation that
+	// produced it, and is held to this cycle's commits like its own.
+	raw, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts,
+		checkpoint.reportInvocation(task.verificationInvocationID()))
 	if err != nil {
 		return productionReentryCheckpoint{}, false, productionPublicationRetryableError(err)
 	}

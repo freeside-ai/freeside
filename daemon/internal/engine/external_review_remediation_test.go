@@ -174,9 +174,10 @@ func TestReentryRemediationSourceTreeRefusesAForeignCheckpoint(t *testing.T) {
 	if key != cycle.verificationCheckpointKey() {
 		t.Fatalf("loader reads %q, the cycle wrote %q", key, cycle.verificationCheckpointKey())
 	}
-	// The cycle's verification report, as the verifier wrote it, and one
-	// that failed: the loader reads the outcome from these bytes.
-	reportArtifact := func(outcome verify.Outcome) ([]domain.Artifact, domain.Digest) {
+	// The cycle's verification report, as the verifier wrote it, one that
+	// failed, and one an earlier cycle wrote that this cycle reused: the
+	// loader reads the outcome from these bytes.
+	reportArtifact := func(outcome verify.Outcome, invocation domain.InvocationID) ([]domain.Artifact, domain.Digest) {
 		t.Helper()
 		raw, err := json.MarshalIndent(verify.Report{
 			HeadSHA: headSHA, BaseSHA: baseSHA, RecipeDigest: "sha256:recipe", Outcome: outcome,
@@ -187,7 +188,7 @@ func TestReentryRemediationSourceTreeRefusesAForeignCheckpoint(t *testing.T) {
 		raw = append(raw, '\n')
 		records := []domain.Artifact{{
 			Type: domain.ArtifactKindVerificationReport, Digest: domain.Digest(contentaddr.Sum(raw)),
-			Provenance: domain.Provenance{ProducerInvocationID: reentryVerificationInvocationID(successor)},
+			Provenance: domain.Provenance{ProducerInvocationID: invocation},
 		}}
 		artifacts.bodies[records[0].Digest] = raw
 		evidence, err := domain.ComputeEvidenceSnapshotDigest(records)
@@ -196,8 +197,11 @@ func TestReentryRemediationSourceTreeRefusesAForeignCheckpoint(t *testing.T) {
 		}
 		return records, evidence
 	}
-	passed, evidence := reportArtifact(verify.OutcomePassed)
-	failed, failedEvidence := reportArtifact(verify.OutcomeFailed)
+	own := reentryVerificationInvocationID(successor)
+	const earlier = domain.InvocationID("verify-run-reentry-first")
+	passed, evidence := reportArtifact(verify.OutcomePassed, own)
+	failed, failedEvidence := reportArtifact(verify.OutcomeFailed, own)
+	reused, reusedEvidence := reportArtifact(verify.OutcomePassed, earlier)
 	good := productionReentryCheckpoint{
 		Version: productionReentryCheckpointVersion, TaskKey: cycle.intentKey(),
 		BaseSHA: successor.Reentry.BaseSHA, HeadSHA: successor.Reentry.HeadSHA,
@@ -232,6 +236,22 @@ func TestReentryRemediationSourceTreeRefusesAForeignCheckpoint(t *testing.T) {
 		{"ordinary kind", productionVerificationCheckpointKind, nil, nil, domain.ErrParentKeyMismatch},
 		{"earlier version", productionReentryCheckpointKind, func(c *productionReentryCheckpoint) {
 			c.Version = "freeside.production-reentry-verification/v1"
+		}, nil, domain.ErrParentKeyMismatch},
+		// A cycle verified before reuse existed still starts a fix.
+		{"pre-reuse version", productionReentryCheckpointKind, func(c *productionReentryCheckpoint) {
+			c.Version = productionReentryCheckpointVersionV2
+		}, nil, nil},
+		// A reused verification's report is read under the invocation that
+		// wrote it, and only the current version may name one.
+		{"a reused verification", productionReentryCheckpointKind, func(c *productionReentryCheckpoint) {
+			c.Artifacts, c.EvidenceSnapshotDigest, c.ReusedInvocationID = reused, reusedEvidence, earlier
+		}, nil, nil},
+		{"a pre-reuse version that reuses", productionReentryCheckpointKind, func(c *productionReentryCheckpoint) {
+			c.Version = productionReentryCheckpointVersionV2
+			c.Artifacts, c.EvidenceSnapshotDigest, c.ReusedInvocationID = reused, reusedEvidence, earlier
+		}, nil, domain.ErrParentKeyMismatch},
+		{"reuse of a report it does not hold", productionReentryCheckpointKind, func(c *productionReentryCheckpoint) {
+			c.ReusedInvocationID = earlier
 		}, nil, domain.ErrParentKeyMismatch},
 		{"another task", productionReentryCheckpointKind, func(c *productionReentryCheckpoint) {
 			c.TaskKey = "production-publication/run-other"

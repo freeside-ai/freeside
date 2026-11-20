@@ -215,8 +215,11 @@ func (w *productionPublicationWorkflow) loadReentryRemediationSourceTree(
 	}
 	// An external review cycle evaluates its head itself, never a merge, so
 	// the recorded tree is the head's. A checkpoint from before the tree was
-	// recorded has no source identity to offer.
-	if checkpoint.Version != productionReentryCheckpointVersion ||
+	// recorded has no source identity to offer, and only the current
+	// version may reuse an earlier cycle's verification.
+	versionAgrees := checkpoint.Version == productionReentryCheckpointVersion ||
+		(checkpoint.Version == productionReentryCheckpointVersionV2 && checkpoint.ReusedInvocationID == "")
+	if !versionAgrees ||
 		checkpoint.TaskKey != task.intentKey() ||
 		checkpoint.BaseSHA != request.BaseSHA || checkpoint.HeadSHA != request.HeadSHA ||
 		checkpoint.EvaluatedSHA != "" || !checkpoint.clean() ||
@@ -248,9 +251,10 @@ func (w *productionPublicationWorkflow) loadReentryRemediationSourceTree(
 		}
 	}
 	// The clean outcome is the verifier's to state, as loadReentryCheckpoint
-	// holds it: read back from the cycle's own report, not from the row.
-	raw, err := loadVerificationReport(
-		w.artifacts, checkpoint.Artifacts, reentryVerificationInvocationID(*task.Successor))
+	// holds it: read back from the report the cycle verified or reused, not
+	// from the row.
+	raw, err := loadVerificationReport(w.artifacts, checkpoint.Artifacts,
+		checkpoint.reportInvocation(reentryVerificationInvocationID(*task.Successor)))
 	if err != nil {
 		return "", fmt.Errorf("load re-entry remediation source report: %w",
 			retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
