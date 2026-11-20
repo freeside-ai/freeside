@@ -1108,15 +1108,15 @@ func (a *Enrollment) Verify(
 }
 
 // RecoverableVerified returns the latest verified coordinates only while
-// their exact marker is still the sole open occurrence for this identity, or
-// is the latest occurrence a finished first enrollment resolved.
-// The caller must independently re-verify the live auth-store bytes before
-// projecting the resolving action.
+// their exact marker is still the sole open occurrence for this identity
+// (pending), or is the latest occurrence a finished first enrollment resolved
+// (finished). The caller must independently re-verify the live auth-store
+// bytes before projecting the resolving action.
 func (a *Enrollment) RecoverableVerified(
 	ctx context.Context,
 	identity domain.AuthIdentity,
-) (domain.CodexReenrollmentRecoveryBinding, bool, error) {
-	var binding domain.CodexReenrollmentRecoveryBinding
+) (ward.CodexAuthRecovery, bool, error) {
+	var recovery ward.CodexAuthRecovery
 	var found bool
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
 		stored, err := tx.GetAuthIdentity(ctx, identity.ID)
@@ -1134,7 +1134,7 @@ func (a *Enrollment) RecoverableVerified(
 		if err != nil || !exists {
 			return err
 		}
-		binding, err = latest.RecoveryBinding()
+		binding, err := latest.RecoveryBinding()
 		if errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
 			return nil
 		}
@@ -1149,14 +1149,15 @@ func (a *Enrollment) RecoverableVerified(
 		if err != nil {
 			return err
 		}
-		if len(occurrences.open) == 1 && occurrences.open[0].ID == latest.MarkerItemID &&
-			occurrences.open[0].ID == occurrences.latest.ID ||
-			finishedInitialCodexEnrollment(latest, binding, occurrences) {
-			found = true
+		pending := len(occurrences.open) == 1 && occurrences.open[0].ID == latest.MarkerItemID &&
+			occurrences.open[0].ID == occurrences.latest.ID
+		finished := finishedInitialCodexEnrollment(latest, binding, occurrences)
+		if pending || finished {
+			recovery, found = ward.CodexAuthRecovery{Binding: binding, Finished: finished}, true
 		}
 		return nil
 	})
-	return binding, found, err
+	return recovery, found, err
 }
 
 // ProjectVerified exposes resolve_reenrollment only after the journal's

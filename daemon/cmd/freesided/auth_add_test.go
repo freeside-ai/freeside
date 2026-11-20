@@ -12,8 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
 const authAddTestToken = "sk-ant-" + "oat01-command-fixture-0123456789abcdef"
@@ -59,21 +62,10 @@ func TestAuthAddCodexEnrollsAndListsTheEnrollment(t *testing.T) {
 		}
 	}
 	inputPath, storePath := filepath.Join(inputRoot, "auth.json"), filepath.Join(storeRoot, "auth.json")
-	var input map[string]any
-	if err := json.Unmarshal(commandCodexAuth("operator-refresh"), &input); err != nil {
-		t.Fatal(err)
-	}
-	input["tokens"].(map[string]any)["account_id"] = "acct-fixture-0001"
-	body, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(inputPath, body, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeCodexLoginWithAccount(t, inputPath)
 	var stdout, stderr bytes.Buffer
 	seedTemplateStore(t, dbPath)
-	err = runAuthAddCommand(context.Background(), []string{
+	err := runAuthAddCommand(context.Background(), []string{
 		"-db", dbPath, "-client", "codex_cli", "-auth-identity", "codex-primary",
 		"-route", "openai-subscription", "-cost-owner", "operator", "-project", "project-1",
 		"-input-root", inputRoot, "-input-file", inputPath,
@@ -108,6 +100,132 @@ func TestAuthAddCodexEnrollsAndListsTheEnrollment(t *testing.T) {
 	raw := runAuthListRawForTest(t, dbPath)
 	if strings.Contains(raw, "acct-fixture-0001") || strings.Contains(raw, "rotated-refresh") {
 		t.Fatalf("auth list leaks the account binding or a token: %s", raw)
+	}
+}
+
+// writeCodexLoginWithAccount writes an operator Codex login whose tokens name
+// the account an enrollment binds.
+func writeCodexLoginWithAccount(t *testing.T, path string) {
+	t.Helper()
+	var input map[string]any
+	if err := json.Unmarshal(commandCodexAuth("operator-refresh"), &input); err != nil {
+		t.Fatal(err)
+	}
+	input["tokens"].(map[string]any)["account_id"] = "acct-fixture-0001"
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAuthAddAdoptsTheStoreEnrollCodexEnrolled proves auth add on an identity
+// enroll-codex first enrolled records the client enrollment over the live
+// store as it stands: it spends no login, writes no store byte, and leaves no
+// hold, even given the login enroll-codex already spent. A rerun reuses the
+// enrollment and records nothing.
+func TestAuthAddAdoptsTheStoreEnrollCodexEnrolled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "freeside.db")
+	inputRoot, storeRoot := filepath.Join(root, "input"), filepath.Join(root, "store")
+	for _, dir := range []string{inputRoot, storeRoot} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inputPath, storePath := filepath.Join(inputRoot, "auth.json"), filepath.Join(storeRoot, "auth.json")
+	writeCodexLoginWithAccount(t, inputPath)
+	seedTemplateStore(t, dbPath)
+	storeFlags := []string{
+		"-db", dbPath, "-project", "project-1", "-auth-identity", "codex-primary",
+		"-input-root", inputRoot, "-input-file", inputPath,
+		"-auth-store-root", storeRoot, "-auth-store", storePath,
+	}
+	refresher := &commandCodexAuthRefresher{}
+	var stdout, stderr bytes.Buffer
+	if err := runEnrollCodexCommandWithRefresher(ctx, storeFlags, &stdout, &stderr, refresher); err != nil {
+		t.Fatalf("enroll-codex: %v; stderr = %s", err, stderr.String())
+	}
+	live, err := os.ReadFile(storePath) //nolint:gosec // G304: test-owned store path
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveDigest := domain.Digest(contentaddr.Sum(live))
+
+	deps := authAddTestDeps()
+	deps.codexRefresher = refresher
+	addArgs := append([]string{
+		"-client", "codex_cli", "-route", "openai-subscription", "-cost-owner", "operator",
+	}, storeFlags...)
+	var listings []string
+	for _, verb := range []string{"recorded", "reused"} {
+		stdout.Reset()
+		stderr.Reset()
+		if err := runAuthAddCommand(ctx, addArgs, nil, &stdout, &stderr, deps); err != nil {
+			t.Fatalf("auth add (%s): %v; stderr = %s", verb, err, stderr.String())
+		}
+		var result ward.CodexAuthEnrollmentResult
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("decode %q: %v", stdout.String(), err)
+		}
+		if result.EnrollmentID != "codex-primary/codex_cli" || result.AuthStorePath != storePath ||
+			result.AuthStoreDigest != liveDigest || result.AttentionItemID != "" {
+			t.Fatalf("auth add (%s) result = %+v", verb, result)
+		}
+		if note := stderr.String(); !strings.Contains(note, verb) ||
+			!strings.Contains(note, "did not use the login at -input-file") {
+			t.Fatalf("auth add (%s) stderr = %q", verb, note)
+		}
+		listings = append(listings, runAuthListRawForTest(t, dbPath))
+	}
+	if listings[0] != listings[1] {
+		t.Fatalf("rerun changed auth list:\n%s\n%s", listings[0], listings[1])
+	}
+	otherRoute := slices.Clone(addArgs)
+	otherRoute[slices.Index(otherRoute, "openai-subscription")] = "openai-other"
+	if err := runAuthAddCommand(ctx, otherRoute, nil, io.Discard, io.Discard, deps); err == nil ||
+		!strings.Contains(err.Error(), `route "openai-subscription", not "openai-other"`) {
+		t.Fatalf("rerun on another route = %v, want a refusal", err)
+	}
+
+	if refresher.calls != 1 {
+		t.Fatalf("refresh calls = %d, want enroll-codex's one", refresher.calls)
+	}
+	after, err := os.ReadFile(storePath) //nolint:gosec // G304: test-owned store path
+	if err != nil || !bytes.Equal(after, live) {
+		t.Fatalf("live store changed: %v", err)
+	}
+	listed := runAuthListForTest(t, dbPath)
+	if len(listed.Identities) != 1 || len(listed.Identities[0].Enrollments) != 1 {
+		t.Fatalf("identities = %+v", listed.Identities)
+	}
+	enrollment := listed.Identities[0].Enrollments[0]
+	if enrollment.ID != "codex-primary/codex_cli" || enrollment.Generation == nil || *enrollment.Generation != 1 {
+		t.Fatalf("listed enrollment = %+v", enrollment)
+	}
+	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, generation, found, err := adapters.Adoption.Enrolled(ctx, "codex-primary", domain.HarnessClientCodexCLI)
+	if err != nil || !found || generation.StoreManifestDigest != liveDigest {
+		t.Fatalf("enrolled generation = %+v, %t, %v; want the live store's digest", generation, found, err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, "codex-primary"); err != nil || needs {
+		t.Fatalf("hold after auth add = %t, %v", needs, err)
 	}
 }
 

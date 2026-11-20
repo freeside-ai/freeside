@@ -3190,8 +3190,10 @@ The enrollment id is `<auth-identity>/<client>`, one per identity and client.
 Every enrolled identity has a cost owner: name `-cost-owner` when the identity
 is created, or when an existing identity still has none. After that, name the
 same one or none. The account binding is set once: a second identity for the
-same account, or an identity bound to a different account, refuses. A client that already has a store generation refuses too; replacing
-an enrolled store is re-enrollment, not `auth add`.
+same account, or an identity bound to a different account, refuses. A client
+that already has a store generation refuses too, apart from the Codex rerun
+below that reuses it; replacing an enrolled store is re-enrollment, not
+`auth add`.
 
 **Codex.** Pass the `enroll-codex` input and store flags (see
 [Enroll A Codex Subscription Identity](#enroll-a-codex-subscription-identity))
@@ -3202,6 +3204,17 @@ paired client after a revoked chain. It reads the account from the login's
 `tokens.account_id` and refuses a login without one. Produce that login with
 the dedicated-`CODEX_HOME` sequence in the enrollment section, never from
 `~/.codex`.
+
+For an identity whose first enrollment already finished, by `enroll-codex`
+or an earlier `auth add`, the command records the client enrollment over the
+identity's live store as it stands, as `auth adopt` does. It binds the
+account the store's own tokens name, doesn't read or spend the login at
+`-input-file` (often the one that first enrollment already spent), opens no
+item, and says so on stderr; its JSON leaves the `attention_item_*` fields
+empty. A rerun reuses the enrollment and records
+nothing; a different `-route` refuses. While an earlier verified enrollment
+still awaits recovery, the command refuses: finish it with `enroll-codex`,
+resolve its item if it stays open, then rerun `auth add`.
 
 ```sh
 freesided auth add \
@@ -3846,8 +3859,12 @@ command creates the store, and a refresh would spend that login without
 enrolling the identity.
 
 A rerun while the store is as the first enrollment left it reports that
-result again and spends nothing. Replacing a revoked chain, or enrolling an
-identity again once a refresh has rotated its store, leaves the identity
+result again and spends nothing. After a first enrollment, `auth add -client
+codex_cli` with the same flags records the identity's Codex client enrollment
+over this store without using the login
+([Enroll An Agent Credential](#enroll-an-agent-credential)). Replacing a
+revoked chain, or enrolling an identity again once a refresh has rotated its
+store, leaves the identity
 blocked (`attention_item_status` is `open`) until the
 operator inspects the displayed digest, fence, and expiry and accepts the
 item's `Resolve re-enrollment` action. That command-backed decision, not this

@@ -25,6 +25,15 @@ const (
 
 var errCodexAuthEnrollmentRetryLiveStore = errors.New("verified codex auth enrollment needs live-store rotation")
 
+// ErrCodexAuthAlreadyEnrolled is EnrollCodexAuth's answer to a client
+// enrollment request (freesided auth add) for an identity whose first
+// enrollment already finished, by enroll-codex or an earlier auth add. Its
+// login is spent and its store is live, so the sequence reads no input and
+// writes nothing. The caller records the client enrollment over the store as
+// it stands with AdoptCodexAuth, which reuses one an earlier run recorded,
+// instead of spending another login.
+var ErrCodexAuthAlreadyEnrolled = errors.New("codex auth identity's first enrollment already finished")
+
 // CodexAuthEnrollmentFailure is the credential-free terminal class exposed
 // to ward's persistence adapter.
 type CodexAuthEnrollmentFailure string
@@ -83,12 +92,21 @@ type CodexAuthEnrollmentJournal interface {
 	RecoverableVerified(
 		ctx context.Context,
 		identity domain.AuthIdentity,
-	) (domain.CodexReenrollmentRecoveryBinding, bool, error)
+	) (CodexAuthRecovery, bool, error)
 	// ProjectVerified attaches the verified binding to the operation's
 	// marker. initial reports an identity's first enrollment, whose marker
 	// the daemon resolves in the same write; otherwise the marker stays open
 	// for the paired client's resolve_reenrollment.
 	ProjectVerified(ctx context.Context, id domain.AuthIdentityID) (item domain.AttentionItem, initial bool, err error)
+}
+
+// CodexAuthRecovery is the verified result RecoverableVerified found.
+type CodexAuthRecovery struct {
+	Binding domain.CodexReenrollmentRecoveryBinding
+	// Finished reports an identity's first enrollment whose marker the
+	// daemon already resolved at projection. Otherwise the result is pending:
+	// its marker is still open.
+	Finished bool
 }
 
 // CodexAuthEnrollmentConfig identifies one operator-supplied login and its
@@ -141,7 +159,9 @@ type CodexAuthEnrollmentResult struct {
 	AttentionItemVersion int                   `json:"attention_item_version"`
 	// AttentionItemStatus is resolved after an identity's first enrollment,
 	// which needs no further step, and open after a revoked chain's
-	// replacement, which a paired client resolves.
+	// replacement, which a paired client resolves. The item fields are empty
+	// when auth add adopted a store an earlier first enrollment left, since
+	// adoption touches no item.
 	AttentionItemStatus domain.ItemStatus `json:"attention_item_status"`
 	// EnrollmentID is set only when the sequence recorded an enrollment.
 	EnrollmentID domain.ClientEnrollmentID `json:"enrollment_id,omitempty"`
@@ -188,18 +208,26 @@ func EnrollCodexAuth(
 		return CodexAuthEnrollmentResult{}, fmt.Errorf("recover verified Codex re-enrollment: %w", err)
 	} else if found {
 		if cfg.Enrollment != nil {
+			// A finished first enrollment is checked before the input is
+			// read: its login is the one that enrollment already spent.
+			if recovered.Finished {
+				return CodexAuthEnrollmentResult{}, ErrCodexAuthAlreadyEnrolled
+			}
 			// Recovery only re-projects an earlier verified replacement, so
 			// finishing it here would report an enrollment this run did not
-			// create. That earlier run may have been an auth add whose
-			// generation committed with its verify, so the operator checks
-			// auth list before enrolling again.
+			// create. Once enroll-codex finishes it, a first enrollment's
+			// rerun takes the branch above and spends nothing, while a
+			// replaced chain's begins a new operation. That earlier run may
+			// have been an auth add whose generation committed with its
+			// verify, so the operator checks auth list before rerunning.
 			return CodexAuthEnrollmentResult{}, errors.New(
-				"a verified Codex enrollment awaits recovery; finish it with enroll-codex and " +
-					"resolve its item. If auth list then shows this client enrolled, the earlier " +
-					"run recorded it; otherwise enroll from a fresh login")
+				"a verified Codex enrollment awaits recovery; finish it with enroll-codex, " +
+					"resolve its item with a paired client if it stays open, then rerun auth add. " +
+					"If auth list then shows this client enrolled, the earlier run recorded it; " +
+					"after a revoked chain's replacement, the rerun needs a fresh login")
 		}
 		result, ok, err := recoverVerifiedCodexAuthEnrollment(
-			ctx, cfg, storeRoot, storePath, recovered,
+			ctx, cfg, storeRoot, storePath, recovered.Binding,
 		)
 		if err != nil {
 			if !errors.Is(err, errCodexAuthEnrollmentRetryLiveStore) {
