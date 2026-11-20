@@ -205,6 +205,10 @@ freesided routing set -db <root>/daemon/freeside.db \
 freesided routing show -db <root>/daemon/freeside.db
 ```
 
+Order the role the exit contract's routing proof checks, such as the
+implementer. A role left out, such as the specifier, runs on the lineup
+and doesn't keep the ordered role off its route
+([Route A Task To One Pool](../daemon/README.md#route-a-task-to-one-pool)).
 Pass `-drain-first` only when the contract names an account; a `set`
 without it clears one. Compare `show`'s orders, and its
 `drain_first_account`, with the exit contract and record its `revision`. A mismatch, or `null`, stops the run

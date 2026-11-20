@@ -12,12 +12,13 @@ import (
 )
 
 // The router applies the routing policy once per task, at the first admission
-// of its first task-line role that has no operator line, and pins every role
-// of the task to the one usage pool it picks (plan §5.4, routing policy;
-// revisions 99, 103, and 107). It writes router-sourced task lines and nothing
-// else: admission still reads only the line, never a reading or a mark. Later
-// roles read those lines, and a line's pool whose window is marked holds the
-// role until the mark clears; nothing reroutes a task in flight.
+// of its first role the policy orders that has no operator line, and pins
+// every role of the task to the one usage pool it picks (plan §5.4, routing
+// policy; revisions 99, 103, and 107). It writes router-sourced task lines
+// and nothing else: admission still reads only the line, never a reading or a
+// mark. Later roles read those lines, and a line's pool whose window is
+// marked holds the role until the mark clears; nothing reroutes a task in
+// flight.
 
 // routerSetByPrefix starts the SetBy of every router line, followed by the
 // line's own task id.
@@ -66,10 +67,12 @@ func (s AgentSelection) routeBeforeAdmission(
 // routeTask writes the task's router lines when this admission is its first
 // routable one: the role is a task-line role with no line version; no role of
 // the task has a router version; the policy in effect at now orders the role
-// (policyInEffect); and no admission of the task's runs ran a task-line role
-// on the lineup, which would mean the task was admitted before routing
-// applied to it. The checks run cheapest first, so a deployment with no
-// policy pays one line read.
+// (policyInEffect); and no admission of the task's runs ran a role that
+// policy orders on the lineup, which would mean the task was admitted before
+// routing applied to it. A lineup admission of a role the policy leaves out,
+// such as a specifier when it orders only the implementer, doesn't count:
+// that role was never the policy's to route. The checks run cheapest first,
+// so a deployment with no policy pays one line read.
 //
 // It decides in a read and opens a write only when it has lines to record,
 // deciding again inside it: every Store.Write moves the sync revision, and an
@@ -161,7 +164,7 @@ func (s AgentSelection) planRoute(
 	if _, ordered := policyRole(policy, role); !ordered {
 		return nil, nil
 	}
-	if lineup, err := admittedThroughLineup(ctx, tx, run.TaskID); err != nil || lineup {
+	if lineup, err := admittedThroughLineup(ctx, tx, run.TaskID, policy); err != nil || lineup {
 		return nil, err
 	}
 	candidates, err := s.routeCandidates(ctx, tx, policy)
@@ -281,24 +284,45 @@ func roleOrder(policy domain.RoutingPolicy, role domain.RoleName) []domain.Clien
 }
 
 // admittedThroughLineup reports whether any run of the task holds an execution
-// or review admission of a task-line role that the lineup selected. It reads
-// the stored records without re-gating them against current policy: routing
-// asks what history holds, and a later trust-profile change must not hide it.
-// The shadow reviewer always runs on the lineup, so its admissions don't
-// count.
-func admittedThroughLineup(ctx context.Context, tx *store.ReadTx, taskID domain.TaskID) (bool, error) {
+// or review admission that the lineup selected for a role the policy orders.
+// It reads the stored records without re-gating them against current policy:
+// routing asks what history holds, and a later trust-profile change must not
+// hide it. A lineup admission of a role the policy leaves out doesn't count,
+// so a specifier the policy doesn't order leaves the implementer routable; the
+// shadow reviewer is never ordered, so its admissions never count. An
+// execution admission whose role can't be placed on its run (its stage is
+// missing, or no ward role runs it) counts, which keeps the task on the
+// lineup.
+func admittedThroughLineup(
+	ctx context.Context, tx *store.ReadTx, taskID domain.TaskID, policy domain.RoutingPolicy,
+) (bool, error) {
+	ordered := func(role domain.RoleName) bool {
+		_, ok := policyRole(policy, role)
+		return ok
+	}
 	runIDs, err := tx.TaskRunIDs(ctx, taskID)
 	if err != nil {
 		return false, err
 	}
 	for _, runID := range runIDs {
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return false, err
+		}
 		executions, err := tx.ListRunExecutionAdmissionRecords(ctx, runID)
 		if err != nil {
 			return false, err
 		}
 		for _, admission := range executions {
-			if admission.AgentBinding != nil &&
-				admission.AgentBinding.SelectionSource == domain.AgentSelectionSourceLineup {
+			if admission.AgentBinding == nil ||
+				admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceLineup {
+				continue
+			}
+			index := slices.IndexFunc(run.Stages, func(stage domain.Stage) bool { return stage.ID == admission.StageID })
+			if index < 0 {
+				return true, nil
+			}
+			if role, ok := wardRole(run, run.Stages[index], admission.InvocationID); !ok || ordered(role) {
 				return true, nil
 			}
 		}
@@ -307,7 +331,7 @@ func admittedThroughLineup(ctx context.Context, tx *store.ReadTx, taskID domain.
 			return false, err
 		}
 		for _, admission := range reviews {
-			if admission.Role.TaskLineEligible() &&
+			if ordered(admission.Role) &&
 				admission.AgentBinding.SelectionSource == domain.AgentSelectionSourceLineup {
 				return true, nil
 			}

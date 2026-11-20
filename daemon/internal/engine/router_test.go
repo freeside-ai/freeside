@@ -441,9 +441,66 @@ func TestRouterLeavesOperatorLinesAlone(t *testing.T) {
 	wantCites(t, again, *change.Line, f.enrollment.ID)
 }
 
+// admitLineupSpecifier admits the fixture run's specifier at at and checks
+// that the lineup selected it.
+func (f *agentAdmissionFixture) admitLineupSpecifier(t *testing.T, at time.Time) domain.ExecutionAdmission {
+	t.Helper()
+	f.engine.admission.now = func() time.Time { return at }
+	admission, err := f.admitSpecifier(t, "inv-specification-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding := admission.AgentBinding; binding == nil || binding.SelectionSource != domain.AgentSelectionSourceLineup {
+		t.Fatalf("specifier binding = %+v, want the lineup's", binding)
+	}
+	return admission
+}
+
+// recordSpecifier stores the fixture run with its specification stage
+// holding admission's attempt, and the admission itself, so the router finds
+// the admission's role on the run.
+func (f *agentAdmissionFixture) recordSpecifier(t *testing.T, admission domain.ExecutionAdmission) {
+	t.Helper()
+	run := f.run
+	stage := domain.Stage{ID: specificationStageID(run.ID), RunID: run.ID, Name: specificationStageName}
+	stage.Attempts = []domain.Attempt{{
+		ID: admission.AttemptID, StageID: stage.ID, Number: 1, InvocationID: admission.InvocationID,
+	}}
+	run.Stages = []domain.Stage{stage}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		return tx.RecordExecutionAdmission(t.Context(), admission)
+	}); err != nil {
+		t.Fatalf("record specifier admission: %v", err)
+	}
+}
+
+// TestRouterRoutesTheImplementerAfterAnUnorderedSpecifier is #3458's case: a
+// policy that orders only the implementer routes it, though the task's
+// specifier ran first on the lineup, and writes no specifier line.
+func TestRouterRoutesTheImplementerAfterAnUnorderedSpecifier(t *testing.T) {
+	t.Parallel()
+	f := newAgentAdmissionFixture(t)
+	f.addSecondAgent(t)
+	f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleImplementer, agentTestSecondEnrollment))
+	f.recordSpecifier(t, f.admitLineupSpecifier(t, agentTestAt.Add(-time.Minute)))
+
+	admission, err := f.admitRun(t, f.run, agentTestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := wantRouterLines(t, f, f.run.ID, policyOrder(1, routerSecondPool), agentTestAt,
+		map[domain.RoleName]string{domain.RoleImplementer: agentTestSecondAgent})
+	wantCites(t, admission, lines[domain.RoleImplementer], agentTestSecondEnrollment)
+}
+
 // TestRouterLeavesALineupTaskOnTheLineup: with no policy, with a policy that
-// doesn't order the role, or for a task the lineup admitted before a policy
-// existed, admission behaves as it did before routing and writes no line.
+// doesn't order the role, or for a task the lineup admitted on a role the
+// policy in effect orders, whether before any policy existed or under an
+// earlier revision that didn't order it, admission behaves as it did before
+// routing and writes no line.
 func TestRouterLeavesALineupTaskOnTheLineup(t *testing.T) {
 	t.Parallel()
 	for name, setup := range map[string]func(t *testing.T, f *agentAdmissionFixture){
@@ -458,6 +515,13 @@ func TestRouterLeavesALineupTaskOnTheLineup(t *testing.T) {
 			}
 			f.record(t, admission)
 			f.setRoutingPolicy(t, agentTestAt.Add(-time.Second),
+				order(domain.RoleImplementer, agentTestSecondEnrollment))
+		},
+		"the lineup admitted the specifier before the policy ordered it": func(t *testing.T, f *agentAdmissionFixture) {
+			f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), order(domain.RoleImplementer, agentTestSecondEnrollment))
+			f.recordSpecifier(t, f.admitLineupSpecifier(t, agentTestAt.Add(-time.Minute)))
+			f.setRoutingPolicy(t, agentTestAt.Add(-time.Second),
+				order(domain.RoleSpecifier, agentTestSecondEnrollment),
 				order(domain.RoleImplementer, agentTestSecondEnrollment))
 		},
 	} {
