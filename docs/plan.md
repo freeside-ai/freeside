@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 131
+revision: 132
 status: active
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 # Freeside
@@ -2451,7 +2451,14 @@ Exactly two channels leave the agent workspace, and they never mix:
    publish as an advisory finding, as a
    reviewer-instruction change (Section [5.8](#58-control-plane-trust)) does.
 2. The **evidence channel** carries typed, provenance-bearing artifacts under
-   Section [5.15](#515-evidence-and-images).
+   Section [5.15](#515-evidence-and-images). It is the only route by which a
+   writer's transcript leaves the ward to be kept.
+
+The live view of a running writer (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+Writer Outcome Authority) is neither channel. It is a display-only route out
+of the running writer that reads the transcript, which sits outside the
+workspace, under that section's conditions, and it stores nothing it
+shows.
 
 The agent commits normally with git, but no trusted component ever reads or
 imports anything from its `.git`: no objects, hooks, configuration, or history
@@ -2650,9 +2657,11 @@ secret-scanned before it is kept. The journal records the retained digest or
 an explicit unavailable disposition before cleanup. The copy's bounds and
 provenance checks are in
 [`ward/failure_evidence.go`](../daemon/internal/ward/failure_evidence.go).
-Operational capture failures leave the workspace and journal open for
-recovery. A retained transcript supplies no source, verification, or
-publication authority.
+The live view of a running writer, below, reads the transcript earlier but
+stores nothing it shows, so this copy stays the only retained one. Operational
+capture failures leave the workspace and journal open for recovery. A
+retained transcript supplies no source, verification, or publication
+authority.
 
 Recovery checks the durable amendments before it inspects marker state, in
 this order: a recorded cancellation intent wins; then a recorded
@@ -2672,6 +2681,37 @@ If any required amendment, capture, teardown, or close fails, the journal stays
 open for recovery to retry. The writer's transcript is evidence, never an
 outcome signal: the pinned CLI's terminal stream event can report success
 alongside an authentication error, and only the exit status tells them apart.
+The live view below is no exception.
+
+**Live view of a running writer** (revision 132; not built yet, #1926 on
+tracker #3461). The operator may watch a running stage's writer. This is the
+one exception to reading a writer's output only after it is gone, and it
+holds only under these conditions:
+
+- **Read-only.** The view has no write path into the running writer;
+  mid-turn steering stays in Phase 3 (Section [11](#11-roadmap-build-order-and-coordination)).
+- **The daemon pulls.** The writer gains no new outbound channel and no
+  egress. The pull reads only the writer's transcript, follows no path the
+  agent chooses, reaches no daemon state or host credential, and treats
+  what it reads as untrusted.
+- **Scanned before display.** Content is checked with the same credential
+  rules as a retained transcript before it leaves the daemon, and the check
+  runs as the stream grows, never only at the end. A match ends the view
+  for that invocation, and clients drop what they hold of it. Content
+  already displayed before a later match can't be taken back, though that
+  match withholds the whole retained transcript; the owner accepts that
+  residual (Section [14](#14-risks)).
+- **Grants nothing.** The view supplies no source, verification, export,
+  publication, or outcome signal, and a pull never delays or changes the
+  writer's stop, quiescence, teardown, or outcome. What it shows is never
+  stored or kept as evidence; the retained transcript still crosses only
+  through the evidence channel after the writer is gone.
+- **Labeled unverified and inert.** Clients show the content as unverified
+  agent output and render it inertly: it loads no image or preview, and a
+  link shows as plain text that can't be opened.
+
+Reviewers and discussion replies are not covered and stay unread while
+they run.
 
 #### Golden Agent and Project Images
 
@@ -4993,8 +5033,11 @@ twice.
 
 On agent completion, Freeside finalizes and fsyncs blobs, then commits the
 message, transition, and replacement item in one SQLite transaction. A failed
-transaction leaves only harmless orphan blobs. Live streaming and mid-turn
-steering wait until Phase 3.
+transaction leaves only harmless orphan blobs. Live streaming of a discussion
+reply and mid-turn steering wait until Phase 3. A read-only live view of a
+running stage's writer comes forward under the conditions in Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer Outcome
+Authority (revision 132).
 
 Workflow closure consumes an unstarted discussion intent and returns its
 conversation to idle without inventing an answer. A previously claimed,
@@ -7824,9 +7867,12 @@ Add ACP interactive attachment, best-effort resume, material plan-change gates,
 briefings, evidence-informed routing, and mature `auto_start` behavior. The
 initiative view moved to 1B.2 (revision 25), basic usage display to 1B.1
 (revision 77), usage-limit routing between subscriptions to 1B.1 (revision
-99), and the work status view, which this paragraph called "WIP views", to
-tracker #3231 (revision 126); routing on task class, quality, latency, and
-cost stays here.
+99), the work status view, which this paragraph called "WIP views", to
+tracker #3231 (revision 126), and a read-only live view of a running writer
+to tracker #3461 (revision 132; Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+Writer Outcome Authority). Routing on task class, quality, latency, and cost
+stays here, and so does ACP interactive attachment, which carries mid-turn
+steering.
 
 ### Phase 4: Generalization
 
@@ -7846,7 +7892,10 @@ Safety failures are:
 
 - a workspace obtains a GitHub write credential;
 - an agent reaches a privileged host service;
-- output escapes either gauntlet channel;
+- output escapes either gauntlet channel (the live view of a running writer,
+  Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), is
+  neither channel; content it shows without its scan, or anything it
+  stores, counts as escaped output);
 - untrusted PR code receives privileged CI authority, including secrets,
   writable tokens, or OIDC, without an explicit gate (the owner's review of
   an `advisory` profile is one, Section [5.5](#55-the-ci-trust-boundary));
@@ -7882,26 +7931,48 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 131 ("Exclude Ignored Symlinks at Import"):
+Revision 132 ("A Read-Only Live View of a Running Writer Comes Forward"):
 
-1. **A base-ignored symlink addition leaves the candidate**
-   (Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)).
-   A new symlink the exact base ignores and doesn't track at or beneath its
-   path is excluded like an ignored regular file or nested repository, and
-   its `non_regular_change` finding drops with it. Git judges it by its own
-   name, and its target is never read. A symlink the base doesn't ignore, or
-   one over tracked content, still blocks, and so do special files and
-   unusual modes.
+1. **The operator may watch a running stage's writer, under five
+   conditions** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
+   Outcome Authority). The view is read-only; the daemon pulls only the
+   transcript, as untrusted bytes, and the writer gains no outbound channel
+   or egress; its content is checked with
+   a retained transcript's credential rules as the stream grows, before it
+   leaves the daemon, and a match ends the view; it grants nothing, never
+   affects the writer's stop, teardown, or outcome, and stores nothing it
+   shows; and clients label it unverified agent output and render it
+   inertly. It is the one exception to reading a writer's output only
+   after the writer is gone. Reviewers and discussion replies are not
+   covered.
+2. **The evidence channel stays the only route that keeps a writer's
+   transcript** (Sections
+   [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
+   and [12](#12-exit-criteria-definitions)). The live view is neither
+   gauntlet channel; content it shows without its scan, or anything it
+   stores, counts as escaped output.
+3. **The owner accepts the view's residual** (Section [14](#14-risks)).
+   Content the credential rules miss, such as an encoded or partial token,
+   reaches the operator's clients while the writer runs, and content
+   displayed before a later match can't be taken back, though that match
+   withholds the whole retained transcript.
+4. **Only the read-only view leaves Phase 3** (Sections
+   [5.14](#514-client-synchronization-and-conversations), Conversations and
+   Discuss, and [11](#11-roadmap-build-order-and-coordination)). Mid-turn
+   steering, ACP interactive attachment, and live streaming of a discussion
+   reply stay there.
 
-This extends revision 129, whose decision covered every base-ignored
-addition but whose rule named only regular files and nested repositories.
-SwiftPM always links `.build/debug` to its build directory, so a writer that
-built the app had its #2968 export refused. Rejected: having the agent delete
-build output before handoff, which leaves every toolchain's links blocking
-and depends on agent behavior.
+Rejected: waiting for Phase 3's ACP attachment, which bundles the view with
+steering; a writer-pushed stream, which gives the writer a new outbound
+channel; and showing only the retained transcript after the run, which
+leaves the operator an hour-long run with nothing to read.
 
-(Owner decision of 2026-11-18 in the #2382 exit run, applied as #3395;
-[decision note](../devlog/2026-11-18-1805-ignored-symlinks.md).)
+Nothing in this revision is built yet: #1926 on tracker #3461 builds it and
+chooses how the daemon pulls.
+
+(Owner decision of 2026-11-19 on tracker #3461, from the owner's request in
+#1926; [decision note](../devlog/2026-11-19-1526-live-writer-view.md).)
 
 ## 14. Risks
 
@@ -7910,6 +7981,7 @@ and depends on agent behavior.
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected`, held by owner decision (revision 103), would remove the token from the writer and bound a leak to the run's own provider use on declared paths; the search channel would remain. |
 | Provider traffic terminated at the control plane under `subscription_injected` | Held by owner decision (revision 103): nothing runs this design until a revision lifts the hold, and the rest of this row is the held design's response. The proxy holds no durable key: a per-run CA, discarded at teardown; the identity's token stays on the credential volume and in the run's proxy memory. It substitutes the placeholder on the declared provider authorities and paths only, refuses credential shape anywhere else and every refresh or account path, verifies the provider's certificate against the system roots with the server name pinned, admits only the run's network, and records every substitution without bodies. The owner accepts what the provider now sees: the daemon's TLS and HTTP client in place of the vendor CLI's, which a provider's bot defence may treat differently; the egress address is unchanged, since the daemon host already originates every tunnel. Residual: a compromised writer still spends the run's identity, request by request, visibly. The subscription-terms judgment on a substituting proxy is the owner's, per vendor. For Claude it is one reason for the hold: with a subscription token, Anthropic would see the daemon's TLS and HTTP client sending Claude Code's requests, close to the Usage Policy's bar on services that "route requests through consumer subscriptions or misrepresent the product or client being used" (effective 2026-11-12). |
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable; no wider escape is offered while `api_key_isolated` is held (revision 103). Under the held `subscription_injected` design the registry tunnel would be unchanged, but the writer would hold no provider token for such a publish to carry. |
+| Live view of a running writer | Show a running writer's transcript only under the conditions in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer Outcome Authority: the daemon pulls it, scans it as it grows, ends it on a match, stores nothing it shows, and clients render it inertly as unverified agent output. Residual, accepted by the owner (revision 132): content the credential rules miss, such as an encoded or partial token, reaches the operator's clients while the writer runs, and content displayed before a later match can't be taken back, though that match withholds the whole retained transcript. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes by default; fail closed on drift, except a workflow change that a merged, surfaced Freeside pull request explains (Section [5.5](#55-the-ci-trust-boundary); not yet built, #3140); prohibit the daemon host as a runner. Residuals under an `advisory` profile: a candidate's workflow runs before review with whatever authority the repository's settings give a pull-request job, can merge a pull request where the branch rules let its token, and can rewrite the pull request's body, advisory section included. So the owner keeps secrets, environments, runners, and merging out of reach of pull-request jobs before opting in, and acceptance counts the advisory on the ready card, which no candidate can edit. And the profile's limits don't describe jobs on other triggers, so the advisory's job list and the owner's merge are the check on those. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipes v2 and v3 (Section [5.15](#515-evidence-and-images)) render authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
