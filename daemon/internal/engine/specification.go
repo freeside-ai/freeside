@@ -243,7 +243,12 @@ type specificationPriorArtifactEnvelope struct {
 	ID      string                  `json:"id,omitempty"`
 	Digest  domain.Digest           `json:"digest"`
 	Source  *specify.ResearchSource `json:"source,omitempty"`
-	Body    string                  `json:"body"`
+	// PlanCommentID is set only on a research block that is the bound
+	// issue's first comments page holding its one current implementation
+	// plan (specification_plan.go). Omitted when empty, so every other
+	// block renders byte for byte as before the field existed.
+	PlanCommentID int64  `json:"plan_comment_id,omitempty"`
+	Body          string `json:"body"`
 }
 
 func specificationFeedbackEnvelopeID(id domain.ArtifactID) string {
@@ -305,6 +310,7 @@ func (e *Engine) encodeSpecificationPriorArtifact(
 			ErrSpecificationInputUndeliverable, artifact.ID)
 	}
 	var source *specify.ResearchSource
+	var planCommentID int64
 	envelopeID := ""
 	promptBody := string(body)
 	if role == "research" {
@@ -314,6 +320,10 @@ func (e *Engine) encodeSpecificationPriorArtifact(
 		}
 		promptBody = evidence.Body
 		source = &evidence.Source
+		planCommentID, err = e.specificationPlanCommentID(ctx, artifact, evidence)
+		if err != nil {
+			return nil, fmt.Errorf("find plan comment in research artifact %q: %w", artifact.ID, err)
+		}
 	}
 	if role == "human_feedback" {
 		envelopeID = specificationFeedbackEnvelopeID(artifact.ID)
@@ -324,7 +334,7 @@ func (e *Engine) encodeSpecificationPriorArtifact(
 	}
 	envelope, err := json.Marshal(specificationPriorArtifactEnvelope{
 		Version: specificationPriorArtifactVersion, Role: role, ID: envelopeID,
-		Digest: artifact.Digest, Source: source, Body: promptBody,
+		Digest: artifact.Digest, Source: source, PlanCommentID: planCommentID, Body: promptBody,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode specification prior artifact %q: %w", artifact.ID, err)

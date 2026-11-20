@@ -2510,6 +2510,23 @@ on within `max_iterations`. A refused URL, an oversized or non-UTF-8
 response, and a storage error still fail the specification. The source-issue
 read that names a label-intake task still fails on a miss.
 
+A task bound to an issue (label intake, or a bare issue URL submitted) can
+be specified from that issue's planning-stage plan without asking the owner.
+The specifier prompt asks for the issue's first page of comments
+(`.../issues/<n>/comments?per_page=100`) with the issue; the daemon fetches
+nothing on its own. When the daemon renders that page for the specifier, and
+exactly one comment on it starts with the current-plan marker
+(`docs/coordination.md`, Stages) and was written by the repository's owner, a
+member, or a collaborator, the research block carries that comment's ID as
+`plan_comment_id`. The specifier then treats the issue body as the contract
+and the comment as the plan, checks what the plan names against the
+workspace, and asks only when they conflict with each other, the code, or
+policy. The check reads the fetch's final URL and accepts only
+`per_page=100`, so a smaller, later, or filtered page, or another issue's
+comments, sets nothing, and neither does a failed or undecodable page. The
+comment stays untrusted research text. Every block without a plan renders as
+before, with no `plan_comment_id` key.
+
 Six keys belong to the app's Workflow settings pane, not this file:
 `gates.follow_up_filing`, `gates.issue_comment`,
 `gates.source_issue_closure`, `follow_up_filing.max_per_day`,

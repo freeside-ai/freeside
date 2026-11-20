@@ -299,6 +299,22 @@ marker. An implementation session pages its issue's comments and stops on an
 active reservation before claiming or starting, even when its scheduling or
 fiat authorization is otherwise valid.
 
+The current implementation-plan comment's first line is this marker; the
+in-place revision replaces the reservation marker with it:
+
+```text
+<!-- freeside-implementation-plan:v1 -->
+```
+
+Marking a plan non-current removes the line. The daemon reads it: when a
+specifier fetches a task's bound issue's first page of comments, a comment
+counts as the current plan only when it is the one comment on that page
+whose first line is the marker and whose author is the repository's owner, a
+member, or a collaborator. The specifier then treats the issue as planned
+(`daemon/README.md`, on reading an issue through the research fetcher). A
+plan without the marker, such as one written before it existed, is read as
+ordinary issue text.
+
 A reservation is active only while unreleased and less than 48 hours past its
 forge-issued `created_at`. Expiry ends the holder's planning-write authority.
 Read the holder's reservation and check its deadline immediately before each
