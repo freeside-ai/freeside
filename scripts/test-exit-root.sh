@@ -13,7 +13,9 @@
 # first_missing from the same tree, a trust marker that `onboard -approve`
 # writes, and the image and recipe that approval prints; `routing`,
 # `set-pool-limit`, and `probe-lineup` record their arguments, and
-# `probe-lineup` also stamps the enrollments as model discovery does.
+# `probe-lineup` also stamps the enrollments as model discovery does;
+# `onboard` refuses a -commit that isn't the tip of a bare upstream's main,
+# which the repository checkout clones and `advance-upstream` moves.
 # A stand-in `lsof` reports the ports a case lists as listening. The
 # synthetic repository's dev-instance.sh is a stand-in too, since
 # test-dev-instance.sh covers the real one.
@@ -25,10 +27,13 @@
 # review that carries the approval forward with no stop, the
 # installation-intent stop, the reviewer-enrollment stop before the first
 # start and the resume once the store exists, the rerun on a new build or a
-# new enrollment, the serve wait, the re-onboarding after a moved base or
-# review configuration, the re-pin of a newer approval's image, the submit
-# line, port selection, the seeded-routing overlay, the scenario pass, and
-# the refusals that create nothing.
+# new enrollment, the serve wait, the review at the base ref's tip fetched
+# just before it (after a template pin older than the tip, and after a
+# deputy start that moved the tip), a root recorded before the template's
+# pin was kept, the base ref moving alone asking for no review, the
+# re-onboarding after a moved review configuration, the re-pin of a newer
+# approval's image, the submit line, port selection, the seeded-routing
+# overlay, the scenario pass, and the refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -126,7 +131,15 @@ for listening in ${FAKE_LISTENING:-}; do
 done
 exit 1
 LSOF_STUB
-chmod +x "$STUB_BIN/go" "$STUB_BIN/lsof"
+# advance-upstream: merges another change into the upstream's main, as a
+# PR landing on the real base ref does.
+cat >"$STUB_BIN/advance-upstream" <<'ADVANCE_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+next=$(git -C "${FAKE_UPSTREAM:?}" commit-tree -p refs/heads/main -m 'Land another change' 'refs/heads/main^{tree}')
+git -C "$FAKE_UPSTREAM" update-ref refs/heads/main "$next"
+ADVANCE_STUB
+chmod +x "$STUB_BIN/go" "$STUB_BIN/lsof" "$STUB_BIN/advance-upstream"
 
 FAKE_FREESIDED=$TMP/fake-freesided
 export FAKE_FREESIDED
@@ -283,6 +296,8 @@ deputy)
   else
     trap 'stop 0' TERM
   fi
+  # The base ref moves while the start runs, as #3518 and #3519 did.
+  [[ -z "${FAKE_DEPUTY_ADVANCES_TIP:-}" ]] || advance-upstream
   printf '{"api_url":"http://%s","pairing_code":"ABCD","environment":"ephemeral","run_id":"r1"}\n' \
     "$(jq -r '.listen' "$settings")"
   for _ in $(seq 1 300); do sleep 0.1; done
@@ -292,6 +307,15 @@ onboard)
   n=$(find "$STUB_DIR" -name 'onboard-*.args' | wc -l | tr -d ' ')
   printf '%s\n' "$@" >"$STUB_DIR/onboard-$((n + 1)).args"
   db=$(flag -db "$@")
+  # The workflow audit covers only the live tip, so a -commit the base ref
+  # has moved past is refused; mode moves lands a change just before the
+  # check, as a merge between exit-root's fetch and the audit does.
+  [[ "${FAKE_ONBOARD_MODE:-}" != moves ]] || advance-upstream
+  live=$(git -C "${FAKE_UPSTREAM:?}" rev-parse refs/heads/main)
+  if [[ "$(flag -commit "$@")" != "$live" ]]; then
+    echo "onboard: the base ref's live tip is $live, not -commit $(flag -commit "$@"); the workflow audit covers only the live tip" >&2
+    exit 1
+  fi
   if [[ -n "$(flag -approve "$@")" ]]; then
     # The trust marker stays REVIEW_DIGEST: prelaunch keeps passing the
     # profile after the review configuration moves.
@@ -381,8 +405,22 @@ git_q -C "$TREE" commit --allow-empty -m 'Start the agent tree'
 TREE_HEAD=$(git -C "$TREE" rev-parse HEAD)
 printf 'operator work in progress\n' >"$TREE/uncommitted.txt"
 
+# The repository checkout is a clone of a bare upstream whose main stands
+# in for the base ref; the fake onboard reads its tip as the live one.
+UPSTREAM=$TMP/upstream.git
+FAKE_UPSTREAM=$UPSTREAM
+export FAKE_UPSTREAM
+git_q init --bare "$UPSTREAM"
 CLONE=$TMP/fixture-clone
-mkdir -p "$CLONE"
+git clone -q "$UPSTREAM" "$CLONE" 2>/dev/null
+git_q -C "$CLONE" commit --allow-empty -m 'Start the fixture repository'
+git -C "$CLONE" push -q origin HEAD:refs/heads/main
+upstream_tip() { git -C "$UPSTREAM" rev-parse refs/heads/main; }
+TEMPLATE_BASE=584dba6120ee6e126460438032c3189762603306
+
+# deputy_calls_before_review: how many deputy starts the case's run logged
+# before its first onboard call.
+deputy_calls_before_review() { sed '/^onboard$/q' "$CASE_DIR/calls.log" | grep -cx deputy || true; }
 REPO_SLUG=freeasinbird/freeside-review-challenge
 
 # The reviewer's enrolled store, which every case but the enrollment stop
@@ -465,7 +503,10 @@ assert_eq "$(jq -r .review_configuration_digest "$FIX/exit-root.json")" "$REVIEW
 mode=$(stat -c %a "$FIX/logs/composition-manifest.json" 2>/dev/null || stat -f %Lp "$FIX/logs/composition-manifest.json" 2>/dev/null || true)
 assert_eq "$mode" 600 'manifest copy mode'
 assert_line "$CASE_DIR/onboard-1.args" "$CLONE"
-assert_line "$CASE_DIR/onboard-1.args" '584dba6120ee6e126460438032c3189762603306'
+# The review runs at the base ref's tip, not the template's older pin.
+assert_line "$CASE_DIR/onboard-1.args" "$(upstream_tip)"
+assert_eq "$(jq -r '.onboarded.base_sha, .onboarded.template_base_sha' "$FIX/exit-root.json" | tr '\n' ' ')" \
+  "$(upstream_tip) $TEMPLATE_BASE " 'state binds the reviewed tip and the template pin'
 assert_line "$CASE_DIR/onboard-1.args" '-image-name'
 assert_line "$CASE_DIR/onboard-1.args" '-registration-id'
 if grep -q "main.version=$SHA1" "$CASE_DIR/go.log" && grep -q "^$FIX/builds/.partial.*/src/daemon |" "$CASE_DIR/go.log"; then
@@ -486,16 +527,17 @@ assert_eq "$(git -C "$TREE" symbolic-ref --short HEAD)" main 'agent-tree branch 
 assert_eq "$(git -C "$TREE" status --porcelain)" '?? uncommitted.txt' 'agent-tree working tree unchanged'
 prompts=$FIX/builds/$SHA1/src/prompts/phase-1a
 expected=$(jq -S -n --slurpfile m "$MACHINE" --slurpfile t "$REPO/scripts/exit-root/passes/fixture/settings.json" \
-  --arg root "$FIX" --arg p "$prompts" --arg clone "$CLONE" --arg tip "$tip" '
+  --arg root "$FIX" --arg p "$prompts" --arg clone "$CLONE" --arg tip "$tip" --arg base "$(upstream_tip)" '
   $m[0].settings * $t[0] * {
     version: "freeside-deputy-settings-v1", listen: "100.64.0.9:9100", seed_root: ($root + "/seed"),
     prompts: {prompt_package: ($p + "/implementer.md"), specification_prompt_package: ($p + "/specifier.md"),
       remediation_prompt_package: ($p + "/remediator.md")},
-    repository: {checkout: $clone}, agent_tree: {commit: $tip},
+    repository: {checkout: $clone, base_sha: $base}, agent_tree: {commit: $tip},
     images: {agent: $m[0].exit_root.placeholder.image}, approved_recipe: $m[0].exit_root.placeholder.recipe}')
 assert_eq "$(jq -S . "$settings")" "$expected" 'rendered settings'
+assert_eq "$(jq -r '.repository.base_sha' "$REPO/scripts/exit-root/passes/fixture/settings.json")" "$TEMPLATE_BASE" 'template pin'
 assert_eq "$(jq -r '.repository.base_sha, .writers.implementer.model, .review.model, .repository.project' "$settings" | tr '\n' ' ')" \
-  '584dba6120ee6e126460438032c3189762603306 claude-haiku-5-5 gpt-6-luna fixture ' 'fixture-table values'
+  "$(upstream_tip) claude-haiku-5-5 gpt-6-luna fixture " 'fixture-table values, with the reviewed tip as the base'
 keys=$(jq -r '[paths(type != "object") | select(all(.[]; type == "string")) | join(".")] | sort | join(" ")' "$settings")
 assert_eq "$keys" "$(tr -s ' \n' '\n' <<<"$SETTINGS_KEYS" | sort | tr '\n' ' ' | sed 's/ $//')" 'settings key set'
 assert_eq "$(jq -r .commit_author.app_slug "$FIX/inputs/publication.json")" '<prod App slug>' 'publication commit author'
@@ -776,7 +818,7 @@ assert_eq "$(git -C "$OP_TREE" show "$tip:policy/lineup")" \
   "lineup $(cksum <"$ROOTS/optree/builds/$SHA2/src/prompts/phase-1a/implementer.md" | cut -d' ' -f1) none" 'tree holds the second patch'
 assert_eq "$(git -C "$OP_TREE" status --porcelain)" ' M policy/lineup' 'operator checkout unchanged'
 
-begin_case "a moved base re-onboards, and a rerun before its approval stops for that approval"
+begin_case "a moved template pin reviews the tip before any deputy start, and a rerun before its approval stops for it"
 TPL=$TMP/moves-template
 cp -R "$REPO/scripts/exit-root/passes/fixture" "$TPL"
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
@@ -784,14 +826,22 @@ assert_rc 3
 approve
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
 assert_rc 0
+# The base ref moves past the reviewed tip, so the template's new pin is
+# older than the tip the review must cover.
+"$STUB_BIN/advance-upstream"
 NEW_BASE=1111111111111111111111111111111111111111
 jq --arg b "$NEW_BASE" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
 mv "$CASE_DIR/t.json" "$TPL/settings.json"
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
 assert_rc 3
-assert_contains "repository.base_sha moved from 584dba6120ee6e126460438032c3189762603306 to $NEW_BASE"
+assert_contains "repository.base_sha moved from $TEMPLATE_BASE to $NEW_BASE"
 # onboard-1 is the first review and onboard-2 the operator's approval.
-assert_line "$CASE_DIR/onboard-3.args" "$NEW_BASE"
+assert_line "$CASE_DIR/onboard-3.args" "$(upstream_tip)"
+assert_eq "$(deputy_calls_before_review)" 0 'deputy starts before the review'
+assert_eq "$(jq -r .repository.base_sha "$ROOTS/moves/daemon/settings.json")" "$(upstream_tip)" 'rendered base is the reviewed tip'
+assert_eq "$(jq -r '.onboarded.base_sha, .onboarded.template_base_sha' "$ROOTS/moves/exit-root.json" | tr '\n' ' ')" \
+  "$(upstream_tip) $NEW_BASE " 'state binds the reviewed tip and the new pin'
 first_approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
 assert_rc 3
@@ -815,11 +865,13 @@ assert_rc 0
 assert_contains 'carried the active approval forward'
 if grep -q '^approval=' "$CASE_DIR/stdout"; then report_failure "a carried review printed an approval"; else ok; fi
 # onboard-1 is the first review and onboard-2 the operator's approval.
-assert_line "$CASE_DIR/onboard-3.args" "$NEW_BASE"
+assert_line "$CASE_DIR/onboard-3.args" "$(upstream_tip)"
 if grep -qx -- -approve "$CASE_DIR/onboard-3.args"; then report_failure "the script itself passed -approve"; else ok; fi
 assert_eq "$(jq -r .status "$ROOTS/carry/daemon/onboard-approved.json")" complete 'carried review is the approval'
 assert_eq "$(jq -r .images.agent "$ROOTS/carry/daemon/settings.json")" "$FAKE_IMAGE2" 'image from the carried review'
-assert_eq "$(jq -r .onboarded.base_sha "$ROOTS/carry/exit-root.json")" "$NEW_BASE" 'carried review bound the new base'
+assert_eq "$(jq -r '.onboarded.base_sha, .onboarded.template_base_sha' "$ROOTS/carry/exit-root.json" | tr '\n' ' ')" \
+  "$(upstream_tip) $NEW_BASE " 'carried review bound the tip and answered the new pin'
+assert_eq "$(jq -r .repository.base_sha "$ROOTS/carry/daemon/settings.json")" "$(upstream_tip)" 'carried tip is the rendered base'
 
 begin_case "an approval that names a new image is pinned though prelaunch passes on the old one"
 CASE_DIR=$MOVES_DIR FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 approve
@@ -836,6 +888,47 @@ FAKE_MANIFEST_DIGEST=$NEW_DIGEST run_exit_root --pass fixture --template "$TPL" 
 assert_rc 3
 assert_contains "the review configuration moved from $REVIEW_DIGEST to $NEW_DIGEST"
 assert_line "$CASE_DIR/onboard-1.args" "$NEW_DIGEST"
+
+begin_case "a tip that moves during the first deputy start is the tip the first review covers"
+before=$(upstream_tip)
+FAKE_DEPUTY_ADVANCES_TIP=1 run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" racing
+assert_rc 3
+assert_not_contains "live tip is"
+if [[ "$(upstream_tip)" != "$before" ]]; then ok; else report_failure "the deputy start did not move the tip"; fi
+assert_line "$CASE_DIR/onboard-1.args" "$(upstream_tip)"
+
+begin_case "a root recorded before the template pin was kept reads its reviewed base as that pin"
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" legacy
+assert_rc 3
+approve
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" legacy
+assert_rc 0
+# Such a root's onboarded record has no template_base_sha, and its base_sha
+# is the template's pin, which the review then ran at.
+jq --arg b "$TEMPLATE_BASE" '.onboarded = {review_configuration_digest: .onboarded.review_configuration_digest, base_sha: $b}' \
+  "$ROOTS/legacy/exit-root.json" >"$CASE_DIR/state.json"
+cp "$CASE_DIR/state.json" "$ROOTS/legacy/exit-root.json"
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" legacy
+assert_rc 0
+assert_not_contains 'moved from'
+if grep -qx onboard "$CASE_DIR/calls.log"; then report_failure "an unchanged legacy root reviewed again"; else ok; fi
+assert_eq "$(jq -r .repository.base_sha "$ROOTS/legacy/daemon/settings.json")" "$TEMPLATE_BASE" 'legacy root keeps its reviewed base'
+
+begin_case "the base ref moving after a review asks for no review and starts no deputy"
+TPL=$TMP/carry-template
+# Settle the template edits the cases above made, then move only the tip.
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 0
+assert_not_exists "$CASE_DIR/onboard-1.args"
+reviewed=$(jq -r .onboarded.base_sha "$ROOTS/carry/exit-root.json")
+"$STUB_BIN/advance-upstream"
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 0
+assert_not_exists "$CASE_DIR/onboard-1.args"
+if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "a moved tip alone started the deputy"; else ok; fi
+assert_eq "$(jq -r .repository.base_sha "$ROOTS/carry/daemon/settings.json")" "$reviewed" 'deputy stays at the reviewed tip'
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild

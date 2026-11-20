@@ -541,7 +541,7 @@ change to one changes both:
 | `repository.repo` | `freeasinbird/freeside-review-challenge` |
 | `repository.repository_id` | `1363494422` |
 | `repository.base_ref` | `main` |
-| `repository.base_sha` | The `fixture-baseline` commit (`git ls-remote origin fixture-baseline`) |
+| `repository.base_sha` | The `fixture-baseline` commit (`git ls-remote origin fixture-baseline`); once a root's onboarding review runs, the root renders the tip that review covered instead (step 3 below) |
 | `repository.allowed_paths` | `src/**`, `test/**`, `README.md` |
 | `repository.checkout` | A clone of the fixture of its own |
 | `repository.project` | `fixture` |
@@ -622,6 +622,18 @@ one; it resumes where it stopped. In order:
    merge moved the base, completes without the approval command:
    `freesided onboard` carries the approval forward, and the script writes
    its output to `onboard-approved.json` and goes on.
+
+   Every review runs at the base ref's tip, because `freesided onboard`
+   refuses a `-commit` that isn't the live tip. The script fetches
+   `repository.base_ref` from the repository checkout's `origin` (so that
+   checkout needs an `origin` that reaches the repository) just before it
+   runs the review, with no deputy start in between, and from then on
+   renders that tip as `repository.base_sha`, so the deputy runs at the
+   base the approval binds. A change to the template's
+   `repository.base_sha` asks for a new review, which runs before any
+   deputy start; `main` moving on its own asks for none. If a merge lands
+   in the seconds between the fetch and the review, the review is refused,
+   and a rerun reviews the new tip at once.
 4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
    the approving run, applies the pass's routing and pool limits, runs
    `freesided probe-lineup -root <root>`
@@ -643,9 +655,9 @@ database, and port, which suits iterating on a build, but a pass counts only
 on a fresh root: give each counted pass a new `<name>`. Reruns also keep the
 root current on their own: one after an enrollment (such as `freesided
 enroll-codex`) starts the deputy again to re-adopt the tree, one after the
-review configuration digest or `repository.base_sha` moves runs the
-onboarding review again and stops for its approval unless that review
-carried the approval forward, and one after a newer
+review configuration digest or the template's `repository.base_sha` moves
+runs the onboarding review again at the base ref's tip and stops for its
+approval unless that review carried the approval forward, and one after a newer
 approval pins that approval's image and recipe. A setup start waits as long
 as the deputy's log keeps growing and gives up only once it has stayed
 still for 900 s. Exit 2 is a refusal
