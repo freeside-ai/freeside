@@ -968,10 +968,11 @@ func TestAdvisoryStanceToleratesAutomationControlFinding(t *testing.T) {
 	}
 }
 
-// TestCommitRejectionWritesOutcomeThenDetail proves the terminal-commit path
-// records the authoritative failed outcome (count-only summary) and the
-// diagnostic rejection beside it.
-func TestCommitRejectionWritesOutcomeThenDetail(t *testing.T) {
+// TestCommitRejectionWritesDetailThenOutcome proves the terminal-commit path
+// records the diagnostic rejection and then the authoritative failed outcome
+// (count-only summary), so a card raised as soon as the outcome lands
+// already finds the findings (#3440).
+func TestCommitRejectionWritesDetailThenOutcome(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	exports := newStubExports()
@@ -990,20 +991,22 @@ func TestCommitRejectionWritesOutcomeThenDetail(t *testing.T) {
 		Sequence: 1, ObservedAt: fixedNow,
 	}}
 	wantCapture := testClaudeUsage()
+	detailFirst := false
+	exports.afterOutcome = func() { _, detailFirst = exports.rejections[testInvoke] }
 	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, wantUsage, wantCapture); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 
 	outcome, ok := exports.outcomes[testInvoke]
-	if !ok || outcome.Status != domain.ExecutionOutcomeFailed {
-		t.Fatalf("outcome = %+v (present=%t), want failed", outcome, ok)
+	if !ok || outcome.Status != domain.ExecutionOutcomeFailed || outcome.Cause != domain.FailureCauseExportRejected {
+		t.Fatalf("outcome = %+v (present=%t), want failed export_rejected", outcome, ok)
 	}
 	if strings.Contains(outcome.Summary, "config.yaml") ||
 		!strings.Contains(outcome.Summary, "publish-blocking findings") {
 		t.Fatalf("outcome summary %q must be count-only", outcome.Summary)
 	}
-	if _, found, _ := exports.LookupExportRejection(ctx, testInvoke); !found {
-		t.Fatal("commitRejection did not record the diagnostic detail")
+	if _, found, _ := exports.LookupExportRejection(ctx, testInvoke); !found || !detailFirst {
+		t.Fatalf("detail recorded = %t, before the outcome = %t; want both", found, detailFirst)
 	}
 	collected, err := d.Collect(ctx, testInvoke)
 	if err != nil {

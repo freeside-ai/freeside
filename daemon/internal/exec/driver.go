@@ -222,6 +222,11 @@ type StageResult struct {
 	// The stage driver sets it from a failed Claude writer's transcript, and
 	// the fake sets it for scenarios.
 	QuotaRefusal *domain.QuotaRefusal `json:"quota_refusal,omitempty"`
+	// CheckFailure names the ward handoff check behind a handoff_check cause
+	// and its screened evidence; present exactly beside that cause. The
+	// stage driver sets it from the ConformanceFailure ward returned
+	// (ward.HandoffCheckFailureOf).
+	CheckFailure *domain.HandoffCheckFailure `json:"handoff_check,omitempty"`
 	// Usage carries numbers-only route telemetry. Nil means not observed.
 	Usage []UsageMeasurement `json:"usage"`
 	// ClaudeUsage is what the Claude writer's own turn told the pinned CLI
@@ -259,6 +264,14 @@ func (r StageResult) Validate() error {
 				r.Cause, ErrQuotaRefusalWithoutQuota)
 		}
 		if err := r.QuotaRefusal.Validate(); err != nil {
+			return fmt.Errorf("stage result: %w", err)
+		}
+	}
+	if (r.Cause == domain.FailureCauseHandoffCheck) != (r.CheckFailure != nil) {
+		return fmt.Errorf("stage result cause %q: %w", r.Cause, ErrHandoffCheckWithoutCause)
+	}
+	if r.CheckFailure != nil {
+		if err := r.CheckFailure.Validate(); err != nil {
 			return fmt.Errorf("stage result: %w", err)
 		}
 	}

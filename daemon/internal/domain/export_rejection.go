@@ -19,11 +19,11 @@ import (
 // fields because domain must not import importer (that package imports this
 // one); Kind is a plain string for the same reason.
 //
-// This record is daemon-internal: it is not carried on the §5.14 sync surface
-// and holds no entity_version/as_of_revision. Surfacing rejection detail to
-// the operator UI is future contract work; the moment a field of this type
-// (or its findings) is read by an API/app client, this stops being a
-// daemon-only record and the change becomes kind:contract (issue #768).
+// The record itself is daemon-internal: it is not carried on the §5.14 sync
+// surface and holds no entity_version/as_of_revision. What a client sees is
+// NewExportRejectionFacts' projection on the execution-failure card (#3440):
+// the first findings' kinds and screened paths and the total, never Rule,
+// Line, Detail, or PathHex.
 type ExportRejection struct {
 	InvocationID InvocationID `json:"invocation_id"`
 	AdmissionID  Digest       `json:"admission_id"`

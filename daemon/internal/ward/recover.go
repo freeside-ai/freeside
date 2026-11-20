@@ -59,6 +59,10 @@ type RecoveryResult struct {
 	// attempt; empty for a straight pre-writer-complete loss and for
 	// exported outcomes.
 	LossCause string
+	// LossCheck is the typed, screened handoff check behind a loss forced by
+	// a refused adoption (HandoffCheckFailureOf); nil when no check refused
+	// it, such as a workspace that is no longer provably the run's.
+	LossCheck *domain.HandoffCheckFailure
 	// FailureStatus is populated only for RecoveryFailed.
 	FailureStatus int
 	// MemoryLimitKill reports, only for RecoveryFailed, that the journal
@@ -691,6 +695,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 			return &RecoveryResult{
 				Outcome: RecoveryLoss, Admission: adm,
 				LossCause: fmt.Sprintf("adoption failed at the %s: %v", stage, aerr),
+				LossCheck: HandoffCheckFailureOf(aerr),
 			}, nil
 		}
 		return nil, fmt.Errorf("adoption failed at the %s: %w", stage, aerr)

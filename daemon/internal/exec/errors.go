@@ -29,6 +29,9 @@ var (
 	// ErrQuotaRefusalWithoutQuota: a result names a refused quota window
 	// beside a cause other than quota.
 	ErrQuotaRefusalWithoutQuota = errors.New("result carries a quota refusal but its cause is not quota")
+	// ErrHandoffCheckWithoutCause: a result carries a handoff check exactly
+	// when its cause is handoff_check.
+	ErrHandoffCheckWithoutCause = errors.New("result handoff check disagrees with its cause")
 	// ErrInvalidClaudeUsage: a result's Claude usage capture is malformed.
 	ErrInvalidClaudeUsage = errors.New("invalid Claude usage capture")
 	// ErrInputSourceMissing: no content-addressed store was supplied.

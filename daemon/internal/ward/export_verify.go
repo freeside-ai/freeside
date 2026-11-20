@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/credentialpattern"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
@@ -37,8 +38,7 @@ const maxArchivePathBytes = 4 << 10
 // an operator confirm a suspected name by recomputing it, without the reason
 // revealing the name.
 func redactPath(p string) string {
-	sum := sha256.Sum256([]byte(p))
-	return "path:" + hex.EncodeToString(sum[:])[:16]
+	return domain.RedactedName(p)
 }
 
 // errExtractionCap marks the handoff-output byte cap: a fact about the

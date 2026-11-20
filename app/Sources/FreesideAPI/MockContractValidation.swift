@@ -439,6 +439,51 @@ enum MockContractValidation {
         return nil
     }
 
+    /// domain.validateOutcomeHandoffCheck, the export rejection's placement
+    /// and bounds, and DecideRetryOutlook (#3440): a handoff check rides a
+    /// handoff_check failure, which must carry one, or a loss; findings
+    /// ride only an export rejection; a present outlook is the derived one.
+    static func failureDiagnosisBreach(_ failure: Components.Schemas.ExecutionFailureFacts) -> String? {
+        if let check = failure.handoff_check {
+            if !(failure.cause == .handoff_check || failure.outcome == .lost) {
+                return "execution_failure handoff_check outside a handoff_check failure or a loss"
+            }
+            if check.evidence.isEmpty || check.evidence.utf8.count > 512 {
+                return "execution_failure handoff_check evidence out of bounds"
+            }
+        } else if failure.cause == .handoff_check {
+            return "execution_failure handoff_check cause without its check"
+        }
+        if let rejection = failure.export_rejection?.value1 {
+            if failure.cause != .export_rejected {
+                return "execution_failure export_rejection outside an export_rejected failure"
+            }
+            if rejection.findings.isEmpty || rejection.findings.count > 5
+                || rejection.total < rejection.findings.count
+            {
+                return "execution_failure export_rejection findings out of bounds"
+            }
+        }
+        if let outlook = failure.retry_outlook?.value1, outlook != derivedRetryOutlook(failure) {
+            return "execution_failure retry_outlook disagrees with the failure"
+        }
+        return nil
+    }
+
+    private static func derivedRetryOutlook(
+        _ failure: Components.Schemas.ExecutionFailureFacts
+    ) -> Components.Schemas.RetryOutlook {
+        if failure.handoff_check?.content_evidence == true { return .would_repeat }
+        guard failure.outcome == .failed, let cause = failure.cause else { return .may_succeed }
+        switch cause {
+        case .export_rejected, .invalid_evidence, .invalid_configuration, .contract_contradiction, .memory_limit:
+            return .would_repeat
+        case .quota, .credential_expired, .credential_revoked, .service_capacity, .provider_unavailable,
+            .handoff_check, .unknown:
+            return .may_succeed
+        }
+    }
+
     static func itemValidityBreach(
         _ item: Components.Schemas.AttentionItem
     ) -> String? {
@@ -842,6 +887,9 @@ enum MockContractValidation {
             }
             if (failure.outcome == .failed) != (failure.cause != nil) {
                 return "execution_failure cause disagrees with outcome"
+            }
+            if let breach = failureDiagnosisBreach(failure) {
+                return breach
             }
             guard case .run(let subject) = item.subject, subject.run_id != nil else {
                 return "execution_failure facts on a non-run subject"

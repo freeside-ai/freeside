@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v17",
+  "version": "freeside-task-record-v18",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -716,7 +716,8 @@
           "operating_mode": "attended_dev",
           "isolation_class": "fresh_vm_read_only_volume_handoff",
           "independence": null
-        }
+        },
+        "retry_outlook": "may_succeed"
       },
       "interpretation_failure": null,
       "publish_block": null,
@@ -813,7 +814,8 @@
           "operating_mode": "attended_dev",
           "isolation_class": "fresh_vm_read_only_volume_handoff",
           "independence": null
-        }
+        },
+        "retry_outlook": "may_succeed"
       },
       "interpretation_failure": null,
       "publish_block": null,

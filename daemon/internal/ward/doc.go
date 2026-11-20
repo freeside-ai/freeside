@@ -196,6 +196,8 @@
 // Layout, by concept:
 //
 //   - errors.go        the Check vocabulary and typed ConformanceFailure
+//   - check_failure.go a ConformanceFailure as the domain's screened
+//     handoff check record
 //   - runtime.go       the Runtime seam over the container runtime, and its
 //     report vocabulary
 //   - seed.go          workspace seeding: host-side source verification, the

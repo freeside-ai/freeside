@@ -546,6 +546,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["FailureCause"] = append(valids["FailureCause"], v.valid)
 	}
 	invalids["FailureCause"] = FailureCause("").valid
+	for _, v := range AllWardChecks {
+		valids["WardCheck"] = append(valids["WardCheck"], v.valid)
+	}
+	invalids["WardCheck"] = WardCheck("").valid
+	for _, v := range AllRetryOutlooks {
+		valids["RetryOutlook"] = append(valids["RetryOutlook"], v.valid)
+	}
+	invalids["RetryOutlook"] = RetryOutlook("").valid
 	for _, v := range AllFailureDispositions {
 		valids["FailureDisposition"] = append(valids["FailureDisposition"], v.valid)
 	}

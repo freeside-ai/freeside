@@ -1861,7 +1861,11 @@
                     switch snapshot.item._type {
                     case .agent_question: [AttentionFixtures.longQuestion().item]
                     case .execution_failure:
-                        [AttentionFixtures.quotaFailure().item, AttentionFixtures.invalidEvidenceFailure().item]
+                        [
+                            AttentionFixtures.quotaFailure().item, AttentionFixtures.invalidEvidenceFailure().item,
+                            AttentionFixtures.handoffCheckLossFailure().item,
+                            AttentionFixtures.exportRejectedFailure().item,
+                        ]
                     default: []
                     }
                 let validated = await validatedDecision(snapshot, drawing: drawn)
@@ -2021,6 +2025,20 @@
                             view: AnyView(
                                 answerableDetail.screenshotCard(
                                     AttentionFixtures.invalidEvidenceFailure().item, at: dynamicTypeSize))))
+                    // F42 and F60 (#3440): the handoff check and its
+                    // evidence, the gauntlet's first findings, and the
+                    // outlook that withholds Retry.
+                    for (suffix, failure) in [
+                        ("handoff_check", AttentionFixtures.handoffCheckLossFailure()),
+                        ("export_rejected", AttentionFixtures.exportRejectedFailure()),
+                    ] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-execution_failure-\(suffix)",
+                                width: canvasWidth,
+                                view: AnyView(
+                                    answerableDetail.screenshotCard(failure.item, at: dynamicTypeSize))))
+                    }
                 }
 
                 if snapshot.item._type == .effect_proposal {

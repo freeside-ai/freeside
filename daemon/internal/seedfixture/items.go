@@ -82,6 +82,7 @@ func seedItems(s seeder, failed, active, verification domain.Run) error {
 	executionFailure.ExecutionFailure = &domain.ExecutionFailureFacts{
 		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
 		Stage: domain.StageNameImplementation, InvocationID: failedInvocation, Admitted: &admitted,
+		RetryOutlook: domain.RetryOutlookMaySucceed,
 	}
 	inputs = append(inputs, executionFailure)
 

@@ -659,6 +659,9 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/store/handoff_journal.go`, `internal/exportscan/` (the export
   credential scan that refuses a handoff), `internal/credentialpattern/`
   (the credential rules both the export scan and the importer apply),
+  `internal/domain/handoff_check_failure.go` (screens a handoff check's
+  evidence and a rejected export's paths with those rules before either
+  reaches a card),
   `internal/exec/stage/state.go`
   (the restart reconstruction gate on a decoded intent),
   `internal/exec/stage/pipeline.go` (released-export authentication and

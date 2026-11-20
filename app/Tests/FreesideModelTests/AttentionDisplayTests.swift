@@ -806,11 +806,75 @@ import Testing
             .contract_contradiction: "Contract contradiction",
             .memory_limit: "Memory limit reached",
             .invalid_evidence: "Invalid evidence",
+            .handoff_check: "Handoff check refused",
+            .export_rejected: "Export rejected",
             .unknown: "Unknown",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.FailureCause.allCases))
         for (cause, label) in labels {
             #expect(AttentionDisplay.label(cause) == label)
+        }
+    }
+
+    /// F42 and F60 (#3440): the failure group names the handoff check and
+    /// its evidence, or the gauntlet's first findings and how many more,
+    /// and says a retry would repeat the failure, since the card then
+    /// offers none.
+    @Test func executionFailureShowsItsDiagnosis() {
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        func failureRows(_ item: Components.Schemas.AttentionItem) -> [String] {
+            AttentionDisplay.executionFailureFacts(
+                item, now: now, pools: [], locale: Locale(identifier: "en_US"), timeZone: .gmt
+            )?.failure.map { "\($0.label): \($0.value)" } ?? []
+        }
+        #expect(
+            failureRows(AttentionFixtures.handoffCheckLossFailure().item) == [
+                "Outcome: Lost", "Stage: Implementation", "Check: Export verification",
+                "Evidence: handoff output exceeds the entry cap", "Retry: Would repeat this failure",
+            ])
+        #expect(
+            failureRows(AttentionFixtures.exportRejectedFailure().item) == [
+                "Outcome: Failed", "Cause: Export rejected", "Stage: Implementation",
+                """
+                Findings: secret: path:3f9a27c41be0d865
+                allowlist violation: .github/workflows/release.yml
+                size violation: fixtures/recording.bin
+                path collision: Sources/Model/Item.swift
+                non regular change
+                and 7 more
+                """,
+                "Retry: Would repeat this failure",
+            ])
+        // A retry that may succeed shows as the action, not a row.
+        var retryable = AttentionFixtures.fixture(type: .execution_failure).item
+        retryable.execution_failure?.value1.retry_outlook = .init(value1: .may_succeed)
+        #expect(!failureRows(retryable).contains { $0.hasPrefix("Retry") })
+    }
+
+    @Test func wardCheckLabelsAreExplicit() {
+        let labels: [Components.Schemas.WardCheck: String] = [
+            .credential_separation: "Credential separation",
+            .control_plane_isolation: "Control-plane isolation",
+            .writer_termination: "Writer termination",
+            .exporter_allowlist: "Exporter allowlist",
+            .in_exporter_verification: "In-exporter verification",
+            .export_verification: "Export verification",
+            .teardown: "Teardown",
+            .writer_volume_exclusion: "Writer volume exclusion",
+            .credential_containment: "Credential containment",
+            .same_vm_refutation: "Same-VM refutation",
+            .pre_job_probe: "Pre-job probe",
+            .networkless_export: "Networkless export",
+            .agent_egress: "Agent egress",
+            .workspace_seeding: "Workspace seeding",
+            .observed_base_identity: "Observed base identity",
+            .auth_store_mutation_lease: "Auth store mutation lease",
+            .recovery: "Recovery",
+            .unknown: "Unknown",
+        ]
+        #expect(Set(labels.keys) == Set(Components.Schemas.WardCheck.allCases))
+        for (check, label) in labels {
+            #expect(AttentionDisplay.label(check) == label)
         }
     }
 

@@ -92,6 +92,19 @@ type ExecutionFailureFacts struct {
 	// can name the profile that failed. omitempty keeps an item raised before
 	// it existed byte-identical to its stored body.
 	Admitted *InvocationAdmissionFacts `json:"admitted,omitempty"`
+	// HandoffCheck is the outcome's handoff check, copied from it: the ward
+	// check that refused the run and its screened evidence.
+	CheckFailure *HandoffCheckFailure `json:"handoff_check,omitempty"`
+	// ExportRejection is the first few gauntlet findings of an
+	// export_rejected failure, projected from the invocation's export
+	// rejection record by NewExportRejectionFacts. The record is written
+	// best-effort, so a card whose record failed to write has none.
+	ExportRejection *ExportRejectionFacts `json:"export_rejection,omitempty"`
+	// RetryOutlook says whether a same-agent retry could escape the failure,
+	// as DecideRetryOutlook derives it. Every item raised since it existed
+	// carries it; an older item has none and is byte-identical to its stored
+	// body.
+	RetryOutlook RetryOutlook `json:"retry_outlook,omitempty"`
 }
 
 func (f ExecutionFailureFacts) Validate() error {
@@ -128,6 +141,143 @@ func (f ExecutionFailureFacts) Validate() error {
 		if admitted.Kind != AdmissionKindExecution || admitted.InvocationID != f.InvocationID {
 			return fmt.Errorf("execution failure %q admitted facts of %s %q: %w",
 				f.InvocationID, admitted.Kind, admitted.InvocationID, ErrCardFactInconsistent)
+		}
+	}
+	if err := validateOutcomeHandoffCheck(f.Outcome, f.Cause, f.CheckFailure); err != nil {
+		return fmt.Errorf("execution failure %q: %w: %w", f.InvocationID, ErrCardFactInconsistent, err)
+	}
+	if rejection := f.ExportRejection; rejection != nil {
+		if f.Outcome != ExecutionOutcomeFailed || f.Cause != FailureCauseExportRejected {
+			return fmt.Errorf("execution failure %s with cause %q and export rejection facts: %w",
+				f.Outcome, f.Cause, ErrCardFactInconsistent)
+		}
+		if err := rejection.Validate(); err != nil {
+			return fmt.Errorf("execution failure %q: %w", f.InvocationID, err)
+		}
+	}
+	if f.RetryOutlook != "" {
+		if want := DecideRetryOutlook(f.Outcome, f.Cause, f.CheckFailure); f.RetryOutlook != want {
+			return fmt.Errorf("execution failure retry outlook %q, derived %q: %w",
+				f.RetryOutlook, want, ErrCardFactInconsistent)
+		}
+	}
+	return nil
+}
+
+// RetryOutlook says whether retrying a failed attempt on the same agent could
+// succeed. It is derived from the recorded failure by DecideRetryOutlook,
+// never stored as a property of a cause.
+type RetryOutlook string
+
+const (
+	// RetryOutlookWouldRepeat: the failure follows from what the run produced
+	// or from configuration, so a retry of the same work would fail the same
+	// way.
+	RetryOutlookWouldRepeat RetryOutlook = "would_repeat"
+	// RetryOutlookMaySucceed: nothing recorded shows the failure would recur.
+	RetryOutlookMaySucceed RetryOutlook = "may_succeed"
+)
+
+// AllRetryOutlooks lists every valid RetryOutlook; it is the single
+// registration point.
+var AllRetryOutlooks = []RetryOutlook{RetryOutlookWouldRepeat, RetryOutlookMaySucceed}
+
+func (o RetryOutlook) valid() bool {
+	switch o {
+	case RetryOutlookWouldRepeat, RetryOutlookMaySucceed:
+		return true
+	default:
+		return false
+	}
+}
+
+// DecideRetryOutlook derives whether a same-agent retry could escape a
+// failure. A handoff check that refused the content itself (ward's
+// content-evidence mark) would refuse a retry identically, whatever the
+// outcome. A failure whose cause lies in what the run produced or in its
+// configuration would repeat. A transient, quota, credential, or capacity
+// cause, an unknown one, and a loss or cancellation with no content evidence
+// may succeed: either the condition can clear, or nothing shows it won't.
+func DecideRetryOutlook(outcome ExecutionOutcomeStatus, cause FailureCause, check *HandoffCheckFailure) RetryOutlook {
+	if check != nil && check.ContentEvidence {
+		return RetryOutlookWouldRepeat
+	}
+	if outcome != ExecutionOutcomeFailed {
+		return RetryOutlookMaySucceed
+	}
+	switch cause {
+	case FailureCauseExportRejected, FailureCauseInvalidEvidence, FailureCauseInvalidConfiguration,
+		FailureCauseContractContradiction, FailureCauseMemoryLimit:
+		return RetryOutlookWouldRepeat
+	case FailureCauseQuota, FailureCauseCredentialExpired, FailureCauseCredentialRevoked,
+		FailureCauseServiceCapacity, FailureCauseProviderUnavailable, FailureCauseHandoffCheck,
+		FailureCauseUnknown:
+		return RetryOutlookMaySucceed
+	}
+	return RetryOutlookMaySucceed
+}
+
+// MaxExportRejectionFacts is how many gauntlet findings an execution-failure
+// card carries; ExportRejectionFacts.Total counts the rest.
+const MaxExportRejectionFacts = 5
+
+// ExportRejectionFacts is the client-visible projection of an
+// ExportRejection: the first findings' kinds and screened paths, and the
+// total the gauntlet reported.
+type ExportRejectionFacts struct {
+	Findings []ExportRejectionFindingFacts `json:"findings"`
+	Total    int                           `json:"total"`
+}
+
+// ExportRejectionFindingFacts is one finding's kind and the path it names.
+// Path is screened (ScreenedName) and bounded; it is absent for a finding
+// that names no representable path, such as an invalid path entry, whose
+// raw name bytes stay daemon-internal.
+type ExportRejectionFindingFacts struct {
+	Kind string `json:"kind"`
+	Path string `json:"path,omitempty"`
+}
+
+// NewExportRejectionFacts projects a rejection record for a card. The engine
+// that raises the card and the store gate that authenticates it both call it,
+// so the two can't disagree. The record keeps its findings in the order the
+// gauntlet reported them, fatal ones first.
+func NewExportRejectionFacts(r ExportRejection) ExportRejectionFacts {
+	shown := r.Findings[:min(len(r.Findings), MaxExportRejectionFacts)]
+	findings := make([]ExportRejectionFindingFacts, 0, len(shown))
+	for _, f := range shown {
+		finding := ExportRejectionFindingFacts{Kind: strings.ToValidUTF8(f.Kind, "\uFFFD")}
+		if f.Path != "" {
+			finding.Path = screenedFindingPath(f.Path)
+		}
+		findings = append(findings, finding)
+	}
+	return ExportRejectionFacts{Findings: findings, Total: r.TotalFindings}
+}
+
+// screenedFindingPath bounds an agent-chosen path to the evidence cap and
+// screens it. Screening follows the cut so a cut can't expose part of a
+// credential-shaped name.
+func screenedFindingPath(path string) string {
+	path = strings.ToValidUTF8(path, "\uFFFD")
+	if matchesCredentialRule(path) {
+		return RedactedName(path)
+	}
+	if len(path) > MaxHandoffEvidenceBytes {
+		path = cutHeadAndTail(path, MaxHandoffEvidenceBytes)
+	}
+	return ScreenedName(path)
+}
+
+func (f ExportRejectionFacts) Validate() error {
+	if len(f.Findings) == 0 || len(f.Findings) > MaxExportRejectionFacts || f.Total < len(f.Findings) {
+		return fmt.Errorf("export rejection facts with %d findings of %d: %w",
+			len(f.Findings), f.Total, ErrCardFactInconsistent)
+	}
+	for index, finding := range f.Findings {
+		if finding.Kind == "" || !utf8.ValidString(finding.Kind) || !utf8.ValidString(finding.Path) ||
+			len(finding.Path) > MaxHandoffEvidenceBytes || matchesCredentialRule(finding.Path) {
+			return fmt.Errorf("export rejection finding[%d]: %w", index, ErrCardFactInconsistent)
 		}
 	}
 	return nil
