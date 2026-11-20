@@ -1310,20 +1310,10 @@ func (s *Service) itemSnapshot(item domain.AttentionItem, snapshot store.Snapsho
 // The mutated slices are cloned first, so the store's decoded value is never
 // touched (nonNilSlice returns the input slice unchanged when non-nil).
 func projectEvidenceAvailability(item domain.AttentionItem, blobs *BlobStore) domain.AttentionItem {
-	availability := func(digest domain.Digest) domain.EvidenceAvailability {
-		if blobs == nil {
-			return domain.EvidenceBytesAbsent
-		}
-		has, err := blobs.Has(digest)
-		if err != nil || !has {
-			return domain.EvidenceBytesAbsent
-		}
-		return domain.EvidenceAvailable
-	}
 	if len(item.EvidenceSnapshot) > 0 {
 		evidence := slices.Clone(item.EvidenceSnapshot)
 		for i := range evidence {
-			evidence[i].Metadata.Availability = availability(evidence[i].Digest)
+			evidence[i].Metadata.Availability = blobAvailability(blobs, evidence[i].Digest)
 		}
 		item.EvidenceSnapshot = evidence
 	}
@@ -1337,12 +1327,27 @@ func projectEvidenceAvailability(item domain.AttentionItem, blobs *BlobStore) do
 			if claims[i].Text != nil {
 				claims[i].Metadata.Availability = domain.EvidenceAvailable
 			} else {
-				claims[i].Metadata.Availability = availability(claims[i].Digest)
+				claims[i].Metadata.Availability = blobAvailability(blobs, claims[i].Digest)
 			}
 		}
 		item.AgentClaims = claims
 	}
 	return item
+}
+
+// blobAvailability is the read-time availability of one digest's bytes, the
+// rule projectEvidenceAvailability applies to every referenced item. A nil
+// store or a failed presence check reads as bytes_absent, since a fetch could
+// not be served either way.
+func blobAvailability(blobs *BlobStore, digest domain.Digest) domain.EvidenceAvailability {
+	if blobs == nil {
+		return domain.EvidenceBytesAbsent
+	}
+	has, err := blobs.Has(digest)
+	if err != nil || !has {
+		return domain.EvidenceBytesAbsent
+	}
+	return domain.EvidenceAvailable
 }
 
 func deliverySnapshot(delivery domain.AttentionDelivery, snapshot store.Snapshot) AttentionDeliverySnapshot {

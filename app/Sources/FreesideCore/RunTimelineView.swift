@@ -522,7 +522,37 @@ struct RunTimelineView: View {
                 }
                 .padding(.leading, 19)
             }
+            if transcriptOpens(invocation, in: timeline) {
+                InvocationTranscriptLink(
+                    coordinator: coordinator, runID: snapshot.run.id, invocationID: invocation.invocation_id,
+                    title: attemptContext(invocationID: invocation.invocation_id, in: timeline)
+                        ?? invocation.invocation_id,
+                    outcome: invocation.status == .completed ? .finished : .failed,
+                    workingTime: RunTimeStrip.invocationDuration(
+                        invocation.invocation_id, milestones: timeline.milestones,
+                        clocks: timeline.clocks?.value1),
+                    rendersInteractiveControls: screenshotTimeline == nil
+                )
+                .padding(.leading, 19)
+            }
         }
+    }
+
+    /// Rule 13: a writer's transcript opens once the writer has ended. A
+    /// writer is a stage attempt or a round's remediation, never the
+    /// reviewer, whose output the round's own evidence read serves. Ended
+    /// is a status this client knows to be final; a status from a newer
+    /// daemon decodes as `unknown` and shows no link rather than a guess.
+    private func transcriptOpens(
+        _ invocation: Components.Schemas.InvocationObservation, in timeline: Components.Schemas.RunTimeline
+    ) -> Bool {
+        let ended: Set<Components.Schemas.ObservedInvocationStatus> = [
+            .completed, .failed, .canceled, .blocked, .gone,
+        ]
+        guard !invocation.live, ended.contains(invocation.status) else { return false }
+        let id = invocation.invocation_id
+        return snapshot.run.stages.contains { stage in stage.attempts.contains { $0.invocation_id == id } }
+            || (timeline.review?.value1.rounds ?? []).contains { $0.remediation?.value1.invocation_id == id }
     }
 
     /// Labels from the timeline being rendered, not the coordinator's copy,

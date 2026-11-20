@@ -94,6 +94,9 @@ type Service struct {
 	// followUpFiler is the dispatcher an approved follow-up filing or issue
 	// comment wakes (WithFollowUpFiler). Nil means none is bound.
 	followUpFiler func() FollowUpFiler
+	// invocationPrompts reads a writer's prompt for the transcript read
+	// (WithInvocationPrompts). Nil means none is bound.
+	invocationPrompts func() InvocationPromptReader
 	// imageUpkeepWake asks image upkeep for a pass after an approved
 	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
 	imageUpkeepWake func()
@@ -136,6 +139,24 @@ func (s *Service) wakeFollowUpFiler() {
 	if filer := s.followUpFiler(); filer != nil {
 		filer.Wake()
 	}
+}
+
+// InvocationPromptReader reads the prompt a writer invocation received. The
+// stage driver implements it; it is injected because the driver is composed
+// after the service.
+type InvocationPromptReader interface {
+	// InvocationPrompt returns the prompt, re-checked against the
+	// invocation's admission. found is false when none is held. An error is
+	// a refusal or a read failure; the transcript read decides which.
+	InvocationPrompt(ctx context.Context, id domain.InvocationID) (prompt string, found bool, err error)
+}
+
+// WithInvocationPrompts supplies the reader the transcript read asks for a
+// writer's prompt. The func is read on each request so the composition can
+// bind the driver after the service is built. With no option, a nil func, or
+// a nil reader, every prompt reads as null.
+func WithInvocationPrompts(reader func() InvocationPromptReader) Option {
+	return func(s *Service) { s.invocationPrompts = reader }
 }
 
 // WithImageUpkeepWake supplies the wake a committed approval of an

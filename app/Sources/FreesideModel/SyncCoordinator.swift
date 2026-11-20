@@ -858,6 +858,51 @@ public final class SyncCoordinator {
         }
     }
 
+    public enum InvocationTranscriptReadError: Error {
+        /// The daemon's 404: no such invocation on this run.
+        case unavailable
+        /// Any other answer, such as the 500 for a claim set that disagrees
+        /// with its invocation: the read failed, which is not the same as
+        /// no transcript being kept.
+        case failed
+        case bindingMismatch
+    }
+
+    /// Reads one ended writer invocation's transcript reference and prompt
+    /// on a tap. A response for another run or invocation, or a claim another
+    /// invocation produced, is refused rather than shown under this one.
+    public func invocationTranscript(
+        runID: String, invocationID: String
+    ) async throws -> Components.Schemas.InvocationTranscript {
+        let generation = cacheGeneration
+        let output = try await store.client.getInvocationTranscript(
+            path: .init(run_id: runID, invocation_id: invocationID))
+        try Task.checkCancellation()
+        guard generation == cacheGeneration else { throw CancellationError() }
+        switch output {
+        case .ok(let ok):
+            let transcript = try ok.body.json
+            guard transcript.run_id == runID, transcript.invocation_id == invocationID else {
+                throw InvocationTranscriptReadError.bindingMismatch
+            }
+            if let claim = transcript.transcript?.value1 {
+                let producer: String
+                switch claim.provenance {
+                case .head_bound(let provenance): producer = provenance.producer_invocation_id
+                case .head_independent(let provenance): producer = provenance.producer_invocation_id
+                }
+                guard producer == invocationID, claim.label == AgentClaimLabels.agentTranscript else {
+                    throw InvocationTranscriptReadError.bindingMismatch
+                }
+            }
+            return transcript
+        case .notFound:
+            throw InvocationTranscriptReadError.unavailable
+        case .undocumented:
+            throw InvocationTranscriptReadError.failed
+        }
+    }
+
     /// Fetches one computed run timeline on navigation. A cached same-epoch
     /// value remains available while unreachable; a successful partial read
     /// replaces it and advances only the observed cursor.

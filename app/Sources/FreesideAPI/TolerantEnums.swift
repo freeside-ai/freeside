@@ -35,6 +35,7 @@ extension Components.Schemas.RunOutcomeFinding.dispositionPayload: UnknownTolera
 extension Components.Schemas.ReviewProgressState: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewEvidenceAvailability: UnknownTolerantEnum {}
 extension Components.Schemas.ReviewSubjectKind: UnknownTolerantEnum {}
+extension Components.Schemas.InvocationTranscriptAvailability: UnknownTolerantEnum {}
 extension Components.Schemas.RunMilestoneKind: UnknownTolerantEnum {}
 extension Components.Schemas.RunHoldReason: UnknownTolerantEnum {}
 extension Components.Schemas.ImageUpkeepPending: UnknownTolerantEnum {}
@@ -153,6 +154,7 @@ public enum TolerantEnums {
         Components.Schemas.ReviewProgressState.self,
         Components.Schemas.ReviewEvidenceAvailability.self,
         Components.Schemas.ReviewSubjectKind.self,
+        Components.Schemas.InvocationTranscriptAvailability.self,
         Components.Schemas.RunMilestoneKind.self,
         Components.Schemas.RunHoldReason.self,
         Components.Schemas.ImageUpkeepPending.self,

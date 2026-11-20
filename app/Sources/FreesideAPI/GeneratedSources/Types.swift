@@ -236,6 +236,14 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /runs/{run_id}/review/{round}/evidence`.
     /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)`.
     func getReviewEvidence(_ input: Operations.getReviewEvidence.Input) async throws -> Operations.getReviewEvidence.Output
+    /// Read an ended writer invocation's transcript reference and prompt
+    ///
+    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)`.
+    func getInvocationTranscript(_ input: Operations.getInvocationTranscript.Input) async throws -> Operations.getInvocationTranscript.Output
     /// List durable schedules
     ///
     /// Lists the durable scheduler's synchronized schedule aggregates (plan §5.16). A partial fetch; it never marks the whole cache current (plan §5.14).
@@ -807,6 +815,22 @@ extension APIProtocol {
         headers: Operations.getReviewEvidence.Input.Headers = .init()
     ) async throws -> Operations.getReviewEvidence.Output {
         try await getReviewEvidence(Operations.getReviewEvidence.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Read an ended writer invocation's transcript reference and prompt
+    ///
+    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)`.
+    public func getInvocationTranscript(
+        path: Operations.getInvocationTranscript.Input.Path,
+        headers: Operations.getInvocationTranscript.Input.Headers = .init()
+    ) async throws -> Operations.getInvocationTranscript.Output {
+        try await getInvocationTranscript(Operations.getInvocationTranscript.Input(
             path: path,
             headers: headers
         ))
@@ -6629,6 +6653,86 @@ public enum Components {
                 case events
                 case result
                 case exit_status
+            }
+        }
+        /// Whether the invocation's transcript bytes can be fetched now: available when a transcript claim exists and the blob store holds its bytes, unavailable otherwise. A later contract adds a state for a running invocation's growing transcript (#1926).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/InvocationTranscriptAvailability`.
+        @frozen public enum InvocationTranscriptAvailability: String, Codable, Hashable, Sendable, CaseIterable {
+            case available = "available"
+            case unavailable = "unavailable"
+            case unknown = "unknown"
+        }
+        /// One ended writer invocation's transcript reference and prompt. Both are agent context, never verified evidence: the transcript is the agent CLI's stream, and the prompt is the text the daemon rendered for the writer. The client fetches the transcript's bytes by digest from GET /attachments/{digest}.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/InvocationTranscript`.
+        public struct InvocationTranscript: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/availability`.
+            public var availability: Components.Schemas.InvocationTranscriptAvailability
+            /// The invocation's agent-transcript claim, served only when availability is available; null when the invocation recorded none or the blob store no longer holds its bytes.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/transcript`.
+            public struct transcriptPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationTranscript/transcript/value1`.
+                public var value1: Components.Schemas.AgentClaim
+                /// Creates a new `transcriptPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AgentClaim) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The invocation's agent-transcript claim, served only when availability is available; null when the invocation recorded none or the blob store no longer holds its bytes.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/transcript`.
+            public var transcript: Components.Schemas.InvocationTranscript.transcriptPayload?
+            /// The prompt the writer received, read from the stage driver's record and re-checked against the invocation's admission; null when none is held or the record fails that check.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/prompt`.
+            public var prompt: Swift.String?
+            /// Creates a new `InvocationTranscript`.
+            ///
+            /// - Parameters:
+            ///   - run_id:
+            ///   - invocation_id:
+            ///   - availability:
+            ///   - transcript: The invocation's agent-transcript claim, served only when availability is available; null when the invocation recorded none or the blob store no longer holds its bytes.
+            ///   - prompt: The prompt the writer received, read from the stage driver's record and re-checked against the invocation's admission; null when none is held or the record fails that check.
+            public init(
+                run_id: Swift.String,
+                invocation_id: Swift.String,
+                availability: Components.Schemas.InvocationTranscriptAvailability,
+                transcript: Components.Schemas.InvocationTranscript.transcriptPayload? = nil,
+                prompt: Swift.String? = nil
+            ) {
+                self.run_id = run_id
+                self.invocation_id = invocation_id
+                self.availability = availability
+                self.transcript = transcript
+                self.prompt = prompt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case run_id
+                case invocation_id
+                case availability
+                case transcript
+                case prompt
             }
         }
         /// The facts behind a work_unit_completed milestone, read from the daemon's re-gated completion record: the PR whose merge satisfied the unit's completion criterion, the merge commit, the bound issue when the criterion names one, and the instant the daemon recorded the completion. The milestone itself carries none of these.
@@ -20954,6 +21058,171 @@ public enum Operations {
             /// No entity exists under the identifier.
             ///
             /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Read an ended writer invocation's transcript reference and prompt
+    ///
+    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    ///
+    ///
+    /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
+    /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)`.
+    public enum getInvocationTranscript {
+        public static let id: Swift.String = "getInvocationTranscript"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// The run's identifier.
+                ///
+                /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/path/run_id`.
+                public var run_id: Components.Parameters.RunID
+                /// A writer invocation admitted for this run.
+                ///
+                /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/path/invocation_id`.
+                public var invocation_id: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - run_id: The run's identifier.
+                ///   - invocation_id: A writer invocation admitted for this run.
+                public init(
+                    run_id: Components.Parameters.RunID,
+                    invocation_id: Swift.String
+                ) {
+                    self.run_id = run_id
+                    self.invocation_id = invocation_id
+                }
+            }
+            public var path: Operations.getInvocationTranscript.Input.Path
+            /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getInvocationTranscript.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getInvocationTranscript.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.getInvocationTranscript.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.getInvocationTranscript.Input.Path,
+                headers: Operations.getInvocationTranscript.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.InvocationTranscript)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.InvocationTranscript {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getInvocationTranscript.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getInvocationTranscript.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The transcript reference and prompt, or explicit unavailability.
+            ///
+            /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.getInvocationTranscript.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.getInvocationTranscript.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No entity exists under the identifier.
+            ///
+            /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)/responses/404`.
             ///
             /// HTTP response code: `404 notFound`.
             case notFound(Components.Responses.NotFound)

@@ -312,6 +312,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			value: attachmentReceipt{Digest: domain.Digest("sha256:" + strings.Repeat("5", 64))},
 		},
 		{name: "error-response", value: errorResponse{Message: "fixture error"}},
+		{name: "invocation-transcript", value: invocationTranscriptFixture(t)},
 		{
 			name:  "effect-proposal-facts-verified",
 			value: effectProposalFactsFixture(domain.ClosureProvenanceVerified, domain.ClosureFlagOriginProposeSite, true, true),
@@ -372,6 +373,47 @@ func TestSignetWireGoldens(t *testing.T) {
 			}
 			golden.Assert(t, tc.name, append(got, '\n'))
 		})
+	}
+}
+
+// invocationTranscriptFixture is a fixed, valid transcript read: a failed
+// writer's retained transcript, available, beside its prompt. Its claim and
+// availability double as validation-positive cases.
+func invocationTranscriptFixture(t *testing.T) InvocationTranscript {
+	t.Helper()
+	invocation := domain.InvocationID("writer-569")
+	claim := domain.AgentClaim{
+		Label: transcriptClaimLabel, Artifact: "artifact-failed-transcript-writer-569",
+		Digest: domain.Digest("sha256:" + strings.Repeat("6", 64)),
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerAgent, ProducerInvocationID: invocation,
+			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivitySensitive,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: 4096,
+			CreatedAt: time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC),
+			Source:    domain.EvidenceSourceClaim, Availability: domain.EvidenceAvailable,
+		},
+	}
+	if err := claim.Validate(); err != nil {
+		t.Fatalf("transcript claim fixture: %v", err)
+	}
+	transcript, err := transcriptClaim(invocation, []domain.AgentClaim{claim})
+	if err != nil || transcript == nil {
+		t.Fatalf("transcript claim fixture = %v, %v", transcript, err)
+	}
+	for _, availability := range AllInvocationTranscriptAvailabilities {
+		if !availability.valid() {
+			t.Fatalf("registered availability %q is invalid", availability)
+		}
+	}
+	if InvocationTranscriptAvailability("").valid() {
+		t.Fatal("zero availability is valid")
+	}
+	prompt := "Implement the approved work item."
+	return InvocationTranscript{
+		RunID: "run-569", InvocationID: invocation,
+		Availability: InvocationTranscriptAvailable, Transcript: transcript, Prompt: &prompt,
 	}
 }
 
