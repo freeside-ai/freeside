@@ -4368,6 +4368,22 @@
                             preview: readerPreview,
                             rendersScrollableContent: false))))
 
+            // The agent transcript sheet (#1131): finished and folded, the
+            // work opened, failed, long at its end, with unreadable lines,
+            // and raw, on the Mac and the phone, by day and by dusk. The
+            // phone's width draws its compact sheet: Raw beside Done at the
+            // top, and no foot.
+            for state in AgentTranscriptScreenshots.State.allCases {
+                for (platform, width) in [("", CGFloat(720)), ("-phone", 390)] {
+                    for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                        surfaces.append(
+                            Surface(
+                                name: state.surface + platform + suffix, width: width, colorScheme: scheme,
+                                view: AgentTranscriptScreenshots.sheet(state)))
+                    }
+                }
+            }
+
             // The consequential confirmation sheet: Stop on a run-scoped item
             // as the macOS sheet by day, Decline on a proposal as the iPhone
             // bottom sheet by dusk. The binding line reads the fixture's

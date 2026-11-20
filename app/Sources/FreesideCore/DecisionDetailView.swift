@@ -72,13 +72,17 @@ struct DecisionDetailView: View {
 
         /// What keys the card's timeline load, as the run timeline page keys
         /// its own, so the card refetches on every canonical replacement.
-        /// Nil, so nothing loads, unless the card is a final review whose
-        /// run is listed: no other card draws the outcome list, and the
-        /// coordinator prunes the timeline of a run it doesn't list.
+        /// Nil, so nothing loads, unless the card is a final review or
+        /// carries an agent transcript, and its run is listed: the outcome
+        /// list and the transcript's working time are the only parts of a
+        /// card read from the timeline, and the coordinator prunes the
+        /// timeline of a run it doesn't list.
         func requestKey(
             for item: Components.Schemas.AttentionItem
         ) -> RunTimelineView.TimelineRequestKey? {
-            guard item._type == .ready_for_final_review,
+            guard
+                item._type == .ready_for_final_review
+                    || item.agent_claims.contains(where: { $0.label == AgentClaimLabels.agentTranscript }),
                 let runID = DecisionModel.runID(of: item.subject),
                 let run = runs.first(where: { $0.run.id == runID })
             else { return nil }
@@ -89,6 +93,28 @@ struct DecisionDetailView: View {
         /// the daemon serves one.
         func outcomes(for item: Components.Schemas.AttentionItem) -> Components.Schemas.RunOutcomes? {
             DecisionModel.runID(of: item.subject).flatMap { timelines[$0]?.outcomes }
+        }
+
+        /// What a transcript claim on the item opens with: the run's stage
+        /// and attempt, and the invocation's working time from the run's
+        /// clock, so it agrees with the run's strip. A card carries a
+        /// transcript only for a failed invocation
+        /// (`failureTranscriptClaims` in
+        /// `daemon/internal/engine/execution_failure.go`), so the sheet
+        /// opens failed.
+        func transcript(
+            for item: Components.Schemas.AttentionItem, invocationID: String
+        ) -> AttachmentRow.Transcript {
+            let runID = DecisionModel.runID(of: item.subject)
+            let run = runID.flatMap { id in runs.first { $0.run.id == id } }
+            let timeline = runID.flatMap { timelines[$0] }
+            return .init(
+                title: run.map { RunDisplay.timelineTitle($0.run) }
+                    ?? "Invocation \(ShortIdentifier.short(invocationID))",
+                outcome: .failed,
+                workingTime: timeline.flatMap {
+                    RunTimeStrip.invocationDuration(invocationID, milestones: $0.milestones, clocks: $0.clocks?.value1)
+                })
         }
     }
 
@@ -2105,7 +2131,8 @@ struct DecisionDetailView: View {
                     loadsAttachments: loadsAttachments,
                     text: claim.text,
                     rendersInteractiveControls: unverified.rendersInteractiveControls,
-                    boxed: boxed)
+                    boxed: boxed,
+                    transcript: transcript(claim))
             }
         }
     }
@@ -2139,6 +2166,13 @@ struct DecisionDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 8)
         }
+    }
+
+    /// The transcript sheet's context for an `agent-transcript` claim;
+    /// nil for every other claim, which opens in the generic reader.
+    private func transcript(_ claim: Components.Schemas.AgentClaim) -> AttachmentRow.Transcript? {
+        guard claim.label == AgentClaimLabels.agentTranscript, let item = model.snapshot?.item else { return nil }
+        return runTimelines.transcript(for: item, invocationID: Self.producerInvocationID(claim))
     }
 
     static func claimSourceRows(
@@ -3584,6 +3618,21 @@ struct DecisionDetailView: View {
         /// attachments. A row inside a card section or a message is already
         /// set apart and draws none.
         var boxed = false
+        /// Set for an agent transcript claim, which opens in the transcript
+        /// sheet in place of the generic reader.
+        var transcript: Transcript? = nil
+
+        struct Transcript {
+            let title: String
+            let outcome: AgentTranscriptSheet.Outcome
+            let workingTime: TimeInterval?
+        }
+
+        /// A transcript's fetched bytes, once per open.
+        private struct OpenTranscript: Identifiable {
+            let id = UUID()
+            let bytes: [UInt8]
+        }
 
         // Task identity for the attachment load: the digest fixes the content,
         // and availability is the one mutable field that must re-trigger the
@@ -3596,6 +3645,7 @@ struct DecisionDetailView: View {
         @State private var showsImagePreview = false
         @State private var showsNonImagePreview = false
         @State private var nonImagePreview: NonImagePreview?
+        @State private var openTranscript: OpenTranscript?
         @State private var previewRequestID: UUID?
         @State private var isDisplayingAttachment = false
         @State private var isHoveringDigest = false
@@ -3653,6 +3703,7 @@ struct DecisionDetailView: View {
             .onChange(of: digest) { oldDigest, newDigest in
                 previewRequestID = nil
                 nonImagePreview = nil
+                openTranscript = nil
                 showsImagePreview = false
                 showsNonImagePreview = false
                 guard rendersInteractiveControls, isDisplayingAttachment else { return }
@@ -3662,6 +3713,7 @@ struct DecisionDetailView: View {
             .onDisappear {
                 previewRequestID = nil
                 nonImagePreview = nil
+                openTranscript = nil
                 showsImagePreview = false
                 showsNonImagePreview = false
                 guard rendersInteractiveControls, isDisplayingAttachment else { return }
@@ -3735,6 +3787,15 @@ struct DecisionDetailView: View {
                         }
                     }
                 )
+                .sheet(item: $openTranscript) { opened in
+                    if let transcript {
+                        AgentTranscriptSheet(
+                            digest: digest, bytes: opened.bytes,
+                            mediaType: reference?.mediaType ?? "application/jsonl",
+                            title: transcript.title, outcome: transcript.outcome,
+                            workingTime: transcript.workingTime)
+                    }
+                }
             case .unavailable:
                 VStack(alignment: .leading, spacing: 4) {
                     Label("No bytes available", systemImage: "photo.badge.exclamationmark")
@@ -3903,8 +3964,7 @@ struct DecisionDetailView: View {
         private func openNonImage(_ bytes: Data?) {
             if let bytes {
                 previewRequestID = nil
-                nonImagePreview = NonImagePreview(bytes: bytes)
-                showsNonImagePreview = true
+                present(bytes)
                 return
             }
             let requestID = UUID()
@@ -3916,7 +3976,15 @@ struct DecisionDetailView: View {
                     previewRequestID == requestID
                 else { return }
                 previewRequestID = nil
-                nonImagePreview = NonImagePreview(bytes: loadedBytes)
+                present(loadedBytes)
+            }
+        }
+
+        private func present(_ bytes: Data) {
+            if transcript != nil {
+                openTranscript = OpenTranscript(bytes: Array(bytes))
+            } else {
+                nonImagePreview = NonImagePreview(bytes: bytes)
                 showsNonImagePreview = true
             }
         }
