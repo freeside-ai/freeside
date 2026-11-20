@@ -111,14 +111,16 @@ func TestBuildKeepsEachCommandsWholeOutputInPrivateFiles(t *testing.T) {
 
 func TestBuildFailsBeforeAnyStepWhenItCannotCreateItsLogDirectory(t *testing.T) {
 	t.Parallel()
-	readOnly := t.TempDir()
-	if err := os.Chmod(readOnly, 0o500); err != nil { //nolint:gosec // G302: a read-only test directory, so the build can't create its logs
+	// A regular file where the log directory's parent belongs fails the
+	// mkdir for every user; a read-only directory would not stop root, and
+	// the project-image proof runs this package's tests as root (#3543).
+	notADirectory := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notADirectory, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(readOnly, 0o700) }) //nolint:gosec // G302: restore the owner's access so TempDir can remove it
 	source, backend := &fakeSource{}, newFakeBackend()
 	builder := newBuilder(source, backend, t.TempDir())
-	builder.logDir = filepath.Join(readOnly, "logs")
+	builder.logDir = filepath.Join(notADirectory, "logs")
 
 	if _, err := builder.Build(t.Context(), validRequest()); err == nil ||
 		!strings.Contains(err.Error(), "create project-image log directory") {
