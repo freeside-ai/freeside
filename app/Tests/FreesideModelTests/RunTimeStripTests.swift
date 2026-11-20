@@ -439,4 +439,32 @@ import Testing
         #expect(Int64(strip.elapsed.rounded(.down)) == clocks.elapsed_seconds)
         #expect(Int64(strip.total(.agentWorking).rounded(.down)) == clocks.active_seconds)
     }
+
+    /// One invocation's working time is the span the strip draws for it:
+    /// its served interval, or its own start-to-ending milestones, and no
+    /// time at all where the strip would only guess an end.
+    @Test func anInvocationsDurationIsItsOwnSpan() {
+        let milestones = [
+            Self.milestone(.run_submitted, 0), Self.milestone(.invocation_started, 2),
+            Self.milestone(.invocation_started, 5, invocation: 2),
+            Self.milestone(.execution_outcome_recorded, 11), Self.milestone(.invocation_started, 12, invocation: 3),
+        ]
+        #expect(RunTimeStrip.invocationDuration("inv-1", milestones: milestones) == TimeInterval(9 * 60))
+        // No ending of its own: the strip runs it to the next start, but
+        // the duration says nothing.
+        #expect(RunTimeStrip.invocationDuration("inv-2", milestones: milestones) == nil)
+        #expect(RunTimeStrip.invocationDuration("inv-9", milestones: milestones) == nil)
+
+        let clocks = Components.Schemas.RunClocks(
+            started_at: Self.at(0), ended_at: nil, elapsed_seconds: 20 * 60, active_seconds: 10 * 60,
+            active_intervals: [
+                .init(invocation_id: "inv-1", started_at: Self.at(3), ended_at: Self.at(7)),
+                .init(invocation_id: "inv-3", started_at: Self.at(12), ended_at: nil),
+            ])
+        #expect(
+            RunTimeStrip.invocationDuration("inv-1", milestones: milestones, clocks: clocks) == TimeInterval(4 * 60))
+        // Still working, or not served: no time.
+        #expect(RunTimeStrip.invocationDuration("inv-3", milestones: milestones, clocks: clocks) == nil)
+        #expect(RunTimeStrip.invocationDuration("inv-2", milestones: milestones, clocks: clocks) == nil)
+    }
 }

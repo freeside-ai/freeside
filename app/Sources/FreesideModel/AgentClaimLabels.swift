@@ -1,9 +1,12 @@
 // Keep in sync with export.SummaryEvidenceLabel and
 // export.ReviewGuideEvidenceLabel in
-// daemon/internal/export/evidence_source.go.
+// daemon/internal/export/evidence_source.go, and agentTranscript with the
+// transcript label in daemon/internal/exec/claude/spec.go and
+// daemon/internal/exec/stage/failure_evidence.go.
 package enum AgentClaimLabels {
     package static let summary = "freeside.summary"
     package static let reviewGuide = "freeside.review-guide"
+    package static let agentTranscript = "agent-transcript"
     static let addressals = "Addressals"
     package static let specification = "Specification"
 
