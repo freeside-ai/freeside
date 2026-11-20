@@ -1,0 +1,52 @@
+{
+  "head_sha": "8f921f0bbb9ba8516ee88f1bd00b535c2d3a0664",
+  "base_sha": "709bc2cb17f802d6c185ba68700b09aacf5d6db9",
+  "recipe_path": ".freeside/verify.json",
+  "recipe_digest": "sha256:9d3b357381854a20a55d599c3083893b840107831164fa11678d20b648c7b538",
+  "outcome": "passed",
+  "steps": [
+    {
+      "argv": [
+        "bash",
+        "scripts/check.sh",
+        "docs"
+      ],
+      "room": "project_image",
+      "exit_code": 0,
+      "output_truncated": false
+    },
+    {
+      "argv": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "room": "project_image",
+      "exit_code": 0,
+      "output_truncated": false
+    },
+    {
+      "argv": [
+        "bash",
+        "scripts/check.sh",
+        "app",
+        "test"
+      ],
+      "room": "macos_host",
+      "exit_code": 0,
+      "output_truncated": false,
+      "not_applicable": {
+        "rule_digest": "sha256:19b79917581d79051b01d9a3697d87f93a0fa954d10d7a5d743162ab94ece065",
+        "changes_digest": "sha256:687d7ee7afcc06f39f01ddb91cc95cd70758070e6f99c21eec936a5d8b21d460"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "path": ".freeside/verify.json",
+      "kind": "recipe_divergence",
+      "detail": "candidate copy differs from the trusted recipe; the trusted source was executed"
+    }
+  ],
+  "transcript_truncated": false
+}

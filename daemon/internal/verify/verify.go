@@ -84,11 +84,17 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	// Every class the recipe names needs a room before anything is
+	// The rules come from the trusted recipe and the change set from the
+	// caller, never from the candidate's tree.
+	skips := recipe.Skips(opts.Changes)
+	// Every class a running command names needs a room before anything is
 	// materialized or run: a command never falls back to another class's
-	// room.
+	// room. A command that won't run needs none.
 	wantsHistory := false
-	for _, cmd := range recipe.Commands {
+	for i, cmd := range recipe.Commands {
+		if skips[i] != nil {
+			continue
+		}
 		room, ok := opts.Rooms[cmd.Class]
 		if !ok {
 			return Result{}, fmt.Errorf("recipe names execution class %q with no room: %w", cmd.Class, ErrRoomUnavailable)
@@ -129,7 +135,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 			return Result{}, err
 		}
 	}
-	steps, transcript, outcome, err := runRecipe(ctx, g, opts, recipe, hist, scratch)
+	steps, transcript, outcome, err := runRecipe(ctx, g, opts, recipe, skips, hist, scratch)
 	if err != nil {
 		return Result{}, err
 	}
@@ -217,6 +223,10 @@ func (g *gitRunner) isTreeSymlink(ctx context.Context, commitSHA, path string) (
 // would do. The named §5.6 residual applies here: candidate test code
 // executes inside the room.
 //
+// A command skips[i] names doesn't run: it gets no workspace and no room
+// call, and its step records the proof in place of an exit, so the report
+// lists it in recipe order as not run, never as a pass.
+//
 // Every command runs in its own freshly materialized workspace, not a
 // shared one: an earlier command's candidate code (a `go test` running
 // the candidate's test functions) could otherwise rewrite files a later
@@ -232,11 +242,16 @@ func (g *gitRunner) isTreeSymlink(ctx context.Context, commitSHA, path string) (
 // copy. Every other command runs exactly as before. Verify built hist
 // when any command asks and checked each such command's room is an
 // EnvRoom.
-func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, hist *history, scratch string) ([]Step, *procbound.TailBuffer, Outcome, error) {
+func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, skips []*NotApplicableProof, hist *history, scratch string) ([]Step, *procbound.TailBuffer, Outcome, error) {
 	steps := make([]Step, 0, len(recipe.Commands))
 	transcript := procbound.NewTailBuffer(opts.Policy.MaxTranscriptBytes)
 	outcome := OutcomePassed
 	for i, cmd := range recipe.Commands {
+		if skips[i] != nil {
+			steps = append(steps, Step{Argv: cmd.Argv, Room: cmd.Class, NotApplicable: skips[i]})
+			writeTranscriptSkip(transcript, cmd.Argv)
+			continue
+		}
 		workspace := filepath.Join(scratch, fmt.Sprintf("workspace-%d", i))
 		if err := g.materialize(ctx, opts.treeSHA(), workspace); err != nil {
 			return nil, nil, "", err
@@ -295,6 +310,12 @@ func writeTranscriptStep(w io.Writer, argv []string, res StepResult) {
 		suffix = " (output truncated)"
 	}
 	_, _ = fmt.Fprintf(w, "exit %d%s\n\n", res.ExitCode, suffix)
+}
+
+// writeTranscriptSkip appends a skipped step's record to the transcript.
+func writeTranscriptSkip(w io.Writer, argv []string) {
+	_, _ = w.Write([]byte("$ " + renderArgv(argv) + "\n"))
+	_, _ = w.Write([]byte("not run: no changed path can affect it\n\n"))
 }
 
 // renderArgv renders an argv for the human-readable transcript. An

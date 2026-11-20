@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -73,7 +75,8 @@ func (c ExecutionClass) valid() bool {
 }
 
 // Command is one recipe command: its argument vector, the class of room
-// that runs it, and whether it asks for the candidate's git history.
+// that runs it, whether it asks for the candidate's git history, and
+// the paths whose change makes it run.
 type Command struct {
 	Argv  []string
 	Class ExecutionClass
@@ -83,6 +86,10 @@ type Command struct {
 	// command may ask; a command that doesn't keeps the exact-tree
 	// workspace.
 	History bool
+	// Paths, when set, limits the command to change sets that touch one
+	// of these path rules (applicability.go). Nil means the command
+	// always runs. ParseRecipe refuses an empty list.
+	Paths []string
 }
 
 // Recipe is a parsed trusted verification recipe: the commands the
@@ -97,6 +104,9 @@ type Command struct {
 type Recipe struct {
 	Commands []Command
 	Capture  CaptureMode
+	// RunAllOn lists path rules a change to which runs every command,
+	// whatever its Paths (applicability.go). Nil names none.
+	RunAllOn []string
 }
 
 // ProofCommands returns the argument vectors of the project_image
@@ -137,6 +147,9 @@ func (r Recipe) CommandsIn(class ExecutionClass) [][]string {
 // object naming its argv and its room (commandObjectWire). The bare form
 // is the only form recipes had before execution classes, so every
 // earlier recipe keeps its bytes and therefore its digest and approval.
+// The optional "run_all_on" list of path rules makes every command run
+// when a changed path matches one; a recipe without it, and without any
+// command "paths", keeps its bytes the same way.
 // JSON rather than the plan's §5.12 YAML config syntax: the daemon
 // carries no YAML dependency and the control-plane config format is not
 // yet initialized; the decision note records the revisit condition.
@@ -147,14 +160,16 @@ func (r Recipe) CommandsIn(class ExecutionClass) [][]string {
 type recipeWire struct {
 	Commands []json.RawMessage `json:"commands"`
 	Capture  string            `json:"capture"`
+	RunAllOn json.RawMessage   `json:"run_all_on"`
 }
 
 // commandObjectWire is a command's object form,
 // {"argv": [...], "room": "macos_host"}. Both fields are required:
 // a missing room is refused rather than defaulted, so the object form
 // always says where its command runs. The optional "history" boolean
-// asks for the candidate's git history; it is raw so a null is refused
-// rather than read as absent.
+// asks for the candidate's git history, and the optional "paths" list
+// limits the command to change sets that touch one of its path rules;
+// both are raw so a null is refused rather than read as absent.
 //
 // Tokens are *string, not string, so the parser can tell a JSON null
 // (nil) from an intentional empty string (a non-nil pointer to ""):
@@ -166,6 +181,7 @@ type commandObjectWire struct {
 	Argv    []*string       `json:"argv"`
 	Room    *string         `json:"room"`
 	History json.RawMessage `json:"history"`
+	Paths   json.RawMessage `json:"paths"`
 }
 
 // ParseRecipe parses and validates trusted recipe bytes. Unknown
@@ -175,9 +191,11 @@ type commandObjectWire struct {
 // empty executable name), a null or NUL-bearing token, a ".." path
 // segment in a token, a recognized direct shell runner carrying a
 // command-string option, a "history" that isn't a boolean or is true on
-// a macos_host command, and an invalid capture mode all fail closed with
-// ErrRecipeInvalid. Command arguments are otherwise opaque: no
-// whitespace splitting or metacharacter rejection.
+// a macos_host command, a malformed "paths" or "run_all_on" rule list
+// (validPathRules), a recipe in which every command carries "paths",
+// and an invalid capture mode all fail closed with ErrRecipeInvalid.
+// Command arguments are otherwise opaque: no whitespace splitting or
+// metacharacter rejection.
 func ParseRecipe(raw []byte) (Recipe, error) {
 	var w recipeWire
 	if err := strictjson.Decode(raw, &w, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
@@ -200,6 +218,18 @@ func ParseRecipe(raw []byte) (Recipe, error) {
 		}
 		r.Commands = append(r.Commands, cmd)
 	}
+	// A command with no rule always runs, so a passing verification
+	// always ran something and a pass never rests on skips alone.
+	if !slices.ContainsFunc(r.Commands, func(c Command) bool { return c.Paths == nil }) {
+		return Recipe{}, fmt.Errorf("every recipe command carries paths, so none always runs: %w", ErrRecipeInvalid)
+	}
+	if w.RunAllOn != nil {
+		rules, err := parsePathRules("run_all_on", w.RunAllOn)
+		if err != nil {
+			return Recipe{}, err
+		}
+		r.RunAllOn = rules
+	}
 	if !r.Capture.valid() {
 		return Recipe{}, fmt.Errorf("recipe capture mode %q: %w", w.Capture, ErrRecipeInvalid)
 	}
@@ -218,6 +248,7 @@ func parseCommand(raw json.RawMessage) (Command, error) {
 	var rawArgv []*string
 	class := ClassProjectImage
 	history := false
+	var paths []string
 	switch trimmed[0] {
 	case '[':
 		if err := strictjson.Decode(raw, &rawArgv, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
@@ -245,6 +276,12 @@ func parseCommand(raw json.RawMessage) (Command, error) {
 				return Command{}, err
 			}
 		}
+		if obj.Paths != nil {
+			var err error
+			if paths, err = parsePathRules("paths", obj.Paths); err != nil {
+				return Command{}, err
+			}
+		}
 	default:
 		return Command{}, fmt.Errorf("recipe command is neither an argv array nor a command object: %w", ErrRecipeInvalid)
 	}
@@ -258,7 +295,70 @@ func parseCommand(raw json.RawMessage) (Command, error) {
 	if err := validateCommand(argv); err != nil {
 		return Command{}, err
 	}
-	return Command{Argv: argv, Class: class, History: history}, nil
+	return Command{Argv: argv, Class: class, History: history, Paths: paths}, nil
+}
+
+// parsePathRules reads a "paths" or "run_all_on" value: a non-empty JSON
+// list of distinct path rules, never null or another type. A rule is a
+// repository-relative directory prefix ending in "/" or an exact file
+// path, the grammar of changed_under in .github/workflows/
+// pull-request.yml. Matching is literal (applicability.go), so the rules
+// refuse every spelling a literal match would read differently from the
+// author: a leading "/", a ".", "..", or empty segment, a glob character
+// or backslash (both read as literal bytes and would silently match
+// nothing), and a NUL byte. A malformed rule refuses the whole recipe, so
+// no rule that can't be read ever skips a step.
+func parsePathRules(field string, raw json.RawMessage) ([]string, error) {
+	var tokens []*string
+	if err := strictjson.Decode(raw, &tokens, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		return nil, fmt.Errorf("recipe %s is not a list of strings: %w: %w", field, err, ErrRecipeInvalid)
+	}
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("recipe %s is null or empty: %w", field, ErrRecipeInvalid)
+	}
+	rules := make([]string, 0, len(tokens))
+	seen := map[string]bool{}
+	for _, tok := range tokens {
+		if tok == nil {
+			return nil, fmt.Errorf("recipe %s carries a null entry: %w", field, ErrRecipeInvalid)
+		}
+		if err := validPathRule(*tok); err != nil {
+			return nil, fmt.Errorf("recipe %s entry %q %w: %w", field, *tok, err, ErrRecipeInvalid)
+		}
+		if seen[*tok] {
+			return nil, fmt.Errorf("recipe %s repeats entry %q: %w", field, *tok, ErrRecipeInvalid)
+		}
+		seen[*tok] = true
+		rules = append(rules, *tok)
+	}
+	return rules, nil
+}
+
+// validPathRule checks one path rule's grammar; parsePathRules says why
+// each refusal exists.
+func validPathRule(rule string) error {
+	if rule == "" {
+		return errors.New("is empty")
+	}
+	if strings.HasPrefix(rule, "/") {
+		return errors.New("is absolute")
+	}
+	if strings.ContainsAny(rule, "*?[]\\\x00") {
+		return errors.New("carries a glob character, a backslash, or a NUL byte")
+	}
+	// A rule decoded from bytes that aren't UTF-8 carries U+FFFD, and a
+	// changed path that isn't UTF-8 runs every command, so such a rule, like
+	// one holding a control character, could never match and would skip its
+	// command on every change.
+	if strings.ContainsFunc(rule, func(r rune) bool { return r == utf8.RuneError || unicode.IsControl(r) }) {
+		return errors.New("carries a byte that isn't UTF-8 or a control character")
+	}
+	for _, seg := range strings.Split(strings.TrimSuffix(rule, "/"), "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return fmt.Errorf("carries a %q segment", seg)
+		}
+	}
+	return nil
 }
 
 // parseHistory reads a command object's "history" value: a JSON boolean,

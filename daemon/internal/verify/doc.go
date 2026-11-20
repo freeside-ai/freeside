@@ -9,7 +9,11 @@
 // never executed. The recipe, not the caller, names each command's
 // execution class (the project image or the macOS host); the caller
 // supplies a room per class, and a class with no room fails closed
-// rather than running in another room. Verification output binds to the
+// rather than running in another room. The recipe may also limit a
+// command to change sets that touch its paths: the rules are part of the
+// trusted bytes the digest covers, the change set is the caller's audited
+// account, and a skipped command is recorded as NotApplicable with a
+// proof, never as a pass. Verification output binds to the
 // exact recipe digest
 // (sha256 over the trusted bytes as loaded) and the exact head SHA; a
 // head the checkout does not hold fails closed before any command runs.
@@ -44,7 +48,9 @@
 //   - errors.go       fail-closed sentinels for recipe, checkout, and git failures
 //   - options.go      Options and their defaults: recipe path, caps, timeouts
 //   - recipe.go       the recipe format, each Command's ExecutionClass
-//     (§5.7), and the capture modes (§5.15)
+//     (§5.7), its path rules, and the capture modes (§5.15)
+//   - applicability.go which commands a change set runs, and the
+//     NotApplicable proof of each it skips (§6)
 //   - source.go       base and evaluated-commit bindings, trusted recipe
 //     loading (§5.8), and recipe divergence
 //   - recipe_at_commit.go CommitReader and the bounded recipe read at one

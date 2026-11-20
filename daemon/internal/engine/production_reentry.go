@@ -902,7 +902,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	// A refused host executor returns *hostVerificationUnavailable, which
 	// the caller stops the cycle on: nothing ran, and a re-entry records no
 	// failed checkpoint without a verifier report.
-	rooms, err := w.verificationRooms(ctx, task, room, recipe)
+	rooms, err := w.verificationRooms(ctx, task, room, recipe, changes)
 	if err != nil {
 		return productionReentryCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, nil))
 	}

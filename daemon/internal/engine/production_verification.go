@@ -114,8 +114,10 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 // verificationRooms is the one room choice of every verification path: a
 // first cycle, a remediation round, a re-entry, and the handoff merge check.
 // project_image always runs in imageRoom, the room the recipe was read
-// through. The host executor is asked to admit the job only when the recipe
-// names macos_host, so a project_image-only recipe never reaches its gate. A
+// through. The host executor is asked to admit the job only when a macos_host
+// command will run against changes, the change set the caller passes to
+// verify.Verify, so a project_image-only recipe, or a change no macos_host
+// command's paths cover, never reaches its gate. A
 // refusal returns *hostVerificationUnavailable and no room for the class:
 // nothing has run, and the caller records the refusal on its own path. A
 // recipe that does not parse returns only imageRoom, for verify to refuse.
@@ -123,10 +125,11 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 // quarantined slots (hostSlotsRoom).
 func (w *productionPublicationWorkflow) verificationRooms(
 	ctx context.Context, task productionPublicationTask, imageRoom verify.Room, recipe []byte,
+	changes []importer.Change,
 ) (map[verify.ExecutionClass]verify.Room, error) {
 	rooms := map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: imageRoom}
 	parsed, err := verify.ParseRecipe(recipe)
-	if err != nil || len(parsed.CommandsIn(verify.ClassMacOSHost)) == 0 {
+	if err != nil || !parsed.RunsClass(verify.ClassMacOSHost, changes) {
 		return rooms, nil
 	}
 	if w.hostVerificationRoom == nil {
@@ -623,7 +626,7 @@ func (w *productionPublicationWorkflow) runVerification(
 	if err != nil {
 		return verify.Result{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, err))
 	}
-	rooms, err := w.verificationRooms(ctx, task, room, recipe)
+	rooms, err := w.verificationRooms(ctx, task, room, recipe, imported.Changes)
 	if err != nil {
 		if releaseErr := w.releaseVerification(ctx, task, binding.run, nil); releaseErr != nil {
 			return verify.Result{}, errors.Join(err, releaseErr)

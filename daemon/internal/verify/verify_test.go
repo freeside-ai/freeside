@@ -612,3 +612,84 @@ func TestVerifyOperandWithSymlinkPrefixNotEntrypoint(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifySkipsCommandsNoChangeCanAffect pins the skip end to end: with
+// a daemon-only change, the app command reaches no room (none is supplied
+// for its class, and none is needed), keeps its place in the report with
+// its proof, and the transcript says it didn't run. The report golden
+// pins the new step shape, and the report parses back unchanged.
+func TestVerifySkipsCommandsNoChangeCanAffect(t *testing.T) {
+	t.Parallel()
+	changes := []importer.Change{{Path: "daemon/main.go", Kind: importer.ChangeAdded, Mode: "100644", Digest: "sha256:bb"}}
+	checkout, opts, image := verifyFixture(t, map[string]string{"daemon/main.go": "package main\n"}, changes)
+	opts.RecipeSource = ConfigRecipe([]byte(rulesRecipeBytes))
+	res, err := Verify(context.Background(), checkout, opts)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if want := [][]string{{"bash", "scripts/check.sh", "docs"}, {"go", "test", "./..."}}; !reflect.DeepEqual(image.runs, want) {
+		t.Errorf("project_image room ran %v, want %v", image.runs, want)
+	}
+	if res.Outcome != OutcomePassed {
+		t.Errorf("outcome = %s, want passed", res.Outcome)
+	}
+	if len(res.Steps) != 3 || res.Steps[0].NotApplicable != nil || res.Steps[1].NotApplicable != nil {
+		t.Fatalf("steps = %+v, want two run and the app command last", res.Steps)
+	}
+	skipped := res.Steps[2]
+	want := Step{
+		Argv: []string{"bash", "scripts/check.sh", "app", "test"}, Room: ClassMacOSHost,
+		NotApplicable: mustParseRecipe(t, rulesRecipeBytes).Skips(changes)[2],
+	}
+	if !reflect.DeepEqual(skipped, want) {
+		t.Errorf("skipped step = %+v, want %+v", skipped, want)
+	}
+	golden.Assert(t, "verify_report_not_applicable", res.Evidence[0].Content)
+	if !bytes.Contains(res.Evidence[1].Content, []byte("$ bash scripts/check.sh app test\nnot run: no changed path can affect it\n")) {
+		t.Errorf("transcript does not say the app command didn't run:\n%s", res.Evidence[1].Content)
+	}
+	rep, err := ParseReport(res.Evidence[0].Content)
+	if err != nil {
+		t.Fatalf("ParseReport: %v", err)
+	}
+	if !reflect.DeepEqual(rep.Steps, res.Steps) {
+		t.Errorf("report steps = %+v, want %+v", rep.Steps, res.Steps)
+	}
+}
+
+// TestVerifyFailureAfterSkipFails pins that a skip never masks a failure:
+// with an app-only change the daemon command is skipped, and the app
+// command that runs after it and exits nonzero fails the verification.
+func TestVerifyFailureAfterSkipFails(t *testing.T) {
+	t.Parallel()
+	changes := []importer.Change{{Path: "app/View.swift", Kind: importer.ChangeAdded, Mode: "100644", Digest: "sha256:bb"}}
+	checkout, opts, image := verifyFixture(t, map[string]string{"app/View.swift": "struct V {}\n"}, changes)
+	mac := &recordingRoom{results: map[string]StepResult{
+		"bash scripts/check.sh app test": {ExitCode: 1, Output: []byte("FAIL\n")},
+	}}
+	opts.RecipeSource = ConfigRecipe([]byte(rulesRecipeBytes))
+	opts.Rooms = map[ExecutionClass]Room{ClassProjectImage: image, ClassMacOSHost: mac}
+	res, err := Verify(context.Background(), checkout, opts)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Outcome != OutcomeFailed {
+		t.Errorf("outcome = %s, want failed", res.Outcome)
+	}
+	if want := [][]string{{"bash", "scripts/check.sh", "docs"}}; !reflect.DeepEqual(image.runs, want) {
+		t.Errorf("project_image room ran %v, want %v", image.runs, want)
+	}
+	if len(res.Steps) != 3 || res.Steps[1].NotApplicable == nil || res.Steps[2].ExitCode != 1 {
+		t.Errorf("steps = %+v, want docs run, daemon skipped, app failed", res.Steps)
+	}
+}
+
+// mustParseRecipe parses a test recipe or fails the test.
+func mustParseRecipe(t *testing.T, raw string) Recipe {
+	t.Helper()
+	r, err := ParseRecipe([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseRecipe: %v", err)
+	}
+	return r
+}
