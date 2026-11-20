@@ -135,6 +135,88 @@ func TestExtractUsageAcceptsFieldReorderingAndZero(t *testing.T) {
 	}
 }
 
+// usage_partial_2_1_319.jsonl is the pinned CLI's own stream-json
+// transcript of a writer turn killed mid-run, captured against a loopback
+// mock with a synthetic setup token: two messages, each split into a text
+// line and a tool_use line, then a cut final line. The mock's message_start
+// reported input 103 and 203, cache creation 1011 and 2011, and cache read
+// 10017 and 20017; its final output counts (45 and 85) never reach the
+// transcript, whose lines carry the start placeholder of 1.
+func TestExtractUsageSumsPartialTranscript(t *testing.T) {
+	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("CET", 3600))
+	partial := func(metric string, quantity int64) exec.UsageMeasurement {
+		return exec.UsageMeasurement{
+			Source: domain.UsageSourcePartialTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: metric, Unit: "tokens", Quantity: quantity, Sequence: 1, ObservedAt: observedAt.UTC(),
+		}
+	}
+	want := []exec.UsageMeasurement{
+		partial("input_tokens", 306),
+		partial("cache_creation_input_tokens", 3022),
+		partial("cache_read_input_tokens", 30034),
+	}
+	got := claude.ExtractUsage(usageFixture(t, "usage_partial_2_1_319.jsonl"), observedAt)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExtractUsage() = %#v, want %#v", got, want)
+	}
+	for i, measurement := range got {
+		if err := measurement.Validate(); err != nil {
+			t.Fatalf("measurement %d invalid: %v", i, err)
+		}
+	}
+}
+
+func TestExtractUsagePartialCountsEachMessageOnce(t *testing.T) {
+	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	body := strings.Join([]string{
+		`{"type":"assistant","message":{"id":"msg_a","usage":{"input_tokens":5,"output_tokens":1}}}`,
+		`{"type":"assistant","message":{"id":"msg_a","usage":{"input_tokens":7,"output_tokens":1}}}`,
+		`{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"id":"msg_b","usage":{"input_tokens":11}}}`,
+		`{"type":"assistant","message":{"usage":{"input_tokens":1000}}}`,
+	}, "\n")
+	want := []exec.UsageMeasurement{{
+		Source: domain.UsageSourcePartialTranscript, Kind: domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 18, Sequence: 1, ObservedAt: observedAt,
+	}}
+	if got := claude.ExtractUsage([]byte(body), observedAt); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExtractUsage() = %#v, want %#v", got, want)
+	}
+}
+
+func TestExtractUsagePartialAbsence(t *testing.T) {
+	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"output only", `{"type":"assistant","message":{"id":"msg_a","usage":{"output_tokens":1}}}`},
+		{"negative count", `{"type":"assistant","message":{"id":"msg_a","usage":{"input_tokens":-1}}}`},
+		{"overflow", `{"type":"assistant","message":{"id":"msg_a","usage":{"input_tokens":9223372036854775807}}}` + "\n" +
+			`{"type":"assistant","message":{"id":"msg_b","usage":{"input_tokens":1}}}`},
+		{"unreadable result", `{"type":"assistant","message":{"id":"msg_a","usage":{"input_tokens":1}}}` + "\n" +
+			`{"type":"result","usage":{"input_tokens":"not-a-number"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claude.ExtractUsage([]byte(tc.body), observedAt); got != nil {
+				t.Fatalf("ExtractUsage() = %#v, want nil", got)
+			}
+		})
+	}
+}
+
+func TestExtractUsageResultSupersedesMessages(t *testing.T) {
+	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	body := `{"type":"assistant","message":{"id":"msg_a","usage":{"input_tokens":5}}}` + "\n" +
+		`{"type":"result","usage":{"input_tokens":9}}`
+	want := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 9, Sequence: 1, ObservedAt: observedAt,
+	}}
+	if got := claude.ExtractUsage([]byte(body), observedAt); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExtractUsage() = %#v, want %#v", got, want)
+	}
+}
+
 func TestExtractUsageCapture(t *testing.T) {
 	t.Parallel()
 	observedAt := time.Date(2026, 11, 4, 9, 0, 0, 0, time.FixedZone("CET", 3600))

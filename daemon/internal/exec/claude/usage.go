@@ -19,6 +19,7 @@ import (
 var (
 	_ stage.UsageExtractor         = claudeProvider{}
 	_ stage.QuotaRefusalClassifier = claudeProvider{}
+	_ stage.FailureUsageExtractor  = claudeProvider{}
 )
 
 // ClassifyQuotaRefusal reads a failed writer's transcript for the provider's
@@ -27,8 +28,16 @@ func (claudeProvider) ClassifyQuotaRefusal(transcript []byte) *domain.QuotaRefus
 	return exec.ClassifyClaudeQuotaRefusal(transcript, ward.RejectDuplicateJSONKeys)
 }
 
+// ExtractFailureUsage reads a failed writer's transcript for its usage: the
+// terminal result's when the turn finished, else the partial sum of its
+// assistant messages. Missing or malformed telemetry returns nil.
+func (claudeProvider) ExtractFailureUsage(transcript []byte, observedAt time.Time) []exec.UsageMeasurement {
+	return ExtractUsage(transcript, observedAt)
+}
+
 // ExtractUsage reads numbers-only telemetry from the last Claude terminal
-// result envelope. Missing or malformed telemetry returns nil.
+// result envelope, or the partial sum of the assistant messages when the
+// transcript has none. Missing or malformed telemetry returns nil.
 func ExtractUsage(transcript []byte, observedAt time.Time) []exec.UsageMeasurement {
 	return exec.ExtractClaudeUsage(
 		transcript, observedAt, domain.UsageSourceAdapterTranscript,

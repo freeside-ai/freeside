@@ -62,6 +62,11 @@ func (d *Driver) failedWriterResult(
 			result.Summary = truncateFailureSummary(quotaRefusalSummary(*refusal) + " " + result.Summary)
 		}
 	}
+	// Read from the same verified bytes at the intent's recorded instant, so
+	// a restart commits the observation the live path would have.
+	if extractor, ok := d.provider.(FailureUsageExtractor); ok {
+		result.Usage = extractor.ExtractFailureUsage(evidence.Body, in.RecordedAt)
+	}
 	digest := domain.Digest(evidence.Digest)
 	claim := domain.AgentClaim{
 		Label:    "agent-transcript",

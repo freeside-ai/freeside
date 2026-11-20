@@ -68,6 +68,17 @@ type QuotaRefusalClassifier interface {
 	ClassifyQuotaRefusal(transcript []byte) *domain.QuotaRefusal
 }
 
+// FailureUsageExtractor is the optional provider hook that reads a failed
+// writer's diagnostic transcript for the tokens it spent before it ended, so
+// a killed writer doesn't look free. The transcript is untrusted agent
+// output, and the measurements feed advisory readings only: they grant
+// nothing and decide nothing. observedAt is the intent's recorded instant, so
+// the live and restart paths commit the same observation. Nil means no
+// readable usage. A provider that doesn't implement it records none.
+type FailureUsageExtractor interface {
+	ExtractFailureUsage(transcript []byte, observedAt time.Time) []exec.UsageMeasurement
+}
+
 // ProviderHandoffInput is the durable input needed to render one provider's
 // ward handoff request.
 type ProviderHandoffInput struct {

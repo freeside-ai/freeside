@@ -429,3 +429,73 @@ func TestUsageObservationPricingRevisionOfAnUnpricedBinding(t *testing.T) {
 		t.Fatalf("unpriced binding records %q, want none", got)
 	}
 }
+
+// A run reads one coverage per admitted invocation: complete from a terminal
+// result, partial from an early end, and missing with no observation.
+func TestInvocationUsageReadsEachAdmittedInvocation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, complete := seedUsageAdmission(t)
+	partial, missing := complete, complete
+	partial.InvocationID, partial.AttemptID = "inv-2", "attempt-2"
+	missing.InvocationID, missing.AttemptID = "inv-3", "attempt-3"
+	for _, admission := range []*domain.ExecutionAdmission{&partial, &missing} {
+		id, err := admission.ComputeID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		admission.ID = id
+	}
+	partialMeasurement := usageMeasurementFixture()
+	partialMeasurement.Source = domain.UsageSourcePartialTranscript
+	partialMeasurement.Quantity = 45
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		run, err := tx.GetRun(ctx, complete.RunID)
+		if err != nil {
+			return err
+		}
+		for i, admission := range []domain.ExecutionAdmission{partial, missing} {
+			run.Stages[0].Attempts = append(run.Stages[0].Attempts, domain.Attempt{
+				ID: admission.AttemptID, StageID: admission.StageID, Number: i + 2, InvocationID: admission.InvocationID,
+			})
+		}
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		for _, admission := range []domain.ExecutionAdmission{partial, missing} {
+			if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.AppendUsageObservations(ctx, complete.InvocationID,
+			[]exec.UsageMeasurement{usageMeasurementFixture()}); err != nil {
+			return err
+		}
+		_, err = tx.AppendUsageObservations(ctx, partial.InvocationID, []exec.UsageMeasurement{partialMeasurement})
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var got []domain.InvocationUsage
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		got, err = tx.InvocationUsage(ctx, complete.RunID)
+		return err
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	tokens := func(quantity int64) []domain.UsageTotal {
+		return []domain.UsageTotal{{
+			Kind: domain.UsageMeasurementReportedUsage, Metric: "input_tokens", Unit: "tokens", Quantity: quantity,
+		}}
+	}
+	want := []domain.InvocationUsage{
+		{InvocationID: "inv-1", Coverage: domain.UsageCoverageComplete, Tokens: tokens(123)},
+		{InvocationID: "inv-2", Coverage: domain.UsageCoveragePartial, Tokens: tokens(45)},
+		{InvocationID: "inv-3", Coverage: domain.UsageCoverageMissing, Tokens: []domain.UsageTotal{}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("InvocationUsage() = %#v, want %#v", got, want)
+	}
+}

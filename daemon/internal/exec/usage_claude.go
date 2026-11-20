@@ -15,8 +15,11 @@ import (
 )
 
 // ExtractClaudeUsage returns the measurements from the last trusted terminal
-// result envelope in a Claude JSON or JSONL transcript. Malformed or missing
-// telemetry is observation absence, not a stage error.
+// result envelope in a Claude JSON or JSONL transcript, under source. A
+// transcript with no result envelope, because the invocation was killed or
+// lost before it ended, falls back to the partial sum
+// (claudePartialUsage) under domain.UsageSourcePartialTranscript. Malformed
+// or missing telemetry is observation absence, not a stage error.
 func ExtractClaudeUsage(
 	transcript []byte,
 	observedAt time.Time,
@@ -24,6 +27,8 @@ func ExtractClaudeUsage(
 	rejectDuplicateKeys func([]byte) error,
 ) []UsageMeasurement {
 	var latest []UsageMeasurement
+	resulted := false
+	partial := claudePartialUsage{messages: map[string]claudeMessageUsage{}}
 	for line := range bytes.SplitSeq(transcript, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || rejectDuplicateKeys(line) != nil {
@@ -34,12 +39,99 @@ func ExtractClaudeUsage(
 		}
 		if err := strictjson.DecodeAllowingUnknownFields(
 			line, &envelopeType, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
-		); err != nil || envelopeType.Type != "result" {
+		); err != nil {
 			continue
 		}
-		latest = decodeClaudeUsageResult(line, observedAt.UTC(), source)
+		switch envelopeType.Type {
+		case "result":
+			resulted = true
+			latest = decodeClaudeUsageResult(line, observedAt.UTC(), source)
+		case "assistant":
+			partial.add(line)
+		}
 	}
-	return latest
+	if resulted {
+		return latest
+	}
+	return partial.measurements(observedAt.UTC())
+}
+
+// claudePartialUsage sums the usage of a transcript's assistant messages.
+// The pinned CLI (2.1.319) writes one assistant line per content block, and
+// every line of one API message carries that message's id and repeats its
+// usage, so each id counts once and its last line wins. Subagent messages
+// (a parent_tool_use_id) are spend too and count.
+//
+// Each line's usage is the message's usage at the start of its stream: the
+// input and cache counts are final there, but output_tokens is the stream's
+// starting placeholder, not what the message produced, and the CLI never
+// writes the final count to the transcript. So the partial sum leaves output
+// out and reports it as unobserved, rather than record a number that is not
+// output usage (devlog/2026-11-20-1017-partial-usage-source.md).
+type claudePartialUsage struct {
+	messages map[string]claudeMessageUsage
+}
+
+type claudeMessageUsage struct {
+	InputTokens              *int64 `json:"input_tokens"`
+	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+}
+
+// add reads one assistant line. A line that doesn't decode, or carries no
+// message id or usage, is skipped, as a cut final line is.
+func (p *claudePartialUsage) add(line []byte) {
+	var record struct {
+		Message *struct {
+			ID    string              `json:"id"`
+			Usage *claudeMessageUsage `json:"usage"`
+		} `json:"message"`
+	}
+	if err := strictjson.DecodeAllowingUnknownFields(
+		line, &record, strictjson.RejectInvalidUTF8, strictjson.NoLimit,
+	); err != nil || record.Message == nil || record.Message.ID == "" || record.Message.Usage == nil {
+		return
+	}
+	p.messages[record.Message.ID] = *record.Message.Usage
+}
+
+// measurements returns one reported_usage measurement per metric any message
+// reported, or nil when none did, a count is negative, or a sum overflows.
+func (p *claudePartialUsage) measurements(observedAt time.Time) []UsageMeasurement {
+	measurements := make([]UsageMeasurement, 0, 3)
+	for _, metric := range []struct {
+		name     string
+		quantity func(claudeMessageUsage) *int64
+	}{
+		{"input_tokens", func(u claudeMessageUsage) *int64 { return u.InputTokens }},
+		{"cache_creation_input_tokens", func(u claudeMessageUsage) *int64 { return u.CacheCreationInputTokens }},
+		{"cache_read_input_tokens", func(u claudeMessageUsage) *int64 { return u.CacheReadInputTokens }},
+	} {
+		var sum int64
+		reported := false
+		for _, usage := range p.messages {
+			quantity := metric.quantity(usage)
+			if quantity == nil {
+				continue
+			}
+			if *quantity < 0 || *quantity > math.MaxInt64-sum {
+				return nil
+			}
+			sum += *quantity
+			reported = true
+		}
+		if reported {
+			measurements = append(measurements, UsageMeasurement{
+				Source: domain.UsageSourcePartialTranscript, Kind: domain.UsageMeasurementReportedUsage,
+				Metric: metric.name, Unit: "tokens", Quantity: sum,
+				Sequence: 1, ObservedAt: observedAt,
+			})
+		}
+	}
+	if len(measurements) == 0 {
+		return nil
+	}
+	return measurements
 }
 
 func decodeClaudeUsageResult(
