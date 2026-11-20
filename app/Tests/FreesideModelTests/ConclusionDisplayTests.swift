@@ -98,6 +98,9 @@ import Testing
         let decided = AttentionFixtures.decidedReviewDispute().item
         #expect(ConclusionDisplay.appliedRoute(for: "finding-1", proposed: nil, in: decided) == .remediate)
         #expect(ConclusionDisplay.appliedRoute(for: "finding-2", proposed: nil, in: decided) == ._defer)
+        // A settled row the decision left out keeps its settled route.
+        #expect(ConclusionDisplay.appliedRoute(for: "finding-3", proposed: .decline, in: decided) == .decline)
+        #expect(ConclusionDisplay.appliedRoute(for: "finding-1", proposed: .decline, in: decided) == .remediate)
 
         var accepted = decided
         var conclusion = try #require(accepted.conclusion?.value1)

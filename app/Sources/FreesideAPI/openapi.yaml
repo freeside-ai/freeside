@@ -6333,13 +6333,16 @@ components:
           items:
             $ref: "#/components/schemas/FindingRouteChoice"
           description: >
-            Complete per-finding routes for adjudicate_findings. Every finding
-            in the dispute's findings list must occur exactly once, with an
-            offered route. Routes for findings outside that list are refused,
-            including bound findings already routed. A decline or defer on a
-            finding whose dispute row has external requires a reason, which
-            the reply in the reviewer's thread posts; every other choice
-            refuses one. Absent for every other action.
+            Per-finding routes for adjudicate_findings. Every row of the
+            dispute's findings list without a settled_route must occur
+            exactly once, with an offered route. A row with a settled_route
+            may be left out, which keeps that route, or occur once with any
+            offered route, which overrides it. Routes for findings outside
+            that list are refused, including bound findings already routed.
+            A decline or defer on a finding whose dispute row has external
+            requires a reason, which the reply in the reviewer's thread
+            posts; every other choice refuses one. Absent for every other
+            action.
         task_lines:
           type: array
           minItems: 1
@@ -8307,7 +8310,7 @@ components:
       type: object
       description: >
         The complete finding binding for one completed review round, with the
-        subset of findings that require a human decision on a routed dispute.
+        findings a routed dispute shows for a human decision.
       required: [run_id, round, finding_ids, completion_evidence]
       properties:
         findings:
@@ -8316,10 +8319,15 @@ components:
           items:
             $ref: "#/components/schemas/DisputedFinding"
           description: >
-            Authenticated findings and executable routes requiring a human answer.
-            On a routed dispute this is a nonempty subset of finding_ids. Each
-            omitted finding already has a stored adjudication route; omission
-            does not mean its remediation has finished.
+            Authenticated findings and executable routes shown for a human
+            decision; on a routed dispute, a nonempty subset of finding_ids
+            with at least one row lacking settled_route. A dispute the
+            per-finding path raises lists every adjudicated finding of the
+            round, and only its rows without settled_route require an
+            answer; one raised before settled_route existed lists only those.
+            Each finding_ids entry left out of this list already has a stored
+            adjudication route; omission does not mean its remediation has
+            finished.
         run_id:
           type: string
           minLength: 1
@@ -8340,7 +8348,7 @@ components:
     DisputedFinding:
       type: object
       description: A bound review finding and the routes the human may execute.
-      required: [finding_id, message, location, severity, external, offered_routes, adjudication]
+      required: [finding_id, message, location, severity, external, offered_routes, adjudication, settled_route]
       properties:
         finding_id:
           type: string
@@ -8400,6 +8408,19 @@ components:
               description: >
                 True when the confidence is below the run's dispatch
                 threshold, so the proposal could not act on its own.
+        settled_route:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AdjudicationRoute"
+          description: >
+            The route the adjudication already settled for a finding that
+            needs no human, one of remediate, decline, or defer. The row may
+            be left out of finding_routes, which keeps this route, or answered
+            with an offered route, which overrides it; nothing is recorded or
+            replied on the forge until the dispute is answered. It may name a
+            route offered_routes lacks. Null when the row must be answered: a
+            finding that waits for a human, a row of a fallback dispute, or a
+            row stored before this field existed.
 
     AttentionItem:
       type: object

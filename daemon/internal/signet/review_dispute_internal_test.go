@@ -52,8 +52,12 @@ func TestAdjudicateFindingsCommandIDStaysWithinArtifactBudget(t *testing.T) {
 	}
 }
 
+// TestReviewDisputeDecisionCountsOnlyListedFindings pins the omission rule:
+// every listed row without a settled route is answered, a settled row may be
+// left out or overridden, and only listed rows with offered routes count.
 func TestReviewDisputeDecisionCountsOnlyListedFindings(t *testing.T) {
 	t.Parallel()
+	settledRemediate := domain.RouteRemediate
 	item := domain.AttentionItem{
 		ID: "subset", Type: domain.AttentionReviewDispute, Status: domain.StatusOpen,
 		ItemVersion: 1, RequestedDecision: []domain.Action{domain.ActionAdjudicateFindings},
@@ -62,6 +66,7 @@ func TestReviewDisputeDecisionCountsOnlyListedFindings(t *testing.T) {
 			Findings: []domain.DisputedFinding{
 				{FindingID: "first", OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline}},
 				{FindingID: "second", OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline}},
+				{FindingID: "settled", OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer}, SettledRoute: &settledRemediate},
 			},
 		},
 	}
@@ -70,8 +75,13 @@ func TestReviewDisputeDecisionCountsOnlyListedFindings(t *testing.T) {
 		want    error
 	}{
 		{`[{"finding_id":"first","route":"decline"},{"finding_id":"second","route":"decline"}]`, nil},
+		{`[{"finding_id":"first","route":"decline"},{"finding_id":"second","route":"decline"},{"finding_id":"settled","route":"defer"}]`, nil},
+		{`[{"finding_id":"first","route":"decline"},{"finding_id":"settled","route":"defer"}]`, ErrFindingRoutesIncomplete},
 		{`[{"finding_id":"first","route":"decline"}]`, ErrFindingRoutesIncomplete},
 		{`[{"finding_id":"first","route":"decline"},{"finding_id":"omitted","route":"decline"}]`, ErrFindingRouteNotOffered},
+		// A settled route is kept by leaving the row out, not by naming a
+		// route the row does not offer.
+		{`[{"finding_id":"first","route":"decline"},{"finding_id":"second","route":"decline"},{"finding_id":"settled","route":"remediate"}]`, ErrFindingRouteNotOffered},
 	} {
 		command, err := domain.NewCommand(domain.CommandInput{
 			CommandID: "answer", DeviceID: "device", ItemID: item.ID,

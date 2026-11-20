@@ -346,3 +346,121 @@ func TestReviewDisputeFirstRoutedTransitionRecordsSet(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// settledDisputeFixture is a card raised by the per-finding path: the
+// internal finding's confident decline is settled, and the unrated external
+// finding's decline waits for a person.
+func settledDisputeFixture(t *testing.T, withPrior bool) (externalCycleFixture, domain.AttentionItem, domain.FindingAdjudication) {
+	t.Helper()
+	f, item, prior := subsetDisputeFixture(t, withPrior)
+	item = fullDisputeRows(f, item)
+	decline := domain.RouteDecline
+	item.ReviewDispute.Findings[0].SettledRoute = &decline
+	return f, item, prior
+}
+
+// TestReviewDisputeSettledRouteIsRederived is the tamper test for #3436: a
+// settled route lets a row go unanswered, so the gate re-derives it from the
+// round's latest model-authored adjudication on write and on read. A row with
+// none must be answered and grants nothing, so it passes as a fallback card's
+// row or one stored before the field existed.
+func TestReviewDisputeSettledRouteIsRederived(t *testing.T) {
+	t.Parallel()
+	defer_ := domain.RouteDefer
+	decline := domain.RouteDecline
+	for name, tc := range map[string]struct {
+		mutate    func(*domain.ReviewDisputeBinding)
+		withPrior bool
+		accepted  bool
+	}{
+		"settled":          {func(*domain.ReviewDisputeBinding) {}, true, true},
+		"legacy unsettled": {func(b *domain.ReviewDisputeBinding) { b.Findings[0].SettledRoute = nil }, true, true},
+		"other route":      {func(b *domain.ReviewDisputeBinding) { b.Findings[0].SettledRoute = &defer_ }, true, false},
+		"no adjudication":  {func(*domain.ReviewDisputeBinding) {}, false, false},
+		"held finding settled": {func(b *domain.ReviewDisputeBinding) {
+			b.Findings[0].SettledRoute, b.Findings[1].SettledRoute = nil, &decline
+		}, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, item, _ := settledDisputeFixture(t, tc.withPrior)
+			tc.mutate(item.ReviewDispute)
+			err := f.st.Write(t.Context(), func(tx *WriteTx) error { return putTestAttentionItem(t.Context(), tx, &item) })
+			if tc.accepted != (err == nil) || (err != nil && !errors.Is(err, domain.ErrParentKeyMismatch)) {
+				t.Fatalf("write: %v, want accepted %t", err, tc.accepted)
+			}
+		})
+	}
+	t.Run("forged on read", func(t *testing.T) {
+		f, item, _ := settledDisputeFixture(t, true)
+		putSubsetDispute(t, f, &item)
+		item.ReviewDispute.Findings[0].SettledRoute, item.ReviewDispute.Findings[1].SettledRoute = nil, &decline
+		if err := f.st.Write(t.Context(), func(tx *WriteTx) error {
+			body, err := json.Marshal(item)
+			if err != nil {
+				return err
+			}
+			_, err = tx.tx.ExecContext(t.Context(), `UPDATE attention_items SET body = ? WHERE id = ?`, string(body), item.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.Read(t.Context(), func(tx *ReadTx) error {
+			_, err := tx.GetAttentionItem(t.Context(), item.ID)
+			return err
+		}); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("forged settled route read: %v", err)
+		}
+	})
+}
+
+// TestReviewDisputeSettledRowKeepsItsRoute: an answer that leaves a settled
+// row out keeps the predecessor's entry, which must hold the route the card
+// showed, and a row with no settled route can't be left out.
+func TestReviewDisputeSettledRowKeepsItsRoute(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"kept", "overridden", "unsettled omitted", "kept entry changed"} {
+		t.Run(name, func(t *testing.T) {
+			f, item, prior := settledDisputeFixture(t, true)
+			if name == "unsettled omitted" {
+				item.ReviewDispute.Findings[0].SettledRoute = nil
+			}
+			putSubsetDispute(t, f, &item)
+			external := `{"finding_id":"` + string(f.finding.ID) + `","route":"defer","reason":"Tracked separately."}`
+			message := `[` + external + `]`
+			if name == "overridden" {
+				message = `[` + external + `,{"finding_id":"` + string(f.internal.ID) + `","route":"defer"}]`
+				if f.finding.ID > f.internal.ID {
+					message = `[{"finding_id":"` + string(f.internal.ID) + `","route":"defer"},` + external + `]`
+				}
+			}
+			decision := decideSubsetDispute(t, f, item, message)
+			entries := slices.Clone(prior.Entries)
+			for index, entry := range entries {
+				var err error
+				switch {
+				case entry.FindingID == f.finding.ID:
+					entries[index], err = domain.NewHumanAdjudicationEntry(entry.FindingID, domain.RouteDefer, "Tracked separately.")
+				case name == "overridden" || name == "kept entry changed":
+					entries[index], err = domain.NewHumanAdjudicationEntry(entry.FindingID, domain.RouteDefer, "")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			human, err := domain.NewHumanSuccessorFindingAdjudication(prior, entries, decision, reentryAt.Add(2*time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = f.putAdjudication(t, human)
+			if name == "kept" || name == "overridden" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("invalid answer: %v", err)
+			}
+		})
+	}
+}

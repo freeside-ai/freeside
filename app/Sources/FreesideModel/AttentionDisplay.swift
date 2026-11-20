@@ -214,6 +214,26 @@ package enum AttentionDisplay {
         }
     }
 
+    /// The line on a dispute row whose route the adjudicator already settled:
+    /// what Apply keeps unless the operator picks another route. Nothing is
+    /// recorded or replied until Apply.
+    package static func disputeSettledRoute(
+        _ route: Components.Schemas.AdjudicationRoute, external: Bool
+    ) -> String {
+        switch route {
+        case .remediate: return "Freeside chose to fix this in this pull request. Keep it or pick another route."
+        case .decline:
+            return external
+                ? "Freeside chose to decline this finding and reply with its reason. Keep it or pick another route."
+                : "Freeside chose to decline this finding. Keep it or pick another route."
+        case ._defer:
+            return external
+                ? "Freeside chose to defer this finding and reply with its reason. Keep it or pick another route."
+                : "Freeside chose to defer this finding. Keep it or pick another route."
+        default: return "Freeside chose \(label(route).lowercased()). Keep it or pick another route."
+        }
+    }
+
     /// Whether a route posts a reply in an external finding's thread: Decline
     /// and Reply and Defer and Reply. The daemon requires the operator's
     /// reason on exactly these and refuses one on any other route.

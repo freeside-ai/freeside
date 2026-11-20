@@ -134,10 +134,10 @@ package enum ConclusionDisplay {
     }
 
     /// The route the concluding decision applied to one finding, which a
-    /// closed card outlines in its inert route list. Adjudication routes
-    /// every finding; choosing alternatives routes the findings it names
-    /// and accepts `proposed` for the rest, as accepting the recommendation
-    /// does for all. Nil when no decision routed the finding: a daemon
+    /// closed card outlines in its inert route list. A decision routes the
+    /// findings it names and applies `proposed` to the rest: accepting the
+    /// recommendation applies it to all, and adjudicating keeps a dispute
+    /// row's settled route, which a row it omits must carry. Nil when no decision routed the finding: a daemon
     /// close, or a decision that stopped or discussed instead.
     package static func appliedRoute(
         for findingID: String, proposed: Components.Schemas.AdjudicationRoute?,
@@ -146,8 +146,7 @@ package enum ConclusionDisplay {
         guard let decision = item.conclusion?.value1.decision?.value1 else { return nil }
         let chosen = decision.finding_routes?.first { $0.finding_id == findingID }?.route
         switch decision.action {
-        case .adjudicate_findings: return chosen
-        case .accept_recommended_route, .choose_alternative_route: return chosen ?? proposed
+        case .adjudicate_findings, .accept_recommended_route, .choose_alternative_route: return chosen ?? proposed
         default: return nil
         }
     }

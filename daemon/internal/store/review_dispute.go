@@ -85,6 +85,21 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 				return domain.ErrParentKeyMismatch
 			}
 		}
+		// A settled route lets the row go unanswered, so it is re-derived
+		// from the round's latest model-authored adjudication, never trusted:
+		// a stored one that disagrees would let a finding that waits for a
+		// person, or a route nobody adjudicated, through without an answer. A
+		// row with none must be answered, so it grants nothing; it passes as a
+		// fallback card's row or one stored before the field existed.
+		if row.SettledRoute != nil {
+			derived, err := domain.SettledDisputeRouteIn(adjudication, finding, threshold)
+			if err != nil {
+				return err
+			}
+			if derived == nil || *derived != *row.SettledRoute {
+				return domain.ErrParentKeyMismatch
+			}
+		}
 	}
 	if len(binding.Findings) < len(binding.FindingIDs) {
 		prior, err := tx.firstNonHumanFindingAdjudication(ctx, binding.RunID, binding.Round)
@@ -171,7 +186,7 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 	if err != nil {
 		return err
 	}
-	if string(body) != command.Message || len(choices) != len(item.ReviewDispute.Findings) {
+	if string(body) != command.Message {
 		return domain.ErrParentKeyMismatch
 	}
 	prior, err := tx.humanDecisionPredecessor(ctx, artifact)
@@ -189,6 +204,18 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 		}
 		chosen[choice.FindingID] = choice
 	}
+	// An unanswered row must be a settled one, and its entry below is the
+	// predecessor's, which must hold the settled route the card showed.
+	kept := make(map[domain.FindingID]domain.AdjudicationRoute)
+	for _, row := range item.ReviewDispute.Findings {
+		if _, answered := chosen[row.FindingID]; answered {
+			continue
+		}
+		if row.SettledRoute == nil {
+			return domain.ErrParentKeyMismatch
+		}
+		kept[row.FindingID] = *row.SettledRoute
+	}
 	for _, entry := range artifact.Entries {
 		if choice, ok := chosen[entry.FindingID]; ok {
 			expected, err := domain.NewHumanAdjudicationEntry(entry.FindingID, choice.Route, choice.Reason)
@@ -202,6 +229,9 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 			}
 			index := slices.IndexFunc(prior.Entries, func(old domain.FindingAdjudicationEntry) bool { return old.FindingID == entry.FindingID })
 			if index < 0 || !reflect.DeepEqual(prior.Entries[index], entry) {
+				return domain.ErrParentKeyMismatch
+			}
+			if route, ok := kept[entry.FindingID]; ok && entry.Route != route {
 				return domain.ErrParentKeyMismatch
 			}
 		}

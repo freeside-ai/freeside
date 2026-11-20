@@ -75,6 +75,14 @@ func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.C
 			if err != nil {
 				return err
 			}
+			// Only the per-finding card lists settled findings; a fallback
+			// card, which lists the round with no subset, has every row answered.
+			if listed != nil {
+				row.SettledRoute, err = domain.SettledDisputeRouteIn(adjudication, finding, threshold)
+				if err != nil {
+					return err
+				}
+			}
 			binding.Findings = append(binding.Findings, row)
 		}
 		return nil

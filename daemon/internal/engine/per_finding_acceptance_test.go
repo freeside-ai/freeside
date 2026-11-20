@@ -12,10 +12,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// TestFindingAdjudicationAcceptsEachAnswer records an accepted answer beside
-// one that waits for a person. Each finding's route takes its own branches,
-// and none depends on the other finding's route, so the rows use each
-// accepted route and each waiting route once rather than every pairing.
+// TestFindingAdjudicationAcceptsEachAnswer holds an accepted answer beside
+// one that waits for a person. The card lists both, the accepted one with its
+// settled route, and nothing is recorded until the person answers; leaving
+// the settled row out then records it under the model's own entry. Each
+// finding's route takes its own branches, and none depends on the other
+// finding's route, so the rows use each accepted route and each waiting
+// route once rather than every pairing.
 func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 	t.Parallel()
 	for _, row := range []struct{ acceptedRoute, waitingRoute domain.AdjudicationRoute }{
@@ -41,7 +44,6 @@ func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 			}
 			waiting := modelRouteEntry(t, "finding-wait", waitingRoute, domain.ConfidenceMedium)
 			f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{accepted, waiting}}
-			var before domain.ReviewDispositionRecord
 			var item domain.AttentionItem
 			var snapshot store.Snapshot
 			for pass := range 2 {
@@ -62,26 +64,16 @@ func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 					if getErr != nil {
 						return getErr
 					}
-					if item.Type != domain.AttentionReviewDispute || len(item.ReviewDispute.Findings) != 1 || item.ReviewDispute.Findings[0].FindingID != waiting.FindingID || len(item.ReviewDispute.FindingIDs) != 2 {
+					rows := item.ReviewDispute.Findings
+					if item.Type != domain.AttentionReviewDispute || len(rows) != 2 ||
+						rows[0].FindingID != accepted.FindingID || rows[0].SettledRoute == nil || *rows[0].SettledRoute != acceptedRoute ||
+						rows[1].FindingID != waiting.FindingID || rows[1].SettledRoute != nil {
 						t.Fatalf("binding = %#v", item.ReviewDispute)
 					}
-					if _, err := tx.GetFindingDisposition(f.ctx, waiting.FindingID, 1); !errors.Is(err, store.ErrNotFound) {
-						t.Fatalf("waiting disposition = %v", err)
-					}
-					got, err := tx.GetFindingDisposition(f.ctx, accepted.FindingID, 1)
-					if acceptedRoute == domain.RouteRemediate {
-						if !errors.Is(err, store.ErrNotFound) {
-							t.Fatalf("premature fix = %v", err)
+					for _, id := range []domain.FindingID{accepted.FindingID, waiting.FindingID} {
+						if _, err := tx.GetFindingDisposition(f.ctx, id, 1); !errors.Is(err, store.ErrNotFound) {
+							t.Fatalf("outcome for %s recorded while the card is open: %v", id, err)
 						}
-						return nil
-					}
-					if err != nil {
-						return err
-					}
-					if pass == 0 {
-						before = got
-					} else if !reflect.DeepEqual(before, got) {
-						t.Fatal("replay changed outcome")
 					}
 					return nil
 				}); err != nil {
@@ -104,7 +96,8 @@ func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 			}
 			later := f.workflow.now().Add(time.Hour)
 			f.workflow.now = func() time.Time { return later }
-			for range 2 {
+			var first domain.ReviewDispositionRecord
+			for pass := range 2 {
 				state, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
 				if err != nil {
 					t.Fatal(err)
@@ -119,16 +112,24 @@ func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 					}
 					index := slices.IndexFunc(artifact.Entries, func(e domain.FindingAdjudicationEntry) bool { return e.FindingID == accepted.FindingID })
 					if index < 0 || !reflect.DeepEqual(artifact.Entries[index], accepted) {
-						t.Fatal("human answer rewrote accepted entry")
+						t.Fatal("human answer rewrote the kept entry")
 					}
 					if acceptedRoute == domain.RouteRemediate {
 						return nil
 					}
 					got, err := tx.GetFindingDisposition(f.ctx, accepted.FindingID, 1)
-					if err == nil && !reflect.DeepEqual(before, got) {
-						t.Fatal("human answer rewrote recorded outcome")
+					if err != nil {
+						return err
 					}
-					return err
+					if got.AdjudicationDigest != artifact.Digest || artifact.Decision == nil || !got.CreatedAt.Equal(artifact.CreatedAt) {
+						t.Fatalf("kept outcome = %#v, want the answered artifact %s", got, artifact.Digest)
+					}
+					if pass == 0 {
+						first = got
+					} else if !reflect.DeepEqual(first, got) {
+						t.Fatal("replay changed outcome")
+					}
+					return nil
 				}); err != nil {
 					t.Fatal(err)
 				}
@@ -173,22 +174,62 @@ func TestFindingAdjudicationMixedBatchPreservesSeverityCeiling(t *testing.T) {
 					t.Fatalf("state=%v error=%v", state, err)
 				}
 				if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
-					if _, err := tx.GetFindingDisposition(f.ctx, f.finding.ID, 1); !errors.Is(err, store.ErrNotFound) {
-						t.Fatalf("ceiling-held outcome = %v", err)
-					}
-					if _, err := tx.GetFindingDisposition(f.ctx, "finding-minor", 1); err != nil {
-						return err
+					for _, id := range []domain.FindingID{f.finding.ID, "finding-minor"} {
+						if _, err := tx.GetFindingDisposition(f.ctx, id, 1); !errors.Is(err, store.ErrNotFound) {
+							t.Fatalf("outcome for %s recorded while the card is open: %v", id, err)
+						}
 					}
 					item, err := tx.GetAttentionItem(f.ctx, productionReviewItemID(f.task.RunID, 1))
-					if err == nil && (len(item.ReviewDispute.Findings) != 1 || item.ReviewDispute.Findings[0].FindingID != f.finding.ID) {
-						t.Fatal("dispute did not isolate ceiling-held finding")
+					if err != nil {
+						return err
 					}
-					return err
+					rows := item.ReviewDispute.Findings
+					if len(rows) != 2 || rows[0].FindingID != f.finding.ID || rows[0].SettledRoute != nil ||
+						rows[1].FindingID != "finding-minor" || rows[1].SettledRoute == nil || *rows[1].SettledRoute != domain.RouteDecline {
+						t.Fatalf("dispute did not hold the ceiling-held finding for a person: %#v", rows)
+					}
+					return nil
 				}); err != nil {
 					t.Fatal(err)
 				}
 			})
 		}
+	}
+}
+
+// TestFindingAdjudicationLeavesRecordedOutcomesOffTheCard: a round an
+// earlier build began recorded its settled outcomes before raising the card.
+// Such a finding is not offered as settled, since an override could no longer
+// change its recorded outcome or the reply already posted.
+func TestFindingAdjudicationLeavesRecordedOutcomesOffTheCard(t *testing.T) {
+	t.Parallel()
+	f := newFindingAdjudicationFixtureWithOptions(t, domain.FindingSeverityP1, nil, "low", "high",
+		findingAdjudicationFixtureOptions{extraFindingIDs: []domain.FindingID{"finding-minor"}, extraFindingSeverity: domain.FindingSeverityP2})
+	f.workflow.findingAdjudicator = &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
+		modelRouteEntry(t, f.finding.ID, domain.RouteDecline, domain.ConfidenceHigh),
+		modelRouteEntry(t, "finding-minor", domain.RouteDecline, domain.ConfidenceHigh),
+	}}
+	if _, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err != nil {
+		t.Fatal(err)
+	}
+	var artifact domain.FindingAdjudication
+	if err := f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+		latest, err := tx.LatestModelFindingAdjudication(f.ctx, f.task.RunID, 1)
+		if err != nil {
+			return err
+		}
+		artifact = latest
+		return persistFindingRouteDispositions(f.ctx, tx, artifact,
+			map[domain.FindingID]domain.AdjudicationRoute{"finding-minor": domain.RouteDecline}, artifact.CreatedAt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	split, err := f.workflow.pendingAdjudicatedFindings(f.ctx, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(split.mustAnswer, []domain.FindingID{f.finding.ID}) || len(split.settled) != 0 {
+		t.Fatalf("split = %#v, want only the held finding", split)
 	}
 }
 

@@ -1786,12 +1786,12 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 	}
 	if item == nil && artifact.Decision == nil {
-		waiting, err := w.pendingAdjudicatedFindings(ctx, artifact)
+		split, err := w.pendingAdjudicatedFindings(ctx, artifact)
 		if err != nil {
 			return productionReviewPending, err
 		}
-		if len(waiting) > 0 {
-			return w.awaitPendingFindingDecisions(ctx, task, record, artifact, routes, waiting)
+		if len(split.mustAnswer) > 0 {
+			return w.awaitPendingFindingDecisions(ctx, task, record, split)
 		}
 	}
 	needsFindingAttention := false
@@ -1811,11 +1811,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				}); err != nil {
 					return productionReviewPending, err
 				}
-				// An external reviewer's severity is whatever badge their comment
-				// carried, and most carry none. Plan §7 reads a missing severity as
-				// high, so the adjudicator alone never dismisses such a finding.
-				if finding.Severity == domain.FindingSeverityP0 || finding.Severity == domain.FindingSeverityP1 ||
-					(finding.External != nil && finding.Severity == "") {
+				if domain.FindingDismissalNeedsPerson(finding) {
 					needsDisputeAttention = true
 					continue
 				}

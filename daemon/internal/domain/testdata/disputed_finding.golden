@@ -21,5 +21,6 @@
     "confidence": "medium",
     "rationale": "The spec requires idempotent updates.",
     "below_threshold": true
-  }
+  },
+  "settled_route": null
 }
