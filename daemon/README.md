@@ -4026,9 +4026,16 @@ daemon first; onboarding refuses a database it holds. It:
    promotes it, so every later call until the result is `complete`,
    including the `-approve` call, passes `-resume`; a call without it is
    refused. Every later run needs the intent unexpired, so finish them all
-   before the `pending.expires_at` the `installation_pending` output prints.
-   After that time `-resume` is refused: rerun with `-replace-intent`, not
-   `-resume`, which opens a new intent and a new approval digest to review;
+   before the `pending.expires_at` the `installation_pending` output prints;
+   a review of a pending intent prints the expiry on stderr, with a warning
+   when less than 15 minutes remain. After that time `-resume` and
+   `-approve` are refused. The error names the intent (its revision,
+   expected account, repositories, and expiry) and prints the command to
+   run next: the same arguments with `-replace-intent` in place of
+   `-resume` and `-approve`, which opens a new intent and a new approval
+   digest to review. A `-resume` that waited until expiry also names the
+   installations the janitor's last pass listed for the registration, or
+   says it listed none; that listing is a diagnostic and grants nothing;
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
    requires its resolved commit to equal `-commit`, and retains that exact
