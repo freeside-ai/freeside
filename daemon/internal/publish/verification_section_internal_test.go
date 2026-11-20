@@ -115,6 +115,35 @@ func TestVerificationSectionGoldenAndDeterminism(t *testing.T) {
 	golden.Assert(t, "verification-section", []byte(first+"\n"))
 }
 
+// TestVerificationSectionShowsASkippedStepAsNotRun: a step the recipe's
+// rules skipped exited zero only because nothing ran, so the section says it
+// didn't run and never shows it as a pass.
+func TestVerificationSectionShowsASkippedStepAsNotRun(t *testing.T) {
+	t.Parallel()
+	c, auth := verificationFixture(t)
+	rep, _, err := validateVerificationCandidate(c, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	rep.Steps = []verify.Step{
+		{Argv: []string{"bash", "scripts/check.sh", "docs"}},
+		{
+			Argv: []string{"bash", "scripts/check.sh", "app", "test"}, Room: verify.ClassMacOSHost,
+			NotApplicable: &verify.NotApplicableProof{RuleDigest: digest, ChangesDigest: digest},
+		},
+	}
+	section, err := renderVerification(&rep, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(section, "- Passed: <code>bash scripts/check.sh docs</code>, run by Freeside at <code>bbbbbbbb</code>\n") ||
+		!strings.Contains(section, "- Not run: <code>bash scripts/check.sh app test</code>, no changed path can affect it\n") ||
+		strings.Contains(section, "Passed: <code>bash scripts/check.sh app test") {
+		t.Fatalf("section does not show the skipped step as not run:\n%s", section)
+	}
+}
+
 // cleanDispositionHistory is one clean review round at head, the shape of a
 // run whose review raised nothing.
 func cleanDispositionHistory(t *testing.T, head string) DispositionHistory {
@@ -264,7 +293,7 @@ func TestVerificationSectionBounds(t *testing.T) {
 	}
 	section, err := renderVerification(&rep, nil)
 	if err != nil || strings.Count(section, "- Passed: <code>true</code>") != maxRenderedVerificationSteps ||
-		!strings.Contains(section, "- Omitted 3 further commands Freeside ran.") {
+		!strings.Contains(section, "- Omitted 3 further recipe commands.") {
 		t.Fatalf("missing honest step cap: %s, %v", section, err)
 	}
 	rep.Steps = []verify.Step{{Argv: []string{"echo", strings.Repeat("<&", 1000)}}}

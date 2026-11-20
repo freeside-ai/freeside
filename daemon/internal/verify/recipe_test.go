@@ -41,6 +41,102 @@ func TestParseRecipeGolden(t *testing.T) {
 	golden.Assert(t, "recipe_parsed", append(got, '\n'))
 }
 
+// rulesRecipeBytes uses both path-rule fields: an always-run command, a
+// command limited to a directory and an exact file, and a macos_host
+// command limited to a directory.
+const rulesRecipeBytes = `{"commands": [` +
+	`["bash", "scripts/check.sh", "docs"], ` +
+	`{"argv": ["go", "test", "./..."], "room": "project_image", "paths": ["daemon/", "api/openapi.yaml"]}, ` +
+	`{"argv": ["bash", "scripts/check.sh", "app", "test"], "room": "macos_host", "paths": ["app/"]}` +
+	`], "capture": "none", "run_all_on": [".freeside/verify.json", ".github/workflows/"]}`
+
+// TestParseRecipeRulesGolden pins how the two path-rule fields parse. A
+// recipe that uses neither keeps TestParseRecipeGolden's golden, whose
+// shape this test leaves alone.
+func TestParseRecipeRulesGolden(t *testing.T) {
+	t.Parallel()
+	r, err := ParseRecipe([]byte(rulesRecipeBytes))
+	if err != nil {
+		t.Fatalf("ParseRecipe: %v", err)
+	}
+	type command struct {
+		Argv    []string       `json:"argv"`
+		Room    ExecutionClass `json:"room"`
+		History bool           `json:"history"`
+		Paths   []string       `json:"paths"`
+	}
+	commands := make([]command, 0, len(r.Commands))
+	for _, c := range r.Commands {
+		commands = append(commands, command{c.Argv, c.Class, c.History, c.Paths})
+	}
+	doc := struct {
+		Commands []command   `json:"commands"`
+		Capture  CaptureMode `json:"capture"`
+		RunAllOn []string    `json:"run_all_on"`
+		Digest   string      `json:"digest"`
+	}{commands, r.Capture, r.RunAllOn, string(RecipeDigest([]byte(rulesRecipeBytes)))}
+	got, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	golden.Assert(t, "recipe_parsed_rules", append(got, '\n'))
+}
+
+// TestParseRecipeRejectsMalformedPathRules pins that no rule that can't be
+// read reaches evaluation: each malformed spelling refuses the whole
+// recipe, for a command's paths and the recipe's run_all_on alike, and a
+// recipe in which every command carries paths is refused.
+func TestParseRecipeRejectsMalformedPathRules(t *testing.T) {
+	t.Parallel()
+	malformed := map[string]string{
+		"not a list":       `"daemon/"`,
+		"object":           `{}`,
+		"null":             `null`,
+		"empty list":       `[]`,
+		"null entry":       `[null]`,
+		"number entry":     `[1]`,
+		"empty entry":      `[""]`,
+		"absolute":         `["/daemon/"]`,
+		"root":             `["/"]`,
+		"dot segment":      `["./daemon/"]`,
+		"inner dot":        `["daemon/./x"]`,
+		"dotdot segment":   `["daemon/../app/"]`,
+		"empty segment":    `["daemon//x"]`,
+		"double slash end": `["daemon//"]`,
+		"star":             `["daemon/*.go"]`,
+		"question":         `["daemon/?"]`,
+		"bracket":          `["daemon/[a]"]`,
+		"close bracket":    `["daemon/a]"]`,
+		"backslash":        `["daemon\\x"]`,
+		"nul byte":         `["daemon\u0000/"]`,
+		"invalid utf-8":    "[\"app\xff/\"]",
+		"replacement char": `["app\ufffd/"]`,
+		"control char":     `["daemon\u0007/"]`,
+		"newline":          `["daemon/\n"]`,
+		"duplicate":        `["daemon/", "daemon/"]`,
+	}
+	for name, rules := range malformed {
+		for field, raw := range map[string]string{
+			"paths":      `{"commands": [["true"], {"argv": ["go", "test"], "room": "project_image", "paths": ` + rules + `}], "capture": "none"}`,
+			"run_all_on": `{"commands": [["true"]], "capture": "none", "run_all_on": ` + rules + `}`,
+		} {
+			t.Run(field+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				if _, err := ParseRecipe([]byte(raw)); !errors.Is(err, ErrRecipeInvalid) {
+					t.Fatalf("ParseRecipe(%s) = %v, want ErrRecipeInvalid", raw, err)
+				}
+			})
+		}
+	}
+	t.Run("every command carries paths", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"commands": [{"argv": ["true"], "room": "project_image", "paths": ["daemon/"]}], "capture": "none"}`
+		if _, err := ParseRecipe([]byte(raw)); !errors.Is(err, ErrRecipeInvalid) {
+			t.Fatalf("ParseRecipe = %v, want ErrRecipeInvalid", err)
+		}
+	})
+}
+
 func TestParseRecipeRejects(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

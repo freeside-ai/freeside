@@ -94,8 +94,9 @@ func validateVerificationCandidate(c Candidate, auth domain.CandidateAuthorizati
 }
 
 // renderVerification writes the publisher-owned Verification section for the
-// target repository's reviewer (#3022): one bullet per recipe command Freeside
-// ran at the head, one bullet for the independent review's outcome with each
+// target repository's reviewer (#3022): one bullet per recipe command, which
+// Freeside ran at the head or skipped because no changed path can affect it,
+// one bullet for the independent review's outcome with each
 // declined or deferred finding under it, and a closing line that labels
 // everything else in the body as its author's account. rep is nil when the
 // candidate carries no bound report, and history is nil when it carries no
@@ -112,11 +113,15 @@ func renderVerification(rep *verify.Report, history *DispositionHistory) (string
 		at := rep.HeadSHA[:min(len(rep.HeadSHA), verificationHeadPrefixLen)]
 		for i, step := range rep.Steps {
 			if i == maxRenderedVerificationSteps {
-				fmt.Fprintf(&out, "- Omitted %d further commands Freeside ran.\n", len(rep.Steps)-i)
+				fmt.Fprintf(&out, "- Omitted %d further recipe commands.\n", len(rep.Steps)-i)
 				break
 			}
 			command := inertClaim(commandLine(step.Argv), maxRenderedVerificationArgvBytes)
-			if step.ExitCode == 0 {
+			// A skipped step exited zero only because nothing ran, so it is
+			// read before the exit code and never rendered as a pass.
+			if step.NotApplicable != nil {
+				fmt.Fprintf(&out, "- Not run: %s, no changed path can affect it\n", command)
+			} else if step.ExitCode == 0 {
 				fmt.Fprintf(&out, "- Passed: %s, run by Freeside at %s\n", command, dispositionCode(at))
 			} else {
 				fmt.Fprintf(&out, "- Attempted: %s, run by Freeside at %s, exit %d\n", command, dispositionCode(at), step.ExitCode)

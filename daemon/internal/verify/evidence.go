@@ -40,7 +40,7 @@ type Evidence struct {
 type Outcome string
 
 const (
-	// OutcomePassed: every recipe command exited zero.
+	// OutcomePassed: every recipe command that ran exited zero.
 	OutcomePassed Outcome = "passed"
 	// OutcomeFailed: a recipe command exited non-zero (or was killed,
 	// e.g. by the per-command timeout); later commands did not run.
@@ -60,7 +60,8 @@ func (o Outcome) valid() bool {
 	}
 }
 
-// Step is one executed recipe command's account.
+// Step is one recipe command's account: what it did when it ran, or
+// why it didn't.
 type Step struct {
 	Argv []string `json:"argv"`
 	// Room is the execution class whose room ran the command. The
@@ -77,6 +78,12 @@ type Step struct {
 	// OutputTruncated reports that this step's output was cut at a
 	// byte cap, so the transcript is honest about being partial.
 	OutputTruncated bool `json:"output_truncated"`
+	// NotApplicable, when set, records that the command did not run
+	// because no changed path can affect it (applicability.go): its exit
+	// code is zero only because nothing ran, so a reader must check this
+	// before reading the step as a pass. Omitted for a command that ran,
+	// so a report written before the field existed keeps its bytes.
+	NotApplicable *NotApplicableProof `json:"not_applicable,omitempty"`
 }
 
 // Report is the verification report's canonical JSON shape. It carries
@@ -93,9 +100,9 @@ type Report struct {
 	EvaluatedSHA string `json:"evaluated_sha,omitempty"`
 	// HistoryBaseSHA is the base a history command's range starts at:
 	// the merge base of HeadSHA and BaseSHA. Set when any recipe command
-	// asks for history, whether or not that command ran; omitted
-	// otherwise, so a report from a recipe that asks for none keeps its
-	// bytes.
+	// the change set doesn't skip asks for history, whether or not a
+	// failure stopped the run before it; omitted otherwise, so a report
+	// from a recipe that asks for none keeps its bytes.
 	HistoryBaseSHA string        `json:"history_base_sha,omitempty"`
 	RecipePath     string        `json:"recipe_path"`
 	RecipeDigest   domain.Digest `json:"recipe_digest"`
@@ -136,6 +143,13 @@ func ParseReport(raw []byte) (Report, error) {
 		}
 		if step.Room != "" && !step.Room.valid() {
 			return Report{}, fmt.Errorf("verification report step %d names unknown room %q", i, step.Room)
+		}
+		// A skipped step ran nothing, so it has no exit, no output, and no
+		// history; one that claims any of them, or whose proof is
+		// malformed, is not the verifier's.
+		if skip := step.NotApplicable; skip != nil &&
+			(step.ExitCode != 0 || step.OutputTruncated || step.History || !skip.valid()) {
+			return Report{}, fmt.Errorf("verification report step %d is not applicable but claims a run or a malformed proof", i)
 		}
 	}
 	canonical, err := json.MarshalIndent(rep, "", "  ")

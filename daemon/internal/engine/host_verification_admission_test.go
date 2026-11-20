@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -447,11 +448,11 @@ func TestVerificationRoomsKeepsACanceledGateRetryable(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	var unavailable *hostVerificationUnavailable
-	_, err := w.verificationRooms(canceled, task, hostRoomForTest{}, recipe)
+	_, err := w.verificationRooms(canceled, task, hostRoomForTest{}, recipe, nil)
 	if errors.As(err, &unavailable) || !productionPublicationRetryableFailure(err) {
 		t.Fatalf("canceled gate = %v, want retryable and not a refusal", err)
 	}
-	_, err = w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe)
+	_, err = w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe, nil)
 	if !errors.As(err, &unavailable) || !errors.Is(err, gateErr) {
 		t.Fatalf("live gate error = %v, want a refusal carrying it", err)
 	}
@@ -459,8 +460,45 @@ func TestVerificationRoomsKeepsACanceledGateRetryable(t *testing.T) {
 	// A refusal whose cause is an environmental failure, such as a store
 	// read past its deadline, is not a verdict either.
 	gateErr = &HostVerificationRefusal{Reason: "read conformance", cause: context.DeadlineExceeded}
-	_, err = w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe)
+	_, err = w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe, nil)
 	if errors.As(err, &unavailable) || !productionPublicationRetryableFailure(err) {
 		t.Fatalf("transient gate failure = %v, want retryable and not a refusal", err)
+	}
+}
+
+// TestVerificationRoomsAsksHostOnlyWhenAHostCommandRuns: the executor is
+// asked to admit a job only when a macos_host command will run against the
+// change set, so a change no host command's paths cover never waits on, or
+// fails for, an executor it doesn't use.
+func TestVerificationRoomsAsksHostOnlyWhenAHostCommandRuns(t *testing.T) {
+	t.Parallel()
+	recipe := []byte(`{"commands":[["/usr/bin/true"],` +
+		`{"argv":["/usr/bin/true"],"room":"macos_host","paths":["app/"]}],"capture":"none"}`)
+	asked := 0
+	w := &productionPublicationWorkflow{hostVerificationRoom: func(
+		context.Context, productionPublicationTask,
+	) (verify.Room, HostVerificationAdmission, error) {
+		asked++
+		return hostRoomForTest{}, HostVerificationAdmission{}, nil
+	}}
+	task := verificationTask("run-paths", productionInvocationID("run-paths"))
+	for _, tc := range []struct {
+		name    string
+		changes []importer.Change
+		asked   bool
+	}{
+		{"daemon only", []importer.Change{{Path: "daemon/main.go", Kind: importer.ChangeModified}}, false},
+		{"app change", []importer.Change{{Path: "app/View.swift", Kind: importer.ChangeModified}}, true},
+		{"empty change set", nil, true},
+	} {
+		asked = 0
+		rooms, err := w.verificationRooms(context.Background(), task, hostRoomForTest{}, recipe, tc.changes)
+		if err != nil {
+			t.Fatalf("%s: verificationRooms = %v", tc.name, err)
+		}
+		_, hasHost := rooms[verify.ClassMacOSHost]
+		if (asked == 1) != tc.asked || hasHost != tc.asked {
+			t.Errorf("%s: asked %d times, host room %v; want asked = %v", tc.name, asked, hasHost, tc.asked)
+		}
 	}
 }

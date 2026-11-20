@@ -1,1 +1,47 @@
-{"commands":[{"argv":["bash","scripts/verify-range-check.sh","scripts/check-commit-messages.sh"],"room":"project_image","history":true},{"argv":["bash","scripts/verify-range-check.sh","scripts/check-migration-history.sh"],"room":"project_image","history":true},["env","GOFLAGS=-p=2","GOMEMLIMIT=768MiB","bash","scripts/check.sh","daemon","build","test","vet","lint"],["bash","scripts/check.sh","docs"],["env","VACUUM=vacuum","bash","scripts/check.sh","api","lint","digest","policy"],["env","GOFLAGS=-p=2","GOMEMLIMIT=768MiB","bash","scripts/check.sh","scripts"],["bash","scripts/check.sh","app","generate"],["bash","scripts/check.sh","app","linux"],{"argv":["bash","scripts/check.sh","app","format"],"room":"macos_host"},{"argv":["env","APP_MACVERIFY=1","bash","scripts/check.sh","app","test"],"room":"macos_host"},{"argv":["env","APP_MACVERIFY=1","bash","scripts/check.sh","app","build-mac"],"room":"macos_host"},{"argv":["env","APP_MACVERIFY=1","bash","scripts/check.sh","app","build-ios"],"room":"macos_host"},{"argv":["env","APP_MACVERIFY=1","bash","scripts/check.sh","convergence","run"],"room":"macos_host"}],"capture":"none"}
+{
+  "commands": [
+    {"argv": ["bash", "scripts/verify-range-check.sh", "scripts/check-commit-messages.sh"], "room": "project_image", "history": true},
+    {"argv": ["bash", "scripts/verify-range-check.sh", "scripts/check-migration-history.sh"], "room": "project_image", "history": true},
+    ["env", "GOFLAGS=-p=2", "GOMEMLIMIT=768MiB", "bash", "scripts/check.sh", "scripts", "tier-a-paths", "credential-literals", "recipe-selectors"],
+    {"argv": ["bash", "scripts/check.sh", "docs"], "room": "project_image",
+     "paths": ["docs/plan.md", "scripts/link-plan-section-refs.sh", "scripts/check.sh"]},
+    {"argv": ["env", "VACUUM=vacuum", "bash", "scripts/check.sh", "api", "lint", "digest", "policy"], "room": "project_image",
+     "paths": ["api/", "scripts/check.sh", "scripts/api-contract-digest.sh", "scripts/api-compatibility-check.sh"]},
+    {"argv": ["env", "GOFLAGS=-p=2", "GOMEMLIMIT=768MiB", "bash", "scripts/check.sh", "daemon", "vet", "lint"], "room": "project_image",
+     "paths": ["daemon/", "scripts/check.sh", "scripts/daemon-test-shards.py", "scripts/daemon-test-shards.json",
+               "images/agent-claude/", "images/agent-codex/", "api/openapi.yaml", "prompts/",
+               "scripts/check-agent-image.sh", "scripts/check-commit-messages.sh", "scripts/check-migration-history.sh"]},
+    {"argv": ["env", "GOFLAGS=-p=2", "GOMEMLIMIT=768MiB", "bash", "scripts/check.sh", "daemon", "build", "test"], "room": "project_image",
+     "paths": ["daemon/", "scripts/check.sh", "scripts/daemon-test-shards.py", "scripts/daemon-test-shards.json",
+               "images/agent-claude/", "images/agent-codex/", "api/openapi.yaml", "prompts/",
+               "scripts/check-agent-image.sh", "scripts/check-commit-messages.sh", "scripts/check-migration-history.sh"]},
+    {"argv": ["env", "GOFLAGS=-p=2", "GOMEMLIMIT=768MiB", "bash", "scripts/check.sh", "scripts", "vocabulary"], "room": "project_image",
+     "paths": ["daemon/", "api/", "app/", "prompts/", "scripts/"]},
+    {"argv": ["env", "GOFLAGS=-p=2", "GOMEMLIMIT=768MiB", "bash", "scripts/check.sh", "scripts", "syntax", "shellcheck", "suites", "skill-mirrors", "trackercollect"], "room": "project_image",
+     "paths": ["scripts/", "app/scripts/", ".githooks/", "app/Apps/iOS/Info.plist", "app/Freeside.xcodeproj/project.pbxproj", ".claude/skills/", ".agents/skills/"]},
+    {"argv": ["bash", "scripts/check.sh", "app", "generate"], "room": "project_image",
+     "paths": ["app/", "api/openapi.yaml", "scripts/check.sh", "daemon/internal/signet/testdata/action-outcomes.golden"]},
+    {"argv": ["bash", "scripts/check.sh", "app", "linux"], "room": "project_image",
+     "paths": ["app/", "api/openapi.yaml", "scripts/check.sh", "daemon/internal/signet/testdata/action-outcomes.golden"]},
+    {"argv": ["bash", "scripts/check.sh", "app", "format"], "room": "macos_host",
+     "paths": ["app/", "api/openapi.yaml", "scripts/check.sh", "daemon/internal/signet/testdata/action-outcomes.golden"]},
+    {"argv": ["env", "APP_MACVERIFY=1", "bash", "scripts/check.sh", "app", "test"], "room": "macos_host",
+     "paths": ["app/", "api/openapi.yaml", "scripts/check.sh", "daemon/internal/signet/testdata/action-outcomes.golden"]},
+    {"argv": ["env", "APP_MACVERIFY=1", "bash", "scripts/check.sh", "app", "build-mac"], "room": "macos_host",
+     "paths": ["app/", "api/openapi.yaml", "scripts/check.sh", "daemon/internal/signet/testdata/action-outcomes.golden"]},
+    {"argv": ["env", "APP_MACVERIFY=1", "bash", "scripts/check.sh", "app", "build-ios"], "room": "macos_host",
+     "paths": ["app/", "api/openapi.yaml", "scripts/check.sh", "daemon/internal/signet/testdata/action-outcomes.golden"]},
+    {"argv": ["env", "APP_MACVERIFY=1", "bash", "scripts/check.sh", "convergence", "run"], "room": "macos_host",
+     "paths": ["app/", "daemon/", "api/openapi.yaml", "scripts/run-convergence.sh", "scripts/check.sh", "images/agent-claude/", "images/agent-codex/"]}
+  ],
+  "capture": "none",
+  "run_all_on": [
+    ".freeside/verify.json",
+    "scripts/check.sh",
+    ".github/workflows/",
+    "daemon/go.mod",
+    "scripts/trackercollect/go.mod",
+    "app/Package.resolved",
+    "app/Freeside.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+  ]
+}

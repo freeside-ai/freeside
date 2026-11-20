@@ -10,6 +10,11 @@ on:
       - "scripts/daemon-test-shards.json"
       - "images/agent-claude/**"
       - "images/agent-codex/**"
+      - "api/openapi.yaml"
+      - "prompts/**"
+      - "scripts/check-agent-image.sh"
+      - "scripts/check-commit-messages.sh"
+      - "scripts/check-migration-history.sh"
       - ".github/workflows/daemon-ci.yml"
   workflow_call:
 

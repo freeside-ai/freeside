@@ -68,8 +68,12 @@ type Options struct {
 	// approves nothing, so evidence is emitted publish-ineligible: the
 	// fail-closed direction.
 	ApprovedRecipes map[domain.Digest]bool
-	// Changes is the importer's audited account of the candidate change
-	// set; verification-control flagging consumes it. The verifier never
+	// Changes is the audited account of what the verified tree changes
+	// against BaseSHA: the importer's change account, or the diff from
+	// BaseSHA to the verified tree. Verification-control flagging reads
+	// it, and it decides which recipe commands run (Recipe.Skips), so it
+	// must be the full change set; a partial one skips commands a missing
+	// path should run. Empty runs every command. The verifier never
 	// re-derives the diff.
 	Changes []importer.Change
 	// GitPath is the git binary to run; empty means "git" from PATH.

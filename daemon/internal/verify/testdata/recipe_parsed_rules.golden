@@ -1,0 +1,46 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "bash",
+        "scripts/check.sh",
+        "docs"
+      ],
+      "room": "project_image",
+      "history": false,
+      "paths": null
+    },
+    {
+      "argv": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "room": "project_image",
+      "history": false,
+      "paths": [
+        "daemon/",
+        "api/openapi.yaml"
+      ]
+    },
+    {
+      "argv": [
+        "bash",
+        "scripts/check.sh",
+        "app",
+        "test"
+      ],
+      "room": "macos_host",
+      "history": false,
+      "paths": [
+        "app/"
+      ]
+    }
+  ],
+  "capture": "none",
+  "run_all_on": [
+    ".freeside/verify.json",
+    ".github/workflows/"
+  ],
+  "digest": "sha256:9d3b357381854a20a55d599c3083893b840107831164fa11678d20b648c7b538"
+}

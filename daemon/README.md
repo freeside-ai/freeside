@@ -4181,12 +4181,57 @@ the same stray-file check, and the same environment. Decision records:
 `devlog/2026-11-12-1730-verify-command-history.md` and
 `devlog/2026-11-18-1007-history-range-with-merges.md`.
 
+**A command can name the paths that make it run.** A command object may add
+`"paths"`, a list of rules, and the recipe may add `"run_all_on"`, a list of
+the same rules at its top level, beside `commands`. A rule ending in `/`
+matches every path under that directory; any other rule matches one exact
+path. This is the rule `changed_under` applies in
+`.github/workflows/pull-request.yml`, so a recipe can copy CI's selectors.
+A rule is refused when it is empty, starts with `/`, holds a glob character
+(`*?[]`), a backslash, a control character, or bytes that aren't UTF-8,
+or has an empty, `.`, or `..` segment; a
+list is refused when it is empty, `null`, or repeats a rule. A recipe in
+which every command carries `paths` is refused, so at least one command
+always runs. The bare argv form can't carry `paths`, so a recipe written
+before the field keeps its bytes, digest, and approval. A daemon without
+these fields refuses a recipe that uses them, so such a recipe needs a
+daemon that has them.
+
+The verifier reads the rules against the full change set from the
+verification's base to the tree it verifies: the import's change account on
+a first cycle or remediation round, and the base-to-merge diff on a
+readiness re-entry or a handoff's merge check. A command runs when:
+
+- **It carries no `paths`.**
+- **A changed path matches one of its rules or a `run_all_on` rule.** A
+  path also matches when its case-folded, alias-normalized form (the
+  importer's collision model) matches the folded rule, since a room on a
+  case-insensitive filesystem checks `DAEMON/x` out into `daemon/x`.
+- **The change set can't rule it out**: the set is empty, or it holds a
+  path the daemon can't read as UTF-8.
+
+A rename counts on both sides, since the change set has no rename
+detection. A command that doesn't run reaches no room and no workspace.
+The report keeps its step, in recipe order, with exit code 0 and a
+`not_applicable` object holding a `rule_digest` (the command's `paths` and
+the recipe's `run_all_on`) and a `changes_digest` (the sorted, distinct
+changed paths), so anyone holding the approved recipe and the change set
+can re-derive the skip. A report with no skipped step omits the field and
+keeps its bytes. The outcome is `passed` when every command that ran
+exited zero. A skip assumes the step already passes on the base, so a step
+CI never runs on the base can hide a failure the change didn't cause. The
+published Verification section lists a skipped step as `Not run:`, never
+`Passed:`. A class that only skipped commands name needs no room, so a
+recipe whose `macos_host` commands all skip runs without asking the host
+admission gate (below). Decision record:
+`devlog/2026-11-20-1048-path-scoped-recipe-steps.md`.
+
 **The daemon asks for the executor only when a recipe needs it.** Every
 verification job (a first cycle, a remediation round, a readiness re-entry,
 and a handoff's merge check) reads its recipe through the project-image room.
-A recipe with no `macos_host` command runs as it always has, and the host
-admission gate is never asked. A recipe with one asks the gate for this job
-before any command runs. The gate admits the job only when the daemon has an
+A recipe with no `macos_host` command that runs against the job's change
+set runs as it always has, and the host admission gate is never asked. A
+recipe with one asks the gate for this job before any command runs. The gate admits the job only when the daemon has an
 executor configured and the job's invocation derives from the task's own run,
 successor, or publication. Under `unattended` it also needs the executor's
 `supports_credential_free_host_verification` declaration and a passed
@@ -4446,14 +4491,11 @@ env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet l
 `-p=2` halves the compile, vet, and test-package parallelism Go runs on 4
 CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
-slows under reclaim. Freeside's `.freeside/verify.json` first runs its two
-history commands (Onboard Freeside), which the offline proof skips, then
-this command, then `bash scripts/check.sh docs`, then `env VACUUM=vacuum
-bash scripts/check.sh api lint digest policy` (Onboard Freeside says why
-not `compat`), then `check.sh scripts` with the same Go limits,
-because `trackercollect` runs `go build`, `test`, and `vet`, then `bash
-scripts/check.sh app generate`, then `bash scripts/check.sh app linux`.
-Measured on 2026-11-10 with this recipe on
+slows under reclaim. Freeside's `.freeside/verify.json` now runs this
+command as two, `daemon vet lint` and `daemon build test`, each with the
+same limits, and its `scripts` steps as three commands with them, because
+`trackercollect` runs `go build`, `test`, and `vet` (Onboard Freeside lists
+the order). Measured on 2026-11-10, before that split, with this recipe on
 `main` at `c40bf92b7`, in Freeside's mixed Go and Swift image
 (`-go-module-dir daemon -swift-package-dir app`), one container per step,
 each prepared as the proof prepares it:
@@ -4921,7 +4963,7 @@ which reads the commit's image inputs. When a merge still lands first, the
 refusal prints the review at the new head; run it at once.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
-  thirteen commands. Eight run in the project image. The first two are the
+  up to sixteen commands. Eleven run in the project image. The first two are the
   history commands, `bash scripts/verify-range-check.sh
   scripts/check-commit-messages.sh` and the same wrapper over
   `scripts/check-migration-history.sh`, each with `"history": true` (A
@@ -4929,9 +4971,12 @@ refusal prints the review at the new head; run it at once.
   first so a candidate that `required` would refuse on either check
   fails verification in seconds. They need a daemon at or after #3170,
   which added the field; an older daemon refuses the whole recipe. The
-  operator approves the new recipe digest before it runs. Then come the
-  four `daemon`, `docs`, `api`, and `scripts` commands sized above, then
-  `bash scripts/check.sh app generate` and
+  operator approves the new recipe digest before it runs. Then come
+  `check.sh scripts tier-a-paths credential-literals recipe-selectors`,
+  then `docs`, `api lint digest policy`, `daemon vet lint`,
+  `daemon build test`, `scripts vocabulary`, `scripts syntax shellcheck
+  suites skill-mirrors trackercollect` (the Go and scripts commands sized
+  above), then `bash scripts/check.sh app generate` and
   `bash scripts/check.sh app linux`. The `api` command names its steps,
   `lint digest policy`, and leaves out `compat`: the step needs `oasdiff`
   and the merge base's spec, and the project image has neither, so a bare
@@ -4950,6 +4995,22 @@ refusal prints the review at the new head; run it at once.
   without `.git` it compares the generated outputs with a snapshot it takes
   before regenerating, so it fails a schema change whose committed client is
   stale, which `api digest` misses when the digest constants were refreshed.
+  The first three commands always run. Every other command carries the
+  `paths` of the `select_component` call in `pull-request.yml` that runs
+  the same check, so it runs when CI would (A command can name the paths
+  that make it run, above). The `daemon` selector names the files outside
+  `daemon/` that daemon tests read: `api/openapi.yaml`, `prompts/`, and the
+  `check-agent-image.sh`, `check-commit-messages.sh`, and
+  `check-migration-history.sh` scripts. `run_all_on` holds the recipe itself,
+  `scripts/check.sh`, `.github/workflows/`, and the Go and Swift
+  dependency manifests (`daemon/go.mod`, `scripts/trackercollect/go.mod`,
+  and both `Package.resolved` files). `scripts/check-recipe-selectors.py`,
+  the `recipe-selectors` step that the `required` check runs on every pull
+  request, fails when a command's `paths` differ from its selector, so a
+  selector change must change the recipe in the same pull request. The
+  rules need a daemon at or after #3408. To adopt this recipe, update the
+  daemon, approve the new recipe digest (onboarding reports it as differing
+  from the admitted image's), and rebuild the project image.
 - **Toolchain:** `-go-module-dir daemon -swift-package-dir app`. The root
   has neither `go.mod` nor `Package.swift`, and the one image bakes both.
 - **Prerequisites:** the executor installed and proved on the daemon host

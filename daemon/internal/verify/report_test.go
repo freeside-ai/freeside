@@ -122,3 +122,61 @@ func TestParseReportAcceptsEveryExecutionClass(t *testing.T) {
 		t.Fatalf("rejected a report carrying every execution class: %v", err)
 	}
 }
+
+// TestParseReportNotApplicableStep pins the skipped-step shape: a report
+// the verifier writes with a skipped step parses, and a skipped step that
+// claims a run (an exit, cut output, history) or carries a missing or
+// malformed digest is refused.
+func TestParseReportNotApplicableStep(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/verify_report_not_applicable.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := verify.ParseReport(raw)
+	if err != nil {
+		t.Fatalf("rejected the verifier's own report: %v", err)
+	}
+	skipped := len(rep.Steps) - 1
+	if rep.Steps[skipped].NotApplicable == nil {
+		t.Fatal("fixture's last step is not skipped")
+	}
+	// The cases below set a history base so the history case reaches the
+	// skip check; the base alone must not be what refuses them.
+	control := rep
+	control.HistoryBaseSHA = control.BaseSHA
+	if encoded, err := json.MarshalIndent(control, "", "  "); err != nil {
+		t.Fatal(err)
+	} else if _, err := verify.ParseReport(append(encoded, '\n')); err != nil {
+		t.Fatalf("rejected the unmutated control: %v", err)
+	}
+	for name, mutate := range map[string]func(*verify.Step){
+		"nonzero exit":       func(s *verify.Step) { s.ExitCode = 1 },
+		"output truncated":   func(s *verify.Step) { s.OutputTruncated = true },
+		"history":            func(s *verify.Step) { s.History = true },
+		"empty rule digest":  func(s *verify.Step) { s.NotApplicable.RuleDigest = "" },
+		"empty changes":      func(s *verify.Step) { s.NotApplicable.ChangesDigest = "" },
+		"malformed rule":     func(s *verify.Step) { s.NotApplicable.RuleDigest = "sha256:zz" },
+		"malformed changes":  func(s *verify.Step) { s.NotApplicable.ChangesDigest = "md5:00" },
+		"empty proof object": func(s *verify.Step) { *s.NotApplicable = verify.NotApplicableProof{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			invalid, err := verify.ParseReport(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof := *invalid.Steps[skipped].NotApplicable
+			invalid.Steps[skipped].NotApplicable = &proof
+			invalid.HistoryBaseSHA = invalid.BaseSHA
+			mutate(&invalid.Steps[skipped])
+			encoded, err := json.MarshalIndent(invalid, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := verify.ParseReport(append(encoded, '\n')); err == nil {
+				t.Fatal("accepted an invalid skipped step")
+			}
+		})
+	}
+}

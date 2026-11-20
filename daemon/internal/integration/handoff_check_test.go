@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -204,6 +205,88 @@ func TestHandoffAtAMovedTipPublishesTheVerifiedHead(t *testing.T) {
 		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
 		t.Fatalf("converged replay = %#v, %v", result, err)
 	}
+}
+
+// TestHandoffSkipsAStepOnlyTheTipAlreadyHolds: the handoff reads the change
+// set of the prospective merge against the moved tip, not the head's against
+// its admitted base. The candidate changes README.md and SHARED.md, and the
+// tip already holds the candidate's SHARED.md, so the merge changes README.md
+// alone: the command limited to SHARED.md runs on the first cycle and is
+// recorded as not applicable at the handoff.
+func TestHandoffSkipsAStepOnlyTheTipAlreadyHolds(t *testing.T) {
+	t.Parallel()
+	recipe := []byte(`{"commands":[["/usr/bin/true"],` +
+		`{"argv":["/usr/bin/true","shared"],"room":"project_image","paths":["SHARED.md"]}],"capture":"none"}`)
+	h := newPublicationHarnessWithBaseFiles(t, recipe, productionBaseManifests())
+	p := newProductionPublicationHarnessFromBase(t, h, "", nil, nil, map[string]string{"SHARED.md": "shared change\n"})
+	p.startAndRecordExport(t)
+	advanced, _ := p.advanceBaseBeforePublication(t, "SHARED.md", "shared change\n")
+	p.reconcileUntilReady(t, 3)
+
+	p.assertHandoffVerified(t, advanced)
+	merge := p.handoffCheck(t).Merge.MergeSHA
+	// Two commands on the first cycle, then the always-run command alone.
+	if p.room.runs != 3 {
+		t.Fatalf("verification runs = %d, want 3", p.room.runs)
+	}
+	var found bool
+	for _, report := range storedReports(t, p) {
+		if report.EvaluatedSHA != merge {
+			continue
+		}
+		found = true
+		if len(report.Steps) != 2 || report.Steps[0].NotApplicable != nil || report.Steps[1].NotApplicable == nil ||
+			report.Outcome != verify.OutcomePassed {
+			t.Fatalf("handoff report = %+v, want the always-run step run and the SHARED.md step skipped", report)
+		}
+	}
+	if !found {
+		t.Fatalf("no stored report of the merge %s", merge)
+	}
+}
+
+// storedReports returns every verification report the store holds.
+func storedReports(t *testing.T, p *productionPublicationHarness) []verify.Report {
+	t.Helper()
+	db, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryContext(p.ctx, `SELECT digest FROM artifacts WHERE id LIKE ?`,
+		string(domain.ArtifactKindVerificationReport)+":%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digests []domain.Digest
+	for rows.Next() {
+		var digest string
+		if err := rows.Scan(&digest); err != nil {
+			t.Fatal(err)
+		}
+		digests = append(digests, domain.Digest(digest))
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		t.Fatal(err)
+	}
+	reports := make([]verify.Report, 0, len(digests))
+	for _, digest := range digests {
+		reader, err := p.blobs.Open(digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		report, err := verify.ParseReport(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reports = append(reports, report)
+	}
+	return reports
 }
 
 // TestHandoffAtAnUnchangedTipPublishesAsBefore: a tip that did not move

@@ -14,6 +14,9 @@ name: pull request
 # convergence-ci.yml has no push trigger; its list stays the union of the
 # app and daemon lists, and it runs the macOS Swift tests whenever app is
 # selected (`app_tests`), so `app` itself requests no macOS test job.
+# The verification recipe (.freeside/verify.json) copies these lists into
+# its commands' "paths", so a change here changes the recipe too;
+# recipe-selectors.yml fails when they disagree.
 
 on:
   pull_request:
@@ -89,7 +92,9 @@ jobs:
 
           select_component daemon daemon/ scripts/check.sh \
             scripts/daemon-test-shards.py scripts/daemon-test-shards.json \
-            images/agent-claude/ images/agent-codex/
+            images/agent-claude/ images/agent-codex/ api/openapi.yaml prompts/ \
+            scripts/check-agent-image.sh scripts/check-commit-messages.sh \
+            scripts/check-migration-history.sh
           select_component app app/ api/openapi.yaml scripts/check.sh \
             daemon/internal/signet/testdata/action-outcomes.golden
           select_component api api/ scripts/check.sh scripts/api-contract-digest.sh \
@@ -152,6 +157,9 @@ jobs:
   credential-literals:
     uses: ./.github/workflows/credential-literals.yml
 
+  recipe-selectors:
+    uses: ./.github/workflows/recipe-selectors.yml
+
   # The job name is the context branch protection requires; keep it exact.
   required:
     name: required
@@ -169,6 +177,7 @@ jobs:
       - migration-history
       - tier-a-paths
       - credential-literals
+      - recipe-selectors
     runs-on: ubuntu-latest
     steps:
       - name: Require every selected job to succeed
@@ -180,11 +189,12 @@ jobs:
           # Only an explicitly unselected component may skip. A selected
           # reusable workflow must propagate every failed or skipped child.
           jq -e 'keys == (["select", "commit-messages", "migration-history", "tier-a-paths",
-                          "credential-literals", "daemon", "app",
+                          "credential-literals", "recipe-selectors", "daemon", "app",
                           "api", "docs", "scripts", "convergence", "vocabulary"] | sort)
             and .select.result == "success" and .["commit-messages"].result == "success"
             and .["migration-history"].result == "success" and .["tier-a-paths"].result == "success"
             and .["credential-literals"].result == "success"
+            and .["recipe-selectors"].result == "success"
             and (. as $needs | all(["daemon", "app", "api", "docs", "scripts", "convergence", "vocabulary"][];
               . as $component | if $needs.select.outputs[$component] == "true"
               then $needs[$component].result == "success"
