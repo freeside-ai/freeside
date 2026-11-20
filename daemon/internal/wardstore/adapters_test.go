@@ -480,8 +480,8 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	); !errors.Is(err, store.ErrLeaseHeld) {
 		t.Fatalf("execution acquired enrollment identity = %v, want lease held", err)
 	}
-	if binding, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity); err != nil || found {
-		t.Fatalf("pending operation recovered = %+v, %t, %v", binding, found, err)
+	if recovery, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity); err != nil || found {
+		t.Fatalf("pending operation recovered = %+v, %t, %v", recovery, found, err)
 	}
 	digest := domain.Digest("sha256:rotated-auth-store")
 	expiresAt := at.Add(4 * time.Hour)
@@ -490,10 +490,11 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	binding, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity)
-	if err != nil || !found {
-		t.Fatalf("verified operation recovery = %+v, %t, %v", binding, found, err)
+	recovery, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity)
+	if err != nil || !found || recovery.Finished {
+		t.Fatalf("verified operation recovery = %+v, %t, %v; want pending", recovery, found, err)
 	}
+	binding := recovery.Binding
 	if binding.AuthIdentityID != identity.ID || binding.LeaseFence != lease.Fence ||
 		binding.AuthStoreDigest != digest || !binding.AccessTokenExpiresAt.Equal(expiresAt) {
 		t.Fatalf("verified binding = %+v", binding)
@@ -594,9 +595,9 @@ func TestFirstCodexEnrollmentLeavesNoHold(t *testing.T) {
 
 	// A rerun whose first run finished but never reported (a crash after the
 	// projection committed) recovers the same result, not a new operation.
-	binding, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity)
-	if err != nil || !found || binding != *item.CodexReenrollmentRecoveryBinding {
-		t.Fatalf("finished first enrollment recovery = %+v, %t, %v", binding, found, err)
+	recovery, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity)
+	if err != nil || !found || !recovery.Finished || recovery.Binding != *item.CodexReenrollmentRecoveryBinding {
+		t.Fatalf("finished first enrollment recovery = %+v, %t, %v", recovery, found, err)
 	}
 	again, initial, err := adapters.Enrollment.ProjectVerified(ctx, identity.ID)
 	if err != nil || !initial || again.ID != item.ID || again.ItemVersion != item.ItemVersion ||
@@ -619,6 +620,12 @@ func TestFirstCodexEnrollmentLeavesNoHold(t *testing.T) {
 	}
 	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
 		t.Fatalf("revoked chain replacement hold before resolve = %t, %v", needs, err)
+	}
+	// The replacement's open marker is pending, never finished: auth add
+	// must not adopt over a store the paired client has not resolved.
+	if recovery, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity); err != nil || !found ||
+		recovery.Finished {
+		t.Fatalf("revoked chain replacement recovery = %+v, %t, %v; want pending", recovery, found, err)
 	}
 }
 

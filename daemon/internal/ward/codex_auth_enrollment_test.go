@@ -23,6 +23,7 @@ type fakeCodexAuthEnrollmentJournal struct {
 	failure       CodexAuthEnrollmentFailure
 	verified      domain.CodexReenrollmentRecoveryBinding
 	recoverable   bool
+	finished      bool
 	initial       bool
 	item          domain.AttentionItem
 	projectMutate func(*domain.AttentionItem)
@@ -85,8 +86,8 @@ func (j *fakeCodexAuthEnrollmentJournal) Verify(
 
 func (j *fakeCodexAuthEnrollmentJournal) RecoverableVerified(
 	_ context.Context, _ domain.AuthIdentity,
-) (domain.CodexReenrollmentRecoveryBinding, bool, error) {
-	return j.verified, j.recoverable, nil
+) (CodexAuthRecovery, bool, error) {
+	return CodexAuthRecovery{Binding: j.verified, Finished: j.finished}, j.recoverable, nil
 }
 
 func (j *fakeCodexAuthEnrollmentJournal) ProjectVerified(
@@ -324,8 +325,9 @@ func TestEnrollCodexAuthRecoversVerifiedProjectionWithoutInput(t *testing.T) {
 }
 
 // TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex proves auth add never
-// finishes an earlier verified replacement, and points the operator at auth
-// list, since an earlier auth add may already have committed the enrollment.
+// finishes an earlier verified replacement whose marker is still open. It
+// sends the operator to enroll-codex and back to auth add, and to auth list,
+// since an earlier auth add may already have committed the enrollment.
 func TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex(t *testing.T) {
 	t.Parallel()
 	cfg, journal, _, refresher, _, _ := codexAuthEnrollmentFixture(t)
@@ -335,12 +337,42 @@ func TestCodexAuthAddLeavesPendingRecoveryToEnrollCodex(t *testing.T) {
 	journal.recoverable = true
 
 	_, err := EnrollCodexAuth(context.Background(), cfg)
-	if err == nil || !strings.Contains(err.Error(), "auth list") {
-		t.Fatalf("err = %v, want a refusal that points at auth list", err)
+	if err == nil || errors.Is(err, ErrCodexAuthAlreadyEnrolled) {
+		t.Fatalf("err = %v, want a pending-recovery refusal", err)
+	}
+	for _, step := range []string{"enroll-codex", "rerun auth add", "auth list"} {
+		if !strings.Contains(err.Error(), step) {
+			t.Fatalf("err = %v, want a refusal that names %q", err, step)
+		}
 	}
 	if journal.beginCalls != 0 || journal.projectCalls != 0 || refresher.calls != 0 {
 		t.Fatalf("refused recovery calls = begin %d project %d refresh %d",
 			journal.beginCalls, journal.projectCalls, refresher.calls)
+	}
+}
+
+// TestCodexAuthAddHandsFinishedFirstEnrollmentToAdoption proves auth add on
+// an identity whose first enrollment finished returns the adoption sentinel
+// before it reads the input login, which that enrollment already spent, and
+// begins, refreshes, and projects nothing.
+func TestCodexAuthAddHandsFinishedFirstEnrollmentToAdoption(t *testing.T) {
+	t.Parallel()
+	cfg, journal, _, refresher, inputPath, _ := codexAuthEnrollmentFixture(t)
+	cfg.Enrollment = &CodexClientEnrollmentRequest{
+		EnrollmentID: "codex-primary/codex_cli", Route: "openai-subscription", CostOwner: "operator",
+	}
+	journal.recoverable, journal.finished = true, true
+	if err := os.Remove(inputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := EnrollCodexAuth(context.Background(), cfg)
+	if !errors.Is(err, ErrCodexAuthAlreadyEnrolled) {
+		t.Fatalf("err = %v, want %v", err, ErrCodexAuthAlreadyEnrolled)
+	}
+	if journal.beginCalls != 0 || journal.verifyCalls != 0 || journal.projectCalls != 0 || refresher.calls != 0 {
+		t.Fatalf("finished recovery calls = begin %d verify %d project %d refresh %d",
+			journal.beginCalls, journal.verifyCalls, journal.projectCalls, refresher.calls)
 	}
 }
 
