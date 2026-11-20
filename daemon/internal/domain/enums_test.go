@@ -578,6 +578,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["UsageMeasurementKind"] = append(valids["UsageMeasurementKind"], v.valid)
 	}
 	invalids["UsageMeasurementKind"] = UsageMeasurementKind("").valid
+	for _, v := range AllUsageCoverages {
+		valids["UsageCoverage"] = append(valids["UsageCoverage"], v.valid)
+	}
+	invalids["UsageCoverage"] = UsageCoverage("").valid
 	for _, v := range AllCollectionAttemptStatuses {
 		valids["CollectionAttemptStatus"] = append(valids["CollectionAttemptStatus"], v.valid)
 	}

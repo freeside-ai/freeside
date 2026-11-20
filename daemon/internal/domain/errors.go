@@ -121,6 +121,7 @@ var (
 	ErrInvalidJudgmentSite              = errors.New("invalid judgment site")
 	ErrInvalidUsageSource               = errors.New("invalid usage source")
 	ErrInvalidUsageMeasurementKind      = errors.New("invalid usage measurement kind")
+	ErrInvalidUsageCoverage             = errors.New("invalid usage coverage")
 	ErrInvalidCollectionAttemptStatus   = errors.New("invalid collection attempt status")
 	ErrInvalidAvailabilityAnswer        = errors.New("invalid availability answer")
 	ErrInvalidWindowStatus              = errors.New("invalid window status")

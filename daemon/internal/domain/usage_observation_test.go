@@ -76,6 +76,7 @@ func TestUsageObservationValidate(t *testing.T) {
 		{"missing invocation", func(o *domain.UsageObservation) { o.InvocationID = "" }, domain.ErrEmptyID},
 		{"invalid digest", func(o *domain.UsageObservation) { o.TreatmentDigest = "treatment" }, domain.ErrInvalidDigest},
 		{"missing pricing", func(o *domain.UsageObservation) { o.PricingRevision = "" }, domain.ErrEmptyField},
+		{"partial source", func(o *domain.UsageObservation) { o.Source = domain.UsageSourcePartialTranscript }, nil},
 		{"invalid source", func(o *domain.UsageObservation) { o.Source = "other" }, domain.ErrInvalidUsageSource},
 		{"invalid kind", func(o *domain.UsageObservation) { o.Kind = "other" }, domain.ErrInvalidUsageMeasurementKind},
 		{"invalid metric", func(o *domain.UsageObservation) { o.Metric = "Input Tokens" }, domain.ErrEmptyField},
@@ -153,8 +154,129 @@ func TestUsageProjectionsRejectQuantityOverflow(t *testing.T) {
 	}
 }
 
+// invocationUsageFixture holds one invocation of each coverage: inv-complete
+// reported a terminal result and also has a partial row its result
+// supersedes, inv-partial ended early, and inv-missing reported nothing.
+func invocationUsageFixture() ([]domain.InvocationID, []domain.UsageObservation) {
+	base := usageObservationFixture()
+	base.InvocationID = "inv-complete"
+	completeOutput := base
+	completeOutput.Metric = "output_tokens"
+	completeOutput.Quantity = 40
+	completeCost := base
+	completeCost.Kind = domain.UsageMeasurementBillableCost
+	completeCost.Metric = "total_cost"
+	completeCost.Unit = "usd_micros"
+	completeCost.Quantity = 1_250_000
+	superseded := base
+	superseded.Source = domain.UsageSourcePartialTranscript
+	superseded.Quantity = 60
+
+	partialInput := base
+	partialInput.InvocationID = "inv-partial"
+	partialInput.Source = domain.UsageSourcePartialTranscript
+	partialInput.Quantity = 306
+	partialCacheRead := partialInput
+	partialCacheRead.Metric = "cache_read_input_tokens"
+	partialCacheRead.Quantity = 30034
+
+	admitted := []domain.InvocationID{"inv-partial", "inv-missing", "inv-complete"}
+	return admitted, []domain.UsageObservation{
+		base, completeOutput, completeCost, superseded, partialInput, partialCacheRead,
+	}
+}
+
+func TestProjectInvocationUsageClassifiesCoverage(t *testing.T) {
+	got, err := domain.ProjectInvocationUsage(invocationUsageFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	type summary struct {
+		id       domain.InvocationID
+		coverage domain.UsageCoverage
+		tokens   map[string]int64
+	}
+	want := []summary{
+		{"inv-complete", domain.UsageCoverageComplete, map[string]int64{"input_tokens": 100, "output_tokens": 40}},
+		{"inv-missing", domain.UsageCoverageMissing, map[string]int64{}},
+		{"inv-partial", domain.UsageCoveragePartial, map[string]int64{"cache_read_input_tokens": 30034, "input_tokens": 306}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ProjectInvocationUsage() = %#v, want %d entries", got, len(want))
+	}
+	for i, entry := range got {
+		if err := entry.Validate(); err != nil {
+			t.Fatalf("entry %d Validate() = %v", i, err)
+		}
+		tokens := map[string]int64{}
+		for _, total := range entry.Tokens {
+			tokens[total.Metric] = total.Quantity
+		}
+		if entry.InvocationID != want[i].id || entry.Coverage != want[i].coverage ||
+			len(tokens) != len(want[i].tokens) {
+			t.Fatalf("entry %d = %#v, want %#v", i, entry, want[i])
+		}
+		for metric, quantity := range want[i].tokens {
+			if tokens[metric] != quantity {
+				t.Fatalf("entry %d %s = %d, want %d", i, metric, tokens[metric], quantity)
+			}
+		}
+	}
+}
+
+func TestProjectInvocationUsageIncludesObservedInvocationsOutsideAdmitted(t *testing.T) {
+	got, err := domain.ProjectInvocationUsage(nil, []domain.UsageObservation{usageObservationFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].InvocationID != "inv-1" || got[0].Coverage != domain.UsageCoverageComplete {
+		t.Fatalf("ProjectInvocationUsage() = %#v, want inv-1 complete", got)
+	}
+}
+
+func TestInvocationUsageValidate(t *testing.T) {
+	valid := func() domain.InvocationUsage {
+		return domain.InvocationUsage{
+			InvocationID: "inv-1", Coverage: domain.UsageCoveragePartial,
+			Tokens: []domain.UsageTotal{
+				{Kind: domain.UsageMeasurementReportedUsage, Metric: "input_tokens", Unit: "tokens", Quantity: 1},
+				{Kind: domain.UsageMeasurementReportedUsage, Metric: "output_tokens", Unit: "tokens", Quantity: 2},
+			},
+		}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*domain.InvocationUsage)
+		want   error
+	}{
+		{"valid", func(*domain.InvocationUsage) {}, nil},
+		{"missing invocation", func(u *domain.InvocationUsage) { u.InvocationID = "" }, domain.ErrEmptyID},
+		{"invalid coverage", func(u *domain.InvocationUsage) { u.Coverage = "other" }, domain.ErrInvalidUsageCoverage},
+		{"nil tokens", func(u *domain.InvocationUsage) { u.Tokens = nil }, domain.ErrEmptyField},
+		{"cost total", func(u *domain.InvocationUsage) {
+			u.Tokens[0].Kind = domain.UsageMeasurementBillableCost
+		}, domain.ErrInvalidUsageMeasurementKind},
+		{"unsorted tokens", func(u *domain.InvocationUsage) {
+			u.Tokens[0], u.Tokens[1] = u.Tokens[1], u.Tokens[0]
+		}, domain.ErrKeysNotCanonical},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			usage := valid()
+			tc.mutate(&usage)
+			if err := usage.Validate(); !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestUsageGoldens(t *testing.T) {
 	runProjection, err := domain.ProjectRunUsage(usageProjectionFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocationUsage, err := domain.ProjectInvocationUsage(invocationUsageFixture())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +291,7 @@ func TestUsageGoldens(t *testing.T) {
 		{"usage_observation", usageObservationFixture()},
 		{"usage_run_projection", runProjection},
 		{"usage_comparison", comparison},
+		{"usage_invocation_projection", invocationUsage},
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {

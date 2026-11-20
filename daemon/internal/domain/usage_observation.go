@@ -23,21 +23,41 @@ type UsageSource string
 const (
 	UsageSourceAdapterTranscript UsageSource = "adapter_transcript"
 	UsageSourceReviewSource      UsageSource = "review_source"
+	// UsageSourcePartialTranscript is the sum of per-message usage read from
+	// a transcript that has no terminal result, because the invocation was
+	// killed or lost before it ended. It is a lower bound: a message still
+	// streaming when the transcript stops is missing, and it carries
+	// reported_usage tokens only, since assistant messages report no cost.
+	// The source value, not the metric name, marks it partial
+	// (devlog/2026-11-20-1017-partial-usage-source.md).
+	UsageSourcePartialTranscript UsageSource = "partial_transcript"
 )
 
 // AllUsageSources is the single registration point for usage sources.
 var AllUsageSources = []UsageSource{
 	UsageSourceAdapterTranscript,
 	UsageSourceReviewSource,
+	UsageSourcePartialTranscript,
 }
 
 func (s UsageSource) valid() bool {
 	switch s {
-	case UsageSourceAdapterTranscript, UsageSourceReviewSource:
+	case UsageSourceAdapterTranscript, UsageSourceReviewSource, UsageSourcePartialTranscript:
 		return true
 	default:
 		return false
 	}
+}
+
+// partial reports whether the source measures only part of an invocation.
+func (s UsageSource) partial() bool {
+	switch s {
+	case UsageSourceAdapterTranscript, UsageSourceReviewSource:
+		return false
+	case UsageSourcePartialTranscript:
+		return true
+	}
+	return false
 }
 
 // UsageMeasurementKind preserves plan §8's deliberately distinct resource
@@ -321,4 +341,130 @@ func usageTotalLess(left, right UsageTotal) bool {
 		return left.Metric < right.Metric
 	}
 	return left.Unit < right.Unit
+}
+
+// UsageCoverage is how much of one admitted invocation's token use its
+// observations cover. It is derived at read time from the run's admissions
+// and observations and never stored. The zero value is invalid by design.
+type UsageCoverage string
+
+const (
+	// UsageCoverageComplete is an invocation with an observation from a
+	// terminal source: its route reported the whole invocation.
+	UsageCoverageComplete UsageCoverage = "complete"
+	// UsageCoveragePartial is an invocation whose only observations are
+	// partial: it ended early and its tokens are a lower bound.
+	UsageCoveragePartial UsageCoverage = "partial"
+	// UsageCoverageMissing is an admitted invocation with no observation.
+	UsageCoverageMissing UsageCoverage = "missing"
+)
+
+// AllUsageCoverages is the single registration point for usage coverages.
+var AllUsageCoverages = []UsageCoverage{
+	UsageCoverageComplete,
+	UsageCoveragePartial,
+	UsageCoverageMissing,
+}
+
+func (c UsageCoverage) valid() bool {
+	switch c {
+	case UsageCoverageComplete, UsageCoveragePartial, UsageCoverageMissing:
+		return true
+	default:
+		return false
+	}
+}
+
+// InvocationUsage is one invocation's usage coverage and the totals of its
+// latest reported_usage observations. Tokens is empty, never nil, for a
+// missing invocation, and holds only the metrics the route reported, so an
+// unobserved metric is absent rather than zero.
+type InvocationUsage struct {
+	InvocationID InvocationID  `json:"invocation_id"`
+	Coverage     UsageCoverage `json:"coverage"`
+	Tokens       []UsageTotal  `json:"tokens"`
+}
+
+// Validate reports whether the entry is well-formed and canonical.
+func (u InvocationUsage) Validate() error {
+	if u.InvocationID == "" {
+		return fmt.Errorf("invocation usage invocation_id: %w", ErrEmptyID)
+	}
+	if !u.Coverage.valid() {
+		return fmt.Errorf("invocation usage coverage %q: %w", u.Coverage, ErrInvalidUsageCoverage)
+	}
+	if u.Tokens == nil {
+		return fmt.Errorf("invocation usage tokens: %w", ErrEmptyField)
+	}
+	for i, total := range u.Tokens {
+		if err := total.Validate(); err != nil {
+			return fmt.Errorf("invocation usage token %d: %w", i, err)
+		}
+		if total.Kind != UsageMeasurementReportedUsage {
+			return fmt.Errorf("invocation usage token %d kind %q: %w", i, total.Kind, ErrInvalidUsageMeasurementKind)
+		}
+		if i > 0 && !usageTotalLess(u.Tokens[i-1], total) {
+			return fmt.Errorf("invocation usage tokens: %w", ErrKeysNotCanonical)
+		}
+	}
+	return nil
+}
+
+// ProjectInvocationUsage returns one entry per invocation, sorted by id: each
+// admitted invocation, and any invocation with an observation, so observed
+// usage is never hidden by a narrower admitted list. An invocation with any
+// terminal-source observation is complete, and its totals come from those
+// sources alone, so a partial reading never adds to a complete one. One with
+// only partial observations is partial; one with none is missing. Totals use
+// the latest-sequence rule ProjectRunUsage applies.
+func ProjectInvocationUsage(admitted []InvocationID, rows []UsageObservation) ([]InvocationUsage, error) {
+	byInvocation := make(map[InvocationID][]UsageObservation)
+	for _, id := range admitted {
+		byInvocation[id] = nil
+	}
+	for _, row := range rows {
+		id := InvocationID(row.InvocationID)
+		byInvocation[id] = append(byInvocation[id], row)
+	}
+	ids := make([]InvocationID, 0, len(byInvocation))
+	for id := range byInvocation {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	result := make([]InvocationUsage, 0, len(ids))
+	for _, id := range ids {
+		entry, err := projectOneInvocationUsage(id, byInvocation[id])
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
+	}
+	return result, nil
+}
+
+func projectOneInvocationUsage(id InvocationID, rows []UsageObservation) (InvocationUsage, error) {
+	entry := InvocationUsage{InvocationID: id, Coverage: UsageCoverageMissing, Tokens: []UsageTotal{}}
+	if len(rows) == 0 {
+		return entry, nil
+	}
+	terminal := slices.DeleteFunc(slices.Clone(rows), func(row UsageObservation) bool {
+		return row.Source.partial()
+	})
+	counted := rows
+	entry.Coverage = UsageCoveragePartial
+	if len(terminal) > 0 {
+		counted = terminal
+		entry.Coverage = UsageCoverageComplete
+	}
+	reported := slices.DeleteFunc(slices.Clone(counted), func(row UsageObservation) bool {
+		return row.Kind != UsageMeasurementReportedUsage
+	})
+	totals, err := sumUsage(latestUsageObservations(reported))
+	if err != nil {
+		return InvocationUsage{}, err
+	}
+	if totals != nil {
+		entry.Tokens = totals
+	}
+	return entry, nil
 }

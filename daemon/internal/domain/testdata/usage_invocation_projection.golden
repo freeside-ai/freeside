@@ -1,0 +1,43 @@
+[
+  {
+    "invocation_id": "inv-complete",
+    "coverage": "complete",
+    "tokens": [
+      {
+        "kind": "reported_usage",
+        "metric": "input_tokens",
+        "unit": "tokens",
+        "quantity": 100
+      },
+      {
+        "kind": "reported_usage",
+        "metric": "output_tokens",
+        "unit": "tokens",
+        "quantity": 40
+      }
+    ]
+  },
+  {
+    "invocation_id": "inv-missing",
+    "coverage": "missing",
+    "tokens": []
+  },
+  {
+    "invocation_id": "inv-partial",
+    "coverage": "partial",
+    "tokens": [
+      {
+        "kind": "reported_usage",
+        "metric": "cache_read_input_tokens",
+        "unit": "tokens",
+        "quantity": 30034
+      },
+      {
+        "kind": "reported_usage",
+        "metric": "input_tokens",
+        "unit": "tokens",
+        "quantity": 306
+      }
+    ]
+  }
+]
