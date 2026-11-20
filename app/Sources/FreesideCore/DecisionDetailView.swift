@@ -2702,11 +2702,14 @@ struct DecisionDetailView: View {
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let settled = finding.settled_route?.value1 {
+                settledRouteNote(settled, finding: finding)
+            }
             // A route this app doesn't know is never offered: picking it
             // would send `unknown` back, so such a finding can't be routed
             // until the app is updated.
             let routes: [ChoiceList<Components.Schemas.AdjudicationRoute?>.Option] =
-                finding.offered_routes.filter { $0 != .unknown }.map {
+                Self.findingRouteOptions(finding).map {
                     .init(
                         value: $0,
                         label: AttentionDisplay.disputeRouteLabel($0, external: external),
@@ -2720,18 +2723,22 @@ struct DecisionDetailView: View {
                     accessibilityLabel: "Route for \(finding.message)",
                     options: routes,
                     selection: .constant(
-                        ConclusionDisplay.appliedRoute(for: finding.finding_id, proposed: nil, in: closed)),
+                        ConclusionDisplay.appliedRoute(
+                            for: finding.finding_id, proposed: finding.settled_route?.value1, in: closed)),
                     isInert: true)
             } else {
                 ChoiceList(
                     accessibilityLabel: "Route for \(finding.message)",
                     options: routes,
                     selection: Binding(
-                        get: { alternativeSelections[finding.finding_id] },
+                        get: { alternativeSelections[finding.finding_id] ?? finding.settled_route?.value1 },
                         set: { alternativeSelections[finding.finding_id] = $0 })
                 )
                 .disabled(!model.actionsEnabled)
+                // Keeping a settled route replies with the adjudicator's
+                // reason, so only a changed route asks for the operator's.
                 if let route = alternativeSelections[finding.finding_id],
+                    route != finding.settled_route?.value1,
                     AttentionDisplay.disputeRouteRepliesExternally(route, external: external)
                 {
                     replyReasonField(
@@ -2755,6 +2762,30 @@ struct DecisionDetailView: View {
         // The ordinal left the face; VoiceOver still names the item.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Finding \(number) of \(total)"))
+    }
+
+    /// The route the adjudicator already settled for a finding that needs no
+    /// person, and its reason, so the operator sees what Apply keeps unless
+    /// they pick another route.
+    private func settledRouteNote(
+        _ route: Components.Schemas.AdjudicationRoute,
+        finding: Components.Schemas.DisputedFinding
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(AttentionDisplay.disputeSettledRoute(route, external: finding.external != nil))
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .proseMeasure()
+            if let rationale = finding.adjudication?.rationale {
+                QuoteBlock {
+                    Text(rationale)
+                        .font(FreesideFont.cardBody)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .proseMeasure()
+                }
+            }
+        }
     }
 
     /// The reason a Decline and Reply or Defer and Reply posts in the
@@ -2873,9 +2904,23 @@ struct DecisionDetailView: View {
         Self.selectedFindingRoutes(findings, selections: alternativeSelections, reasons: findingReasons)
     }
 
-    /// One choice per finding with an offered route picked. A route that
-    /// replies in an external thread carries the trimmed reason when it is
-    /// sendable; every other route carries none, whatever draft is kept.
+    /// The routes a finding's row lists: the offered ones this app knows,
+    /// and its settled route when that is not among them, so the operator
+    /// can return to it after picking another.
+    static func findingRouteOptions(
+        _ finding: Components.Schemas.DisputedFinding
+    ) -> [Components.Schemas.AdjudicationRoute] {
+        let offered = finding.offered_routes.filter { $0 != .unknown }
+        guard let settled = finding.settled_route?.value1, settled != .unknown, !offered.contains(settled)
+        else { return offered }
+        return offered + [settled]
+    }
+
+    /// One choice per finding with an offered route picked, leaving out a
+    /// row whose pick is its settled route: the daemon keeps that route for
+    /// a row the command omits. A route that replies in an external thread
+    /// carries the trimmed reason when it is sendable; every other route
+    /// carries none, whatever draft is kept.
     static func selectedFindingRoutes(
         _ findings: [Components.Schemas.DisputedFinding],
         selections: [String: Components.Schemas.AdjudicationRoute],
@@ -2883,6 +2928,7 @@ struct DecisionDetailView: View {
     ) -> [Components.Schemas.FindingRouteChoice] {
         findings.compactMap { finding in
             guard let route = selections[finding.finding_id], route != .unknown,
+                route != finding.settled_route?.value1,
                 finding.offered_routes.contains(route)
             else {
                 return nil
@@ -2895,19 +2941,38 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// Apply's input gate: every finding has an offered route, and every
-    /// route that replies externally has a sendable reason.
+    /// Apply's input gate: every row without a settled route has an
+    /// offered route, the command answers at least one row, and every route
+    /// that replies externally has a sendable reason.
     static func findingRoutesReady(
         _ findings: [Components.Schemas.DisputedFinding],
         selections: [String: Components.Schemas.AdjudicationRoute],
         reasons: [String: String]
     ) -> Bool {
         let choices = selectedFindingRoutes(findings, selections: selections, reasons: reasons)
-        return !findings.isEmpty && choices.count == findings.count
-            && zip(findings, choices).allSatisfy { finding, choice in
-                !AttentionDisplay.disputeRouteRepliesExternally(choice.route, external: finding.external != nil)
+        let external = Set(findings.filter { $0.external != nil }.map(\.finding_id))
+        let answered = Set(choices.map(\.finding_id))
+        return !choices.isEmpty
+            && findings.allSatisfy { $0.settled_route != nil || answered.contains($0.finding_id) }
+            && choices.allSatisfy { choice in
+                !AttentionDisplay.disputeRouteRepliesExternally(
+                    choice.route, external: external.contains(choice.finding_id))
                     || choice.reason != nil
             }
+    }
+
+    /// How many rows Apply would route: those with a pick and those whose
+    /// settled route Apply keeps.
+    static func decidedFindingRoutes(
+        _ findings: [Components.Schemas.DisputedFinding],
+        selections: [String: Components.Schemas.AdjudicationRoute]
+    ) -> Int {
+        findings.count { finding in
+            if let route = selections[finding.finding_id] {
+                return route == finding.settled_route?.value1 || finding.offered_routes.contains(route)
+            }
+            return finding.settled_route != nil
+        }
     }
 
     static func selectedAlternatives(
@@ -4435,7 +4500,7 @@ struct DecisionDetailView: View {
             let findings = item.review_dispute?.value1.findings, !findings.isEmpty
         else { return AttentionDisplay.label(action, for: item) }
         return AttentionDisplay.applyFindingRoutesLabel(
-            selected: selectedFindingRoutes(findings).count, of: findings.count)
+            selected: Self.decidedFindingRoutes(findings, selections: alternativeSelections), of: findings.count)
     }
 
     private var canPresentLaunchComposer: Bool {

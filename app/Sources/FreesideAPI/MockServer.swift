@@ -2036,10 +2036,15 @@ public actor MockServer {
                     commandID: command.command_id, reason: "snooze_until is not in the future")
             }
         case .concludes(_) where payload.action == .adjudicate_findings:
+            // Every row without a settled route is answered; a settled row
+            // may be left out, which keeps its route.
             guard let findings = current.item.review_dispute?.value1.findings,
-                let choices = payload.finding_routes, choices.count == findings.count,
+                let choices = payload.finding_routes,
                 choices.allSatisfy({ choice in
                     findings.contains { $0.finding_id == choice.finding_id && $0.offered_routes.contains(choice.route) }
+                }),
+                findings.allSatisfy({ finding in
+                    finding.settled_route != nil || choices.contains { $0.finding_id == finding.finding_id }
                 })
             else {
                 throw InvalidFindingAdjudicationDecisionError(reason: "finding routes are incomplete or not offered")

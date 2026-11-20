@@ -1005,6 +1005,12 @@ enum MockContractValidation {
                     {
                         return "invalid disputed finding adjudication"
                     }
+                    if let settled = finding.settled_route?.value1, ![.remediate, .decline, ._defer].contains(settled) {
+                        return "invalid disputed finding settled route"
+                    }
+                }
+                if !findings.isEmpty && findings.allSatisfy({ $0.settled_route != nil }) {
+                    return "review_dispute binding has no finding to answer"
                 }
             }
             guard case .run(let subject) = item.subject,

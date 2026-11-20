@@ -389,6 +389,31 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The routed dispute as the per-finding path raises it (#3436): every
+    /// finding of the round, with one external finding the adjudicator
+    /// already declined. That row carries its settled route, which Apply
+    /// keeps unless the operator picks another.
+    public static func settledReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = routedReviewDispute()
+        snapshot.item.reason =
+            "Adjudication requires a second decision. Choose a route for each finding that waits for you (2). "
+            + "The other findings (1) already have a route; keep it or change it. Nothing is recorded or "
+            + "replied on GitHub until you apply, and remediation waits until then."
+        snapshot.item.review_dispute?.value1.finding_ids.append("finding-3")
+        snapshot.item.review_dispute?.value1.findings?.append(
+            .init(
+                finding_id: "finding-3", message: "Rename `applyUpdate` to `commitUpdate`.",
+                location: .init(value1: .init(path: "daemon/update.go", start_line: 30, end_line: 30)),
+                severity: .P3, external: .init(reviewer_login: "reviewer", thread_id: "review-thread-3"),
+                offered_routes: [.remediate, .decline, ._defer],
+                adjudication: .init(
+                    lean: .init(value1: .decline), confidence: .high,
+                    rationale: "The name matches the package's other update helpers; the rename is a style preference.",
+                    below_threshold: false),
+                settled_route: .init(value1: .decline)))
+        return snapshot
+    }
+
     public static func subsetReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = routedReviewDispute()
         snapshot.item.review_dispute?.value1.findings?.removeLast()

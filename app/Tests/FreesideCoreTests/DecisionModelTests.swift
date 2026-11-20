@@ -1876,6 +1876,48 @@ import Testing
                 == #"[{"finding_id":"finding-1","route":"decline","reason":"Out of scope."}]"#)
     }
 
+    /// A settled row starts on its settled route, which Apply keeps by
+    /// leaving the row out; picking another offered route overrides it and,
+    /// on an external finding, asks for the reply's reason (#3436).
+    @Test func settledDisputeRowKeepsItsRouteUnlessChanged() async throws {
+        let seed = AttentionFixtures.settledReviewDispute()
+        let findings = try #require(seed.item.review_dispute?.value1.findings)
+        typealias Selections = [String: Components.Schemas.AdjudicationRoute]
+        let waiting: Selections = ["finding-1": .remediate, "finding-2": ._defer]
+        func ready(_ selections: Selections, _ reasons: [String: String] = [:]) -> Bool {
+            DecisionDetailView.findingRoutesReady(findings, selections: selections, reasons: reasons)
+        }
+        #expect(!ready([:]))
+        #expect(!ready(["finding-1": .remediate]))
+        #expect(DecisionDetailView.decidedFindingRoutes(findings, selections: [:]) == 1)
+        #expect(DecisionDetailView.decidedFindingRoutes(findings, selections: waiting) == 3)
+        #expect(ready(waiting))
+        var kept = waiting
+        kept["finding-3"] = .decline
+        #expect(ready(kept))
+        #expect(
+            DecisionDetailView.selectedFindingRoutes(findings, selections: kept)
+                == [.init(finding_id: "finding-1", route: .remediate), .init(finding_id: "finding-2", route: ._defer)])
+        var overridden = waiting
+        overridden["finding-3"] = ._defer
+        #expect(!ready(overridden))
+        #expect(ready(overridden, ["finding-3": "Later."]))
+        #expect(
+            DecisionDetailView.selectedFindingRoutes(findings, selections: overridden, reasons: ["finding-3": "Later."])
+                .last == .init(finding_id: "finding-3", route: ._defer, reason: "Later."))
+
+        var unoffered = findings[2]
+        unoffered.offered_routes = [.decline, ._defer]
+        unoffered.settled_route = .init(value1: .remediate)
+        #expect(DecisionDetailView.findingRouteOptions(unoffered) == [.decline, ._defer, .remediate])
+
+        let store = await makeStore(server: MockServer(items: [seed]))
+        let model = DecisionModel(store: store, itemID: seed.item.id)
+        await model.validate()
+        await model.submitFindingRoutes(DecisionDetailView.selectedFindingRoutes(findings, selections: kept))
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
     /// A route a newer daemon offers decodes as unknown. The app never sends
     /// unknown back (#1266), so a finding routed only that way leaves Apply
     /// waiting rather than sending it.

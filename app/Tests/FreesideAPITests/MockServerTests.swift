@@ -1827,6 +1827,25 @@ import Testing
         #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
     }
 
+    /// A settled row may be left out, which keeps its route, or answered
+    /// with an offered route; a row without one must be answered (#3436).
+    @Test func settledDisputeRowMayBeLeftOut() async throws {
+        let seed = AttentionFixtures.settledReviewDispute()
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        var missing = Self.command(id: "settled-missing", against: seed, action: .adjudicate_findings)
+        missing.payload.asDecision.finding_routes = [.init(finding_id: "finding-1", route: .remediate)]
+        #expect(try await client.submitCommand(body: .json(missing)).refusalStatus != nil)
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+
+        var command = Self.command(id: "settled-kept", against: seed, action: .adjudicate_findings)
+        command.payload.asDecision.finding_routes = [
+            .init(finding_id: "finding-1", route: .remediate), .init(finding_id: "finding-2", route: ._defer),
+        ]
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
+    }
+
     @Test func findingAdjudicationAcceptAndAlternativeChoiceResolve() async throws {
         for (id, action, choices) in [
             (

@@ -4635,6 +4635,7 @@
             for (variant, routed) in [
                 ("routed", AttentionFixtures.routedReviewDispute()),
                 ("subset", AttentionFixtures.subsetReviewDispute()),
+                ("settled", AttentionFixtures.settledReviewDispute()),
             ] {
                 let routedClient = APIClientFactory.mock(server: MockServer(items: [routed]))
                 let routedStore = InboxStore(client: routedClient)
