@@ -71,7 +71,9 @@ type TrustedInstallationRecord struct {
 
 // PendingEnvelopeRecord is the bounded reconciliation exception. It receives
 // that exception only while its epoch and revision equal the entry's frontier
-// and it has not expired; otherwise it is structurally valid history.
+// and it has not expired. Once expired at the frontier, it only keeps the
+// installation it matches from removal, and grants nothing else; off the
+// frontier, it is structurally valid history.
 //
 // InstallationID is a pointer because zero is its widest value, not its
 // narrowest: an envelope without an installation matches any installation on

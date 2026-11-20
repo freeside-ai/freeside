@@ -4253,3 +4253,28 @@ chooses how the daemon pulls.
 
 (Owner decision of 2026-11-19 on tracker #3461, from the owner's request in
 #1926; [decision note](../../devlog/2026-11-19-1526-live-writer-view.md).)
+
+## Revision 133 ("The Janitor Keeps an Expired Intent's Installation"):
+
+1. **An expired intent no longer costs the operator its installation**
+   (Section [10](../plan.md#10-operations-and-onboarding), GitHub App Agent Identity).
+   The janitor keeps the one installation that matches the current epoch
+   and revision's expired intent (owner, installation ID when known, and
+   selected mode) until a replacement intent covers it or the operator
+   removes it. It checks that match from the installation record alone,
+   mints no token for it, gives it no coverage, and never reports it ready.
+   On a trusted installation, the expired expansion's set is not drift, and
+   coverage stays the trusted set.
+2. **Expiry still grants nothing.** An expired intent authorizes no
+   onboarding token and can't be promoted. A stale epoch, a superseded
+   revision, another account, another installation on the expected account,
+   identity drift, or a non-selected mode is removed as before.
+
+Rejected: quarantine, which suspends and deletes the installation and bars
+its ID from any later intent; a grant-read token for the kept installation,
+which breaks the pre-token gate; and a second janitor journal or authority
+document per exit root, which would let one janitor delete installations the
+other trusts.
+
+(Owner decision of 2026-11-19 in #3434, from #2382's exit run;
+[decision note](../../devlog/2026-11-19-2313-expired-intent-keeps-installation.md).)

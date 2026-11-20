@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 132
+revision: 133
 status: active
 updated: 2026-11-19
 ---
@@ -7193,9 +7193,19 @@ intent and the state it references reach the remote durability frontier.
 
 The intent grants no authority beyond existing trusted bindings. In particular,
 the added repository cannot mint, publish, or reach attention. The janitor may
-leave untouched, and only until expiry, exactly one remote installation that
-matches that owner, installation ID when known, selected-repository mode, active
-epoch, durable intent revision, and exact post-change repository set.
+leave untouched exactly one remote installation that matches that owner,
+installation ID when known, selected-repository mode, active epoch, durable
+intent revision, and exact post-change repository set.
+
+Expiry ends that exception, not the installation. After the intent expires, the
+janitor still leaves untouched the one installation that matches its owner,
+installation ID when known, selected-repository mode, active epoch, and durable
+intent revision, until a replacement intent covers it or the operator removes
+it. It checks that match from the installation record alone, whatever
+repositories the installation holds, mints no token for it, and gives it no
+coverage. On a trusted installation, an expired expansion's
+post-change set is likewise not drift, and the installation keeps only its
+trusted coverage.
 
 A same-session callback that matches the nonce is an acceleration, not the
 authority path. The active daemon also polls App-authenticated installation
@@ -7207,8 +7217,9 @@ Promotion still requires the canonical owner, installation, selected mode, and
 post-change IDs, plus acceptance of the local one-time trust review. That
 acceptance atomically creates the installation-to-repository binding. A missing,
 ambiguous, over-broad, replayed, stale-epoch, superseded-revision, or expired
-match fails closed, invalidates the intent, and lets ordinary reconciliation
-resume.
+match fails closed and invalidates the intent. Ordinary reconciliation then
+resumes, except that the janitor keeps an expired match's installation as
+stated above.
 
 Every registration, public or private, requires the always-on installation-grant
 janitor. The daemon refuses to operate a registration without it. The janitor
@@ -7221,7 +7232,8 @@ registration, a trusted owner) or an unexpired pending envelope whose
 registration, expected owner, installation ID when known, active epoch, and
 durable intent revision match current state. This pre-token gate does not claim
 that the pending repository set matches. It deletes and audit-logs every other
-installation from that metadata alone. It does not enumerate that installation's
+installation from that metadata alone, apart from the expired intent's
+installation kept above. It does not enumerate that installation's
 repositories.
 
 For a candidate that passes this gate, the janitor first requires
@@ -7240,7 +7252,8 @@ exact pending match, and it does so by matching its expected post-change
 repository set. For that exact, unexpired match only, the expected owner and
 post-change repository set are temporarily exempt from the untrusted-owner
 branch and the unrecorded-grant branch. The exception grants no authority and
-disappears on promotion or expiry.
+disappears on promotion or expiry; after expiry, only the keep stated above
+remains.
 
 Outside that exception, any unrecorded repository grant immediately suspends and
 audit-logs the whole affected installation. That includes `all repositories`.
@@ -7934,48 +7947,30 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 132 ("A Read-Only Live View of a Running Writer Comes Forward"):
+Revision 133 ("The Janitor Keeps an Expired Intent's Installation"):
 
-1. **The operator may watch a running stage's writer, under five
-   conditions** (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
-   Outcome Authority). The view is read-only; the daemon pulls only the
-   transcript, as untrusted bytes, and the writer gains no outbound channel
-   or egress; its content is checked with
-   a retained transcript's credential rules as the stream grows, before it
-   leaves the daemon, and a match ends the view; it grants nothing, never
-   affects the writer's stop, teardown, or outcome, and stores nothing it
-   shows; and clients label it unverified agent output and render it
-   inertly. It is the one exception to reading a writer's output only
-   after the writer is gone. Reviewers and discussion replies are not
-   covered.
-2. **The evidence channel stays the only route that keeps a writer's
-   transcript** (Sections
-   [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
-   and [12](#12-exit-criteria-definitions)). The live view is neither
-   gauntlet channel; content it shows without its scan, or anything it
-   stores, counts as escaped output.
-3. **The owner accepts the view's residual** (Section [14](#14-risks)).
-   Content the credential rules miss, such as an encoded or partial token,
-   reaches the operator's clients while the writer runs, and content
-   displayed before a later match can't be taken back, though that match
-   withholds the whole retained transcript.
-4. **Only the read-only view leaves Phase 3** (Sections
-   [5.14](#514-client-synchronization-and-conversations), Conversations and
-   Discuss, and [11](#11-roadmap-build-order-and-coordination)). Mid-turn
-   steering, ACP interactive attachment, and live streaming of a discussion
-   reply stay there.
+1. **An expired intent no longer costs the operator its installation**
+   (Section [10](#10-operations-and-onboarding), GitHub App Agent Identity).
+   The janitor keeps the one installation that matches the current epoch
+   and revision's expired intent (owner, installation ID when known, and
+   selected mode) until a replacement intent covers it or the operator
+   removes it. It checks that match from the installation record alone,
+   mints no token for it, gives it no coverage, and never reports it ready.
+   On a trusted installation, the expired expansion's set is not drift, and
+   coverage stays the trusted set.
+2. **Expiry still grants nothing.** An expired intent authorizes no
+   onboarding token and can't be promoted. A stale epoch, a superseded
+   revision, another account, another installation on the expected account,
+   identity drift, or a non-selected mode is removed as before.
 
-Rejected: waiting for Phase 3's ACP attachment, which bundles the view with
-steering; a writer-pushed stream, which gives the writer a new outbound
-channel; and showing only the retained transcript after the run, which
-leaves the operator an hour-long run with nothing to read.
+Rejected: quarantine, which suspends and deletes the installation and bars
+its ID from any later intent; a grant-read token for the kept installation,
+which breaks the pre-token gate; and a second janitor journal or authority
+document per exit root, which would let one janitor delete installations the
+other trusts.
 
-Nothing in this revision is built yet: #1926 on tracker #3461 builds it and
-chooses how the daemon pulls.
-
-(Owner decision of 2026-11-19 on tracker #3461, from the owner's request in
-#1926; [decision note](../devlog/2026-11-19-1526-live-writer-view.md).)
+(Owner decision of 2026-11-19 in #3434, from #2382's exit run;
+[decision note](../devlog/2026-11-19-2313-expired-intent-keeps-installation.md).)
 
 ## 14. Risks
 

@@ -75,7 +75,11 @@ type trustedOwnerKey struct {
 }
 
 type authorityCandidate struct {
-	pending               bool
+	pending bool
+	// kept marks an installation that only an expired envelope matches. The
+	// janitor leaves it in place from its metadata alone: it mints no token
+	// for it, gives it no coverage, and never reports it ready.
+	kept                  bool
 	activeEpoch           int64
 	durableIntentRevision int64
 	installationID        int64
@@ -83,13 +87,22 @@ type authorityCandidate struct {
 	accountID             int64
 	repositoryIDs         []int64
 	allowedRepositoryIDs  []int64
+	// expiredExpansionRepositoryIDs is the post-change set an expired
+	// envelope named for this trusted installation. A grant equal to it is
+	// not drift, but coverage stays allowedRepositoryIDs.
+	expiredExpansionRepositoryIDs []int64
 }
 
 type validatedInstallationAuthority struct {
 	trustedOwners map[trustedOwnerKey]struct{}
 	trusted       map[int64]authorityCandidate
 	pending       *authorityCandidate
-	quarantined   map[int64]struct{}
+	// expired is the current epoch and revision's envelope once its expiry
+	// has passed. Only candidate reads it, to keep the installation it names;
+	// it is never pending authority, so it authorizes no onboarding token,
+	// coverage, or readiness.
+	expired     *authorityCandidate
+	quarantined map[int64]struct{}
 }
 
 // InstallationAuthorityAllowsRepository re-runs the credential-bound
@@ -256,18 +269,17 @@ func validateInstallationAuthority(
 		}
 	}
 
-	// Stale, superseded, or expired envelopes are structurally valid history,
-	// but grant no reconciliation exception. Ordinary unknown-installation
-	// cleanup therefore resumes without trusting them.
+	// Stale or superseded envelopes are structurally valid history, but grant
+	// no reconciliation exception. Ordinary unknown-installation cleanup
+	// therefore resumes without trusting them.
 	if pending.ActiveEpoch != snapshot.ActiveEpoch ||
-		pending.DurableIntentRevision != snapshot.DurableIntentRevision ||
-		!pending.ExpiresAt.After(now) {
+		pending.DurableIntentRevision != snapshot.DurableIntentRevision {
 		return validated, nil
 	}
 	if _, withdrawn := validated.quarantined[pending.InstallationID]; withdrawn {
 		return validated, nil
 	}
-	validated.pending = &authorityCandidate{
+	envelope := &authorityCandidate{
 		pending:               true,
 		activeEpoch:           pending.ActiveEpoch,
 		durableIntentRevision: pending.DurableIntentRevision,
@@ -277,6 +289,16 @@ func validateInstallationAuthority(
 		repositoryIDs:         expectedIDs,
 		allowedRepositoryIDs:  currentIDs,
 	}
+	// An expired envelope at the current frontier still names the
+	// installation this daemon is onboarding. Deleting it would cost the
+	// operator a reinstall (#3434), so it keeps that installation until a
+	// replacement intent covers it, but it is never pending authority.
+	if !pending.ExpiresAt.After(now) {
+		envelope.pending = false
+		validated.expired = envelope
+		return validated, nil
+	}
+	validated.pending = envelope
 	return validated, nil
 }
 
@@ -356,9 +378,30 @@ func (a validatedInstallationAuthority) candidate(
 	if trusted, ok := a.trusted[installation.ID]; ok {
 		if trusted.account == strings.ToLower(installation.Account.Login) &&
 			trusted.accountID == installation.Account.ID {
+			if a.expired != nil && a.expired.installationID == installation.ID {
+				trusted.expiredExpansionRepositoryIDs = a.expired.repositoryIDs
+			}
 			return trusted, true, false
 		}
 		return authorityCandidate{}, false, true
+	}
+	// Validation already refused an envelope that omits or contradicts a
+	// trusted binding, so an expired envelope reaching here names an
+	// installation no trusted binding holds.
+	if a.expired != nil &&
+		(a.expired.installationID == 0 || a.expired.installationID == installation.ID) {
+		if a.expired.account == strings.ToLower(installation.Account.Login) &&
+			a.expired.accountID == installation.Account.ID {
+			return authorityCandidate{
+				kept:           true,
+				installationID: installation.ID,
+				account:        a.expired.account,
+				accountID:      a.expired.accountID,
+			}, true, false
+		}
+		if a.expired.installationID == installation.ID {
+			return authorityCandidate{}, false, true
+		}
 	}
 	return authorityCandidate{}, false, false
 }
