@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -235,6 +236,39 @@ func TestRepeatedQuarantineKeepsOneWithdrawalAndEveryRequest(t *testing.T) {
 	// implies is already recorded.
 	if len(journal.Entries) != 2 {
 		t.Fatalf("audit entries are %+v, want both requests", journal.Entries)
+	}
+}
+
+// TestInstallationRemovalsReadsOneRegistrationsRequests pins the read
+// onboarding uses to name a removed installation: both actions, in recording
+// order, and nothing from another registration.
+func TestInstallationRemovalsReadsOneRegistrationsRequests(t *testing.T) {
+	t.Parallel()
+	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
+
+	removal := removalRecord(702, publish.InstallationRemovalUntrustedOwner)
+	other := removalRecord(703, publish.InstallationRemovalUnbound)
+	other.RegistrationID = 502
+	quarantine := removalRecord(701, publish.InstallationRemovalGrantDrift)
+	quarantine.RequestedAt = fixtureTime.Add(time.Minute)
+	quarantine.ObservedRepositoryIDs = []int64{fixtureRepositoryID, fixtureRepositoryID + 1}
+	if err := store.RecordInstallationRemoval(removal); err != nil {
+		t.Fatalf("record removal: %v", err)
+	}
+	if err := store.RecordInstallationRemoval(other); err != nil {
+		t.Fatalf("record other registration's removal: %v", err)
+	}
+	if err := store.RecordInstallationQuarantine(quarantine); err != nil {
+		t.Fatalf("record quarantine: %v", err)
+	}
+
+	removals, err := reopenAuthorityStore(t, dir).InstallationRemovals(t.Context(), 501)
+	if err != nil {
+		t.Fatalf("installation removals: %v", err)
+	}
+	want := []publish.InstallationRemovalRecord{removal, quarantine}
+	if !reflect.DeepEqual(removals, want) {
+		t.Fatalf("removals are %+v, want %+v", removals, want)
 	}
 }
 

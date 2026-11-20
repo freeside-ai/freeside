@@ -415,6 +415,50 @@ func (s *InstallationAuthorityStore) record(action janitorAction, record Install
 	return s.writeFile(installationJanitorJournalFileName, payload)
 }
 
+// InstallationRemovals returns the registration's journaled removal and
+// quarantine requests, in the order the janitor recorded them. It is
+// read-only and exists so onboarding can tell the operator that the
+// installation it waits for is gone. Entries an operator trimmed are not
+// reported.
+func (s *InstallationAuthorityStore) InstallationRemovals(
+	ctx context.Context,
+	registrationID int64,
+) ([]InstallationRemovalRecord, error) {
+	if s == nil {
+		return nil, errors.New("installation janitor journal: nil store")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	journal, err := s.loadJournalLocked()
+	if err != nil {
+		return nil, err
+	}
+	var removals []InstallationRemovalRecord
+	for _, entry := range journal.Entries {
+		if entry.RegistrationID != registrationID {
+			continue
+		}
+		removals = append(removals, InstallationRemovalRecord{
+			RequestedAt:           entry.RequestedAt,
+			RegistrationID:        entry.RegistrationID,
+			InstallationID:        entry.InstallationID,
+			AccountID:             entry.AccountID,
+			Reason:                entry.Reason,
+			ObservedRepositoryIDs: slices.Clone(entry.ObservedRepositoryIDs),
+		})
+	}
+	return removals, nil
+}
+
+// JournalPath is where the janitor journal lives, for messages that send the
+// operator to it.
+func (s *InstallationAuthorityStore) JournalPath() string {
+	return filepath.Join(s.dir, installationJanitorJournalFileName)
+}
+
 // lockJournal takes the exclusive advisory lock for authority and journal
 // read-modify-write operations. The in-process mutex belongs to one store
 // value, and nothing stops a composer from constructing one store per port or
