@@ -35,6 +35,14 @@
         ],
         "recommendation": "Current and previous"
       }
+    ],
+    "previous_answers": [
+      {
+        "decision_index": 0,
+        "option_label": "Current only",
+        "note": null,
+        "item_id": "question-earlier-task"
+      }
     ]
   }
 }

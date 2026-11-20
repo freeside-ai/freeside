@@ -78,6 +78,8 @@
 //   - specification.go, specification_discussion.go, specification_retry.go
 //     the specification workflow, its discussion, and its retry
 //   - specification_plan.go recognizing a bound issue's current plan comment
+//   - specification_previous_answer.go the owner's earlier answers a re-asked
+//     specification question carries
 //   - production_workflow.go the production lane's dispatch intents
 //   - production_attempt.go a deliberate new implementation attempt
 //   - production_question.go a blocked implementation's agent question

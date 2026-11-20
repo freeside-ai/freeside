@@ -314,6 +314,11 @@ func seedAgentQuestion(s seeder, at time.Time) error {
 			},
 			Recommendation: "Current and previous",
 		}},
+		// The owner answered this on an earlier task with the same source
+		// (#3443), so the card opens with that answer chosen.
+		PreviousAnswers: []domain.PreviousAnswer{{
+			DecisionIndex: 0, OptionLabel: new("Current only"), ItemID: "question-earlier-task",
+		}},
 	}
 	factsDigest, err := facts.ComputeDigest()
 	if err != nil {

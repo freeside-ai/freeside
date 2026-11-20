@@ -5386,6 +5386,24 @@ is the abandon's result for that task. When the cleanup fails after the
 new task committed, `submit` prints the result, exits 1, and names the
 `abandon -task <task-id> -episode <episode>` repair.
 
+**A re-asked specification question carries the owner's earlier answers.**
+When a specification question asks a decision the owner already answered,
+on this task or on another task in the same project that holds the same
+submitted source (as after `--replace`), the item's
+`agent_question.previous_answers` names that answer: the chosen option's
+exact label, or the text typed for "Other answer". A decision matches an
+earlier one with the same set of option labels, in any order, and otherwise
+one with the same question text; the newest earlier question decides, and
+among its decisions with those labels, such as two Yes/No questions, the one
+with the same text. A chosen label carries only while the new decision still
+offers it. A typed answer from before the client sent chosen options carries
+only for a one-decision question, since it can't be split across several,
+and only within the 6 KiB an answer's note may hold. The clients
+open the card with each answer chosen for the owner to confirm or change;
+the daemon never answers or retries on its own, and the answers stay outside
+the Question claim's digest. A failed lookup logs a warning and asks without
+them.
+
 **`prod` keeps running, without execution.** The operator neither stops
 nor restores the `prod` daemon around a start: an executing `prod` is paused
 before the run and resumed after it (Pause Execution For A Deputy Run). The
