@@ -298,8 +298,9 @@ func TestExternalReviewCycleRemediatesAnAcceptedFinding(t *testing.T) {
 	if pushed != remediated.HeadSHA {
 		t.Fatalf("pull request head = %s, want the remediated head %s", pushed, remediated.HeadSHA)
 	}
-	if p.room.runs != 3 {
-		t.Fatalf("verification runs = %d, want the first head, the cycle, and the remediation", p.room.runs)
+	// The cycle reuses the first head's verification (issue #3445).
+	if p.room.runs != 2 {
+		t.Fatalf("verification runs = %d, want the first head and the remediation", p.room.runs)
 	}
 	if ready := p.currentReadyItem(t); ready.Status != domain.StatusOpen ||
 		ready.PRHeadSHA != remediated.HeadSHA {

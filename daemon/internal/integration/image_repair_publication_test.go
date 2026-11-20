@@ -230,3 +230,28 @@ func TestImageRepairReentryTakesTheRepairGateOnlyAtTheTip(t *testing.T) {
 			len(builder.requests), len(images), p.room.runs, p.room.images, images[1].ID)
 	}
 }
+
+// A maintenance task's external review cycle at its refusal's tip verifies
+// its unchanged head again under the repair gate instead of reusing the
+// first cycle's verification: the repair path is outside reuse (issue #3445).
+func TestImageRepairExternalReviewVerifiesAgain(t *testing.T) {
+	t.Parallel()
+	p, _ := newImageRepairPublicationHarness(t, nil, imageRepairCase{})
+	p.publishReady(t)
+	head := p.replay.HeadSHA
+	p.listExternalReviewers(t, externalMaintainer())
+	p.leaveExternalFinding(t, 1, externalMaintainer(), head, "this leaks the handle")
+	if !p.startExternalReview(t) {
+		t.Fatal("an admitted finding on the published head started no cycle")
+	}
+	p.scriptCleanReview(2, p.baseSHA, head)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if end := p.externalReviewEnd(t); len(end.reviewItems) != 1 {
+		t.Fatalf("cycle end = %#v, want it to reach its review item", end)
+	}
+	if p.room.runs != 2 {
+		t.Fatalf("verification runs = %d, want the first head and the cycle's own", p.room.runs)
+	}
+}
