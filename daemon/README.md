@@ -2994,6 +2994,10 @@ lineup supplies each role's model and effort and the revision the policy
 records. `-agent-tree-commit` is the full commit id. `-drain-first` is
 optional and takes a usage pool id, as `freesided auth list` prints it.
 
+To prove routing for a role, order that role. The example orders no
+specifier: the specifier runs on the lineup, and the implementer is still
+routed (Route A Task To One Pool).
+
 - **Each `set` replaces the whole policy.** A role left out of it keeps
   lineup behaviour, and a `set` without `-drain-first` clears the account,
   whatever an earlier revision said. There's no command yet that returns the
@@ -3061,9 +3065,12 @@ does for an operator's.
   (`specifier`, `implementer`, `remediator`, `reviewer`) that has no line,
   when the current policy orders that role. It doesn't run if any role
   already has a router line, or if a run of the task was already admitted
-  for a task-line role through the lineup. A task admitted before the policy
-  was set stays on the lineup. A role the policy doesn't order is admitted
-  through the lineup, as before.
+  through the lineup for a role the current policy orders. A task the
+  lineup admitted before the policy was set, for a role the policy now
+  orders, stays on the lineup. A role the policy doesn't order is admitted
+  through the lineup, as before, and that admission doesn't stop routing:
+  a specifier the policy leaves out runs on the lineup, and the implementer
+  after it is still routed.
 - **It ranks the pools in three tiers** (`docs/plan.md` §5.4, revision 107).
   A candidate is an ordered enrollment running the role's lineup model and
   effort. Candidates on the policy's drain-first account come first, when
