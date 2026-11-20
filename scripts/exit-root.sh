@@ -38,7 +38,9 @@
 #   3. Build <root>/builds/<sha>/freesided from `git archive`, stamped with
 #      -X main.version=<sha> (preflight's daemon_build check needs the stamp).
 #   4. Render <root>/daemon/settings.json, mode 0600, from the machine file,
-#      the template, and the state file, on every run.
+#      the template, and the state file, on every run. The template's
+#      repository.base_sha seeds a fresh root; once a review has run, the
+#      rendered repository.base_sha is the tip that review covered.
 #   5. Pin images.agent and approved_recipe from
 #      <root>/daemon/onboard-approved.json whenever it holds a completed
 #      approval the script hasn't pinned from yet. When the settings or the
@@ -61,15 +63,22 @@
 #      fresh root. The start waits as long as the deputy's log grows, and
 #      gives up once the log stays still for EXIT_ROOT_SERVE_STALL_SECONDS
 #      (default 900).
-#   6. Once onboarded, run the onboarding review again when the review
-#      configuration digest or repository.base_sha differs from the ones
-#      the last review bound, since prelaunch keeps passing the old trust
-#      profile; before that review's approval, stop with its approval
-#      command. A review that changes nothing the active approval trusts
-#      completes on its own (`freesided onboard` carries the approval
-#      forward): its output becomes the completed approval, step 5 pins its
-#      image, and the run goes on with no stop. Then run
-#      `freesided prelaunch -no-live` and act on its first_missing:
+#   6. Every onboarding review runs at the base ref's tip, fetched from the
+#      repository checkout's origin just before `freesided onboard` runs
+#      (which refuses any other -commit), with no deputy start in between;
+#      the state file records that tip, and step 4 pins the deputy to it.
+#      A review refused because the tip moved in those seconds keeps the
+#      completed approval in place, and a rerun reviews the new tip with no
+#      start first. Once onboarded, run the review again when the review
+#      configuration digest or the template's repository.base_sha differs
+#      from the ones the last review answered, since prelaunch keeps passing
+#      the old trust profile; the base ref moving on its own asks for none.
+#      Before that review's approval, stop with its approval command. A
+#      review that changes nothing the active approval trusts completes on
+#      its own (`freesided onboard` carries the approval forward): its
+#      output becomes the completed approval, step 5 pins its image, and the
+#      run goes on with no stop. Then run `freesided prelaunch -no-live` and
+#      act on its first_missing:
 #      trust_profile: run the onboarding review (never -approve) with the
 #        state file's review digest and stop with the approval command,
 #        unless it carried the approval forward;
@@ -207,7 +216,8 @@ trap cleanup EXIT
 
 # ------------------------------------------------------------ the template
 # Settings paths the script sets itself; a template or machine file that sets
-# one, or a key inside one, is refused.
+# one, or a key inside one, is refused. repository.base_sha isn't one: the
+# template seeds it, and the script overrides it only once a review has run.
 computed_paths='[["version"],["listen"],["seed_root"],["prompts","prompt_package"],
   ["prompts","specification_prompt_package"],["prompts","remediation_prompt_package"],
   ["repository","checkout"],["agent_tree","commit"],["agent_tree","second_writer"],
@@ -275,6 +285,9 @@ if [[ -z "$scenario" ]]; then
   [[ -n "$repo" ]] || refuse 'neither the template nor the machine file sets repository.repo'
   repo_checkout=$(jq -r --arg r "$repo" '.exit_root.repositories[$r].checkout // empty' "$machine")
   [[ "$repo_checkout" == /* ]] || refuse "the machine file names no absolute exit_root.repositories[\"$repo\"].checkout"
+  # The template's pin, read here once: the rendered settings carry the last
+  # reviewed tip in its place.
+  template_base=$(jq -r '.repository.base_sha // empty' "$work/sources.json")
   tree_checkout=$(jq -r '.agent_tree.checkout // empty' "$work/sources.json")
   [[ "$tree_checkout" == /* ]] || refuse 'agent_tree.checkout must be an absolute path'
   second_writer=$(jq -r '.second_writer // false' <<<"$pass_json")
@@ -385,6 +398,8 @@ if [[ -z "$(state_get .tree_commit)" ]]; then
   state_set tree_commit "\"$tree_start\""
 fi
 
+# render_settings: once a review has run, repository.base_sha is the tip it
+# reviewed, so the deputy runs at the base its approval binds.
 render_settings() {
   local second='null'
   [[ "$second_writer" != true ]] || second=$(jq -c '.exit_root.second_writer' "$machine")
@@ -400,7 +415,8 @@ render_settings() {
         specification_prompt_package: ($prompts + "/specifier.md"),
         remediation_prompt_package: ($prompts + "/remediator.md")
       },
-      repository: {checkout: $checkout},
+      repository: ({checkout: $checkout}
+        + (if $s[0].onboarded.base_sha == null then {} else {base_sha: $s[0].onboarded.base_sha} end)),
       agent_tree: ({commit: $s[0].tree_commit} + (if $second == null then {} else {second_writer: $second} end)),
       images: {agent: ($s[0].image // $m[0].exit_root.placeholder.image)},
       approved_recipe: ($s[0].recipe // $m[0].exit_root.placeholder.recipe)
@@ -569,29 +585,48 @@ emit_head() {
   printf 'client=bash %s --attach %s\n' "$(printf '%q' "$src/scripts/dev-instance.sh")" "$(printf '%q' "$root")"
 }
 
+# resolve_tip <base_ref>: fetches the base ref from the repository checkout's
+# origin and prints its tip. The fetch also puts the tip in the checkout,
+# which `freesided onboard -source` reads the commit's image inputs from.
+resolve_tip() {
+  git -C "$repo_checkout" fetch --quiet --no-tags origin "$1" 2>"$logs/fetch-base.err" || {
+    tail -n 20 "$logs/fetch-base.err" >&2
+    die "could not fetch $1 from origin in $repo_checkout; the review needs the base ref's tip"
+  }
+  git -C "$repo_checkout" rev-parse --verify --quiet 'FETCH_HEAD^{commit}' ||
+    die "fetching $1 in $repo_checkout gave no commit"
+}
+
 # onboard_review: the one-time review, never -approve; stops with exit 3
 # unless the review carried the active approval forward, which it records
 # as the completed approval and returns. The digest comes from the state
 # file, so a rerun that starts no deputy (the installation resume) still
-# has it.
+# has it. `freesided onboard` refuses a -commit that isn't the base ref's
+# live tip, so the review runs at the tip fetched just before it, with no
+# deputy start in between, and the settings then pin the deputy there.
 onboard_review() {
-  local digest args=() arg status review="$root/daemon/onboard-review.json" approved="$root/daemon/onboard-approved.json"
+  local digest tip bound args=() arg status review="$root/daemon/onboard-review.json" approved="$root/daemon/onboard-approved.json"
   digest=$(state_get .review_configuration_digest)
   [[ -n "$digest" ]] || die "the last composed start's manifest names no review_configuration_digest; see $logs/composition-manifest.json"
+  tip=$(resolve_tip "$(setting .repository.base_ref)") || exit 1
   args=(onboard "$(setting .repository.repo)" -db "$root/daemon/freeside.db"
-    -repository-id "$(setting .repository.repository_id)" -commit "$(setting .repository.base_sha)"
+    -repository-id "$(setting .repository.repository_id)" -commit "$tip"
     -base-ref "$(setting .repository.base_ref)" -source "$repo_checkout" -review-config-digest "$digest")
   while IFS= read -r arg; do args+=("$arg"); done < <(jq -r --arg r "$repo" \
     '(.exit_root.onboard_args // [])[], (.exit_root.repositories[$r].onboard_args // [])[]' "$machine")
   [[ "$(state_get .onboard_resume)" != true ]] || args+=(-resume)
-  # An approval from before this review binds an older review; keep it, but
-  # out of the way of the step that reads the new one.
-  [[ ! -e "$approved" ]] || mv "$approved" "$root/daemon/onboard-approved.superseded-$(date +%s).json"
-  say "running the onboarding review (log: $logs/onboard-review.err)"
+  say "running the onboarding review at $tip (log: $logs/onboard-review.err)"
   "$freesided" "${args[@]}" >"$review" 2>"$logs/onboard-review.err" || {
     tail -n 20 "$logs/onboard-review.err" >&2
-    die 'the onboarding review failed'
+    die 'the onboarding review failed; the completed approval, if any, stays in place, and a rerun reviews the tip again'
   }
+  # An approval from before this review binds an older review; keep it, but
+  # out of the way of the step that reads the new one. A refused review
+  # leaves it where it is.
+  [[ ! -e "$approved" ]] || mv "$approved" "$root/daemon/onboard-approved.superseded-$(date +%s).json"
+  # What this review bound, so a later run sees when either moves.
+  bound=$(jq -n --arg d "$digest" --arg b "$tip" --arg t "$template_base" \
+    '{review_configuration_digest: $d, base_sha: $b, template_base_sha: $t}')
   status=$(jq -r '.status // empty' "$review")
   case $status in
   installation_pending)
@@ -605,9 +640,8 @@ onboard_review() {
     local command
     command="$(printf '%q ' "$freesided" "${args[@]}" -approve "$(jq -r '.approval_digest' "$review")")> $(printf '%q' "$approved")"
     state_set approval_command "$(jq -n --arg c "$command" '$c')"
-    # What this review bound, so a later run sees when either moves.
-    state_set onboarded "$(jq -n --arg d "$digest" --arg b "$(setting .repository.base_sha)" \
-      '{review_configuration_digest: $d, base_sha: $b}')"
+    state_set onboarded "$bound"
+    render_settings
     emit_head
     say "read the review in $review before approving"
     printf 'approval=%s\n' "$command"
@@ -617,8 +651,8 @@ onboard_review() {
     # Nothing the active approval trusts changed, so the review carried it
     # forward: the review's output is the completed approval.
     cp "$review" "$approved"
-    state_set onboarded "$(jq -n --arg d "$digest" --arg b "$(setting .repository.base_sha)" \
-      '{review_configuration_digest: $d, base_sha: $b}')"
+    state_set onboarded "$bound"
+    render_settings
     say "the onboarding review carried the active approval forward; no approval needed"
     onboard_carried=true
     ;;
@@ -690,25 +724,29 @@ take_onboarding_image() {
 }
 
 # check_onboarding: prelaunch keeps passing a trust profile whose review
-# configuration or base has since moved, so the script compares both with
-# what its onboarding review bound and reviews again when either moved. A
-# review not yet approved stops for its approval rather than running again.
-# A root onboarded before the script recorded this skips the check.
+# configuration or base has since moved, so the script compares the review
+# configuration digest and the template's repository.base_sha with what its
+# onboarding review answered, and reviews again, once, when either moved.
+# The base ref moving on its own asks for no review: the deputy stays pinned
+# to the tip the last review bound. A review not yet approved stops for its
+# approval rather than running again. A root onboarded before the script
+# recorded this skips the check, and one recorded before it kept the
+# template's pin reads the reviewed base, which was then that pin.
 check_onboarding() {
-  local bound_digest bound_base digest base
+  local bound_digest bound_base digest moved=false
   [[ -n "$(state_get .onboarded)" ]] || return 0
   bound_digest=$(state_get .onboarded.review_configuration_digest)
-  bound_base=$(state_get .onboarded.base_sha)
+  bound_base=$(state_get '.onboarded.template_base_sha // .onboarded.base_sha')
   digest=$(state_get .review_configuration_digest)
-  base=$(setting .repository.base_sha)
   if [[ "$digest" != "$bound_digest" ]]; then
     say "the review configuration moved from $bound_digest to $digest since the onboarding review; reviewing again"
-    onboard_review
+    moved=true
   fi
-  if [[ "$base" != "$bound_base" ]]; then
-    say "repository.base_sha moved from $bound_base to $base since the onboarding review; reviewing again"
-    onboard_review
+  if [[ "$template_base" != "$bound_base" ]]; then
+    say "repository.base_sha moved from $bound_base to $template_base in the template since the onboarding review; reviewing the base ref's tip"
+    moved=true
   fi
+  [[ "$moved" == false ]] || onboard_review
   approved_complete || stop_for_approval
 }
 

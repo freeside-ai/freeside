@@ -4912,7 +4912,13 @@ recorded before execution.
 Freeside onboards itself for its whole repository (plan §11, revisions
 92, 113, and 120). It runs the `freesided onboard` flow above with
 these inputs. `-commit` must equal the live `-base-ref` head, so
-onboard from a `main` that already carries `.freeside/verify.json`.
+onboard from a `main` that already carries `.freeside/verify.json`. On a
+busy `main`, read the head in the same command line as the review, so no
+merge lands in between: `git -C <checkout> fetch origin main && freesided
+onboard ... -source <checkout> -commit "$(git -C <checkout> rev-parse
+FETCH_HEAD)"`. The fetch also puts that commit in the `-source` checkout,
+which reads the commit's image inputs. When a merge still lands first, the
+refusal prints the review at the new head; run it at once.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
   thirteen commands. Eight run in the project image. The first two are the
