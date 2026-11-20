@@ -5021,11 +5021,17 @@ onboard from a `main` that already carries `.freeside/verify.json`.
 
   ```json
   [".agents/**", ".claude/**", ".freeside/**", ".githooks/**", ".github/**",
-   ".git-blame-ignore-revs", ".gitattributes", "AGENTS.md", "CLAUDE.md",
-   "CONTRIBUTING.md", "LICENSE", "LICENSING-PHILOSOPHY.md", "README.md",
-   "api/**", "app/**", "daemon/**", "devlog/**", "docs/**", "images/**",
-   "policy/**", "prompts/**", "scripts/**"]
+   ".git-blame-ignore-revs", ".gitattributes", ".worktree-disposables",
+   "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "LICENSE",
+   "LICENSING-PHILOSOPHY.md", "README.md", "api/**", "app/**", "daemon/**",
+   "devlog/**", "docs/**", "images/**", "policy/**", "prompts/**",
+   "scripts/**"]
   ```
+
+  `.worktree-disposables` names the build output merge-cleanup's worktree
+  sweep may delete. It is allowed because the sweep reads it at the base
+  commit, so a writer's edit takes effect only once the owner merges it,
+  as with `scripts/**`.
 
   The `paths` key of the policy file `freesided submit -policy` reads holds
   the same list in the same order: `admissionauth.ResolvedPathAllowlist`
