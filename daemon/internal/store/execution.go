@@ -67,6 +67,28 @@ JOIN outbox AS dispatch
 WHERE admission.invocation_id <> ?
   AND dispatch.status IN ('dispatching', 'dispatched')`
 
+	// Run, stage, and attempt are unchanged by a supersession, so only the
+	// columns a fresh admission can change are set. Matching the stored id
+	// keeps the update from landing on a row another writer replaced.
+	supersedeExecutionAdmissionSQL = `
+UPDATE execution_admissions
+SET id = ?, auth_identity_id = ?, agent_digest = ?, enrollment_id = ?,
+    enrollment_generation = ?, admitted_at = ?, body = ?
+WHERE invocation_id = ? AND id = ?`
+	recordSupersededExecutionAdmissionSQL = `
+INSERT INTO superseded_execution_admissions
+    (admission_id, invocation_id, superseding_admission_id, superseded_at, body)
+VALUES (?, ?, ?, ?, ?)`
+	listSupersededExecutionAdmissionsSQL = `
+SELECT body FROM superseded_execution_admissions WHERE invocation_id = ? ORDER BY rowid`
+	// Every table whose rows cite an admission's id, which a supersession
+	// would orphan, and each of which the attempt writes only once it ran.
+	executionAttemptStartedSQL = `
+SELECT EXISTS (SELECT 1 FROM execution_exports WHERE invocation_id = ?1)
+    OR EXISTS (SELECT 1 FROM execution_outcomes WHERE invocation_id = ?1)
+    OR EXISTS (SELECT 1 FROM export_rejections WHERE invocation_id = ?1)
+    OR EXISTS (SELECT 1 FROM current_import_starts WHERE invocation_id = ?1)`
+
 	// A run's admissions by insertion order, without decoding one: asking
 	// whether an attempt ended must not depend on re-gating its admission.
 	listRunExecutionAttemptsSQL = `
@@ -128,7 +150,10 @@ FROM export_rejections WHERE invocation_id = ?`
 //
 // Write-once: a byte-identical replay converges on the stored row, and a
 // second admission of the same invocation with different content fails with
-// ErrImmutableConflict.
+// ErrImmutableConflict. The one exception is
+// SupersedeUnstartedExecutionAdmission, which replaces an unattended
+// admission whose driver never started once its backend configuration has
+// changed.
 //
 // It also registers the run's project against the admission's base repository
 // in the same transaction (issue #1535), so a run with a recorded admission
@@ -291,6 +316,138 @@ func (tx *WriteTx) reserveAdmittedDispatch(ctx context.Context, admission domain
 		return fmt.Errorf("reserve execution dispatch %q: %w", admission.InvocationID, err)
 	}
 	return nil
+}
+
+// ErrAdmissionNotSupersedable refuses a supersession whose stored admission
+// is not an unstarted unattended admission the fresh one may replace.
+var ErrAdmissionNotSupersedable = errors.New("execution admission cannot be superseded")
+
+// SupersedeUnstartedExecutionAdmission replaces stale, the stored unattended
+// admission of an attempt the driver never started, with fresh, an admission
+// of the same attempt under another backend configuration (issue #3433). It
+// is the one exception to the admission's write-once rule. Without it, an
+// attempt admitted under configuration A and still waiting when the daemon
+// moved to B could never start: the start authority refuses A in a process
+// that yields B, and a recorded attempt replays only its stored admission.
+//
+// It refuses with ErrAdmissionNotSupersedable, writing nothing, unless the
+// stored row is exactly stale, both are unattended, fresh names the same
+// invocation, run, stage, attempt, and base, the two bind different
+// configurations, and the invocation has no export, outcome, export
+// rejection, or import start: any of those means the attempt ran. Proving
+// the driver holds no intent for the invocation is the caller's half,
+// because only the driver knows. fresh then passes every gate a new
+// admission passes, and a refusal there leaves stale in place.
+//
+// The row is updated in place, so its rowid, and with it the run's
+// admission order (runBase's legacy fallback reads the first), stays put;
+// stale moves to superseded_execution_admissions. The run's
+// invocation_admitted milestone stays the first admission's, because a run
+// records one per invocation. A credentialed fresh admission takes the
+// dispatch reservation a new admission takes.
+func (tx *WriteTx) SupersedeUnstartedExecutionAdmission(
+	ctx context.Context, stale, fresh domain.ExecutionAdmission, memory *MemoryReservation,
+) error {
+	refuse := func(format string, args ...any) error {
+		return fmt.Errorf("supersede execution admission %q: %s: %w",
+			stale.InvocationID, fmt.Sprintf(format, args...), ErrAdmissionNotSupersedable)
+	}
+	if fresh.BackupEncryptionWaiver != nil {
+		return fmt.Errorf("supersede execution admission %q: %w",
+			stale.InvocationID, domain.ErrBackupEncryptionWaiverUnsupported)
+	}
+	if stale.OperatingMode != domain.ModeUnattended || fresh.OperatingMode != domain.ModeUnattended {
+		return refuse("operating modes %q and %q, want unattended", stale.OperatingMode, fresh.OperatingMode)
+	}
+	if fresh.InvocationID != stale.InvocationID || fresh.RunID != stale.RunID ||
+		fresh.StageID != stale.StageID || fresh.AttemptID != stale.AttemptID {
+		return refuse("fresh admission names invocation %q of run %q, stage %q, attempt %q",
+			fresh.InvocationID, fresh.RunID, fresh.StageID, fresh.AttemptID)
+	}
+	if fresh.Base != stale.Base {
+		return refuse("fresh admission starts at %s, the stored one at %s", fresh.Base.BaseSHA, stale.Base.BaseSHA)
+	}
+	if fresh.BackendConfigurationDigest == stale.BackendConfigurationDigest {
+		return refuse("both admissions bind configuration %s", stale.BackendConfigurationDigest)
+	}
+	staleBody, err := encode(stale)
+	if err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	freshBody, err := encode(fresh)
+	if err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	existing, err := tx.existingBody(ctx, selectExecutionAdmissionBodySQL, stale.InvocationID)
+	if err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	if existing == nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, ErrNotFound)
+	}
+	if string(existing) != staleBody {
+		return refuse("the stored admission is not %s", stale.ID)
+	}
+	var started bool
+	if err := tx.tx.QueryRowContext(ctx, executionAttemptStartedSQL, stale.InvocationID).Scan(&started); err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	if started {
+		return refuse("the attempt has a recorded export, outcome, or import start")
+	}
+	run, err := tx.requireAdmissionGates(ctx, fresh)
+	if err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	if err := tx.requireNewAdmissionGates(ctx, run, fresh, memory); err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	if _, err := tx.tx.ExecContext(ctx, recordSupersededExecutionAdmissionSQL,
+		stale.ID, stale.InvocationID, fresh.ID, formatTime(fresh.AdmittedAt), staleBody); err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	identity, agentDigest, enrollmentID, enrollmentGeneration := admissionColumns(fresh)
+	result, err := tx.tx.ExecContext(ctx, supersedeExecutionAdmissionSQL,
+		fresh.ID, identity, agentDigest, enrollmentID, enrollmentGeneration,
+		formatTime(fresh.AdmittedAt), freshBody, stale.InvocationID, stale.ID)
+	if err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	}
+	if updated, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
+	} else if updated != 1 {
+		return fmt.Errorf("supersede execution admission %q: updated %d rows: %w",
+			stale.InvocationID, updated, errRowInconsistent)
+	}
+	return tx.reserveAdmittedDispatch(ctx, fresh)
+}
+
+// ListSupersededExecutionAdmissions returns the admissions superseded for
+// one invocation, oldest first. It is history: nothing starts from them.
+func (tx *ReadTx) ListSupersededExecutionAdmissions(
+	ctx context.Context, id domain.InvocationID,
+) ([]domain.ExecutionAdmission, error) {
+	rows, err := tx.tx.QueryContext(ctx, listSupersededExecutionAdmissionsSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("list superseded execution admissions %q: %w", id, err)
+	}
+	defer rows.Close() //nolint:errcheck // rows.Err below reports any deferred-close failure
+	var admissions []domain.ExecutionAdmission
+	for rows.Next() {
+		var body []byte
+		if err := rows.Scan(&body); err != nil {
+			return nil, fmt.Errorf("list superseded execution admissions %q: %w", id, err)
+		}
+		admission, err := decode[domain.ExecutionAdmission](body)
+		if err != nil {
+			return nil, fmt.Errorf("list superseded execution admissions %q: %w", id, err)
+		}
+		admissions = append(admissions, admission)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list superseded execution admissions %q: %w", id, err)
+	}
+	return admissions, nil
 }
 
 // ExecutionAttempt names one admitted attempt of a run.

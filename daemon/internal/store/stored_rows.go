@@ -565,6 +565,10 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.GetExecutionAdmissionRecord(ctx, domain.InvocationID(k.s[0])))
 		})},
+	{"superseded execution admission", []string{"superseded_execution_admissions"}, eachKey(`SELECT DISTINCT invocation_id FROM superseded_execution_admissions`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.ListSupersededExecutionAdmissions(ctx, domain.InvocationID(k.s[0])))
+		})},
 	{"execution export", []string{"execution_exports"}, eachKey(`SELECT invocation_id FROM execution_exports`, "s",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.GetExecutionExportRecord(ctx, domain.InvocationID(k.s[0])))

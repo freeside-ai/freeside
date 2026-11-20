@@ -12,6 +12,7 @@ import (
 // leaves: it drops the table 0146 creates and forgets 0146.
 func rewindProjectReadiness(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindSupersededExecutionAdmissions(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE project_readiness`,
 		`DELETE FROM schema_migrations WHERE name = '0146_project_readiness.sql'`,
