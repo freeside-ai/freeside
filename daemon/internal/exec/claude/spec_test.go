@@ -446,7 +446,9 @@ func TestPhase1ASpecifierPromptLeavesEnvelopeHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const promptPackageBudget = 4 << 10
+	// 5 KiB since #3405, by owner decision: the planned-issue rule did not fit
+	// 4 KiB without dropping existing guidance.
+	const promptPackageBudget = 5 << 10
 	if len(prompt) > promptPackageBudget {
 		t.Fatalf("specifier prompt = %d bytes, want <= %d to preserve envelope headroom",
 			len(prompt), promptPackageBudget)
