@@ -65,6 +65,10 @@ file's source_issue, which must equal a task source that is exactly one GitHub
 issue URL. source_reference_omitted gives the reason when the pull request
 will carry no publisher-written issue reference.
 
+replaced_task, present only with --replace, is the abandon result for the
+replaced task: released, episode, workflow_closed, retired_items, and
+cleanup_complete, as freesided abandon reports them.
+
 The approved implementation specification digest is available before start on
 the specification-approval AttentionItem claim, and after the run exists from
 the spec_digest field returned by GET /runs/{implementation_run_id}.
@@ -128,6 +132,8 @@ func runSubmitMain(args []string) {
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
 	submissionID := flags.String("submission-id", "", "prepared identity for new work (otherwise generated and saved before submission)")
 	retrySubmissionID := flags.String("retry-submission-id", "", "manually retry a saved submission using its original inputs")
+	replaceTaskID := flags.String("replace", "", "abandon this task and submit the new one in the same write; the task must be "+
+		"in -project, hold the submitted source, be unfinished, and have only execution failures open")
 	var taskLines taskLineFlag
 	flags.Var(&taskLines, "task-line", "choose what runs this task's role, as role=enrollment/model/effort "+
 		"(repeatable; roles: "+taskLineRoleList()+"); a line that cannot be honored refuses the attempt and never "+
@@ -173,8 +179,14 @@ func runSubmitMain(args []string) {
 		RequireComposition: *requireComposition,
 		ProjectID:          domain.ProjectID(*projectID),
 		TaskLines:          taskLines, AttachPaths: attachPaths,
+		ReplaceTaskID: domain.TaskID(*replaceTaskID),
 	})
 	if err != nil {
+		// A replacement whose cleanup failed still created the new task, so
+		// the result is printed beside the repair command.
+		if result.TaskID != "" {
+			_ = json.NewEncoder(os.Stdout).Encode(result)
+		}
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
@@ -263,6 +275,12 @@ type submitCommandConfig struct {
 	// tag omits the field when there are none, which keeps an
 	// attachment-less journal the bytes it was before the field existed.
 	Attachments []signet.TaskAttachmentInput `json:",omitempty"`
+	// ReplaceTaskID is the --replace task, which the submission abandons in
+	// the write that creates the new task. The journal keeps it so a manual
+	// retry replays the choice; the tag omits it when unset, which keeps a
+	// journal saved without the flag the bytes it was before the field
+	// existed.
+	ReplaceTaskID domain.TaskID `json:",omitempty"`
 	// attachmentFiles hold the --attach bytes of a new submission until they
 	// are stored, before the journal is written.
 	attachmentFiles []attachmentFile
@@ -349,6 +367,9 @@ type submitResult struct {
 	// publication names none.
 	SourceIssue            string `json:"source_issue,omitempty"`
 	SourceReferenceOmitted string `json:"source_reference_omitted,omitempty"`
+	// ReplacedTask is the abandon outcome of the --replace task, absent
+	// without the flag.
+	ReplacedTask *abandonResult `json:"replaced_task,omitempty"`
 }
 
 // The reasons a submission's stored publication names no source issue.
@@ -449,6 +470,10 @@ type submitApplyRequest struct {
 	// Attachments reference blobs already stored beside the database, in
 	// submitted order; omitted when there are none, like TaskLines.
 	Attachments []signet.TaskAttachmentInput `json:",omitempty"`
+	// ReplaceTaskID is the task the submission abandons in its write;
+	// omitted when unset, like TaskLines, so a daemon that predates the
+	// field refuses a replacement rather than ignore it.
+	ReplaceTaskID domain.TaskID `json:",omitempty"`
 }
 
 // readSubmissionFile hashes one input file under the size cap. The digest is
@@ -714,7 +739,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		Keys: keys, WorkUnit: workUnit, ResolvedPolicy: resolvedPolicy,
 		ImplementationRunID: implementationRunID, SpecificationRunID: specificationRunID,
 		CampaignID: campaignID, CompositionDigest: composition.digest,
-		TaskLines: cfg.TaskLines, Attachments: cfg.Attachments,
+		TaskLines: cfg.TaskLines, Attachments: cfg.Attachments, ReplaceTaskID: cfg.ReplaceTaskID,
 	}
 	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeMigrating)
 	if err != nil {
@@ -723,8 +748,10 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if client != nil {
 		defer client.Close()
 		var result submitResult
-		err := client.call(ctx, "/submissions", req, &result)
-		return result, err
+		if err := client.call(ctx, "/submissions", req, &result); err != nil {
+			return result, err
+		}
+		return result, replacementError(result)
 	}
 	defer func() { _ = handle.Close() }()
 	if launchComposition {
@@ -738,7 +765,21 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: open blob store: %w", err)
 	}
-	return applySubmission(ctx, handle.store, blobs, req)
+	result, err := applySubmission(ctx, handle.store, blobs, req)
+	if err != nil {
+		return result, err
+	}
+	return result, replacementError(result)
+}
+
+// replacementError reports a replacement whose cleanup failed after the new
+// task committed. applyLaunchSubmission returns that outcome in the result,
+// as /tasks/abandon does, so the control route still carries the new task.
+func replacementError(result submitResult) error {
+	if result.ReplacedTask != nil && result.ReplacedTask.Error != "" {
+		return errors.New(result.ReplacedTask.Error)
+	}
+	return nil
 }
 
 // applySubmission runs the same store transaction for offline and daemon-routed
@@ -795,18 +836,20 @@ func applyLaunchSubmission(
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	// The task lines and attachments join the fingerprint so a submission
-	// identity names one choice of agents and one list of files. Each is
-	// omitted when empty, which keeps a submission without them at the digest
-	// it had before the field existed, so one recorded then still replays.
+	// The task lines, attachments, and replaced task join the fingerprint so
+	// a submission identity names one choice of agents, one list of files,
+	// and one task it replaces. Each is omitted when empty, which keeps a
+	// submission without them at the digest it had before the field existed,
+	// so one recorded then still replays.
 	fingerprint, err := json.Marshal(struct {
 		Project                                            domain.ProjectID
 		Source, Policy, Publication, WorkUnit, Composition domain.Digest
 		TaskLines                                          []domain.TaskLineChoice      `json:",omitempty"`
 		Attachments                                        []signet.TaskAttachmentInput `json:",omitempty"`
+		ReplaceTaskID                                      domain.TaskID                `json:",omitempty"`
 	}{
 		cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest, composition.digest,
-		req.TaskLines, req.Attachments,
+		req.TaskLines, req.Attachments, req.ReplaceTaskID,
 	})
 	if err != nil {
 		return submitResult{}, err
@@ -863,9 +906,13 @@ func applyLaunchSubmission(
 	if _, err := blobs.Put(policy.digest, bytes.NewReader(policy.body)); err != nil {
 		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
 	}
-	var submitted engine.SpecificationRun
+	var (
+		submitted engine.SpecificationRun
+		replaced  *abandonResult
+	)
 	lookupComplete := errors.New("submission lookup complete")
 	err = st.Write(ctx, func(tx *store.WriteTx) error {
+		replaced = nil
 		replay := false
 		if original, err := tx.GetManualSubmission(ctx, manual.Identity); err == nil {
 			if !original.SameRequest(*manual) {
@@ -878,6 +925,14 @@ func applyLaunchSubmission(
 		if !replay {
 			if err := launch.admit(req.ProjectID, publication.CommitAuthor, composition.digest, resolvedPolicy); err != nil {
 				return fmt.Errorf("submit: %w", err)
+			}
+			if req.ReplaceTaskID != "" {
+				var err error
+				if replaced, err = abandonReplacedTask(
+					ctx, tx, req.ReplaceTaskID, cfg.ProjectID, specArtifact.ID, time.Now().UTC(),
+				); err != nil {
+					return err
+				}
 			}
 			if err := refuseUnfinishedDuplicate(ctx, &tx.ReadTx, cfg.ProjectID, specArtifact.ID); err != nil {
 				return err
@@ -945,7 +1000,124 @@ func applyLaunchSubmission(
 	if workUnit != nil {
 		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)
 	}
+	if req.ReplaceTaskID != "" {
+		if replaced == nil {
+			// A replay: the abandon committed with the new task, and only
+			// the episode is read back so its cleanup can finish.
+			if replaced, err = replayedReplacement(ctx, st, req.ReplaceTaskID); err != nil {
+				return submitResult{}, fmt.Errorf("submit: replaced task %s: %w", req.ReplaceTaskID, err)
+			}
+		}
+		if replaced.Episode == 0 {
+			replaced.CleanupComplete = true
+		} else {
+			// The error is in replaced.Error, which the caller reports.
+			_ = finishAbandonedEpisode(ctx, st, replaced)
+		}
+		result.ReplacedTask = replaced
+	}
 	return result, nil
+}
+
+// errReplaceRefused marks a --replace submission refused because of the task
+// it names. Nothing is written when it is returned.
+var errReplaceRefused = errors.New("replace refused")
+
+// abandonReplacedTask abandons the task a --replace submission names, in the
+// submission's own write, so the new task never runs beside it and the old
+// one is never abandoned for a submission that fails. It refuses unless the
+// task is in the submitted project, holds the submitted source, is
+// unfinished, and has only execution failures open, at least one: that is a
+// task that failed, and any other open item may still need the owner. The
+// open items are the ones abandoning would retire, so an effect or task
+// proposal the episode owns refuses too. A finished task, abandoned or
+// released, is refused: a retry of a submission that already abandoned it
+// never reaches here, since replayedReplacement answers it from the journal,
+// and a retry of one that never committed replaced nothing to report.
+func abandonReplacedTask(
+	ctx context.Context, tx *store.WriteTx, taskID domain.TaskID, project domain.ProjectID, source domain.ArtifactID,
+	now time.Time,
+) (*abandonResult, error) {
+	snapshot, err := tx.GetTaskSnapshot(ctx, taskID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("%w: task %s does not exist", errReplaceRefused, taskID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	task := snapshot.Value
+	switch {
+	case task.ProjectID != project:
+		return nil, fmt.Errorf("%w: task %s is in project %s, not %s", errReplaceRefused, taskID, task.ProjectID, project)
+	case task.Source == nil || task.Source.WorkItemArtifactID != source:
+		return nil, fmt.Errorf("%w: task %s does not hold this submission's source", errReplaceRefused, taskID)
+	}
+	if lifecycle := task.DisplayLifecycle(nil); lifecycle != nil {
+		// A finished task no longer holds its source, so a submission
+		// without --replace, under a new id, is accepted.
+		return nil, fmt.Errorf("%w: task %s is %s; submit without --replace under a new submission id",
+			errReplaceRefused, taskID, *lifecycle)
+	}
+	result := &abandonResult{TaskID: taskID, RetiredItems: []domain.ItemID{}}
+	start := task.CurrentStart()
+	items, err := replacedTaskOpenItems(ctx, &tx.ReadTx, task)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("%w: task %s has no execution failure open; abandon it with `freesided abandon` first if it should stop",
+			errReplaceRefused, taskID)
+	}
+	open := make([]string, 0, len(items))
+	onlyFailures := true
+	for _, item := range items {
+		open = append(open, fmt.Sprintf("%s (%s)", item.ID, item.Type))
+		onlyFailures = onlyFailures && item.Type == domain.AttentionExecutionFailure
+	}
+	if !onlyFailures {
+		return nil, fmt.Errorf("%w: task %s has items open other than execution failures: %s",
+			errReplaceRefused, taskID, strings.Join(open, ", "))
+	}
+	// Submission records a task's start, so an unfinished task has one; a
+	// task without one would hold no slot and record no abandon, and
+	// refuseUnfinishedDuplicate then refuses the submission.
+	if start != nil {
+		result.Episode = start.Ordinal
+	}
+	if result.Released, err = tx.AbandonTask(ctx, taskID, now); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// replacedTaskOpenItems lists the open items abandoning an unfinished task
+// would retire, the set --replace accepts only execution failures in. A task
+// with no start has no episode, so no closure, and nothing to retire.
+func replacedTaskOpenItems(ctx context.Context, tx *store.ReadTx, task domain.Task) ([]domain.AttentionItem, error) {
+	start := task.CurrentStart()
+	if start == nil {
+		return nil, nil
+	}
+	return engine.OpenTaskWorkflowItems(ctx, tx, task.ID, start.Ordinal)
+}
+
+// replayedReplacement reads back the replaced task of an accepted
+// submission. Its abandoned episode is the one the cleanup finishes; a task
+// no longer abandoned has nothing left to clean up.
+func replayedReplacement(ctx context.Context, st *store.Store, taskID domain.TaskID) (*abandonResult, error) {
+	result := &abandonResult{TaskID: taskID, RetiredItems: []domain.ItemID{}}
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		task, err := tx.GetTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		lifecycle, start := task.DisplayLifecycle(nil), task.CurrentStart()
+		if lifecycle != nil && *lifecycle == domain.TaskAbandoned && start != nil {
+			result.Episode = start.Ordinal
+		}
+		return nil
+	})
+	return result, err
 }
 
 // recordSubmittedTaskLines appends the operator's lines to the task a CLI
@@ -1090,11 +1262,11 @@ func validateSubmissionComposition(
 // refuseUnfinishedDuplicate refuses new work whose source is already an
 // unfinished task's in the same project, so one work item cannot run twice
 // by accident. A replay of the same submission never reaches it; deliberate
-// new work on the same source goes through that task's own reattempt, or
-// after it is abandoned. The same source in another project is new work
-// there; a deputy's launch manifest admits only its own project, so in a
-// deputy's store this covers every task. The scan reads every task: a
-// real-work store holds few.
+// new work on the same source goes through that task's own reattempt, after
+// it is abandoned, or with --replace when only execution failures are open.
+// The same source in another project is new work there; a deputy's launch
+// manifest admits only its own project, so in a deputy's store this covers
+// every task. The scan reads every task: a real-work store holds few.
 func refuseUnfinishedDuplicate(
 	ctx context.Context, tx *store.ReadTx, project domain.ProjectID, source domain.ArtifactID,
 ) error {
@@ -1108,12 +1280,38 @@ func refuseUnfinishedDuplicate(
 			task.DisplayLifecycle(nil) != nil {
 			continue
 		}
-		return fmt.Errorf("%w: task %s already holds this source and is not finished; "+
-			"reattempt it with `freesided reattempt`, abandon it with `freesided abandon`, "+
-			"or redeliver its own submission with --retry-submission-id", errDuplicateSource, task.ID)
+		items, err := replacedTaskOpenItems(ctx, tx, task)
+		if err != nil {
+			return err
+		}
+		replaceable := len(items) != 0 && !slices.ContainsFunc(items, func(item domain.AttentionItem) bool {
+			return item.Type != domain.AttentionExecutionFailure
+		})
+		return duplicateSourceError{task: task.ID, replaceable: replaceable}
 	}
 	return nil
 }
+
+// duplicateSourceError is refuseUnfinishedDuplicate's refusal. It names the
+// task holding the source and whether only execution failures are open on
+// it, the case --replace accepts, so prelaunch can say which fix applies.
+type duplicateSourceError struct {
+	task        domain.TaskID
+	replaceable bool
+}
+
+func (e duplicateSourceError) Error() string {
+	if e.replaceable {
+		return fmt.Sprintf("%s: task %s already holds this source and has only execution failures open; "+
+			"replace it with `freesided submit --replace %s`, reattempt it with `freesided reattempt`, "+
+			"or redeliver its own submission with --retry-submission-id", errDuplicateSource, e.task, e.task)
+	}
+	return fmt.Sprintf("%s: task %s already holds this source and is not finished; "+
+		"reattempt it with `freesided reattempt`, abandon it with `freesided abandon`, "+
+		"or redeliver its own submission with --retry-submission-id", errDuplicateSource, e.task)
+}
+
+func (e duplicateSourceError) Unwrap() error { return errDuplicateSource }
 
 // validateLaunchComposition binds a submission to the manifest a deputy
 // composed for its whole run, which names no submission. What the

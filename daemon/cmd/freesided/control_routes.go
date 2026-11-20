@@ -335,6 +335,8 @@ func (p *pairingControl) registerControlRoutes(
 		if err != nil {
 			return nil, err
 		}
-		return applyLaunchSubmission(ctx, st, blobs, req, launch, readinessGate)
+		// The store context lets a --replace cleanup close the workflow
+		// under the daemon's closure guard, as /tasks/abandon does.
+		return applyLaunchSubmission(withStore(ctx), st, blobs, req, launch, readinessGate)
 	})
 }
