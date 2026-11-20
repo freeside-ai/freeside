@@ -1,0 +1,120 @@
+{
+  "project_id": "proj-1",
+  "period": {
+    "start": "2026-11-09T00:00:00Z",
+    "end": "2026-11-16T00:00:00Z"
+  },
+  "tasks_ready": 4,
+  "tasks_ready_without_items": 2,
+  "share_without_items": 0.5,
+  "by_class": [
+    {
+      "interruption_class": "planned_gate",
+      "known": true,
+      "items": 1,
+      "tasks": 1
+    },
+    {
+      "interruption_class": "exceptional",
+      "known": true,
+      "items": 4,
+      "tasks": 2
+    }
+  ],
+  "by_type": [
+    {
+      "type": "execution_failure",
+      "interruption_class": "exceptional",
+      "known": true,
+      "items": 3,
+      "tasks": 2
+    },
+    {
+      "type": "solar_flare",
+      "interruption_class": "exceptional",
+      "known": false,
+      "items": 1,
+      "tasks": 1
+    },
+    {
+      "type": "spec_approval",
+      "interruption_class": "planned_gate",
+      "known": true,
+      "items": 1,
+      "tasks": 1
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "task-f",
+      "ready_item_id": "f-ready-1",
+      "ready_at": "2026-11-09T00:00:00Z",
+      "items": []
+    },
+    {
+      "task_id": "task-c",
+      "ready_item_id": "c-ready",
+      "ready_at": "2026-11-11T00:00:00Z",
+      "items": [
+        {
+          "item_id": "c-fail-1",
+          "type": "execution_failure",
+          "interruption_class": "exceptional",
+          "created_at": "2026-11-10T00:00:00Z"
+        },
+        {
+          "item_id": "c-fail-2",
+          "type": "execution_failure",
+          "interruption_class": "exceptional",
+          "created_at": "2026-11-10T10:00:00Z"
+        },
+        {
+          "item_id": "c-flare",
+          "type": "solar_flare",
+          "interruption_class": "exceptional",
+          "created_at": "2026-11-10T11:00:00Z"
+        }
+      ]
+    },
+    {
+      "task_id": "task-a",
+      "ready_item_id": "a-ready",
+      "ready_at": "2026-11-12T00:00:00Z",
+      "items": []
+    },
+    {
+      "task_id": "task-b",
+      "ready_item_id": "b-ready",
+      "ready_at": "2026-11-14T00:00:00Z",
+      "items": [
+        {
+          "item_id": "b-spec",
+          "type": "spec_approval",
+          "interruption_class": "planned_gate",
+          "created_at": "2026-11-01T00:00:00Z"
+        },
+        {
+          "item_id": "b-fail",
+          "type": "execution_failure",
+          "interruption_class": "exceptional",
+          "created_at": "2026-11-13T00:00:00Z"
+        }
+      ]
+    }
+  ],
+  "task_less": [
+    {
+      "type": "system_health",
+      "interruption_class": "exceptional",
+      "known": true,
+      "items": 1
+    }
+  ],
+  "skipped": [
+    {
+      "table": "attention_items",
+      "row": "item-bad",
+      "error": "no created_at"
+    }
+  ]
+}
