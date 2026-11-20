@@ -29,6 +29,9 @@ struct AgentTranscriptSheet: View {
     /// The invocation's working time; nil drops the time from the closing
     /// line rather than guessing one.
     var workingTime: TimeInterval? = nil
+    /// The prompt the writer received, which the stream doesn't carry; nil
+    /// starts the conversation at the agent's first message.
+    var prompt: String? = nil
     var folds: AgentTranscriptFoldPreferences = .shared
     /// The screenshot composition lays the content out in place of the
     /// scroll view, whose height ImageRenderer cannot settle, and clips it
@@ -47,7 +50,7 @@ struct AgentTranscriptSheet: View {
     /// sheet parses `bytes` off the main actor when it opens.
     init(
         digest: String, bytes: [UInt8], mediaType: String, title: String, outcome: Outcome,
-        workingTime: TimeInterval? = nil, folds: AgentTranscriptFoldPreferences = .shared,
+        workingTime: TimeInterval? = nil, prompt: String? = nil, folds: AgentTranscriptFoldPreferences = .shared,
         presentation: AgentTranscriptPresentation? = nil, showsRaw: Bool = false,
         rendersScrollableContent: Bool = true, screenshotHeight: CGFloat? = nil
     ) {
@@ -57,6 +60,7 @@ struct AgentTranscriptSheet: View {
         self.title = title
         self.outcome = outcome
         self.workingTime = workingTime
+        self.prompt = prompt
         self.folds = folds
         self.rendersScrollableContent = rendersScrollableContent
         self.screenshotHeight = screenshotHeight
@@ -142,7 +146,7 @@ struct AgentTranscriptSheet: View {
                 RawView(presentation: presentation, mediaType: mediaType, lazy: rendersScrollableContent)
             } else {
                 ConversationContent(
-                    presentation: presentation, outcome: outcome, workingTime: workingTime,
+                    presentation: presentation, outcome: outcome, workingTime: workingTime, prompt: prompt,
                     lazy: rendersScrollableContent,
                     fold: { key in
                         Binding(
@@ -223,6 +227,7 @@ private struct ConversationContent: View {
     let presentation: AgentTranscriptPresentation
     let outcome: AgentTranscriptSheet.Outcome
     let workingTime: TimeInterval?
+    let prompt: String?
     let lazy: Bool
     /// The open state of the fold with this key, remembered per transcript.
     let fold: (String) -> Binding<Bool>
@@ -230,6 +235,11 @@ private struct ConversationContent: View {
 
     var body: some View {
         TranscriptStack(lazy: lazy, spacing: 13) {
+            // Rule 2: the conversation starts with the prompt, above the
+            // `Worked for` fold and the failed run's entries alike.
+            if let prompt {
+                PromptBubble(text: prompt)
+            }
             switch outcome {
             case .finished:
                 // Rule 8: the work folds behind `Worked for`, above a
@@ -357,6 +367,29 @@ private struct MessageText: View {
             .foregroundStyle(Color.ink)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Rule 2: the prompt on the trailing side, the operator's side of the
+/// conversation. It is daemon-rendered text, so it draws verbatim, with no
+/// Markdown read into it.
+private struct PromptBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(Color.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color.ground3, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.leading, 48)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            // Its own element before the label, so the label never reaches
+            // the selectable Text through the wrappers (#2993).
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Prompt: \(text)")
     }
 }
 

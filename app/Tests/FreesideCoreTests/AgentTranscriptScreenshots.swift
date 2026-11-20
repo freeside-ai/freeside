@@ -49,7 +49,7 @@
             let sheet = AgentTranscriptSheet(
                 digest: digest, bytes: bytes, mediaType: "application/jsonl",
                 title: "Implementation · Attempt 1", outcome: state == .failed ? .failed : .finished,
-                workingTime: state == .failed ? 9 * 60 : 16 * 60,
+                workingTime: state == .failed ? 9 * 60 : 16 * 60, prompt: state == .raw ? nil : prompt,
                 folds: AgentTranscriptFoldPreferences(defaults: nil, open: [digest: openFolds(state, presentation)]),
                 presentation: presentation, showsRaw: state == .raw, rendersScrollableContent: false,
                 screenshotHeight: state == .end || state == .raw ? 560 : nil)
@@ -78,6 +78,10 @@
 
         // MARK: The Transcript
 
+        /// The prompt the writer received, which the daemon serves beside
+        /// the stream (rule 2). Raw is the stream only, so it shows none.
+        private static let prompt =
+            "Fix the flaky acceptance rig: the probe fires before the fixture server listens. Keep the change to rig/."
         private static let m1 = "I’ll read the rig’s runner and the failing acceptance test first."
         private static let m2 =
             "The rig fails because the probe fires before the fixture server is listening. I’ll move the bind ahead of the probe and add a test for the order."
