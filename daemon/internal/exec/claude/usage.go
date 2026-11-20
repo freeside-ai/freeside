@@ -19,12 +19,20 @@ import (
 var (
 	_ stage.UsageExtractor         = claudeProvider{}
 	_ stage.QuotaRefusalClassifier = claudeProvider{}
+	_ stage.FailureUsageExtractor  = claudeProvider{}
 )
 
 // ClassifyQuotaRefusal reads a failed writer's transcript for the provider's
 // refusal of one quota window. Anything else, or any doubt, returns nil.
 func (claudeProvider) ClassifyQuotaRefusal(transcript []byte) *domain.QuotaRefusal {
 	return exec.ClassifyClaudeQuotaRefusal(transcript, ward.RejectDuplicateJSONKeys)
+}
+
+// ExtractFailureUsage reads a failed writer's transcript for its usage: the
+// terminal result's when the turn finished, else the partial sum of its
+// assistant messages. Missing or malformed telemetry returns nil.
+func (claudeProvider) ExtractFailureUsage(transcript []byte, observedAt time.Time) []exec.UsageMeasurement {
+	return ExtractUsage(transcript, observedAt)
 }
 
 // ExtractUsage reads numbers-only telemetry from the last Claude terminal
