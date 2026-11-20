@@ -290,8 +290,11 @@ func (d HealthDiagnostic) Validate() error {
 }
 
 // ReviewDisputeBinding binds the whole round in FindingIDs and its immutable
-// completion evidence. Findings lists only the findings a person must answer;
-// the store requires prior adjudication entries for every omitted finding.
+// completion evidence. Findings lists the rows the card shows. A card the
+// per-finding path raises lists every adjudicated finding of the round, and a
+// row with SettledRoute may go unanswered; a card written before that path
+// listed only the findings a person must answer. The store requires prior
+// adjudication entries for every finding the rows omit.
 type ReviewDisputeBinding struct {
 	RunID              RunID             `json:"run_id"`
 	Round              int               `json:"round"`
@@ -305,6 +308,13 @@ type ReviewDisputeBinding struct {
 // Adjudication is the adjudicator's view of the finding, also never routing
 // authority; it is nil when the round has no model-authored adjudication for
 // the finding, and on a row stored before it existed (#2059).
+//
+// SettledRoute is the route the adjudication already settled for a finding
+// that needs no person (SettledDisputeRouteIn). A person may leave the row
+// unanswered, which keeps that route, or answer it with an offered route,
+// which overrides it. A nil value means the row must be answered: a finding
+// that waits for a person, a fallback card's row, or a row stored before the
+// field existed. It may name a route the row does not offer.
 type DisputedFinding struct {
 	FindingID     FindingID                    `json:"finding_id"`
 	Message       string                       `json:"message"`
@@ -313,6 +323,7 @@ type DisputedFinding struct {
 	External      *DisputedFindingExternal     `json:"external"`
 	OfferedRoutes []AdjudicationRoute          `json:"offered_routes"`
 	Adjudication  *DisputedFindingAdjudication `json:"adjudication"`
+	SettledRoute  *AdjudicationRoute           `json:"settled_route"`
 }
 
 // DisputedFindingAdjudication is the adjudicator's proposal for one disputed
@@ -714,6 +725,7 @@ func (b ReviewDisputeBinding) Validate() error {
 		seen[id] = struct{}{}
 	}
 	rows := make(map[FindingID]bool, len(b.Findings))
+	mustAnswer := false
 	for _, finding := range b.Findings {
 		if _, ok := seen[finding.FindingID]; !ok || rows[finding.FindingID] ||
 			finding.Message == "" || !utf8.ValidString(finding.Message) || len(finding.OfferedRoutes) == 0 {
@@ -744,6 +756,16 @@ func (b ReviewDisputeBinding) Validate() error {
 				return ErrCardFactInconsistent
 			}
 		}
+		if settled := finding.SettledRoute; settled == nil {
+			mustAnswer = true
+		} else if *settled != RouteRemediate && *settled != RouteDecline && *settled != RouteDefer {
+			return ErrCardFactInconsistent
+		}
+	}
+	// A card is raised because some finding waits for a person, so rows that
+	// are all settled describe no decision.
+	if len(b.Findings) > 0 && !mustAnswer {
+		return ErrCardFactInconsistent
 	}
 	return nil
 }
@@ -805,6 +827,10 @@ func cloneReviewDisputeBinding(in *ReviewDisputeBinding) *ReviewDisputeBinding {
 				value.Lean = &lean
 			}
 			row.Adjudication = &value
+		}
+		if row.SettledRoute != nil {
+			value := *row.SettledRoute
+			row.SettledRoute = &value
 		}
 	}
 	return &out

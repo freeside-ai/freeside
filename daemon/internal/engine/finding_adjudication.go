@@ -1786,12 +1786,12 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 	}
 	if item == nil && artifact.Decision == nil {
-		waiting, err := w.pendingAdjudicatedFindings(ctx, artifact)
+		split, err := w.pendingAdjudicatedFindings(ctx, artifact)
 		if err != nil {
 			return productionReviewPending, err
 		}
-		if len(waiting) > 0 {
-			return w.awaitPendingFindingDecisions(ctx, task, record, artifact, routes, waiting)
+		if len(split.mustAnswer) > 0 {
+			return w.awaitPendingFindingDecisions(ctx, task, record, split)
 		}
 	}
 	needsFindingAttention := false

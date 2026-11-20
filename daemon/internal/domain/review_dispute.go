@@ -93,7 +93,8 @@ func FindingDismissalNeedsPerson(finding Finding) bool {
 // FindingNeedsPerson is the one rule for whether a person must choose this
 // finding's route: its entry is below the threshold, it is a dispute, or it
 // dismisses a finding FindingDismissalNeedsPerson holds for a person. The
-// engine raises the dispute card from it.
+// engine raises the dispute card from it, and the store re-derives each
+// row's SettledRoute from it.
 func FindingNeedsPerson(entry FindingAdjudicationEntry, finding Finding, threshold DispatchThreshold) (bool, error) {
 	accepted, err := entry.Accepted(threshold)
 	if err != nil {
@@ -106,6 +107,31 @@ func FindingNeedsPerson(entry FindingAdjudicationEntry, finding Finding, thresho
 		return FindingDismissalNeedsPerson(finding), nil
 	}
 	return false, nil
+}
+
+// SettledDisputeRouteIn derives a dispute row's SettledRoute from the round's
+// latest model-authored artifact: the finding's route when no person is
+// needed and the route executes rather than parks, else nil. A nil artifact,
+// or one with no entry for the finding, settles nothing.
+func SettledDisputeRouteIn(
+	artifact *FindingAdjudication, finding Finding, threshold DispatchThreshold,
+) (*AdjudicationRoute, error) {
+	if artifact == nil {
+		return nil, nil
+	}
+	index := slices.IndexFunc(artifact.Entries, func(entry FindingAdjudicationEntry) bool {
+		return entry.FindingID == finding.ID
+	})
+	if index < 0 {
+		return nil, nil
+	}
+	entry := artifact.Entries[index]
+	needsPerson, err := FindingNeedsPerson(entry, finding, threshold)
+	if err != nil || needsPerson || entry.Route.ParksRun() {
+		return nil, err
+	}
+	route := entry.Route
+	return &route, nil
 }
 
 // ReviewDisputeBindingMatches reports whether a stored binding agrees with the

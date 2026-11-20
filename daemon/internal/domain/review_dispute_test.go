@@ -150,6 +150,12 @@ func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 				Lean: ptr(domain.AdjudicationRoute("ship")), Confidence: domain.ConfidenceLow, Rationale: "x",
 			}
 		},
+		"parking settled route": func(b *domain.ReviewDisputeBinding) {
+			settled := b.Findings[0]
+			settled.FindingID, settled.SettledRoute = "finding-2", ptr(domain.RouteParkUnknown)
+			b.Findings = append(b.Findings, settled)
+		},
+		"every row settled": func(b *domain.ReviewDisputeBinding) { b.Findings[0].SettledRoute = ptr(domain.RouteDecline) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := binding
@@ -159,6 +165,66 @@ func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 				t.Fatal("invalid subset accepted")
 			}
 		})
+	}
+}
+
+// TestSettledDisputeRouteFollowsTheOneRule pins which findings a person must
+// answer and which keep their adjudicated route, one row per branch of
+// FindingNeedsPerson and SettledDisputeRouteIn.
+func TestSettledDisputeRouteFollowsTheOneRule(t *testing.T) {
+	t.Parallel()
+	external := &domain.ExternalFindingProvenance{ReviewerLogin: "reviewer", ThreadID: "thread-1"}
+	model := func(route domain.AdjudicationRoute, confidence domain.AdjudicationConfidence) domain.FindingAdjudicationEntry {
+		goal, compatibility := domain.GoalContradictory, (*domain.ProposedCompatibility)(nil)
+		if route == domain.RouteDefer {
+			goal = domain.GoalAdjacent
+		}
+		if route == domain.RouteParkUnknown {
+			unknown := domain.ProposedUnknown
+			goal, compatibility = domain.GoalRequired, &unknown
+		}
+		entry, err := domain.NewModelAdjudicationEntry("f", goal, compatibility, route, confidence, "why", nil, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	remediate, err := domain.NewEngineModelAdjudicationEntry("f", domain.GoalRequired, domain.ConfidenceHigh, "fix it", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		entry   domain.FindingAdjudicationEntry
+		finding domain.Finding
+		settled *domain.AdjudicationRoute
+	}{
+		"confident minor decline":      {model(domain.RouteDecline, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP2}, ptr(domain.RouteDecline)},
+		"confident rated external":     {model(domain.RouteDefer, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP3, External: external, Message: "[P3] rename"}, ptr(domain.RouteDefer)},
+		"confident remediation":        {remediate, domain.Finding{Severity: domain.FindingSeverityP1}, ptr(domain.RouteRemediate)},
+		"below threshold":              {model(domain.RouteDecline, domain.ConfidenceMedium), domain.Finding{Severity: domain.FindingSeverityP2}, nil},
+		"dispute":                      {model(domain.RouteDispute, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP2}, nil},
+		"accepted park":                {model(domain.RouteParkUnknown, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP2}, nil},
+		"high severity decline":        {model(domain.RouteDecline, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP1}, nil},
+		"unrated external defer":       {model(domain.RouteDefer, domain.ConfidenceHigh), domain.Finding{External: external, Message: "rename"}, nil},
+		"blocking-labeled external":    {model(domain.RouteDecline, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP3, External: external, Message: "[P3, blocking] Declare 401"}, nil},
+		"blocking label from Freeside": {model(domain.RouteDecline, domain.ConfidenceHigh), domain.Finding{Severity: domain.FindingSeverityP3, Message: "[P3, blocking] Declare 401"}, ptr(domain.RouteDecline)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tc.finding.ID = "f"
+			artifact := &domain.FindingAdjudication{Entries: []domain.FindingAdjudicationEntry{tc.entry}}
+			got, err := domain.SettledDisputeRouteIn(artifact, tc.finding, domain.DispatchThresholdHigh)
+			if err != nil || !reflect.DeepEqual(got, tc.settled) {
+				t.Fatalf("settled = %v, %v; want %v", got, err, tc.settled)
+			}
+		})
+	}
+	for name, artifact := range map[string]*domain.FindingAdjudication{
+		"no artifact": nil,
+		"no entry":    {Entries: []domain.FindingAdjudicationEntry{remediate}},
+	} {
+		if got, err := domain.SettledDisputeRouteIn(artifact, domain.Finding{ID: "other"}, domain.DispatchThresholdHigh); got != nil || err != nil {
+			t.Errorf("%s: settled = %v, %v", name, got, err)
+		}
 	}
 }
 

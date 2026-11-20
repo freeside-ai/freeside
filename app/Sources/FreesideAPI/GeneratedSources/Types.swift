@@ -10183,7 +10183,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternative_choices`.
             public var alternative_choices: [Components.Schemas.AlternativeChoice]?
-            /// Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
+            /// Per-finding routes for adjudicate_findings. Every row of the dispute's findings list without a settled_route must occur exactly once, with an offered route. A row with a settled_route may be left out, which keeps that route, or occur once with any offered route, which overrides it. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/finding_routes`.
@@ -10216,7 +10216,7 @@ public enum Components {
             ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
-            ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
+            ///   - finding_routes: Per-finding routes for adjudicate_findings. Every row of the dispute's findings list without a settled_route must occur exactly once, with an offered route. A row with a settled_route may be left out, which keeps that route, or occur once with any offered route, which overrides it. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
             ///   - task_lines: Per-role choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type, where the daemon rejects it with 400. A selection the daemon doesn't serve is refused as TaskLineInput describes.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
@@ -13750,12 +13750,12 @@ public enum Components {
                 case impairs
             }
         }
-        /// The complete finding binding for one completed review round, with the subset of findings that require a human decision on a routed dispute.
+        /// The complete finding binding for one completed review round, with the findings a routed dispute shows for a human decision.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding`.
         public struct ReviewDisputeBinding: Codable, Hashable, Sendable {
-            /// Authenticated findings and executable routes requiring a human answer. On a routed dispute this is a nonempty subset of finding_ids. Each omitted finding already has a stored adjudication route; omission does not mean its remediation has finished.
+            /// Authenticated findings and executable routes shown for a human decision; on a routed dispute, a nonempty subset of finding_ids with at least one row lacking settled_route. A dispute the per-finding path raises lists every adjudicated finding of the round, and only its rows without settled_route require an answer; one raised before settled_route existed lists only those. Each finding_ids entry left out of this list already has a stored adjudication route; omission does not mean its remediation has finished.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ReviewDisputeBinding/findings`.
@@ -13773,7 +13773,7 @@ public enum Components {
             /// Creates a new `ReviewDisputeBinding`.
             ///
             /// - Parameters:
-            ///   - findings: Authenticated findings and executable routes requiring a human answer. On a routed dispute this is a nonempty subset of finding_ids. Each omitted finding already has a stored adjudication route; omission does not mean its remediation has finished.
+            ///   - findings: Authenticated findings and executable routes shown for a human decision; on a routed dispute, a nonempty subset of finding_ids with at least one row lacking settled_route. A dispute the per-finding path raises lists every adjudicated finding of the round, and only its rows without settled_route require an answer; one raised before settled_route existed lists only those. Each finding_ids entry left out of this list already has a stored adjudication route; omission does not mean its remediation has finished.
             ///   - run_id:
             ///   - round:
             ///   - finding_ids: Every finding bound to the review round, including already routed findings omitted from findings.
@@ -13933,6 +13933,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication`.
             public var adjudication: Components.Schemas.DisputedFinding.adjudicationPayload?
+            /// The route the adjudication already settled for a finding that needs no human, one of remediate, decline, or defer. The row may be left out of finding_routes, which keeps this route, or answered with an offered route, which overrides it; nothing is recorded or replied on the forge until the dispute is answered. It may name a route offered_routes lacks. Null when the row must be answered: a finding that waits for a human, a row of a fallback dispute, or a row stored before this field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/settled_route`.
+            public struct settled_routePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/settled_route/value1`.
+                public var value1: Components.Schemas.AdjudicationRoute
+                /// Creates a new `settled_routePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AdjudicationRoute) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The route the adjudication already settled for a finding that needs no human, one of remediate, decline, or defer. The row may be left out of finding_routes, which keeps this route, or answered with an offered route, which overrides it; nothing is recorded or replied on the forge until the dispute is answered. It may name a route offered_routes lacks. Null when the row must be answered: a finding that waits for a human, a row of a fallback dispute, or a row stored before this field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/settled_route`.
+            public var settled_route: Components.Schemas.DisputedFinding.settled_routePayload?
             /// Creates a new `DisputedFinding`.
             ///
             /// - Parameters:
@@ -13943,6 +13969,7 @@ public enum Components {
             ///   - external:
             ///   - offered_routes:
             ///   - adjudication: The adjudicator's proposal for this finding, shown so the human does not decide blind. It is a model judgment, never a route the human can send: offered_routes alone are executable, and lean may name a route they do not include. Null when the round has no model-authored adjudication for the finding (the adjudicator was unconfigured or its batch failed validation, or the finding was never judged), and on an item stored before this field existed.
+            ///   - settled_route: The route the adjudication already settled for a finding that needs no human, one of remediate, decline, or defer. The row may be left out of finding_routes, which keeps this route, or answered with an offered route, which overrides it; nothing is recorded or replied on the forge until the dispute is answered. It may name a route offered_routes lacks. Null when the row must be answered: a finding that waits for a human, a row of a fallback dispute, or a row stored before this field existed.
             public init(
                 finding_id: Swift.String,
                 message: Swift.String,
@@ -13950,7 +13977,8 @@ public enum Components {
                 severity: Components.Schemas.DisputedFinding.severityPayload,
                 external: Components.Schemas.DisputedFinding.externalPayload? = nil,
                 offered_routes: [Components.Schemas.AdjudicationRoute],
-                adjudication: Components.Schemas.DisputedFinding.adjudicationPayload? = nil
+                adjudication: Components.Schemas.DisputedFinding.adjudicationPayload? = nil,
+                settled_route: Components.Schemas.DisputedFinding.settled_routePayload? = nil
             ) {
                 self.finding_id = finding_id
                 self.message = message
@@ -13959,6 +13987,7 @@ public enum Components {
                 self.external = external
                 self.offered_routes = offered_routes
                 self.adjudication = adjudication
+                self.settled_route = settled_route
             }
             public enum CodingKeys: String, CodingKey {
                 case finding_id
@@ -13968,6 +13997,7 @@ public enum Components {
                 case external
                 case offered_routes
                 case adjudication
+                case settled_route
             }
         }
         /// A decision request (plan §4); mirrors domain.AttentionItem. item_version increments on every state change except a change to timing alone, and version-binds client decisions. timing is daemon-derived, never client-set; a notification delivery or an opened receipt that changes it raises the snapshot's entity_version and leaves item_version where it was.
