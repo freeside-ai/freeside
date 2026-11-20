@@ -377,12 +377,6 @@ func TestStalePendingEnvelopeResumesOrdinaryCleanup(t *testing.T) {
 				authority.Pending.DurableIntentRevision--
 			},
 		},
-		{
-			name: "expired",
-			mutate: func(authority *publish.InstallationAuthority) {
-				authority.Pending.ExpiresAt = fixtureTime
-			},
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -438,6 +432,192 @@ func TestStalePendingEnvelopeResumesOrdinaryCleanup(t *testing.T) {
 				t.Errorf("token mints = %d, records = %+v", tokenMints, records)
 			}
 		})
+	}
+}
+
+// TestExpiredRecordedIntentKeepsItsInstallation pins the janitor's decision
+// for the current intent once it expires (#3434): the installation it names
+// stays, from metadata alone, with no token, coverage, or readiness, and every
+// installation it does not name is still removed.
+func TestExpiredRecordedIntentKeepsItsInstallation(t *testing.T) {
+	t.Parallel()
+	const operatorInstallation = `{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected",` +
+		`"account":{"login":"operator","id":101}}`
+	for _, tc := range []struct {
+		name string
+		// envelopeID is the installation ID the expired intent names.
+		envelopeID   int64
+		quarantined  []int64
+		installation string
+		// wantReason is empty when the installation is kept.
+		wantReason     publish.InstallationRemovalReason
+		wantQuarantine bool
+	}{
+		{name: "matching installation", envelopeID: 701, installation: operatorInstallation},
+		{name: "zero-ID intent on the expected account", installation: operatorInstallation},
+		{
+			name:         "another account",
+			installation: `{"id":701,"app_id":501,"target_id":303,"repository_selection":"selected","account":{"login":"stranger","id":303}}`,
+			wantReason:   publish.InstallationRemovalUntrustedOwner,
+		},
+		{
+			name: "another installation on the expected account", envelopeID: 701,
+			installation: `{"id":702,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}`,
+			wantReason:   publish.InstallationRemovalUnbound,
+		},
+		{
+			name: "named installation on another account", envelopeID: 701,
+			installation: `{"id":701,"app_id":501,"target_id":303,"repository_selection":"selected","account":{"login":"stranger","id":303}}`,
+			wantReason:   publish.InstallationRemovalIdentityDrift, wantQuarantine: true,
+		},
+		{
+			name: "all repositories", envelopeID: 701,
+			installation: `{"id":701,"app_id":501,"target_id":101,"repository_selection":"all","account":{"login":"operator","id":101}}`,
+			wantReason:   publish.InstallationRemovalSelectionDrift, wantQuarantine: true,
+		},
+		{
+			name: "quarantined installation", quarantined: []int64{701}, installation: operatorInstallation,
+			wantReason: publish.InstallationRemovalUnbound,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := publish.InstallationAuthority{
+				ActiveEpoch:                7,
+				DurableIntentRevision:      11,
+				TrustedOwners:              []publish.TrustedOwner{{Login: "operator", ID: 101}},
+				QuarantinedInstallationIDs: tc.quarantined,
+				Pending: &publish.PendingInstallationEnvelope{
+					ActiveEpoch:            7,
+					DurableIntentRevision:  11,
+					RegistrationID:         501,
+					ExpectedAccount:        "operator",
+					ExpectedAccountID:      101,
+					InstallationID:         tc.envelopeID,
+					ExpectedRepositoryIDs:  []int64{fixtureRepositoryID},
+					RequiredRepositoryMode: "selected",
+					ExpiresAt:              fixtureTime,
+				},
+			}
+			var tokenMints atomic.Int32
+			recorder := &removalRecorder{}
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+					_, _ = io.WriteString(w, "["+tc.installation+"]")
+				case r.Method == http.MethodPost:
+					tokenMints.Add(1)
+					t.Error("expired intent's installation reached the token endpoint")
+				case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/suspended"),
+					r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/app/installations/"):
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			})))
+			defer srv.Close()
+
+			janitor := newJanitor(
+				t,
+				publicJanitorKeystore(t),
+				srv,
+				installationAuthoritySource{501: snapshot},
+				recorder,
+				1,
+			)
+			if err := janitor.RunScheduledPass(context.Background()); err != nil {
+				t.Fatalf("RunScheduledPass: %v", err)
+			}
+			if tokenMints.Load() != 0 {
+				t.Errorf("token mints = %d, want 0", tokenMints.Load())
+			}
+			records := recorder.snapshot()
+			if tc.wantQuarantine {
+				records = recorder.quarantineSnapshot()
+			}
+			if tc.wantReason == "" {
+				if len(recorder.snapshot()) != 0 || len(recorder.quarantineSnapshot()) != 0 {
+					t.Fatalf("kept installation was removed: %+v %+v", recorder.snapshot(), recorder.quarantineSnapshot())
+				}
+				if !janitor.ActiveFor(501) {
+					t.Fatal("pass keeping the installation published no registration coverage")
+				}
+				if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+					t.Error("expired intent's installation gained repository coverage")
+				}
+				if _, ready := janitor.PendingReady(*snapshot.Pending); ready {
+					t.Error("expired intent's installation was reported ready")
+				}
+				return
+			}
+			if len(records) != 1 || records[0].Reason != tc.wantReason {
+				t.Fatalf("records = %+v, want one %s", records, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestExpiredExpansionKeepsTrustedCoverage pins the expansion half of #3434:
+// once an expansion intent expires, a trusted installation whose grant
+// already holds the expanded set is not quarantined, and it covers only the
+// trusted set.
+func TestExpiredExpansionKeepsTrustedCoverage(t *testing.T) {
+	t.Parallel()
+	const addedRepositoryID = int64(990012)
+	authority := installationAuthoritySource{
+		fixtureAppID: {
+			ActiveEpoch:           7,
+			DurableIntentRevision: 11,
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: fixtureAppID,
+				InstallationID: 777,
+				Account:        "freeside-ai",
+				AccountID:      testOwnerID,
+				RepositoryIDs:  []int64{fixtureRepositoryID},
+			}},
+			Pending: &publish.PendingInstallationEnvelope{
+				ActiveEpoch:            7,
+				DurableIntentRevision:  11,
+				RegistrationID:         fixtureAppID,
+				ExpectedAccount:        "freeside-ai",
+				ExpectedAccountID:      testOwnerID,
+				InstallationID:         777,
+				CurrentRepositoryIDs:   []int64{fixtureRepositoryID},
+				ExpectedRepositoryIDs:  []int64{fixtureRepositoryID, addedRepositoryID},
+				RequiredRepositoryMode: "selected",
+				ExpiresAt:              fixtureTime,
+			},
+		},
+	}
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			_, _ = fmt.Fprintf(w,
+				`[{"id":777,"app_id":%d,"target_id":%d,"repository_selection":"selected","account":{"login":"freeside-ai","id":%d}}]`,
+				fixtureAppID,
+				testOwnerID,
+				testOwnerID,
+			)
+		case handleExactGrant(w, r, fixtureRepositoryID, addedRepositoryID):
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})))
+	defer srv.Close()
+
+	recorder := &removalRecorder{}
+	janitor := newJanitor(t, newRegisteredKeystore(t), srv, authority, recorder, 1)
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("RunScheduledPass: %v", err)
+	}
+	if len(recorder.snapshot()) != 0 || len(recorder.quarantineSnapshot()) != 0 {
+		t.Fatalf("expired expansion removed the trusted installation: %+v %+v",
+			recorder.snapshot(), recorder.quarantineSnapshot())
+	}
+	if !janitor.AllowsRepository(fixtureAppID, 777, fixtureRepositoryID) {
+		t.Fatal("expired expansion revoked the trusted repository")
+	}
+	if janitor.AllowsRepository(fixtureAppID, 777, addedRepositoryID) {
+		t.Fatal("expired expansion authorized the repository it never promoted")
 	}
 }
 

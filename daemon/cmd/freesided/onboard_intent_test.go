@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // TestOnboardRefusesSilentIntentReplacement covers the gate between a
@@ -199,6 +202,183 @@ func TestPendingIntentGateLetsResumeContinueALiveIntent(t *testing.T) {
 	}
 }
 
+// TestRemovedInstallationErrorNamesTheRecovery pins what the operator reads
+// when the janitor removed the installation an intent waits for (#3434), and
+// which journal entries count as that installation.
+func TestRemovedInstallationErrorNamesTheRecovery(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	removal := func(installationID, accountID int64, at time.Time) publish.InstallationRemovalRecord {
+		return publish.InstallationRemovalRecord{
+			RequestedAt: at, RegistrationID: 91, InstallationID: installationID, AccountID: accountID,
+			Reason: publish.InstallationRemovalUntrustedOwner,
+		}
+	}
+	before, after := since.Add(-time.Minute), since.Add(time.Minute)
+	for _, tc := range []struct {
+		name           string
+		removals       []publish.InstallationRemovalRecord
+		installationID int64
+		wantRemoved    int64
+	}{
+		{
+			name:           "named installation removed before the wait",
+			removals:       []publish.InstallationRemovalRecord{removal(777, 42, before)},
+			installationID: 777,
+			wantRemoved:    777,
+		},
+		{
+			name:           "another installation removed",
+			removals:       []publish.InstallationRemovalRecord{removal(778, 42, after)},
+			installationID: 777,
+		},
+		{
+			name:     "zero-ID intent ignores a removal before the wait",
+			removals: []publish.InstallationRemovalRecord{removal(777, 42, before)},
+		},
+		{
+			name:     "zero-ID intent ignores another account",
+			removals: []publish.InstallationRemovalRecord{removal(777, 43, after)},
+		},
+		{
+			name:     "zero-ID intent ignores a retried removal of an older installation",
+			removals: []publish.InstallationRemovalRecord{removal(776, 42, before), removal(776, 42, after)},
+		},
+		{
+			name:        "zero-ID intent names a removal on its account during the wait",
+			removals:    []publish.InstallationRemovalRecord{removal(776, 42, before), removal(777, 42, since)},
+			wantRemoved: 777,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := removedInstallationError(tc.removals, tc.installationID, 42, since, "/state/installation-janitor-journal.json")
+			if tc.wantRemoved == 0 {
+				if err != nil {
+					t.Fatalf("removedInstallationError() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("removedInstallationError() = nil, want the removal")
+			}
+			for _, want := range []string{
+				fmt.Sprintf("installation %d", tc.wantRemoved), "untrusted_owner", "/state/installation-janitor-journal.json",
+				"-installation-id 0", "-replace-intent", "installation_url", "-resume",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err, want)
+				}
+			}
+		})
+	}
+	err := removedInstallationError(
+		[]publish.InstallationRemovalRecord{removal(777, 42, before)}, 777, 42, since, "journal")
+	if err == nil || !strings.Contains(err.Error(), before.Format(time.RFC3339)) {
+		t.Errorf("error %v does not name the removal time %s", err, before.Format(time.RFC3339))
+	}
+}
+
+// TestOnboardRefusesAnIntentForARemovedInstallation covers the exit run's
+// hang (#3434): an intent that names an installation the janitor removed is
+// refused before it is recorded, and a -resume of one fails before it arms the
+// poll or starts the janitor, instead of waiting out the intent.
+func TestOnboardRefusesAnIntentForARemovedInstallation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// intent is the recorded intent's state: "", "live", or "expired".
+		intent string
+		extra  []string
+	}{
+		{name: "first call"},
+		{name: "-replace-intent over an expired intent", intent: "expired", extra: []string{"-replace-intent"}},
+		{name: "-resume of a live intent", intent: "live", extra: []string{"-resume"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newOnboardIntentFixture(t)
+			flag := slices.Index(fixture.args, "-installation-id")
+			fixture.args[flag+1] = "777"
+			wantRevision := int64(0)
+			if tc.intent != "" {
+				pending, err := operations.BeginInstallation(t.Context(), fixture.authority, operations.InstallationIntentRequest{
+					RegistrationID: 91, Account: "example", AccountID: 42, InstallationID: 777, RepositoryID: 55,
+					ExpiresAt: time.Now().UTC().Add(time.Hour),
+				}, time.Now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantRevision = pending.DurableIntentRevision
+				if tc.intent == "expired" {
+					fixture.expireIntent(t)
+				}
+			}
+			if err := fixture.authority.RecordInstallationRemoval(publish.InstallationRemovalRecord{
+				RequestedAt: time.Now().UTC(), RegistrationID: 91, InstallationID: 777, AccountID: 42,
+				Reason: publish.InstallationRemovalUntrustedOwner,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			err := runOnboardCommand(t.Context(), append(fixture.args, tc.extra...), io.Discard, io.Discard)
+			if err == nil {
+				t.Fatal("onboard accepted an intent for a removed installation")
+			}
+			for _, want := range []string{"installation 777", "untrusted_owner", fixture.authority.JournalPath(), "-installation-id 0"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name %q", err, want)
+				}
+			}
+			if got := fixture.revision(t); got != wantRevision {
+				t.Fatalf("refused call moved the intent revision to %d, want %d", got, wantRevision)
+			}
+			if armed := fixture.pollArmed(t); armed {
+				t.Fatal("refused call armed the installation poll")
+			}
+		})
+	}
+}
+
+// TestInstallationPollEndsWhenTheJanitorRemovesTheInstallation covers the
+// other half of the hang: a removal the resume's own janitor makes while the
+// poll waits ends the wait with the removal, not the intent's expiry.
+func TestInstallationPollEndsWhenTheJanitorRemovesTheInstallation(t *testing.T) {
+	t.Parallel()
+	fixture := newOnboardIntentFixture(t)
+	fixture.recordIntent(t, false)
+	snapshot, err := fixture.authority.InstallationAuthority(t.Context(), 91)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := *snapshot.Pending
+	st, _, err := openStoreWithTopicKey(t.Context(), fixture.dbPath(t), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	sched, err := newInstallPollScheduler(st, fixture.authority, noPendingReady{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := armInstallationPoll(t.Context(), sched, 91, pending.ActiveEpoch, pending.DurableIntentRevision, pending.ExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now().UTC()
+	if err := fixture.authority.RecordInstallationRemoval(publish.InstallationRemovalRecord{
+		RequestedAt: started, RegistrationID: 91, InstallationID: 777, AccountID: 42,
+		Reason: publish.InstallationRemovalSelectionDrift,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = awaitInstallationPoll(t.Context(), st, sched, installPollScheduleID(91), func(ctx context.Context) error {
+		return refuseRemovedInstallation(ctx, fixture.authority, 91, pending.InstallationID, pending.ExpectedAccountID, started)
+	})
+	if err == nil || !strings.Contains(err.Error(), "installation 777") ||
+		!strings.Contains(err.Error(), string(publish.InstallationRemovalSelectionDrift)) {
+		t.Fatalf("awaitInstallationPoll() = %v, want the removal of installation 777", err)
+	}
+}
+
 type onboardIntentFixture struct {
 	authority *publish.InstallationAuthorityStore
 	args      []string
@@ -295,6 +475,37 @@ func (f *onboardIntentFixture) trustInstallation(t *testing.T, installationID in
 		t.Fatal("fixture args carry no -installation-id value")
 	}
 	f.args[flag+1] = strconv.FormatInt(installationID, 10)
+}
+
+func (f onboardIntentFixture) dbPath(t *testing.T) string {
+	t.Helper()
+	flag := slices.Index(f.args, "-db")
+	if flag < 0 || flag+1 >= len(f.args) {
+		t.Fatal("fixture args carry no -db value")
+	}
+	return f.args[flag+1]
+}
+
+// pollArmed reports whether any onboard call armed the registration's
+// installation poll.
+func (f onboardIntentFixture) pollArmed(t *testing.T) bool {
+	t.Helper()
+	st, _, err := openStoreWithTopicKey(t.Context(), f.dbPath(t), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	err = st.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetSchedule(t.Context(), installPollScheduleID(91))
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return true
 }
 
 func (f onboardIntentFixture) revision(t *testing.T) int64 {

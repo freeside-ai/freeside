@@ -275,6 +275,15 @@ func runOnboardCommand(
 			if err := pendingIntentGate(snapshot.Pending, cfg.Resume, cfg.ReplaceIntent, time.Now().UTC()); err != nil {
 				return err
 			}
+			// A resume of an intent whose installation the janitor removed would
+			// wait out the intent for an installation GitHub no longer has.
+			if cfg.Resume && snapshot.Pending != nil && snapshot.Pending.InstallationID > 0 {
+				if err := refuseRemovedInstallation(
+					ctx, authority, cfg.RegistrationID, snapshot.Pending.InstallationID, 0, time.Time{},
+				); err != nil {
+					return err
+				}
+			}
 		}
 		if !cfg.Resume {
 			installURL, err := installationURLForRegistration(
@@ -289,6 +298,13 @@ func runOnboardCommand(
 			} else {
 				if slices.Contains(snapshot.QuarantinedInstallationIDs, cfg.InstallationID) {
 					return errors.New("installation is quarantined; use -recover-installation with -installation-id 0 for a fresh native installation")
+				}
+				if cfg.InstallationID > 0 {
+					if err := refuseRemovedInstallation(
+						ctx, authority, cfg.RegistrationID, cfg.InstallationID, 0, time.Time{},
+					); err != nil {
+						return err
+					}
 				}
 				pending, err = operations.BeginInstallation(ctx, authority, intent, time.Now)
 			}
@@ -650,6 +666,68 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	return cfg, nil
 }
 
+// refuseRemovedInstallation reads the janitor journal and returns
+// removedInstallationError's verdict for the intent's installation.
+func refuseRemovedInstallation(
+	ctx context.Context,
+	authority *publish.InstallationAuthorityStore,
+	registrationID, installationID, accountID int64,
+	since time.Time,
+) error {
+	removals, err := authority.InstallationRemovals(ctx, registrationID)
+	if err != nil {
+		return err
+	}
+	return removedInstallationError(removals, installationID, accountID, since, authority.JournalPath())
+}
+
+// removedInstallationError reports the janitor's latest removal request for
+// the installation an intent waits for, or nil. An intent that names its
+// installation matches that ID at any time: GitHub never reuses one. A
+// zero-ID intent matches a removal on its account at or after since, the
+// start of the wait, but not one of an installation the journal already
+// recorded before since: that is a retried delete of an older installation
+// (a quarantined one that outlived its deletion), not the one the intent
+// waits for.
+//
+// The recovery order matters: a new intent comes first, because an
+// installation made while no live intent covers it is removed again.
+func removedInstallationError(
+	removals []publish.InstallationRemovalRecord,
+	installationID, accountID int64,
+	since time.Time,
+	journalPath string,
+) error {
+	earlier := make(map[int64]struct{})
+	for _, removal := range removals {
+		if removal.RequestedAt.Before(since) {
+			earlier[removal.InstallationID] = struct{}{}
+		}
+	}
+	var latest *publish.InstallationRemovalRecord
+	for i, removal := range removals {
+		matches := removal.InstallationID == installationID
+		if installationID == 0 {
+			_, retried := earlier[removal.InstallationID]
+			matches = removal.AccountID == accountID && !removal.RequestedAt.Before(since) && !retried
+		}
+		if matches {
+			latest = &removals[i]
+		}
+	}
+	if latest == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"the installation janitor requested removal of installation %d at %s (reason %s), "+
+			"so this intent can't complete; the janitor journal at %s records the request. "+
+			"Rerun this command with -installation-id 0, plus -replace-intent while an intent is recorded, "+
+			"install the App again at the installation_url it prints with only the repositories in "+
+			"pending.expected_repository_ids selected, then rerun with -resume",
+		latest.InstallationID, latest.RequestedAt.UTC().Format(time.RFC3339), latest.Reason, journalPath,
+	)
+}
+
 // withDurableInstallationPoll resumes a pending install-or-expansion intent
 // through its durable §5.16 poll schedule: the throwaway janitor still
 // reconciles coverage on its own bounded cadence (an operational probe, not
@@ -665,6 +743,9 @@ func withDurableInstallationPoll(
 	registrationID int64,
 	run func(*publish.InstallationJanitor, *publish.Keystore, *http.Client) error,
 ) error {
+	// Read before the janitor starts, so a removal it makes during this wait
+	// is at or after it.
+	started := time.Now().UTC()
 	keystore, err := publish.NewKeystore(authorityLock, credentialsDir)
 	if err != nil {
 		return err
@@ -707,11 +788,17 @@ func withDurableInstallationPoll(
 		return fail(err)
 	}
 
+	pending := *snapshot.Pending
+	removed := func(checkCtx context.Context) error {
+		return refuseRemovedInstallation(
+			checkCtx, authority, registrationID, pending.InstallationID, pending.ExpectedAccountID, started,
+		)
+	}
 	waitCtx, stopWait := context.WithCancel(runCtx)
 	defer stopWait()
 	waited := make(chan error, 1)
 	go func() {
-		waited <- awaitInstallationPoll(waitCtx, st, sched, installPollScheduleID(registrationID))
+		waited <- awaitInstallationPoll(waitCtx, st, sched, installPollScheduleID(registrationID), removed)
 	}()
 	select {
 	case err := <-done:

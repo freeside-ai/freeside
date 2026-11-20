@@ -819,7 +819,7 @@ func (j *InstallationJanitor) reconcileRegistration(
 				})
 				continue
 			}
-			if candidate.pending {
+			if candidate.pending || candidate.kept {
 				if seenPending {
 					return false, registrationCoverage{}, errors.New(
 						"installation janitor: pending envelope matched multiple installations",
@@ -836,6 +836,11 @@ func (j *InstallationJanitor) reconcileRegistration(
 				})
 				continue
 			}
+			if candidate.kept {
+				// Metadata alone keeps it: no grant-read token, so no
+				// coverage and no readiness.
+				continue
+			}
 			repositoryIDs, err := j.enumerateRepositoryGrants(ctx, jwt, app.AppID, installation.ID)
 			if err != nil {
 				return false, registrationCoverage{}, fmt.Errorf(
@@ -849,7 +854,9 @@ func (j *InstallationJanitor) reconcileRegistration(
 			matchesPendingBase := candidate.pending &&
 				len(candidate.allowedRepositoryIDs) > 0 &&
 				slices.Equal(repositoryIDs, candidate.allowedRepositoryIDs)
-			if !matchesExpected && !matchesPendingBase {
+			matchesExpiredExpansion := len(candidate.expiredExpansionRepositoryIDs) > 0 &&
+				slices.Equal(repositoryIDs, candidate.expiredExpansionRepositoryIDs)
+			if !matchesExpected && !matchesPendingBase && !matchesExpiredExpansion {
 				actions = append(actions, installationRemoval{
 					installationID:        installation.ID,
 					accountID:             installation.Account.ID,
