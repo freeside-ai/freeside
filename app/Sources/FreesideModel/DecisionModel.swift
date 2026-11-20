@@ -782,15 +782,33 @@ public final class DecisionModel {
     @discardableResult
     /// Submits an answer. `answerRoute` is required exactly for answer_and_retry
     /// on an implementation-stage question (AgentQuestionPresentation.answerRoute);
-    /// the daemon refuses it anywhere else.
+    /// the daemon refuses it anywhere else. `questionAnswers` are the options
+    /// chosen on the card, sent only to a daemon that serves
+    /// `question_option_answers`; with them `message` is the owner's note,
+    /// optional unless an answer is left to it, and held to the note's limit.
     public func submitAnswer(
         _ action: Components.Schemas.Action, message: String,
-        answerRoute: Components.Schemas.AnswerRoute? = nil
+        answerRoute: Components.Schemas.AnswerRoute? = nil,
+        questionAnswers: [Components.Schemas.QuestionAnswer]? = nil
     ) async -> Bool {
         guard action == .answer_and_retry || action == .answer_without_retry else { return false }
-        return await submitMessageAction(
-            action, message: message, emptyError: "enter an answer before sending",
-            answerRoute: answerRoute)
+        guard let questionAnswers else {
+            return await submitMessageAction(
+                action, message: message, emptyError: "enter an answer before sending",
+                answerRoute: answerRoute)
+        }
+        let note = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if AgentQuestionPresentation.needsNote(questionAnswers) && note.isEmpty {
+            submissionError = "write the other answer in the note before sending"
+            return false
+        }
+        guard note.lengthOfBytes(using: .utf8) <= Components.Schemas.QuestionAnswer.maxNoteBytes else {
+            submissionError = "the note must be 6 KiB or less"
+            return false
+        }
+        let generationBefore = submissionClaimGeneration
+        await submit(action, message: note, answerRoute: answerRoute, questionAnswers: questionAnswers)
+        return submissionClaimGeneration != generationBefore
     }
 
     @discardableResult
@@ -904,6 +922,7 @@ public final class DecisionModel {
         findingRoutes: [Components.Schemas.FindingRouteChoice]? = nil,
         message: String? = nil,
         answerRoute: Components.Schemas.AnswerRoute? = nil,
+        questionAnswers: [Components.Schemas.QuestionAnswer]? = nil,
         attachments: [DraftAttachment] = [],
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil,
         trustDetailsRevealed: Bool = false,
@@ -921,6 +940,7 @@ public final class DecisionModel {
             (action == .choose_alternative_route) == (alternativeChoices != nil),
             (action == .adjudicate_findings) == (findingRoutes != nil),
             action == .open_pr || pullRequestDestination == nil,
+            questionAnswers == nil || action == .answer_and_retry || action == .answer_without_retry,
             attachments.isEmpty || (action == .discuss && acceptsDiscussAttachments),
             ([
                 .discuss, .request_changes, .answer_and_retry, .answer_without_retry,
@@ -968,6 +988,7 @@ public final class DecisionModel {
                     },
                     alternate_agent_choice: alternateAgentChoice.map { .init(value1: $0) },
                     answer_route: answerRoute.map { .init(value1: $0) },
+                    question_answers: questionAnswers,
                     // Nil, not empty, for none, so a text-only command
                     // keeps its shape.
                     attachments: attachments.isEmpty ? nil : attachments.map(\.digest),

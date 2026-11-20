@@ -928,6 +928,30 @@
                             byteLimit: 8192,
                             rendersInteractiveControls: false,
                             submit: { _, _ in true }))))
+            // #3444: the answer sheet once the card's options are chosen,
+            // listing them above the optional note and naming them in Send.
+            let chosenAnswers: [Components.Schemas.QuestionAnswer] = [
+                .init(decision_index: 0, option_label: "Copy to a new table, then switch readers"),
+                .init(decision_index: 1, option_label: nil),
+            ]
+            for (suffix, width) in [("", CGFloat(480)), ("-phone", CGFloat(390))] {
+                surfaces.append(
+                    Surface(
+                        name: "message-composer-question-answers\(suffix)",
+                        width: width,
+                        view: AnyView(
+                            MessageComposerSheet(
+                                eyebrow: AttentionDisplay.label(.answer_and_retry),
+                                ask: DecisionDetailView.answerAsk(chosenAnswers),
+                                submitLabel: AgentQuestionPresentation.confirmLabel(
+                                    .answer_and_retry, answers: chosenAnswers),
+                                byteLimit: Components.Schemas.QuestionAnswer.maxNoteBytes,
+                                rendersInteractiveControls: false,
+                                routeOptions: [.retry_implementation, .revise_specification],
+                                choiceLines: AgentQuestionPresentation.choiceLines(chosenAnswers),
+                                requiresMessage: AgentQuestionPresentation.needsNote(chosenAnswers),
+                                submit: { _, _ in true }))))
+            }
             surfaces.append(
                 Surface(
                     name: "message-composer-phone",
@@ -1959,6 +1983,35 @@
                                 view: AnyView(
                                     answerableDetail.screenshotCard(
                                         long,
+                                        at: dynamicTypeSize,
+                                        compactLayout: width < canvasWidth))))
+                    }
+                }
+
+                if snapshot.item._type == .agent_question {
+                    // #3444: a daemon that takes chosen options draws each
+                    // decision's options as a choice list, the recommended
+                    // one first, with the first decision picked and the
+                    // second still open, so the answer actions wait.
+                    let choosing = DecisionDetailView(
+                        store: validated.store,
+                        itemID: snapshot.item.id,
+                        questionChoices: [0: .option("Copy to a new table, then switch readers")],
+                        graphics: graphics,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow,
+                        servesQuestionOptionAnswers: true,
+                        model: validated.model
+                    )
+                    for (suffix, width) in [("choose", canvasWidth), ("choose-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-agent_question-\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    choosing.screenshotCard(
+                                        AttentionFixtures.longQuestion().item,
                                         at: dynamicTypeSize,
                                         compactLayout: width < canvasWidth))))
                     }

@@ -434,6 +434,7 @@ public struct FreesideRootView: View {
                 timelines: coordinator.timelinesByRunID, runs: coordinator.runs,
                 cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration,
                 load: coordinator.refreshTimeline),
+            servesQuestionOptionAnswers: coordinator.daemonFeatures.contains(.question_option_answers),
             onConclusion: { conclusion in
                 handleConclusion(conclusion, coordinator: coordinator)
             })
