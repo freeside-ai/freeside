@@ -719,6 +719,18 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/projectimage/rebuild_gate.go` (repository manifests gate image
   rebuilds), and `internal/projectimage/preparation_gate.go` (re-gates a
   decoded preparation command before it reaches the root launch argv).
+  The review dispute joins them, since it decides which findings Freeside
+  routes and replies to on GitHub without a person:
+  `internal/domain/review_dispute.go` and
+  `internal/domain/blocking_label.go` (the one rule for which findings wait
+  for a person, which reads an external reviewer's blocking label),
+  `internal/engine/per_finding_acceptance.go` (splits a round into findings
+  that wait and findings already settled, and records neither until the
+  card is answered), `internal/engine/review_dispute.go` (derives each
+  row's settled route), `internal/signet/review_dispute.go` (checks that a
+  decision answers every row without a settled route), and
+  `internal/store/review_dispute.go` (re-derives a stored settled route
+  from the adjudication and keeps an omitted row's route).
 - **Stored run settings:** the instance and project settings records,
   which hold the approved recipe, the allowed paths, and the publication
   repository a run uses: `internal/domain/instance_settings.go` and
