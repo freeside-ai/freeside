@@ -65,6 +65,12 @@
       "version": null
     },
     {
+      "name": "ready-share",
+      "command": "freesided ready-share -db PATH",
+      "ids": [],
+      "version": null
+    },
+    {
       "name": "auth list",
       "command": "freesided auth list -db PATH",
       "ids": [],

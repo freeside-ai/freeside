@@ -96,7 +96,8 @@ type HoldRow struct {
 
 // SkippedCauseRow is a row ReadCauseRows couldn't decode: an unparseable
 // time, an empty value, an attention body that isn't valid JSON, or a hold
-// that ends before it starts.
+// that ends before it starts. ReadReadyShareRows lists its skipped attention
+// items in the same shape.
 type SkippedCauseRow struct {
 	Table string
 	Key   string

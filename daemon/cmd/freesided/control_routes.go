@@ -253,6 +253,7 @@ func (p *pairingControl) registerControlRoutes(
 	})
 	command("/comprehension/defects", runComprehensionCommand)
 	command("/cause-counts", runCauseCountsCommand)
+	command("/ready-share", runReadyShareCommand)
 	command("/shadow-review/configuration-approvals", runApproveShadowReviewCommand)
 	command("/usage-pools/limit", runSetPoolLimitCommand)
 	command("/memory-budget", runSetMemoryBudgetCommand)

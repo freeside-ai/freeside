@@ -2154,6 +2154,61 @@ listed when it held a run in either window; `known` is as for causes.
   reason, or a clear before its start) is listed in `skipped` under its
   table, keyed by span id or, for a current hold, by run.
 
+### Count Tasks That Reach Ready Without An Item
+
+`freesided ready-share` prints how many tasks reached a ready pull request
+over a period without raising any attention item first, and which items the
+others raised, by type and interruption class. Each such item stopped its
+task overnight or interrupted the operator by day, so the ranking shows which
+recurring items to make autonomous next. No model runs and nothing is
+written.
+
+```sh
+freesided ready-share -db <db> [-period 168h] [-end 2026-11-16T00:00:00Z] [-project <project-id>]
+```
+
+The flags, and the control-socket and direct reads, are as for
+`freesided cause-counts`: the period is `[end - period, end)`, and
+`-project` narrows every count to that project's items.
+
+- **Reached ready:** a task's ready time is the `created_at` of its first
+  `ready_for_final_review` item, ties broken by item ID. A task counts when
+  that time falls in the period. A later ready item, from another cycle,
+  never moves it, and a task whose first ready item is outside the period
+  doesn't count.
+- **Before ready:** an item of the task (`subject_task_id`) created strictly
+  before the ready time, whenever that was. The ready item, and every item
+  created at or after it, are left out.
+- **Task-less items:** an item with no `subject_task_id` (system health,
+  execution pause, and similar) belongs to no task. It counts in `task_less`
+  when created in the period and never changes the share. An item whose
+  subject has no task yet, such as a project or a proposal batch with no
+  run, is task-less even when a task it led to later reaches ready.
+
+The output is one JSON object:
+
+| Field | Holds |
+|---|---|
+| `tasks_ready` | Tasks that reached ready in the period. |
+| `tasks_ready_without_items` | Those that raised no item before ready. |
+| `share_without_items` | The second over the first; `null` when no task reached ready. |
+| `by_class` | Per `interruption_class`, the before-ready `items` and distinct `tasks` that raised one. Both known classes are always listed. |
+| `by_type` | Per (`type`, `interruption_class`), the same two counts, ranked by `tasks`, then `items`. |
+| `tasks` | Each counted task in ready order: `task_id`, `ready_item_id`, `ready_at`, and its before-ready `items` (`item_id`, `type`, `interruption_class`, `created_at`), for `freesided inspect item`. |
+| `task_less` | Per (`type`, `interruption_class`), the task-less `items` created in the period. |
+| `skipped` | Each item row that couldn't be decoded, with its table, row key, and error. |
+
+`known` is `false` for a type or class this build doesn't know; it is
+counted under its stored string. An item re-raised under a new ID, such as
+a later revision of a card, counts once per ID, so `items` can exceed the
+interruptions a person saw; `tasks` is unaffected. The report is advisory,
+so a row with an empty type, a body that isn't valid JSON, no `created_at`,
+or an empty `interruption_class` is skipped and listed rather than failing
+the read. Items stored before `created_at` existed are skipped this way.
+The counts never see a skipped row, so a skipped first ready item or
+before-ready item can move a task's ready time or its share; check
+`skipped` before trusting a period that has any.
+
 ### Check A New Build Against The Live Database
 
 Before an update replaces a supervised daemon, `freesided check-database`

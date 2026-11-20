@@ -225,6 +225,9 @@ func main() {
 		case "cause-counts":
 			runCauseCountsMain(os.Args[2:])
 			return
+		case "ready-share":
+			runReadyShareMain(os.Args[2:])
+			return
 		case "snapshot":
 			runSnapshotMain(os.Args[2:])
 			return
