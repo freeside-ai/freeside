@@ -74,6 +74,7 @@ func inspectReads() []inspectRead {
 		},
 		{Name: "comprehension", Command: "freesided comprehension -db PATH", IDs: []string{}},
 		{Name: "cause-counts", Command: "freesided cause-counts -db PATH", IDs: []string{}},
+		{Name: "ready-share", Command: "freesided ready-share -db PATH", IDs: []string{}},
 		{Name: "auth list", Command: "freesided auth list -db PATH", IDs: []string{}},
 	}
 }

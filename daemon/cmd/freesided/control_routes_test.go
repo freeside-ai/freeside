@@ -79,6 +79,13 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	if !json.Valid(causeCounts.Bytes()) {
 		t.Fatal("cause counts are not JSON")
 	}
+	var readyShare bytes.Buffer
+	if err := runReadyShareCommand(ctx, []string{"-db", dbPath}, &readyShare, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(readyShare.Bytes()) {
+		t.Fatal("ready share is not JSON")
+	}
 	taskPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
 	submitted, err := runSubmitCommand(ctx, submitCommandConfig{
 		SubmissionID: "control-submit", DBPath: dbPath, TaskPath: taskPath,
@@ -259,6 +266,7 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 		},
 		"comprehension measures": func() error { return runComprehensionCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
 		"cause counts":           func() error { return runCauseCountsCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
+		"ready share":            func() error { return runReadyShareCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
 		"comprehension defect": func() error {
 			return runComprehensionCommand(ctx, []string{"record-defect", "-db", dbPath, "-item", "item-1", "-claim", digest, "-reason", "reason"}, io.Discard, io.Discard)
 		},
