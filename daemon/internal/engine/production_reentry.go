@@ -476,7 +476,14 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 			domain.HoldRecipeRevoked)
 	}
 	if !found {
-		stored, err = w.verifyReentry(ctx, task.reentryCheckpointKey(), task, binding, checkoutDir)
+		// A cycle whose predecessor already verified exactly this input
+		// reuses that verification; the tree and diff it still resolves in
+		// its own checkout stop the cycle on the same causes as a fresh one.
+		var reused bool
+		stored, reused, err = w.reuseReentryVerification(ctx, task, binding, checkoutDir)
+		if err == nil && !reused {
+			stored, err = w.verifyReentry(ctx, task.reentryCheckpointKey(), task, binding, checkoutDir)
+		}
 		if reason, stop := reentryUnverifiableTreeReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
@@ -495,8 +502,10 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if err := w.runAfterVerification("production verification"); err != nil {
-			return productionTaskOutcome{}, err
+		if !reused {
+			if err := w.runAfterVerification("production verification"); err != nil {
+				return productionTaskOutcome{}, err
+			}
 		}
 	}
 	if !stored.clean() {
@@ -957,6 +966,144 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		return productionReentryCheckpoint{}, err
 	}
 	return checkpoint, nil
+}
+
+// reuseReentryVerification records the cycle's checkpoint from the
+// verification its predecessor's ready item already holds, when that
+// verification covers exactly the input this cycle would verify, and reports
+// whether it did. A cycle that answers an external review on an unchanged
+// pull request otherwise verifies the same head on the same base again
+// (issue #3445). A mismatch is no reuse, never an error; a read failure is
+// an error, so a flaky disk is never mistaken for different input.
+//
+// It re-checks, against the predecessor item's evidence and the verifier's
+// own report in it: the item is the cycle's predecessor ready item for the
+// cycle's head; the evidence holds exactly one verification report, and
+// every artifact's bytes match its digest; and the report names the cycle's
+// head and base, no prospective merge, the recipe the cycle's image binds,
+// and a pass with no findings. The predecessor item is read through the
+// store's current-policy evidence gate, and the caller has already held the
+// cycle when current trust no longer approves that recipe.
+//
+// The image needs no comparison of its own. A cycle that verifies its head
+// binds the image from the run's write-once rebuild row for that head, or
+// else the admitted image of the predecessor's producer
+// (resolveVerificationImage), so a verification of the same head in the
+// same run resolved the same image. The repair path binds its image by
+// upkeep's gate instead, so it is excluded, as is a cycle that verifies a
+// prospective merge. The verifier's control patterns come from the trust
+// profile, which is the same only while the admission pins it; a legacy
+// admission that reads the latest profile is excluded too. A hand-back is
+// excluded because its predecessor binding is the latest published ready
+// item at or before its admission, which need not be the cycle's own
+// predecessor, and it adopts a head no Freeside invocation produced.
+//
+// The checkpoint is the cycle's own, under its own key: the tree and diff
+// are resolved in this cycle's checkout, never copied, and the reused
+// report's invocation is recorded so every reader reads that report.
+func (w *productionPublicationWorkflow) reuseReentryVerification(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkoutDir string,
+) (productionReentryCheckpoint, bool, error) {
+	baseSHA := binding.admission.Base.BaseSHA
+	predecessor := binding.reentry.predecessor
+	if task.Successor.HandsBack() || binding.evaluatedSHA != "" ||
+		binding.admission.TrustProfileDigest == nil || predecessor.HeadSHA != task.HeadSHA {
+		return productionReentryCheckpoint{}, false, nil
+	}
+	repair, err := w.repairVerification(ctx, binding, baseSHA)
+	if err != nil || repair {
+		return productionReentryCheckpoint{}, false, err
+	}
+	var item domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItem(ctx, predecessor.ItemID)
+		return err
+	}); err != nil {
+		return productionReentryCheckpoint{}, false, fmt.Errorf("load re-entry predecessor ready item: %w", err)
+	}
+	if item.Type != domain.AttentionReadyForFinalReview || item.PRHeadSHA != task.HeadSHA {
+		return productionReentryCheckpoint{}, false, nil
+	}
+	var report *domain.Artifact
+	for index, artifact := range item.EvidenceSnapshot {
+		if artifact.Type != domain.ArtifactKindVerificationReport {
+			continue
+		}
+		if report != nil {
+			return productionReentryCheckpoint{}, false, nil
+		}
+		report = &item.EvidenceSnapshot[index]
+	}
+	if report == nil {
+		return productionReentryCheckpoint{}, false, nil
+	}
+	for _, artifact := range item.EvidenceSnapshot {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
+			return productionReentryCheckpoint{}, false, fmt.Errorf(
+				"verify re-entry predecessor evidence: %w",
+				retryableOrTerminal(ctx, err, domain.ErrParentKeyMismatch))
+		}
+	}
+	reused := report.Provenance.ProducerInvocationID
+	raw, err := loadVerificationReport(w.artifacts, item.EvidenceSnapshot, reused)
+	if err != nil {
+		return productionReentryCheckpoint{}, false, productionPublicationRetryableError(err)
+	}
+	verified, err := verify.ParseReport(raw)
+	if err != nil {
+		return productionReentryCheckpoint{}, false, fmt.Errorf(
+			"re-entry predecessor verification report: %w", errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if verified.HeadSHA != task.HeadSHA || verified.BaseSHA != baseSHA || verified.EvaluatedSHA != "" ||
+		verified.RecipeDigest != binding.image.RecipeDigest ||
+		verified.Outcome != verify.OutcomePassed || len(verified.Findings) != 0 {
+		return productionReentryCheckpoint{}, false, nil
+	}
+	_, diffStats, err := w.reentryDiff(ctx, checkoutDir, baseSHA, task.HeadSHA, task.HeadSHA)
+	if err != nil {
+		return productionReentryCheckpoint{}, false, err
+	}
+	treeSHA, err := w.reentryTreeSHA(ctx, checkoutDir, task.HeadSHA)
+	if err != nil {
+		return productionReentryCheckpoint{}, false, err
+	}
+	artifacts := slices.Clone(item.EvidenceSnapshot)
+	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(artifacts)
+	if err != nil {
+		return productionReentryCheckpoint{}, false, err
+	}
+	checkpoint := productionReentryCheckpoint{
+		Version: productionReentryCheckpointVersion,
+		TaskKey: task.intentKey(),
+		BaseSHA: baseSHA, HeadSHA: task.HeadSHA, TreeSHA: treeSHA,
+		ProjectImage: binding.verificationImage().ID,
+		Outcome:      reentryOutcome(verified.Outcome), RecipeDigest: verified.RecipeDigest,
+		EvidenceSnapshotDigest: evidenceDigest,
+		Findings:               verificationCandidateFindings(verified.Findings),
+		Artifacts:              artifacts, DiffStats: diffStats,
+		ReusedInvocationID: reused,
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
+		return productionReentryCheckpoint{}, false, err
+	}
+	if err := w.persistReentryCheckpoint(ctx, task.reentryCheckpointKey(), checkpoint); err != nil {
+		return productionReentryCheckpoint{}, false, err
+	}
+	if err := runDurableTransitionHook(w.transitionHook,
+		DurableTransitionVerificationEvidence, DurableTransitionAfter); err != nil {
+		return productionReentryCheckpoint{}, false, err
+	}
+	if w.logger != nil {
+		w.logger.Info("re-entry reused its predecessor's verification",
+			"run_id", task.RunID, "publication_id", task.PublicationID,
+			"head_sha", task.HeadSHA, "base_sha", baseSHA, "reused_invocation_id", reused)
+	}
+	return checkpoint, true, nil
 }
 
 // bindBaseServingImage binds a cycle whose admitted image cannot serve its

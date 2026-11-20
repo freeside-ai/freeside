@@ -244,13 +244,15 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 		t.Fatalf("cycle result = %#v, %v", result, err)
 	}
 	// The pull request did not move, so the cycle reviews its head itself
-	// against the base the last review used: no merge, nothing pushed.
+	// against the base the last review used: no merge, nothing pushed. It
+	// reuses the first cycle's verification of that same head and base
+	// instead of running it again (issue #3445).
 	if len(reviews.requests) != 1 || reviews.requests[0].Round != 2 ||
 		reviews.requests[0].BaseSHA != p.baseSHA || reviews.requests[0].HeadSHA != head {
 		t.Fatalf("review requests = %#v", reviews.requests)
 	}
-	if p.room.runs != 2 || p.transport.MergeCount() != 0 {
-		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0", p.room.runs, p.transport.MergeCount())
+	if p.room.runs != 1 || p.transport.MergeCount() != 0 {
+		t.Fatalf("verification runs = %d, merges = %d, want 1 and 0", p.room.runs, p.transport.MergeCount())
 	}
 	if p.transport.PushCount() != pushes || p.forge.PullRequests()[0].Body != body {
 		t.Fatal("the cycle pushed or rewrote the pull request")
@@ -285,7 +287,7 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
 		t.Fatalf("converged replay = %#v, %v", result, err)
 	}
-	if p.room.runs != 2 || len(reviews.requests) != 1 {
+	if p.room.runs != 1 || len(reviews.requests) != 1 {
 		t.Fatalf("converged replay ran verification %d times and requested %d reviews",
 			p.room.runs, len(reviews.requests))
 	}
@@ -433,13 +435,11 @@ func TestExternalReviewCycleConvergesAcrossRestarts(t *testing.T) {
 						t.Fatalf("restart requested review %s %d times, want 1", id, count)
 					}
 				}
-				wantRuns := 2
-				if transition == engine.DurableTransitionVerificationEvidence &&
-					side == engine.DurableTransitionBefore {
-					wantRuns = 3
-				}
-				if p.room.runs != wantRuns {
-					t.Fatalf("verification runs = %d, want %d", p.room.runs, wantRuns)
+				// The cycle reuses the first head's verification, so an
+				// interrupted reuse is recorded again and nothing verifies
+				// twice (issue #3445).
+				if p.room.runs != 1 {
+					t.Fatalf("verification runs = %d, want 1", p.room.runs)
 				}
 			})
 		}
