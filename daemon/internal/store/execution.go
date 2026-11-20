@@ -160,22 +160,7 @@ func (tx *WriteTx) RecordExecutionAdmissionReserving(
 	if err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
-	if err := tx.gateAdmission(ctx, admission); err != nil {
-		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
-	// The operating-state half runs only here and at dispatch, not in
-	// scanExecutionAdmission's re-gate: an operator stop or a blocking item
-	// closes new unattended operation without making recorded history
-	// unreadable (RequireUnattendedAdmissible). Running before putImmutable
-	// applies only to a new record: an exact immutable replay returned above is
-	// history, while dispatch re-checks operating state before starting work.
-	if err := tx.RequireUnattendedAdmissible(ctx, admission); err != nil {
-		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
-	if err := tx.RequireBackendConformant(ctx, admission); err != nil {
-		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
-	run, err := tx.requireRecordedAttempt(ctx, admission)
+	run, err := tx.requireAdmissionGates(ctx, admission)
 	if err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
@@ -196,40 +181,10 @@ func (tx *WriteTx) RecordExecutionAdmissionReserving(
 		}
 		return nil
 	}
-	// The credential-integrity half of §5.4 admission rule 4 runs only on
-	// this new-record path, never in scanExecutionAdmission's re-gate
-	// (RequireGenerationUnmarked): a generation the probe marked admits
-	// nothing new, while the exact replay returned above and every recorded
-	// admission stay readable. The stored mark rows are read here, in the
-	// admitting transaction, because the admission carries no unmarked claim
-	// to trust. A legacy admission names no generation and is unaffected.
-	if binding := admission.AgentBinding; binding != nil {
-		if err := tx.RequireGenerationUnmarked(ctx, binding.EnrollmentID, binding.EnrollmentGeneration); err != nil {
-			return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-		}
-	}
-	// A new admission carries the daemon's current configured name, so it
-	// follows a rename; a rebinding to another repository id fails here,
-	// before any work is admitted.
-	if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base, true); err != nil {
+	if err := tx.requireNewAdmissionGates(ctx, run, admission, memory); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
-	if err := tx.RequireUsagePoolCapacity(ctx, admission); err != nil {
-		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
-	if err := tx.RequireExecutionMemory(ctx, admission, memory); err != nil {
-		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
-	var identity any
-	if admission.AuthIdentityID != nil {
-		identity = *admission.AuthIdentityID
-	}
-	var agentDigest, enrollmentID, enrollmentGeneration any
-	if binding := admission.AgentBinding; binding != nil {
-		agentDigest = string(binding.AgentDigest)
-		enrollmentID = binding.EnrollmentID
-		enrollmentGeneration = binding.EnrollmentGeneration
-	}
+	identity, agentDigest, enrollmentID, enrollmentGeneration := admissionColumns(admission)
 	inserted, err := tx.putImmutableInserted(ctx, recordExecutionAdmissionSQL,
 		[]any{
 			admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
@@ -249,10 +204,8 @@ func (tx *WriteTx) RecordExecutionAdmissionReserving(
 	if !inserted {
 		return nil
 	}
-	if admission.AuthIdentityID != nil {
-		if err := tx.MarkOutboxDispatching(ctx, string(admission.InvocationID)); err != nil {
-			return fmt.Errorf("reserve execution dispatch %q: %w", admission.InvocationID, err)
-		}
+	if err := tx.reserveAdmittedDispatch(ctx, admission); err != nil {
+		return err
 	}
 	invocation := admission.InvocationID
 	if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
@@ -260,6 +213,82 @@ func (tx *WriteTx) RecordExecutionAdmissionReserving(
 		InvocationID: &invocation, RecordedAt: admission.AdmittedAt,
 	}); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	return nil
+}
+
+// requireAdmissionGates runs the gates every admission write runs, a replay
+// included, and returns the run the admission's attempt belongs to.
+func (tx *WriteTx) requireAdmissionGates(
+	ctx context.Context, admission domain.ExecutionAdmission,
+) (domain.Run, error) {
+	if err := tx.gateAdmission(ctx, admission); err != nil {
+		return domain.Run{}, err
+	}
+	// The operating-state half runs only here and at dispatch, not in
+	// scanExecutionAdmission's re-gate: an operator stop or a blocking item
+	// closes new unattended operation without making recorded history
+	// unreadable (RequireUnattendedAdmissible).
+	if err := tx.RequireUnattendedAdmissible(ctx, admission); err != nil {
+		return domain.Run{}, err
+	}
+	if err := tx.RequireBackendConformant(ctx, admission); err != nil {
+		return domain.Run{}, err
+	}
+	return tx.requireRecordedAttempt(ctx, admission)
+}
+
+// requireNewAdmissionGates runs the gates only a new record runs, never an
+// exact replay, after requireAdmissionGates.
+func (tx *WriteTx) requireNewAdmissionGates(
+	ctx context.Context, run domain.Run, admission domain.ExecutionAdmission, memory *MemoryReservation,
+) error {
+	// The credential-integrity half of §5.4 admission rule 4 runs only on
+	// this new-record path, never in scanExecutionAdmission's re-gate
+	// (RequireGenerationUnmarked): a generation the probe marked admits
+	// nothing new, while an exact replay and every recorded
+	// admission stay readable. The stored mark rows are read here, in the
+	// admitting transaction, because the admission carries no unmarked claim
+	// to trust. A legacy admission names no generation and is unaffected.
+	if binding := admission.AgentBinding; binding != nil {
+		if err := tx.RequireGenerationUnmarked(ctx, binding.EnrollmentID, binding.EnrollmentGeneration); err != nil {
+			return err
+		}
+	}
+	// A new admission carries the daemon's current configured name, so it
+	// follows a rename; a rebinding to another repository id fails here,
+	// before any work is admitted.
+	if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base, true); err != nil {
+		return err
+	}
+	if err := tx.RequireUsagePoolCapacity(ctx, admission); err != nil {
+		return err
+	}
+	return tx.RequireExecutionMemory(ctx, admission, memory)
+}
+
+// admissionColumns is the nullable extracted columns of an admission row.
+func admissionColumns(admission domain.ExecutionAdmission) (identity, agentDigest, enrollmentID, enrollmentGeneration any) {
+	if admission.AuthIdentityID != nil {
+		identity = *admission.AuthIdentityID
+	}
+	if binding := admission.AgentBinding; binding != nil {
+		agentDigest = string(binding.AgentDigest)
+		enrollmentID = binding.EnrollmentID
+		enrollmentGeneration = binding.EnrollmentGeneration
+	}
+	return identity, agentDigest, enrollmentID, enrollmentGeneration
+}
+
+// reserveAdmittedDispatch takes a credentialed admission's dispatch
+// reservation in the admitting transaction, so its pool slot is held from
+// the admission until its driver starts or refuses it.
+func (tx *WriteTx) reserveAdmittedDispatch(ctx context.Context, admission domain.ExecutionAdmission) error {
+	if admission.AuthIdentityID == nil {
+		return nil
+	}
+	if err := tx.MarkOutboxDispatching(ctx, string(admission.InvocationID)); err != nil {
+		return fmt.Errorf("reserve execution dispatch %q: %w", admission.InvocationID, err)
 	}
 	return nil
 }
