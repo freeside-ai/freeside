@@ -33,7 +33,7 @@
                     makeService: { plist in
                         #expect(plist == "ai.freeside.daemon.plist")
                         return service
-                    }, healthChecker: health, clock: FastPollClock())
+                    }, healthChecker: health, clock: NeverTimingOutClock())
                 #expect(result.exitCode == 0)
                 #expect(service.calls == [action])
                 #expect(await health.calls == 2)
@@ -57,7 +57,7 @@
                         makeService: { plist in
                             #expect(plist == "ai.freeside.daemon.dev.plist")
                             return service
-                        }, healthChecker: health)
+                        }, healthChecker: health, clock: NeverTimingOutClock())
                     let agrees = (status == .enabled && healthy) || (status == .notRegistered && !healthy)
                     #expect(result.exitCode == (agrees ? 0 : (status == .requiresApproval ? 3 : 1)))
                     #expect(service.calls.isEmpty)
@@ -73,7 +73,9 @@
                 let service = CommandService(status: .requiresApproval)
                 service.failure = throwsError
                 let health = CommandHealth(values: [true])
-                let result = await command.run(environment: .prod, makeService: { _ in service }, healthChecker: health)
+                let result = await command.run(
+                    environment: .prod, makeService: { _ in service }, healthChecker: health,
+                    clock: NeverTimingOutClock())
                 #expect(result.exitCode == 3)
                 #expect(result.line.contains("error=login_items_approval_required"))
                 #expect(await health.calls == 0)
@@ -85,7 +87,8 @@
                 let command = try #require(DaemonLifecycleCommand(arguments: ["daemon", action]))
                 let service = CommandService(status: .notFound)
                 service.failure = true
-                let result = await command.run(environment: .prod, makeService: { _ in service })
+                let result = await command.run(
+                    environment: .prod, makeService: { _ in service }, clock: NeverTimingOutClock())
                 #expect(result.exitCode == 1)
                 #expect(result.line.contains("error=service_operation_failed"))
             }
@@ -133,9 +136,22 @@
         }
     }
 
-    private struct FastPollClock: DaemonLifecycleClock {
+    /// Polls yield at once; the timeout never elapses, and only the
+    /// command's cancellation ends its sleep. A real 30s timeout lost the race
+    /// to a poller starved of the main actor by another suite (#2323).
+    private struct NeverTimingOutClock: DaemonLifecycleClock {
         func sleep(for duration: Duration) async throws {
-            if duration >= .seconds(1) { try await Task.sleep(for: duration) } else { await Task.yield() }
+            guard duration >= .seconds(1) else {
+                await Task.yield()
+                return
+            }
+            let (stream, continuation) = AsyncStream<Never>.makeStream()
+            // Iteration ends only when the task is cancelled. Finishing the
+            // stream afterward also keeps the continuation alive until then,
+            // so the stream can't end early.
+            for await _ in stream {}
+            continuation.finish()
+            throw CancellationError()
         }
     }
 
