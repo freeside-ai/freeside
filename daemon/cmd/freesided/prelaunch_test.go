@@ -1026,11 +1026,12 @@ func TestPrelaunchRefusesASourceAnUnfinishedTaskHolds(t *testing.T) {
 	if _, err := loadOrCreateTopicKey(f.paths.DB, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runSubmitCommand(t.Context(), submitCommandConfig{
+	earlier, err := runSubmitCommand(t.Context(), submitCommandConfig{
 		SubmissionID: "earlier", DBPath: f.paths.DB,
 		TaskPath: f.task, PolicyPath: f.policy, WorkUnitPath: f.workUnit, PublicationPath: f.publication,
 		ProjectID: settings.Repository.Project,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	record, body, stderr, err := f.run(t, f.args("-no-live"))
@@ -1039,8 +1040,38 @@ func TestPrelaunchRefusesASourceAnUnfinishedTaskHolds(t *testing.T) {
 	}
 	check := findPrelaunchCheck(record, prelaunchGroupInputs, "duplicate_source")
 	if check.Status != compositionFailed || !strings.Contains(check.Evidence, "task task-") ||
-		!strings.Contains(stderr, "duplicate_source") {
+		!strings.Contains(stderr, "duplicate_source") || strings.Contains(check.Fix, "--replace") {
 		t.Fatalf("duplicate_source %+v, stderr %q; want a failure naming the unfinished task", check, stderr)
+	}
+
+	// Once only an execution failure is open on that task, the fix is to
+	// replace it.
+	runID := earlier.SpecificationRunID
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "prelaunch-failure", ProjectID: settings.Repository.Project,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: "The run failed.",
+		RequestedDecision: []domain.Action{domain.ActionStop}, ItemVersion: 1, Status: domain.StatusOpen,
+		InterruptionClass: domain.InterruptionExceptional,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.OpenExisting(t.Context(), f.paths.DB, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.Write(t.Context(), func(tx *store.WriteTx) error { return tx.PutAttentionItem(t.Context(), item) })
+	if closeErr := st.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	record, body, _, err = f.run(t, f.args("-no-live"))
+	if !errors.Is(err, errPrelaunchFailed) {
+		t.Fatalf("err %v, want a failed prelaunch\n%s", err, body)
+	}
+	check = findPrelaunchCheck(record, prelaunchGroupInputs, "duplicate_source")
+	if check.Status != compositionFailed || !strings.Contains(check.Fix, "--replace "+string(earlier.TaskID)) {
+		t.Fatalf("duplicate_source %+v; want a fix naming submit --replace %s", check, earlier.TaskID)
 	}
 }
 

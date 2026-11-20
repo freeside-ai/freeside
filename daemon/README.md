@@ -5367,7 +5367,24 @@ submission, and a v1 one still replays.
 `submit` also refuses a second unfinished task for the same specification in
 the same project; the refusal names the first task and the commands that
 settle it (`freesided reattempt`, `freesided abandon`, or a replay with
-`--retry-submission-id`).
+`--retry-submission-id`). When only execution failures are open on that
+task, it names `submit --replace <task-id>` instead of `abandon`.
+
+**Resubmit a failed task with `--replace <task-id>`.** `submit --replace`
+abandons the named task in the write that creates the new one, then
+finishes that abandon's workflow closure and card cleanup as
+`freesided abandon` does. It refuses, before writing anything, unless the
+named task is in `-project`, holds the submitted source, is unfinished, and
+has only `execution_failure` items open (at least one); the refusal names
+the items still open. The recovery journal keeps the choice, so
+`--retry-submission-id` replays it; a retry of an accepted submission, whose
+task is already abandoned, skips the abandon and finishes the cleanup. Any
+other submission naming a finished task is refused; that task no longer
+holds the source, so submitting without `--replace` under a new id is
+accepted. The result's `replaced_task`
+is the abandon's result for that task. When the cleanup fails after the
+new task committed, `submit` prints the result, exits 1, and names the
+`abandon -task <task-id> -episode <episode>` repair.
 
 **`prod` keeps running, without execution.** The operator neither stops
 nor restores the `prod` daemon around a start: an executing `prod` is paused
@@ -5545,10 +5562,11 @@ is `not_run`, and the rest still run.
   publication's `source_issue`; the `--task-line` set is well formed and
   each selection resolves as admission would resolve it. `duplicate_source` makes `submit`'s refusal of
   a source an unfinished task in the project already holds, as for new
-  work (a replay under that task's own `--submission-id` is not checked), and
-  `launch_binding` compares the inputs with the composed manifest as
-  `submit` does: the publication's `commit_author` must be the App bot the
-  composition resolved.
+  work (a replay under that task's own `--submission-id` is not checked);
+  when that task has only execution failures open, its fix is to submit
+  with `--replace <task-id>`. `launch_binding` compares the inputs with
+  the composed manifest as `submit` does: the publication's
+  `commit_author` must be the App bot the composition resolved.
 - **`state`**: the database is absent (a fresh root) or opens read-only at
   this build's schema; an older schema fails with both versions and the
   recovery text. `system_health` fails on every open item whose admission
