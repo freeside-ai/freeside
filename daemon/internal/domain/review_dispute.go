@@ -77,6 +77,37 @@ func DisputedFindingAdjudicationIn(
 	return nil, nil
 }
 
+// FindingDismissalNeedsPerson reports whether declining or deferring finding
+// needs a person however confident the adjudicator is: a critical or high
+// finding, or an external finding its reviewer left unrated or labeled
+// blocking. Plan §7 reads a missing external severity as high, so the
+// adjudicator alone never dismisses such a finding.
+func FindingDismissalNeedsPerson(finding Finding) bool {
+	if finding.Severity == FindingSeverityP0 || finding.Severity == FindingSeverityP1 {
+		return true
+	}
+	return finding.External != nil &&
+		(finding.Severity == "" || ExternalCommentLabeledBlocking(finding.Message))
+}
+
+// FindingNeedsPerson is the one rule for whether a person must choose this
+// finding's route: its entry is below the threshold, it is a dispute, or it
+// dismisses a finding FindingDismissalNeedsPerson holds for a person. The
+// engine raises the dispute card from it.
+func FindingNeedsPerson(entry FindingAdjudicationEntry, finding Finding, threshold DispatchThreshold) (bool, error) {
+	accepted, err := entry.Accepted(threshold)
+	if err != nil {
+		return false, err
+	}
+	if !accepted || entry.Route == RouteDispute {
+		return true, nil
+	}
+	if entry.Route == RouteDecline || entry.Route == RouteDefer {
+		return FindingDismissalNeedsPerson(finding), nil
+	}
+	return false, nil
+}
+
 // ReviewDisputeBindingMatches reports whether a stored binding agrees with the
 // one derived from current state. A stored row with no adjudication block
 // agrees with any derived block: such a row predates the block (#2059), the

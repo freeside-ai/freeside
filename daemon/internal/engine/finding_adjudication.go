@@ -1811,11 +1811,7 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 				}); err != nil {
 					return productionReviewPending, err
 				}
-				// An external reviewer's severity is whatever badge their comment
-				// carried, and most carry none. Plan §7 reads a missing severity as
-				// high, so the adjudicator alone never dismisses such a finding.
-				if finding.Severity == domain.FindingSeverityP0 || finding.Severity == domain.FindingSeverityP1 ||
-					(finding.External != nil && finding.Severity == "") {
+				if domain.FindingDismissalNeedsPerson(finding) {
 					needsDisputeAttention = true
 					continue
 				}

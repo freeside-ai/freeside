@@ -24,18 +24,13 @@ func (w *productionPublicationWorkflow) pendingAdjudicatedFindings(ctx context.C
 		}
 		threshold := resolvedFindingThreshold(policy, findingConfidenceThresholdKey)
 		for _, entry := range artifact.Entries {
-			accepted, err := entry.Accepted(threshold)
+			finding, err := tx.GetFinding(ctx, entry.FindingID)
 			if err != nil {
 				return err
 			}
-			needsDecision := !accepted || entry.Route == domain.RouteDispute
-			if entry.Route == domain.RouteDecline || entry.Route == domain.RouteDefer {
-				finding, err := tx.GetFinding(ctx, entry.FindingID)
-				if err != nil {
-					return err
-				}
-				needsDecision = needsDecision || finding.Severity == domain.FindingSeverityP0 ||
-					finding.Severity == domain.FindingSeverityP1 || (finding.External != nil && finding.Severity == "")
+			needsDecision, err := domain.FindingNeedsPerson(entry, finding, threshold)
+			if err != nil {
+				return err
 			}
 			if needsDecision {
 				waiting = append(waiting, entry.FindingID)

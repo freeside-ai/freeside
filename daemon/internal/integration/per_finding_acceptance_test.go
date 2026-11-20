@@ -140,3 +140,31 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 		t.Fatal("remediation replaced the pull request")
 	}
 }
+
+// TestExternalReviewBlockingLabelWaitsForPerson: a rated external finding its
+// reviewer labeled blocking is declined at high confidence, yet it waits on
+// the card like a P0 or P1 instead of settling and replying.
+func TestExternalReviewBlockingLabelWaitsForPerson(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	driver := p.configureAdjudicator(t)
+	// The harness stores every external finding rated P2, as the badge here
+	// reads; the blocking label alone holds it.
+	_, findings := p.startAdjudicatedExternalReview(t, "[P2, blocking] Declare 401")
+	p.scriptCleanReview(2, p.baseSHA, p.replay.HeadSHA)
+	scriptAdjudication(t, driver, declineVerdict(findings[0].ID))
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	end := p.externalReviewEnd(t)
+	if end.readyItem || len(end.reviewItems) != 1 {
+		t.Fatalf("round end = %#v", end)
+	}
+	rows := end.reviewItems[0].ReviewDispute.Findings
+	if len(rows) != 1 || rows[0].FindingID != findings[0].ID {
+		t.Fatalf("dispute rows = %#v", rows)
+	}
+	if dispositions := p.externalDispositions(t); len(dispositions) != 0 {
+		t.Fatalf("blocking finding declined without a person: %#v", dispositions)
+	}
+}
