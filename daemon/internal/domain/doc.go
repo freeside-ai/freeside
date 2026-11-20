@@ -28,6 +28,8 @@
 //     accepted client decisions on an item and operator command receipts (§4)
 //   - comprehension.go the client capability contract and comprehension events
 //   - agent_decision.go the decisions an agent hands back and the blocked outcome (§4)
+//   - question_answer.go the options an owner's answer picks for those
+//     decisions, and the answer text rendered from them
 //   - scope_conflict.go a candidate whose required work extends past its
 //     approved paths
 //   - artifact.go     artifacts, provenance, and the evidence gate (§5.15)

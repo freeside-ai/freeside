@@ -1,0 +1,29 @@
+{
+  "command_id": "cmd-answer",
+  "device_id": "device-1",
+  "item_id": "question-1",
+  "item_version": 1,
+  "pr_head_sha": "",
+  "artifact_digests": [
+    "sha256:question"
+  ],
+  "action": "answer_without_retry",
+  "message": "Decision 1: Current and previous\nDecision 2: Other answer, see the note below\nDecision 3: SQLite\n\nKeep the old endpoint behind a flag until the next release.",
+  "attachments": [],
+  "answer_route": null,
+  "question_answers": [
+    {
+      "decision_index": 0,
+      "option_label": "Current and previous"
+    },
+    {
+      "decision_index": 1,
+      "option_label": null
+    },
+    {
+      "decision_index": 2,
+      "option_label": "SQLite"
+    }
+  ],
+  "decision_evidence": null
+}

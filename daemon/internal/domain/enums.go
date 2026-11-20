@@ -2942,6 +2942,9 @@ const (
 	DaemonFeatureParkedTaskMove DaemonFeature = "parked_task_move"
 	// DaemonFeatureWorkHours is the GET /work-hours read.
 	DaemonFeatureWorkHours DaemonFeature = "work_hours"
+	// DaemonFeatureQuestionOptionAnswers is question_answers on an
+	// agent_question answer.
+	DaemonFeatureQuestionOptionAnswers DaemonFeature = "question_option_answers"
 )
 
 // AllDaemonFeatures lists every feature this build serves; it is the single
@@ -2949,11 +2952,12 @@ const (
 var AllDaemonFeatures = []DaemonFeature{
 	DaemonFeatureParkedTaskMove,
 	DaemonFeatureWorkHours,
+	DaemonFeatureQuestionOptionAnswers,
 }
 
 func (f DaemonFeature) valid() bool {
 	switch f {
-	case DaemonFeatureParkedTaskMove, DaemonFeatureWorkHours:
+	case DaemonFeatureParkedTaskMove, DaemonFeatureWorkHours, DaemonFeatureQuestionOptionAnswers:
 		return true
 	default:
 		return false

@@ -62,6 +62,14 @@ type Command struct {
 	// implementer or revises the specification. Which items require or forbid
 	// it is the acceptance boundary's policy, not a domain invariant.
 	AnswerRoute *AnswerRoute `json:"answer_route"`
+	// QuestionAnswers are the options an agent_question answer chose, one per
+	// decision in decision order, when the owner chose them on the card;
+	// Message then holds the
+	// daemon-rendered answer (RenderQuestionAnswers). Which actions and items
+	// allow them is the acceptance boundary's policy. omitempty keeps every
+	// command without answers at its existing stored byte-form, so a replay
+	// of an older command still converges.
+	QuestionAnswers []QuestionAnswer `json:"question_answers,omitempty"`
 	// DecisionEvidence is the daemon-stamped record of the decision context the
 	// command was accepted in (plan §8, §9): the action surface it referenced
 	// and the item's recommendation at acceptance. It is never caller-supplied,
@@ -120,6 +128,7 @@ func (c Command) WithDecisionEvidence(evidence CommandDecisionEvidence) (Command
 	c.ArtifactDigests = append([]Digest{}, c.ArtifactDigests...)
 	c.Attachments = append([]Digest{}, c.Attachments...)
 	c.AnswerRoute = clonePtr(c.AnswerRoute)
+	c.QuestionAnswers = cloneQuestionAnswers(c.QuestionAnswers)
 	c.DecisionEvidence = &stamped
 	if err := c.Validate(); err != nil {
 		return Command{}, err
@@ -140,6 +149,7 @@ type CommandInput struct {
 	Message         string
 	Attachments     []Digest
 	AnswerRoute     *AnswerRoute
+	QuestionAnswers []QuestionAnswer
 }
 
 // NewCommand builds a validated Command whose bound digest set is in canonical
@@ -171,6 +181,10 @@ func NewCommand(in CommandInput) (Command, error) {
 		// array-shaped ("[]") in the write-once record.
 		Attachments: append([]Digest{}, in.Attachments...),
 		AnswerRoute: clonePtr(in.AnswerRoute),
+		// Sorted by decision index, so a retry that lists the same answers in
+		// another order converges on the one stored byte-form (the #33
+		// canonical-body lesson the digest set follows).
+		QuestionAnswers: sortedQuestionAnswers(in.QuestionAnswers),
 	}
 	if err := c.Validate(); err != nil {
 		return Command{}, err
@@ -203,6 +217,17 @@ func (c Command) Validate() error {
 	}
 	if c.AnswerRoute != nil && !c.AnswerRoute.valid() {
 		return fmt.Errorf("command %s answer_route %q: %w", c.CommandID, *c.AnswerRoute, ErrInvalidAnswerRoute)
+	}
+	// Absent is the ordinary case; a present set is never empty, so the
+	// record has one byte-form for "no answers".
+	if c.QuestionAnswers != nil {
+		if err := validateQuestionAnswerShape(c.QuestionAnswers); err != nil {
+			return fmt.Errorf("command %s: %w", c.CommandID, err)
+		}
+		if !slices.IsSortedFunc(c.QuestionAnswers, compareQuestionAnswers) {
+			return fmt.Errorf("command %s question_answers out of decision order: %w",
+				c.CommandID, ErrQuestionAnswerInvalid)
+		}
 	}
 	// The bound digest set is canonical (sorted, deduplicated): the write-once
 	// record then has one byte-form per accepted binding, so a reordered retry

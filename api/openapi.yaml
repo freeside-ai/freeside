@@ -6347,7 +6347,10 @@ components:
             discuss, request_changes, answer_and_retry,
             answer_without_retry, and return_to_agent; absent for pure
             decisions. The daemon binds it to the versioned command and
-            applies each action's size and attachment policy.
+            applies each action's size and attachment policy. With
+            question_answers it is the owner's note: optional unless an
+            answer names no option, at most 6144 bytes, and the record's
+            message is the daemon-rendered answer instead.
         capability_manifest_digest:
           allOf:
             - $ref: "#/components/schemas/Digest"
@@ -6377,6 +6380,22 @@ components:
             specification feedback and starts a fresh campaign under the same
             task, whose revised specification, once approved, begins a new
             implementation run.
+        question_answers:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/QuestionAnswer"
+          description: >
+            The option the owner chose for each decision of an
+            agent_question. Allowed only on answer_and_retry and
+            answer_without_retry against an agent_question, and only when the
+            daemon lists question_option_answers in `/health`'s features. The
+            set must be complete and exact: one answer per decision, no
+            duplicate or out-of-range decision_index, and every non-null
+            option_label equal to one of that decision's option labels. A
+            null or absent option_label requires a non-blank message. The daemon
+            renders the answers and the message into the record's message.
         attachments:
           type: array
           items:
@@ -6614,8 +6633,14 @@ components:
             (Go's time.RFC3339Nano); retry_with_capabilities, the chosen
             capability manifest digest; and retry_with_alternate_agent, the
             chosen agent's tree name. Every other action,
-            accept_recommended_route included, leaves it empty.
-            decisionMessage in
+            accept_recommended_route included, leaves it empty. An answer
+            that carried question_answers holds the daemon-rendered answer:
+            one `Decision N: <label>` line per decision in decision order
+            (N counts from 1, a label over 200 bytes is cut on a UTF-8
+            boundary to at most 200 bytes ending in an ellipsis, and a null
+            or absent option_label reads
+            `Decision N: Other answer, see the note below`), then a blank
+            line and the owner's note when there is one. decisionMessage in
             daemon/internal/signet/command.go is the source of truth for
             each action's byte form. The record always renders both content
             fields, empty or not, so the write-once body has one byte-form.
@@ -6634,6 +6659,16 @@ components:
             The route an implementation-stage answer named; null for every
             other command. Always rendered, so the record keeps one
             byte-form.
+        question_answers:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/QuestionAnswer"
+          description: >
+            The option choices an agent_question answer carried, in decision
+            order, exactly as accepted. Absent for every other command, so a
+            command without answers keeps its byte-form.
         decision_evidence:
           nullable: true
           allOf:
@@ -6927,7 +6962,7 @@ components:
 
     DaemonFeature:
       type: string
-      enum: [parked_task_move, work_hours, unknown]
+      enum: [parked_task_move, work_hours, question_option_answers, unknown]
       description: >
         A feature a daemon build may serve, named in `/health`'s `features`
         so an app can turn off what an older daemon lacks. A name is
@@ -6935,6 +6970,8 @@ components:
         newer app would otherwise send to a daemon that refuses it.
         `parked_task_move`: the `move_parked_task` command (plan §4, quota
         park). `work_hours`: the `GET /work-hours` read.
+        `question_option_answers`: `question_answers` on an agent_question
+        answer.
 
     PairingRequest:
       type: object
@@ -10973,6 +11010,30 @@ components:
         end_line:
           type: integer
           minimum: 0
+
+    QuestionAnswer:
+      type: object
+      description: >
+        The owner's choice for one decision of an agent_question. The option
+        is named by its exact label, which is unique within its decision and
+        stays the same when a re-asked question reorders its options.
+      required: [decision_index]
+      properties:
+        decision_index:
+          type: integer
+          minimum: 0
+          maximum: 7
+          description: The decision's 0-based position in agent_question.decisions.
+        option_label:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 4096
+          description: >
+            The chosen option's exact label. Null or absent when the owner
+            answers this decision in the message instead; a generated client
+            omits a nil optional rather than writing null, so both forms mean
+            the same.
 
     AlternativeChoice:
       type: object

@@ -1896,6 +1896,30 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An answer that chose options on the card: the record keeps the typed
+	// answers, and its message is the daemon-rendered answer, pinned here for
+	// a mixed answer (chosen options, one decision answered in the note, and
+	// the note).
+	chosenTarget, chosenStore := "Current and previous", "SQLite"
+	questionAnswers := []domain.QuestionAnswer{
+		{DecisionIndex: 2, OptionLabel: &chosenStore},
+		{DecisionIndex: 0, OptionLabel: &chosenTarget},
+		{DecisionIndex: 1},
+	}
+	renderedAnswer, err := domain.RenderQuestionAnswers(questionAnswers,
+		"Keep the old endpoint behind a flag until the next release.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	answerCommand, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "cmd-answer", DeviceID: "device-1", ItemID: "question-1",
+		ItemVersion: 1, ArtifactDigests: []domain.Digest{"sha256:question"},
+		Action: domain.ActionAnswerWithoutRetry, Message: renderedAnswer,
+		QuestionAnswers: questionAnswers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Comprehension telemetry (plan §8, §9): the capability contract a device
 	// registers, the daemon-derived action surface, one plain and one
 	// action-bearing event, an operator-recorded defect, and a command carrying
@@ -2695,6 +2719,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_advisory", advisoryItem},
 		{"attention_item_review_recovery", recoveryItem},
 		{"command", command},
+		{"command_question_answers", answerCommand},
 		{"subject", subject},
 		{"agent_claim", agentClaim},
 		{"agent_claim_text", textClaim},

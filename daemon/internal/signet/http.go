@@ -445,7 +445,24 @@ type decisionPayloadRequest struct {
 	CapabilityManifestDigest    *domain.Digest                 `json:"capability_manifest_digest"`
 	AlternateAgentChoice        *AlternateAgentChoice          `json:"alternate_agent_choice"`
 	AnswerRoute                 *domain.AnswerRoute            `json:"answer_route"`
+	QuestionAnswers             []questionAnswerRequest        `json:"question_answers"`
 	DecisionActionSurfaceDigest *domain.Digest                 `json:"decision_action_surface_digest"`
+}
+
+// questionAnswerRequest is the wire shape of one QuestionAnswer. decision_index
+// is required. option_label is null or absent for an answer written in the
+// note: the app's generated client omits a nil optional instead of writing
+// null, so the two forms can't be told apart on the wire.
+type questionAnswerRequest struct {
+	DecisionIndex *int    `json:"decision_index"`
+	OptionLabel   *string `json:"option_label"`
+}
+
+func (r questionAnswerRequest) answer() (domain.QuestionAnswer, error) {
+	if r.DecisionIndex == nil {
+		return domain.QuestionAnswer{}, errors.New("decision_index is required")
+	}
+	return domain.QuestionAnswer{DecisionIndex: *r.DecisionIndex, OptionLabel: r.OptionLabel}, nil
 }
 
 // effectProposalRevisionRequest is the wire shape of effect_proposal_revision:
@@ -602,6 +619,19 @@ func (h httpHandler) submitDecisionCommand(w http.ResponseWriter, r *http.Reques
 	if arm.AnswerRoute != nil {
 		route := *arm.AnswerRoute
 		payload.AnswerRoute = &route
+	}
+	if arm.QuestionAnswers != nil {
+		payload.QuestionAnswers = make([]domain.QuestionAnswer, 0, len(arm.QuestionAnswers))
+		for index, request := range arm.QuestionAnswers {
+			answer, err := request.answer()
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, errorResponse{
+					Message: "payload.question_answers[" + strconv.Itoa(index) + "]." + err.Error(),
+				})
+				return
+			}
+			payload.QuestionAnswers = append(payload.QuestionAnswers, answer)
+		}
 	}
 	if arm.DecisionActionSurfaceDigest != nil {
 		digest := *arm.DecisionActionSurfaceDigest
@@ -1123,6 +1153,10 @@ func isCommandRequestError(err error) bool {
 		ErrOperatorSettingUnavailable, ErrUsageOperationUnavailable,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
+		// question_answers that don't answer the question exactly are the
+		// client's request, refused before the write.
+		domain.ErrQuestionAnswerInvalid, domain.ErrQuestionAnswersIncomplete,
+		domain.ErrQuestionAnswerOptionUnknown, domain.ErrQuestionAnswerNoteRequired,
 	} {
 		if errors.Is(err, target) {
 			return true

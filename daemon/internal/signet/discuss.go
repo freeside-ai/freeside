@@ -376,3 +376,22 @@ func validateAnswerRoute(command domain.Command, item domain.AttentionItem) erro
 	}
 	return nil
 }
+
+// validateQuestionAnswers is the per-item half of the question_answers policy;
+// decisionMessage already refused them on any other action and checked the
+// note. Answers are allowed only on an agent_question, and there they must
+// answer every decision once, each chosen label one of its decision's labels.
+// The answer grants nothing, but it is client input the agent reads, so a
+// choice the question never offered is refused rather than rendered.
+func validateQuestionAnswers(command domain.Command, item domain.AttentionItem) error {
+	if command.QuestionAnswers == nil {
+		return nil
+	}
+	if item.Type != domain.AttentionAgentQuestion || item.AgentQuestion == nil {
+		return fmt.Errorf("action %q question_answers on %q: %w", command.Action, item.Type, ErrContentNotAllowed)
+	}
+	if err := domain.ValidateQuestionAnswers(command.QuestionAnswers, *item.AgentQuestion); err != nil {
+		return fmt.Errorf("action %q: %w", command.Action, err)
+	}
+	return nil
+}

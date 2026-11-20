@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // TestWriteCommandErrorClassifiesAuthorityRejections pins the HTTP boundary
@@ -159,5 +160,52 @@ func TestSnoozedProposalHTTPMappingsAreAuthoritative(t *testing.T) {
 	writeReadError(read, fmt.Errorf("get: %w", ErrProposalSnoozed))
 	if read.Code != http.StatusNotFound {
 		t.Fatalf("snoozed read -> %d, want %d", read.Code, http.StatusNotFound)
+	}
+}
+
+// TestQuestionAnswerRequestDecodesTheClientsForms: decision_index is
+// required, option_label is a string, or null or absent for an answer in the
+// note, and the strict decode refuses an unknown member. The absent form is
+// the one the app's generated client sends for "Other answer".
+func TestQuestionAnswerRequestDecodesTheClientsForms(t *testing.T) {
+	t.Parallel()
+	decode := func(raw string) (domain.QuestionAnswer, error) {
+		var request questionAnswerRequest
+		if err := strictjson.Decode([]byte(raw), &request, strictjson.RejectInvalidUTF8, 1<<10); err != nil {
+			return domain.QuestionAnswer{}, err
+		}
+		return request.answer()
+	}
+	if answer, err := decode(`{"decision_index":1,"option_label":"SQLite"}`); err != nil ||
+		answer.DecisionIndex != 1 || answer.OptionLabel == nil || *answer.OptionLabel != "SQLite" {
+		t.Fatalf("labelled answer = %#v, %v", answer, err)
+	}
+	for _, raw := range []string{`{"decision_index":0,"option_label":null}`, `{"decision_index":0}`} {
+		if answer, err := decode(raw); err != nil || answer.OptionLabel != nil {
+			t.Fatalf("decode %s = %#v, %v; want an answer in the note", raw, answer, err)
+		}
+	}
+	for _, raw := range []string{
+		`{"option_label":"SQLite"}`,
+		`{"decision_index":0,"option_label":3}`,
+		`{"decision_index":0,"option_label":"SQLite","note":"x"}`,
+	} {
+		if answer, err := decode(raw); err == nil {
+			t.Fatalf("decode %s = %#v, want an error", raw, answer)
+		}
+	}
+}
+
+func TestWriteCommandErrorClassifiesQuestionAnswerRefusals(t *testing.T) {
+	t.Parallel()
+	for _, refusal := range []error{
+		domain.ErrQuestionAnswerInvalid, domain.ErrQuestionAnswersIncomplete,
+		domain.ErrQuestionAnswerOptionUnknown, domain.ErrQuestionAnswerNoteRequired,
+	} {
+		recorder := httptest.NewRecorder()
+		writeCommandError(recorder, nil, fmt.Errorf("submit answer: %w", refusal))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%v -> %d, want %d", refusal, recorder.Code, http.StatusBadRequest)
+		}
 	}
 }
