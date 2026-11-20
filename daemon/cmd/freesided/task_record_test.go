@@ -141,6 +141,25 @@ func TestTaskRecordGolden(t *testing.T) {
 		}); err != nil {
 			return err
 		}
+		// One verification that passed and one still running, inside the
+		// run's span, so the record's verification steps and the
+		// timeline's rows both show.
+		for _, m := range []struct {
+			kind       domain.RunMilestoneKind
+			invocation domain.InvocationID
+			minutes    int
+		}{
+			{domain.MilestoneVerificationStarted, "verify-golden-1", 2},
+			{domain.MilestoneVerificationPassed, "verify-golden-1", 3},
+			{domain.MilestoneVerificationStarted, "verify-golden-2", 4},
+		} {
+			if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+				RunID: fixtureActiveRunID, Kind: m.kind, InvocationID: &m.invocation,
+				RecordedAt: time.Date(2026, 9, 1, 13, 40+m.minutes, 0, 0, time.UTC),
+			}); err != nil {
+				return err
+			}
+		}
 		return addRecordV15Facts(ctx, tx, id)
 	}); err != nil {
 		t.Fatal(err)

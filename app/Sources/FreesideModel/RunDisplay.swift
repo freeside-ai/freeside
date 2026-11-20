@@ -50,8 +50,9 @@ package enum RunDisplay {
     }
 
     /// Production runs append implementation passes without recording review
-    /// or verification stages. Publication progress supplies that position;
-    /// Review is completed by position, never shown as a live review round.
+    /// or verification stages. A verification milestone or publication
+    /// progress supplies that position (#3446); Review is completed by
+    /// position here, and only `openReviewRound` shows a live review round.
     /// The holds that place a run in Verification: the publication cycle's
     /// (daemon/internal/domain/observation.go).
     package static let publicationHoldReasons: Set<Components.Schemas.RunHoldReason> = [
@@ -65,7 +66,10 @@ package enum RunDisplay {
         let completed = run.outcome == .completed || milestone == .work_unit_completed
         let published = run.outcome == .published || milestone == .publication_ready
         let publicationHold = run.hold_reason.map { publicationHoldReasons.contains($0.value1) } ?? false
-        if completed || published || publicationHold || milestone == .publication_blocked || run.outcome == .blocked {
+        let verifying = milestone.map(verificationMilestones.contains) ?? false
+        if completed || published || publicationHold || verifying || milestone == .publication_blocked
+            || run.outcome == .blocked
+        {
             let passes = run.stages.filter { canonicalStageName($0.name) == "implementation" }.count
             return WorkflowPhase(
                 stage: .verification, round: "Round \(passes)",
@@ -75,10 +79,35 @@ package enum RunDisplay {
         return WorkflowPhase(stage: .implementation, round: round(stage), completed: [])
     }
 
-    /// Shared by the row title and timeline header so their phase and round agree.
+    /// The milestones a run records around its verification.
+    static let verificationMilestones: Set<Components.Schemas.RunMilestoneKind> = [
+        .verification_started, .verification_passed, .verification_failed,
+    ]
+
+    /// The newest review round the run waits on: one pending or running,
+    /// requested after the run's newest verification result. A run records
+    /// no review stage, so this is how the run page reads "Review · Round N"
+    /// while an external round's review is open (#3446). Nil when none is.
+    package static func openReviewRound(
+        _ rounds: [Components.Schemas.RunReviewRound], milestones: [Components.Schemas.RunMilestone]
+    ) -> Int? {
+        let verified = milestones.filter { $0.kind == .verification_passed || $0.kind == .verification_failed }
+            .map(\.recorded_at).max()
+        return rounds.filter { round in
+            guard round.state == .pending || round.state == .running else { return false }
+            guard let verified else { return true }
+            return round.requested_at.map { $0 > verified } ?? false
+        }.map(\.round).max()
+    }
+
+    /// Shared by the row title and timeline header so they agree on the phase
+    /// and round the run records. `openReviewRound`, from the run's timeline,
+    /// names a review round in progress, so only the run page, which holds
+    /// the timeline, reads "Review · Round N"; a caller without it passes
+    /// none.
     package static func stageHeading(
         _ run: Components.Schemas.Run, task: Components.Schemas.Task? = nil,
-        attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = [], openReviewRound: Int? = nil
     ) -> (label: String, round: String?)? {
         if let task,
             let dispute = TaskDisplay.reviewDisputeHeading(task, run: run, attentionItems: attentionItems)
@@ -89,6 +118,9 @@ package enum RunDisplay {
             let handoff = TaskDisplay.finalReviewHeading(task, run: run, attentionItems: attentionItems)
         {
             return (handoff, nil)
+        }
+        if let openReviewRound {
+            return (AttentionDisplay.label(.review), "Round \(openReviewRound)")
         }
         if let phase = workflowPhase(run) {
             return (AttentionDisplay.label(phase.stage), phase.round)

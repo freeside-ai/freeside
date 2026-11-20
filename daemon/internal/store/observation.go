@@ -101,10 +101,11 @@ const (
 // AppendRunMilestone appends one milestone, first observation wins: a replay
 // or crash-retry that re-observes the same (run, kind, invocation) converges
 // on the already-recorded instant instead of duplicating or erroring. A
-// milestone that actually inserts is forward progress and clears the run's
-// current hold, which the hold history records as cleared at the milestone's
-// recorded instant; a converged replay clears nothing, because no progress
-// happened now and a standing hold must not blink out under replays.
+// milestone that actually inserts and whose kind ClearsHold is forward
+// progress and clears the run's current hold, which the hold history records
+// as cleared at the milestone's recorded instant; a converged replay clears
+// nothing, because no progress happened now and a standing hold must not
+// blink out under replays.
 func (tx *WriteTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone) error {
 	if err := m.Validate(); err != nil {
 		return fmt.Errorf("append run milestone: %w", err)
@@ -135,7 +136,7 @@ func (tx *WriteTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone
 	if err != nil {
 		return fmt.Errorf("append run milestone %s %s: %w", m.RunID, m.Kind, err)
 	}
-	if inserted == 0 {
+	if inserted == 0 || !m.Kind.ClearsHold() {
 		return nil
 	}
 	if err := tx.clearRunHoldAt(ctx, m.RunID, m.RecordedAt); err != nil {

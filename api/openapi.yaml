@@ -4396,6 +4396,9 @@ components:
         - publication_ready
         - publication_blocked
         - work_unit_completed
+        - verification_started
+        - verification_passed
+        - verification_failed
         - unknown
 
     RunHoldReason:

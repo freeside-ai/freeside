@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v19",
+  "version": "freeside-task-record-v20",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -182,6 +182,78 @@
       {
         "milestone": {
           "run_id": "run-freeside-656",
+          "kind": "verification_started",
+          "invocation_id": "verify-golden-2",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:44:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "external_review": null,
+        "line": null,
+        "triage": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:44:00Z",
+        "campaign_id": null,
+        "run_id": "run-freeside-656",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-freeside-656",
+          "kind": "verification_passed",
+          "invocation_id": "verify-golden-1",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:43:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "external_review": null,
+        "line": null,
+        "triage": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:43:00Z",
+        "campaign_id": null,
+        "run_id": "run-freeside-656",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-freeside-656",
+          "kind": "verification_started",
+          "invocation_id": "verify-golden-1",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:42:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "external_review": null,
+        "line": null,
+        "triage": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:42:00Z",
+        "campaign_id": null,
+        "run_id": "run-freeside-656",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-freeside-656",
           "kind": "run_submitted",
           "invocation_id": "inv-implement-run-freeside-656",
           "terminal": null,
@@ -216,6 +288,30 @@
         "run_id": "run-freeside-656",
         "approved_spec_digest": "sha256:991a2714c751292b0b241243e3c411e6722584bbcf31701b7575898a74820b13",
         "specification_run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "pr_number": null,
+        "merge_commit_sha": null
+      },
+      {
+        "milestone": {
+          "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+          "kind": "execution_export_recorded",
+          "invocation_id": "inv-specify-run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b-1",
+          "terminal": null,
+          "outcome": null,
+          "reason": null,
+          "recorded_at": "2026-09-01T13:10:00Z"
+        },
+        "review": null,
+        "verification": null,
+        "external_review": null,
+        "line": null,
+        "triage": null,
+        "kind": "run_milestone",
+        "recorded_at": "2026-09-01T13:10:00Z",
+        "campaign_id": null,
+        "run_id": "run-specification-4e43b0ee6a2c5cade4f35788f3138230700ac6f98d5524dd68f013c0e5db8e6b",
+        "approved_spec_digest": null,
+        "specification_run_id": null,
         "pr_number": null,
         "merge_commit_sha": null
       },
@@ -400,6 +496,33 @@
               },
               {
                 "run_id": "run-freeside-656",
+                "kind": "verification_started",
+                "invocation_id": "verify-golden-2",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:44:00Z"
+              },
+              {
+                "run_id": "run-freeside-656",
+                "kind": "verification_passed",
+                "invocation_id": "verify-golden-1",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:43:00Z"
+              },
+              {
+                "run_id": "run-freeside-656",
+                "kind": "verification_started",
+                "invocation_id": "verify-golden-1",
+                "terminal": null,
+                "outcome": null,
+                "reason": null,
+                "recorded_at": "2026-09-01T13:42:00Z"
+              },
+              {
+                "run_id": "run-freeside-656",
                 "kind": "invocation_admitted",
                 "invocation_id": "inv-implement-run-freeside-656",
                 "terminal": null,
@@ -424,8 +547,19 @@
               "started_at": "2026-09-01T13:31:00Z",
               "ended_at": "2026-09-01T13:51:00Z",
               "elapsed_seconds": 1200,
-              "active_seconds": 0,
-              "active_intervals": []
+              "active_seconds": 480,
+              "active_intervals": [
+                {
+                  "invocation_id": "verify-golden-1",
+                  "started_at": "2026-09-01T13:42:00Z",
+                  "ended_at": "2026-09-01T13:43:00Z"
+                },
+                {
+                  "invocation_id": "verify-golden-2",
+                  "started_at": "2026-09-01T13:44:00Z",
+                  "ended_at": "2026-09-01T13:51:00Z"
+                }
+              ]
             }
           },
           {
@@ -526,6 +660,7 @@
         }
       ],
       "publication": null,
+      "verifications": [],
       "closure_cards": [],
       "closure": null,
       "specification_retries": [],
@@ -590,6 +725,20 @@
         }
       ],
       "publication": null,
+      "verifications": [
+        {
+          "invocation_id": "verify-golden-1",
+          "started_at": "2026-09-01T13:42:00Z",
+          "finished_at": "2026-09-01T13:43:00Z",
+          "result": "passed"
+        },
+        {
+          "invocation_id": "verify-golden-2",
+          "started_at": "2026-09-01T13:44:00Z",
+          "finished_at": null,
+          "result": null
+        }
+      ],
       "closure_cards": [],
       "closure": null,
       "specification_retries": [],
@@ -696,6 +845,7 @@
         }
       ],
       "publication": null,
+      "verifications": [],
       "closure_cards": [],
       "closure": null,
       "specification_retries": [],

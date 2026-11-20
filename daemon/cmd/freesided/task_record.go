@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v19"
+const taskRecordVersion = "freeside-task-record-v20"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -103,6 +103,9 @@ type taskRecordRun struct {
 	// and its wall time, in invocation-id order.
 	Usage       []taskRecordInvocationUsage `json:"usage"`
 	Publication *taskRecordPublication      `json:"publication"`
+	// Verifications are the run's verification steps, in the order each
+	// first appears on its milestones; empty for a run that never verified.
+	Verifications []taskRecordVerification `json:"verifications"`
 	// ClosureCards are the closure cards of the run's work unit, open or
 	// closed, in item-id order. Each publication admits its own closure
 	// instance, so a run that published more than once can hold several.
@@ -134,6 +137,56 @@ type taskRecordInvocationUsage struct {
 	Coverage     domain.UsageCoverage `json:"coverage"`
 	Tokens       []domain.UsageTotal  `json:"tokens"`
 	WallSeconds  *int64               `json:"wall_seconds"`
+}
+
+// taskRecordVerification is one verification step, read from the run's
+// verification milestones. StartedAt is null for a verdict recorded without
+// running the verifier (a refused rebuild or host executor); FinishedAt and
+// Result are null while it runs. Result is passed or failed.
+type taskRecordVerification struct {
+	InvocationID domain.InvocationID         `json:"invocation_id"`
+	StartedAt    *time.Time                  `json:"started_at"`
+	FinishedAt   *time.Time                  `json:"finished_at"`
+	Result       *domain.VerificationOutcome `json:"result"`
+}
+
+// projectTaskRecordVerifications pairs each verification invocation's start
+// with its result. Milestones are first observation wins per kind and
+// invocation, so each step has at most one of each.
+func projectTaskRecordVerifications(milestones []domain.RunMilestone) []taskRecordVerification {
+	steps := []taskRecordVerification{}
+	step := func(invocation domain.InvocationID) *taskRecordVerification {
+		for i := range steps {
+			if steps[i].InvocationID == invocation {
+				return &steps[i]
+			}
+		}
+		steps = append(steps, taskRecordVerification{InvocationID: invocation})
+		return &steps[len(steps)-1]
+	}
+	for _, m := range milestones {
+		var result domain.VerificationOutcome
+		switch m.Kind {
+		case domain.MilestoneVerificationStarted:
+			at := m.RecordedAt
+			step(*m.InvocationID).StartedAt = &at
+			continue
+		case domain.MilestoneVerificationPassed:
+			result = domain.VerificationPassed
+		case domain.MilestoneVerificationFailed:
+			result = domain.VerificationFailed
+		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
+			domain.MilestoneInvocationStarted, domain.MilestoneExecutionExportRecorded,
+			domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneTerminalRecorded,
+			domain.MilestonePublicationReady, domain.MilestonePublicationBlocked,
+			domain.MilestoneWorkUnitCompleted:
+			continue
+		}
+		at := m.RecordedAt
+		s := step(*m.InvocationID)
+		s.FinishedAt, s.Result = &at, &result
+	}
+	return steps
 }
 
 // taskRecordReviewAdmission is one review invocation's admission. It leaves
@@ -696,6 +749,9 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 		fail(taskRecordRunConclusion, err)
 		return out
 	}
+	// The verification milestones are projection, which the overlay below
+	// leaves as stored, so a failed status check doesn't hide them.
+	out.Verifications = projectTaskRecordVerifications(observation.Milestones)
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
 		// The invocations' statuses are authenticated against the run, and

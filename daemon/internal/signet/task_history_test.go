@@ -91,8 +91,12 @@ func TestTaskHistoryPublishedReviewAndVerificationResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts := map[domain.TaskEventKind]int{}
+	var milestones []domain.RunMilestoneKind
 	for _, event := range got.Events {
 		counts[event.Kind]++
+		if event.Milestone != nil {
+			milestones = append(milestones, event.Milestone.Kind)
+		}
 		if event.Review != nil && (*event.RunID != runID || event.Review.InvocationID != request.InvocationID || event.Review.HeadSHA != "cafebabe" || event.Review.BaseSHA != "base") {
 			t.Fatalf("wrong review binding: %+v", event)
 		}
@@ -100,10 +104,15 @@ func TestTaskHistoryPublishedReviewAndVerificationResponse(t *testing.T) {
 			t.Fatalf("wrong verification: %+v", event)
 		}
 	}
-	for _, kind := range []domain.TaskEventKind{domain.TaskEventCreated, domain.TaskEventStarted, domain.TaskEventReviewRequested, domain.TaskEventReviewCompleted, domain.TaskEventVerificationRecorded, domain.TaskEventPROpened, domain.TaskEventRunMilestone} {
+	for _, kind := range []domain.TaskEventKind{domain.TaskEventCreated, domain.TaskEventStarted, domain.TaskEventReviewRequested, domain.TaskEventReviewCompleted, domain.TaskEventVerificationRecorded, domain.TaskEventPROpened} {
 		if counts[kind] != 1 {
 			t.Errorf("%s count %d, want 1", kind, counts[kind])
 		}
+	}
+	// The writer's export shows as finished with its import passed.
+	slices.Sort(milestones)
+	if want := []domain.RunMilestoneKind{domain.MilestoneExecutionExportRecorded, domain.MilestonePublicationReady}; !slices.Equal(milestones, want) {
+		t.Errorf("run milestones = %v, want %v", milestones, want)
 	}
 	if counts[domain.TaskEventPRMerged] != 0 || counts[domain.TaskEventCompleted] != 0 {
 		t.Fatal("publication inferred completion")

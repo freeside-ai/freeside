@@ -121,7 +121,8 @@ import Testing
     /// header's chip name the rail's newest start: published, after the
     /// ready card was withdrawn but before round 2 was requested (with the
     /// run's newest milestone still its publication, as the iPhone held it,
-    /// or a later one, as the Mac did), and after the request.
+    /// or a later one, as the Mac did), after the request, and once the
+    /// round's verification starts.
     @Test func theRowAndHeaderAgreeThroughAnExternalReviewReEntry() throws {
         func page(
             _ history: Components.Schemas.TaskTimeline, outcome: Components.Schemas.RunOutcome,
@@ -158,6 +159,15 @@ import Testing
                     TaskHistoryFixtures.externallyReviewed(requested: true), outcome: .pending,
                     milestone: .invocation_started),
                 .review, "Round 2"
+            ),
+            (
+                // The round's verification started: the row and the chip
+                // read Verifying from its milestone (#3446).
+                "round 2 verifying",
+                page(
+                    TaskHistoryFixtures.externalRoundVerifying(), outcome: .pending,
+                    milestone: .verification_started),
+                .verification, nil
             ),
         ]
         for (name, page, expected, round) in windows {

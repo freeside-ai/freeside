@@ -289,15 +289,19 @@ import Testing
     }
 
     /// The mock's clocks follow the daemon's definition: the active run's
-    /// two attempts work from minute 2 to its export at 18, and from 21 to
-    /// the timeline's as_of at 35, with the second still working.
+    /// first attempt works from minute 2 to its export at 18, its
+    /// verification from 18 to its failure at 19, and the second attempt
+    /// from 21 to the timeline's as_of at 35, still working.
     @Test func servedClocksFollowTheDaemonDefinition() async throws {
         let timeline = try #require(await MockServer().runTimeline(id: RunFixtures.activeRunID))
         let clocks = try #require(timeline.clocks?.value1)
         #expect(clocks.ended_at == nil)
         #expect(clocks.elapsed_seconds == 35 * 60)
-        #expect(clocks.active_seconds == 16 * 60 + 14 * 60)
-        #expect(clocks.active_intervals.map(\.ended_at) == [clocks.started_at.addingTimeInterval(18 * 60), nil])
+        #expect(clocks.active_seconds == 16 * 60 + 1 * 60 + 14 * 60)
+        #expect(
+            clocks.active_intervals.map(\.ended_at) == [
+                clocks.started_at.addingTimeInterval(18 * 60), clocks.started_at.addingTimeInterval(19 * 60), nil,
+            ])
     }
 
     /// The port matches `TestRunClocksOf` in the daemon on the cases that

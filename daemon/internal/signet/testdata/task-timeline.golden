@@ -105,6 +105,54 @@
       "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "milestone": {
+        "run_id": "run-retry-1",
+        "kind": "verification_failed",
+        "invocation_id": "verify-reentry-run-retry-1",
+        "terminal": null,
+        "outcome": null,
+        "reason": null,
+        "recorded_at": "2026-09-12T13:50:00Z"
+      },
+      "review": null,
+      "verification": null,
+      "external_review": null,
+      "line": null,
+      "triage": null,
+      "kind": "run_milestone",
+      "recorded_at": "2026-09-12T13:50:00Z",
+      "campaign_id": null,
+      "run_id": "run-retry-1",
+      "approved_spec_digest": null,
+      "specification_run_id": null,
+      "pr_number": null,
+      "merge_commit_sha": null
+    },
+    {
+      "milestone": {
+        "run_id": "run-retry-1",
+        "kind": "verification_started",
+        "invocation_id": "verify-reentry-run-retry-1",
+        "terminal": null,
+        "outcome": null,
+        "reason": null,
+        "recorded_at": "2026-09-12T13:46:00Z"
+      },
+      "review": null,
+      "verification": null,
+      "external_review": null,
+      "line": null,
+      "triage": null,
+      "kind": "run_milestone",
+      "recorded_at": "2026-09-12T13:46:00Z",
+      "campaign_id": null,
+      "run_id": "run-retry-1",
+      "approved_spec_digest": null,
+      "specification_run_id": null,
+      "pr_number": null,
+      "merge_commit_sha": null
+    },
+    {
       "milestone": null,
       "review": null,
       "verification": null,
@@ -159,6 +207,78 @@
       "triage": null,
       "kind": "run_milestone",
       "recorded_at": "2026-09-12T13:30:00Z",
+      "campaign_id": null,
+      "run_id": "run-retry-1",
+      "approved_spec_digest": null,
+      "specification_run_id": null,
+      "pr_number": null,
+      "merge_commit_sha": null
+    },
+    {
+      "milestone": {
+        "run_id": "run-retry-1",
+        "kind": "verification_passed",
+        "invocation_id": "verify-run-retry-1",
+        "terminal": null,
+        "outcome": null,
+        "reason": null,
+        "recorded_at": "2026-09-12T13:25:00Z"
+      },
+      "review": null,
+      "verification": null,
+      "external_review": null,
+      "line": null,
+      "triage": null,
+      "kind": "run_milestone",
+      "recorded_at": "2026-09-12T13:25:00Z",
+      "campaign_id": null,
+      "run_id": "run-retry-1",
+      "approved_spec_digest": null,
+      "specification_run_id": null,
+      "pr_number": null,
+      "merge_commit_sha": null
+    },
+    {
+      "milestone": {
+        "run_id": "run-retry-1",
+        "kind": "verification_started",
+        "invocation_id": "verify-run-retry-1",
+        "terminal": null,
+        "outcome": null,
+        "reason": null,
+        "recorded_at": "2026-09-12T13:21:00Z"
+      },
+      "review": null,
+      "verification": null,
+      "external_review": null,
+      "line": null,
+      "triage": null,
+      "kind": "run_milestone",
+      "recorded_at": "2026-09-12T13:21:00Z",
+      "campaign_id": null,
+      "run_id": "run-retry-1",
+      "approved_spec_digest": null,
+      "specification_run_id": null,
+      "pr_number": null,
+      "merge_commit_sha": null
+    },
+    {
+      "milestone": {
+        "run_id": "run-retry-1",
+        "kind": "execution_export_recorded",
+        "invocation_id": "inv-run-retry-1",
+        "terminal": null,
+        "outcome": null,
+        "reason": null,
+        "recorded_at": "2026-09-12T13:20:00Z"
+      },
+      "review": null,
+      "verification": null,
+      "external_review": null,
+      "line": null,
+      "triage": null,
+      "kind": "run_milestone",
+      "recorded_at": "2026-09-12T13:20:00Z",
       "campaign_id": null,
       "run_id": "run-retry-1",
       "approved_spec_digest": null,
@@ -541,12 +661,75 @@
             },
             {
               "run_id": "run-retry-1",
+              "kind": "verification_failed",
+              "invocation_id": "verify-reentry-run-retry-1",
+              "terminal": null,
+              "outcome": null,
+              "reason": null,
+              "recorded_at": "2026-09-12T13:50:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
+              "kind": "execution_outcome_recorded",
+              "invocation_id": "verify-reentry-run-retry-1",
+              "terminal": null,
+              "outcome": "failed",
+              "reason": null,
+              "recorded_at": "2026-09-12T13:48:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
+              "kind": "verification_started",
+              "invocation_id": "verify-reentry-run-retry-1",
+              "terminal": null,
+              "outcome": null,
+              "reason": null,
+              "recorded_at": "2026-09-12T13:46:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
               "kind": "publication_ready",
               "invocation_id": "inv-run-retry-1",
               "terminal": null,
               "outcome": null,
               "reason": null,
               "recorded_at": "2026-09-12T13:30:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
+              "kind": "verification_passed",
+              "invocation_id": "verify-run-retry-1",
+              "terminal": null,
+              "outcome": null,
+              "reason": null,
+              "recorded_at": "2026-09-12T13:25:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
+              "kind": "verification_started",
+              "invocation_id": "verify-run-retry-1",
+              "terminal": null,
+              "outcome": null,
+              "reason": null,
+              "recorded_at": "2026-09-12T13:21:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
+              "kind": "execution_export_recorded",
+              "invocation_id": "inv-run-retry-1",
+              "terminal": null,
+              "outcome": null,
+              "reason": null,
+              "recorded_at": "2026-09-12T13:20:00Z"
+            },
+            {
+              "run_id": "run-retry-1",
+              "kind": "invocation_admitted",
+              "invocation_id": "inv-run-retry-1",
+              "terminal": null,
+              "outcome": null,
+              "reason": null,
+              "recorded_at": "2026-09-12T13:01:00Z"
             },
             {
               "run_id": "run-retry-1",
@@ -598,8 +781,19 @@
             "started_at": "2026-09-12T13:00:00Z",
             "ended_at": null,
             "elapsed_seconds": 18000,
-            "active_seconds": 0,
-            "active_intervals": []
+            "active_seconds": 480,
+            "active_intervals": [
+              {
+                "invocation_id": "verify-run-retry-1",
+                "started_at": "2026-09-12T13:21:00Z",
+                "ended_at": "2026-09-12T13:25:00Z"
+              },
+              {
+                "invocation_id": "verify-reentry-run-retry-1",
+                "started_at": "2026-09-12T13:46:00Z",
+                "ended_at": "2026-09-12T13:50:00Z"
+              }
+            ]
           }
         },
         {

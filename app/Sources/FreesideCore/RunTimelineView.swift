@@ -227,7 +227,8 @@ struct RunTimelineView: View {
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                 .truncationMode(.middle)
             if let identity = RunTimelineView.identityLine(
-                snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots)
+                snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots,
+                timeline: timeline)
             {
                 Text(identity)
                     .font(FreesideFont.trailingSummary)
@@ -252,15 +253,28 @@ struct RunTimelineView: View {
         }
     }
 
+    /// The review round in progress the run page names, from the loaded
+    /// timeline (`RunDisplay.openReviewRound`); nil before it loads. The
+    /// header and the hold callout both read it so their rounds agree.
+    static func openReviewRound(_ timeline: Components.Schemas.RunTimeline?) -> Int? {
+        timeline.flatMap {
+            RunDisplay.openReviewRound($0.review?.value1.rounds ?? [], milestones: $0.milestones)
+        }
+    }
+
     /// The header's identity line: the phase, its round, and the newest
     /// milestone, the three facts the header used to print as icon labels.
-    /// Nil when the run has recorded none of them.
+    /// Nil when the run has recorded none of them. The `timeline`, once
+    /// loaded, names a review round in progress (`RunDisplay.openReviewRound`).
     static func identityLine(
         _ run: Components.Schemas.Run, task: Components.Schemas.Task? = nil,
-        attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
+        attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
+        timeline: Components.Schemas.RunTimeline? = nil
     ) -> String? {
         var parts: [String] = []
-        if let heading = RunDisplay.stageHeading(run, task: task, attentionItems: attentionItems) {
+        if let heading = RunDisplay.stageHeading(
+            run, task: task, attentionItems: attentionItems, openReviewRound: openReviewRound(timeline))
+        {
             parts.append(heading.label)
             if let round = heading.round { parts.append(round) }
         }
@@ -403,7 +417,8 @@ struct RunTimelineView: View {
     private func holdCallout(_ hold: Components.Schemas.RunHold) -> some View {
         SystemCallout {
             if let round = RunDisplay.stageHeading(
-                snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots)?.round
+                snapshot.run, task: task, attentionItems: coordinator.store.orderedSnapshots,
+                openReviewRound: RunTimelineView.openReviewRound(timeline))?.round
             {
                 Text(round)
                     .font(FreesideFont.cardBody)
@@ -660,8 +675,12 @@ enum RunHistoryPresentation {
             return milestone.terminal?.value1 == .failed ? .failure : .event
         case .publication_blocked:
             return .failure
+        case .verification_started:
+            return .stageStart(.verification)
+        case .verification_failed:
+            return .failure
         case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded, .publication_ready,
-            .work_unit_completed, .unknown:
+            .work_unit_completed, .verification_passed, .unknown:
             return .event
         }
     }

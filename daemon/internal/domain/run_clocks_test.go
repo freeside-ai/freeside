@@ -26,7 +26,8 @@ func TestRunClocksOf(t *testing.T) {
 			reason := domain.HoldVerificationFindings
 			m.Reason = &reason
 		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted, domain.MilestoneInvocationStarted,
-			domain.MilestoneExecutionExportRecorded, domain.MilestonePublicationReady, domain.MilestoneWorkUnitCompleted:
+			domain.MilestoneExecutionExportRecorded, domain.MilestonePublicationReady, domain.MilestoneWorkUnitCompleted,
+			domain.MilestoneVerificationStarted, domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
 		}
 		return m
 	}
@@ -230,6 +231,47 @@ func TestRunClocksOf(t *testing.T) {
 			want: &domain.RunClocks{
 				StartedAt: at(0), ElapsedSeconds: 60, ActiveSeconds: 0,
 				ActiveIntervals: []domain.RunActiveInterval{interval("inv-1", 20, ptr(at(20)))},
+			},
+		},
+		{
+			name: "a passed verification counts as working",
+			milestones: []domain.RunMilestone{
+				submitted(0), started("inv-1", 10), exported("inv-1", 20),
+				milestone(domain.MilestoneVerificationStarted, "verify-1", 30),
+				milestone(domain.MilestoneVerificationPassed, "verify-1", 70),
+			},
+			asOf: at(90),
+			want: &domain.RunClocks{
+				StartedAt: at(0), ElapsedSeconds: 90, ActiveSeconds: 50,
+				ActiveIntervals: []domain.RunActiveInterval{
+					interval("inv-1", 10, ptr(at(20))), interval("verify-1", 30, ptr(at(70))),
+				},
+			},
+		},
+		{
+			name: "a failed verification ends its span",
+			milestones: []domain.RunMilestone{
+				submitted(0), milestone(domain.MilestoneVerificationStarted, "verify-1", 10),
+				milestone(domain.MilestoneVerificationFailed, "verify-1", 25),
+			},
+			asOf: at(40),
+			want: &domain.RunClocks{
+				StartedAt: at(0), ElapsedSeconds: 40, ActiveSeconds: 15,
+				ActiveIntervals: []domain.RunActiveInterval{interval("verify-1", 10, ptr(at(25)))},
+			},
+		},
+		{
+			name: "an unfinished verification runs until the next start",
+			milestones: []domain.RunMilestone{
+				submitted(0), milestone(domain.MilestoneVerificationStarted, "verify-1", 10),
+				started("inv-2", 30),
+			},
+			asOf: at(50),
+			want: &domain.RunClocks{
+				StartedAt: at(0), ElapsedSeconds: 50, ActiveSeconds: 40,
+				ActiveIntervals: []domain.RunActiveInterval{
+					interval("verify-1", 10, ptr(at(30))), interval("inv-2", 30, nil),
+				},
 			},
 		},
 		{

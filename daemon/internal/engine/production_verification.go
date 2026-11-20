@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -637,6 +638,9 @@ func (w *productionPublicationWorkflow) runVerification(
 		}
 		return verify.Result{}, err
 	}
+	if err := w.recordVerificationStarted(ctx, task); err != nil {
+		return verify.Result{}, errors.Join(err, w.releaseVerification(ctx, task, binding.run, nil))
+	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
@@ -730,8 +734,61 @@ func (w *productionPublicationWorkflow) persistCheckpoint(
 			return fmt.Errorf("production verification checkpoint disagrees with stored row: %w",
 				domain.ErrImmutableTransition)
 		}
-		return nil
+		return tx.AppendRunMilestone(ctx, verificationResultMilestone(
+			task, checkpoint.Authorization.VerificationOutcome, w.now().UTC()))
 	})
+}
+
+// recordVerificationStarted appends the run's verification_started milestone
+// on the task's verification invocation, in its own write, just before the
+// verifier runs. A refusal before that point (a refused rebuild or host
+// executor) starts no verifier and records no start. A retried verification
+// keeps its first start, since milestones are first observation wins. The
+// milestone grants nothing and clears no hold: it lets the run's timeline
+// and clocks show the verification (#3446).
+func (w *productionPublicationWorkflow) recordVerificationStarted(
+	ctx context.Context, task productionPublicationTask,
+) error {
+	invocation := task.verificationInvocationID()
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: task.RunID, Kind: domain.MilestoneVerificationStarted,
+			InvocationID: &invocation, RecordedAt: w.now().UTC(),
+		})
+	})
+}
+
+// recordVerificationStopped appends verification_failed for a verification
+// that stopped the run with no stored verdict: a verifier killed at its
+// memory limit, a tree it can't verify, or a refusal before it ran. Without
+// it, a started verification would read as running, and count as working
+// time, for as long as the stopped run waits on a person. Like the start, it
+// is its own write and first observation wins, so a crash before the stop
+// is recorded converges when the stop runs again.
+func (w *productionPublicationWorkflow) recordVerificationStopped(
+	ctx context.Context, task productionPublicationTask,
+) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(ctx, verificationResultMilestone(task, domain.VerificationFailed, w.now().UTC()))
+	})
+}
+
+// verificationResultMilestone is the milestone a stored verification verdict
+// records on the task's verification invocation. The checkpoint writers
+// append it in the transaction that stores the verdict, so the two never
+// disagree and a crash cannot lose it. Like the start, it leaves the run's
+// hold standing (RunMilestoneKind.ClearsHold).
+func verificationResultMilestone(
+	task productionPublicationTask, outcome domain.VerificationOutcome, at time.Time,
+) domain.RunMilestone {
+	kind := domain.MilestoneVerificationFailed
+	if outcome == domain.VerificationPassed {
+		kind = domain.MilestoneVerificationPassed
+	}
+	invocation := task.verificationInvocationID()
+	return domain.RunMilestone{
+		RunID: task.RunID, Kind: kind, InvocationID: &invocation, RecordedAt: at,
+	}
 }
 
 func (w *productionPublicationWorkflow) loadCheckpoint(

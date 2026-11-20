@@ -163,6 +163,26 @@ enum TaskHistoryFixtures {
         return timeline
     }
 
+    /// `externallyReviewed(requested: false)` once round 2's verification
+    /// has started: the run works the external round (#3446).
+    static func externalRoundVerifying() -> Components.Schemas.TaskTimeline {
+        let run = "history-implementation-1"
+        let started = Components.Schemas.RunMilestone(
+            run_id: run, kind: .verification_started, invocation_id: "verify-\(run)-2",
+            recorded_at: instant.addingTimeInterval(-7 * 60))
+        var timeline = externallyReviewed(requested: false)
+        timeline.events.insert(
+            .init(
+                milestone: .init(value1: started), kind: .run_milestone, recorded_at: started.recorded_at, run_id: run),
+            at: 0)
+        if let section = timeline.sections.indices.first,
+            let index = timeline.sections[section].runs.firstIndex(where: { $0.run_id == run })
+        {
+            timeline.sections[section].runs[index].milestones.insert(started, at: 0)
+        }
+        return timeline
+    }
+
     /// `.published` with the task's agent choices: the router's implementer
     /// line, which passed over an exhausted pool, and an operator's change of
     /// the reviewer line, which supersedes the one set at submission.

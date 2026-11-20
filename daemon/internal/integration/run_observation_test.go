@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -66,6 +67,62 @@ func assertMilestoneKinds(t *testing.T, o domain.RunObservation, want ...domain.
 	}
 }
 
+// verificationStep is one verification the run recorded: the invocation its
+// verification_started names and the result its own invocation recorded
+// after that start ("" while none has).
+type verificationStep struct {
+	invocation domain.InvocationID
+	result     domain.RunMilestoneKind
+}
+
+// verificationSteps pairs each verification_started with its result, in
+// start order. A result with no start before it fails the test: every path
+// that runs the verifier records the start first.
+func verificationSteps(t *testing.T, o domain.RunObservation) []verificationStep {
+	t.Helper()
+	var steps []verificationStep
+	for _, m := range o.Milestones {
+		switch m.Kind {
+		case domain.MilestoneVerificationStarted:
+			steps = append(steps, verificationStep{invocation: *m.InvocationID})
+		case domain.MilestoneVerificationPassed, domain.MilestoneVerificationFailed:
+			at := slices.IndexFunc(steps, func(s verificationStep) bool { return s.invocation == *m.InvocationID })
+			if at < 0 || steps[at].result != "" {
+				t.Fatalf("%s on %s has no open start: %v", m.Kind, *m.InvocationID, milestoneKinds(o))
+			}
+			steps[at].result = m.Kind
+		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
+			domain.MilestoneInvocationStarted, domain.MilestoneExecutionExportRecorded,
+			domain.MilestoneExecutionOutcomeRecorded, domain.MilestoneTerminalRecorded,
+			domain.MilestonePublicationReady, domain.MilestonePublicationBlocked,
+			domain.MilestoneWorkUnitCompleted:
+		}
+	}
+	return steps
+}
+
+// assertVerificationResults checks the run verified once per wanted result,
+// in order, each on its own invocation, and returns the steps.
+func assertVerificationResults(
+	t *testing.T, st *store.Store, runID domain.RunID, want ...domain.RunMilestoneKind,
+) []verificationStep {
+	t.Helper()
+	steps := verificationSteps(t, observeProductionRun(t, st, runID))
+	results := make([]domain.RunMilestoneKind, 0, len(steps))
+	seen := map[domain.InvocationID]bool{}
+	for _, step := range steps {
+		if seen[step.invocation] {
+			t.Fatalf("verification steps = %+v, want results %v on distinct invocations", steps, want)
+		}
+		seen[step.invocation] = true
+		results = append(results, step.result)
+	}
+	if !slices.Equal(results, want) {
+		t.Fatalf("verification steps = %+v, want results %v", steps, want)
+	}
+	return steps
+}
+
 // streamRefusingDriver proves the containment boundary mechanically: the
 // engine's observation flow must never read the writer's transcript, so a
 // Stream call anywhere in the observed scenarios is a test failure.
@@ -98,9 +155,12 @@ func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
 		domain.MilestoneInvocationAdmitted,
 		domain.MilestoneInvocationStarted,
 		domain.MilestoneExecutionExportRecorded,
+		domain.MilestoneVerificationStarted,
+		domain.MilestoneVerificationPassed,
 		domain.MilestonePublicationReady,
 		domain.MilestoneTerminalRecorded,
 	)
+	assertVerificationResults(t, p.store, p.runID, domain.MilestoneVerificationPassed)
 	if observation.Hold != nil {
 		t.Errorf("published run still holds: %+v", observation.Hold)
 	}

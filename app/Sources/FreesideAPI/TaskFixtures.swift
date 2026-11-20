@@ -162,14 +162,15 @@ public enum TaskFixtures {
                 events += run.events
                 for milestone in run.milestones {
                     switch milestone.kind {
-                    case .run_submitted, .invocation_started, .terminal_recorded, .publication_ready,
-                        .publication_blocked:
+                    // The daemon's projection (signet/task_history.go).
+                    case .run_submitted, .invocation_started, .execution_export_recorded, .terminal_recorded,
+                        .publication_ready, .publication_blocked, .verification_started, .verification_passed,
+                        .verification_failed:
                         events.append(
                             .init(
                                 milestone: .init(value1: milestone), kind: .run_milestone,
                                 recorded_at: milestone.recorded_at, run_id: run.run_id))
-                    case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded,
-                        .work_unit_completed, .unknown:
+                    case .invocation_admitted, .execution_outcome_recorded, .work_unit_completed, .unknown:
                         break
                     }
                 }

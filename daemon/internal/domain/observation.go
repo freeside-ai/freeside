@@ -63,6 +63,18 @@ const (
 	// invocation as publication_ready; the PR, merge commit, and bound issue
 	// stay on the re-gated work_unit_completions row, the single authority.
 	MilestoneWorkUnitCompleted RunMilestoneKind = "work_unit_completed"
+	// MilestoneVerificationStarted: the verifier was about to run the
+	// approved recipe for a candidate. It is keyed to the verification
+	// invocation, never the writer's, so a retried verification keeps its
+	// first start (first observation wins).
+	MilestoneVerificationStarted RunMilestoneKind = "verification_started"
+	// MilestoneVerificationPassed: the verification checkpoint stored a
+	// passing verdict for the invocation verification_started named.
+	MilestoneVerificationPassed RunMilestoneKind = "verification_passed"
+	// MilestoneVerificationFailed: the verification checkpoint stored a
+	// verdict other than a pass. The three verification milestones are
+	// projection only: the verdict's authority stays on the checkpoint.
+	MilestoneVerificationFailed RunMilestoneKind = "verification_failed"
 )
 
 // AllRunMilestoneKinds is the single registration point for milestone kinds.
@@ -76,6 +88,9 @@ var AllRunMilestoneKinds = []RunMilestoneKind{
 	MilestonePublicationReady,
 	MilestonePublicationBlocked,
 	MilestoneWorkUnitCompleted,
+	MilestoneVerificationStarted,
+	MilestoneVerificationPassed,
+	MilestoneVerificationFailed,
 }
 
 func (k RunMilestoneKind) valid() bool {
@@ -84,11 +99,33 @@ func (k RunMilestoneKind) valid() bool {
 		MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
 		MilestoneExecutionOutcomeRecorded, MilestoneTerminalRecorded,
 		MilestonePublicationReady, MilestonePublicationBlocked,
-		MilestoneWorkUnitCompleted:
+		MilestoneWorkUnitCompleted, MilestoneVerificationStarted,
+		MilestoneVerificationPassed, MilestoneVerificationFailed:
 		return true
 	default:
 		return false
 	}
+}
+
+// ClearsHold reports whether recording a milestone of this kind is forward
+// progress that ends the run's current hold. The verification kinds are not:
+// they only show the run verifying, and a hold standing then (a publication
+// environment fault, say) is its owner's to clear, as it was before the run
+// recorded verification (#3446). Dispatch switch without default so the
+// exhaustive linter forces a new kind to decide.
+func (k RunMilestoneKind) ClearsHold() bool {
+	switch k {
+	case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
+		MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
+		MilestoneExecutionOutcomeRecorded, MilestoneTerminalRecorded,
+		MilestonePublicationReady, MilestonePublicationBlocked,
+		MilestoneWorkUnitCompleted:
+		return true
+	case MilestoneVerificationStarted, MilestoneVerificationPassed,
+		MilestoneVerificationFailed:
+		return false
+	}
+	return false
 }
 
 // ObservedInvocationStatus is the observation-side mirror of the driver
@@ -758,7 +795,9 @@ func (m RunMilestone) Validate() error {
 				m.Kind, *m.Terminal, ErrInvalidObservedStatus)
 		}
 		return nil
-	case MilestonePublicationReady, MilestoneWorkUnitCompleted:
+	case MilestonePublicationReady, MilestoneWorkUnitCompleted,
+		MilestoneVerificationStarted, MilestoneVerificationPassed,
+		MilestoneVerificationFailed:
 		return check(true, false, false, false)
 	case MilestonePublicationBlocked:
 		return check(true, false, false, true)
@@ -1138,7 +1177,8 @@ func (o RunObservation) ConcludedAt() (time.Time, bool) {
 			}
 		case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
 			MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
-			MilestoneExecutionOutcomeRecorded:
+			MilestoneExecutionOutcomeRecorded, MilestoneVerificationStarted,
+			MilestoneVerificationPassed, MilestoneVerificationFailed:
 		}
 	}
 	return latest, found
@@ -1340,7 +1380,8 @@ func ConcludeRun(observation RunObservation) RunConclusion {
 				terminal = nil
 			}
 		case MilestoneRunSubmitted, MilestoneExecutionExportRecorded,
-			MilestoneExecutionOutcomeRecorded:
+			MilestoneExecutionOutcomeRecorded, MilestoneVerificationStarted,
+			MilestoneVerificationPassed, MilestoneVerificationFailed:
 		}
 	}
 	switch {
@@ -1476,7 +1517,8 @@ func PublicationReadyStands(observation RunObservation) bool {
 		case MilestoneRunSubmitted, MilestoneInvocationAdmitted,
 			MilestoneInvocationStarted, MilestoneExecutionExportRecorded,
 			MilestoneExecutionOutcomeRecorded, MilestoneTerminalRecorded,
-			MilestoneWorkUnitCompleted:
+			MilestoneWorkUnitCompleted, MilestoneVerificationStarted,
+			MilestoneVerificationPassed, MilestoneVerificationFailed:
 		}
 	}
 	return lastReady >= 0 && lastReady > lastBlock

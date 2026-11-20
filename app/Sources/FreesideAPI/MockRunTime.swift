@@ -20,11 +20,6 @@ enum MockRunTime {
         ]
     }
 
-    /// The milestone kinds that end an invocation's working span.
-    private static let invocationEndings: Set<Components.Schemas.RunMilestoneKind> = [
-        .execution_export_recorded, .execution_outcome_recorded, .terminal_recorded,
-    ]
-
     /// The run's clocks from its milestones in record order, as
     /// `domain.RunClocksOf` in the daemon defines them; nil with no
     /// milestone.
@@ -37,11 +32,8 @@ enum MockRunTime {
         let end = finished ? newest : max(asOf, newest)
         let intervals: [Components.Schemas.RunActiveInterval] = milestones.indices.compactMap { index in
             let started = milestones[index]
-            guard started.kind == .invocation_started, let invocation = started.invocation_id else { return nil }
-            let later = milestones[(index + 1)...]
-            let ending =
-                later.first { $0.invocation_id == invocation && invocationEndings.contains($0.kind) }
-                ?? later.first { $0.kind == .invocation_started }
+            guard RunWorkSpan.startsWork(started.kind), let invocation = started.invocation_id else { return nil }
+            let ending = RunWorkSpan.ending(of: index, in: milestones)
             // An ending recorded at an earlier instant serves a zero-length
             // interval, as the daemon clamps it.
             return .init(

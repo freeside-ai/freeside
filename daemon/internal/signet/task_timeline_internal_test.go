@@ -129,8 +129,20 @@ func taskTimelineFixtureInputs() (domain.Task, []taskTimelineInput) {
 			input.facts.completion = &WorkUnitCompletionFacts{
 				PRNumber: 73, MergeCommitSHA: strings.Repeat("a", 40), RecordedAt: at.Add(4 * time.Hour),
 			}
+			// The writer finishes and its first verification passes before
+			// publication; the external round's verification fails. The
+			// admission and the outcome stay off the task timeline.
+			verify, reverify := domain.InvocationID("verify-"+seed.run), domain.InvocationID("verify-reentry-"+seed.run)
+			failed := domain.ExecutionOutcomeFailed
 			input.observation.Milestones = append(input.observation.Milestones,
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneInvocationAdmitted, InvocationID: &inv, RecordedAt: at.Add(181 * time.Minute)},
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneExecutionExportRecorded, InvocationID: &inv, RecordedAt: at.Add(200 * time.Minute)},
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneVerificationStarted, InvocationID: &verify, RecordedAt: at.Add(201 * time.Minute)},
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneVerificationPassed, InvocationID: &verify, RecordedAt: at.Add(205 * time.Minute)},
 				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestonePublicationReady, InvocationID: &inv, RecordedAt: input.prBinding.RecordedAt},
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneVerificationStarted, InvocationID: &reverify, RecordedAt: at.Add(226 * time.Minute)},
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneExecutionOutcomeRecorded, InvocationID: &reverify, Outcome: &failed, RecordedAt: at.Add(228 * time.Minute)},
+				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneVerificationFailed, InvocationID: &reverify, RecordedAt: at.Add(230 * time.Minute)},
 				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneWorkUnitCompleted, InvocationID: &inv, RecordedAt: input.facts.completion.RecordedAt})
 			// An admitted external review withdrew the published card and
 			// opened round 2 before the PR merged.
@@ -167,7 +179,7 @@ func TestTaskTimelineOrdersHistoryAndEmitsApprovalOnce(t *testing.T) {
 	if len(retry.Events) != 2 || retry.Events[0].Kind != domain.TaskEventPRMerged || retry.Events[1].Kind != domain.TaskEventPROpened {
 		t.Fatalf("PR events = %+v", retry.Events)
 	}
-	if retry.Milestones[0].Kind != domain.MilestoneWorkUnitCompleted || retry.Milestones[2].Kind != domain.MilestoneRunSubmitted {
+	if retry.Milestones[0].Kind != domain.MilestoneWorkUnitCompleted || retry.Milestones[len(retry.Milestones)-1].Kind != domain.MilestoneRunSubmitted {
 		t.Fatalf("milestone order = %+v", retry.Milestones)
 	}
 	if *first.Runs[1].SupersededBy != retry.RunID || *first.Runs[2].SupersededBy != first.Runs[1].RunID {
