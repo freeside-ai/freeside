@@ -349,13 +349,39 @@ func (d *Driver) loadIntent(ctx context.Context, id domain.InvocationID) (intent
 
 // loadIntentAdmission reconstructs an intent against its immutable admission
 // without re-applying mutable start policy. It is reserved for stopping an
-// already-admitted writer and committing a terminal fact: policy drift must
-// prevent new or recovered work, but it must not make existing work
-// uncancelable or its terminal outcome permanently unrecordable.
+// already-admitted writer, committing a terminal fact, and reading a prompt
+// for display (InvocationPrompt): policy drift must prevent new or recovered
+// work, but it must not make existing work uncancelable, its terminal outcome
+// permanently unrecordable, or its history unreadable.
 func (d *Driver) loadIntentAdmission(
 	ctx context.Context, id domain.InvocationID,
 ) (intent, error) {
 	return d.loadIntentRegated(ctx, id, false)
+}
+
+// InvocationPrompt returns the prompt this driver rendered for an invocation,
+// for the operator to read beside its transcript. It re-checks the intent
+// through loadIntentAdmission, which authenticates the record against its
+// immutable admission and refuses a prompt that disagrees with a re-render of
+// the admitted inputs; the prompt is never served from an unchecked file.
+// found is false when the driver holds no intent for the invocation, or the
+// start was refused before a prompt existed. Any other error, including a
+// reconstruction refusal, is returned for the caller to classify.
+//
+// It is read-only and takes no lock: the gate only reads the intent file and
+// durable records, and intents are replaced atomically, so a read never sees
+// a partial file and never waits behind a running handoff's transition.
+func (d *Driver) InvocationPrompt(
+	ctx context.Context, id domain.InvocationID,
+) (prompt string, found bool, err error) {
+	in, err := d.loadIntentAdmission(ctx, id)
+	if errors.Is(err, exec.ErrUnknownInvocation) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return in.Prompt, in.Prompt != "", nil
 }
 
 func (d *Driver) loadIntentRegated(
