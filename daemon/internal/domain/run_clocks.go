@@ -15,13 +15,14 @@ type RunClocks struct {
 	EndedAt        *time.Time `json:"ended_at"`
 	ElapsedSeconds int64      `json:"elapsed_seconds"`
 	ActiveSeconds  int64      `json:"active_seconds"`
-	// ActiveIntervals has one entry per invocation_started milestone, in
-	// record order. Entries can overlap; ActiveSeconds counts shared time
-	// once. Never nil, so it renders [].
+	// ActiveIntervals has one entry per invocation_started or
+	// verification_started milestone, in record order. Entries can overlap;
+	// ActiveSeconds counts shared time once. Never nil, so it renders [].
 	ActiveIntervals []RunActiveInterval `json:"active_intervals"`
 }
 
-// RunActiveInterval is the span one invocation was working.
+// RunActiveInterval is the span one invocation was working, or one
+// verification was running.
 type RunActiveInterval struct {
 	InvocationID InvocationID `json:"invocation_id"`
 	StartedAt    time.Time    `json:"started_at"`
@@ -45,11 +46,15 @@ type RunActiveInterval struct {
 //   - Elapsed time runs from the start to the end.
 //   - An invocation is working from its invocation_started milestone to the
 //     first later milestone of its own that is execution_export_recorded,
-//     execution_outcome_recorded, or terminal_recorded. An invocation with
-//     none of the three is working until the next invocation_started, or
-//     until the run's end when there is none.
+//     execution_outcome_recorded, or terminal_recorded.
+//   - A verification is working from its verification_started milestone to
+//     the first later milestone of its own invocation that is
+//     verification_passed or verification_failed (#3446).
+//   - A span with no ending of its own is working until the next
+//     invocation_started or verification_started, or until the run's end
+//     when there is none.
 //   - Active time is the part of the elapsed time during which at least one
-//     invocation is working. Two invocations working at once count once.
+//     span is working. Two spans working at once count once.
 //   - A hold doesn't reduce active time. A hold records that the daemon
 //     refused or put off the run's next step; it doesn't stop an invocation
 //     that has already started, so where a hold overlaps an active interval
@@ -60,7 +65,7 @@ type RunActiveInterval struct {
 //
 // Later and earlier mean record order, which pairs each start with its own
 // ending even when two instants tie. The milestones must be valid, so every
-// invocation_started names its invocation. These are the rules the app's
+// start names its invocation. These are the rules the app's
 // run time strip applies to the milestones it holds (#3233).
 func RunClocksOf(milestones []RunMilestone, finished bool, asOf time.Time) *RunClocks {
 	if len(milestones) == 0 {
@@ -83,11 +88,11 @@ func RunClocksOf(milestones []RunMilestone, finished bool, asOf time.Time) *RunC
 		ActiveIntervals: []RunActiveInterval{},
 	}
 	for i, m := range milestones {
-		if m.Kind != MilestoneInvocationStarted {
+		if !startsWork(m.Kind) {
 			continue
 		}
 		interval := RunActiveInterval{InvocationID: *m.InvocationID, StartedAt: m.RecordedAt, EndedAt: endedAt()}
-		if ending, ok := invocationEnding(milestones[i+1:], *m.InvocationID); ok {
+		if ending, ok := workEnding(milestones[i+1:], m.Kind, *m.InvocationID); ok {
 			// Record order decides which milestone ends the span, and
 			// nothing keeps recorded instants in that order: a clock stepped
 			// back serves a zero-length span, never one that reads
@@ -122,24 +127,34 @@ func runBounds(milestones []RunMilestone, finished bool, asOf time.Time) (start,
 	return start, laterOf(asOf, newest)
 }
 
-// invocationEnding is the instant that ends a working span among the
-// milestones recorded after its start: the invocation's own first ending
-// milestone, else the next invocation_started.
-func invocationEnding(after []RunMilestone, invocation InvocationID) (time.Time, bool) {
+// startsWork reports whether a milestone opens a working span.
+func startsWork(kind RunMilestoneKind) bool {
+	return kind == MilestoneInvocationStarted || kind == MilestoneVerificationStarted
+}
+
+// workEnding is the instant that ends a working span among the milestones
+// recorded after its start: the span's own first ending milestone on its
+// invocation, else the next start of either kind. An invocation span ends at
+// an export, outcome, or terminal; a verification span at its result.
+func workEnding(after []RunMilestone, start RunMilestoneKind, invocation InvocationID) (time.Time, bool) {
+	verification := start == MilestoneVerificationStarted
 	next := -1
 	for i, m := range after {
 		switch m.Kind {
 		case MilestoneExecutionExportRecorded, MilestoneExecutionOutcomeRecorded, MilestoneTerminalRecorded:
-			if *m.InvocationID == invocation {
+			if !verification && *m.InvocationID == invocation {
 				return m.RecordedAt, true
 			}
-		case MilestoneInvocationStarted:
+		case MilestoneVerificationPassed, MilestoneVerificationFailed:
+			if verification && *m.InvocationID == invocation {
+				return m.RecordedAt, true
+			}
+		case MilestoneInvocationStarted, MilestoneVerificationStarted:
 			if next < 0 {
 				next = i
 			}
 		case MilestoneRunSubmitted, MilestoneInvocationAdmitted, MilestonePublicationReady,
-			MilestonePublicationBlocked, MilestoneWorkUnitCompleted, MilestoneVerificationStarted,
-			MilestoneVerificationPassed, MilestoneVerificationFailed:
+			MilestonePublicationBlocked, MilestoneWorkUnitCompleted:
 		}
 	}
 	if next < 0 {

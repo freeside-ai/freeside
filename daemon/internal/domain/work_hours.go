@@ -361,8 +361,9 @@ type runTimeSegment struct {
 //     cleared_at, or to the run's end while the hold is current. The time
 //     keeps the hold's reason; where two holds overlap, the one first
 //     observed later wins, and of two observed at once the later span.
-//  4. Other: what remains, such as queueing before admission,
-//     verification, and publication.
+//  4. Other: what remains, such as queueing before admission and
+//     publication. Verification is working time once its run records
+//     verification_started (RunClocksOf).
 //
 // Every span is cut to the elapsed time, so a hold or an item that outlasts
 // a finished run ends at the run's end.
