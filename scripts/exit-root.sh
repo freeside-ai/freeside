@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # exit-root.sh — stand up an exit-run root for one pass with one command.
 #
-# Usage: exit-root.sh --pass PASS --build SHA [--machine FILE] [--template DIR] NAME
+# Usage: exit-root.sh --pass PASS --build SHA [--machine FILE] [--template DIR]
+#                     [--replace-intent] NAME
 #
 # Creates <roots_dir>/NAME (roots_dir from the machine file) for a deputy
 # pass, such as `fixture` or `seeded-routing`, or a scenario pass,
@@ -20,6 +21,11 @@
 #                    $HOME/.config/freeside/exit-root-machine.json; see
 #                    scripts/exit-root/machine.example.json). Never written.
 #   --template DIR   a pass directory of the operator's own, for the real run
+#   --replace-intent run this run's onboarding review with -replace-intent in
+#                    place of -resume, opening a new installation intent over
+#                    an expired one; the approval digest changes. A review
+#                    that fails on an expired intent says to rerun with this
+#                    flag.
 #
 # A pass directory holds settings.json (deputy settings keys), the submit
 # inputs (task.md, policy.json, publication.json, work-unit.json), and an
@@ -116,7 +122,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: exit-root.sh --pass PASS --build SHA [--machine FILE] [--template DIR] NAME' >&2
+  echo 'usage: exit-root.sh --pass PASS --build SHA [--machine FILE] [--template DIR] [--replace-intent] NAME' >&2
   exit 2
 }
 say() { echo "exit-root: $*" >&2; }
@@ -133,9 +139,11 @@ pass=''
 build=''
 machine="${HOME:-}/.config/freeside/exit-root-machine.json"
 template=''
+replace_intent=false
 name=''
 while [[ $# -gt 0 ]]; do
   case $1 in
+  --replace-intent) replace_intent=true ;;
   --pass | --build | --machine | --template)
     [[ $# -ge 2 && -n "$2" ]] || usage
     case $1 in
@@ -616,10 +624,21 @@ onboard_review() {
     -base-ref "$(setting .repository.base_ref)" -source "$repo_checkout" -review-config-digest "$digest")
   while IFS= read -r arg; do args+=("$arg"); done < <(jq -r --arg r "$repo" \
     '(.exit_root.onboard_args // [])[], (.exit_root.repositories[$r].onboard_args // [])[]' "$machine")
-  [[ "$(state_get .onboard_resume)" != true ]] || args+=(-resume)
+  if [[ "$replace_intent" == true ]]; then
+    args+=(-replace-intent)
+  elif [[ "$(state_get .onboard_resume)" == true ]]; then
+    args+=(-resume)
+  fi
   say "running the onboarding review at $tip (log: $logs/onboard-review.err)"
   "$freesided" "${args[@]}" >"$review" 2>"$logs/onboard-review.err" || {
     tail -n 20 "$logs/onboard-review.err" >&2
+    # An expired intent's error ends with the -replace-intent command that
+    # recovers; this script runs it under its own flag. Match that sentence,
+    # not any mention of -replace-intent: the refusal of another root's
+    # pending intent and the usage text name the flag too.
+    [[ "$replace_intent" == true ]] ||
+      ! grep -q -F 'open a new intent, which changes the approval digest, with:' "$logs/onboard-review.err" ||
+      say "rerun this command with --replace-intent to open a new installation intent"
     die 'the onboarding review failed; the completed approval, if any, stays in place, and a rerun reviews the tip again'
   }
   # An approval from before this review binds an older review; keep it, but
@@ -633,9 +652,15 @@ onboard_review() {
   case $status in
   installation_pending)
     state_set onboard_resume true
+    # A new intent voids any recorded review's approval: its digest binds
+    # the old intent revision.
+    state_set onboarded null
+    state_set approval_command null
     emit_head
-    printf 'approval=complete the GitHub App installation for %s at %s, then rerun this command\n' \
-      "$repo" "$(jq -r '.installation_url' "$review")"
+    local rerun='rerun this command'
+    [[ "$replace_intent" != true ]] || rerun='rerun this command without --replace-intent'
+    printf 'approval=complete the GitHub App installation for %s at %s, then %s\n' \
+      "$repo" "$(jq -r '.installation_url' "$review")" "$rerun"
     exit 3
     ;;
   review_required)
@@ -646,6 +671,10 @@ onboard_review() {
     render_settings
     emit_head
     say "read the review in $review before approving"
+    local expires
+    expires=$(jq -r '.installation.pending.expires_at // empty' "$review")
+    [[ -z "$expires" ]] ||
+      say "approve before the installation intent expires at $expires; rerun with --replace-intent after that"
     printf 'approval=%s\n' "$command"
     exit 3
     ;;
@@ -731,12 +760,25 @@ take_onboarding_image() {
 # onboarding review answered, and reviews again, once, when either moved.
 # The base ref moving on its own asks for no review: the deputy stays pinned
 # to the tip the last review bound. A review not yet approved stops for its
-# approval rather than running again. A root onboarded before the script
-# recorded this skips the check, and one recorded before it kept the
-# template's pin reads the reviewed base, which was then that pin.
+# approval rather than running again, with two exceptions: --replace-intent
+# reviews again under a new intent, and an approval that ran but did not
+# complete (its redirect left onboard-approved.json without a complete
+# status) reviews again, because its digest may no longer match: an
+# approval that promoted the installation before a failed build leaves it
+# trusted, and the next review returns a new digest. A root onboarded
+# before the script recorded this skips the check, and one recorded before
+# it kept the template's pin reads the reviewed base, which was then that
+# pin.
 check_onboarding() {
   local bound_digest bound_base digest moved=false
   [[ -n "$(state_get .onboarded)" ]] || return 0
+  if [[ "$replace_intent" == true ]]; then
+    say "reviewing again under a new installation intent (--replace-intent)"
+    moved=true
+  elif [[ -e "$root/daemon/onboard-approved.json" ]] && ! approved_complete; then
+    say "the approval command ran but did not complete; reviewing again"
+    moved=true
+  fi
   bound_digest=$(state_get .onboarded.review_configuration_digest)
   bound_base=$(state_get '.onboarded.template_base_sha // .onboarded.base_sha')
   digest=$(state_get .review_configuration_digest)
