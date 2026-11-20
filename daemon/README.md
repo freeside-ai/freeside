@@ -4026,9 +4026,16 @@ daemon first; onboarding refuses a database it holds. It:
    promotes it, so every later call until the result is `complete`,
    including the `-approve` call, passes `-resume`; a call without it is
    refused. Every later run needs the intent unexpired, so finish them all
-   before the `pending.expires_at` the `installation_pending` output prints.
-   After that time `-resume` is refused: rerun with `-replace-intent`, not
-   `-resume`, which opens a new intent and a new approval digest to review;
+   before the `pending.expires_at` the `installation_pending` output prints;
+   a review of a pending intent prints the expiry on stderr, with a warning
+   when less than 15 minutes remain. After that time `-resume` and
+   `-approve` are refused. The error names the intent (its revision,
+   expected account, repositories, and expiry) and prints the command to
+   run next: the same arguments with `-replace-intent` in place of
+   `-resume` and `-approve`, which opens a new intent and a new approval
+   digest to review. A `-resume` that waited until expiry also names the
+   installations the janitor's last pass listed for the registration, or
+   says it listed none; that listing is a diagnostic and grants nothing;
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
    requires its resolved commit to equal `-commit`, and retains that exact
@@ -4042,13 +4049,25 @@ daemon first; onboarding refuses a database it holds. It:
    repository already onboarded may instead carry its approval forward
    (below);
 5. accepts only `-approve <approval_digest>` from that review; and
-6. reuses the admitted project image when it serves the commit (below), or
-   else invokes `internal/projectimage` directly, requires the returned
-   preparation command and registry/image destination to match the approved
-   request, and advances the admitted-image pointer to it; then it rechecks
-   the exact authority and reconciled grant before activating the profile.
-   A pending installation is promoted only after the image has been durably
-   recorded and the review accepted.
+6. promotes a pending installation as soon as it accepts the approval,
+   before any image work, and waits up to a minute for the janitor to
+   cover the repository under the promoted binding, so a build that
+   outlasts the intent's expiry still completes. A repository that already
+   has a trust profile promotes after the image instead and activates at
+   once, because that profile could otherwise mint through the promoted
+   binding before this approval's profile activates. It then reuses the
+   admitted project image when it serves the commit (below), or else
+   invokes `internal/projectimage` directly, requires the returned
+   preparation command and registry/image destination to match the
+   approved request, and advances the admitted-image pointer to it; then it
+   rechecks the exact authority and reconciled grant before activating the
+   profile. Early promotion grants no runtime authority: the runtime
+   minter, publication, and attention all need the profile, which comes
+   last. Until then only `freesided preflight`'s read-only inspection token
+   can mint for the promoted installation. A build that fails after it
+   leaves the installation trusted and no profile active; rerun the review,
+   which now sees a trusted installation and returns a new approval
+   digest.
 
 **A review that changes nothing the approval trusts completes on its own.**
 After the base moves, rerun the review at the new tip. When the

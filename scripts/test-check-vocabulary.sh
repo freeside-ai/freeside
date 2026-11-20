@@ -93,7 +93,9 @@ commit_all() {
 export_tree() {
   local dir=$TMP/$2
   mkdir -p "$dir"
-  git -C "$1" archive HEAD | tar -x -C "$dir"
+  # Drain past tar's end-of-archive exit, so git's last padding write can't
+  # fail the pipe on SIGPIPE.
+  git -C "$1" archive HEAD | { tar -x -C "$dir" && cat >/dev/null; }
   echo "$dir"
 }
 

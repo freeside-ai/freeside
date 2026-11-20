@@ -31,7 +31,10 @@ func TestOnboardRefusesSilentIntentReplacement(t *testing.T) {
 		intent string
 		extra  []string
 		// wantErr lists what a refusal names besides the intent's revision.
-		wantErr   []string
+		wantErr []string
+		// rejectErr lists what a refusal must not name. A flag carries its
+		// leading space: the recovery command quotes the call's arguments,
+		// whose temporary paths hold the test's name.
 		rejectErr []string
 	}{
 		{
@@ -41,12 +44,12 @@ func TestOnboardRefusesSilentIntentReplacement(t *testing.T) {
 		{
 			name: "no -resume with an expired intent", intent: "expired",
 			wantErr:   []string{"repositories [55]", "expired at", "-replace-intent", "approval digest"},
-			rejectErr: []string{"-resume"},
+			rejectErr: []string{" -resume"},
 		},
 		{
 			name: "-resume with an expired intent", intent: "expired", extra: []string{"-resume"},
 			wantErr:   []string{"expired at", "-replace-intent"},
-			rejectErr: []string{"-resume"},
+			rejectErr: []string{" -resume"},
 		},
 		{
 			name: "-replace-intent with no intent", extra: []string{"-replace-intent"},
@@ -518,4 +521,161 @@ func (f onboardIntentFixture) revision(t *testing.T) int64 {
 		return 0
 	}
 	return snapshot.Pending.DurableIntentRevision
+}
+
+// TestInstallationPollExpiryNamesTheIntentAndWhatTheJanitorListed covers
+// #3437 F13: a wait the intent's expiry ends names the intent, the
+// installations the janitor's last pass listed, and the command that opens a
+// new intent, instead of a bare deadline.
+func TestInstallationPollExpiryNamesTheIntentAndWhatTheJanitorListed(t *testing.T) {
+	t.Parallel()
+	fixture := newOnboardIntentFixture(t)
+	revision := fixture.recordIntent(t, true)
+	snapshot, err := fixture.authority.InstallationAuthority(t.Context(), 91)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := *snapshot.Pending
+	st, _, err := openStoreWithTopicKey(t.Context(), fixture.dbPath(t), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	sched, err := newInstallPollScheduler(st, fixture.authority, noPendingReady{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := armInstallationPoll(t.Context(), sched, 91, pending.ActiveEpoch, pending.DurableIntentRevision, pending.ExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	err = awaitInstallationPoll(t.Context(), st, sched, installPollScheduleID(91), func(context.Context) error { return nil })
+	if !errors.Is(err, errInstallationPollExpired) {
+		t.Fatalf("awaitInstallationPoll() = %v, want the poll's expiry", err)
+	}
+
+	resume := append(slices.Clone(fixture.args), "-resume")
+	for name, test := range map[string]struct {
+		observed []publish.JanitorObservedInstallation
+		faults   []publish.JanitorRegistrationFault
+		want     []string
+	}{
+		"listed installations": {
+			observed: []publish.JanitorObservedInstallation{
+				{InstallationID: 777, AccountLogin: "example", AccountID: 42, RepositorySelection: "selected", RepositoryIDs: []int64{44}},
+				{InstallationID: 778, AccountLogin: "other", AccountID: 43, RepositorySelection: "all"},
+			},
+			faults: []publish.JanitorRegistrationFault{
+				{RegistrationID: 91, Err: errors.New("grant read failed")},
+				{RegistrationID: 92, Err: errors.New("another registration's fault")},
+			},
+			want: []string{
+				`installation 777 (account "example", ID 42; repository selection "selected"; repositories [44])`,
+				`installation 778 (account "other", ID 43; repository selection "all"; grants not read)`,
+				"could not complete the registration: grant read failed",
+			},
+		},
+		"nothing listed": {want: []string{"the janitor's last pass listed no installation of registration 91"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := withIntentRecovery(expiredWaitError(pending, 91, test.observed, test.faults), resume).Error()
+			want := append([]string{
+				fmt.Sprintf("revision %d", revision), "account example", "repositories [55]",
+				"expired at " + pending.ExpiresAt.UTC().Format(time.RFC3339),
+				"approval digest", replaceIntentCommand(resume),
+			}, test.want...)
+			for _, part := range want {
+				if !strings.Contains(got, part) {
+					t.Errorf("error %q does not name %q", got, part)
+				}
+			}
+			if strings.Contains(got, "another registration's fault") {
+				t.Errorf("error %q names another registration's fault", got)
+			}
+		})
+	}
+}
+
+// TestExpiredIntentErrorsNameTheRecoveryCommand covers every source of an
+// expired-intent error onboarding ends with: the -resume gate (through the
+// command), and the poll's and the operation's (through the wrapper). Each
+// prints the call's own arguments without -resume, -approve, or
+// -replace-intent, plus -replace-intent.
+func TestExpiredIntentErrorsNameTheRecoveryCommand(t *testing.T) {
+	t.Parallel()
+	fixture := newOnboardIntentFixture(t)
+	fixture.recordIntent(t, true)
+	resume := append(slices.Clone(fixture.args), "-resume")
+	err := runOnboardCommand(t.Context(), resume, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "with: "+replaceIntentCommand(resume)) {
+		t.Fatalf("gate error = %v, want the recovery command", err)
+	}
+	command := replaceIntentCommand(append(slices.Clone(fixture.args), "-resume", "-approve", "sha256:old"))
+	want := replaceIntentCommand(fixture.args)
+	if command != want || strings.Contains(want, " -resume") || strings.Contains(want, "sha256:old") {
+		t.Fatalf("recovery command = %q, want %q", command, want)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "repository first",
+			args: []string{"example/repo", "-resume", "-approve", "sha256:old", "-dns", "1.1.1.1"},
+			want: "freesided onboard example/repo -replace-intent -dns 1.1.1.1",
+		},
+		{
+			name: "repository last, joined flags",
+			args: []string{"-replace-intent", "-approve=sha256:old", "-resume=true", "-dns", "1.1.1.1", "example/repo"},
+			want: "freesided onboard -replace-intent -dns 1.1.1.1 example/repo",
+		},
+	} {
+		if got := replaceIntentCommand(tc.args); got != tc.want {
+			t.Fatalf("%s: recovery command = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// The printed command, in either argument order, must parse as a new
+	// intent. The fixture's temporary paths need no quoting, so splitting on
+	// spaces recovers the words.
+	flagsFirst := append(slices.Clone(fixture.args[1:]), "-resume", fixture.args[0])
+	for _, args := range [][]string{resume, flagsFirst} {
+		printed := replaceIntentCommand(args)
+		cfg, err := parseOnboardConfig(strings.Fields(strings.TrimPrefix(printed, "freesided onboard ")), io.Discard)
+		if err != nil || !cfg.ReplaceIntent || cfg.Resume || cfg.Approval != "" || cfg.Repository != "example/repo" {
+			t.Fatalf("parse %q = %+v, %v", printed, cfg, err)
+		}
+	}
+	operationErr := fmt.Errorf("onboard run: %w", &operations.ExpiredIntentError{
+		RegistrationID: 91, DurableIntentRevision: 3, ExpectedAccount: "example",
+		ExpectedRepositoryIDs: []int64{55}, ExpiresAt: time.Now(),
+	})
+	if got := withIntentRecovery(operationErr, resume).Error(); !strings.Contains(got, "with: "+want) {
+		t.Fatalf("operation error = %q, want the recovery command", got)
+	}
+	other := errors.New("unrelated")
+	if got := withIntentRecovery(other, resume); got != other { //nolint:errorlint // the contract is the same error value, not a wrap of it
+		t.Fatalf("unrelated error = %v, want it unchanged", got)
+	}
+}
+
+// TestIntentExpiryNotice covers the review's stderr line: the expiry always,
+// and a warning when less than 15 minutes remain.
+func TestIntentExpiryNotice(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	plenty := intentExpiryNotice(now.Add(40*time.Minute), now)
+	if strings.Contains(plenty, "warning") || !strings.Contains(plenty, "2026-11-20T12:40:00Z") ||
+		!strings.Contains(plenty, "40m0s") {
+		t.Fatalf("notice with 40 minutes left = %q", plenty)
+	}
+	short := intentExpiryNotice(now.Add(14*time.Minute+59*time.Second), now)
+	if !strings.Contains(short, "warning") || !strings.Contains(short, "2026-11-20T12:14:59Z") ||
+		!strings.Contains(short, "14m59s") {
+		t.Fatalf("notice with under 15 minutes left = %q", short)
+	}
+	expired := intentExpiryNotice(now.Add(-2*time.Second), now)
+	if !strings.Contains(expired, "expired at 2026-11-20T11:59:58Z") || strings.Contains(expired, "-2s") {
+		t.Fatalf("notice after expiry = %q", expired)
+	}
 }

@@ -844,3 +844,71 @@ func TestUnknownInstallationCannotMintOrCreateAttention(t *testing.T) {
 		t.Errorf("unknown installation produced %d AttentionItems", attentionItems)
 	}
 }
+
+// TestInstallationJanitorPublishesListingAsDiagnosticOnly proves a pass keeps
+// what it listed per registration, including an installation it removed and
+// the grants it read, and that the listing grants nothing: the removal still
+// withholds coverage, and the removed installation never enters the allow-set.
+func TestInstallationJanitorPublishesListingAsDiagnosticOnly(t *testing.T) {
+	t.Parallel()
+	ks := publicJanitorKeystore(t)
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleExactGrant(w, r, fixtureRepositoryID) {
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			_, _ = io.WriteString(w, `[
+				{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}},
+				{"id":702,"app_id":501,"target_id":202,"repository_selection":"all","account":{"login":"unsolicited-owner","id":202}}
+			]`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/app/installations/702":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
+		RegistrationID: 501,
+		InstallationID: 701,
+		Account:        "operator",
+		AccountID:      101,
+		RepositoryIDs:  []int64{fixtureRepositoryID},
+	}), &removalRecorder{}, 10)
+	if got := janitor.ObservedInstallations(501); len(got) != 0 {
+		t.Fatalf("listing before the first pass = %+v", got)
+	}
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("RunScheduledPass: %v", err)
+	}
+	want := []publish.JanitorObservedInstallation{
+		{
+			InstallationID:      701,
+			AccountLogin:        "operator",
+			AccountID:           101,
+			RepositorySelection: "selected",
+			RepositoryIDs:       []int64{fixtureRepositoryID},
+		},
+		{
+			InstallationID:      702,
+			AccountLogin:        "unsolicited-owner",
+			AccountID:           202,
+			RepositorySelection: "all",
+		},
+	}
+	if got := janitor.ObservedInstallations(501); !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing = %+v, want %+v", got, want)
+	}
+	if janitor.ActiveFor(501) {
+		t.Fatal("a pass that removed an installation published coverage")
+	}
+	if janitor.AllowsRepository(501, 701, fixtureRepositoryID) ||
+		janitor.AllowsRepository(501, 702, fixtureRepositoryID) {
+		t.Fatal("a listed installation entered the allow-set")
+	}
+	if got := janitor.ObservedInstallations(502); len(got) != 0 {
+		t.Fatalf("listing for an unknown registration = %+v", got)
+	}
+}

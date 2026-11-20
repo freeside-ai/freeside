@@ -175,7 +175,9 @@ setup_export() {
   setup_repo
   EXPORT=$TMP/export$case_number
   mkdir -p "$EXPORT"
-  git -C "$REPO" archive HEAD | tar -x -C "$EXPORT"
+  # Drain past tar's end-of-archive exit, so git's last padding write can't
+  # fail the pipe on SIGPIPE.
+  git -C "$REPO" archive HEAD | { tar -x -C "$EXPORT" && cat >/dev/null; }
   mkdir -p "$EXPORT/daemon/internal/signet"
   digest_out=$(bash "$EXPORT/scripts/api-contract-digest.sh" --write 2>&1) || {
     printf '%s\n' "$digest_out" >&2

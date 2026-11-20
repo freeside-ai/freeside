@@ -24,8 +24,10 @@ type ProjectImageBuilder interface {
 }
 
 // InstallationGate carries the janitor's latest complete observation of
-// trusted and pending remote grants. Onboarding rechecks it at the final
-// activation boundary because the project-image build may be long-running.
+// trusted and pending remote grants. Onboarding reads it before promoting a
+// pending intent, polls it until the janitor covers the promoted binding, and
+// rechecks it at the final activation boundary because the project-image
+// build may be long-running.
 type InstallationGate interface {
 	AllowsRepository(registrationID, installationID, repositoryID int64) bool
 	PendingReady(publish.PendingInstallationEnvelope) (int64, bool)
@@ -159,6 +161,47 @@ func (e *MovedTipError) Error() string {
 		e.Tip, e.Commit)
 }
 
+// ExpiredIntentError reports that the pending installation intent a call
+// relies on expired before onboarding promoted it. An expired intent can't be
+// promoted or resumed; only a new intent recovers, and it changes the
+// approval digest.
+type ExpiredIntentError struct {
+	RegistrationID        int64
+	DurableIntentRevision int64
+	ExpectedAccount       string
+	ExpectedRepositoryIDs []int64
+	ExpiresAt             time.Time
+}
+
+func (e *ExpiredIntentError) Error() string {
+	return fmt.Sprintf(
+		"onboard: pending installation intent revision %d of registration %d for account %s "+
+			"and repositories %v expired at %s",
+		e.DurableIntentRevision, e.RegistrationID, e.ExpectedAccount,
+		e.ExpectedRepositoryIDs, e.ExpiresAt.UTC().Format(time.RFC3339))
+}
+
+// NewExpiredIntentError names envelope's intent as expired.
+func NewExpiredIntentError(envelope publish.PendingInstallationEnvelope) *ExpiredIntentError {
+	return &ExpiredIntentError{
+		RegistrationID:        envelope.RegistrationID,
+		DurableIntentRevision: envelope.DurableIntentRevision,
+		ExpectedAccount:       envelope.ExpectedAccount,
+		ExpectedRepositoryIDs: slices.Clone(envelope.ExpectedRepositoryIDs),
+		ExpiresAt:             envelope.ExpiresAt,
+	}
+}
+
+// promotedCoverageWait bounds how long an approval waits, after promoting a
+// pending intent, for a janitor pass to cover the new trusted binding. The
+// onboarding janitor passes every half second, so a minute is many passes;
+// running out means the janitor is not reconciling the binding, not that a
+// pass is slow.
+const (
+	promotedCoverageWait = time.Minute
+	promotedCoveragePoll = 250 * time.Millisecond
+)
+
 // BaseInputsReader reads, from one exact commit, the inputs a project image
 // of layout records (projectimage.ObserveBaseInputs).
 type BaseInputsReader func(
@@ -184,7 +227,19 @@ type Onboard struct {
 // Run returns the complete digest-bound review until the operator supplies
 // that proposed profile's exact digest. The applying pass builds and records
 // the project image before activating the profile, so a failed build cannot
-// leave a repository trusted without its runtime artifact.
+// leave a repository with an active profile and no runtime artifact.
+//
+// An applying pass over a pending intent, for a repository no trust profile
+// covers, promotes the installation first, before any build or reuse, so the
+// build cannot outlast the intent: the owner's response and an image build
+// used to have to fit in the intent's one hour (#3437). The binding is then
+// trusted, but the runtime minter mints nothing for a repository without a
+// profile, and this one gets its profile only after the image is recorded. A
+// build that fails after promotion leaves the installation trusted, and the
+// rerun reviews it as trusted, with a new approval digest. A repository that
+// already has a profile promotes after the image and activates at once, as
+// before, because that profile could mint through the promoted binding. See
+// devlog/2026-11-20-1130-promote-before-build.md.
 //
 // Two shortcuts skip work the active approval already covers. The applying
 // pass reuses the admitted image instead of building when that image serves
@@ -255,11 +310,13 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 			envelope.DurableIntentRevision != authority.DurableIntentRevision ||
 			!strings.EqualFold(envelope.ExpectedAccount, owner) ||
 			len(added) != 1 || added[0] != req.RepositoryID ||
-			envelope.RequiredRepositoryMode != "selected" ||
-			!envelope.ExpiresAt.After(o.Now().UTC()) {
+			envelope.RequiredRepositoryMode != "selected" {
 			return OnboardResult{}, fmt.Errorf(
 				"onboard: repository %d has no current exact pending installation",
 				req.RepositoryID)
+		}
+		if !envelope.ExpiresAt.After(o.Now().UTC()) {
+			return OnboardResult{}, NewExpiredIntentError(*envelope)
 		}
 		if o.Gate == nil {
 			return OnboardResult{}, errors.New(
@@ -403,6 +460,28 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 			"onboard: approval digest %s does not match proposed review %s",
 			req.ApprovalDigest, result.ApprovalDigest)
 	}
+	// Promote first only when no trust profile could mint for the
+	// repository. The runtime minter pairs a current profile with whatever
+	// trusted binding the janitor covers for its repository ID, so a profile
+	// already there would mint through the promoted binding before this
+	// approval's profile activates. Such a repository keeps the old order:
+	// promote, then activate at once.
+	promoteFirst := false
+	if pending {
+		profiled, err := o.repositoryProfiled(ctx, req)
+		if err != nil {
+			return OnboardResult{}, err
+		}
+		promoteFirst = !profiled
+	}
+	if promoteFirst {
+		if err := o.promote(ctx, req, *pendingReview); err != nil {
+			return OnboardResult{}, err
+		}
+		if err := o.awaitPromotedCoverage(ctx, installation); err != nil {
+			return OnboardResult{}, err
+		}
+	}
 	var image domain.ProjectImage
 	if reusable != nil {
 		// The admitted image already serves the approved request, so the
@@ -419,18 +498,12 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 			return OnboardResult{}, err
 		}
 	}
-	if pending {
-		if o.Documents == nil {
-			return OnboardResult{}, errors.New("onboard: nil installation authority writer")
-		}
-		if _, ready := o.Gate.PendingReady(*pendingReview); !ready {
-			return OnboardResult{}, errors.New(
-				"onboard: pending installation changed before approved promotion")
-		}
-		if err := PromoteInstallation(
-			ctx, o.Documents, *pendingReview, req.RepositoryID, o.Now,
-		); err != nil {
-			return OnboardResult{}, fmt.Errorf("onboard: promote approved installation: %w", err)
+	if pending && !promoteFirst {
+		// Nothing runs between this promotion and the activation below, so
+		// the old profile never pairs with the new binding for longer than
+		// the two writes take.
+		if err := o.promote(ctx, req, *pendingReview); err != nil {
+			return OnboardResult{}, err
 		}
 	} else if err := o.recheckTrustedInstallation(ctx, req.RegistrationID, installation); err != nil {
 		return OnboardResult{}, err
@@ -441,6 +514,83 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 	result.Status = "complete"
 	result.ProjectImage = &image
 	return result, nil
+}
+
+// promote converts the approved pending intent to a trusted binding. An
+// intent that expired since the review returns ExpiredIntentError;
+// PromoteInstallation refuses an expired intent on its own as well.
+func (o Onboard) promote(
+	ctx context.Context,
+	req OnboardRequest,
+	approved publish.PendingInstallationEnvelope,
+) error {
+	if o.Documents == nil {
+		return errors.New("onboard: nil installation authority writer")
+	}
+	if !approved.ExpiresAt.After(o.Now().UTC()) {
+		return NewExpiredIntentError(approved)
+	}
+	if _, ready := o.Gate.PendingReady(approved); !ready {
+		return errors.New("onboard: pending installation changed before approved promotion")
+	}
+	if err := PromoteInstallation(ctx, o.Documents, approved, req.RepositoryID, o.Now); err != nil {
+		return fmt.Errorf("onboard: promote approved installation: %w", err)
+	}
+	return nil
+}
+
+// awaitPromotedCoverage waits, bounded by promotedCoverageWait, for the
+// janitor to cover the binding promote just trusted, so the build's clone
+// token and the recheck before activation find it covered. Each check may
+// itself wait for one janitor pass already running.
+func (o Onboard) awaitPromotedCoverage(ctx context.Context, installation InstallationReview) error {
+	covered := func() bool {
+		return o.Gate.AllowsRepository(
+			installation.RegistrationID, installation.InstallationID, installation.RepositoryID)
+	}
+	if covered() {
+		return nil
+	}
+	deadline := time.NewTimer(promotedCoverageWait)
+	defer deadline.Stop()
+	poll := time.NewTicker(promotedCoveragePoll)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("onboard: wait for the promoted installation's coverage: %w", ctx.Err())
+		case <-deadline.C:
+			return fmt.Errorf(
+				"onboard: promoted installation %d, but the janitor did not cover repository %d "+
+					"within %s; the installation stays trusted with no active profile, and "+
+					"rerunning the review shows it as trusted with a new approval digest",
+				installation.InstallationID, installation.RepositoryID, promotedCoverageWait)
+		case <-poll.C:
+			if covered() {
+				return nil
+			}
+		}
+	}
+}
+
+// repositoryProfiled reports whether any current trust profile could mint
+// for req's repository: one recorded under its ID or, case-insensitively,
+// its name. A profile that no longer reconstructs names no ID, so it counts
+// too; the cost of a false match is only the old promotion order.
+func (o Onboard) repositoryProfiled(ctx context.Context, req OnboardRequest) (bool, error) {
+	var inspections []store.CurrentTrustProfileInspection
+	if err := o.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		inspections, err = tx.InspectLatestTrustProfiles(ctx)
+		return err
+	}); err != nil {
+		return false, fmt.Errorf("onboard: read current trust profiles: %w", err)
+	}
+	return slices.ContainsFunc(inspections, func(current store.CurrentTrustProfileInspection) bool {
+		return current.ReconstructionError != nil ||
+			current.Profile.RepositoryID == req.RepositoryID ||
+			strings.EqualFold(current.Repo, req.Repository)
+	}), nil
 }
 
 // buildAndAdmit builds the approved image, proves the result is bound to the
@@ -542,7 +692,9 @@ func (o Onboard) recheckTrustedInstallation(
 	binding := matches[0]
 	if binding.RegistrationID != installation.RegistrationID ||
 		binding.InstallationID != installation.InstallationID ||
-		binding.Account != installation.Account ||
+		// GitHub logins are case-insensitive, and promotion keeps a trusted
+		// binding's stored spelling; the account ID is the identity.
+		!strings.EqualFold(binding.Account, installation.Account) ||
 		binding.AccountID != installation.AccountID ||
 		!o.Gate.AllowsRepository(
 			installation.RegistrationID,

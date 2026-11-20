@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -22,7 +23,9 @@ import (
 )
 
 type imageBuilderStub struct {
-	calls              int
+	calls int
+	// onBuild runs first in Build; an error from it fails the build.
+	onBuild            func() error
 	image              domain.ProjectImage
 	store              *store.Store
 	preparationCommand []string
@@ -45,6 +48,11 @@ func (b *imageBuilderStub) Build(
 	ctx context.Context, req projectimage.Request,
 ) (domain.ProjectImage, error) {
 	b.calls++
+	if b.onBuild != nil {
+		if err := b.onBuild(); err != nil {
+			return domain.ProjectImage{}, err
+		}
+	}
 	if b.mutateRequest != nil {
 		b.mutateRequest(&req)
 	}
@@ -966,7 +974,6 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 		t.Fatal("review pass promoted the non-authorizing pending installation")
 	}
 	req.ApprovalDigest = review.ApprovalDigest
-	changedAuthority := onboard.Authority
 	onboard.Authority = authorityStub{publish.InstallationAuthority{
 		ActiveEpoch: 3, DurableIntentRevision: 8,
 		Pending: &publish.PendingInstallationEnvelope{
@@ -980,8 +987,10 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 	if _, err := onboard.Run(ctx, req); err == nil {
 		t.Fatal("onboard accepted approval for a replacement pending revision")
 	}
-	onboard.Authority = changedAuthority
 	onboard.Gate = &pendingGateSequence{results: []bool{true, false}}
+	// The applying pass rechecks the promoted binding before activation, so
+	// from here the authority reads what promotion writes.
+	onboard.Authority = documents
 	if _, err := onboard.Run(ctx, req); err == nil {
 		t.Fatal("onboard accepted readiness that changed before promotion")
 	}
@@ -1347,5 +1356,390 @@ func TestOnboardNamesTheMovedTip(t *testing.T) {
 	var moved *operations.MovedTipError
 	if !errors.As(err, &moved) || moved.Tip != carryCommitB || moved.Commit != carryCommitA {
 		t.Fatalf("stale commit error = %v, want MovedTipError{%s, %s}", err, carryCommitB, carryCommitA)
+	}
+}
+
+// InstallationAuthority serves the stub's document the way the authority
+// store does, so an onboarding run reads back the binding its own promotion
+// wrote.
+func (s *documentStoreStub) InstallationAuthority(
+	_ context.Context, registrationID int64,
+) (publish.InstallationAuthority, error) {
+	for _, entry := range s.document.Registrations {
+		if entry.RegistrationID != registrationID {
+			continue
+		}
+		authority := publish.InstallationAuthority{
+			ActiveEpoch: entry.ActiveEpoch, DurableIntentRevision: entry.DurableIntentRevision,
+		}
+		for _, binding := range entry.TrustedInstallations {
+			authority.TrustedInstallations = append(authority.TrustedInstallations,
+				publish.TrustedInstallation{
+					RegistrationID: registrationID, InstallationID: binding.InstallationID,
+					Account: binding.Account, AccountID: binding.AccountID,
+					RepositoryIDs: slices.Clone(binding.RepositoryIDs),
+				})
+		}
+		if pending := entry.Pending; pending != nil {
+			authority.Pending = &publish.PendingInstallationEnvelope{
+				ActiveEpoch: pending.ActiveEpoch, DurableIntentRevision: pending.DurableIntentRevision,
+				RegistrationID: registrationID, ExpectedAccount: pending.ExpectedAccount,
+				ExpectedAccountID: pending.ExpectedAccountID, InstallationID: *pending.InstallationID,
+				CurrentRepositoryIDs:   slices.Clone(pending.CurrentRepositoryIDs),
+				ExpectedRepositoryIDs:  slices.Clone(pending.ExpectedRepositoryIDs),
+				RequiredRepositoryMode: pending.RequiredRepositoryMode, ExpiresAt: pending.ExpiresAt,
+			}
+		}
+		return authority, nil
+	}
+	return publish.InstallationAuthority{}, fmt.Errorf("registration %d is not in the document", registrationID)
+}
+
+// coverageGate reports a pending intent ready and covers the promoted binding
+// only once covered is set, counting each coverage read.
+type coverageGate struct {
+	covered func() bool
+	reads   int
+}
+
+func (g *coverageGate) AllowsRepository(int64, int64, int64) bool {
+	g.reads++
+	return g.covered()
+}
+
+func (*coverageGate) PendingReady(envelope publish.PendingInstallationEnvelope) (int64, bool) {
+	if envelope.InstallationID == 0 {
+		return 22, true
+	}
+	return envelope.InstallationID, true
+}
+
+// hookedAuditor runs during the workflow audit, between onboarding's start
+// check and its promotion.
+type hookedAuditor struct {
+	audit  domain.WorkflowAudit
+	during func()
+}
+
+func (a hookedAuditor) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
+	if a.during != nil {
+		a.during()
+	}
+	return a.audit, nil
+}
+
+// pendingFixture is a repository awaiting its first installation: a pending
+// intent that expires an hour after the audit, read and written through one
+// document, with a clock the test moves.
+type pendingFixture struct {
+	st        *store.Store
+	documents *documentStoreStub
+	builder   *imageBuilderStub
+	now       time.Time
+	expiresAt time.Time
+	onboard   operations.Onboard
+	req       operations.OnboardRequest
+}
+
+func newPendingFixture(t *testing.T) *pendingFixture {
+	t.Helper()
+	ctx := t.Context()
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditedAt := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	audit := domain.WorkflowAudit{
+		Repo: "example/repo", AuditedCommitSHA: "0123456789012345678901234567890123456789",
+		AuditedAt: auditedAt, WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(ctx, audit)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unassigned := int64(0)
+	f := &pendingFixture{
+		st: st, now: auditedAt, expiresAt: auditedAt.Add(time.Hour),
+		builder: &imageBuilderStub{store: st},
+	}
+	f.documents = &documentStoreStub{document: publish.InstallationAuthorityDocument{
+		Version: 1,
+		Registrations: []publish.InstallationAuthorityEntry{{
+			RegistrationID: 11, ActiveEpoch: 3, DurableIntentRevision: 7,
+			TrustedOwners:        []publish.TrustedOwnerRecord{},
+			TrustedInstallations: []publish.TrustedInstallationRecord{},
+			Pending: &publish.PendingEnvelopeRecord{
+				ActiveEpoch: 3, DurableIntentRevision: 7,
+				ExpectedAccount: "example", ExpectedAccountID: 33,
+				InstallationID:       &unassigned,
+				CurrentRepositoryIDs: []int64{}, ExpectedRepositoryIDs: []int64{44},
+				RequiredRepositoryMode: "selected", ExpiresAt: f.expiresAt,
+			},
+		}},
+	}}
+	f.onboard = operations.Onboard{
+		Store: st, Builder: f.builder, Documents: f.documents, Authority: f.documents,
+		Auditor: workflowAuditorStub{audit: audit},
+		Now:     func() time.Time { return f.now }, Gate: pendingGateStub(true),
+		BaseInputs: unreadableBaseInputs,
+	}
+	f.req = operations.OnboardRequest{
+		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
+		BaseRef: "main",
+		Policy: operations.OnboardPolicy{
+			PRExecution: domain.PRExecutionAuditedSameRepo,
+			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		},
+		Image: projectimage.Request{
+			Repository: "example/repo", RepositoryID: 44,
+			CommitSHA: "0123456789012345678901234567890123456789",
+			Recipe:    []byte(`{"commands":[["npm","test"]],"capture":"none"}`),
+			BaseImageRef: domain.ImageRef(
+				"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
+			BaseBuildRef: "local/base:v1", LocalRegistryPort: 5100,
+			ImageName: "test-image", RefTag: "v1",
+		},
+	}
+	review, err := f.onboard.Run(ctx, f.req)
+	if err != nil {
+		t.Fatalf("review pass: %v", err)
+	}
+	if review.Installation.Pending == nil {
+		t.Fatalf("review installation = %+v, want a pending intent", review.Installation)
+	}
+	f.req.ApprovalDigest = review.ApprovalDigest
+	return f
+}
+
+// trusted reports whether the document holds the promoted binding and no
+// pending intent.
+func (f *pendingFixture) trusted() bool {
+	entry := f.documents.document.Registrations[0]
+	return entry.Pending == nil && len(entry.TrustedInstallations) == 1 &&
+		entry.TrustedInstallations[0].InstallationID == 22 &&
+		slices.Equal(entry.TrustedInstallations[0].RepositoryIDs, []int64{44})
+}
+
+func (f *pendingFixture) activeProfile(t *testing.T) bool {
+	t.Helper()
+	err := f.st.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.LatestTrustProfile(t.Context(), f.req.Repository)
+		return err
+	})
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	return err == nil
+}
+
+// TestOnboardPromotesBeforeBuildSoTheBuildCanOutlastTheIntent proves an
+// approval promotes the pending installation before the image build starts,
+// so a build that runs past the intent's expiry still completes (#3437 F19).
+func TestOnboardPromotesBeforeBuildSoTheBuildCanOutlastTheIntent(t *testing.T) {
+	f := newPendingFixture(t)
+	f.builder.onBuild = func() error {
+		if !f.trusted() {
+			t.Error("the build started before the installation was promoted")
+		}
+		f.now = f.expiresAt.Add(13 * time.Minute)
+		return nil
+	}
+	result, err := f.onboard.Run(t.Context(), f.req)
+	if err != nil {
+		t.Fatalf("approval whose build outlasted the intent: %v", err)
+	}
+	if result.Status != "complete" || f.builder.calls != 1 || !f.trusted() || !f.activeProfile(t) {
+		t.Fatalf("status %q, builds %d, trusted %t, active %t",
+			result.Status, f.builder.calls, f.trusted(), f.activeProfile(t))
+	}
+}
+
+// TestOnboardWithAProfilePromotesAfterTheImage proves a repository that
+// already has a trust profile keeps the old order: the binding stays pending
+// through the build, so the runtime minter can never pair the old profile with
+// the new binding, and a failed build leaves the intent pending and the old
+// profile in place. A profile recorded under another spelling of the name
+// still counts, because the minter checks coverage by repository ID.
+func TestOnboardWithAProfilePromotesAfterTheImage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		seedRepo  string
+		buildErr  error
+		wantTrust bool
+	}{
+		{name: "build succeeds", wantTrust: true},
+		{name: "build fails", buildErr: errors.New("build failed")},
+		{name: "profile under another spelling", seedRepo: "Example/Repo", buildErr: errors.New("build failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPendingFixture(t)
+			ctx := t.Context()
+			older := f.req
+			older.ApprovalDigest = ""
+			older.Policy.CommitPlan = domain.CommitPlanPlanPreferred
+			previous, err := f.onboard.Run(ctx, older)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.seedRepo != "" {
+				previous.Profile.Repo = tc.seedRepo
+				if previous.Profile.ProfileDigest, err = previous.Profile.ComputeDigest(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := f.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := tx.RecordInactiveTrustProfile(ctx, previous.Profile, f.now); err != nil {
+					return err
+				}
+				return tx.ActivateTrustProfile(ctx, previous.Profile.Repo, previous.Profile.ProfileDigest, f.now)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			current := f.req
+			current.ApprovalDigest = ""
+			review, err := f.onboard.Run(ctx, current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.req.ApprovalDigest = review.ApprovalDigest
+			f.builder.onBuild = func() error {
+				if f.trusted() {
+					t.Error("a repository with a profile promoted before its build")
+				}
+				return tc.buildErr
+			}
+			_, err = f.onboard.Run(ctx, f.req)
+			if (err == nil) != (tc.buildErr == nil) {
+				t.Fatalf("approval error = %v, want build error %v", err, tc.buildErr)
+			}
+			if f.trusted() != tc.wantTrust {
+				t.Fatalf("trusted = %t, want %t", f.trusted(), tc.wantTrust)
+			}
+			var active domain.AutomationTrustProfile
+			if err := f.st.Read(ctx, func(tx *store.ReadTx) error {
+				active, err = tx.LatestTrustProfile(ctx, previous.Profile.Repo)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			want := previous.Profile.ProfileDigest
+			if tc.buildErr == nil {
+				want = review.Profile.ProfileDigest
+			}
+			if active.ProfileDigest != want {
+				t.Fatalf("active profile = %s, want %s", active.ProfileDigest, want)
+			}
+		})
+	}
+}
+
+// TestOnboardFailedBuildAfterPromotionLeavesNoActiveProfile proves a build
+// that fails after promotion leaves the installation trusted but no active
+// trust profile, which the runtime minter requires before it mints.
+func TestOnboardFailedBuildAfterPromotionLeavesNoActiveProfile(t *testing.T) {
+	f := newPendingFixture(t)
+	f.builder.onBuild = func() error { return errors.New("build failed") }
+	if _, err := f.onboard.Run(t.Context(), f.req); err == nil {
+		t.Fatal("approval succeeded with a failed build")
+	}
+	if !f.trusted() {
+		t.Fatalf("promotion did not survive the failed build: %+v", f.documents.document.Registrations[0])
+	}
+	if f.activeProfile(t) {
+		t.Fatal("a failed build left an active trust profile")
+	}
+}
+
+// TestOnboardWaitsBoundedForThePromotedBindingsCoverage proves the approval
+// waits for a janitor pass to cover the promoted binding before it builds,
+// and gives up after the bound without building.
+func TestOnboardWaitsBoundedForThePromotedBindingsCoverage(t *testing.T) {
+	t.Run("covered after a few passes", func(t *testing.T) {
+		f := newPendingFixture(t)
+		gate := &coverageGate{}
+		gate.covered = func() bool { return gate.reads > 3 }
+		f.onboard.Gate = gate
+		f.builder.onBuild = func() error {
+			if gate.reads <= 3 {
+				t.Error("the build started before the janitor covered the promoted binding")
+			}
+			return nil
+		}
+		synctest.Test(t, func(t *testing.T) {
+			if _, err := f.onboard.Run(t.Context(), f.req); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if f.builder.calls != 1 || !f.activeProfile(t) {
+			t.Fatalf("builds %d, active %t", f.builder.calls, f.activeProfile(t))
+		}
+	})
+	t.Run("never covered", func(t *testing.T) {
+		f := newPendingFixture(t)
+		f.onboard.Gate = &coverageGate{covered: func() bool { return false }}
+		var err error
+		synctest.Test(t, func(t *testing.T) {
+			started := time.Now()
+			_, err = f.onboard.Run(t.Context(), f.req)
+			if waited := time.Since(started); waited < time.Minute {
+				t.Errorf("gave up after %s, want the one-minute bound", waited)
+			}
+		})
+		if err == nil || !strings.Contains(err.Error(), "did not cover repository 44") {
+			t.Fatalf("error = %v, want the coverage bound", err)
+		}
+		if f.builder.calls != 0 || !f.trusted() || f.activeProfile(t) {
+			t.Fatalf("builds %d, trusted %t, active %t", f.builder.calls, f.trusted(), f.activeProfile(t))
+		}
+	})
+}
+
+// TestOnboardNamesTheExpiredIntent proves an intent that expired before
+// promotion fails with ExpiredIntentError, at the start check and at the
+// pre-promotion check, and is never promoted.
+func TestOnboardNamesTheExpiredIntent(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*pendingFixture)
+	}{
+		{"before the start check", func(f *pendingFixture) { f.now = f.expiresAt }},
+		{"during the workflow audit", func(f *pendingFixture) {
+			auditor, ok := f.onboard.Auditor.(workflowAuditorStub)
+			if !ok {
+				t.Fatalf("auditor = %T", f.onboard.Auditor)
+			}
+			f.onboard.Auditor = hookedAuditor{
+				audit: auditor.audit, during: func() { f.now = f.expiresAt.Add(time.Second) },
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newPendingFixture(t)
+			test.setup(f)
+			_, err := f.onboard.Run(t.Context(), f.req)
+			var expired *operations.ExpiredIntentError
+			if !errors.As(err, &expired) {
+				t.Fatalf("error = %v, want ExpiredIntentError", err)
+			}
+			want := operations.ExpiredIntentError{
+				RegistrationID: 11, DurableIntentRevision: 7, ExpectedAccount: "example",
+				ExpectedRepositoryIDs: []int64{44}, ExpiresAt: f.expiresAt,
+			}
+			if !reflect.DeepEqual(*expired, want) {
+				t.Fatalf("expired = %+v, want %+v", *expired, want)
+			}
+			if f.trusted() || f.builder.calls != 0 || f.activeProfile(t) {
+				t.Fatalf("expired intent: trusted %t, builds %d, active %t",
+					f.trusted(), f.builder.calls, f.activeProfile(t))
+			}
+		})
 	}
 }

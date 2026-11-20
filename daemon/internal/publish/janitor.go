@@ -147,6 +147,28 @@ type JanitorRegistrationIncomplete struct {
 	RegistrationID int64
 }
 
+// JanitorObservedInstallation is one installation a janitor pass listed for
+// a registration. It is an operator diagnostic, never authority: coverage,
+// PendingReady, AllowsRepository, and every mint read the pass's own
+// validated state, not this record. An onboarding wait that runs out names
+// these so the operator can see which account and repositories GitHub
+// reported instead of the ones the intent expected.
+//
+// AccountLogin and RepositorySelection are GitHub's returned text. The login
+// passed the janitor's owner-login check; the selection is unchecked and is
+// quoted wherever it is printed.
+type JanitorObservedInstallation struct {
+	InstallationID      int64
+	AccountLogin        string
+	AccountID           int64
+	RepositorySelection string
+	// RepositoryIDs is the granted set when the pass read the installation's
+	// grants, and nil when it did not: a metadata-only decision (removal,
+	// selection drift, or an expired intent's kept installation) or a grant
+	// read that failed.
+	RepositoryIDs []int64
+}
+
 // InstallationJanitor reconciles every App registration against canonical
 // installation-to-repository bindings and the current pending envelope. It has
 // no signet or AttentionItem dependency: unsolicited GitHub state can be
@@ -172,6 +194,7 @@ type InstallationJanitor struct {
 	faults     []JanitorRegistrationFault
 	churn      []JanitorRegistrationChurn
 	incomplete []JanitorRegistrationIncomplete
+	listed     map[int64][]JanitorObservedInstallation
 	// retained holds a minted token whose revoke failed, only so a later pass
 	// can retry the revoke. Whether the installation is held is the durable
 	// hold's decision; a token is never persisted, so a restart loses it and
@@ -417,6 +440,30 @@ func (j *InstallationJanitor) IncompleteRegistrations() []JanitorRegistrationInc
 	return slices.Clone(j.incomplete)
 }
 
+// ObservedInstallations reports the installations of registrationID that the
+// most recently completed pass listed, in GitHub's order, including those the
+// pass removed or quarantined and those listed before a fault stopped the
+// registration. It is empty when that pass listed none or did not visit the
+// registration, before the first pass, and after Run returns. Like the other
+// diagnostics, it stays published while the next pass runs, and nothing that
+// grants coverage or readiness reads it.
+func (j *InstallationJanitor) ObservedInstallations(
+	registrationID int64,
+) []JanitorObservedInstallation {
+	if j == nil {
+		return nil
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	listed := j.listed[registrationID]
+	observed := make([]JanitorObservedInstallation, len(listed))
+	for index, installation := range listed {
+		installation.RepositoryIDs = slices.Clone(installation.RepositoryIDs)
+		observed[index] = installation
+	}
+	return observed
+}
+
 // Run keeps reconciliation active until ctx is canceled. Coverage is published
 // only after each cycle and cleared before Run returns, so a registration is
 // active only while its own latest pass covered it.
@@ -557,6 +604,7 @@ type janitorPass struct {
 	faults        []JanitorRegistrationFault
 	churn         []int64
 	incomplete    []int64
+	listed        map[int64][]JanitorObservedInstallation
 }
 
 // runCycle reconciles every registration in the keystore. A failure it can
@@ -580,7 +628,10 @@ func (j *InstallationJanitor) runCycle(
 	}
 
 	var cycle JanitorCycle
-	pass := janitorPass{registrations: make([]int64, 0, len(apps))}
+	pass := janitorPass{
+		registrations: make([]int64, 0, len(apps)),
+		listed:        make(map[int64][]JanitorObservedInstallation, len(apps)),
+	}
 	requiredRecords := make(map[int64]int, len(apps))
 	for _, app := range apps {
 		pass.registrations = append(pass.registrations, app.AppID)
@@ -591,7 +642,7 @@ func (j *InstallationJanitor) runCycle(
 	cleanRecords := make(map[int64]int, len(pass.registrations))
 	for _, app := range apps {
 		removedBefore := cycle.Removed
-		complete, registrationCoverage, err := j.reconcileApp(ctx, app, &cycle)
+		complete, registrationCoverage, err := j.reconcileApp(ctx, app, &cycle, pass.listed)
 		if err != nil {
 			if errors.Is(err, errJanitorUnsafe) {
 				return cycle, pass, err
@@ -702,10 +753,13 @@ func withdrawUnreconciled(
 // errors are attributable to that registration alone except for
 // errJanitorUnsafe, which reconcileRegistration raises for the shared audit
 // barrier and for a credential it could not revoke; runCycle separates them.
+// listed collects what the registration's listing returned, for
+// ObservedInstallations.
 func (j *InstallationJanitor) reconcileApp(
 	ctx context.Context,
 	app AppCredentials,
 	cycle *JanitorCycle,
+	listed map[int64][]JanitorObservedInstallation,
 ) (bool, registrationCoverage, error) {
 	snapshot, err := j.authority.InstallationAuthority(ctx, app.AppID)
 	if err != nil {
@@ -723,7 +777,7 @@ func (j *InstallationJanitor) reconcileApp(
 			err,
 		)
 	}
-	return j.reconcileRegistration(ctx, app, authority, cycle)
+	return j.reconcileRegistration(ctx, app, authority, cycle, listed)
 }
 
 type registrationCoverage struct {
@@ -744,7 +798,17 @@ func (j *InstallationJanitor) reconcileRegistration(
 	app AppCredentials,
 	authority validatedInstallationAuthority,
 	cycle *JanitorCycle,
+	listed map[int64][]JanitorObservedInstallation,
 ) (bool, registrationCoverage, error) {
+	// The listing is recorded on every return, so a registration that faults
+	// or removes installations still reports what GitHub listed for it. Two
+	// keystore records with one registration ID both append.
+	var observed []JanitorObservedInstallation
+	defer func() {
+		if len(observed) > 0 {
+			listed[app.AppID] = append(listed[app.AppID], observed...)
+		}
+	}()
 	jwt, err := AppJWT(app.Key, app.AppID, j.now())
 	if err != nil {
 		return false, registrationCoverage{}, fmt.Errorf("installation janitor: registration %d: %w", app.AppID, err)
@@ -787,6 +851,12 @@ func (j *InstallationJanitor) reconcileRegistration(
 			}
 			seen[installation.ID] = struct{}{}
 			cycle.Examined++
+			observed = append(observed, JanitorObservedInstallation{
+				InstallationID:      installation.ID,
+				AccountLogin:        installation.Account.Login,
+				AccountID:           installation.Account.ID,
+				RepositorySelection: installation.RepositorySelection,
+			})
 
 			candidate, ok, identityDrift := authority.candidate(installation)
 			if identityDrift {
@@ -850,6 +920,9 @@ func (j *InstallationJanitor) reconcileRegistration(
 					err,
 				)
 			}
+			// Never nil once read: nil means the grants were not read, and an
+			// installation with no repository reads as an empty list.
+			observed[len(observed)-1].RepositoryIDs = append([]int64{}, repositoryIDs...)
 			matchesExpected := slices.Equal(repositoryIDs, candidate.repositoryIDs)
 			matchesPendingBase := candidate.pending &&
 				len(candidate.allowedRepositoryIDs) > 0 &&
@@ -1500,6 +1573,7 @@ func (j *InstallationJanitor) publishPass(pass janitorPass) {
 	j.faults = slices.Clone(pass.faults)
 	j.churn = nextChurn
 	j.incomplete = nextIncomplete
+	j.listed = pass.listed
 	j.mu.Unlock()
 }
 
@@ -1520,6 +1594,7 @@ func (j *InstallationJanitor) finishRun() {
 	j.faults = nil
 	j.churn = nil
 	j.incomplete = nil
+	j.listed = nil
 	// Retained tokens outlive this loop, just as their credentials do.
 	j.mu.Unlock()
 }

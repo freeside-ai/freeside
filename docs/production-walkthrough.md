@@ -609,9 +609,10 @@ one; it resumes where it stopped. In order:
    installation and rerun. The script passes `-resume` on every later
    onboarding call. An intent expires (the daemon guide's `freesided
    onboard` steps, under Renew A Codex Subscription Credential in
-   daemon/README.md); after that, run the onboarding with `-replace-intent`
-   by hand as that guide says, then rerun. The intent belongs to the App, so
-   finish one root's installation before another root's onboarding starts:
+   daemon/README.md); the review prints the expiry. After it, the failed
+   review says to rerun the script with `--replace-intent`, which opens a
+   new intent with a new approval digest; complete the installation and
+   rerun as usual. The intent belongs to the App, so finish one root's installation before another root's onboarding starts:
    a new root's first call doesn't pass `-resume`.
 3. **The onboarding approval.** The `approval=` line is the full `freesided
    onboard ... -approve <approval_digest>` command. Read the review in
@@ -621,7 +622,11 @@ one; it resumes where it stopped. In order:
    nothing the active approval trusts, such as one after a source-only
    merge moved the base, completes without the approval command:
    `freesided onboard` carries the approval forward, and the script writes
-   its output to `onboard-approved.json` and goes on.
+   its output to `onboard-approved.json` and goes on. When the approval
+   command fails, rerun the script: it sees the incomplete
+   `onboard-approved.json` and reviews again, because a build that failed
+   after the approval promoted the installation leaves a new approval
+   digest to review.
 
    Every review runs at the base ref's tip, because `freesided onboard`
    refuses a `-commit` that isn't the live tip. The script fetches

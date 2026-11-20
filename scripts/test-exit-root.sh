@@ -317,7 +317,11 @@ onboard)
     echo "onboard: the base ref's live tip is $live, not -commit $(flag -commit "$@"); the workflow audit covers only the live tip" >&2
     exit 1
   fi
-  if [[ -n "$(flag -approve "$@")" ]]; then
+  if [[ -n "$(flag -approve "$@")" && "${FAKE_ONBOARD_MODE:-}" == failed-approval ]]; then
+    # The approval promoted the installation, then its build failed.
+    echo 'freesided onboard: onboard: build project image: build failed' >&2
+    exit 1
+  elif [[ -n "$(flag -approve "$@")" ]]; then
     # The trust marker stays REVIEW_DIGEST: prelaunch keeps passing the
     # profile after the review configuration moves.
     printf '%s\n' "$REVIEW_DIGEST" >"$(dirname "$db")/fake-trust"
@@ -327,8 +331,21 @@ onboard)
     # Nothing the active approval trusts changed: the review completes.
     jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
       '{status: "complete", carried: true, project_image: {image_ref: $i, recipe_digest: $r}}'
-  elif [[ "${FAKE_ONBOARD_MODE:-}" == pending ]] && ! printf '%s\n' "$@" | grep -qx -- -resume; then
+  elif [[ "${FAKE_ONBOARD_MODE:-}" == foreign ]]; then
+    # Another root's intent is pending on the same App: the error names
+    # -replace-intent, but replacing that intent is not this root's recovery.
+    echo 'freesided onboard: onboard: an installation intent is pending; pass -resume to continue it, or -replace-intent to replace it' >&2
+    exit 1
+  elif [[ "${FAKE_ONBOARD_MODE:-}" == pending || "${FAKE_ONBOARD_MODE:-}" == expired ]] &&
+    ! printf '%s\n' "$@" | grep -qx -- -resume; then
     jq -n '{status: "installation_pending", installation_url: "https://github.com/apps/fake/installations/new"}'
+  elif [[ "${FAKE_ONBOARD_MODE:-}" == expired ]]; then
+    # The resume finds the intent expired and names the recovery command.
+    echo 'freesided onboard: onboard: pending installation intent revision 2 expired; open a new intent, which changes the approval digest, with: freesided onboard -replace-intent' >&2
+    exit 1
+  elif [[ "${FAKE_ONBOARD_MODE:-}" == pending ]]; then
+    jq -n --arg a "$APPROVAL_DIGEST" \
+      '{status: "review_required", approval_digest: $a, installation: {pending: {expires_at: "2026-11-20T13:00:00Z"}}}'
   else
     jq -n --arg a "$APPROVAL_DIGEST" '{status: "review_required", approval_digest: $a}'
   fi
@@ -667,6 +684,60 @@ case $(sed -n 's/^approval=//p' "$CASE_DIR/stdout") in
 *" -resume -approve $APPROVAL_DIGEST "*) ok ;;
 *) report_failure "the approve command lacks -resume" ;;
 esac
+assert_contains 'approve before the installation intent expires at 2026-11-20T13:00:00Z'
+# Once a review is recorded, a rerun stops for its approval without
+# reviewing, but --replace-intent reviews again under a new intent.
+FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" --replace-intent pending
+assert_rc 3
+assert_line "$CASE_DIR/onboard-3.args" '-replace-intent'
+assert_contains 'reviewing again under a new installation intent'
+assert_contains 'rerun this command without --replace-intent'
+# The new intent voided the recorded review, so a plain rerun reviews again
+# rather than reprinting the old approval.
+FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" pending
+assert_rc 3
+assert_line "$CASE_DIR/onboard-4.args" '-resume'
+
+begin_case "an approval that ran but did not complete reviews again instead of reprinting it"
+FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" failed
+FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" failed
+assert_rc 3
+FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" failed
+assert_rc 3
+assert_not_exists "$CASE_DIR/onboard-3.args"
+if FAKE_ONBOARD_MODE=failed-approval approve >/dev/null 2>&1; then
+  report_failure "the failed approval succeeded"
+else
+  ok
+fi
+FAKE_ONBOARD_MODE=pending run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" failed
+assert_rc 3
+assert_contains 'the approval command ran but did not complete; reviewing again'
+assert_line "$CASE_DIR/onboard-4.args" '-resume'
+
+begin_case "an expired intent's failed resume names --replace-intent, which opens a new intent"
+FAKE_ONBOARD_MODE=expired run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" expired
+assert_rc 3
+FAKE_ONBOARD_MODE=expired run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" expired
+assert_rc 1
+assert_line "$CASE_DIR/onboard-2.args" '-resume'
+assert_contains 'rerun this command with --replace-intent'
+FAKE_ONBOARD_MODE=expired run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" --replace-intent expired
+assert_rc 3
+assert_line "$CASE_DIR/onboard-3.args" '-replace-intent'
+if grep -qx -- -resume "$CASE_DIR/onboard-3.args"; then
+  report_failure "--replace-intent still passed -resume"
+else
+  ok
+fi
+assert_contains 'approval=complete the GitHub App installation'
+FAKE_ONBOARD_MODE=expired run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" expired
+assert_line "$CASE_DIR/onboard-4.args" '-resume'
+
+begin_case "another root's pending intent names -replace-intent without the --replace-intent hint"
+FAKE_ONBOARD_MODE=foreign run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" foreign
+assert_rc 1
+assert_not_contains 'rerun this command with --replace-intent'
 
 begin_case "a missing reviewer store stops before the first start with the enrollment commands, then resumes"
 M=$CASE_DIR/machine.json

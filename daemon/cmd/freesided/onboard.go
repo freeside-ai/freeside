@@ -189,6 +189,7 @@ func runOnboardCommand(
 	if err != nil {
 		return err
 	}
+	defer func() { err = withIntentRecovery(err, args) }()
 	var recipe []byte
 	if cfg.RecipePath == "" {
 		recipe, err = detectRecipe(ctx, cfg.GitPath, cfg.SourceDir, cfg.Commit)
@@ -416,6 +417,9 @@ func runOnboardCommand(
 		if runErr != nil {
 			return runErr
 		}
+		if result.Status == "review_required" && result.Installation.Pending != nil {
+			_, _ = fmt.Fprintln(stderr, intentExpiryNotice(result.Installation.Pending.ExpiresAt, time.Now()))
+		}
 		for _, change := range result.Changes {
 			if change.Reason != "" {
 				_, _ = fmt.Fprintf(stderr, "onboard: %s\n", change.Reason)
@@ -441,8 +445,47 @@ func runOnboardCommand(
 		)
 	}
 	return withDurableInstallationPoll(
-		ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.RegistrationID, runOnboard,
+		ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.RegistrationID, stderr, runOnboard,
 	)
+}
+
+// intentExpiryWarning is how close to its expiry a reviewed intent draws a
+// warning: the owner still has to read the review and approve, and approval
+// must promote the installation before the intent expires.
+const intentExpiryWarning = 15 * time.Minute
+
+// intentExpiryNotice is the stderr line a review of a pending intent prints:
+// the expiry, and a warning when little time remains to approve.
+func intentExpiryNotice(expiresAt, now time.Time) string {
+	remaining := expiresAt.Sub(now).Truncate(time.Second)
+	at := expiresAt.UTC().Format(time.RFC3339)
+	if remaining <= 0 {
+		// The intent expired during the review's own audit.
+		return fmt.Sprintf(
+			"onboard: warning: the pending installation intent expired at %s; "+
+				"the approval will fail and needs a new intent with a new approval digest", at)
+	}
+	if remaining < intentExpiryWarning {
+		return fmt.Sprintf(
+			"onboard: warning: the pending installation intent expires in %s, at %s; "+
+				"approve before then, or the approval fails and needs a new intent with a new approval digest",
+			remaining, at)
+	}
+	return fmt.Sprintf(
+		"onboard: the pending installation intent expires at %s (in %s); approve before then", at, remaining)
+}
+
+// withIntentRecovery adds the one command that recovers from an expired
+// intent to an error that ends onboarding because of one: the same arguments
+// without -resume, -approve, or -replace-intent, plus -replace-intent.
+func withIntentRecovery(err error, args []string) error {
+	var expired *operations.ExpiredIntentError
+	if !errors.As(err, &expired) {
+		return err
+	}
+	return fmt.Errorf(
+		"%w; open a new intent, which changes the approval digest, with: %s",
+		err, replaceIntentCommand(args))
 }
 
 // onboardBaseInputs reads a commit's project-image inputs from the -source
@@ -464,21 +507,51 @@ func onboardBaseInputs(gitPath, sourceDir string) operations.BaseInputsReader {
 // since the earlier approval digest binds the old commit. A review at the tip
 // carries the approval forward when nothing it trusts changed.
 func movedTipCommand(args []string, tip string) string {
+	return onboardCommand(args, map[string]bool{"approve": true}, map[string]string{"commit": tip})
+}
+
+// replaceIntentCommand opens a new intent over an expired one: the same
+// arguments without -resume, -approve, or -replace-intent, plus
+// -replace-intent. The approval digest binds the old intent's revision, so
+// -approve goes too.
+func replaceIntentCommand(args []string) string {
+	return onboardCommand(args,
+		map[string]bool{"resume": false, "approve": true, "replace-intent": false}, nil,
+		"-replace-intent")
+}
+
+// onboardCommand renders a rerun of freesided onboard with args edited. Each
+// flag in drop is removed, with the next argument too when drop maps it to
+// true (a valued flag in the -flag value form). Each flag in set keeps its
+// place with a new value. extra is appended.
+func onboardCommand(
+	args []string, drop map[string]bool, set map[string]string, extra ...string,
+) string {
 	command := []string{"freesided", "onboard"}
 	for i := 0; i < len(args); i++ {
 		name, _, hasValue := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
-		if !strings.HasPrefix(args[i], "-") || (name != "commit" && name != "approve") {
+		takesValue, dropped := drop[name]
+		value, replaced := set[name]
+		if !strings.HasPrefix(args[i], "-") || (!dropped && !replaced) {
 			command = append(command, args[i])
 			continue
 		}
-		if !hasValue {
+		if !hasValue && (replaced || takesValue) {
 			// The flag package's -flag value form: the next argument is the value.
 			i++
 		}
-		if name == "commit" {
-			command = append(command, "-commit", tip)
+		if replaced {
+			command = append(command, "-"+name, value)
 		}
 	}
+	// The extra flags go before any repository that follows the flags: the
+	// flag package stops at the first positional argument, so a flag after
+	// it would be refused. A repository that leads keeps its place.
+	at := 2
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		at = 3
+	}
+	command = slices.Insert(command, min(at, len(command)), extra...)
 	quoted := make([]string, len(command))
 	for i, arg := range command {
 		quoted[i] = shellQuote(arg)
@@ -550,11 +623,8 @@ func pendingIntentGate(
 	}
 	expired := !pending.ExpiresAt.After(now)
 	if expired && !replace {
-		return fmt.Errorf(
-			"pending installation intent revision %d for repositories %v expired at %s; "+
-				"pass -replace-intent to open a new one, which changes the approval digest",
-			pending.DurableIntentRevision, pending.ExpectedRepositoryIDs,
-			pending.ExpiresAt.UTC().Format(time.RFC3339))
+		// runOnboardCommand adds the -replace-intent command that recovers.
+		return operations.NewExpiredIntentError(*pending)
 	}
 	if !resume && !replace {
 		return fmt.Errorf(
@@ -804,6 +874,7 @@ func withDurableInstallationPoll(
 	authorityLock *publish.AuthorityWriterLock,
 	credentialsDir string,
 	registrationID int64,
+	stderr io.Writer,
 	run func(*publish.InstallationJanitor, *publish.Keystore, *http.Client) error,
 ) error {
 	// Read before the janitor starts, so a removal it makes during this wait
@@ -852,6 +923,9 @@ func withDurableInstallationPoll(
 	}
 
 	pending := *snapshot.Pending
+	_, _ = fmt.Fprintf(stderr,
+		"onboard: waiting for the installation grant until intent revision %d expires at %s\n",
+		pending.DurableIntentRevision, pending.ExpiresAt.UTC().Format(time.RFC3339))
 	removed := func(checkCtx context.Context) error {
 		return refuseRemovedInstallation(
 			checkCtx, authority, registrationID, pending.InstallationID, pending.ExpectedAccountID, started,
@@ -872,6 +946,11 @@ func withDurableInstallationPoll(
 		}
 		return err
 	case err := <-waited:
+		if errors.Is(err, errInstallationPollExpired) {
+			// Read before fail stops the janitor, which clears its diagnostics.
+			err = expiredWaitError(pending, registrationID,
+				janitor.ObservedInstallations(registrationID), janitor.RegistrationFaults())
+		}
 		if err != nil {
 			return fail(err)
 		}
@@ -879,6 +958,53 @@ func withDurableInstallationPoll(
 	runErr := run(janitor, keystore, client)
 	cancel()
 	return errors.Join(runErr, <-done)
+}
+
+// expiredWaitError is the error of a wait the intent's expiry ended: the
+// intent, and what the janitor's last pass listed for its registration.
+func expiredWaitError(
+	pending publish.PendingInstallationEnvelope,
+	registrationID int64,
+	observed []publish.JanitorObservedInstallation,
+	faults []publish.JanitorRegistrationFault,
+) error {
+	return fmt.Errorf("%w; %s", operations.NewExpiredIntentError(pending),
+		describeJanitorListing(registrationID, observed, faults))
+}
+
+// describeJanitorListing names the installations of registrationID the
+// janitor's last pass listed, so an expired wait shows which account and
+// repositories GitHub reported instead of the ones the intent expected, and
+// any fault that stopped the pass for the registration. GitHub's text is
+// quoted.
+func describeJanitorListing(
+	registrationID int64,
+	observed []publish.JanitorObservedInstallation,
+	faults []publish.JanitorRegistrationFault,
+) string {
+	var description string
+	if len(observed) == 0 {
+		description = fmt.Sprintf("the janitor's last pass listed no installation of registration %d", registrationID)
+	} else {
+		listed := make([]string, len(observed))
+		for i, installation := range observed {
+			repositories := "grants not read"
+			if installation.RepositoryIDs != nil {
+				repositories = fmt.Sprintf("repositories %v", installation.RepositoryIDs)
+			}
+			listed[i] = fmt.Sprintf("installation %d (account %q, ID %d; repository selection %q; %s)",
+				installation.InstallationID, installation.AccountLogin, installation.AccountID,
+				installation.RepositorySelection, repositories)
+		}
+		description = fmt.Sprintf("the janitor's last pass listed, for registration %d: %s",
+			registrationID, strings.Join(listed, ", "))
+	}
+	for _, fault := range faults {
+		if fault.RegistrationID == registrationID {
+			description += fmt.Sprintf("; that pass could not complete the registration: %v", fault.Err)
+		}
+	}
+	return description
 }
 
 func installationURLForRegistration(

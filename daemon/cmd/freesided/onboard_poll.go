@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -74,10 +75,16 @@ func armInstallationPoll(
 	return nil
 }
 
+// errInstallationPollExpired is the durable poll's expiry, which is the
+// intent's own. The caller names the intent and what the janitor listed,
+// because a bare deadline told the operator nothing (#3437 F13).
+var errInstallationPollExpired = errors.New("the installation poll expired with the intent")
+
 // awaitInstallationPoll drives the scheduler until the durable poll
 // concludes: resolved condition_satisfied means the selected grant matched
 // and onboarding proceeds; expiry is the -install-wait bound, now carried
-// by the envelope itself so it holds across sessions. While the poll is
+// by the envelope itself so it holds across sessions, and returns
+// errInstallationPollExpired. While the poll is
 // armed, each tick runs removed, whose error ends the wait: the janitor
 // may remove the installation the intent waits for, and the poll alone
 // would then wait out the intent.
@@ -114,7 +121,7 @@ func awaitInstallationPoll(
 			return fmt.Errorf("pending installation intent disappeared (%s)",
 				schedule.Resolution.Reason)
 		case domain.ScheduleExpired:
-			return fmt.Errorf("wait for selected installation: %w", context.DeadlineExceeded)
+			return errInstallationPollExpired
 		case domain.ScheduleFired:
 			return fmt.Errorf("installation poll %s terminated %s", id, schedule.Status)
 		}
