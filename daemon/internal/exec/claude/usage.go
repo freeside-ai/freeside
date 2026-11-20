@@ -28,7 +28,8 @@ func (claudeProvider) ClassifyQuotaRefusal(transcript []byte) *domain.QuotaRefus
 }
 
 // ExtractUsage reads numbers-only telemetry from the last Claude terminal
-// result envelope. Missing or malformed telemetry returns nil.
+// result envelope, or the partial sum of the assistant messages when the
+// transcript has none. Missing or malformed telemetry returns nil.
 func ExtractUsage(transcript []byte, observedAt time.Time) []exec.UsageMeasurement {
 	return exec.ExtractClaudeUsage(
 		transcript, observedAt, domain.UsageSourceAdapterTranscript,

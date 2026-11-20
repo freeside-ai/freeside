@@ -10,7 +10,8 @@
 //     its ReviewInstructionBinding, and the engine, the ward, and freesided
 //     preflight must produce the same bytes and digest.
 //   - usage_claude.go: ExtractClaudeUsage parses Claude's transcript result
-//     envelope (provider code), shared by exec/claude and the ward's review
+//     envelope, or sums its assistant messages' usage when the transcript
+//     has none (provider code), shared by exec/claude and the ward's review
 //     sources.
 //   - materialize.go: Materializer reads stage inputs through the injected
 //     InputSource (I/O), because MaterializingStageDriver is the one
