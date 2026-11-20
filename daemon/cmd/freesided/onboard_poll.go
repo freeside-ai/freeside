@@ -77,12 +77,16 @@ func armInstallationPoll(
 // awaitInstallationPoll drives the scheduler until the durable poll
 // concludes: resolved condition_satisfied means the selected grant matched
 // and onboarding proceeds; expiry is the -install-wait bound, now carried
-// by the envelope itself so it holds across sessions.
+// by the envelope itself so it holds across sessions. While the poll is
+// armed, each tick runs removed, whose error ends the wait: the janitor
+// may remove the installation the intent waits for, and the poll alone
+// would then wait out the intent.
 func awaitInstallationPoll(
 	ctx context.Context,
 	st *store.Store,
 	sched *scheduler.Scheduler,
 	id domain.ScheduleID,
+	removed func(context.Context) error,
 ) error {
 	ticker := time.NewTicker(installPollInterval / 2)
 	defer ticker.Stop()
@@ -100,6 +104,9 @@ func awaitInstallationPoll(
 		}
 		switch schedule.Status {
 		case domain.ScheduleArmed:
+			if err := removed(ctx); err != nil {
+				return err
+			}
 		case domain.ScheduleResolved:
 			if schedule.Resolution.Reason == domain.ResolutionConditionSatisfied {
 				return nil
