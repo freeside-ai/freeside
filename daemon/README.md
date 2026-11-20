@@ -4491,14 +4491,11 @@ env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet l
 `-p=2` halves the compile, vet, and test-package parallelism Go runs on 4
 CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
-slows under reclaim. Freeside's `.freeside/verify.json` first runs its two
-history commands (Onboard Freeside), which the offline proof skips, then
-this command, then `bash scripts/check.sh docs`, then `env VACUUM=vacuum
-bash scripts/check.sh api lint digest policy` (Onboard Freeside says why
-not `compat`), then `check.sh scripts` with the same Go limits,
-because `trackercollect` runs `go build`, `test`, and `vet`, then `bash
-scripts/check.sh app generate`, then `bash scripts/check.sh app linux`.
-Measured on 2026-11-10 with this recipe on
+slows under reclaim. Freeside's `.freeside/verify.json` now runs this
+command as two, `daemon vet lint` and `daemon build test`, each with the
+same limits, and its `scripts` steps as three commands with them, because
+`trackercollect` runs `go build`, `test`, and `vet` (Onboard Freeside lists
+the order). Measured on 2026-11-10, before that split, with this recipe on
 `main` at `c40bf92b7`, in Freeside's mixed Go and Swift image
 (`-go-module-dir daemon -swift-package-dir app`), one container per step,
 each prepared as the proof prepares it:
@@ -4966,7 +4963,7 @@ which reads the commit's image inputs. When a merge still lands first, the
 refusal prints the review at the new head; run it at once.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
-  thirteen commands. Eight run in the project image. The first two are the
+  up to sixteen commands. Eleven run in the project image. The first two are the
   history commands, `bash scripts/verify-range-check.sh
   scripts/check-commit-messages.sh` and the same wrapper over
   `scripts/check-migration-history.sh`, each with `"history": true` (A
@@ -4974,9 +4971,12 @@ refusal prints the review at the new head; run it at once.
   first so a candidate that `required` would refuse on either check
   fails verification in seconds. They need a daemon at or after #3170,
   which added the field; an older daemon refuses the whole recipe. The
-  operator approves the new recipe digest before it runs. Then come the
-  four `daemon`, `docs`, `api`, and `scripts` commands sized above, then
-  `bash scripts/check.sh app generate` and
+  operator approves the new recipe digest before it runs. Then come
+  `check.sh scripts tier-a-paths credential-literals recipe-selectors`,
+  then `docs`, `api lint digest policy`, `daemon vet lint`,
+  `daemon build test`, `scripts vocabulary`, `scripts syntax shellcheck
+  suites skill-mirrors trackercollect` (the Go and scripts commands sized
+  above), then `bash scripts/check.sh app generate` and
   `bash scripts/check.sh app linux`. The `api` command names its steps,
   `lint digest policy`, and leaves out `compat`: the step needs `oasdiff`
   and the merge base's spec, and the project image has neither, so a bare
@@ -4995,6 +4995,22 @@ refusal prints the review at the new head; run it at once.
   without `.git` it compares the generated outputs with a snapshot it takes
   before regenerating, so it fails a schema change whose committed client is
   stale, which `api digest` misses when the digest constants were refreshed.
+  The first three commands always run. Every other command carries the
+  `paths` of the `select_component` call in `pull-request.yml` that runs
+  the same check, so it runs when CI would (A command can name the paths
+  that make it run, above). The `daemon` selector names the files outside
+  `daemon/` that daemon tests read: `api/openapi.yaml`, `prompts/`, and the
+  `check-agent-image.sh`, `check-commit-messages.sh`, and
+  `check-migration-history.sh` scripts. `run_all_on` holds the recipe itself,
+  `scripts/check.sh`, `.github/workflows/`, and the Go and Swift
+  dependency manifests (`daemon/go.mod`, `scripts/trackercollect/go.mod`,
+  and both `Package.resolved` files). `scripts/check-recipe-selectors.py`,
+  the `recipe-selectors` step that the `required` check runs on every pull
+  request, fails when a command's `paths` differ from its selector, so a
+  selector change must change the recipe in the same pull request. The
+  rules need a daemon at or after #3408. To adopt this recipe, update the
+  daemon, approve the new recipe digest (onboarding reports it as differing
+  from the admitted image's), and rebuild the project image.
 - **Toolchain:** `-go-module-dir daemon -swift-package-dir app`. The root
   has neither `go.mod` nor `Package.swift`, and the one image bakes both.
 - **Prerequisites:** the executor installed and proved on the daemon host

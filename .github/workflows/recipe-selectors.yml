@@ -1,0 +1,27 @@
+name: recipe selectors
+
+# Fails when a verification recipe command's "paths" in .freeside/verify.json
+# differ from the select_component list in pull-request.yml that runs the
+# same check (scripts/check-recipe-selectors.py). It runs on every PR, not
+# only when the scripts component is selected: a recipe edit selects no
+# component.
+
+on:
+  # Run on every PR through pull-request.yml and report through required.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recipe-selectors-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that the recipe's path rules match CI's selectors
+        run: bash scripts/check.sh scripts recipe-selectors
