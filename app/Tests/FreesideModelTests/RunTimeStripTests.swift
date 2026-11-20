@@ -156,6 +156,36 @@ import Testing
                 [(.other, 0, 2), (.agentWorking, 2, 18), (.other, 18, 21), (.agentWorking, 21, 25), (.other, 25, 30)]))
     }
 
+    /// A verification works from its start to its own result, as the
+    /// daemon's clocks count it (#3446); the writer's outcome on another
+    /// invocation doesn't end it.
+    @Test func aVerificationWorksFromItsStartToItsResult() {
+        let strip = Self.strip(
+            .active,
+            [
+                Self.milestone(.run_submitted, 0), Self.milestone(.invocation_started, 2),
+                Self.milestone(.execution_export_recorded, 18),
+                Self.milestone(.verification_started, 19, invocation: 9),
+                Self.milestone(.execution_outcome_recorded, 20),
+                Self.milestone(.verification_passed, 24, invocation: 9),
+            ], now: 30)
+        #expect(
+            Self.same(
+                Self.shape(strip),
+                [(.other, 0, 2), (.agentWorking, 2, 18), (.other, 18, 19), (.agentWorking, 19, 24), (.other, 24, 30)]))
+    }
+
+    @Test func aVerificationWithNoResultRunsToTheNextStart() {
+        let strip = Self.strip(
+            .active,
+            [
+                Self.milestone(.run_submitted, 0), Self.milestone(.verification_started, 5, invocation: 9),
+                Self.milestone(.invocation_started, 12, invocation: 2),
+                Self.milestone(.execution_export_recorded, 20, invocation: 2),
+            ], now: 25)
+        #expect(Self.same(Self.shape(strip), [(.other, 0, 5), (.agentWorking, 5, 20), (.other, 20, 25)]))
+    }
+
     @Test func anInvocationWithNoEndingRunsToTheNextInvocationsStart() {
         let strip = Self.strip(
             .finished,

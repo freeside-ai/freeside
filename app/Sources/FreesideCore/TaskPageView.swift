@@ -953,7 +953,8 @@ struct TaskPageView: View {
     /// or the Timeline. Then the lead line, the attempt and why it started,
     /// which ends as a Runs row does, in the same columns (#3455): the
     /// run's length, its start, and the chevron, the whole line opening
-    /// the run. Then an Agent row and, once a round exists, a Review row.
+    /// the run. Then an Agent row, a Round row while the run works an
+    /// external review's round, and, once a round exists, a Review row.
     /// Everything else about the run (its state chip, round facts, details,
     /// and the campaign's earlier attempts) is in run history: the head's
     /// chip already says its state and phase.
@@ -969,7 +970,7 @@ struct TaskPageView: View {
                 }
                 // Only with a row to hold, so an empty block adds no gap
                 // under the lead before the run has an agent.
-                if current.line != nil || current.showsReview {
+                if current.line != nil || current.externalRound != nil || current.showsReview {
                     VStack(alignment: .leading, spacing: 8) {
                         if let line = current.line {
                             currentRunRow("Agent") {
@@ -979,6 +980,10 @@ struct TaskPageView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             .accessibilityElement(children: .combine)
+                        }
+                        if let round = current.externalRound {
+                            currentRunRow("Round") { externalRoundValue(round) }
+                                .accessibilityElement(children: .combine)
                         }
                         if current.showsReview {
                             currentRunRow("Review") {
@@ -1179,7 +1184,36 @@ struct TaskPageView: View {
         }
     }
 
-    private static let currentRunRowLabels = ["Agent", "Review"]
+    private static let currentRunRowLabels = ["Agent", "Round", "Review"]
+
+    /// The Round row's value: the round, its step, and the time since the
+    /// re-entry opened it, then what opened it, dim. The elapsed time ticks
+    /// each minute unless a test or screenshot pins the clock.
+    @ViewBuilder
+    private func externalRoundValue(_ round: TaskTimelinePresentation.ExternalRound) -> some View {
+        let content = { (now: Date) in
+            VStack(alignment: .leading, spacing: 2) {
+                Text(
+                    [
+                        "\(round.round)", round.step?.rawValue,
+                        RunTimeStripView.duration(round.elapsed(now: now), locale: locale),
+                    ]
+                    .compactMap { $0 }.joined(separator: " · ")
+                )
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.ink)
+                Text(round.trigger)
+                    .font(FreesideFont.factLabel)
+                    .foregroundStyle(Color.inkDim)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        if pinnedNow == nil {
+            TimelineView(.periodic(from: .now, by: 60)) { context in content(context.date) }
+        } else {
+            content(now)
+        }
+    }
 
     /// What the task's Stop says, drawn only while there is a Stop state
     /// to state; Stop itself starts from the Task Actions menu.
@@ -2058,19 +2092,25 @@ enum TaskTimelinePresentation {
     /// The daemon records no stage starts, so they are read off its events
     /// (devlog/2026-10-11-1140-task-stage-timeline.md). Walking oldest to
     /// newest, a run's submission enters its role's stage and a review
-    /// request enters Review, and a verification result or a publication
-    /// milestone enters Verification. When that changes where the task
-    /// stands, the event's own row becomes the start point: one row with
-    /// the start marker, the stage first and the event's words after it
-    /// (`Review started · Round 1 requested`), at the event's time and with
-    /// its item link. A submission's words drop their own `started`
-    /// (`Implementation started · Attempt 1`). Verification's start
-    /// therefore carries the time of the first event that moved the
-    /// task there, which trails the real start by the daemon's own
-    /// verification (devlog/2026-10-23-0856-verification-start-point.md).
+    /// request enters Review, and a verification's start, a verification
+    /// result, or a publication milestone enters Verification. When that
+    /// changes where the task stands, the event's own row becomes the start
+    /// point: one row with the start marker, the stage first and the event's
+    /// words after it (`Review started · Round 1 requested`), at the event's
+    /// time and with its item link. A submission's words drop their own
+    /// `started` (`Implementation started · Attempt 1`). A run that records
+    /// `verification_started` starts Verification at that instant (#3446);
+    /// on an older run, Verification's start carries the time of the first
+    /// later event that moved the task there, which trails the real start
+    /// by the daemon's own verification
+    /// (devlog/2026-10-23-0856-verification-start-point.md).
     /// No other event moves the stage: an attempt's result can be recorded
     /// after the review of its work was requested, and must not read as a
     /// return to implementation.
+    ///
+    /// A writer's export reads as its work finishing and its import passing,
+    /// and a verification's result as its own row; neither counts as a pass
+    /// of the attempt.
     ///
     /// A remediation is a return to Implementation. `reviewRounds` holds
     /// each run's review rounds by run id; a round whose findings went to a
@@ -2172,6 +2212,15 @@ enum TaskTimelinePresentation {
                 // A run with no role has no stage to enter, and leaves the
                 // one before it: what follows is not known to continue it.
                 position = next
+            case (_, .execution_export_recorded):
+                if let invocation = milestone?.invocation_id, reviewInvocations.contains(invocation) { continue }
+                if remediated(milestone) != nil {
+                    oldestFirst.append(
+                        TimelineRail.Row(
+                            kind: .event, label: "Remediation work finished · Import passed",
+                            recordedAt: event.recorded_at))
+                    continue
+                }
             case (_, .terminal_recorded):
                 if let milestone, remediated(milestone) != nil {
                     oldestFirst.append(
@@ -2192,7 +2241,8 @@ enum TaskTimelinePresentation {
                 let next = StagePosition(stage: .review, campaignID: source?.campaignID)
                 if next != position { start = .review }
                 position = next
-            case (.verification_recorded, _), (_, .publication_ready), (_, .publication_blocked):
+            case (.verification_recorded, _), (_, .verification_started), (_, .publication_ready),
+                (_, .publication_blocked):
                 let next = StagePosition(stage: .verification, campaignID: source?.campaignID)
                 if next != position { start = .verification }
                 position = next
@@ -2312,6 +2362,96 @@ enum TaskTimelinePresentation {
         /// Whether its Review draws: an implementation run whose timeline
         /// holds a round.
         let showsReview: Bool
+        /// The external-review round the run is working, if it is in one.
+        let externalRound: ExternalRound?
+    }
+
+    /// An external-review round in progress on the current run (#3446): the
+    /// round, what opened it, the step it is on, and when it opened, from
+    /// which the page ticks its elapsed time.
+    struct ExternalRound: Equatable {
+        enum Step: String {
+            case verifying = "Verifying"
+            case reviewing = "Reviewing"
+            case remediating = "Remediating"
+            case publishing = "Publishing"
+        }
+
+        let round: Int
+        /// `External review by @login on #N`, as the rail names the re-entry.
+        let trigger: String
+        /// The newest step not yet finished; nil between steps.
+        let step: Step?
+        /// When the re-entry opened the round.
+        let since: Date
+        /// The round's newest recorded instant, so its elapsed time, as a
+        /// run line's, never ends before what was recorded, whatever the
+        /// device clock says.
+        let latest: Date
+
+        func elapsed(now: Date) -> TimeInterval { max(now, latest).timeIntervalSince(since) }
+    }
+
+    /// The round Current Run shows while the run's newest round-opening
+    /// event is an external review's re-entry and no publication milestone
+    /// of the run is newer. A review request for the re-entry's own round
+    /// is that round's review, not a new round.
+    ///
+    /// The step is the newest of the unfinished ones since the re-entry:
+    /// Verifying, a verification started without its result; Reviewing, a
+    /// round pending or running; Remediating, a remediator started without
+    /// its terminal; Publishing, a verification passed, since no
+    /// publication milestone followed it. `rounds` are the run's review
+    /// rounds from its own timeline, empty while it loads.
+    static func externalRound(
+        runID: String, timeline: Components.Schemas.TaskTimeline, rounds: [Components.Schemas.RunReviewRound]
+    ) -> ExternalRound? {
+        // Newest first, the run's own events.
+        let events = events(timeline).filter { ($0.run_id ?? $0.milestone?.value1.run_id) == runID }
+        guard
+            let opening = events.firstIndex(where: {
+                $0.kind == .external_review_reentered || $0.kind == .review_requested
+            }),
+            events[opening].kind == .external_review_reentered,
+            let external = events[opening].external_review?.value1, let number = events[opening].pr_number
+        else { return nil }
+        let since = events[opening].recorded_at
+        let newer = events[..<opening]
+        let milestones = newer.compactMap { $0.milestone?.value1 }
+        if newer.contains(where: { $0.kind == .review_requested && $0.review?.value1.round != external.round })
+            || milestones.contains(where: { $0.kind == .publication_ready || $0.kind == .publication_blocked })
+        {
+            return nil
+        }
+        func ended(_ invocation: String?, by kinds: Set<Components.Schemas.RunMilestoneKind>) -> Bool {
+            milestones.contains { $0.invocation_id == invocation && kinds.contains($0.kind) }
+        }
+        let remediators = Set(rounds.compactMap { $0.remediation?.value1.invocation_id })
+        var unfinished: [(step: ExternalRound.Step, at: Date)] = milestones.compactMap { milestone in
+            switch milestone.kind {
+            case .verification_started
+            where !ended(milestone.invocation_id, by: [.verification_passed, .verification_failed]):
+                return (.verifying, milestone.recorded_at)
+            case .invocation_started
+            where milestone.invocation_id.map(remediators.contains) == true
+                && !ended(milestone.invocation_id, by: [.terminal_recorded]):
+                return (.remediating, milestone.recorded_at)
+            case .verification_passed:
+                return (.publishing, milestone.recorded_at)
+            default:
+                return nil
+            }
+        }
+        unfinished += rounds.compactMap { round in
+            guard round.state == .pending || round.state == .running, let requested = round.requested_at,
+                requested >= since
+            else { return nil }
+            return (.reviewing, requested)
+        }
+        return ExternalRound(
+            round: external.round, trigger: "External review by @\(external.reviewer_login) on #\(number)",
+            step: unfinished.max { $0.at < $1.at }?.step, since: since,
+            latest: (newer.map(\.recorded_at) + unfinished.map(\.at)).max().map { max($0, since) } ?? since)
     }
 
     /// Current Run for an active task whose loaded history holds a current
@@ -2327,7 +2467,9 @@ enum TaskTimelinePresentation {
         return CurrentRun(
             run: run,
             line: currentRunLine(task, run: run, runTimeline: runTimeline),
-            showsReview: reviews && runTimeline?.review?.value1.rounds.isEmpty == false)
+            showsReview: reviews && runTimeline?.review?.value1.rounds.isEmpty == false,
+            externalRound: externalRound(
+                runID: run.run_id, timeline: timeline, rounds: runTimeline?.review?.value1.rounds ?? []))
     }
 
     /// Current Run's mono line, in the run page's grammar: the harness,
@@ -2691,10 +2833,12 @@ enum TaskTimelinePresentation {
         }
     }
 
-    /// A failed review round, a failed stop, or a work result the daemon
-    /// recorded as failed: the entries whose own words say so.
+    /// A failed review round, a failed stop, a failed verification, or a
+    /// work result the daemon recorded as failed: the entries whose own
+    /// words say so.
     private static func recordsFailure(_ event: Components.Schemas.TaskEvent) -> Bool {
         if event.kind == .review_failed || event.kind == .stop_failed { return true }
+        if event.milestone?.value1.kind == .verification_failed { return true }
         guard let milestone = event.milestone?.value1, milestone.kind == .terminal_recorded else { return false }
         return terminalWord(milestone) == Components.Schemas.ObservedInvocationStatus.failed.rawValue
     }
@@ -2722,14 +2866,24 @@ enum TaskTimelinePresentation {
         startsStage: Bool = false
     ) -> String? {
         let attempt = run?.role == nil ? nil : run?.attempt_number
+        switch event.milestone?.value1.kind {
+        case .verification_started?: return startsStage ? nil : "Verification started"
+        case .verification_passed?: return "Verification passed"
+        case .verification_failed?: return "Verification failed"
+        default: break
+        }
         if let milestone = event.milestone?.value1, run?.role?.value1 == .specification {
             if milestone.kind == .run_submitted { return startsStage ? nil : "Specification run started" }
+            if milestone.kind == .execution_export_recorded { return "Specification run work finished · Import passed" }
             if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
                 return "Specification run" + (pass > 1 ? ", pass \(pass)" : "") + " \(word)"
             }
         }
         if let milestone = event.milestone?.value1, let attempt {
             if milestone.kind == .run_submitted { return "Attempt \(attempt)" + (startsStage ? "" : " started") }
+            if milestone.kind == .execution_export_recorded {
+                return "Attempt \(attempt) work finished · Import passed"
+            }
             if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
                 return "Attempt \(attempt)" + (pass > 1 ? ", pass \(pass)" : "") + " \(word)"
             }

@@ -513,7 +513,7 @@ import Testing
         let timeline = try #require(
             RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
         let milestones = timeline.milestones
-        #expect(milestones.count == 6)
+        #expect(milestones.count == 8)
 
         let rows = RunHistoryPresentation.rows(milestones: milestones, context: { _ in nil })
 

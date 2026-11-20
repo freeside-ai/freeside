@@ -250,6 +250,44 @@ import Testing
         #expect(RunDisplay.title(run) == "Implementation")
     }
 
+    /// A verification milestone places the run in Verification until its
+    /// next writer starts (#3446).
+    @Test func verificationMilestonesPlaceTheRunInVerification() {
+        var run = RunFixtures.defaultRuns()[0].run
+        run.hold_reason = nil
+        run.outcome = .pending
+        for milestone in [Components.Schemas.RunMilestoneKind.verification_started, .verification_passed] {
+            run.latest_milestone = .init(value1: milestone)
+            #expect(RunDisplay.title(run) == "Verification · Round 1")
+        }
+        run.latest_milestone = .init(value1: .verification_failed)
+        #expect(RunDisplay.workflowPhase(run)?.stage == .verification)
+        run.latest_milestone = .init(value1: .invocation_started)
+        #expect(RunDisplay.workflowPhase(run)?.stage == .implementation)
+    }
+
+    /// A round in progress requested after the newest verification result
+    /// reads as Review; a finished round, or one the result follows, doesn't.
+    @Test func anOpenReviewRoundAfterTheNewestVerificationResultReadsAsReview() {
+        let base = Date(timeIntervalSince1970: 1_786_502_400)
+        let passed = Components.Schemas.RunMilestone(
+            run_id: "run-1", kind: .verification_passed, invocation_id: "verify-1", recorded_at: base)
+        let after = RunFixtures.reviewRound(.running, round: 2, requestedAt: base.addingTimeInterval(60))
+        let before = RunFixtures.reviewRound(.pending, round: 2, requestedAt: base.addingTimeInterval(-60))
+        let done = RunFixtures.reviewRound(.completed, round: 2, requestedAt: base.addingTimeInterval(60))
+
+        #expect(RunDisplay.openReviewRound([done, after], milestones: [passed]) == 2)
+        #expect(RunDisplay.openReviewRound([before], milestones: [passed]) == nil)
+        #expect(RunDisplay.openReviewRound([done], milestones: [passed]) == nil)
+        // A run that recorded no verification result: any round in progress.
+        #expect(RunDisplay.openReviewRound([before], milestones: []) == 2)
+
+        let run = RunFixtures.defaultRuns()[0].run
+        #expect(
+            RunDisplay.stageHeading(run, openReviewRound: 2).map { "\($0.label) · \($0.round ?? "")" }
+                == "Review · Round 2")
+    }
+
     @Test func nonProductionStagesKeepTheirRecordedPosition() {
         var run = RunFixtures.defaultRuns()[0].run
         run.stages[0].name = "publication"

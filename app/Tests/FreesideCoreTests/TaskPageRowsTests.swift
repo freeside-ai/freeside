@@ -359,6 +359,105 @@ import Testing
             TaskTimelinePresentation.newestReviewRound(TaskHistoryFixtures.externallyReviewed(requested: false)) == 2)
     }
 
+    /// A recorded verification start moves the rail to Verification at its
+    /// own instant; the writer's export and the verification's results
+    /// draw their own rows and count as no pass (#3446).
+    @Test func verificationMilestonesDrawTheirOwnRows() {
+        let run = "history-implementation-1"
+        let instant = TaskHistoryFixtures.instant
+        func milestone(
+            _ kind: Components.Schemas.RunMilestoneKind, _ invocation: String, _ minute: Int
+        ) -> Components.Schemas.TaskEvent {
+            let milestone = Components.Schemas.RunMilestone(
+                run_id: run, kind: kind, invocation_id: invocation,
+                recorded_at: instant.addingTimeInterval(TimeInterval(minute * 60)))
+            return .init(
+                milestone: .init(value1: milestone), kind: .run_milestone, recorded_at: milestone.recorded_at,
+                run_id: run)
+        }
+        var timeline = TaskHistoryFixtures.externalRoundVerifying()
+        let published = lines(TaskHistoryFixtures.externallyReviewed(requested: false)).map {
+            $0.replacingOccurrences(of: " *", with: "")
+        }
+        #expect(lines(timeline) == ["> Verification started *"] + published)
+
+        timeline.events.insert(milestone(.verification_failed, "verify-\(run)-2", -6), at: 0)
+        timeline.events.insert(milestone(.execution_export_recorded, "inv-\(run)-2", -3), at: 0)
+        timeline.events.insert(milestone(.verification_started, "verify-\(run)-3", -2), at: 0)
+        timeline.events.insert(milestone(.verification_passed, "verify-\(run)-3", -1), at: 0)
+        #expect(
+            lines(timeline)
+                == [
+                    "Verification passed *", "Verification started", "Attempt 1 work finished · Import passed",
+                    "! Verification failed", "> Verification started",
+                ] + published)
+
+        // A remediator's export reads as the remediation's.
+        var round = RunFixtures.reviewRound(.completed, round: 2, findings: true)
+        round.remediation = .init(value1: .init(invocation_id: "inv-\(run)-2", finding_ids: ["finding-1"]))
+        #expect(
+            lines(timeline, reviewRounds: [run: [round]]).contains("Remediation work finished · Import passed"))
+    }
+
+    /// Current Run's round entry: what opened the round, the newest step
+    /// not yet finished, and when the round opened; none once the run
+    /// publishes or a later round opens (#3446).
+    @Test func anExternalRoundNamesItsTriggerAndCurrentStep() throws {
+        let run = "history-implementation-1"
+        let instant = TaskHistoryFixtures.instant
+        func at(_ minute: Int) -> Date { instant.addingTimeInterval(TimeInterval(minute * 60)) }
+        func milestone(
+            _ kind: Components.Schemas.RunMilestoneKind, _ invocation: String, _ minute: Int
+        ) -> Components.Schemas.TaskEvent {
+            let milestone = Components.Schemas.RunMilestone(
+                run_id: run, kind: kind, invocation_id: invocation, recorded_at: at(minute))
+            return .init(
+                milestone: .init(value1: milestone), kind: .run_milestone, recorded_at: milestone.recorded_at,
+                run_id: run)
+        }
+        func round(
+            _ timeline: Components.Schemas.TaskTimeline, _ rounds: [Components.Schemas.RunReviewRound] = []
+        )
+            -> TaskTimelinePresentation.ExternalRound?
+        {
+            TaskTimelinePresentation.externalRound(runID: run, timeline: timeline, rounds: rounds)
+        }
+
+        #expect(round(TaskHistoryFixtures.history(.published)) == nil)
+        #expect(
+            round(TaskHistoryFixtures.externallyReviewed(requested: false))
+                == .init(
+                    round: 2, trigger: "External review by @maintainer on #110", step: nil, since: at(-8),
+                    latest: at(-8)))
+        var timeline = TaskHistoryFixtures.externalRoundVerifying()
+        let verifying = try #require(round(timeline))
+        #expect(verifying.step == .verifying)
+        // A device clock behind the round's newest record still counts to it.
+        #expect(verifying.elapsed(now: at(-20)) == 60)
+        #expect(verifying.elapsed(now: at(0)) == 8 * 60)
+
+        timeline.events.insert(milestone(.verification_passed, "verify-\(run)-2", -6), at: 0)
+        #expect(try #require(round(timeline)).step == .publishing)
+        // The round's own review request is its review, not a new round.
+        let reviewing = RunFixtures.reviewRound(.running, round: 2, requestedAt: at(-5))
+        #expect(try #require(round(timeline, [reviewing])).step == .reviewing)
+        var remediating = RunFixtures.reviewRound(.completed, round: 2, findings: true, requestedAt: at(-5))
+        remediating.remediation = .init(
+            value1: .init(invocation_id: "inv-\(run)-2", finding_ids: ["finding-1"], decided_at: at(-3)))
+        timeline.events.insert(milestone(.invocation_started, "inv-\(run)-2", -2), at: 0)
+        #expect(try #require(round(timeline, [remediating])).step == .remediating)
+
+        var requested = timeline
+        requested.events.insert(
+            .init(
+                review: .init(value1: .init(invocation_id: "review-\(run)-3", round: 3, head_sha: "a", base_sha: "a")),
+                kind: .review_requested, recorded_at: at(-1), run_id: run),
+            at: 0)
+        #expect(round(requested) == nil)
+        timeline.events.insert(milestone(.publication_ready, "inv-\(run)-1", -1), at: 0)
+        #expect(round(timeline) == nil)
+    }
+
     @Test func aTaskLineNamesTheActorOnlyWhenItIsTheRouter() {
         // Only a replaced agent takes the arrow: the router's fallback never
         // ran the agent it passed over. No line event starts a stage.

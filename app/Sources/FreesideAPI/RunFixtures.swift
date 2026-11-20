@@ -681,6 +681,10 @@ public enum RunFixtures {
             milestone(.invocation_admitted, runID: activeRunID, minute: 1),
             milestone(.invocation_started, runID: activeRunID, minute: 2),
             milestone(.execution_export_recorded, runID: activeRunID, minute: 18),
+            // The first attempt's verification failed, so attempt 2 started
+            // (#3446).
+            milestone(.verification_started, runID: activeRunID, invocationID: "verify-\(activeRunID)-1", minute: 18),
+            milestone(.verification_failed, runID: activeRunID, invocationID: "verify-\(activeRunID)-1", minute: 19),
             milestone(.invocation_admitted, runID: activeRunID, attempt: 2, minute: 20),
             milestone(.invocation_started, runID: activeRunID, attempt: 2, minute: 21),
         ]
@@ -898,6 +902,7 @@ public enum RunFixtures {
         _ kind: Components.Schemas.RunMilestoneKind,
         runID: String,
         attempt: Int = 1,
+        invocationID: String? = nil,
         minute: Int
     ) -> Components.Schemas.RunMilestone {
         let terminal: Components.Schemas.RunMilestone.terminalPayload? =
@@ -905,7 +910,7 @@ public enum RunFixtures {
         return .init(
             run_id: runID,
             kind: kind,
-            invocation_id: "inv-\(runID)-\(attempt)",
+            invocation_id: invocationID ?? "inv-\(runID)-\(attempt)",
             terminal: terminal,
             recorded_at: date(TimeInterval(minute * 60)))
     }

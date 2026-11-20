@@ -17,15 +17,16 @@ package enum RunTimeStrip {
     /// In precedence order, which is also the legend's order.
     package enum Kind: CaseIterable, Equatable, Sendable {
         /// An agent invocation, from its start to its own export, outcome,
-        /// or terminal milestone.
+        /// or terminal milestone, or a verification, from its start to its
+        /// result (`RunWorkSpan`).
         case agentWorking
         /// An attention item about the run, open or later closed, while no
         /// agent works.
         case waitingOnYou
         /// A served hold, while no agent works and no card waits.
         case held
-        /// Everything else: queueing before admission, verification,
-        /// publication.
+        /// Everything else: queueing before admission, publication, and
+        /// verification on a run that recorded no `verification_started`.
         case other
     }
 
@@ -63,11 +64,6 @@ package enum RunTimeStrip {
             segments.filter { $0.kind == kind }.reduce(0) { $0 + $1.duration }
         }
     }
-
-    /// The milestone kinds that end an invocation's working span.
-    private static let invocationEndings: Set<Components.Schemas.RunMilestoneKind> = [
-        .execution_export_recorded, .execution_outcome_recorded, .terminal_recorded,
-    ]
 
     /// The run's strip, or nil when the run has no milestones or no elapsed
     /// time.
@@ -179,17 +175,12 @@ package enum RunTimeStrip {
         let end: Date
     }
 
-    /// Each `invocation_started` to the first later ending milestone on the
-    /// same invocation; with none, to the next invocation's start, else to
-    /// the bar's end.
+    /// Each span `RunWorkSpan` opens, to its ending, else to the bar's end.
     private static func agentSpans(_ milestones: [Components.Schemas.RunMilestone], barEnd: Date) -> [Span] {
         milestones.indices.compactMap { index in
-            let started = milestones[index]
-            guard started.kind == .invocation_started else { return nil }
-            let ending =
-                ownEnding(of: index, in: milestones)
-                ?? milestones[(index + 1)...].first { $0.kind == .invocation_started }
-            return Span(start: started.recorded_at, end: ending?.recorded_at ?? barEnd)
+            guard RunWorkSpan.startsWork(milestones[index].kind) else { return nil }
+            let ending = RunWorkSpan.ending(of: index, in: milestones)
+            return Span(start: milestones[index].recorded_at, end: ending?.recorded_at ?? barEnd)
         }
     }
 
@@ -214,21 +205,9 @@ package enum RunTimeStrip {
             let index = milestones.firstIndex(where: {
                 $0.kind == .invocation_started && $0.invocation_id == invocationID
             }),
-            let ending = ownEnding(of: index, in: milestones)
+            let ending = RunWorkSpan.ownEnding(of: index, in: milestones)
         else { return nil }
         return ending.recorded_at.timeIntervalSince(milestones[index].recorded_at)
-    }
-
-    /// The first ending milestone after `index` on the invocation that
-    /// `milestones[index]` started.
-    private static func ownEnding(
-        of index: Int, in milestones: [Components.Schemas.RunMilestone]
-    ) -> Components.Schemas.RunMilestone? {
-        milestones[index].invocation_id.flatMap { invocation in
-            milestones[(index + 1)...].first {
-                $0.invocation_id == invocation && invocationEndings.contains($0.kind)
-            }
-        }
     }
 
     /// Each item about the run from its creation to its conclusion (or its

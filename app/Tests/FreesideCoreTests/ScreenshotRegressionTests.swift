@@ -5502,6 +5502,12 @@
                         work_item_artifact_digest: .init(value1: "sha256:" + String(repeating: "e", count: 64)))))
             working.task.issue = nil
             working.task.task_lines = lines
+            // An external review's round 2 while it verifies: Current Run
+            // shows the round, and the rail starts Verification (#3446).
+            var externalRound = TaskStageFixtures.page(TaskHistoryFixtures.externalRoundVerifying())
+            externalRound.task.task_lines = lines
+            externalRound.runs[0].run.outcome = .pending
+            externalRound.runs[0].run.latest_milestone = .init(value1: .verification_started)
             var finished = TaskStageFixtures.page(.review)
             finished.task.task_lines = lines
             finished.task.lifecycle = .finished
@@ -5537,6 +5543,7 @@
                 ("task-page-look-alike", lookAlike, Optional(question), false, [twin]),
                 ("task-page-several", several, Optional(question), false, []),
                 ("task-page-working", working, nil, false, []),
+                ("task-page-external-round", externalRound, nil, false, []),
                 ("task-page-finished", finished, nil, false, []),
             ] {
                 let (coordinator, task) = try TaskStageFixtures.coordinator(
