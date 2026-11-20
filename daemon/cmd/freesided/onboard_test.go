@@ -639,3 +639,33 @@ func TestTrustedInstallationChecksEveryLocalRegistration(t *testing.T) {
 		})
 	}
 }
+
+// TestMovedTipCommandReviewsTheTip: the next command after a moved tip keeps
+// every other argument, names the tip as -commit, and drops -approve, in
+// either flag form.
+func TestMovedTipCommandReviewsTheTip(t *testing.T) {
+	t.Parallel()
+	const tip = "2223456789012345678901234567890123456789"
+	for name, args := range map[string][]string{
+		"separate values": {
+			"example/repo", "-db", "/root/freeside.db", "-commit", "0123", "-approve", "sha256:old",
+			"-resume", "-dns", "1.1.1.1",
+		},
+		"joined values": {
+			"example/repo", "-db", "/root/freeside.db", "--commit=0123", "-approve=sha256:old",
+			"-resume", "-dns", "1.1.1.1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := movedTipCommand(args, tip)
+			want := "freesided onboard example/repo -db /root/freeside.db -commit " + tip + " -resume -dns 1.1.1.1"
+			if got != want {
+				t.Fatalf("movedTipCommand = %q, want %q", got, want)
+			}
+		})
+	}
+	if got := movedTipCommand([]string{"-source", "/a b/it's"}, tip); got != `freesided onboard -source '/a b/it'\''s'` {
+		t.Fatalf("quoted command = %q", got)
+	}
+}

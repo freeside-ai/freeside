@@ -392,6 +392,7 @@ func runOnboardCommand(
 		result, runErr := (operations.Onboard{
 			Store: st, Builder: builder, Auditor: auditor, Authority: authority,
 			Documents: authority, Gate: gate, Now: time.Now,
+			BaseInputs: onboardBaseInputs(cfg.GitPath, cfg.SourceDir),
 		}).Run(ctx, operations.OnboardRequest{
 			Repository: cfg.Repository, RepositoryID: cfg.RepositoryID,
 			RegistrationID: cfg.RegistrationID,
@@ -408,8 +409,20 @@ func runOnboardCommand(
 				SwiftPackageDir: cfg.SwiftPackageDir,
 			},
 		})
+		var moved *operations.MovedTipError
+		if errors.As(runErr, &moved) {
+			return fmt.Errorf("%w; review the tip with: %s", runErr, movedTipCommand(args, moved.Tip))
+		}
 		if runErr != nil {
 			return runErr
+		}
+		for _, change := range result.Changes {
+			if change.Reason != "" {
+				_, _ = fmt.Fprintf(stderr, "onboard: %s\n", change.Reason)
+				continue
+			}
+			_, _ = fmt.Fprintf(stderr, "onboard: changed %s: %s -> %s\n",
+				change.Field, change.Approved, change.Proposed)
 		}
 		if err := json.NewEncoder(stdout).Encode(result); err != nil {
 			return fmt.Errorf("write onboarding result: %w", err)
@@ -430,6 +443,56 @@ func runOnboardCommand(
 	return withDurableInstallationPoll(
 		ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.RegistrationID, runOnboard,
 	)
+}
+
+// onboardBaseInputs reads a commit's project-image inputs from the -source
+// checkout, the one the recipe is detected from. Without one, no admitted
+// image is reused and approval builds as it always did.
+func onboardBaseInputs(gitPath, sourceDir string) operations.BaseInputsReader {
+	return func(
+		ctx context.Context, commitSHA string, layout domain.ProjectImageInputLayout,
+	) (domain.ProjectImageBaseInputs, error) {
+		if sourceDir == "" {
+			return domain.ProjectImageBaseInputs{}, errors.New("no -source checkout to read the commit from")
+		}
+		return projectimage.ObserveBaseInputs(ctx, gitPath, sourceDir, commitSHA, layout)
+	}
+}
+
+// movedTipCommand is the review to run when the base ref's tip moved past
+// -commit: the same arguments with -commit naming the tip and no -approve,
+// since the earlier approval digest binds the old commit. A review at the tip
+// carries the approval forward when nothing it trusts changed.
+func movedTipCommand(args []string, tip string) string {
+	command := []string{"freesided", "onboard"}
+	for i := 0; i < len(args); i++ {
+		name, _, hasValue := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
+		if !strings.HasPrefix(args[i], "-") || (name != "commit" && name != "approve") {
+			command = append(command, args[i])
+			continue
+		}
+		if !hasValue {
+			// The flag package's -flag value form: the next argument is the value.
+			i++
+		}
+		if name == "commit" {
+			command = append(command, "-commit", tip)
+		}
+	}
+	quoted := make([]string, len(command))
+	for i, arg := range command {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// shellQuote leaves a word of only safe characters bare and single-quotes
+// anything else.
+func shellQuote(arg string) string {
+	if arg != "" && strings.Trim(arg, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:=@,+%") == "" {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
 // onboardPolicy is the trust policy the operator proposes for review. The

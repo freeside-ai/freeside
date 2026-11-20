@@ -617,7 +617,11 @@ one; it resumes where it stopped. In order:
    onboard ... -approve <approval_digest>` command. Read the review in
    `<root>/daemon/onboard-review.json`, then run that command yourself; it
    writes `<root>/daemon/onboard-approved.json`. The approval stays the
-   operator's: the script never passes `-approve`.
+   operator's: the script never passes `-approve`. A re-review that changes
+   nothing the active approval trusts, such as one after a source-only
+   merge moved the base, completes without the approval command:
+   `freesided onboard` carries the approval forward, and the script writes
+   its output to `onboard-approved.json` and goes on.
 4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
    the approving run, applies the pass's routing and pool limits, runs
    `freesided probe-lineup -root <root>`
@@ -640,7 +644,8 @@ on a fresh root: give each counted pass a new `<name>`. Reruns also keep the
 root current on their own: one after an enrollment (such as `freesided
 enroll-codex`) starts the deputy again to re-adopt the tree, one after the
 review configuration digest or `repository.base_sha` moves runs the
-onboarding review again and stops for its approval, and one after a newer
+onboarding review again and stops for its approval unless that review
+carried the approval forward, and one after a newer
 approval pins that approval's image and recipe. A setup start waits as long
 as the deputy's log keeps growing and gives up only once it has stayed
 still for 900 s. Exit 2 is a refusal

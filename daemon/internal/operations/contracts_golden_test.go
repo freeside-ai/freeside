@@ -135,6 +135,14 @@ func TestOperationalContractGoldens(t *testing.T) {
 			name: "onboard-review-required",
 			value: operations.OnboardResult{
 				Status: "review_required", ApprovalDigest: approvalDigest,
+				Changes: []operations.OnboardChange{
+					{
+						Field:    "workflow_audit_digest",
+						Approved: json.RawMessage(`"sha256:` + strings.Repeat("8", 64) + `"`),
+						Proposed: json.RawMessage(`"` + string(profile.WorkflowAuditDigest) + `"`),
+					},
+					{Reason: "the admitted image does not serve the commit: package-lock.json differs"},
+				},
 				Profile: profile, Review: review,
 				Installation: installation, ImageRequest: imageRequest,
 				OperatingMode:  domain.ModeAttendedDev,
@@ -145,6 +153,15 @@ func TestOperationalContractGoldens(t *testing.T) {
 			name: "onboard-complete",
 			value: operations.OnboardResult{
 				Status: "complete", ApprovalDigest: approvalDigest,
+				Profile: profile, Review: review,
+				Installation: installation, ImageRequest: imageRequest, ProjectImage: &image,
+				OperatingMode: domain.ModeAttendedDev, IsolationClass: "process_local",
+			},
+		},
+		{
+			name: "onboard-carried",
+			value: operations.OnboardResult{
+				Status: "complete", ApprovalDigest: approvalDigest, Carried: true,
 				Profile: profile, Review: review,
 				Installation: installation, ImageRequest: imageRequest, ProjectImage: &image,
 				OperatingMode: domain.ModeAttendedDev, IsolationClass: "process_local",

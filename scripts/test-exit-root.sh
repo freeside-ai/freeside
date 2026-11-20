@@ -21,7 +21,8 @@
 # The cases cover the settings rendering from the fixture template (every
 # fixture-table value and the machine file, nothing else), the tree commit on
 # its own branch and a later one against a checkout whose policy files
-# differ, the stop at the onboarding approval and the resume after it, the
+# differ, the stop at the onboarding approval and the resume after it, a
+# review that carries the approval forward with no stop, the
 # installation-intent stop, the reviewer-enrollment stop before the first
 # start and the resume once the store exists, the rerun on a new build or a
 # new enrollment, the serve wait, the re-onboarding after a moved base or
@@ -297,6 +298,10 @@ onboard)
     printf '%s\n' "$REVIEW_DIGEST" >"$(dirname "$db")/fake-trust"
     jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
       '{status: "complete", project_image: {image_ref: $i, recipe_digest: $r}}'
+  elif [[ "${FAKE_ONBOARD_MODE:-}" == carry ]]; then
+    # Nothing the active approval trusts changed: the review completes.
+    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
+      '{status: "complete", carried: true, project_image: {image_ref: $i, recipe_digest: $r}}'
   elif [[ "${FAKE_ONBOARD_MODE:-}" == pending ]] && ! printf '%s\n' "$@" | grep -qx -- -resume; then
     jq -n '{status: "installation_pending", installation_url: "https://github.com/apps/fake/installations/new"}'
   else
@@ -793,6 +798,28 @@ assert_rc 3
 assert_not_exists "$CASE_DIR/onboard-4.args"
 assert_eq "$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")" "$first_approval" 'stored approval command'
 MOVES_DIR=$CASE_DIR
+
+begin_case "a moved base whose review carries the approval forward goes on without an approval"
+TPL=$TMP/carry-template
+cp -R "$REPO/scripts/exit-root/passes/fixture" "$TPL"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 3
+approve
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 0
+jq --arg b "$NEW_BASE" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
+mv "$CASE_DIR/t.json" "$TPL/settings.json"
+FAKE_ONBOARD_MODE=carry FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 \
+  run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 0
+assert_contains 'carried the active approval forward'
+if grep -q '^approval=' "$CASE_DIR/stdout"; then report_failure "a carried review printed an approval"; else ok; fi
+# onboard-1 is the first review and onboard-2 the operator's approval.
+assert_line "$CASE_DIR/onboard-3.args" "$NEW_BASE"
+if grep -qx -- -approve "$CASE_DIR/onboard-3.args"; then report_failure "the script itself passed -approve"; else ok; fi
+assert_eq "$(jq -r .status "$ROOTS/carry/daemon/onboard-approved.json")" complete 'carried review is the approval'
+assert_eq "$(jq -r .images.agent "$ROOTS/carry/daemon/settings.json")" "$FAKE_IMAGE2" 'image from the carried review'
+assert_eq "$(jq -r .onboarded.base_sha "$ROOTS/carry/exit-root.json")" "$NEW_BASE" 'carried review bound the new base'
 
 begin_case "an approval that names a new image is pinned though prelaunch passes on the old one"
 CASE_DIR=$MOVES_DIR FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 approve

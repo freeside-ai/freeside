@@ -114,9 +114,16 @@ type ProjectImageReview struct {
 
 // OnboardResult is either a review-required projection or a completed,
 // activated profile plus its durable project image.
+//
+// Carried marks a review pass that completed without an approval because
+// nothing the active approval trusts changed (Onboard.Run). Changes lists,
+// on a review_required result for a repository with an active profile, what
+// differs from that approval.
 type OnboardResult struct {
 	Status         string                        `json:"status"`
 	ApprovalDigest domain.Digest                 `json:"approval_digest"`
+	Carried        bool                          `json:"carried,omitempty"`
+	Changes        []OnboardChange               `json:"changes,omitempty"`
 	Profile        domain.AutomationTrustProfile `json:"profile"`
 	Review         store.WorkflowAuditReview     `json:"review"`
 	Installation   InstallationReview            `json:"installation"`
@@ -125,6 +132,38 @@ type OnboardResult struct {
 	OperatingMode  domain.OperatingMode          `json:"operating_mode"`
 	IsolationClass string                        `json:"isolation_class"`
 }
+
+// OnboardChange is one reason a review cannot carry the active approval
+// forward. A field change names a top-level profile field, or
+// image.recipe_digest or image.base_image_ref, with the approved and proposed
+// JSON values; a reason change says in prose why the admitted image or the
+// installation needs the owner.
+type OnboardChange struct {
+	Field    string          `json:"field,omitempty"`
+	Approved json.RawMessage `json:"approved,omitempty"`
+	Proposed json.RawMessage `json:"proposed,omitempty"`
+	Reason   string          `json:"reason,omitempty"`
+}
+
+// MovedTipError reports that the live base-ref tip, which the fresh workflow
+// audit covers, is not the requested commit. Onboarding audits only the live
+// tip, so the caller reruns the review at Tip.
+type MovedTipError struct {
+	Tip    string
+	Commit string
+}
+
+func (e *MovedTipError) Error() string {
+	return fmt.Sprintf(
+		"onboard: the base ref's live tip is %s, not -commit %s; the workflow audit covers only the live tip",
+		e.Tip, e.Commit)
+}
+
+// BaseInputsReader reads, from one exact commit, the inputs a project image
+// of layout records (projectimage.ObserveBaseInputs).
+type BaseInputsReader func(
+	ctx context.Context, commitSHA string, layout domain.ProjectImageInputLayout,
+) (domain.ProjectImageBaseInputs, error)
 
 // Onboard composes a fresh workflow audit, owner policy, and the reusable
 // project-image builder. It deliberately carries no second audit or image
@@ -136,16 +175,29 @@ type Onboard struct {
 	Authority publish.InstallationAuthoritySource
 	Documents AuthorityDocumentStore
 	Gate      InstallationGate
-	Now       func() time.Time
+	// BaseInputs decides, with the admitted image's record, whether that
+	// image serves the requested commit without a build.
+	BaseInputs BaseInputsReader
+	Now        func() time.Time
 }
 
 // Run returns the complete digest-bound review until the operator supplies
 // that proposed profile's exact digest. The applying pass builds and records
 // the project image before activating the profile, so a failed build cannot
 // leave a repository trusted without its runtime artifact.
+//
+// Two shortcuts skip work the active approval already covers. The applying
+// pass reuses the admitted image instead of building when that image serves
+// the commit. The review pass carries the approval forward, re-activating
+// the active profile with no owner approval, when the installation is
+// already trusted, the proposed profile's digest equals the active one, and
+// the admitted image serves the commit: the profile digest binds every
+// workflow, setting, and policy fact the owner approved, and the image check
+// binds the recipe, base, destination, toolchain layout, and dependency
+// manifests. Anything else needs the owner, and the result's Changes say why.
 func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, error) {
 	if o.Store == nil || o.Builder == nil || o.Auditor == nil ||
-		o.Authority == nil || o.Now == nil {
+		o.Authority == nil || o.BaseInputs == nil || o.Now == nil {
 		return OnboardResult{}, errors.New("onboard: nil dependency")
 	}
 	if req.Repository == "" || req.RepositoryID <= 0 ||
@@ -242,9 +294,9 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		return OnboardResult{}, fmt.Errorf("onboard: audit workflow authority: %w", err)
 	}
 	if audit.AuditedCommitSHA != approvedImageRequest.CommitSHA {
-		return OnboardResult{}, fmt.Errorf(
-			"onboard: fresh workflow audit covers commit %s, not project-image commit %s",
-			audit.AuditedCommitSHA, approvedImageRequest.CommitSHA)
+		return OnboardResult{}, &MovedTipError{
+			Tip: audit.AuditedCommitSHA, Commit: approvedImageRequest.CommitSHA,
+		}
 	}
 	if err := o.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.RecordWorkflowAudit(ctx, audit)
@@ -305,7 +357,45 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 	if err != nil {
 		return OnboardResult{}, err
 	}
+	reusable, imageChanges, err := o.servingImage(ctx, approvedImageRequest)
+	if err != nil {
+		return OnboardResult{}, err
+	}
 	if req.ApprovalDigest == "" {
+		active, found, activeChange, err := o.activeProfile(ctx, req.Repository)
+		if err != nil {
+			return OnboardResult{}, err
+		}
+		if !found {
+			return result, nil
+		}
+		if !pending && activeChange == nil &&
+			active.ProfileDigest == profile.ProfileDigest && reusable != nil {
+			if err := o.recheckTrustedInstallation(ctx, req.RegistrationID, installation); err != nil {
+				return OnboardResult{}, err
+			}
+			if err := o.activate(ctx, profile); err != nil {
+				return OnboardResult{}, err
+			}
+			result.Status = "complete"
+			result.Carried = true
+			result.ProjectImage = reusable
+			return result, nil
+		}
+		if activeChange != nil {
+			result.Changes = append(result.Changes, *activeChange)
+		} else {
+			result.Changes, err = profileChanges(active, profile)
+			if err != nil {
+				return OnboardResult{}, err
+			}
+		}
+		if pending {
+			result.Changes = append(result.Changes, OnboardChange{
+				Reason: "the repository's installation is a pending intent, which only an approval promotes",
+			})
+		}
+		result.Changes = append(result.Changes, imageChanges...)
 		return result, nil
 	}
 	if req.ApprovalDigest != result.ApprovalDigest {
@@ -313,15 +403,64 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 			"onboard: approval digest %s does not match proposed review %s",
 			req.ApprovalDigest, result.ApprovalDigest)
 	}
+	var image domain.ProjectImage
+	if reusable != nil {
+		// The admitted image already serves the approved request, so the
+		// pointer stays where it is and only the profile is recorded.
+		image = *reusable
+		if err := o.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.RecordInactiveTrustProfile(ctx, profile, o.Now().UTC())
+		}); err != nil {
+			return OnboardResult{}, fmt.Errorf("onboard: record inactive trust profile: %w", err)
+		}
+	} else {
+		image, err = o.buildAndAdmit(ctx, req, approvedImageRequest, profile)
+		if err != nil {
+			return OnboardResult{}, err
+		}
+	}
+	if pending {
+		if o.Documents == nil {
+			return OnboardResult{}, errors.New("onboard: nil installation authority writer")
+		}
+		if _, ready := o.Gate.PendingReady(*pendingReview); !ready {
+			return OnboardResult{}, errors.New(
+				"onboard: pending installation changed before approved promotion")
+		}
+		if err := PromoteInstallation(
+			ctx, o.Documents, *pendingReview, req.RepositoryID, o.Now,
+		); err != nil {
+			return OnboardResult{}, fmt.Errorf("onboard: promote approved installation: %w", err)
+		}
+	} else if err := o.recheckTrustedInstallation(ctx, req.RegistrationID, installation); err != nil {
+		return OnboardResult{}, err
+	}
+	if err := o.activate(ctx, profile); err != nil {
+		return OnboardResult{}, err
+	}
+	result.Status = "complete"
+	result.ProjectImage = &image
+	return result, nil
+}
+
+// buildAndAdmit builds the approved image, proves the result is bound to the
+// approved request, and records the profile inactive beside the admitted-image
+// pointer advanced to that image.
+func (o Onboard) buildAndAdmit(
+	ctx context.Context,
+	req OnboardRequest,
+	approvedImageRequest projectimage.Request,
+	profile domain.AutomationTrustProfile,
+) (domain.ProjectImage, error) {
 	image, err := o.Builder.Build(ctx, cloneProjectImageRequest(approvedImageRequest))
 	if err != nil {
-		return OnboardResult{}, fmt.Errorf("onboard: build project image: %w", err)
+		return domain.ProjectImage{}, fmt.Errorf("onboard: build project image: %w", err)
 	}
 	if err := image.Validate(); err != nil {
-		return OnboardResult{}, fmt.Errorf("onboard: validate project image result: %w", err)
+		return domain.ProjectImage{}, fmt.Errorf("onboard: validate project image result: %w", err)
 	}
 	if err := projectimage.ValidatePublishedRef(approvedImageRequest, image.ImageRef); err != nil {
-		return OnboardResult{}, fmt.Errorf(
+		return domain.ProjectImage{}, fmt.Errorf(
 			"onboard: project image result is not bound to the approved destination: %w", err,
 		)
 	}
@@ -331,7 +470,7 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		image.RecipeDigest != verify.RecipeDigest(approvedImageRequest.Recipe) ||
 		!slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}) ||
 		image.BaseImageRef != approvedImageRequest.BaseImageRef {
-		return OnboardResult{}, errors.New(
+		return domain.ProjectImage{}, errors.New(
 			"onboard: project image result is not bound to the approved request")
 	}
 	// A new build always records its environment, under this binary's own
@@ -340,7 +479,7 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 	// reused on evidence this binary did not produce.
 	if image.Environment == nil ||
 		image.Environment.PreparationDigest != projectimage.PreparationDigest() {
-		return OnboardResult{}, errors.New(
+		return domain.ProjectImage{}, errors.New(
 			"onboard: project image result does not record this builder's environment")
 	}
 	var recorded domain.ProjectImage
@@ -349,10 +488,10 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		recorded, err = tx.GetProjectImage(ctx, image.ID)
 		return err
 	}); err != nil {
-		return OnboardResult{}, fmt.Errorf("onboard: read recorded project image: %w", err)
+		return domain.ProjectImage{}, fmt.Errorf("onboard: read recorded project image: %w", err)
 	}
 	if !sameProjectImage(recorded, image) {
-		return OnboardResult{}, errors.New(
+		return domain.ProjectImage{}, errors.New(
 			"onboard: recorded project image differs from the builder result")
 	}
 	// The image just built seeds the admitted-image pointer in the same
@@ -370,67 +509,232 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		}
 		return tx.AdvanceAdmittedImagePointer(ctx, pointer)
 	}); err != nil {
-		return OnboardResult{}, fmt.Errorf("onboard: record inactive trust profile: %w", err)
+		return domain.ProjectImage{}, fmt.Errorf("onboard: record inactive trust profile: %w", err)
 	}
-	if pending {
-		if o.Documents == nil {
-			return OnboardResult{}, errors.New("onboard: nil installation authority writer")
-		}
-		if _, ready := o.Gate.PendingReady(*pendingReview); !ready {
-			return OnboardResult{}, errors.New(
-				"onboard: pending installation changed before approved promotion")
-		}
-		if err := PromoteInstallation(
-			ctx, o.Documents, *pendingReview, req.RepositoryID, o.Now,
-		); err != nil {
-			return OnboardResult{}, fmt.Errorf("onboard: promote approved installation: %w", err)
-		}
-	} else {
-		if o.Gate == nil {
-			return OnboardResult{}, errors.New(
-				"onboard: trusted installation has no canonical grant reconciliation")
-		}
-		current, authorityErr := o.Authority.InstallationAuthority(
-			ctx, req.RegistrationID,
-		)
-		if authorityErr != nil {
-			return OnboardResult{}, fmt.Errorf(
-				"onboard: re-resolve installation authority before activation: %w",
-				authorityErr)
-		}
-		var matches []publish.TrustedInstallation
-		for _, binding := range current.TrustedInstallations {
-			if slices.Contains(binding.RepositoryIDs, req.RepositoryID) {
-				matches = append(matches, binding)
-			}
-		}
-		if len(matches) != 1 {
-			return OnboardResult{}, errors.New(
-				"onboard: trusted installation changed before profile activation")
-		}
-		binding := matches[0]
-		if binding.RegistrationID != installation.RegistrationID ||
-			binding.InstallationID != installation.InstallationID ||
-			binding.Account != installation.Account ||
-			binding.AccountID != installation.AccountID ||
-			!o.Gate.AllowsRepository(
-				installation.RegistrationID,
-				installation.InstallationID,
-				installation.RepositoryID,
-			) {
-			return OnboardResult{}, errors.New(
-				"onboard: trusted installation changed before profile activation")
+	return image, nil
+}
+
+// recheckTrustedInstallation re-resolves the repository's trusted installation
+// and the janitor's reconciled grant just before activation: an image build
+// can run for most of an hour, and a carried review activates without one.
+func (o Onboard) recheckTrustedInstallation(
+	ctx context.Context, registrationID int64, installation InstallationReview,
+) error {
+	if o.Gate == nil {
+		return errors.New(
+			"onboard: trusted installation has no canonical grant reconciliation")
+	}
+	current, err := o.Authority.InstallationAuthority(ctx, registrationID)
+	if err != nil {
+		return fmt.Errorf(
+			"onboard: re-resolve installation authority before activation: %w", err)
+	}
+	var matches []publish.TrustedInstallation
+	for _, binding := range current.TrustedInstallations {
+		if slices.Contains(binding.RepositoryIDs, installation.RepositoryID) {
+			matches = append(matches, binding)
 		}
 	}
+	if len(matches) != 1 {
+		return errors.New(
+			"onboard: trusted installation changed before profile activation")
+	}
+	binding := matches[0]
+	if binding.RegistrationID != installation.RegistrationID ||
+		binding.InstallationID != installation.InstallationID ||
+		binding.Account != installation.Account ||
+		binding.AccountID != installation.AccountID ||
+		!o.Gate.AllowsRepository(
+			installation.RegistrationID,
+			installation.InstallationID,
+			installation.RepositoryID,
+		) {
+		return errors.New(
+			"onboard: trusted installation changed before profile activation")
+	}
+	return nil
+}
+
+func (o Onboard) activate(ctx context.Context, profile domain.AutomationTrustProfile) error {
 	if err := o.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.ActivateTrustProfile(
 			ctx, profile.Repo, profile.ProfileDigest, o.Now().UTC())
 	}); err != nil {
-		return OnboardResult{}, fmt.Errorf("onboard: activate trust profile: %w", err)
+		return fmt.Errorf("onboard: activate trust profile: %w", err)
 	}
-	result.Status = "complete"
-	result.ProjectImage = &image
-	return result, nil
+	return nil
+}
+
+// activeProfile reads the repository's active trust profile. A repository
+// with none returns found false. One whose stored profile no longer
+// reconstructs under this build returns found true with a change naming
+// that, so the owner reviews it again instead of being locked out of the
+// re-approval that repairs it.
+func (o Onboard) activeProfile(
+	ctx context.Context, repository string,
+) (domain.AutomationTrustProfile, bool, *OnboardChange, error) {
+	var active domain.AutomationTrustProfile
+	err := o.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		active, err = tx.LatestTrustProfile(ctx, repository)
+		return err
+	})
+	switch {
+	case err == nil:
+		return active, true, nil, nil
+	case errors.Is(err, store.ErrNotFound):
+		return domain.AutomationTrustProfile{}, false, nil, nil
+	case errors.Is(err, store.ErrTrustProfileUnreadable):
+		return domain.AutomationTrustProfile{}, true, &OnboardChange{
+			Reason: fmt.Sprintf("the active trust profile is unreadable: %v", err),
+		}, nil
+	}
+	return domain.AutomationTrustProfile{}, false, nil,
+		fmt.Errorf("onboard: read active trust profile: %w", err)
+}
+
+// servingImage returns the Claude harness's admitted image when it serves
+// request's commit, so onboarding needs no build: the image bakes the
+// requested recipe on the requested base, sits at the requested destination,
+// bakes the requested toolchain directories, and is admissible at the commit
+// (domain.ProjectImage.AdmissibleAt, over the commit's inputs). Otherwise it
+// returns the changes that say why not. Only a store failure is an error; an
+// unreadable commit is a reason, and the caller builds as it would without
+// an admitted image.
+func (o Onboard) servingImage(
+	ctx context.Context, request projectimage.Request,
+) (*domain.ProjectImage, []OnboardChange, error) {
+	var (
+		image domain.ProjectImage
+		found bool
+	)
+	if err := o.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		_, image, found, err = tx.GetAdmittedImagePointer(
+			ctx, request.RepositoryID, domain.HarnessClientClaudeCode)
+		return err
+	}); err != nil {
+		return nil, nil, fmt.Errorf("onboard: read admitted project image: %w", err)
+	}
+	if !found {
+		return nil, []OnboardChange{{
+			Reason: "the repository has no admitted project image; approval builds one",
+		}}, nil
+	}
+	var changes []OnboardChange
+	if recipe := verify.RecipeDigest(request.Recipe); image.RecipeDigest != recipe {
+		change, err := fieldChange("image.recipe_digest", image.RecipeDigest, recipe)
+		if err != nil {
+			return nil, nil, err
+		}
+		changes = append(changes, change)
+	}
+	if image.BaseImageRef != request.BaseImageRef {
+		change, err := fieldChange("image.base_image_ref", image.BaseImageRef, request.BaseImageRef)
+		if err != nil {
+			return nil, nil, err
+		}
+		changes = append(changes, change)
+	}
+	if len(changes) != 0 {
+		return nil, changes, nil
+	}
+	notServed := func(format string, args ...any) (*domain.ProjectImage, []OnboardChange, error) {
+		return nil, []OnboardChange{{Reason: fmt.Sprintf(format, args...)}}, nil
+	}
+	if image.Repository != request.Repository {
+		return notServed("the admitted image %s was built for repository %s, not %s",
+			image.ImageRef, image.Repository, request.Repository)
+	}
+	if !slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}) {
+		return notServed("the admitted image %s runs preparation command %q, not %q",
+			image.ImageRef, image.PreparationCommand, projectimage.PreparationPath)
+	}
+	layout := image.InputLayout()
+	if layout.GoModuleDir != request.GoModuleDir || layout.SwiftPackageDir != request.SwiftPackageDir {
+		return notServed("the admitted image %s bakes Go module directory %q and Swift package directory %q; "+
+			"the request declares %q and %q",
+			image.ImageRef, layout.GoModuleDir, layout.SwiftPackageDir,
+			request.GoModuleDir, request.SwiftPackageDir)
+	}
+	// AdmissibleAt accepts any image at its own build commit, so a same-commit
+	// review would otherwise reuse an image built by another binary's
+	// toolchain and preparation sources, which a build here never does.
+	if image.Environment == nil || image.Environment.PreparationDigest != projectimage.PreparationDigest() {
+		return notServed("the admitted image %s was not built with this binary's toolchain and "+
+			"preparation sources", image.ImageRef)
+	}
+	if err := projectimage.ValidatePublishedRef(request, image.ImageRef); err != nil {
+		return notServed("the admitted image is not at the requested destination: %v", err)
+	}
+	inputs, err := o.BaseInputs(ctx, request.CommitSHA, layout)
+	if err != nil {
+		return notServed("cannot read commit %s's image inputs to reuse the admitted image %s: %v",
+			request.CommitSHA, image.ImageRef, err)
+	}
+	if err := image.AdmissibleAt(inputs, projectimage.PreparationDigest()); err != nil {
+		return notServed("%v", err)
+	}
+	return &image, nil, nil
+}
+
+// profileChanges lists each top-level field of the proposed profile whose
+// JSON value differs from the active one, in field order. The profile digest
+// is left out: it differs whenever any listed field does.
+func profileChanges(active, proposed domain.AutomationTrustProfile) ([]OnboardChange, error) {
+	approvedFields, err := profileFields(active)
+	if err != nil {
+		return nil, err
+	}
+	proposedFields, err := profileFields(proposed)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(approvedFields)+len(proposedFields))
+	for name := range approvedFields {
+		names = append(names, name)
+	}
+	for name := range proposedFields {
+		if _, ok := approvedFields[name]; !ok {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	var changes []OnboardChange
+	for _, name := range names {
+		if name == "profile_digest" ||
+			string(approvedFields[name]) == string(proposedFields[name]) {
+			continue
+		}
+		changes = append(changes, OnboardChange{
+			Field: name, Approved: approvedFields[name], Proposed: proposedFields[name],
+		})
+	}
+	return changes, nil
+}
+
+func profileFields(profile domain.AutomationTrustProfile) (map[string]json.RawMessage, error) {
+	body, err := json.Marshal(profile)
+	if err != nil {
+		return nil, fmt.Errorf("onboard: encode trust profile: %w", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("onboard: decode trust profile fields: %w", err)
+	}
+	return fields, nil
+}
+
+func fieldChange(field string, approved, proposed any) (OnboardChange, error) {
+	approvedJSON, err := json.Marshal(approved)
+	if err != nil {
+		return OnboardChange{}, fmt.Errorf("onboard: encode approved %s: %w", field, err)
+	}
+	proposedJSON, err := json.Marshal(proposed)
+	if err != nil {
+		return OnboardChange{}, fmt.Errorf("onboard: encode proposed %s: %w", field, err)
+	}
+	return OnboardChange{Field: field, Approved: approvedJSON, Proposed: proposedJSON}, nil
 }
 
 func onboardApprovalDigest(

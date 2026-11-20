@@ -2,7 +2,9 @@ package operations_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -81,6 +83,27 @@ func (b *imageBuilderStub) Build(
 		b.afterBuild()
 	}
 	return b.image, nil
+}
+
+// bakedBaseInputs observes, at any commit, exactly the manifests
+// stubProjectImageEnvironment bakes, as a source-only commit holds them.
+func bakedBaseInputs(
+	_ context.Context, commitSHA string, _ domain.ProjectImageInputLayout,
+) (domain.ProjectImageBaseInputs, error) {
+	environment := stubProjectImageEnvironment()
+	return domain.ProjectImageBaseInputs{
+		CommitSHA:         commitSHA,
+		PackageJSONSHA256: environment.PackageJSONSHA256,
+		PackageLockSHA256: environment.PackageLockSHA256,
+	}, nil
+}
+
+// unreadableBaseInputs is a checkout that lacks the commit, so no admitted
+// image is reused and every approval builds.
+func unreadableBaseInputs(
+	context.Context, string, domain.ProjectImageInputLayout,
+) (domain.ProjectImageBaseInputs, error) {
+	return domain.ProjectImageBaseInputs{}, errors.New("checkout lacks the commit")
 }
 
 type authorityStub struct{ authority publish.InstallationAuthority }
@@ -177,6 +200,7 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+		BaseInputs: bakedBaseInputs,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -321,6 +345,7 @@ func onboardProposesIssueCommentWorkflows(t *testing.T, listed []domain.IssueCom
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+		BaseInputs: bakedBaseInputs,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -406,6 +431,7 @@ func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+		BaseInputs: bakedBaseInputs,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -515,6 +541,7 @@ func TestOnboardReRunBindsProtectedPaths(t *testing.T) {
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+		BaseInputs: bakedBaseInputs,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -641,7 +668,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 	onboard := operations.Onboard{
 		Store: st, Builder: builder, Auditor: workflowAuditorStub{audit: audit},
 		Now: func() time.Time { return audit.AuditedAt }, Gate: gate,
-		Authority: authority,
+		Authority: authority, BaseInputs: unreadableBaseInputs,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -899,6 +926,7 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 		Store: st, Builder: builder, Documents: documents,
 		Auditor: workflowAuditorStub{audit: audit},
 		Now:     func() time.Time { return auditedAt }, Gate: pendingGateStub(true),
+		BaseInputs: unreadableBaseInputs,
 		Authority: authorityStub{publish.InstallationAuthority{
 			ActiveEpoch: 3, DurableIntentRevision: 7,
 			Pending: &publish.PendingInstallationEnvelope{
@@ -971,5 +999,353 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 	if entry.Pending != nil || len(entry.TrustedInstallations) != 1 ||
 		entry.TrustedInstallations[0].InstallationID != installationID {
 		t.Fatalf("approved authority = %+v", entry)
+	}
+}
+
+// carryFixture is a repository onboarded and activated at carryCommitA, whose
+// base ref has since moved to carryCommitB with no change to its workflows.
+type carryFixture struct {
+	st      *store.Store
+	dbPath  string
+	builder *imageBuilderStub
+	gate    *mutableInstallationGate
+	onboard operations.Onboard
+	req     operations.OnboardRequest
+	audit   domain.WorkflowAudit
+	first   operations.OnboardResult
+}
+
+const (
+	carryCommitA = "0123456789012345678901234567890123456789"
+	carryCommitB = "2223456789012345678901234567890123456789"
+)
+
+func newCarryFixture(t *testing.T) *carryFixture {
+	t.Helper()
+	ctx := t.Context()
+	dbPath := t.TempDir() + "/freeside.db"
+	st := storetest.Open(t, dbPath, store.Options{})
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := domain.WorkflowAudit{
+		Repo: "example/repo", AuditedCommitSHA: carryCommitA,
+		AuditedAt:           time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC),
+		WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+	}
+	f := &carryFixture{
+		st: st, dbPath: dbPath, builder: &imageBuilderStub{store: st},
+		gate: &mutableInstallationGate{allowed: true}, audit: audit,
+	}
+	f.onboard = operations.Onboard{
+		Store: st, Builder: f.builder, Auditor: workflowAuditorStub{audit: audit},
+		Authority: authorityStub{publish.InstallationAuthority{
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 11, InstallationID: 22,
+				Account: "example", AccountID: 33, RepositoryIDs: []int64{44},
+			}},
+		}},
+		Gate: f.gate, BaseInputs: bakedBaseInputs,
+		Now: func() time.Time { return audit.AuditedAt },
+	}
+	f.req = operations.OnboardRequest{
+		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
+		BaseRef: "main",
+		Policy: operations.OnboardPolicy{
+			PRExecution: domain.PRExecutionAuditedSameRepo,
+			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+			CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		},
+		Image: projectimage.Request{
+			Repository: "example/repo", RepositoryID: 44, CommitSHA: carryCommitA,
+			Recipe: []byte(`{"commands":[["npm","test"]],"capture":"none"}`),
+			BaseImageRef: domain.ImageRef(
+				"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
+			BaseBuildRef: "local/base:v1", LocalRegistryPort: 5100,
+		},
+	}
+	review, err := f.onboard.Run(ctx, f.req)
+	if err != nil {
+		t.Fatalf("first review: %v", err)
+	}
+	if review.Changes != nil {
+		t.Fatalf("first review of a repository with no active profile shows changes %+v", review.Changes)
+	}
+	f.req.ApprovalDigest = review.ApprovalDigest
+	f.first, err = f.onboard.Run(ctx, f.req)
+	if err != nil || f.first.Status != "complete" || f.builder.calls != 1 {
+		t.Fatalf("first approval = %+v, %v; builder calls %d", f.first, err, f.builder.calls)
+	}
+	// The base moves to a source-only commit, and the operator reviews again.
+	f.req.ApprovalDigest = ""
+	f.req.Image.CommitSHA = carryCommitB
+	f.audit.AuditedCommitSHA = carryCommitB
+	f.onboard.Auditor = workflowAuditorStub{audit: f.audit}
+	// A new build is only ever of the new commit.
+	f.builder.image = domain.ProjectImage{}
+	return f
+}
+
+func (f *carryFixture) activations(t *testing.T) int {
+	t.Helper()
+	raw, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var count int
+	if err := raw.QueryRowContext(t.Context(),
+		`SELECT count(*) FROM trust_profile_activations WHERE repo = ?`, f.req.Repository,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func (f *carryFixture) pointerImage(t *testing.T) domain.Digest {
+	t.Helper()
+	var pointer domain.AdmittedImagePointer
+	if err := f.st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		pointer, _, _, err = tx.GetAdmittedImagePointer(t.Context(), f.req.RepositoryID, domain.HarnessClientClaudeCode)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return pointer.ImageID
+}
+
+func (f *carryFixture) activeDigest(t *testing.T) domain.Digest {
+	t.Helper()
+	var active domain.AutomationTrustProfile
+	if err := f.st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		active, err = tx.LatestTrustProfile(t.Context(), f.req.Repository)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return active.ProfileDigest
+}
+
+// TestOnboardCarriesApprovalAcrossSourceOnlyCommit: a review after the base
+// moved, with the same workflows and policy and an admitted image that
+// serves the new commit, completes with no approval and no build, and
+// re-activates the approved profile.
+func TestOnboardCarriesApprovalAcrossSourceOnlyCommit(t *testing.T) {
+	f := newCarryFixture(t)
+	before := f.activations(t)
+	carried, err := f.onboard.Run(t.Context(), f.req)
+	if err != nil {
+		t.Fatalf("carried review: %v", err)
+	}
+	if carried.Status != "complete" || !carried.Carried || carried.Changes != nil {
+		t.Fatalf("carried review = status %q carried %t changes %+v", carried.Status, carried.Carried, carried.Changes)
+	}
+	if f.builder.calls != 1 {
+		t.Fatalf("carried review built an image; builder calls = %d", f.builder.calls)
+	}
+	if carried.ProjectImage == nil || carried.ProjectImage.ID != f.first.ProjectImage.ID ||
+		f.pointerImage(t) != f.first.ProjectImage.ID {
+		t.Fatalf("carried image = %+v, want the admitted %s", carried.ProjectImage, f.first.ProjectImage.ID)
+	}
+	if carried.ImageRequest.CommitSHA != carryCommitB ||
+		carried.Profile.ProfileDigest != f.first.Profile.ProfileDigest {
+		t.Fatalf("carried review binds commit %s profile %s", carried.ImageRequest.CommitSHA, carried.Profile.ProfileDigest)
+	}
+	if got := f.activations(t); got != before+1 {
+		t.Fatalf("activation rows = %d, want %d", got, before+1)
+	}
+}
+
+// TestOnboardReviewNamesWhatTheApprovalDoesNotCover: each change the owner
+// has not approved keeps the review required, appends no activation, and
+// names the change.
+func TestOnboardReviewNamesWhatTheApprovalDoesNotCover(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*carryFixture)
+		want   func(operations.OnboardChange) bool
+	}{
+		{"audited privilege", func(f *carryFixture) {
+			f.audit.OIDCAvailable = true
+			f.onboard.Auditor = workflowAuditorStub{audit: f.audit}
+		}, func(c operations.OnboardChange) bool {
+			return c.Field == "allow_oidc" && string(c.Approved) == "false" && string(c.Proposed) == "true"
+		}},
+		{"recipe", func(f *carryFixture) {
+			f.req.Image.Recipe = []byte(`{"commands":[["npm","run","check"]],"capture":"none"}`)
+		}, func(c operations.OnboardChange) bool { return c.Field == "image.recipe_digest" }},
+		{"manifests", func(f *carryFixture) {
+			f.onboard.BaseInputs = func(
+				ctx context.Context, commit string, layout domain.ProjectImageInputLayout,
+			) (domain.ProjectImageBaseInputs, error) {
+				inputs, err := bakedBaseInputs(ctx, commit, layout)
+				inputs.PackageLockSHA256 = strings.Repeat("3", 64)
+				return inputs, err
+			}
+		}, func(c operations.OnboardChange) bool {
+			return strings.Contains(c.Reason, "package-lock.json at the base differs")
+		}},
+		{"unreadable commit", func(f *carryFixture) {
+			f.onboard.BaseInputs = unreadableBaseInputs
+		}, func(c operations.OnboardChange) bool {
+			return strings.Contains(c.Reason, "checkout lacks the commit")
+		}},
+		{"toolchain directory", func(f *carryFixture) {
+			f.req.Image.GoModuleDir = "daemon"
+		}, func(c operations.OnboardChange) bool {
+			return strings.Contains(c.Reason, `the request declares "daemon"`)
+		}},
+		{"pending installation", func(f *carryFixture) {
+			f.onboard.Authority = authorityStub{publish.InstallationAuthority{
+				ActiveEpoch: 3, DurableIntentRevision: 7,
+				Pending: &publish.PendingInstallationEnvelope{
+					ActiveEpoch: 3, DurableIntentRevision: 7, RegistrationID: 11,
+					ExpectedAccount: "example", ExpectedAccountID: 33,
+					CurrentRepositoryIDs: []int64{}, ExpectedRepositoryIDs: []int64{44},
+					RequiredRepositoryMode: "selected", ExpiresAt: f.audit.AuditedAt.Add(time.Hour),
+				},
+			}}
+			f.onboard.Gate = pendingGateStub(true)
+		}, func(c operations.OnboardChange) bool { return strings.Contains(c.Reason, "pending intent") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCarryFixture(t)
+			tc.mutate(f)
+			before := f.activations(t)
+			review, err := f.onboard.Run(t.Context(), f.req)
+			if err != nil {
+				t.Fatalf("review: %v", err)
+			}
+			if review.Status != "review_required" || review.Carried || !slices.ContainsFunc(review.Changes, tc.want) {
+				t.Fatalf("review = status %q carried %t changes %+v", review.Status, review.Carried, review.Changes)
+			}
+			if got := f.activations(t); got != before || f.builder.calls != 1 {
+				t.Fatalf("activation rows %d (want %d), builder calls %d (want 1)", got, before, f.builder.calls)
+			}
+		})
+	}
+}
+
+// TestOnboardDoesNotCarryAnotherBinarysImage: an image at the review's own
+// commit passes AdmissibleAt whatever built it, so the carry checks the
+// preparation sources itself.
+func TestOnboardDoesNotCarryAnotherBinarysImage(t *testing.T) {
+	f := newCarryFixture(t)
+	ctx := t.Context()
+	environment := stubProjectImageEnvironment()
+	environment.PreparationDigest = domain.Digest("sha256:" + strings.Repeat("9", 64))
+	var pointed domain.ProjectImage
+	if err := f.st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		_, pointed, _, err = tx.GetAdmittedImagePointer(ctx, f.req.RepositoryID, domain.HarnessClientClaudeCode)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: pointed.Repository, RepositoryID: pointed.RepositoryID,
+		CommitSHA: f.req.Image.CommitSHA, RecipeDigest: pointed.RecipeDigest,
+		PreparationCommand: pointed.PreparationCommand, BaseImageRef: pointed.BaseImageRef,
+		ImageRef: domain.ImageRef(strings.Replace(
+			string(pointed.ImageRef), strings.Repeat("b", 64), strings.Repeat("c", 64), 1)),
+		Environment: environment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordProjectImage(ctx, stale); err != nil {
+			return err
+		}
+		return tx.AdvanceAdmittedImagePointer(ctx, domain.AdmittedImagePointer{
+			RepositoryID: stale.RepositoryID, Repository: stale.Repository,
+			Harness: domain.HarnessClientClaudeCode, ImageID: stale.ID, ImageRef: stale.ImageRef,
+			AdvancedAt: f.audit.AuditedAt,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	review, err := f.onboard.Run(ctx, f.req)
+	if err != nil || review.Status != "review_required" || review.Carried ||
+		!slices.ContainsFunc(review.Changes, func(c operations.OnboardChange) bool {
+			return strings.Contains(c.Reason, "this binary's toolchain")
+		}) {
+		t.Fatalf("review over another binary's image = %+v, %v", review, err)
+	}
+}
+
+// TestOnboardCarryRechecksTheTrustedInstallation: a carried review activates
+// only after the same installation re-check an approval runs.
+func TestOnboardCarryRechecksTheTrustedInstallation(t *testing.T) {
+	f := newCarryFixture(t)
+	f.gate.allowed = false
+	before := f.activations(t)
+	if _, err := f.onboard.Run(t.Context(), f.req); err == nil ||
+		!strings.Contains(err.Error(), "trusted installation changed before profile activation") {
+		t.Fatalf("carry with a revoked grant: err = %v", err)
+	}
+	if got := f.activations(t); got != before {
+		t.Fatalf("activation rows = %d, want %d", got, before)
+	}
+}
+
+// TestOnboardApprovalReusesAServingImage: an approval of a changed policy
+// whose admitted image still serves the commit activates without a build and
+// leaves the pointer alone; one whose image does not serve builds as before.
+func TestOnboardApprovalReusesAServingImage(t *testing.T) {
+	approve := func(t *testing.T, f *carryFixture) operations.OnboardResult {
+		t.Helper()
+		review, err := f.onboard.Run(t.Context(), f.req)
+		if err != nil || review.Status != "review_required" {
+			t.Fatalf("review = %+v, %v", review, err)
+		}
+		f.req.ApprovalDigest = review.ApprovalDigest
+		complete, err := f.onboard.Run(t.Context(), f.req)
+		if err != nil || complete.Status != "complete" || complete.Carried {
+			t.Fatalf("approval = %+v, %v", complete, err)
+		}
+		if f.activeDigest(t) != review.Profile.ProfileDigest {
+			t.Fatalf("active profile = %s, want the approved %s", f.activeDigest(t), review.Profile.ProfileDigest)
+		}
+		return complete
+	}
+	t.Run("serving image", func(t *testing.T) {
+		f := newCarryFixture(t)
+		f.req.Policy.CommitPlan = domain.CommitPlanPlanPreferred
+		complete := approve(t, f)
+		if f.builder.calls != 1 || complete.ProjectImage.ID != f.first.ProjectImage.ID ||
+			f.pointerImage(t) != f.first.ProjectImage.ID {
+			t.Fatalf("approval built %d image(s) and returned %s, want the admitted %s",
+				f.builder.calls-1, complete.ProjectImage.ID, f.first.ProjectImage.ID)
+		}
+	})
+	t.Run("moved destination", func(t *testing.T) {
+		f := newCarryFixture(t)
+		f.req.Image.ImageName = "moved-image"
+		complete := approve(t, f)
+		if f.builder.calls != 2 || complete.ProjectImage.CommitSHA != carryCommitB ||
+			f.pointerImage(t) != complete.ProjectImage.ID {
+			t.Fatalf("approval at a moved destination: builder calls %d, image %+v, pointer %s",
+				f.builder.calls, complete.ProjectImage, f.pointerImage(t))
+		}
+	})
+}
+
+// TestOnboardNamesTheMovedTip: a review pinned to a commit the live tip has
+// left reports the tip, so the caller can review it.
+func TestOnboardNamesTheMovedTip(t *testing.T) {
+	f := newCarryFixture(t)
+	f.req.Image.CommitSHA = carryCommitA
+	_, err := f.onboard.Run(t.Context(), f.req)
+	var moved *operations.MovedTipError
+	if !errors.As(err, &moved) || moved.Tip != carryCommitB || moved.Commit != carryCommitA {
+		t.Fatalf("stale commit error = %v, want MovedTipError{%s, %s}", err, carryCommitB, carryCommitA)
 	}
 }
