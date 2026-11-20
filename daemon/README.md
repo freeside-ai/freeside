@@ -5513,6 +5513,21 @@ alone, so attempts behind it on proven images still start. An attempt
 admitted under one configuration starts only while the daemon yields that
 configuration for its image.
 
+A new daemon binary or backend setting changes that configuration, so an
+unattended attempt recorded before the change would otherwise hold under
+`backend_not_conformant` on every pass. When the stage driver has no
+intent for the attempt, the driver never started it, and the dispatch
+pass admits it again under the running configuration: the fresh admission
+passes the same gates a new one does and replaces the stored one, which
+moves to `superseded_execution_admissions`. A refused fresh admission
+holds as a new one would, keeps the stored admission, and is retried on a
+later pass. An attempt the driver did start may have run its writer, so
+it is never admitted again. It keeps its `backend_not_conformant` hold and
+raises one `execution_failure` attention item on its run naming the
+invocation; restarting the daemon on the configuration it started under,
+or stopping the task, ends the wait. The item is released when the
+attempt starts and expires when the task's workflow closes.
+
 The scheduled pass bounds the proofs ward holds. It keeps the images
 attempts selected or started on since the previous scheduled pass, and
 always the most recently selected one, and re-proves each in its own

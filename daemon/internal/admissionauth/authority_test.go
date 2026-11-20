@@ -223,7 +223,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	}
 	attempt := domain.Attempt{ID: "released-attempt", StageID: production.StageID, Number: 1, InvocationID: production.InvocationID}
 	run.Stages[0].Attempts = []domain.Attempt{attempt}
-	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+	admissionInput := domain.ExecutionAdmissionInput{
 		InvocationID: production.InvocationID, RunID: run.ID, StageID: production.StageID, AttemptID: attempt.ID,
 		Backend: string(domain.BackendFreshVMReadOnlyVolumeHandoff), BackendConfigurationDigest: oldDigest,
 		Capabilities: capabilities, OperatingMode: domain.ModeUnattended, CredentialMode: domain.CredentialSubscriptionContained,
@@ -232,7 +232,8 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 		SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: inputDigest,
 		Base:      domain.BaseRevision{Repo: profile.Repo, RepositoryID: profile.RepositoryID, BaseRef: "main", BaseSHA: strings.Repeat("b", 40)},
 		Workspace: "test-workspace", AuthIdentityID: &identity.ID, AdmittedAt: now,
-	})
+	}
+	admission, err := domain.NewExecutionAdmission(admissionInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,5 +338,24 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	health.Encryption = domain.BackupHealthUnhealthy
 	if err := authority.AuthenticateImport(ctx, production.InvocationID, spec); !errors.Is(err, domain.ErrCheckpointNotEncrypted) {
 		t.Fatalf("unhealthy backup was not refused: %v", err)
+	}
+	// The engine re-admits a never-started attempt under the running
+	// configuration (#3433). The superseding admission, bound to the digest
+	// this process yields, starts; the gate itself is unchanged.
+	health.Encryption = domain.BackupHealthHealthy
+	readmittedInput := admissionInput
+	readmittedInput.BackendConfigurationDigest = newDigest
+	readmittedInput.AdmittedAt = now.Add(time.Minute)
+	readmitted, err := domain.NewExecutionAdmission(readmittedInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.SupersedeUnstartedExecutionAdmission(ctx, admission, readmitted, nil)
+	}); err != nil {
+		t.Fatalf("supersede the unstarted admission: %v", err)
+	}
+	if err := authority.AuthenticateStart(ctx, production.InvocationID, exec.StartSpecFromAdmission(readmitted)); err != nil {
+		t.Fatalf("start of the superseding admission: %v", err)
 	}
 }
