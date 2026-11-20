@@ -372,6 +372,77 @@ func TestInvocationObservationUpsert(t *testing.T) {
 	}
 }
 
+// TestInvocationObservationKeepsConcludedInstant: re-observing an unchanged
+// concluded observation keeps its first instant, because only a refresh of a
+// status that can decay says anything new; any change, or a stored instant
+// the incoming one cannot follow, still overwrites (issue #3452).
+func TestInvocationObservationKeepsConcludedInstant(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+
+	record := func(o domain.InvocationObservation) {
+		t.Helper()
+		if err := s.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordInvocationObservation(ctx, o)
+		}); err != nil {
+			t.Fatalf("record %+v: %v", o, err)
+		}
+	}
+	stored := func(runID domain.RunID) domain.InvocationObservation {
+		t.Helper()
+		got := observeRun(t, s, runID)
+		if len(got.Invocations) != 1 {
+			t.Fatalf("observations under %s = %+v, want one", runID, got.Invocations)
+		}
+		return got.Invocations[0]
+	}
+	failed := domain.InvocationObservation{
+		InvocationID: "inv-1", RunID: f.run.ID,
+		Status: domain.ObservedStatusFailed, ObservedAt: admissionEpoch,
+	}
+	record(failed)
+	refresh := failed
+	refresh.ObservedAt = admissionEpoch.Add(time.Minute)
+	record(refresh)
+	if got := stored(f.run.ID); !got.ObservedAt.Equal(admissionEpoch) {
+		t.Errorf("unchanged concluded refresh moved observed_at to %v, want %v", got.ObservedAt, admissionEpoch)
+	}
+
+	// Each change overwrites, time and all; every step starts from the
+	// stored row so it differs from it in exactly one field. A live-bit
+	// change has no case: Validate refuses a live concluded observation, so
+	// only a corrupt stored row could differ in it, and that row is replaced.
+	at := admissionEpoch
+	for _, change := range []struct {
+		name  string
+		apply func(*domain.InvocationObservation)
+	}{
+		{"status change", func(o *domain.InvocationObservation) { o.Status = domain.ObservedStatusCompleted }},
+		{"run rebind", func(o *domain.InvocationObservation) { o.RunID = "run-2" }},
+	} {
+		next := stored(failed.RunID)
+		change.apply(&next)
+		at = at.Add(time.Minute)
+		next.ObservedAt = at
+		record(next)
+		if got := stored(next.RunID); got != next {
+			t.Errorf("%s: stored %+v, want overwrite with %+v", change.name, got, next)
+		}
+		failed.RunID = next.RunID
+	}
+
+	// A stored instant after the incoming one (a stepped-back clock) is
+	// replaced rather than kept.
+	earlier := stored(failed.RunID)
+	earlier.ObservedAt = admissionEpoch
+	record(earlier)
+	if got := stored(earlier.RunID); !got.ObservedAt.Equal(admissionEpoch) {
+		t.Errorf("stepped-back clock: observed_at = %v, want overwrite with %v", got.ObservedAt, admissionEpoch)
+	}
+}
+
 // TestExecutionRecordsProjectMilestones: the admission, export, and outcome
 // authorities carry their observation milestones atomically, whatever lane
 // commits them, and the outcome's summary text never crosses into the
