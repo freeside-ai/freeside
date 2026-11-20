@@ -65,10 +65,14 @@
 #      configuration digest or repository.base_sha differs from the ones
 #      the last review bound, since prelaunch keeps passing the old trust
 #      profile; before that review's approval, stop with its approval
-#      command. Then run `freesided prelaunch -no-live` and act on its
-#      first_missing:
+#      command. A review that changes nothing the active approval trusts
+#      completes on its own (`freesided onboard` carries the approval
+#      forward): its output becomes the completed approval, step 5 pins its
+#      image, and the run goes on with no stop. Then run
+#      `freesided prelaunch -no-live` and act on its first_missing:
 #      trust_profile: run the onboarding review (never -approve) with the
-#        state file's review digest and stop with the approval command;
+#        state file's review digest and stop with the approval command,
+#        unless it carried the approval forward;
 #      project_image, approved_recipe: stop with the approval command when
 #        the approving run's output, <root>/daemon/onboard-approved.json,
 #        is missing or incomplete.
@@ -565,9 +569,11 @@ emit_head() {
   printf 'client=bash %s --attach %s\n' "$(printf '%q' "$src/scripts/dev-instance.sh")" "$(printf '%q' "$root")"
 }
 
-# onboard_review: the one-time review, never -approve; stops with exit 3.
-# The digest comes from the state file, so a rerun that starts no deputy
-# (the installation resume) still has it.
+# onboard_review: the one-time review, never -approve; stops with exit 3
+# unless the review carried the active approval forward, which it records
+# as the completed approval and returns. The digest comes from the state
+# file, so a rerun that starts no deputy (the installation resume) still
+# has it.
 onboard_review() {
   local digest args=() arg status review="$root/daemon/onboard-review.json" approved="$root/daemon/onboard-approved.json"
   digest=$(state_get .review_configuration_digest)
@@ -606,6 +612,15 @@ onboard_review() {
     say "read the review in $review before approving"
     printf 'approval=%s\n' "$command"
     exit 3
+    ;;
+  complete)
+    # Nothing the active approval trusts changed, so the review carried it
+    # forward: the review's output is the completed approval.
+    cp "$review" "$approved"
+    state_set onboarded "$(jq -n --arg d "$digest" --arg b "$(setting .repository.base_sha)" \
+      '{review_configuration_digest: $d, base_sha: $b}')"
+    say "the onboarding review carried the active approval forward; no approval needed"
+    onboard_carried=true
     ;;
   *) die "the onboarding review returned status \"$status\"; see $review" ;;
   esac
@@ -725,6 +740,7 @@ start_key() {
 # the settings' identities.
 committed=false
 rechecked=false
+onboard_carried=false
 for _ in 1 2 3 4 5 6 7 8; do
   pin_approved_image
   render_settings
@@ -742,12 +758,20 @@ for _ in 1 2 3 4 5 6 7 8; do
     [[ -z "$key" ]] || state_set composed_inputs "\"$key\""
   fi
   check_onboarding
+  if [[ "$onboard_carried" == true ]]; then
+    # Pin and render the carried approval's image before prelaunch reads it.
+    onboard_carried=false
+    continue
+  fi
   run_prelaunch
   case $missing in
   agent_tree)
     die "prelaunch still reports agent_tree after a start whose tree matched: $(jq -r '.first_missing.evidence' "$root/daemon/prelaunch.json")"
     ;;
-  trust_profile) onboard_review ;;
+  trust_profile)
+    onboard_review
+    onboard_carried=false
+    ;;
   project_image | approved_recipe) take_onboarding_image ;;
   '')
     [[ "$passed" != true ]] || break
