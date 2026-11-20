@@ -116,3 +116,37 @@ extension AgentQuestionPresentationTests {
                 == "Record with 2 Answers")
     }
 }
+
+extension AgentQuestionPresentationTests {
+    @Test func previousAnswersStartAsTheChoicesAndAPickReplacesThem() throws {
+        let item = AttentionFixtures.previouslyAnsweredQuestion().item
+        let presentation = try #require(AgentQuestionPresentation(item))
+        #expect(
+            presentation.decisions.map(\.previousAnswer) == [
+                .option("Rewrite rows in place"), .note(AttentionFixtures.previousTypedAnswer),
+            ])
+        // An earlier option answer starts chosen; typed text starts as
+        // "Other answer", and the sheet opens with that text.
+        #expect(presentation.previousChoices == [0: .option("Rewrite rows in place"), 1: .other])
+        #expect(presentation.previousNote(presentation.previousChoices) == AttentionFixtures.previousTypedAnswer)
+        let answers = try #require(presentation.answers(presentation.choices(picked: [:])))
+        #expect(
+            answers == [
+                .init(decision_index: 0, option_label: "Rewrite rows in place"),
+                .init(decision_index: 1, option_label: nil),
+            ])
+
+        // The owner's own pick wins, and once no decision is left at the
+        // earlier typed answer the sheet starts empty.
+        let picked = presentation.choices(picked: [1: .option("Reject the old shape")])
+        #expect(picked == [0: .option("Rewrite rows in place"), 1: .option("Reject the old shape")])
+        #expect(presentation.previousNote(picked) == nil)
+    }
+
+    @Test func aQuestionWithoutPreviousAnswersStartsUnchosen() throws {
+        let presentation = try #require(AgentQuestionPresentation(AttentionFixtures.longQuestion().item))
+        #expect(presentation.decisions.allSatisfy { $0.previousAnswer == nil })
+        #expect(presentation.previousChoices.isEmpty)
+        #expect(presentation.previousNote(presentation.choices(picked: [0: .other, 1: .other])) == nil)
+    }
+}

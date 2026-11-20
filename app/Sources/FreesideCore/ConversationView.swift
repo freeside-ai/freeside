@@ -383,7 +383,13 @@ struct MessageComposerSheet: View {
     static let fieldPlaceholder = "Write to the agent\u{2026}"
 
     @Environment(\.dismiss) private var dismiss
-    @State private var message = ""
+    /// The field's text once the operator edits it; nil until then, so the
+    /// field shows `initialMessage`.
+    @State private var editedMessage: String? = nil
+    private var message: String { editedMessage ?? initialMessage }
+    private var messageText: Binding<String> {
+        Binding(get: { message }, set: { editedMessage = $0 })
+    }
     /// The keyword naming the command the sheet carries out.
     let eyebrow: String
     /// What the operator is asked to write.
@@ -412,6 +418,10 @@ struct MessageComposerSheet: View {
     /// Whether Send needs text in the field. An answer whose options all
     /// came from the card may go without a note.
     var requiresMessage = true
+    /// The text the field starts with: what the owner typed before for a
+    /// question they answered "Other answer" (#3443). Empty for every other
+    /// composer.
+    var initialMessage = ""
     let submit: (String, Components.Schemas.AnswerRoute?) async -> Bool
     @State private var isSubmitting = false
     @State private var chosenRoute: Components.Schemas.AnswerRoute?
@@ -550,7 +560,7 @@ struct MessageComposerSheet: View {
             if rendersInteractiveControls, attachments != nil {
                 attachingEditor
             } else if rendersInteractiveControls {
-                TextEditor(text: $message)
+                TextEditor(text: messageText)
                     .font(FreesideFont.callout)
                     .foregroundStyle(Color.ink)
                     .scrollContentBackground(.hidden)
@@ -571,9 +581,22 @@ struct MessageComposerSheet: View {
                     }
                     .accessibilityLabel("Message")
             } else {
-                placeholder
-                    .frame(maxWidth: .infinity, minHeight: Self.fieldMinHeight, alignment: .topLeading)
-                    .background(fieldFrame(isFocused: false))
+                // A still render draws the text the field starts with, the
+                // way the editor shows it, or the prompt.
+                Group {
+                    if message.isEmpty {
+                        placeholder
+                    } else {
+                        Text(message)
+                            .font(FreesideFont.callout)
+                            .foregroundStyle(Color.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: Self.fieldMinHeight, alignment: .topLeading)
+                .background(fieldFrame(isFocused: false))
             }
             if let byteLimit {
                 // A fixed face: the platform caption draws under the 11.5pt
@@ -599,7 +622,7 @@ struct MessageComposerSheet: View {
     @ViewBuilder private var attachingEditor: some View {
         #if os(macOS)
             TaskPromptEditor(
-                text: $message, history: nil, browse: browse, fieldLabel: "Message", textFont: Self.fieldFont,
+                text: messageText, history: nil, browse: browse, fieldLabel: "Message", textFont: Self.fieldFont,
                 onAttach: attach(pasted:), isFocused: $editorIsFocused
             )
             .padding(Self.editorPadding)
@@ -613,7 +636,7 @@ struct MessageComposerSheet: View {
                 }
             }
         #else
-            TextEditor(text: $message)
+            TextEditor(text: messageText)
                 .font(FreesideFont.callout)
                 .foregroundStyle(Color.ink)
                 .scrollContentBackground(.hidden)
