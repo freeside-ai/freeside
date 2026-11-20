@@ -675,6 +675,16 @@ func newAttentionService(
 		signet.WithFollowUpFiler(func() signet.FollowUpFiler {
 			return FollowUpFilerBinding(late.ClaudeWiring)
 		}),
+		// The transcript read asks the stage driver for a writer's prompt. A
+		// daemon without a Claude driver serves every prompt as null. The
+		// nil checks return an untyped nil, never a nil *Driver in the
+		// interface.
+		signet.WithInvocationPrompts(func() signet.InvocationPromptReader {
+			if late.ClaudeWiring == nil || late.ClaudeWiring.driver == nil {
+				return nil
+			}
+			return late.ClaudeWiring.driver
+		}),
 		// An approved image-policy adoption wakes upkeep to build under it.
 		signet.WithImageUpkeepWake(func() {
 			if late.UpkeepTrigger != nil {

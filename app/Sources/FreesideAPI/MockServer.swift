@@ -275,7 +275,8 @@ public actor MockServer {
         pairingNtfyServerURL: String = "https://ntfy.example",
         pairingNtfyTopic: String? = nil,
         pairingDeviceToken: String? = nil,
-        attachments: [String: Data] = AttentionFixtures.defaultAttachments(),
+        attachments: [String: Data] = AttentionFixtures.defaultAttachments()
+            .merging(RunFixtures.transcriptAttachments()) { inbox, _ in inbox },
         automaticallyCompletesAgentWork: Bool = false
     ) {
         for timeline in taskTimelines {

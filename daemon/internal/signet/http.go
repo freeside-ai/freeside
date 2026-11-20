@@ -97,6 +97,7 @@ func (h httpHandler) routes() []httpRoute {
 		{"GET /runs/{run_id}/timeline", h.authenticated(h.getRunTimeline)},
 		{"GET /tasks/{task_id}/timeline", h.authenticated(h.getTaskTimeline)},
 		{"GET /runs/{run_id}/review/{round}/evidence", h.authenticated(h.getReviewEvidence)},
+		{"GET /runs/{run_id}/invocations/{invocation_id}/transcript", h.authenticated(h.getInvocationTranscript)},
 		{"GET /conversations/{conversation_id}", h.authenticated(h.getConversation)},
 		{"POST /commands", h.authenticated(h.submitCommand)},
 		{"PUT /attachments/{digest}", h.authenticated(h.putAttachment)},

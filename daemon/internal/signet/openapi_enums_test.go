@@ -150,6 +150,9 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"UnattendedStopKind":          enumStrings(domain.AllUnattendedStopKinds),
 		"RestartBlockerKind":          enumStrings(domain.AllRestartBlockerKinds),
 		"WorkUnitCompatibility":       enumStrings(domain.AllWorkUnitCompatibilities),
+
+		// Signet-owned wire vocabulary for the transcript read.
+		"InvocationTranscriptAvailability": enumStrings(signet.AllInvocationTranscriptAvailabilities),
 	}
 	// A schema with an enum key decodes to a non-nil slice; enum: [null]
 	// decodes to [""].

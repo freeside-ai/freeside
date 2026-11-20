@@ -295,6 +295,30 @@ public struct MockServerTransport: ClientTransport {
                     status: .notFound, body: Components.Schemas._Error(message: "review round unavailable"))
             }
             return try Self.json(status: .ok, body: RunFixtures.reviewEvidence(runID: runID, round: round))
+        case "getInvocationTranscript":
+            // As the daemon: only an invocation the run's timeline holds
+            // under an execution admission answers; a reviewer's or another
+            // run's is not found.
+            let parts = (request.path ?? "").split(separator: "/")
+            guard parts.count == 5, parts[0] == "runs", parts[2] == "invocations", parts[4] == "transcript",
+                let runID = String(parts[1]).removingPercentEncoding,
+                let invocationID = String(parts[3]).removingPercentEncoding,
+                let timeline = await server.runTimeline(id: runID),
+                let invocation = timeline.invocations.first(where: { $0.invocation_id == invocationID }),
+                !(timeline.review?.value1.rounds.contains { $0.invocation_id == invocationID } ?? false),
+                !timeline.admissions.contains(where: { $0.invocation_id == invocationID && $0.kind == .review })
+            else {
+                return try Self.json(
+                    status: .notFound, body: Components.Schemas._Error(message: "no entity exists under the identifier")
+                )
+            }
+            var transcript = RunFixtures.invocationTranscript(runID: runID, invocation: invocation)
+            // As the daemon: a claim whose bytes are gone is served as none.
+            if let claim = transcript.transcript?.value1, await server.attachmentBytes(digest: claim.digest) == nil {
+                transcript.transcript = nil
+                transcript.availability = .unavailable
+            }
+            return try Self.json(status: .ok, body: transcript)
         case "listSchedules":
             return try Self.json(status: .ok, body: await server.listSchedules())
         case "pairDevice":

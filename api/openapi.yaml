@@ -649,6 +649,38 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /runs/{run_id}/invocations/{invocation_id}/transcript:
+    get:
+      operationId: getInvocationTranscript
+      tags: [runs]
+      summary: Read an ended writer invocation's transcript reference and prompt
+      description: >
+        Returns the agent-transcript claim the daemon recorded for one writer
+        invocation of this run, and the prompt the writer received. The claim
+        carries a digest; the client fetches its bytes from
+        GET /attachments/{digest}. Everything here is the agent's own,
+        unverified account. The invocation's recorded admission must name
+        this run, else 404. A claim set that disagrees with the invocation
+        fails the read with no partial content.
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+        - name: invocation_id
+          in: path
+          required: true
+          description: A writer invocation admitted for this run.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: The transcript reference and prompt, or explicit unavailability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvocationTranscript"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /schedules:
     get:
       operationId: listSchedules
@@ -4276,6 +4308,45 @@ components:
           type: "integer"
           minimum: 0
           maximum: 255
+          nullable: true
+    InvocationTranscriptAvailability:
+      type: "string"
+      description: >
+        Whether the invocation's transcript bytes can be fetched now:
+        available when a transcript claim exists and the blob store holds its
+        bytes, unavailable otherwise. A later contract adds a state for a
+        running invocation's growing transcript (#1926).
+      enum: ["available", "unavailable", "unknown"]
+    InvocationTranscript:
+      type: "object"
+      description: >
+        One ended writer invocation's transcript reference and prompt. Both
+        are agent context, never verified evidence: the transcript is the
+        agent CLI's stream, and the prompt is the text the daemon rendered
+        for the writer. The client fetches the transcript's bytes by digest
+        from GET /attachments/{digest}.
+      required: ["run_id", "invocation_id", "availability", "transcript", "prompt"]
+      properties:
+        run_id:
+          type: "string"
+        invocation_id:
+          type: "string"
+        availability:
+          $ref: "#/components/schemas/InvocationTranscriptAvailability"
+        transcript:
+          description: >
+            The invocation's agent-transcript claim, served only when
+            availability is available; null when the invocation recorded none
+            or the blob store no longer holds its bytes.
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/AgentClaim"}
+        prompt:
+          type: "string"
+          description: >
+            The prompt the writer received, read from the stage driver's
+            record and re-checked against the invocation's admission; null
+            when none is held or the record fails that check.
           nullable: true
 
     WorkUnitCompletionFacts:

@@ -566,6 +566,76 @@ public enum RunFixtures {
                 availability: availability))
     }
 
+    /// The transcripts the mock keeps for ended writer invocations, by
+    /// digest: a short Claude stream for a completed writer, and a failed
+    /// writer's retained stdout for any other end, as the daemon keeps them.
+    public static let finishedTranscriptDigest = "sha256:" + String(repeating: "7", count: 64)
+    public static let failedTranscriptDigest = "sha256:" + String(repeating: "8", count: 64)
+    public static let writerPrompt =
+        "Implement the approved work item.\n\nKeep the change to the paths the work item names."
+
+    public static func transcriptAttachments() -> [String: Data] {
+        [
+            finishedTranscriptDigest: Data(finishedTranscript.utf8),
+            failedTranscriptDigest: Data(failedTranscript.utf8),
+        ]
+    }
+
+    private static let finishedTranscript = """
+        {"cwd":"/workspace","model":"claude-opus-5-5","subtype":"init","type":"system"}
+        {"message":{"content":[{"text":"I’ll read the runner and its failing test first.","type":"text"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+        {"message":{"content":[{"id":"t1","input":{"command":"go test ./rig/..."},"name":"Bash","type":"tool_use"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+        {"message":{"content":[{"content":"ok  freeside.example/rig  2.281s","is_error":false,"tool_use_id":"t1","type":"tool_result"}],"role":"user"},"parent_tool_use_id":null,"type":"user"}
+        {"message":{"content":[{"text":"The rig now starts its fixture server before the first probe, and its tests pass.","type":"text"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+        {"is_error":false,"result":"The rig now starts its fixture server before the first probe, and its tests pass.","subtype":"success","type":"result"}
+
+        """
+
+    private static let failedTranscript = """
+        claude: starting session in /workspace
+        claude: stream interrupted before the first message
+
+        """
+
+    /// Runs that kept no transcript: the failed oriole run, so the mock
+    /// shows the run page's unavailable line.
+    private static let transcriptlessRunIDs: Set<String> = ["run-oriole-121"]
+
+    /// The transcript read for one invocation of a run, as the daemon answers
+    /// it: an ended writer's claim and prompt, or unavailable with neither.
+    /// The transport drops a claim whose bytes its byte store doesn't hold.
+    public static func invocationTranscript(
+        runID: String, invocation: Components.Schemas.InvocationObservation
+    ) -> Components.Schemas.InvocationTranscript {
+        let ended =
+            !invocation.live
+            && [.completed, .failed, .canceled, .blocked, .gone].contains(invocation.status)
+        guard ended, !transcriptlessRunIDs.contains(runID) else {
+            return .init(
+                run_id: runID, invocation_id: invocation.invocation_id, availability: .unavailable,
+                transcript: nil, prompt: nil)
+        }
+        let finished = invocation.status == .completed
+        let content = finished ? finishedTranscript : failedTranscript
+        let claim = Components.Schemas.AgentClaim(
+            label: "agent-transcript",
+            artifact_id: (finished ? "agent-transcript-" : "artifact-failed-transcript-")
+                + invocation.invocation_id,
+            digest: finished ? finishedTranscriptDigest : failedTranscriptDigest,
+            provenance: .head_independent(
+                .init(
+                    producer_class: .agent, producer_invocation_id: invocation.invocation_id,
+                    head_binding: .head_independent, verification_recipe_digest: nil,
+                    sensitivity_class: .sensitive)),
+            metadata: .init(
+                media_type: finished ? .application_sol_jsonl : .text_sol_plain,
+                size_bytes: Int64(content.utf8.count), created_at: invocation.observed_at, source: .claim,
+                availability: .available))
+        return .init(
+            run_id: runID, invocation_id: invocation.invocation_id, availability: .available,
+            transcript: .init(value1: claim), prompt: writerPrompt)
+    }
+
     public static func reviewEvidence(
         runID: String, round: Components.Schemas.RunReviewRound
     ) -> Components.Schemas.ReviewEvidence {
