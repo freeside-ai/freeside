@@ -243,8 +243,20 @@ func (e *Engine) retireClosedInvocationIntent(ctx context.Context, entry store.Q
 	return retired, err
 }
 
+// closedWorkflowResultKey is the inbox key of an attempt's settled result in
+// a closed workflow.
+func closedWorkflowResultKey(id domain.InvocationID) string {
+	return "closed-workflow-result/" + string(id)
+}
+
 // collectClosedRun retains validated provider observations and usage without
 // feeding them to specification, recovery, readiness or publication consumers.
+// An attempt's closed-workflow-result row is written only after its
+// conversation reply has landed, so the row marks the attempt settled, and a
+// settled attempt is never inspected again: re-inspecting it would only
+// repeat a driver call on every pass for as long as the run is kept. A row
+// a daemon before #3452 wrote ahead of a reply that then failed is taken as
+// settled too, so that reply is not retried (accepted in the issue's plan).
 func (e *Engine) collectClosedRun(ctx context.Context, run domain.Run) (int, error) {
 	accepted := 0
 	for _, stage := range run.Stages {
@@ -284,6 +296,20 @@ func (e *Engine) collectClosedRun(ctx context.Context, run domain.Run) (int, err
 			if !owned {
 				continue
 			}
+			settled := false
+			if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetInbox(ctx, closedWorkflowResultKey(attempt.InvocationID))
+				if errors.Is(err, store.ErrNotFound) {
+					return nil
+				}
+				settled = err == nil
+				return err
+			}); err != nil {
+				return accepted, err
+			}
+			if settled {
+				continue
+			}
 			result, ready, err := e.collectWorkflowTerminal(ctx, run.ID, attempt, true)
 			if errors.Is(err, exec.ErrUnknownInvocation) || errors.Is(err, ErrInvocationLost) {
 				continue // Absence is neither successful cancellation nor completion.
@@ -302,11 +328,17 @@ func (e *Engine) collectClosedRun(ctx context.Context, run domain.Run) (int, err
 			if err != nil {
 				return accepted, err
 			}
+			// The reply lands before the row that settles the attempt; a
+			// failed reply leaves it unsettled, so the next pass retries it.
+			// The reply is idempotent, so a crash between the two replays it.
+			if err := e.acceptClosedConversationReply(ctx, run, attempt, result); err != nil {
+				return accepted, err
+			}
 			err = e.store.Write(ctx, func(tx *store.WriteTx) error {
 				if err := tx.RequireRunWorkflowOpen(ctx, run.ID); !errors.Is(err, store.ErrTaskWorkflowClosed) {
 					return errors.Join(err, domain.ErrParentKeyMismatch)
 				}
-				stored, inserted, err := tx.RecordInbox(ctx, "closed-workflow-result/"+string(attempt.InvocationID), "closed_workflow_result", payload)
+				stored, inserted, err := tx.RecordInbox(ctx, closedWorkflowResultKey(attempt.InvocationID), "closed_workflow_result", payload)
 				if err != nil {
 					return err
 				}
@@ -323,9 +355,6 @@ func (e *Engine) collectClosedRun(ctx context.Context, run domain.Run) (int, err
 			}
 			if err == nil {
 				accepted++
-			}
-			if err := e.acceptClosedConversationReply(ctx, run, attempt, result); err != nil {
-				return accepted, err
 			}
 		}
 	}
