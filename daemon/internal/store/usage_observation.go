@@ -68,13 +68,13 @@ func (tx *ReadTx) projectRunBillableCost(
 }
 
 // BillableCostSoFar returns the run's render-only spend figure, or nil while
-// no billable observation exists. It is the one aggregate the ordinary read
-// transaction exposes over usage rows: the rows themselves stay behind
-// UsageReadTx, so admission and policy callers still cannot reach them. The
-// figure is complete only when every admitted invocation (execution
-// admissions, review records, and review failures) has a billable
-// observation and every observed unit is usd_micros; an admitted invocation
-// with no observation, or an unknown unit, marks the amount a lower bound.
+// no billable observation exists. It and InvocationUsage are the aggregates
+// the ordinary read transaction exposes over usage rows: the rows themselves
+// stay behind UsageReadTx, so admission and policy callers still cannot reach
+// them. The figure is complete only when every admitted invocation
+// (runAdmittedInvocations) has a billable observation and every observed
+// unit is usd_micros; an admitted invocation with no observation, or an
+// unknown unit, marks the amount a lower bound.
 func (tx *ReadTx) BillableCostSoFar(
 	ctx context.Context, runID domain.RunID,
 ) (*domain.CostSoFar, error) {
@@ -89,30 +89,12 @@ func (tx *ReadTx) BillableCostSoFar(
 	for _, invocationID := range projection.invocationIDs {
 		observedInvocations[invocationID] = struct{}{}
 	}
-	admittedInvocations := make(map[domain.InvocationID]struct{})
-	admissions, err := tx.ListRunExecutionAdmissionRecords(ctx, runID)
+	admittedInvocations, err := tx.runAdmittedInvocations(ctx, runID)
 	if err != nil {
 		return nil, err
-	}
-	for _, admission := range admissions {
-		admittedInvocations[admission.InvocationID] = struct{}{}
-	}
-	reviews, err := tx.ListReviewRecords(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	for _, review := range reviews {
-		admittedInvocations[review.InvocationID] = struct{}{}
-	}
-	failures, err := tx.ListReviewFailures(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	for _, failure := range failures {
-		admittedInvocations[failure.InvocationID] = struct{}{}
 	}
 	complete := projection.completeUnits
-	for invocationID := range admittedInvocations {
+	for _, invocationID := range admittedInvocations {
 		if _, ok := observedInvocations[invocationID]; !ok {
 			complete = false
 			break
@@ -122,6 +104,57 @@ func (tx *ReadTx) BillableCostSoFar(
 		Currency: "USD", Amount: usdMicrosDecimal(projection.usdMicros),
 		Invocations: len(observedInvocations), Complete: complete,
 	}, nil
+}
+
+// InvocationUsage returns the run's render-only per-invocation usage: each
+// admitted invocation's coverage and token totals
+// (domain.ProjectInvocationUsage). It reads the rows through the
+// transaction's own connection, as projectRunBillableCost does.
+func (tx *ReadTx) InvocationUsage(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.InvocationUsage, error) {
+	observations, err := queryAll(ctx, tx.tx, scanUsageObservation, listRunUsageObservationsSQL, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list run usage observations %q: %w", runID, err)
+	}
+	admitted, err := tx.runAdmittedInvocations(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	return domain.ProjectInvocationUsage(admitted, observations)
+}
+
+// runAdmittedInvocations is every invocation the run admitted that can
+// report usage, sorted and without repeats: its execution admissions, review
+// records, and review failures. Verification holds no execution admission,
+// so it is not among them.
+func (tx *ReadTx) runAdmittedInvocations(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.InvocationID, error) {
+	var ids []domain.InvocationID
+	admissions, err := tx.ListRunExecutionAdmissionRecords(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, admission := range admissions {
+		ids = append(ids, admission.InvocationID)
+	}
+	reviews, err := tx.ListReviewRecords(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, review := range reviews {
+		ids = append(ids, review.InvocationID)
+	}
+	failures, err := tx.ListReviewFailures(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, failure := range failures {
+		ids = append(ids, failure.InvocationID)
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids), nil
 }
 
 func usdMicrosDecimal(micros int64) string {

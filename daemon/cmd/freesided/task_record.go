@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v18"
+const taskRecordVersion = "freeside-task-record-v19"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -99,7 +99,10 @@ type taskRecordRun struct {
 	Admissions           []taskRecordAdmission          `json:"admissions"`
 	ResolvedPolicyDigest *domain.Digest                 `json:"resolved_policy_digest"`
 	BillableCost         *domain.CostSoFar              `json:"billable_cost"`
-	Publication          *taskRecordPublication         `json:"publication"`
+	// Usage is each admitted invocation's token coverage, its token totals,
+	// and its wall time, in invocation-id order.
+	Usage       []taskRecordInvocationUsage `json:"usage"`
+	Publication *taskRecordPublication      `json:"publication"`
 	// ClosureCards are the closure cards of the run's work unit, open or
 	// closed, in item-id order. Each publication admits its own closure
 	// instance, so a run that published more than once can hold several.
@@ -119,6 +122,18 @@ type taskRecordRun struct {
 	// what the run posted or tried to post, and the findings it set aside.
 	Outcomes *signet.RunOutcomes  `json:"outcomes"`
 	Errors   []taskRecordRunError `json:"errors"`
+}
+
+// taskRecordInvocationUsage is one invocation's usage. Tokens holds only the
+// metrics its route reported, and is empty for a missing invocation.
+// WallSeconds is the invocation's working time in the record's timeline
+// clocks, rounded down; it is null while the invocation is working, when it
+// never started, and when the timeline didn't read (timeline_error).
+type taskRecordInvocationUsage struct {
+	InvocationID domain.InvocationID  `json:"invocation_id"`
+	Coverage     domain.UsageCoverage `json:"coverage"`
+	Tokens       []domain.UsageTotal  `json:"tokens"`
+	WallSeconds  *int64               `json:"wall_seconds"`
 }
 
 // taskRecordReviewAdmission is one review invocation's admission. It leaves
@@ -203,6 +218,7 @@ const (
 	taskRecordRunAdmissions taskRecordRunSection = "admissions"
 	taskRecordRunPolicy     taskRecordRunSection = "resolved_policy_digest"
 	taskRecordRunCost       taskRecordRunSection = "billable_cost"
+	taskRecordRunUsage      taskRecordRunSection = "usage"
 	// taskRecordRunObservation covers Hold and Invocations, which one read
 	// returns.
 	taskRecordRunObservation taskRecordRunSection = "observation"
@@ -226,7 +242,7 @@ const (
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
-	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
+	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost, taskRecordRunUsage,
 	taskRecordRunObservation, taskRecordRunConclusion,
 	taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
 	taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions,
@@ -235,7 +251,7 @@ var allTaskRecordRunSections = []taskRecordRunSection{
 
 func (s taskRecordRunSection) valid() bool {
 	switch s {
-	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
+	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost, taskRecordRunUsage,
 		taskRecordRunObservation, taskRecordRunConclusion,
 		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
 		taskRecordRunClosure, taskRecordRunSpecificationRetries, taskRecordRunReviewAdmissions,
@@ -493,6 +509,9 @@ func readTaskRecord(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asO
 		}
 		record.Runs = append(record.Runs, run)
 	}
+	if record.Timeline != nil {
+		fillTaskRecordWallSeconds(*record.Timeline, record.Runs)
+	}
 	if lines, err := tx.TaskLines(ctx, id); err != nil {
 		record.TaskLinesError = newTaskRecordError(err)
 	} else {
@@ -520,6 +539,43 @@ func readTaskRecord(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asO
 		return taskRecord{}, err
 	}
 	return record, nil
+}
+
+// fillTaskRecordWallSeconds sets each usage entry's wall time from its run's
+// clocks in the timeline, so the two can't disagree. An invocation's wall
+// time sums its active intervals, and stays null if any is still open.
+func fillTaskRecordWallSeconds(timeline signet.TaskTimeline, runs []taskRecordRun) {
+	clocks := make(map[domain.RunID]*domain.RunClocks)
+	for _, section := range timeline.Sections {
+		for _, run := range section.Runs {
+			clocks[run.RunID] = run.Clocks
+		}
+	}
+	for i := range runs {
+		runClocks := clocks[runs[i].RunID]
+		if runClocks == nil {
+			continue
+		}
+		for j := range runs[i].Usage {
+			usage := &runs[i].Usage[j]
+			var wall time.Duration
+			found, open := false, false
+			for _, interval := range runClocks.ActiveIntervals {
+				if interval.InvocationID != usage.InvocationID {
+					continue
+				}
+				found = true
+				if interval.EndedAt == nil {
+					open = true
+					break
+				}
+				wall += interval.EndedAt.Sub(interval.StartedAt)
+			}
+			if found && !open {
+				usage.WallSeconds = new(int64(wall / time.Second))
+			}
+		}
+	}
 }
 
 func projectTaskRecordTask(task domain.Task) taskRecordTask {
@@ -567,6 +623,16 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 		fail(taskRecordRunCost, err)
 	} else {
 		out.BillableCost = cost
+	}
+	if usage, err := tx.InvocationUsage(ctx, runID); err != nil {
+		fail(taskRecordRunUsage, err)
+	} else {
+		out.Usage = make([]taskRecordInvocationUsage, 0, len(usage))
+		for _, entry := range usage {
+			out.Usage = append(out.Usage, taskRecordInvocationUsage{
+				InvocationID: entry.InvocationID, Coverage: entry.Coverage, Tokens: entry.Tokens,
+			})
+		}
 	}
 	if publication, binding, err := readTaskRecordPublication(ctx, tx, runID); err != nil {
 		fail(taskRecordRunPublication, err)

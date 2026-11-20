@@ -291,7 +291,8 @@ func TestTaskRecordReportsUnreadableRun(t *testing.T) {
 
 // TestTaskRecordKeepsRunFactsPastAFailedRead breaks one admission row of
 // another task. The admissions read scans every run's rows, so it fails for
-// this task's runs too, and each run still reads its hold, invocations, and
+// this task's runs too, and so does the usage read, which takes its admitted
+// invocations from it. Each run still reads its hold, invocations, and
 // conclusion.
 func TestTaskRecordKeepsRunFactsPastAFailedRead(t *testing.T) {
 	t.Parallel()
@@ -304,12 +305,13 @@ func TestTaskRecordKeepsRunFactsPastAFailedRead(t *testing.T) {
 	record := readRecord(t, st, id)
 	for index, run := range record.Runs {
 		want := before.Runs[index]
-		if !slices.Equal(runErrorSections(run), []taskRecordRunSection{taskRecordRunAdmissions}) ||
-			run.Errors[0].Kind != taskRecordErrorIntegrity || run.Admissions != nil {
-			t.Fatalf("run %s: errors = %+v, admissions = %v", run.RunID, run.Errors, run.Admissions)
+		if !slices.Equal(runErrorSections(run), []taskRecordRunSection{taskRecordRunAdmissions, taskRecordRunUsage}) ||
+			run.Errors[0].Kind != taskRecordErrorIntegrity || run.Errors[1].Kind != taskRecordErrorIntegrity ||
+			run.Admissions != nil || run.Usage != nil {
+			t.Fatalf("run %s: errors = %+v, admissions = %v, usage = %v", run.RunID, run.Errors, run.Admissions, run.Usage)
 		}
-		// Everything but the admissions is as it was.
-		run.Admissions, run.Errors = want.Admissions, want.Errors
+		// Everything but the admissions and usage is as it was.
+		run.Admissions, run.Usage, run.Errors = want.Admissions, want.Usage, want.Errors
 		got, wantJSON := mustJSON(t, run), mustJSON(t, want)
 		if run.Conclusion == nil || run.Invocations == nil || !bytes.Equal(got, wantJSON) {
 			t.Errorf("run %s lost facts: %s, want %s", run.RunID, got, wantJSON)
@@ -1093,6 +1095,50 @@ func TestTaskRecordConcludesConfirmedStop(t *testing.T) {
 		_, followed, err := observedb.Borrow(st).ObserveConclusion(ctx, run.RunID)
 		if err != nil || followed.Outcome != got.Outcome || followed.Final != got.Final {
 			t.Errorf("run %s: follow = %+v (%v), record = %+v", run.RunID, followed, err, got)
+		}
+	}
+}
+
+// An invocation's wall time is its intervals in the timeline's clocks, summed
+// and rounded down. It stays null while one is open, and for an invocation
+// with none or a run the timeline doesn't hold.
+func TestTaskRecordWallSecondsFollowTimelineClocks(t *testing.T) {
+	t.Parallel()
+	at := func(seconds int) *time.Time { return new(taskRecordAsOf.Add(time.Duration(seconds) * time.Second)) }
+	timeline := signet.TaskTimeline{Sections: []signet.TaskTimelineSection{{Runs: []signet.TaskTimelineRun{{
+		RunID: "run-1",
+		Clocks: &domain.RunClocks{ActiveIntervals: []domain.RunActiveInterval{
+			{InvocationID: "inv-missing", StartedAt: *at(0), EndedAt: at(90)},
+			{InvocationID: "inv-missing", StartedAt: *at(100), EndedAt: at(130)},
+			{InvocationID: "inv-working", StartedAt: *at(140), EndedAt: nil},
+		}},
+	}}}}}
+	usage := func(ids ...domain.InvocationID) []taskRecordInvocationUsage {
+		entries := []taskRecordInvocationUsage{}
+		for _, id := range ids {
+			entries = append(entries, taskRecordInvocationUsage{
+				InvocationID: id, Coverage: domain.UsageCoverageMissing, Tokens: []domain.UsageTotal{},
+			})
+		}
+		return entries
+	}
+	runs := []taskRecordRun{
+		{RunID: "run-1", Usage: usage("inv-missing", "inv-working", "inv-unstarted")},
+		{RunID: "run-absent", Usage: usage("inv-other")},
+	}
+	fillTaskRecordWallSeconds(timeline, runs)
+	got := map[domain.InvocationID]*int64{}
+	for _, run := range runs {
+		for _, entry := range run.Usage {
+			got[entry.InvocationID] = entry.WallSeconds
+		}
+	}
+	if got["inv-missing"] == nil || *got["inv-missing"] != 120 {
+		t.Fatalf("inv-missing wall_seconds = %v, want 120", got["inv-missing"])
+	}
+	for _, id := range []domain.InvocationID{"inv-working", "inv-unstarted", "inv-other"} {
+		if got[id] != nil {
+			t.Errorf("%s wall_seconds = %d, want null", id, *got[id])
 		}
 	}
 }
