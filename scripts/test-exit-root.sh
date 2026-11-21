@@ -14,8 +14,10 @@
 # writes, and the image and recipe that approval prints; `routing`,
 # `set-pool-limit`, and `probe-lineup` record their arguments, and
 # `probe-lineup` also stamps the enrollments as model discovery does;
-# `onboard` refuses a -commit that isn't the tip of a bare upstream's main,
-# which the repository checkout clones and `advance-upstream` moves.
+# `onboard` refuses a review whose -commit isn't the tip of a bare
+# upstream's main, which the repository checkout clones and
+# `advance-upstream` moves, and applies an approval at that tip when its
+# -source checkout has fetched it, naming the tip in image_request.
 # A stand-in `lsof` reports the ports a case lists as listening. The
 # synthetic repository's dev-instance.sh is a stand-in too, since
 # test-dev-instance.sh covers the real one.
@@ -31,7 +33,8 @@
 # just before it (after a template pin older than the tip, and after a
 # deputy start that moved the tip), a root recorded before the template's
 # pin was kept, the base ref moving alone asking for no review, a review
-# refused at a moved tip keeping the approval, the re-onboarding after a
+# refused at a moved tip keeping the approval, an approval run after the tip
+# moved applying at the tip and pinning the deputy there, the re-onboarding after a
 # moved review configuration, the re-pin of a newer approval's image, the
 # submit line, port selection, the seeded-routing overlay, the scenario
 # pass, and the refusals that create nothing.
@@ -308,13 +311,19 @@ onboard)
   n=$(find "$STUB_DIR" -name 'onboard-*.args' | wc -l | tr -d ' ')
   printf '%s\n' "$@" >"$STUB_DIR/onboard-$((n + 1)).args"
   db=$(flag -db "$@")
-  # The workflow audit covers only the live tip, so a -commit the base ref
-  # has moved past is refused; mode moves lands a change just before the
-  # check, as a merge between exit-root's fetch and the audit does.
+  # The workflow audit covers only the live tip, so a review at a -commit
+  # the base ref has moved past is refused; mode moves lands a change just
+  # before the check, as a merge between exit-root's fetch and the audit
+  # does. An approval applies at the tip, as the real one does when nothing
+  # it covers changed there, but only from a -source that has fetched it.
   [[ "${FAKE_ONBOARD_MODE:-}" != moves ]] || advance-upstream
   live=$(git -C "${FAKE_UPSTREAM:?}" rev-parse refs/heads/main)
-  if [[ "$(flag -commit "$@")" != "$live" ]]; then
+  if [[ "$(flag -commit "$@")" != "$live" && -z "$(flag -approve "$@")" ]]; then
     echo "onboard: the base ref's live tip is $live, not -commit $(flag -commit "$@"); the workflow audit covers only the live tip" >&2
+    exit 1
+  fi
+  if [[ -n "$(flag -approve "$@")" ]] && ! git -C "$(flag -source "$@")" cat-file -e "$live^{commit}" 2>/dev/null; then
+    echo "onboard: cannot read the verification recipe at the tip $live" >&2
     exit 1
   fi
   if [[ -n "$(flag -approve "$@")" && "${FAKE_ONBOARD_MODE:-}" == failed-approval ]]; then
@@ -325,8 +334,8 @@ onboard)
     # The trust marker stays REVIEW_DIGEST: prelaunch keeps passing the
     # profile after the review configuration moves.
     printf '%s\n' "$REVIEW_DIGEST" >"$(dirname "$db")/fake-trust"
-    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
-      '{status: "complete", project_image: {image_ref: $i, recipe_digest: $r}}'
+    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" --arg c "$live" \
+      '{status: "complete", image_request: {commit_sha: $c}, project_image: {image_ref: $i, recipe_digest: $r}}'
   elif [[ "${FAKE_ONBOARD_MODE:-}" == carry ]]; then
     # Nothing the active approval trusts changed: the review completes.
     jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
@@ -1023,6 +1032,26 @@ assert_rc 0
 assert_line "$CASE_DIR/onboard-2.args" "$(upstream_tip)"
 assert_eq "$(deputy_calls_before_review)" 0 'deputy starts before the rerun review'
 assert_eq "$(jq -r .onboarded.template_base_sha "$ROOTS/carry/exit-root.json")" "$NEW_BASE2" 'rerun answered the new pin'
+
+begin_case "an approval run after the tip moved applies at the tip, and the deputy runs there"
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" late
+assert_rc 3
+approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
+case $approval in
+"git -C $CLONE fetch --quiet --no-tags origin main && "*" onboard $REPO_SLUG "*"-approve $APPROVAL_DIGEST > $ROOTS/late/daemon/onboard-approved.json") ok ;;
+*) report_failure "approval does not fetch the base ref first: $approval" ;;
+esac
+reviewed=$(upstream_tip)
+"$STUB_BIN/advance-upstream"
+if approve >"$CASE_DIR/approve.out" 2>&1; then ok; else report_failure "the approval after the tip moved failed: $(cat "$CASE_DIR/approve.out")"; fi
+assert_eq "$(jq -r .image_request.commit_sha "$ROOTS/late/daemon/onboard-approved.json")" "$(upstream_tip)" 'approval applied at the tip'
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-review.log"
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" late
+assert_rc 0
+assert_contains "the approval applied at $(upstream_tip), the base ref's tip after the review at $reviewed"
+assert_eq "$(jq -r .repository.base_sha "$ROOTS/late/daemon/settings.json")" "$(upstream_tip)" 'rendered base is the approval commit'
+assert_eq "$(jq -r .onboarded.base_sha "$ROOTS/late/exit-root.json")" "$(upstream_tip)" 'state binds the approval commit'
+if grep -qx onboard "$CASE_DIR/calls.log"; then report_failure "the approved root reviewed again"; else ok; fi
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild

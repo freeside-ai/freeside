@@ -49,7 +49,10 @@
 #      rendered repository.base_sha is the tip that review covered.
 #   5. Pin images.agent and approved_recipe from
 #      <root>/daemon/onboard-approved.json whenever it holds a completed
-#      approval the script hasn't pinned from yet. When the settings or the
+#      approval the script hasn't pinned from yet. An approval that applied
+#      at a tip the base ref moved to after its review records that tip as
+#      its image_request.commit_sha; the state file takes it as the
+#      reviewed tip, so step 4 pins the deputy there. When the settings or the
 #      root's enrollments (from `freesided auth list`) differ from the last
 #      start that composed (a new root, a new build's prompt packages, a
 #      changed machine file, a new image, an enrollment from enroll-codex),
@@ -79,7 +82,10 @@
 #      configuration digest or the template's repository.base_sha differs
 #      from the ones the last review answered, since prelaunch keeps passing
 #      the old trust profile; the base ref moving on its own asks for none.
-#      Before that review's approval, stop with its approval command. A
+#      Before that review's approval, stop with its approval command, which
+#      fetches the base ref into the repository checkout first: an approval
+#      after the tip moved applies at the new tip when nothing it covers
+#      changed there, and reads that tip's recipe and image inputs. A
 #      review that changes nothing the active approval trusts completes on
 #      its own (`freesided onboard` carries the approval forward): its
 #      output becomes the completed approval, step 5 pins its image, and the
@@ -664,8 +670,13 @@ onboard_review() {
     exit 3
     ;;
   review_required)
+    # The approval fetches the base ref first: if the tip moved since this
+    # review, `freesided onboard` applies the approval there when nothing it
+    # covers changed, reading the tip's recipe and image inputs from the
+    # checkout.
     local command
-    command="$(printf '%q ' "$freesided" "${args[@]}" -approve "$(jq -r '.approval_digest' "$review")")> $(printf '%q' "$approved")"
+    command="$(printf '%q ' git -C "$repo_checkout" fetch --quiet --no-tags origin "$(setting .repository.base_ref)")&& "
+    command+="$(printf '%q ' "$freesided" "${args[@]}" -approve "$(jq -r '.approval_digest' "$review")")> $(printf '%q' "$approved")"
     state_set approval_command "$(jq -n --arg c "$command" '$c')"
     state_set onboarded "$bound"
     render_settings
@@ -733,14 +744,22 @@ stop_for_approval() {
 # script hasn't pinned from yet. A re-onboarding's approval can name a new
 # image while prelaunch still passes on the old one, so this runs whenever
 # the approval changes, not only when prelaunch names the image missing.
+# An approval that applied at a tip the base ref moved to after the review
+# names that tip in image_request.commit_sha, and the deputy runs there.
 pin_approved_image() {
-  local approved="$root/daemon/onboard-approved.json" source image recipe
+  local approved="$root/daemon/onboard-approved.json" source image recipe commit bound
   approved_complete || return 0
   source=$(git -C "$repo_root" hash-object -- "$approved")
   [[ "$source" != "$(state_get .image_source)" ]] || return 0
   image=$(jq -r '.project_image.image_ref // empty' "$approved")
   recipe=$(jq -r '.project_image.recipe_digest // empty' "$approved")
   [[ -n "$image" && -n "$recipe" ]] || die "$approved names no project_image"
+  commit=$(jq -r '.image_request.commit_sha // empty' "$approved")
+  bound=$(state_get .onboarded.base_sha)
+  if [[ -n "$commit" && -n "$bound" && "$commit" != "$bound" ]]; then
+    state_set onboarded "$(jq -c --arg b "$commit" '.onboarded + {base_sha: $b}' "$state")"
+    say "the approval applied at $commit, the base ref's tip after the review at $bound; the deputy runs there"
+  fi
   state_set image "\"$image\""
   state_set recipe "\"$recipe\""
   state_set image_source "\"$source\""

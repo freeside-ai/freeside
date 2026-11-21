@@ -615,7 +615,8 @@ one; it resumes where it stopped. In order:
    rerun as usual. The intent belongs to the App, so finish one root's installation before another root's onboarding starts:
    a new root's first call doesn't pass `-resume`.
 3. **The onboarding approval.** The `approval=` line is the full `freesided
-   onboard ... -approve <approval_digest>` command. Read the review in
+   onboard ... -approve <approval_digest>` command, after a fetch of
+   `repository.base_ref` into the repository checkout. Read the review in
    `<root>/daemon/onboard-review.json`, then run that command yourself; it
    writes `<root>/daemon/onboard-approved.json`. The approval stays the
    operator's: the script never passes `-approve`. A re-review that changes
@@ -639,7 +640,12 @@ one; it resumes where it stopped. In order:
    deputy start; `main` moving on its own asks for none. If a merge lands
    in the seconds between the fetch and the review, the review is refused,
    the root keeps its completed approval, and a rerun reviews the new tip
-   at once.
+   at once. The approval needn't race `main`: when the tip moved while you
+   read the review, the approval applies at the new tip if nothing it
+   covers (the workflows, the recipe, the installation, the flags) changed
+   there, and the next rerun renders that tip as `repository.base_sha`.
+   If something did change, the approval command fails, prints what
+   changed, and a rerun of the script reviews the new tip.
 4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
    the approving run, applies the pass's routing and pool limits, runs
    `freesided probe-lineup -root <root>`
