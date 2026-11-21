@@ -4039,17 +4039,33 @@ daemon first; onboarding refuses a database it holds. It:
    says it listed none; that listing is a diagnostic and grants nothing;
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
-   requires its resolved commit to equal `-commit`, and retains that exact
-   evidence. When the tip has moved past `-commit`, it refuses and prints
-   the review to run next: the same arguments with `-commit` naming the tip
-   and no `-approve`;
+   requires its resolved commit to equal `-commit` on a review, and retains
+   that exact evidence. When the tip has moved past `-commit`, a review
+   refuses and prints the review to run next: the same arguments with
+   `-commit` naming the tip and no `-approve`. An approval at a moved tip
+   is step 5's;
 4. derives a conservative profile from the fresh retained audit and returns
    the installation- and image-request-bound approval digest as
    `review_required`; the `-commit-plan` owner-policy flag selects
    `single_commit` (the conservative default) or `plan_preferred`. A
    repository already onboarded may instead carry its approval forward
    (below);
-5. accepts only `-approve <approval_digest>` from that review; and
+5. accepts only `-approve <approval_digest>` from that review. When the
+   base ref's tip has moved past the reviewed `-commit` by the time the
+   approval runs, the approval still applies at the tip if nothing it
+   covers changed there: it reads the tip's `.freeside/verify.json` (from
+   `-source`, which must have fetched the tip, or the `-recipe` file),
+   rebuilds the profile from the tip's audit, recomputes the approval
+   digest with the reviewed commit in place of the tip, and requires that
+   digest and the recipe to equal the reviewed ones. The image is then
+   reused or built at the tip. The result names the tip in
+   `image_request.commit_sha`, the reviewed commit in
+   `reviewed_commit_sha`, and keeps the owner's `approval_digest`.
+   Otherwise the approval is refused, prints one `onboard:` line per
+   change (a profile field such as `workflow_audit_digest`,
+   `image.recipe_digest`, an unreadable recipe, or a digest mismatch from
+   an installation or flag change), and prints the review to run at the
+   tip; and
 6. promotes a pending installation as soon as it accepts the approval,
    before any image work, and waits up to a minute for the janitor to
    cover the repository under the promoted binding, so a build that
@@ -4981,7 +4997,10 @@ merge lands in between: `git -C <checkout> fetch origin main && freesided
 onboard ... -source <checkout> -commit "$(git -C <checkout> rev-parse
 FETCH_HEAD)"`. The fetch also puts that commit in the `-source` checkout,
 which reads the commit's image inputs. When a merge still lands first, the
-refusal prints the review at the new head; run it at once.
+refusal prints the review at the new head; run it at once. The approval
+needn't race `main`: fetch again before it (`git -C <checkout> fetch
+origin main && freesided onboard ... -approve <digest>`), and it applies
+at the new head when nothing it covers changed there.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs
   up to sixteen commands. Eleven run in the project image. The first two are the

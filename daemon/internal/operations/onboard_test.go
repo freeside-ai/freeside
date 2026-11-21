@@ -114,6 +114,12 @@ func unreadableBaseInputs(
 	return domain.ProjectImageBaseInputs{}, errors.New("checkout lacks the commit")
 }
 
+// recipeAtAnyCommit reads, at any commit, the one recipe every request in
+// these tests carries, as a tip whose recipe the owner already reviewed.
+func recipeAtAnyCommit(context.Context, string) ([]byte, error) {
+	return []byte(`{"commands":[["npm","test"]],"capture":"none"}`), nil
+}
+
 type authorityStub struct{ authority publish.InstallationAuthority }
 
 func (a authorityStub) InstallationAuthority(
@@ -208,7 +214,7 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
-		BaseInputs: bakedBaseInputs,
+		BaseInputs: bakedBaseInputs, Recipe: recipeAtAnyCommit,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -353,7 +359,7 @@ func onboardProposesIssueCommentWorkflows(t *testing.T, listed []domain.IssueCom
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
-		BaseInputs: bakedBaseInputs,
+		BaseInputs: bakedBaseInputs, Recipe: recipeAtAnyCommit,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -439,7 +445,7 @@ func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
-		BaseInputs: bakedBaseInputs,
+		BaseInputs: bakedBaseInputs, Recipe: recipeAtAnyCommit,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -549,7 +555,7 @@ func TestOnboardReRunBindsProtectedPaths(t *testing.T) {
 			}},
 		}},
 		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
-		BaseInputs: bakedBaseInputs,
+		BaseInputs: bakedBaseInputs, Recipe: recipeAtAnyCommit,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -676,7 +682,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 	onboard := operations.Onboard{
 		Store: st, Builder: builder, Auditor: workflowAuditorStub{audit: audit},
 		Now: func() time.Time { return audit.AuditedAt }, Gate: gate,
-		Authority: authority, BaseInputs: unreadableBaseInputs,
+		Authority: authority, BaseInputs: unreadableBaseInputs, Recipe: recipeAtAnyCommit,
 	}
 	req := operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
@@ -934,7 +940,7 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 		Store: st, Builder: builder, Documents: documents,
 		Auditor: workflowAuditorStub{audit: audit},
 		Now:     func() time.Time { return auditedAt }, Gate: pendingGateStub(true),
-		BaseInputs: unreadableBaseInputs,
+		BaseInputs: unreadableBaseInputs, Recipe: recipeAtAnyCommit,
 		Authority: authorityStub{publish.InstallationAuthority{
 			ActiveEpoch: 3, DurableIntentRevision: 7,
 			Pending: &publish.PendingInstallationEnvelope{
@@ -1011,8 +1017,8 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 	}
 }
 
-// carryFixture is a repository onboarded and activated at carryCommitA, whose
-// base ref has since moved to carryCommitB with no change to its workflows.
+// carryFixture is a repository onboarded through one trusted installation,
+// built by newReviewFixture or newCarryFixture.
 type carryFixture struct {
 	st      *store.Store
 	dbPath  string
@@ -1027,11 +1033,13 @@ type carryFixture struct {
 const (
 	carryCommitA = "0123456789012345678901234567890123456789"
 	carryCommitB = "2223456789012345678901234567890123456789"
+	carryCommitC = "3333456789012345678901234567890123456789"
 )
 
-func newCarryFixture(t *testing.T) *carryFixture {
+// newReviewFixture is a repository with no active profile or admitted image,
+// whose base ref's tip is carryCommitA, before its first review.
+func newReviewFixture(t *testing.T) *carryFixture {
 	t.Helper()
-	ctx := t.Context()
 	dbPath := t.TempDir() + "/freeside.db"
 	st := storetest.Open(t, dbPath, store.Options{})
 	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
@@ -1058,7 +1066,7 @@ func newCarryFixture(t *testing.T) *carryFixture {
 				Account: "example", AccountID: 33, RepositoryIDs: []int64{44},
 			}},
 		}},
-		Gate: f.gate, BaseInputs: bakedBaseInputs,
+		Gate: f.gate, BaseInputs: bakedBaseInputs, Recipe: recipeAtAnyCommit,
 		Now: func() time.Time { return audit.AuditedAt },
 	}
 	f.req = operations.OnboardRequest{
@@ -1078,6 +1086,22 @@ func newCarryFixture(t *testing.T) *carryFixture {
 			BaseBuildRef: "local/base:v1", LocalRegistryPort: 5100,
 		},
 	}
+	return f
+}
+
+// moveTip moves the base ref's tip to commit with the workflows unchanged.
+func (f *carryFixture) moveTip(commit string) {
+	f.audit.AuditedCommitSHA = commit
+	f.onboard.Auditor = workflowAuditorStub{audit: f.audit}
+}
+
+// newCarryFixture is a repository onboarded and activated at carryCommitA,
+// whose base ref has since moved to carryCommitB with no change to its
+// workflows, before its review there.
+func newCarryFixture(t *testing.T) *carryFixture {
+	t.Helper()
+	ctx := t.Context()
+	f := newReviewFixture(t)
 	review, err := f.onboard.Run(ctx, f.req)
 	if err != nil {
 		t.Fatalf("first review: %v", err)
@@ -1093,8 +1117,7 @@ func newCarryFixture(t *testing.T) *carryFixture {
 	// The base moves to a source-only commit, and the operator reviews again.
 	f.req.ApprovalDigest = ""
 	f.req.Image.CommitSHA = carryCommitB
-	f.audit.AuditedCommitSHA = carryCommitB
-	f.onboard.Auditor = workflowAuditorStub{audit: f.audit}
+	f.moveTip(carryCommitB)
 	// A new build is only ever of the new commit.
 	f.builder.image = domain.ProjectImage{}
 	return f
@@ -1359,6 +1382,165 @@ func TestOnboardNamesTheMovedTip(t *testing.T) {
 	}
 }
 
+// TestOnboardApprovalAppliesAtAMovedTip: an approval of a review whose
+// commit the base ref has since left applies at the live tip when the tip's
+// workflow audit and recipe are the reviewed ones. The image is built or
+// reused at the tip, and the result keeps the owner's digest and names the
+// reviewed commit.
+func TestOnboardApprovalAppliesAtAMovedTip(t *testing.T) {
+	t.Run("first onboarding builds at the tip", func(t *testing.T) {
+		f := newReviewFixture(t)
+		review, err := f.onboard.Run(t.Context(), f.req)
+		if err != nil || review.Status != "review_required" {
+			t.Fatalf("review = %+v, %v", review, err)
+		}
+		f.req.ApprovalDigest = review.ApprovalDigest
+		f.moveTip(carryCommitB)
+		complete, err := f.onboard.Run(t.Context(), f.req)
+		if err != nil || complete.Status != "complete" || complete.Carried {
+			t.Fatalf("approval at a moved tip = %+v, %v", complete, err)
+		}
+		if f.builder.calls != 1 || complete.ProjectImage == nil ||
+			complete.ProjectImage.CommitSHA != carryCommitB ||
+			f.pointerImage(t) != complete.ProjectImage.ID {
+			t.Fatalf("approval built %d image(s), image %+v, pointer %s; want one build at the tip",
+				f.builder.calls, complete.ProjectImage, f.pointerImage(t))
+		}
+		assertAppliedAtTip(t, f, review, complete, carryCommitA, carryCommitB)
+	})
+	t.Run("an onboarded repository reuses the serving image", func(t *testing.T) {
+		f := newCarryFixture(t)
+		f.req.Policy.CommitPlan = domain.CommitPlanPlanPreferred
+		review, err := f.onboard.Run(t.Context(), f.req)
+		if err != nil || review.Status != "review_required" {
+			t.Fatalf("review = %+v, %v", review, err)
+		}
+		f.req.ApprovalDigest = review.ApprovalDigest
+		f.moveTip(carryCommitC)
+		complete, err := f.onboard.Run(t.Context(), f.req)
+		if err != nil || complete.Status != "complete" || complete.Carried {
+			t.Fatalf("approval at a moved tip = %+v, %v", complete, err)
+		}
+		// The reused image keeps its own build commit; it serves the tip.
+		if f.builder.calls != 1 || complete.ProjectImage == nil ||
+			complete.ProjectImage.ID != f.first.ProjectImage.ID ||
+			f.pointerImage(t) != f.first.ProjectImage.ID {
+			t.Fatalf("approval built %d image(s) and returned %+v, want the admitted %s",
+				f.builder.calls-1, complete.ProjectImage, f.first.ProjectImage.ID)
+		}
+		assertAppliedAtTip(t, f, review, complete, carryCommitB, carryCommitC)
+	})
+}
+
+func assertAppliedAtTip(
+	t *testing.T, f *carryFixture, review, complete operations.OnboardResult, reviewed, tip string,
+) {
+	t.Helper()
+	if complete.ImageRequest.CommitSHA != tip || complete.ReviewedCommitSHA != reviewed ||
+		complete.ApprovalDigest != review.ApprovalDigest {
+		t.Fatalf("approval at a moved tip names image commit %s, reviewed commit %s, digest %s; "+
+			"want %s, %s, %s", complete.ImageRequest.CommitSHA, complete.ReviewedCommitSHA,
+			complete.ApprovalDigest, tip, reviewed, review.ApprovalDigest)
+	}
+	if review.ReviewedCommitSHA != "" {
+		t.Fatalf("review names reviewed commit %s, want none", review.ReviewedCommitSHA)
+	}
+	if got := f.activeDigest(t); got != review.Profile.ProfileDigest {
+		t.Fatalf("active profile = %s, want the approved %s", got, review.Profile.ProfileDigest)
+	}
+}
+
+// TestOnboardApprovalRefusesAMovedTipThatChangedWhatItCovers: an approval
+// at a moved tip whose workflow audit, recipe, or onboarding flags differ
+// from the review refuses with the tip, names what differs, and builds,
+// promotes, and activates nothing.
+func TestOnboardApprovalRefusesAMovedTipThatChangedWhatItCovers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *carryFixture)
+		want   func(operations.OnboardChange) bool
+	}{
+		{"workflow audit", func(t *testing.T, f *carryFixture) {
+			evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+				`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":["ci.yml"]}`,
+			))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.audit.WorkflowAuditDigest, f.audit.Evidence = evidence.Digest(), &evidence
+			f.onboard.Auditor = workflowAuditorStub{audit: f.audit}
+		}, func(c operations.OnboardChange) bool { return c.Field == "workflow_audit_digest" }},
+		{"recipe", func(_ *testing.T, f *carryFixture) {
+			f.onboard.Recipe = func(context.Context, string) ([]byte, error) {
+				return []byte(`{"commands":[["npm","run","check"]],"capture":"none"}`), nil
+			}
+		}, func(c operations.OnboardChange) bool { return c.Field == "image.recipe_digest" }},
+		{"unreadable recipe", func(_ *testing.T, f *carryFixture) {
+			f.onboard.Recipe = func(context.Context, string) ([]byte, error) {
+				return nil, errors.New("checkout lacks the commit")
+			}
+		}, func(c operations.OnboardChange) bool {
+			return strings.Contains(c.Reason, "recipe at the tip "+carryCommitB) &&
+				strings.Contains(c.Reason, "checkout lacks the commit")
+		}},
+		{"onboarding flag", func(_ *testing.T, f *carryFixture) {
+			f.req.Policy.CommitPlan = domain.CommitPlanPlanPreferred
+		}, func(c operations.OnboardChange) bool {
+			return strings.Contains(c.Reason, "does not match the review recomputed at the tip")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReviewFixture(t)
+			review, err := f.onboard.Run(t.Context(), f.req)
+			if err != nil {
+				t.Fatalf("review: %v", err)
+			}
+			f.req.ApprovalDigest = review.ApprovalDigest
+			f.moveTip(carryCommitB)
+			tc.mutate(t, f)
+			_, err = f.onboard.Run(t.Context(), f.req)
+			var moved *operations.MovedTipError
+			if !errors.As(err, &moved) || moved.Tip != carryCommitB || moved.Commit != carryCommitA ||
+				!slices.ContainsFunc(moved.Changes, tc.want) {
+				t.Fatalf("approval at a changed tip: err = %v, changes %+v", err, changesOf(moved))
+			}
+			if f.builder.calls != 0 || f.activations(t) != 0 {
+				t.Fatalf("refused approval built %d image(s) and left %d activation(s)",
+					f.builder.calls, f.activations(t))
+			}
+		})
+	}
+}
+
+// TestOnboardRefusedMovedTipApprovalLeavesTheIntentPending: a refused
+// approval at a moved tip decides before promotion, so a pending intent
+// stays pending and nothing is built or activated.
+func TestOnboardRefusedMovedTipApprovalLeavesTheIntentPending(t *testing.T) {
+	f := newPendingFixture(t)
+	audit := f.onboard.Auditor.(workflowAuditorStub).audit
+	audit.AuditedCommitSHA = carryCommitB
+	f.onboard.Auditor = workflowAuditorStub{audit: audit}
+	f.onboard.Recipe = func(context.Context, string) ([]byte, error) {
+		return []byte(`{"commands":[["npm","run","check"]],"capture":"none"}`), nil
+	}
+	_, err := f.onboard.Run(t.Context(), f.req)
+	var moved *operations.MovedTipError
+	if !errors.As(err, &moved) || len(moved.Changes) == 0 {
+		t.Fatalf("approval at a tip with a changed recipe: err = %v", err)
+	}
+	if f.trusted() || f.builder.calls != 0 || f.activeProfile(t) {
+		t.Fatalf("refused approval: trusted %t, builds %d, active profile %t",
+			f.trusted(), f.builder.calls, f.activeProfile(t))
+	}
+}
+
+func changesOf(moved *operations.MovedTipError) []operations.OnboardChange {
+	if moved == nil {
+		return nil
+	}
+	return moved.Changes
+}
+
 // InstallationAuthority serves the stub's document the way the authority
 // store does, so an onboarding run reads back the binding its own promotion
 // wrote.
@@ -1487,7 +1669,7 @@ func newPendingFixture(t *testing.T) *pendingFixture {
 		Store: st, Builder: f.builder, Documents: f.documents, Authority: f.documents,
 		Auditor: workflowAuditorStub{audit: audit},
 		Now:     func() time.Time { return f.now }, Gate: pendingGateStub(true),
-		BaseInputs: unreadableBaseInputs,
+		BaseInputs: unreadableBaseInputs, Recipe: recipeAtAnyCommit,
 	}
 	f.req = operations.OnboardRequest{
 		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,

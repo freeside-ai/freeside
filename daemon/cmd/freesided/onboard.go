@@ -394,6 +394,7 @@ func runOnboardCommand(
 			Store: st, Builder: builder, Auditor: auditor, Authority: authority,
 			Documents: authority, Gate: gate, Now: time.Now,
 			BaseInputs: onboardBaseInputs(cfg.GitPath, cfg.SourceDir),
+			Recipe:     onboardRecipe(cfg, recipe),
 		}).Run(ctx, operations.OnboardRequest{
 			Repository: cfg.Repository, RepositoryID: cfg.RepositoryID,
 			RegistrationID: cfg.RegistrationID,
@@ -412,6 +413,7 @@ func runOnboardCommand(
 		})
 		var moved *operations.MovedTipError
 		if errors.As(runErr, &moved) {
+			printOnboardChanges(stderr, moved.Changes)
 			return fmt.Errorf("%w; review the tip with: %s", runErr, movedTipCommand(args, moved.Tip))
 		}
 		if runErr != nil {
@@ -420,14 +422,7 @@ func runOnboardCommand(
 		if result.Status == "review_required" && result.Installation.Pending != nil {
 			_, _ = fmt.Fprintln(stderr, intentExpiryNotice(result.Installation.Pending.ExpiresAt, time.Now()))
 		}
-		for _, change := range result.Changes {
-			if change.Reason != "" {
-				_, _ = fmt.Fprintf(stderr, "onboard: %s\n", change.Reason)
-				continue
-			}
-			_, _ = fmt.Fprintf(stderr, "onboard: changed %s: %s -> %s\n",
-				change.Field, change.Approved, change.Proposed)
-		}
+		printOnboardChanges(stderr, result.Changes)
 		if err := json.NewEncoder(stdout).Encode(result); err != nil {
 			return fmt.Errorf("write onboarding result: %w", err)
 		}
@@ -447,6 +442,19 @@ func runOnboardCommand(
 	return withDurableInstallationPoll(
 		ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.RegistrationID, stderr, runOnboard,
 	)
+}
+
+// printOnboardChanges writes one onboard: line per change: its reason, or
+// the field with its approved and proposed values.
+func printOnboardChanges(stderr io.Writer, changes []operations.OnboardChange) {
+	for _, change := range changes {
+		if change.Reason != "" {
+			_, _ = fmt.Fprintf(stderr, "onboard: %s\n", change.Reason)
+			continue
+		}
+		_, _ = fmt.Fprintf(stderr, "onboard: changed %s: %s -> %s\n",
+			change.Field, change.Approved, change.Proposed)
+	}
 }
 
 // intentExpiryWarning is how close to its expiry a reviewed intent draws a
@@ -502,10 +510,30 @@ func onboardBaseInputs(gitPath, sourceDir string) operations.BaseInputsReader {
 	}
 }
 
+// onboardRecipe reads the recipe at a commit the base ref moved to after the
+// review. A -recipe file is the recipe at every commit, so it returns the
+// bytes read at start. Otherwise it reads .freeside/verify.json at the
+// commit from the -source checkout, which must have fetched it.
+func onboardRecipe(cfg onboardConfig, fileRecipe []byte) operations.RecipeReader {
+	return func(ctx context.Context, commitSHA string) ([]byte, error) {
+		if cfg.RecipePath != "" {
+			return slices.Clone(fileRecipe), nil
+		}
+		recipe, err := verify.ReadRecipeAtCommit(ctx, cfg.GitPath, cfg.SourceDir, commitSHA)
+		if err != nil {
+			return nil, fmt.Errorf("%w; fetch %s into the -source checkout %s and approve again",
+				err, cfg.BaseRef, cfg.SourceDir)
+		}
+		return recipe, nil
+	}
+}
+
 // movedTipCommand is the review to run when the base ref's tip moved past
-// -commit: the same arguments with -commit naming the tip and no -approve,
-// since the earlier approval digest binds the old commit. A review at the tip
-// carries the approval forward when nothing it trusts changed.
+// -commit and onboarding can't go on at it: the same arguments with -commit
+// naming the tip and no -approve. An approval reaches here only when
+// something it covers differs at the tip, and its digest binds the old
+// commit, so it goes. A review at the tip carries the approval forward when
+// nothing it trusts changed.
 func movedTipCommand(args []string, tip string) string {
 	return onboardCommand(args, map[string]bool{"approve": true}, map[string]string{"commit": tip})
 }
