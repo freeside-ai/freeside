@@ -721,7 +721,7 @@ func checkPrelaunchState(
 	}
 	defer func() { _ = lock.Close() }() // Only reads ran under it.
 	st, err := store.OpenReadOnly(ctx, paths.DB, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{settings.ApprovedRecipe: true},
+		ApprovedRecipes: settings.storeRecipes(),
 	})
 	if mismatch := (*store.SchemaMismatchError)(nil); errors.As(err, &mismatch) {
 		record.fail(prelaunchGroupState, "state_database", err.Error(),
@@ -1295,7 +1295,7 @@ func mintPrelaunchIssueToken(
 	}
 	defer lock.Close() //nolint:errcheck // acquisition succeeded; the mint's result is primary
 	st, err := store.OpenExisting(ctx, cfg.DBPath, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+		ApprovedRecipes: cfg.storeRecipes(),
 	})
 	if err != nil {
 		return publish.InstallationToken{}, err

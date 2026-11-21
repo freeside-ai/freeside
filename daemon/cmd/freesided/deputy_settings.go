@@ -38,9 +38,10 @@ const (
 // existed at its revision: agent_tree.review_harness, whose absence means
 // codex_cli because every such file ran a Codex reviewer;
 // agent_tree.second_writer, whose absence means one writer subscription;
-// writers.specifier_escalated, whose absence means no escalated line; and
+// writers.specifier_escalated, whose absence means no escalated line;
 // macos_verification, whose absence configures no macOS verification
-// executor.
+// executor; and retained_recipes, whose absence means the root approved no
+// recipe before approved_recipe.
 type deputySettings struct {
 	Version string `json:"version"`
 	// Listen is the leased listener paired clients reach the run at.
@@ -52,7 +53,16 @@ type deputySettings struct {
 		Review   string `json:"review"`
 	} `json:"images"`
 	ApprovedRecipe domain.Digest `json:"approved_recipe"`
-	Repository     struct {
+	// RetainedRecipes are recipes the root approved before approved_recipe
+	// replaced them (#3556). The store still approves them, so evidence
+	// stored under one keeps reading, syncing, and backing up; without them
+	// a re-pinned root refuses its own history and cannot start. They stay
+	// approved as prod's repeated -approved-recipe is: a new image binding
+	// still needs approved_recipe, the recipe the agent image must carry,
+	// but a task already bound to an image under a retained recipe still
+	// verifies under it.
+	RetainedRecipes []domain.Digest `json:"retained_recipes,omitempty"`
+	Repository      struct {
 		Repo         string           `json:"repo"`
 		RepositoryID int64            `json:"repository_id"`
 		BaseRef      string           `json:"base_ref"`
@@ -309,6 +319,16 @@ func (s *loadedDeputySettings) validate() error {
 	if !contentaddr.Valid(string(s.ApprovedRecipe)) {
 		return errors.New("approved_recipe is not a sha256 digest")
 	}
+	seen := map[domain.Digest]bool{s.ApprovedRecipe: true}
+	for _, recipe := range s.RetainedRecipes {
+		if !contentaddr.Valid(string(recipe)) {
+			return errors.New("retained_recipes holds a value that is not a sha256 digest")
+		}
+		if seen[recipe] {
+			return fmt.Errorf("retained_recipes repeats %s or approved_recipe", recipe)
+		}
+		seen[recipe] = true
+	}
 	if publish.ValidateRepository(s.Repository.Repo) != nil {
 		return errors.New("repository.repo is not owner/name")
 	}
@@ -517,6 +537,16 @@ func (s *loadedDeputySettings) runSettings(containerBin string) daemoncompose.Ru
 	}
 }
 
+// storeRecipes is the recipe set the deputy's store approves:
+// approved_recipe and every retained recipe. The map is the caller's.
+func (s *loadedDeputySettings) storeRecipes() map[domain.Digest]bool {
+	recipes := map[domain.Digest]bool{s.ApprovedRecipe: true}
+	for _, recipe := range s.RetainedRecipes {
+		recipes[recipe] = true
+	}
+	return recipes
+}
+
 // keysNotImported are the file's keys that runSettings leaves out, so
 // settings import can name what the records will not hold. Optional keys
 // are named only when the file sets them.
@@ -532,6 +562,9 @@ func (s *loadedDeputySettings) keysNotImported() []string {
 	}
 	if s.AgentTree.SecondWriter != nil {
 		keys = append(keys, "agent_tree.second_writer")
+	}
+	if len(s.RetainedRecipes) > 0 {
+		keys = append(keys, "retained_recipes")
 	}
 	keys = append(keys, "writers", "review.model", "review.effort", "judgment.model", "judgment.effort",
 		"prod", "memory_budget_mib")
