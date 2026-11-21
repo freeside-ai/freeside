@@ -1544,9 +1544,9 @@ public struct Client: APIProtocol {
             }
         )
     }
-    /// Read an ended writer invocation's transcript reference and prompt
+    /// Read a writer invocation's transcript, ended or running, and its prompt
     ///
-    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    /// For an ended writer invocation of this run, returns the agent-transcript claim the daemon recorded and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. For a writer that is still running and has recorded no claim, returns its transcript's complete records after the `after` offset, each scanned against the daemon's credential rules before it leaves the daemon, or withheld once a rule matches. A live answer is display-only: never stored, never evidence, and inert. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
     ///
     ///
     /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
@@ -1568,6 +1568,13 @@ public struct Client: APIProtocol {
                     method: .get
                 )
                 suppressMutabilityWarning(&request)
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "after",
+                    value: input.query.after
+                )
                 converter.setAcceptHeader(
                     in: &request.headerFields,
                     contentTypes: input.headers.accept
@@ -1598,6 +1605,28 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .ok(.init(body: body))
+                case 400:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.getInvocationTranscript.Output.BadRequest.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .badRequest(.init(body: body))
                 case 404:
                     let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
                     let body: Components.Responses.NotFound.Body

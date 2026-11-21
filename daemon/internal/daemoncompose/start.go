@@ -685,6 +685,15 @@ func newAttentionService(
 			}
 			return late.ClaudeWiring.driver
 		}),
+		// The transcript read asks the stage driver for a running writer's
+		// scanned records. A daemon without a Claude driver serves a running
+		// writer as unavailable.
+		signet.WithLiveTranscripts(func() signet.LiveTranscriptReader {
+			if late.ClaudeWiring == nil || late.ClaudeWiring.driver == nil {
+				return nil
+			}
+			return liveTranscriptReader{driver: late.ClaudeWiring.driver}
+		}),
 		// An approved image-policy adoption wakes upkeep to build under it.
 		signet.WithImageUpkeepWake(func() {
 			if late.UpkeepTrigger != nil {

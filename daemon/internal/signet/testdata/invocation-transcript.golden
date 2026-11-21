@@ -22,5 +22,6 @@
       "availability": "available"
     }
   },
+  "live": null,
   "prompt": "Implement the approved work item."
 }

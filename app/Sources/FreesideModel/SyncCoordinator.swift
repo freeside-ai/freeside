@@ -866,17 +866,24 @@ public final class SyncCoordinator {
         /// no transcript being kept.
         case failed
         case bindingMismatch
+        /// The daemon's 400: `after` is no longer an offset it can serve
+        /// from, as when the writer's handoff restarted. The reader drops
+        /// what it holds and reads again from 0.
+        case offsetRefused
     }
 
-    /// Reads one ended writer invocation's transcript reference and prompt
-    /// on a tap. A response for another run or invocation, or a claim another
-    /// invocation produced, is refused rather than shown under this one.
+    /// Reads one writer invocation's transcript on a tap, and, while the
+    /// writer runs, its records after byte offset `after` on each poll. A
+    /// response for another run or invocation, a claim another invocation
+    /// produced, or a live range that doesn't continue from `after` is
+    /// refused rather than shown under this one.
     public func invocationTranscript(
-        runID: String, invocationID: String
+        runID: String, invocationID: String, after: Int64 = 0
     ) async throws -> Components.Schemas.InvocationTranscript {
         let generation = cacheGeneration
         let output = try await store.client.getInvocationTranscript(
-            path: .init(run_id: runID, invocation_id: invocationID))
+            path: .init(run_id: runID, invocation_id: invocationID),
+            query: .init(after: after == 0 ? nil : after))
         try Task.checkCancellation()
         guard generation == cacheGeneration else { throw CancellationError() }
         switch output {
@@ -895,12 +902,26 @@ public final class SyncCoordinator {
                     throw InvocationTranscriptReadError.bindingMismatch
                 }
             }
+            guard Self.liveRangeContinues(transcript, after: after) else {
+                throw InvocationTranscriptReadError.bindingMismatch
+            }
             return transcript
+        case .badRequest:
+            throw InvocationTranscriptReadError.offsetRefused
         case .notFound:
             throw InvocationTranscriptReadError.unavailable
         case .undocumented:
             throw InvocationTranscriptReadError.failed
         }
+    }
+
+    /// A live answer must carry its records and continue from `after`: at
+    /// `after` itself, or later only when it says earlier records left the
+    /// daemon's window. Any other answer must carry no live records.
+    static func liveRangeContinues(_ transcript: Components.Schemas.InvocationTranscript, after: Int64) -> Bool {
+        guard transcript.availability == .live else { return transcript.live == nil }
+        guard let live = transcript.live?.value1 else { return false }
+        return live.start <= live.end && (live.start == after || (live.start > after && live.omitted_before))
     }
 
     /// Fetches one computed run timeline on navigation. A cached same-epoch

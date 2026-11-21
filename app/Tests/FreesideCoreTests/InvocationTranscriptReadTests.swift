@@ -82,14 +82,60 @@ private struct RewrittenTranscriptTransport: ClientTransport {
         #expect(Self.producer(failed) == failedID)
     }
 
-    /// A live writer has nothing kept yet: the read answers unavailable with
-    /// no claim and no prompt.
-    @Test func aLiveWriterReadsAsUnavailable() async throws {
-        let live = try await coordinator().invocationTranscript(
-            runID: RunFixtures.activeRunID, invocationID: "inv-\(RunFixtures.activeRunID)-2")
-        #expect(live.availability == .unavailable)
-        #expect(live.transcript == nil)
-        #expect(live.prompt == nil)
+    /// A running writer reads live: its records from the offset asked for,
+    /// none past the end it has served, and the prompt. An offset that isn't
+    /// a record boundary is the daemon's 400, which the reader answers by
+    /// starting again from 0.
+    @Test func aRunningWriterReadsLive() async throws {
+        let coordinator = coordinator()
+        let runID = RunFixtures.activeRunID
+        let invocationID = "inv-\(runID)-2"
+        let first = try await coordinator.invocationTranscript(runID: runID, invocationID: invocationID)
+        let live = try #require(first.live?.value1)
+        #expect(first.availability == .live)
+        #expect(first.transcript == nil)
+        #expect(first.prompt == RunFixtures.writerPrompt)
+        #expect(live.start == 0)
+        #expect(Array(live.records.data) == Array(RunFixtures.runningTranscript.utf8))
+
+        let next = try await coordinator.invocationTranscript(
+            runID: runID, invocationID: invocationID, after: live.end)
+        #expect(next.live?.value1.start == live.end)
+        #expect(next.live?.value1.records.data.isEmpty == true)
+
+        await #expect(throws: SyncCoordinator.InvocationTranscriptReadError.offsetRefused) {
+            try await coordinator.invocationTranscript(runID: runID, invocationID: invocationID, after: 3)
+        }
+    }
+
+    /// A live answer must continue from the offset asked for: one that
+    /// starts elsewhere without saying earlier records left the window, one
+    /// with no records, and a non-live answer carrying records are refused.
+    @Test func refusesALiveRangeThatDoesNotContinue() async throws {
+        let runID = RunFixtures.activeRunID
+        let invocationID = "inv-\(runID)-2"
+        let rewrites: [@Sendable (inout [String: Any]) -> Void] = [
+            { object in
+                var live = object["live"] as? [String: Any] ?? [:]
+                live["start"] = 1
+                object["live"] = live
+            },
+            { $0["live"] = NSNull() },
+            { $0["availability"] = "withheld" },
+        ]
+        for rewrite in rewrites {
+            await #expect(throws: SyncCoordinator.InvocationTranscriptReadError.bindingMismatch) {
+                try await coordinator(rewrite: rewrite).invocationTranscript(runID: runID, invocationID: invocationID)
+            }
+        }
+        // Later than asked is admitted when the answer says why.
+        let skipped = try await coordinator(rewrite: { object in
+            var live = object["live"] as? [String: Any] ?? [:]
+            live["start"] = 9
+            live["omitted_before"] = true
+            object["live"] = live
+        }).invocationTranscript(runID: runID, invocationID: invocationID)
+        #expect(skipped.live?.value1.start == 9)
     }
 
     /// The daemon's 404, for an unknown invocation, another run's, or a

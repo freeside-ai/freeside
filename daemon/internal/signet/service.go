@@ -97,6 +97,9 @@ type Service struct {
 	// invocationPrompts reads a writer's prompt for the transcript read
 	// (WithInvocationPrompts). Nil means none is bound.
 	invocationPrompts func() InvocationPromptReader
+	// liveTranscripts reads a running writer's transcript for the transcript
+	// read (WithLiveTranscripts). Nil means none is bound.
+	liveTranscripts func() LiveTranscriptReader
 	// imageUpkeepWake asks image upkeep for a pass after an approved
 	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
 	imageUpkeepWake func()
@@ -157,6 +160,28 @@ type InvocationPromptReader interface {
 // a nil reader, every prompt reads as null.
 func WithInvocationPrompts(reader func() InvocationPromptReader) Option {
 	return func(s *Service) { s.invocationPrompts = reader }
+}
+
+// LiveTranscriptReader reads a running writer's scanned transcript. The
+// stage driver implements it through an adapter; it is injected because the
+// driver is composed after the service.
+type LiveTranscriptReader interface {
+	// LiveTranscript returns the records after byte offset after. The
+	// availability is live with records, withheld when a credential rule
+	// matched, or unavailable when no handoff for the invocation runs in this
+	// process. An offset that isn't a record boundary is
+	// ErrLiveTranscriptOffset.
+	LiveTranscript(ctx context.Context, id domain.InvocationID, after int64) (
+		InvocationTranscriptAvailability, *LiveTranscript, error)
+}
+
+// WithLiveTranscripts supplies the reader the transcript read asks for a
+// running writer's records. The func is read on each request so the
+// composition can bind the driver after the service is built. With no
+// option, a nil func, or a nil reader, a running writer reads as
+// unavailable.
+func WithLiveTranscripts(reader func() LiveTranscriptReader) Option {
+	return func(s *Service) { s.liveTranscripts = reader }
 }
 
 // WithImageUpkeepWake supplies the wake a committed approval of an
