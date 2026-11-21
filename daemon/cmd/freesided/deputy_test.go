@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -693,6 +694,30 @@ func TestDeputyPreflightConfigCarriesTheSecondWriter(t *testing.T) {
 	settings.AgentTree.SecondWriter = nil
 	if cfg := deputyPreflightConfig(settings, paths, lease, nil); cfg.SecondAuthIdentityID != "" || cfg.SecondAuthVolume != "" {
 		t.Fatalf("one writer: preflight second writer = %q on %q", cfg.SecondAuthIdentityID, cfg.SecondAuthVolume)
+	}
+}
+
+// The deputy's preflight and daemon open the store with approved_recipe and
+// every retained recipe, as withDeputyStore does (#3556).
+//
+//nolint:paralleltest // Serial: deputyLeaseFixture sets HOME with t.Setenv.
+func TestDeputyConfigsApproveTheRetainedRecipes(t *testing.T) {
+	host, paths, settings := deputyLeaseFixture(t)
+	settings.RetainedRecipes = []domain.Digest{domain.Digest("sha256:" + strings.Repeat("e", 64))}
+	want := settings.storeRecipes()
+	if len(want) != 2 {
+		t.Fatalf("store recipes = %v, want approved_recipe and the retained one", want)
+	}
+	lease, interrupted, err := acquireDeputyLease(t.Context(), host, paths, settings, io.Discard)
+	if err != nil || interrupted != nil {
+		t.Fatalf("acquire lease: %v, %+v", err, interrupted)
+	}
+	defer func() { _ = lease.Close() }()
+	if got := deputyPreflightConfig(settings, paths, lease, nil).storeRecipes(); !maps.Equal(got, want) {
+		t.Fatalf("preflight approves %v, want %v", got, want)
+	}
+	if got := deputyDaemonConfig(settings, paths, deputyLaunch{}, nil).ApprovedRecipes; !maps.Equal(got, want) {
+		t.Fatalf("daemon approves %v, want %v", got, want)
 	}
 }
 

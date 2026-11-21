@@ -178,21 +178,25 @@ type compositionManifest struct {
 }
 
 type preflightConfig struct {
-	SubmissionID              string
-	Judgments                 daemoncompose.JudgmentConfig
-	DBPath                    string
-	RigTokenFile              string
-	ServerURL                 string
-	ContainerBin              string
-	AgentImage                string
-	ExporterImage             string
-	ReviewImage               string
-	Repo                      string
-	RepositoryCheckout        string
-	RepositoryID              int64
-	BaseRef                   string
-	BaseSHA                   string
-	ApprovedRecipe            domain.Digest
+	SubmissionID       string
+	Judgments          daemoncompose.JudgmentConfig
+	DBPath             string
+	RigTokenFile       string
+	ServerURL          string
+	ContainerBin       string
+	AgentImage         string
+	ExporterImage      string
+	ReviewImage        string
+	Repo               string
+	RepositoryCheckout string
+	RepositoryID       int64
+	BaseRef            string
+	BaseSHA            string
+	ApprovedRecipe     domain.Digest
+	// RetainedRecipes are a deputy root's earlier recipes (#3556): the store
+	// inspection approves them so stored evidence reads. Only the deputy sets
+	// them; the image check still compares ApprovedRecipe alone.
+	RetainedRecipes           []domain.Digest
 	AgentTreeCheckout         string
 	AgentTreeCommit           string
 	AuthVolume                string
@@ -234,6 +238,16 @@ type preflightConfig struct {
 	// compared. SettingsDigest is then the settings revision to record.
 	Launch         bool
 	SettingsDigest domain.Digest
+}
+
+// storeRecipes is the recipe set preflight's store reads approve:
+// ApprovedRecipe and every retained recipe. The map is the caller's.
+func (cfg preflightConfig) storeRecipes() map[domain.Digest]bool {
+	recipes := map[domain.Digest]bool{cfg.ApprovedRecipe: true}
+	for _, recipe := range cfg.RetainedRecipes {
+		recipes[recipe] = true
+	}
+	return recipes
 }
 
 type databaseInspection struct {
@@ -1337,7 +1351,7 @@ func retainedPreflightPolicyMatches(ctx context.Context, cfg preflightConfig, po
 		return false
 	}
 	defer lock.Close() //nolint:errcheck // a failed lookup never exempts validation
-	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true}})
+	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{ApprovedRecipes: cfg.storeRecipes()})
 	if err != nil {
 		return false
 	}
@@ -1399,7 +1413,7 @@ func inspectRepositoryAuthority(
 	}
 	defer lock.Close() //nolint:errcheck // acquisition succeeded; inspection errors remain primary
 	st, err := store.OpenExisting(ctx, cfg.DBPath, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+		ApprovedRecipes: cfg.storeRecipes(),
 	})
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
@@ -1715,7 +1729,7 @@ func (productionPreflightEnvironment) ResolveAgentSelection(
 	}
 	defer lock.Close() //nolint:errcheck // the resolution result is reported independently
 	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+		ApprovedRecipes: cfg.storeRecipes(),
 	})
 	if err != nil {
 		return preflightAgentSelection{}, err
@@ -1801,7 +1815,7 @@ func (productionPreflightEnvironment) CheckJudgmentRoles(
 	}
 	defer lock.Close() //nolint:errcheck // the check result is reported independently
 	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+		ApprovedRecipes: cfg.storeRecipes(),
 	})
 	if err != nil {
 		return nil, err
@@ -1935,7 +1949,7 @@ func (productionPreflightEnvironment) InspectDatabase(
 	}
 	defer lock.Close() //nolint:errcheck // inspection reports the database result
 	st, err := store.OpenReadOnly(ctx, cfg.DBPath, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+		ApprovedRecipes: cfg.storeRecipes(),
 	})
 	if err != nil {
 		inspection.OpenError = err

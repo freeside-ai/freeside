@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -440,7 +441,7 @@ func withDeputyStore(
 	ctx context.Context, dbPath string, settings loadedDeputySettings, fn func(*store.Store) error,
 ) (err error) {
 	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{
-		ApprovedRecipes: map[domain.Digest]bool{settings.ApprovedRecipe: true},
+		ApprovedRecipes: settings.storeRecipes(),
 	})
 	if err != nil {
 		return err
@@ -712,6 +713,10 @@ func deputyAdoptArgs(settings loadedDeputySettings, paths deputyPaths) []string 
 		"-specification-prompt-package", settings.Prompts.SpecificationPromptPackage,
 		"-remediation-prompt-package", settings.Prompts.RemediationPromptPackage,
 	}
+	// Adoption opens the store, so it approves what the deputy's store does.
+	for _, recipe := range settings.RetainedRecipes {
+		args = append(args, "-approved-recipe", string(recipe))
+	}
 	// A Codex reviewer's live store is under the review input root; a Claude
 	// reviewer adopts its setup-token volume and takes no store root.
 	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
@@ -799,7 +804,7 @@ func deputyPreflightConfig(
 		Repo:        settings.Repository.Repo, RepositoryCheckout: settings.Repository.Checkout,
 		RepositoryID: settings.Repository.RepositoryID,
 		BaseRef:      settings.Repository.BaseRef, BaseSHA: settings.Repository.BaseSHA,
-		ApprovedRecipe:    settings.ApprovedRecipe,
+		ApprovedRecipe: settings.ApprovedRecipe, RetainedRecipes: slices.Clone(settings.RetainedRecipes),
 		AgentTreeCheckout: settings.AgentTree.Checkout, AgentTreeCommit: settings.AgentTree.Commit,
 		AuthVolume:      settings.AgentTree.AuthVolume,
 		ReviewInputRoot: settings.Review.InputRoot, ReviewAuthMode: settings.Review.AuthMode,
@@ -872,7 +877,7 @@ func deputyDaemonConfig(
 		DoctorInterval:            defaultDoctorInterval,
 		SchedulerInterval:         defaultSchedulerInterval,
 		AttentionDeliveryInterval: defaultAttentionDeliveryInterval,
-		ApprovedRecipes:           map[domain.Digest]bool{settings.ApprovedRecipe: true},
+		ApprovedRecipes:           settings.storeRecipes(),
 		Logger:                    logger,
 		DeputyLaunch:              &launch,
 	}

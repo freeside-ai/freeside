@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/macverify"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // deputySettingsFixture is a complete, valid settings object as generic JSON,
@@ -121,6 +125,15 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 			s["review"].(map[string]any)["reasoning"] = "high"
 		}, `unknown object member name "reasoning"`},
 		"wrong version": {func(s map[string]any) { s["version"] = "freeside-deputy-settings-v0" }, "version"},
+		"retained recipe not a digest": {func(s map[string]any) {
+			s["retained_recipes"] = []string{"sha256:short"}
+		}, "retained_recipes holds a value that is not a sha256 digest"},
+		"retained recipe is the approved recipe": {func(s map[string]any) {
+			s["retained_recipes"] = []any{s["approved_recipe"]}
+		}, "retained_recipes repeats"},
+		"retained recipe twice": {func(s map[string]any) {
+			s["retained_recipes"] = []string{"sha256:" + strings.Repeat("e", 64), "sha256:" + strings.Repeat("e", 64)}
+		}, "retained_recipes repeats"},
 		"tag-only image": {func(s map[string]any) {
 			s["images"].(map[string]any)["review"] = "registry.local/review:latest"
 		}, "images.review is not a digest-pinned image reference"},
@@ -552,6 +565,51 @@ func TestLoadDeputySettingsPassesTheSecondWriterToAdoption(t *testing.T) {
 				t.Fatalf("auth adopt second writer = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// A root re-pinned from recipe R1 to R2 still holds evidence stored under
+// R1 (#3556). Without R1 retained, the deputy's store refuses that evidence
+// and the deputy cannot start; with it retained, the store and auth adopt
+// both approve R1, and approved_recipe stays R2.
+func TestDeputyStoreReadsEvidenceUnderARetainedRecipe(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	earlier := seedRecipeGatedEvidence(t, dbPath)
+	listItems := func(retained []domain.Digest) error {
+		settings := deputySettingsFixture(t)
+		if retained != nil {
+			settings["retained_recipes"] = retained
+		}
+		path, _ := writeDeputySettings(t, settings, 0o600)
+		loaded, err := loadDeputySettings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.ApprovedRecipe == earlier {
+			t.Fatal("the fixture's approved_recipe must differ from the seeded evidence's recipe")
+		}
+		config, err := parseAuthAdoptConfig(deputyAdoptArgs(loaded, newDeputyPaths(t.TempDir())), io.Discard, time.Now())
+		if err != nil {
+			t.Fatalf("auth adopt refuses the deputy's args: %v", err)
+		}
+		if !maps.Equal(map[domain.Digest]bool(config.ApprovedRecipes), loaded.storeRecipes()) {
+			t.Fatalf("auth adopt approves %v, want the store's %v", config.ApprovedRecipes, loaded.storeRecipes())
+		}
+		ctx := context.Background()
+		return withDeputyStore(ctx, dbPath, loaded, func(st *store.Store) error {
+			return st.Read(ctx, func(tx *store.ReadTx) error {
+				_, err := tx.ListAttentionItems(ctx)
+				return err
+			})
+		})
+	}
+	if err := listItems(nil); !errors.Is(err, domain.ErrPublishEligibleInconsistent) &&
+		!errors.Is(err, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("a store approving only approved_recipe read evidence under another recipe: %v", err)
+	}
+	if err := listItems([]domain.Digest{earlier}); err != nil {
+		t.Fatalf("a store retaining the evidence's recipe refused it: %v", err)
 	}
 }
 

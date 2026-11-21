@@ -1879,8 +1879,8 @@ Reading the record:
   flag names, and the store refuses evidence that names any other recipe;
   the record reports that item or section as `unapproved_recipe`, and the
   message names the recipe. A stopped root therefore needs the digests its
-  daemon ran with: `approved_recipe` in `<root>/daemon/settings.json` for
-  a deputy root. A direct read that meets
+  daemon ran with: `approved_recipe` and each `retained_recipes` digest in
+  `<root>/daemon/settings.json` for a deputy root. A direct read that meets
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
@@ -4945,8 +4945,8 @@ combined with `-once` or `-snapshot`. The snapshot reconstructs every open
 item and approves only the recipes a request names, through a running
 daemon as on a stopped root, so an item whose evidence names a recipe
 fails the read and the wait exits 1: pass `-approved-recipe`, as for
-`-snapshot` (`approved_recipe` in `<root>/daemon/settings.json` for a deputy
-root). A timeout also ends a read still in flight.
+`-snapshot` (`approved_recipe` and each `retained_recipes` digest in
+`<root>/daemon/settings.json` for a deputy root). A timeout also ends a read still in flight.
 
 **Follow is the pull diagnostic, not the way a stall reaches an operator.**
 Freeside's premise is that nobody is watching: work that needs judgment
@@ -5262,7 +5262,7 @@ container volume, not a host path.
 
 | Group | Keys |
 | --- | --- |
-| top level | `listen`, `seed_root`, `approved_recipe`, `manual_submission_config`, `memory_budget_mib` (positive; Bound Container Memory) |
+| top level | `listen`, `seed_root`, `approved_recipe`, the optional `retained_recipes`, `manual_submission_config`, `memory_budget_mib` (positive; Bound Container Memory) |
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
 | `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project`, and the optional `hand_back_label` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
@@ -5273,6 +5273,22 @@ container volume, not a host path.
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
 | `build` | `proxy`, `base_build_ref`, `dns` |
 | `macos_verification` | Optional: `root`, `slots`, `xcode_build`, `swift`, all required when present; `port_base`, optional, defaults to 47000 |
+
+`retained_recipes` lists the recipes the root approved before
+`approved_recipe` replaced them, as sha256 digests, none repeated and none
+equal to `approved_recipe` (#3556). The deputy's store approves them with
+`approved_recipe`, so evidence stored under an earlier recipe still reads,
+syncs, and backs up; without them a root whose onboarding approved a new
+image refuses its own history and the deputy exits at start. They stay
+approved as prod's repeated `-approved-recipe` is: a new image binding still
+needs `approved_recipe`, the recipe the agent image must carry, but a task
+already bound to an image under a retained recipe still verifies under it.
+Remove a recipe from the list only once no stored evidence or open task names
+it. The exit run's script adds the replaced recipe when an approval names a
+new one and renders the list from `retained_recipes` in `<root>/exit-root.json`
+on every run, so on an exit root edit the list there, not in the settings
+file. A root the script re-pinned before it kept the list needs the replaced
+recipe added there by hand.
 
 `repository.project` is the project ID that `submit -project` and the
 manual-submission file repeat. Use the managed repository's name (`gh-imgup`
@@ -5678,7 +5694,9 @@ lacks, with its fix, or is null: `agent_tree` (see The First Start in
 docs/production-walkthrough.md), `trust_profile` (`freesided onboard` with
 the record's review-configuration digest), `project_image` (set
 `images.agent` to the onboarding's `project_image.image_ref`), then
-`approved_recipe` (set it to that image's `recipe_digest`).
+`approved_recipe` (set it to that image's `recipe_digest`, and move the
+recipe it replaces into `retained_recipes` so the root's earlier evidence
+still reads).
 
 **The admitted-image pointer.** `images.agent` and `-agent-image` only
 seed the repository's admitted-image pointer for the Claude agent base
