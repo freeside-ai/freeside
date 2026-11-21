@@ -210,6 +210,22 @@ package enum RunTimeStrip {
         return ending.recorded_at.timeIntervalSince(milestones[index].recorded_at)
     }
 
+    /// When one invocation started working, by the same facts
+    /// `invocationDuration` reads: its served active interval's start, or
+    /// without `clocks` its `invocation_started` milestone. A running
+    /// writer's sheet counts `Working for` from it (#1926).
+    package static func invocationStart(
+        _ invocationID: String, milestones: [Components.Schemas.RunMilestone],
+        clocks: Components.Schemas.RunClocks? = nil
+    ) -> Date? {
+        if let clocks {
+            return clocks.active_intervals.first(where: { $0.invocation_id == invocationID })?.started_at
+        }
+        return milestones.first(where: {
+            $0.kind == .invocation_started && $0.invocation_id == invocationID
+        })?.recorded_at
+    }
+
     /// Each item about the run from its creation to its conclusion (or its
     /// decision, on a row with no conclusion), or to `now` (the bar's end)
     /// while open.

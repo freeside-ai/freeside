@@ -27,6 +27,9 @@
             case unreadable
             /// The raw stream, from its head.
             case raw
+            /// A writer still running (#1926): nothing folds, the call under
+            /// way is the last line, and the clock closes the sheet.
+            case running
 
             var surface: String {
                 switch self {
@@ -36,6 +39,7 @@
                 case .end: "agent-transcript-end"
                 case .unreadable: "agent-transcript-unreadable"
                 case .raw: "agent-transcript-raw"
+                case .running: "agent-transcript-running"
                 }
             }
         }
@@ -44,6 +48,7 @@
 
         /// The sheet in `state`, laid out in place of its scroll view.
         static func sheet(_ state: State) -> AnyView {
+            if state == .running { return runningSheet() }
             let bytes = Array(transcript(state).utf8)
             let presentation = AgentTranscriptPresentation(bytes: bytes, streamEnded: true)
             let sheet = AgentTranscriptSheet(
@@ -56,13 +61,29 @@
             return AnyView(sheet)
         }
 
+        /// The running sheet, its clock fixed at four minutes and twelve
+        /// seconds, as in the design frame.
+        private static func runningSheet() -> AnyView {
+            let bytes = Array(transcript(.running).utf8)
+            let now = Date(timeIntervalSince1970: 1_795_000_000)
+            let running = AgentTranscriptSheet.Running(
+                presentation: AgentTranscriptPresentation(bytes: bytes, streamEnded: false),
+                startedAt: now.addingTimeInterval(-(4 * 60 + 12)), now: now)
+            return AnyView(
+                AgentTranscriptSheet(
+                    digest: digest, bytes: [], mediaType: "application/jsonl", title: "Implementation · Attempt 1",
+                    outcome: .running, prompt: prompt, running: running,
+                    folds: AgentTranscriptFoldPreferences(defaults: nil, open: [:]),
+                    rendersScrollableContent: false))
+        }
+
         private static func openFolds(_ state: State, _ presentation: AgentTranscriptPresentation) -> Set<String> {
             let works = presentation.entries.compactMap { entry -> AgentTranscriptPresentation.Work? in
                 if case .work(let work) = entry { return work }
                 return nil
             }
             switch state {
-            case .finished, .failed, .raw:
+            case .finished, .failed, .raw, .running:
                 return []
             case .unreadable:
                 return ["unreadable"]
@@ -118,6 +139,15 @@
             lines += call("t7", "Edit", ["file_path": "/workspace/rig/runner_test.go"], "The file has been updated.")
             lines += call("t8", "Bash", ["command": "go test ./rig/..."], testFailure, isError: true)
             if state == .failed { return lines.joined(separator: "\n") + "\n" }
+            if state == .running {
+                // The last call has no result yet: it is the call under way.
+                lines += call("t9", "Bash", ["command": "gofmt -l rig/"], "")
+                lines.append(
+                    assistant([
+                        "type": "tool_use", "id": "t10", "name": "Bash", "input": ["command": "go test ./rig/..."],
+                    ]))
+                return lines.joined(separator: "\n") + "\n"
+            }
             lines += call("t9", "Bash", ["command": "gofmt -l rig/"], "")
             lines += call("t10", "Bash", ["command": "go test ./rig/..."], "ok  \tfreeside.example/rig\t2.281s")
             lines += call("t11", "Bash", ["command": "git status --short"], " M rig/runner.go\n M rig/runner_test.go")

@@ -10,12 +10,34 @@ import SwiftUI
 /// Nothing is cut at the head: both views hold the whole transcript the
 /// loader fetched, and each opens at its end. Both are lazy, because a
 /// failed writer's transcript runs to megabytes.
+///
+/// A running writer's sheet (#1926) shows the records the daemon has served
+/// so far, which `RunningTranscriptSheet` reads and hands in as `running`.
 struct AgentTranscriptSheet: View {
     enum Outcome: Equatable {
         /// The run's work folds behind `Worked for` above the final message.
         case finished
         /// Nothing folds, and the sheet closes on `Failed after`.
         case failed
+        /// Nothing folds, the call under way is the last line, and the foot
+        /// says how long the writer has worked.
+        case running
+    }
+
+    /// What a running writer's sheet shows, read by its owner on each poll.
+    struct Running: Equatable {
+        /// Nil until the first live answer is parsed.
+        var presentation: AgentTranscriptPresentation?
+        /// When the invocation started, for the `Working for` clock; nil
+        /// drops the time rather than guessing one.
+        var startedAt: Date?
+        var omittedBefore = false
+        /// Records the daemon withheld whole, which the stream doesn't hold.
+        var unreadableRecords = 0
+        /// Said in place of the conversation once an answer isn't live.
+        var notice: String?
+        /// Fixes the clock, for screenshots.
+        var now: Date?
     }
 
     /// The transcript's digest: which transcript the remembered folds
@@ -32,6 +54,8 @@ struct AgentTranscriptSheet: View {
     /// The prompt the writer received, which the stream doesn't carry; nil
     /// starts the conversation at the agent's first message.
     var prompt: String? = nil
+    /// Set only with the running outcome.
+    var running: Running? = nil
     var folds: AgentTranscriptFoldPreferences = .shared
     /// The screenshot composition lays the content out in place of the
     /// scroll view, whose height ImageRenderer cannot settle, and clips it
@@ -42,6 +66,10 @@ struct AgentTranscriptSheet: View {
 
     @State private var presentation: AgentTranscriptPresentation?
     @State private var showsRaw: Bool
+    /// The running sheet follows new records only while the operator is at
+    /// the end; scrolling up holds the view where they put it.
+    @State private var scrollPosition = ScrollPosition(edge: .bottom)
+    @State private var isAtEnd = true
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.locale) private var locale
@@ -50,7 +78,8 @@ struct AgentTranscriptSheet: View {
     /// sheet parses `bytes` off the main actor when it opens.
     init(
         digest: String, bytes: [UInt8], mediaType: String, title: String, outcome: Outcome,
-        workingTime: TimeInterval? = nil, prompt: String? = nil, folds: AgentTranscriptFoldPreferences = .shared,
+        workingTime: TimeInterval? = nil, prompt: String? = nil, running: Running? = nil,
+        folds: AgentTranscriptFoldPreferences = .shared,
         presentation: AgentTranscriptPresentation? = nil, showsRaw: Bool = false,
         rendersScrollableContent: Bool = true, screenshotHeight: CGFloat? = nil
     ) {
@@ -61,6 +90,7 @@ struct AgentTranscriptSheet: View {
         self.outcome = outcome
         self.workingTime = workingTime
         self.prompt = prompt
+        self.running = running
         self.folds = folds
         self.rendersScrollableContent = rendersScrollableContent
         self.screenshotHeight = screenshotHeight
@@ -102,7 +132,14 @@ struct AgentTranscriptSheet: View {
             // a scrolled row never meets the title's descenders.
             .padding(.bottom, 8)
             Group {
-                if let presentation {
+                if let notice = running?.notice {
+                    Text(notice)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, isCompact ? 16 : 20)
+                        .padding(.top, 12)
+                } else if let presentation = running.map(\.presentation) ?? presentation {
                     scrolled(presentation)
                 } else {
                     ProgressView("Reading the transcript…")
@@ -119,7 +156,7 @@ struct AgentTranscriptSheet: View {
         .freesideSheetPresentation()
         .modifier(MacSheetSize(applies: rendersScrollableContent))
         .task {
-            guard presentation == nil else { return }
+            guard running == nil, presentation == nil else { return }
             let bytes = bytes
             let parsing = Task.detached(priority: .userInitiated) {
                 AgentTranscriptPresentation(bytes: bytes, streamEnded: true)
@@ -147,7 +184,7 @@ struct AgentTranscriptSheet: View {
             } else {
                 ConversationContent(
                     presentation: presentation, outcome: outcome, workingTime: workingTime, prompt: prompt,
-                    lazy: rendersScrollableContent,
+                    running: running, lazy: rendersScrollableContent,
                     fold: { key in
                         Binding(
                             get: { folds.isOpen(key, transcript: digest) },
@@ -162,7 +199,22 @@ struct AgentTranscriptSheet: View {
         // A long conversation opens at its end (rule 10); the raw stream
         // opens at its head, under the line that says what it is.
         let anchor: UnitPoint = showsRaw ? .top : .bottom
-        if rendersScrollableContent {
+        if rendersScrollableContent, outcome == .running, !showsRaw {
+            // New records keep the operator at the end only while they are
+            // there; scrolled up, the view stays put as records arrive.
+            ScrollView {
+                content
+            }
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 24
+            } action: { _, atEnd in
+                isAtEnd = atEnd
+            }
+            .onChange(of: presentation) {
+                if isAtEnd { scrollPosition.scrollTo(edge: .bottom) }
+            }
+        } else if rendersScrollableContent {
             // Only the first offset is anchored, so a fold opened higher up
             // grows downward, and each view opens at its own anchor.
             ScrollView {
@@ -228,6 +280,7 @@ private struct ConversationContent: View {
     let outcome: AgentTranscriptSheet.Outcome
     let workingTime: TimeInterval?
     let prompt: String?
+    let running: AgentTranscriptSheet.Running?
     let lazy: Bool
     /// The open state of the fold with this key, remembered per transcript.
     let fold: (String) -> Binding<Bool>
@@ -275,9 +328,26 @@ private struct ConversationContent: View {
                 .padding(.top, 11)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .top) { Hairline() }
+            case .running:
+                // Nothing folds; earlier records the daemon no longer holds
+                // are said before the first one, and the call under way is
+                // the last line, with no output to open.
+                if running?.omittedBefore == true {
+                    Text("Earlier activity isn't shown")
+                        .foregroundStyle(Color.inkDim)
+                }
+                entries
+                if let call = presentation.underWay {
+                    CallRow(call: call, fold: fold)
+                }
             }
-            if !presentation.unreadable.isEmpty {
+            if unreadableCount > 0 {
                 unreadable
+            }
+            if outcome == .running {
+                WorkingFoot(startedAt: running?.startedAt, now: running?.now)
+                    .padding(.top, 11)
+                    .overlay(alignment: .top) { Hairline() }
             }
         }
         .font(FreesideFont.factLabel)
@@ -298,13 +368,19 @@ private struct ConversationContent: View {
         }
     }
 
+    /// The lines the parser couldn't read, and on a running sheet the
+    /// records the daemon withheld whole, which only it has seen.
+    private var unreadableCount: Int {
+        presentation.unreadable.count + (running?.unreadableRecords ?? 0)
+    }
+
     /// Rule 11: one quiet line after the conversation, opening to each
     /// line with its number. Each line is its own row, so a stream the
     /// parser can't read at all stays lazy.
     @ViewBuilder
     private var unreadable: some View {
-        let count = presentation.unreadable.count
-        FoldRow(isOpen: fold("unreadable")) {
+        let count = unreadableCount
+        FoldRow(isOpen: fold("unreadable"), isFoldable: !presentation.unreadable.isEmpty) {
             Text("\(count.formatted()) line\(count == 1 ? "" : "s") Freeside could not read")
                 .foregroundStyle(Color.inkDim)
         }
@@ -334,6 +410,14 @@ private struct ConversationContent: View {
         time.map { "Failed after \(RunTimeStripView.duration($0, locale: locale))" } ?? "Failed"
     }
 
+    /// The running sheet's clock, to the second, so it visibly ticks.
+    nonisolated static func working(_ time: TimeInterval?, locale: Locale) -> String {
+        guard let time else { return "Working" }
+        let duration = Duration.seconds(max(0, time).rounded(.down))
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow).locale(locale))
+        return "Working for \(duration)"
+    }
+
     /// The agent's inline Markdown with every link's action removed and
     /// its destination shown after its label, the policy
     /// `SpecificationMarkdown` keeps for agent text: a label on an
@@ -353,6 +437,37 @@ private struct ConversationContent: View {
             }
         }
         return attributed
+    }
+}
+
+/// The running sheet's foot: a water dot and how long the writer has
+/// worked, ticking each second from the invocation's start.
+private struct WorkingFoot: View {
+    let startedAt: Date?
+    let now: Date?
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Circle()
+                .fill(Color.waterText)
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+            if let now {
+                label(at: now)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    label(at: context.date)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func label(at date: Date) -> some View {
+        Text(AgentTranscriptSheetText.working(startedAt.map { date.timeIntervalSince($0) }, locale: locale))
+            .foregroundStyle(Color.inkDim)
+            .monospacedDigit()
     }
 }
 
