@@ -33,6 +33,11 @@ const (
 	CapEnforcedProviderEgress = domain.CapEnforcedProviderEgress
 
 	CapCredentialFreeHostVerification = domain.CapCredentialFreeHostVerification
+
+	CapCordonedSecretDenial     = domain.CapCordonedSecretDenial
+	CapCordonedLaunchDenial     = domain.CapCordonedLaunchDenial
+	CapCordonedDaemonProtection = domain.CapCordonedDaemonProtection
+	CapCordonedRunEndProof      = domain.CapCordonedRunEndProof
 )
 
 // AllCapabilities lists every valid Capability; it drives table-driven tests

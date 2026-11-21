@@ -9,10 +9,10 @@ import (
 
 // RunnerBackendClass names an isolation class a runner backend realizes and
 // declares as its identity (plan §5.7: "the name is the runner backend's
-// declared identity"). The vocabulary lives here rather than in ward because
-// a backend's proven conformance is persisted and re-gated by the store, and
-// store may not import ward; ward derives its backend name from this
-// registration point.
+// declared identity"). The vocabulary lives here rather than in a backend
+// package because a backend's proven conformance is persisted and re-gated by
+// the store, and store may not import a backend; each backend derives its
+// name from this registration point.
 type RunnerBackendClass string
 
 // BackendFreshVMReadOnlyVolumeHandoff is the strong class the
@@ -27,16 +27,25 @@ const BackendFreshVMReadOnlyVolumeHandoff RunnerBackendClass = "fresh_vm_read_on
 // the one host-side class unattended admits, and only for verification.
 const BackendCredentialFreeHostVerification RunnerBackendClass = "credential_free_host_verification" //nolint:gosec // G101: a backend class name, not a credential
 
+// BackendCordonedHostProcess is the cordoned run (§5.7, Cordoned Runs): a
+// writer that runs as ordinary processes on the daemon's host, held by a
+// short list of fixed denials instead of a VM. No backend declares it yet
+// (tracker #3462); registering it fixes its ceiling and its unattended
+// minimum before one does.
+const BackendCordonedHostProcess RunnerBackendClass = "cordoned_host_process"
+
 // AllRunnerBackendClasses lists every valid RunnerBackendClass; it drives
 // table-driven tests and is the single place a new class is registered.
 var AllRunnerBackendClasses = []RunnerBackendClass{
 	BackendFreshVMReadOnlyVolumeHandoff,
 	BackendCredentialFreeHostVerification,
+	BackendCordonedHostProcess,
 }
 
 func (c RunnerBackendClass) valid() bool {
 	switch c {
-	case BackendFreshVMReadOnlyVolumeHandoff, BackendCredentialFreeHostVerification:
+	case BackendFreshVMReadOnlyVolumeHandoff, BackendCredentialFreeHostVerification,
+		BackendCordonedHostProcess:
 		return true
 	default:
 		return false
@@ -75,8 +84,26 @@ func ProvableCapabilities(class RunnerBackendClass) (CapabilitySnapshot, bool) {
 		// capability is an over-claim for it: its suite (#2879) can prove
 		// only its own declaration.
 		return NewCapabilitySnapshot(CapCredentialFreeHostVerification), true
+	case BackendCordonedHostProcess:
+		// The cordon has no VM and no volume, so every ward capability is
+		// an over-claim for it, and the executor's declaration belongs to
+		// the executor alone; its suite can prove only the cordon's own
+		// denials and how a run ends.
+		return CordonedCapabilities(), true
 	}
 	return nil, false
+}
+
+// CordonedCapabilities returns the cordoned class's four capabilities, which
+// are both its ceiling and its unattended minimum, as a fresh snapshot the
+// caller may keep.
+func CordonedCapabilities() CapabilitySnapshot {
+	return NewCapabilitySnapshot(
+		CapCordonedSecretDenial,
+		CapCordonedLaunchDenial,
+		CapCordonedDaemonProtection,
+		CapCordonedRunEndProof,
+	)
 }
 
 // ConformanceOutcome is the durable state one conformance-log append records

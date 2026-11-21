@@ -37,6 +37,28 @@ const (
 	// executor's full conformance pass (#2879) earns it, and it is the one
 	// capability that lets a host-side class run under unattended.
 	CapCredentialFreeHostVerification RunnerCapability = "supports_credential_free_host_verification"
+
+	// The cordoned class's capabilities (§5.7, Cordoned Runs). Each of the
+	// first three proves one of the cordon's fixed denials and the last
+	// proves how a run ends. Only cordoned_host_process can earn them, and
+	// it can earn nothing else (ProvableCapabilities).
+
+	// CapCordonedSecretDenial proves a run can't read the owner's
+	// credentials or the login keychain, and can't read or write any
+	// instance's daemon state or the enrolled tokens.
+	CapCordonedSecretDenial RunnerCapability = "supports_cordoned_secret_denial"
+	// CapCordonedLaunchDenial proves a run can't start anything outside the
+	// cordon: through launchd or Launch Services, as a launchd job that
+	// loads later, or in a Simulator device.
+	CapCordonedLaunchDenial RunnerCapability = "supports_cordoned_launch_denial"
+	// CapCordonedDaemonProtection proves a run can't signal or attach to a
+	// process outside the run, and can't write anything the daemon, import,
+	// clean verification, or publication trusts.
+	CapCordonedDaemonProtection RunnerCapability = "supports_cordoned_daemon_protection"
+	// CapCordonedRunEndProof proves the daemon finds every process a run
+	// started, ends any still alive, and shows that none remains before
+	// export.
+	CapCordonedRunEndProof RunnerCapability = "supports_cordoned_run_end_proof"
 )
 
 // AllRunnerCapabilities lists every valid RunnerCapability; it drives
@@ -50,13 +72,19 @@ var AllRunnerCapabilities = []RunnerCapability{
 	CapNetworklessExport,
 	CapEnforcedProviderEgress,
 	CapCredentialFreeHostVerification,
+	CapCordonedSecretDenial,
+	CapCordonedLaunchDenial,
+	CapCordonedDaemonProtection,
+	CapCordonedRunEndProof,
 }
 
 func (c RunnerCapability) valid() bool {
 	switch c {
 	case CapDetachableWorkspace, CapPostExitExport, CapReadOnlyRemount,
 		CapCredentialVolumeDetach, CapWorkspaceSnapshot, CapNetworklessExport,
-		CapEnforcedProviderEgress, CapCredentialFreeHostVerification:
+		CapEnforcedProviderEgress, CapCredentialFreeHostVerification,
+		CapCordonedSecretDenial, CapCordonedLaunchDenial,
+		CapCordonedDaemonProtection, CapCordonedRunEndProof:
 		return true
 	default:
 		return false

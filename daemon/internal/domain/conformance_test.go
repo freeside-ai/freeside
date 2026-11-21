@@ -167,6 +167,41 @@ func TestHostVerificationConformanceCeiling(t *testing.T) {
 	}
 }
 
+// TestCordonedConformanceCeiling pins the cordoned class's ceiling in both
+// directions: a cordoned record claiming a ward capability over-claims, and so
+// does a ward record claiming a cordon capability. One capability stands for
+// each side, since ExcessCapabilities treats every capability alike.
+func TestCordonedConformanceCeiling(t *testing.T) {
+	cordon := domain.NewCapabilitySnapshot(
+		domain.CapCordonedSecretDenial,
+		domain.CapCordonedLaunchDenial,
+		domain.CapCordonedDaemonProtection,
+		domain.CapCordonedRunEndProof,
+	)
+	input := domain.BackendConformanceInput{
+		Backend:             domain.BackendCordonedHostProcess,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        cordon,
+		ProvedAt:            provedAt,
+	}
+	if _, err := domain.NewBackendConformance(input); err != nil {
+		t.Fatalf("passed cordoned record: %v", err)
+	}
+
+	over := input
+	over.Capabilities = domain.NewCapabilitySnapshot(append(cordon.Clone(), domain.CapNetworklessExport)...)
+	if _, err := domain.NewBackendConformance(over); !errors.Is(err, domain.ErrConformanceOverclaim) {
+		t.Errorf("cordoned record claiming a ward capability = %v, want ErrConformanceOverclaim", err)
+	}
+
+	ward := validPassedConformance(t)
+	ward.Capabilities = domain.NewCapabilitySnapshot(append(ward.Capabilities.Clone(), domain.CapCordonedRunEndProof)...)
+	if err := ward.Validate(); !errors.Is(err, domain.ErrConformanceOverclaim) {
+		t.Errorf("ward record claiming a cordon capability = %v, want ErrConformanceOverclaim", err)
+	}
+}
+
 // TestProvableCapabilities pins each registered class's ceiling: every member
 // is registered vocabulary, the refuted capabilities are excluded, and an
 // unregistered class has no ceiling at all.
@@ -204,6 +239,17 @@ func TestProvableCapabilities(t *testing.T) {
 	wantHost := domain.NewCapabilitySnapshot(domain.CapCredentialFreeHostVerification)
 	if !slices.Equal(hostVerification, wantHost) {
 		t.Errorf("host-verification ceiling = %v, want %v", hostVerification, wantHost)
+	}
+
+	cordoned, _ := domain.ProvableCapabilities(domain.BackendCordonedHostProcess)
+	wantCordoned := domain.NewCapabilitySnapshot(
+		domain.CapCordonedSecretDenial,
+		domain.CapCordonedLaunchDenial,
+		domain.CapCordonedDaemonProtection,
+		domain.CapCordonedRunEndProof,
+	)
+	if !slices.Equal(cordoned, wantCordoned) {
+		t.Errorf("cordoned ceiling = %v, want %v", cordoned, wantCordoned)
 	}
 
 	if ceiling, ok := domain.ProvableCapabilities("no_such_class"); ok || ceiling != nil {

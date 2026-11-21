@@ -31,12 +31,16 @@ var conformancePendingCapabilities = []exec.Capability{
 
 // refusedCapabilities must never be declared: the first two are refuted on
 // the reference runtime (the same-VM fallback class and volume snapshots),
-// and the last belongs to the host verification executor's class, not the
-// ward's.
+// the third belongs to the host verification executor's class, and the last
+// four to the cordoned class, not the ward's.
 var refusedCapabilities = []exec.Capability{
 	exec.CapCredentialVolumeDetach,
 	exec.CapWorkspaceSnapshot,
 	exec.CapCredentialFreeHostVerification,
+	exec.CapCordonedSecretDenial,
+	exec.CapCordonedLaunchDenial,
+	exec.CapCordonedDaemonProtection,
+	exec.CapCordonedRunEndProof,
 }
 
 // testImageA and testImageB are two digest-pinned writer images, each with
