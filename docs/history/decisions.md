@@ -4349,3 +4349,58 @@ Nothing in this revision is built yet: tracker #3462 builds it.
 
 (Owner decisions of 2026-11-19 and 2026-11-20 in #3464, from the #3463 and
 #3526 spikes; [decision note](../../devlog/2026-11-20-2237-cordoned-runs.md).)
+
+## Revision 135 ("A Cordoned Candidate Is Verified Cordoned"):
+
+1. **A cordoned candidate's macOS-host checks run cordoned** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+   Verification). They run on the daemon's host as the daemon's own account,
+   under a verifier rule file, in every instance tier, and the verdict is
+   recorded as cordoned. The job holds no credential and runs no agent, and
+   it captures in-process renders only, never a Simulator, a window, or the
+   screen. The recipe's Linux commands stay in the ward.
+2. **The candidate's writers pick the class** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+   Verification). A candidate is verified cordoned only when Freeside runs
+   wrote every change in it and each ran cordoned, in every verification of
+   it. A warded candidate, one a warded or uncordoned run helped write, and a
+   head with any change no Freeside run wrote keep the slot executor, which stays for them. A cordoned job whose
+   class has no current proof is refused, never moved; the operator may send
+   a project's or a task's cordoned candidates to the slot executor by an
+   explicit setting, and the verdict is then the slot executor's.
+3. **The class is `cordoned_host_verification`, with four capabilities of its
+   own** (Section [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes)):
+   read denial, confinement, host protection, and a proven job end.
+   `unattended` admits it on its own conformance, on the daemon's host only,
+   and not before #3550 keeps secrets out of every process the daemon starts.
+   It proves no teardown by uid, no packet filter, and no login session of
+   its own.
+4. **The writer cordon widens to keep writers out of a job** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+   Runs): no read or write of a job's own directories, no write to the cordoned
+   verifier's own toolchain and caches or to the preferences a job reads, and
+   no bind of a job's ports. The owner's temporary directory and Clang module
+   cache stay shared. `supports_cordoned_daemon_protection` proves it,
+   without a new name.
+5. **A count bounds cordoned verification jobs** (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), Machine
+   Capacity): an operator-set cap per instance, separate from the cordoned
+   writers' cap, with a visible hold over it.
+6. **The owner accepts the residual for cordoned candidates** (Section
+   [14](../plan.md#14-risks)): the shared temporary directory and Clang module cache,
+   readable environments, the pasteboard and possibly the screen, helpers
+   launchd starts, teardown by sandbox membership, and one network layer.
+
+Rejected: keeping all verification on the slot executor, the cordoned-verifier
+spike's recommendation, because it runs two jobs at once and needs hidden
+accounts, a root helper, and a reinstall to change either, while a cordoned
+candidate has already run as the owner and the daemon and App key already
+rest on the cordon; a macOS VM per job on the reference host (#3136), not yet
+measured and held to two guests per host by the kernel quota, which the owner
+revisits with the slot executor; and verification on the Mac mini, which the
+owner decided is not its first job.
+
+Nothing in this revision is built yet: tracker #3462 builds it.
+
+(Owner decisions of 2026-11-20 on #3464, from the #3526 spike; #3548;
+[decision note](../../devlog/2026-11-21-0854-cordoned-verification.md).)
