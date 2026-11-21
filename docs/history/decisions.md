@@ -4278,3 +4278,74 @@ other trusts.
 
 (Owner decision of 2026-11-19 in #3434, from #2382's exit run;
 [decision note](../../devlog/2026-11-19-2313-expired-intent-keeps-installation.md).)
+
+## Revision 134 ("Cordoned Runs Are the Default Writer Class"):
+
+1. **A writer runs cordoned on the daemon's host by default** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Cordoned Runs). The implementer and the remediator run as ordinary processes
+   under the owner's account, with no VM, held by fixed denials: no reading the
+   owner's credentials or the login keychain or using them through a key agent,
+   no reading or writing any instance's daemon state or the enrolled tokens,
+   directly or through the container runtime, nothing started through launchd
+   or Launch Services, no signal, attach, or daemon-socket connection outside
+   the run, and no write to anything the daemon, import, clean verification, or
+   publication trusts. The cordon denies only what it names. The harness's
+   review of each action is a second check, not a boundary.
+2. **The class is `cordoned_host_process`, with capabilities of its own**
+   (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Operating Modes). `unattended` admits it on its own conformance. The runner
+   minimum is per class: a cordoned run needs none of the ward's handoff or
+   enforced-egress capabilities, and a warded run none of the cordon's. Its
+   handoff exports only after the daemon shows that no process of the run is
+   alive (Section
+   [5.6](../plan.md#56-the-gauntlet-workspace-handoff-import-and-clean-verification)).
+   It runs on the daemon's host only, in every instance tier (Section
+   [10](../plan.md#10-operations-and-onboarding)).
+3. **Warded runs stay** for clean verification, which this revision leaves
+   where it was; for the specifier, researcher, and reviewers; and for a
+   writer run whose project or task the operator sets to warded, for
+   material the owner doesn't trust or a grant of something sensitive beyond
+   the project. The split is by what a run handles, never by
+   whether the owner is present. A cordoned run reports its isolation class
+   wherever a warded run does and is never recorded as warded.
+4. **A cordoned writer holds its identity's token under
+   `subscription_contained`** (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency)). The
+   token reaches the CLI alone, never argv, an environment, or a record, and no
+   process the daemon starts carries a secret in its arguments or environment,
+   so the class waits on #3550 for admission. The hold on
+   `subscription_injected` stays; revision 95's wait for it no longer applies
+   to a host-run writer.
+5. **Its network comes in two steps** (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency)):
+   `host_open`, the host's network, until the network rule lands; then
+   `host_web_read`, search and read anything, send nothing. Cordoned writer
+   launches offer search and a daemon-run page fetch; #1659 stays open for a
+   warded writer's launch and the review launches.
+6. **A count bounds cordoned launches** (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency),
+   Machine Capacity). They reserve no VM, so an operator-set cap per instance
+   bounds them.
+7. **Seeing its own work is standard:** renders, the built Mac app, and a web
+   preview of a server the run starts. The Simulator is denied by default,
+   because code in a device runs as the owner outside the cordon; running one
+   is a per-run grant of its own kind, as full desktop control is, and either
+   grant records the run as uncordoned.
+8. **The owner accepts the residual** (Section [14](../plan.md#14-risks)),
+   including what the spikes measured and no rule closes.
+
+Rejected: hidden per-run accounts, which have no login session and so no
+Simulator; a separate logged-in agents account, for its setup friction and a
+manual login after each restart; one shared Linux VM, which serves Linux work
+only; a guest Mac for all agents, a fixed block of memory; a deny-by-default
+box, where agents hit walls and the owner maintains exceptions; proxy
+credential substitution, the reason revision 103 holds
+`subscription_injected`; and two accounts per run to keep the token from
+tools.
+
+Nothing in this revision is built yet: tracker #3462 builds it.
+
+(Owner decisions of 2026-11-19 and 2026-11-20 in #3464, from the #3463 and
+#3526 spikes; [decision note](../../devlog/2026-11-20-2237-cordoned-runs.md).)
