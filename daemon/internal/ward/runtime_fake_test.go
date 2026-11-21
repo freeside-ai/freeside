@@ -52,6 +52,9 @@ func (stubRuntime) ExportRootFS(context.Context, string, io.Writer, int64) error
 	return nil
 }
 func (stubRuntime) CopyIntoContainer(context.Context, string, string, string) error { return nil }
+func (stubRuntime) ExecRead(context.Context, string, []string, int) ([]byte, error) {
+	return nil, nil
+}
 
 // fakeCtr is one container the fakeRuntime tracks.
 type fakeCtr struct {
@@ -202,6 +205,8 @@ type fakeRuntime struct {
 	onListContainers  func(list []ContainerSummary) ([]ContainerSummary, error)
 	onListVolumes     func(list []VolumeSummary) ([]VolumeSummary, error)
 	onExport          func(id string, dest io.Writer) error
+	// onExecRead answers ExecRead; unset fails every exec read.
+	onExecRead func(ctx context.Context, id string, argv []string, maxBytes int) ([]byte, error)
 	// onCopyIntoContainer overrides the copy outcome. Returning nil without the
 	// fake recording anything models the runtime's real and most dangerous
 	// behaviour: a copy into a mounted volume writes nothing and still reports
@@ -1212,4 +1217,21 @@ func stateProofFor(
 		contents,
 		credStateDigest(string(kind)+":"+contents),
 	)
+}
+
+// ExecRead records the read and answers through onExecRead. It takes the
+// lock only to record, so a hook that blocks models a wedged exec without
+// holding up the rest of the fake.
+func (f *fakeRuntime) ExecRead(ctx context.Context, id string, argv []string, maxBytes int) ([]byte, error) {
+	f.mu.Lock()
+	f.record("exec-read %s", id)
+	hook := f.onExecRead
+	f.mu.Unlock()
+	if err := f.checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	if hook == nil {
+		return nil, fmt.Errorf("exec read of %q not scripted", id)
+	}
+	return hook(ctx, id, argv, maxBytes)
 }

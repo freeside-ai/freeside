@@ -11,6 +11,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -781,6 +782,10 @@ func TestListInspectExportWithholdStderr(t *testing.T) {
 		"list containers": func() error { _, err := rt.ListContainers(ctx); return err },
 		"list volumes":    func() error { _, err := rt.ListVolumes(ctx); return err },
 		"export":          func() error { return rt.ExportRootFS(ctx, "gate-name", &bytes.Buffer{}, 0) },
+		"exec read": func() error {
+			_, err := rt.ExecRead(ctx, "gate-name", liveTranscriptReadArgv(0, 64), 64)
+			return err
+		},
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -990,5 +995,41 @@ func TestCreateContainerArgsTerminatesOptions(t *testing.T) {
 	// The image and command sit in the positional tail, after the terminator.
 	if got := args[term+1:]; got[0] != spec.Image || got[1] != spec.Command[0] {
 		t.Errorf("positional tail = %q, want image then command", got)
+	}
+}
+
+// TestExecReadArgv pins the exec form: root, no environment, no stdin or
+// terminal, the container, then the caller's argv verbatim.
+func TestExecReadArgv(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	execfixture.Write(t, bin, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done\n"), 0o700)
+	argv := liveTranscriptReadArgv(9, 1<<20)
+	out, err := NewCLIRuntime(bin).ExecRead(context.Background(), "writer-name", argv, 1<<20)
+	if err != nil {
+		t.Fatalf("ExecRead = %v", err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	want := append([]string{"exec", "--user", "0:0", "writer-name"}, argv...)
+	if !slices.Equal(got, want) {
+		t.Errorf("argv = %q, want %q", got, want)
+	}
+}
+
+// TestExecReadRefusesOutputPastItsCap: output past the cap fails the call
+// and returns no prefix, so a caller never mistakes a truncated read for a
+// whole one.
+func TestExecReadRefusesOutputPastItsCap(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	execfixture.Write(t, bin, []byte("#!/bin/sh\nhead -c 4096 /dev/zero\n"), 0o700)
+	rt := NewCLIRuntime(bin)
+	out, err := rt.ExecRead(context.Background(), "writer-name", []string{"true"}, 4095)
+	if err == nil || out != nil {
+		t.Fatalf("ExecRead over the cap = %d bytes, %v; want refusal", len(out), err)
+	}
+	out, err = rt.ExecRead(context.Background(), "writer-name", []string{"true"}, 4096)
+	if err != nil || len(out) != 4096 {
+		t.Fatalf("ExecRead at the cap = %d bytes, %v; want 4096", len(out), err)
 	}
 }
