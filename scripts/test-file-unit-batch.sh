@@ -219,12 +219,12 @@ class FileUnitBatch(unittest.TestCase):
         self.assertIn('expected OWNER/NAME', result.stderr)
         self.assertEqual(calls, [])
 
-    def test_unwritable_input_directory_fails_before_any_create(self):
-        self.input.chmod(0o555)
-        try:
-            result, calls = self.file()
-        finally:
-            self.input.chmod(0o755)
+    def test_unwritable_state_write_fails_before_any_create(self):
+        # A directory where the state file's temporary copy goes fails the
+        # write for every user; a read-only directory would not stop root, and
+        # the project-image proof runs this suite as root.
+        (self.input / 'filed.json.tmp').mkdir()
+        result, calls = self.file()
         self.assertEqual(result.returncode, 1)
         self.assertIn('filed.json', result.stderr)
         self.assertEqual(calls, [])
