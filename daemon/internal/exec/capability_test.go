@@ -20,6 +20,12 @@ type backend struct {
 func (b backend) Name() string                     { return b.name }
 func (b backend) Capabilities() exec.CapabilitySet { return b.caps }
 
+// allExcept is every registered capability but absent, so a "missing one"
+// case stays exact as the vocabulary grows.
+func allExcept(absent exec.Capability) []exec.Capability {
+	return slices.DeleteFunc(slices.Clone(exec.AllCapabilities), func(c exec.Capability) bool { return c == absent })
+}
+
 // TestCheckCapabilities is acceptance fixture 2: table-driven over the named
 // §5.7 capabilities, an unmet policy minimum yields a typed refusal naming
 // every missing capability, never a silent downgrade or partial pass.
@@ -46,68 +52,38 @@ func TestCheckCapabilities(t *testing.T) {
 			minimum:  []exec.Capability{exec.CapPostExitExport},
 		},
 		{
-			name: "missing detachable workspace",
-			declared: []exec.Capability{
-				exec.CapPostExitExport, exec.CapReadOnlyRemount,
-				exec.CapCredentialVolumeDetach, exec.CapWorkspaceSnapshot,
-				exec.CapNetworklessExport, exec.CapEnforcedProviderEgress,
-				exec.CapCredentialFreeHostVerification,
-			},
+			name:        "missing detachable workspace",
+			declared:    allExcept(exec.CapDetachableWorkspace),
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapDetachableWorkspace},
 		},
 		{
-			name: "missing post-exit export",
-			declared: []exec.Capability{
-				exec.CapDetachableWorkspace, exec.CapReadOnlyRemount,
-				exec.CapCredentialVolumeDetach, exec.CapWorkspaceSnapshot,
-				exec.CapNetworklessExport, exec.CapEnforcedProviderEgress,
-				exec.CapCredentialFreeHostVerification,
-			},
+			name:        "missing post-exit export",
+			declared:    allExcept(exec.CapPostExitExport),
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapPostExitExport},
 		},
 		{
-			name: "missing read-only remount",
-			declared: []exec.Capability{
-				exec.CapDetachableWorkspace, exec.CapPostExitExport,
-				exec.CapCredentialVolumeDetach, exec.CapWorkspaceSnapshot,
-				exec.CapNetworklessExport, exec.CapEnforcedProviderEgress,
-				exec.CapCredentialFreeHostVerification,
-			},
+			name:        "missing read-only remount",
+			declared:    allExcept(exec.CapReadOnlyRemount),
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapReadOnlyRemount},
 		},
 		{
-			name: "missing credential volume detach",
-			declared: []exec.Capability{
-				exec.CapDetachableWorkspace, exec.CapPostExitExport,
-				exec.CapReadOnlyRemount, exec.CapWorkspaceSnapshot,
-				exec.CapNetworklessExport, exec.CapEnforcedProviderEgress,
-				exec.CapCredentialFreeHostVerification,
-			},
+			name:        "missing credential volume detach",
+			declared:    allExcept(exec.CapCredentialVolumeDetach),
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapCredentialVolumeDetach},
 		},
 		{
-			name: "missing workspace snapshot",
-			declared: []exec.Capability{
-				exec.CapDetachableWorkspace, exec.CapPostExitExport,
-				exec.CapReadOnlyRemount, exec.CapCredentialVolumeDetach,
-				exec.CapNetworklessExport, exec.CapEnforcedProviderEgress,
-				exec.CapCredentialFreeHostVerification,
-			},
+			name:        "missing workspace snapshot",
+			declared:    allExcept(exec.CapWorkspaceSnapshot),
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapWorkspaceSnapshot},
 		},
 		{
-			name: "missing networkless export",
-			declared: []exec.Capability{
-				exec.CapDetachableWorkspace, exec.CapPostExitExport,
-				exec.CapReadOnlyRemount, exec.CapCredentialVolumeDetach,
-				exec.CapWorkspaceSnapshot, exec.CapEnforcedProviderEgress,
-				exec.CapCredentialFreeHostVerification,
-			},
+			name:        "missing networkless export",
+			declared:    allExcept(exec.CapNetworklessExport),
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapNetworklessExport},
 		},
@@ -117,6 +93,10 @@ func TestCheckCapabilities(t *testing.T) {
 			minimum:  exec.AllCapabilities,
 			// Sorted lexically, not in AllCapabilities order.
 			wantMissing: []exec.Capability{
+				exec.CapCordonedDaemonProtection,
+				exec.CapCordonedLaunchDenial,
+				exec.CapCordonedRunEndProof,
+				exec.CapCordonedSecretDenial,
 				exec.CapCredentialFreeHostVerification,
 				exec.CapCredentialVolumeDetach,
 				exec.CapDetachableWorkspace,

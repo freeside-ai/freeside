@@ -640,8 +640,9 @@ func TestAdmittedUnder(t *testing.T) {
 
 // TestRequiredCapabilitiesPerClass pins the class-aware minimum (§5.7): under
 // unattended the ward class keeps its configured floor plus the plan's two
-// proofs, the host-verification executor needs exactly its own declaration
-// whatever the configured floor says, and an unregistered class is refused.
+// proofs, the host-verification executor needs exactly its own declaration and
+// the cordoned class exactly its four, whatever the configured floor says, and
+// an unregistered class is refused.
 func TestRequiredCapabilitiesPerClass(t *testing.T) {
 	floor := domain.NewCapabilitySnapshot(domain.CapPostExitExport)
 	cases := []struct {
@@ -664,6 +665,14 @@ func TestRequiredCapabilitiesPerClass(t *testing.T) {
 			nil,
 		},
 		{
+			"unattended cordoned", domain.ModeUnattended, domain.BackendCordonedHostProcess,
+			[]domain.RunnerCapability{
+				domain.CapCordonedDaemonProtection, domain.CapCordonedLaunchDenial,
+				domain.CapCordonedRunEndProof, domain.CapCordonedSecretDenial,
+			},
+			nil,
+		},
+		{
 			"unattended unregistered class", domain.ModeUnattended, "fake-runner",
 			nil, domain.ErrInvalidRunnerBackendClass,
 		},
@@ -677,6 +686,10 @@ func TestRequiredCapabilitiesPerClass(t *testing.T) {
 		},
 		{
 			"attended host verification", domain.ModeAttendedDev, domain.BackendCredentialFreeHostVerification,
+			nil, nil,
+		},
+		{
+			"attended cordoned", domain.ModeAttendedDev, domain.BackendCordonedHostProcess,
 			nil, nil,
 		},
 		{
@@ -733,6 +746,49 @@ func TestAdmittedUnderHostVerification(t *testing.T) {
 	}
 	if err := domain.AdmittedUnder(record("fake-runner", domain.AllRunnerCapabilities...), policy); !errors.Is(err, domain.ErrInvalidRunnerBackendClass) {
 		t.Errorf("unregistered unattended class = %v, want ErrInvalidRunnerBackendClass", err)
+	}
+}
+
+// TestAdmittedUnderCordoned proves the re-gate holds an unattended cordoned
+// admission to the cordon's four capabilities rather than the configured
+// floor: it admits one that declares the four, and refuses one missing any of
+// them by naming it. One absent capability stands for all four, since
+// MissingCapabilities treats every capability alike and
+// TestRequiredCapabilitiesPerClass pins the four.
+func TestAdmittedUnderCordoned(t *testing.T) {
+	profile := domain.Digest("sha256:profile-v1")
+	backupHealth := healthyBackupHealth()
+	policy := domain.AdmissionPolicy{
+		Floors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealth:            &backupHealth,
+	}
+	cordon := []domain.RunnerCapability{
+		domain.CapCordonedSecretDenial,
+		domain.CapCordonedLaunchDenial,
+		domain.CapCordonedDaemonProtection,
+		domain.CapCordonedRunEndProof,
+	}
+	record := func(caps ...domain.RunnerCapability) domain.ExecutionAdmission {
+		in := admissionInput()
+		in.Backend = string(domain.BackendCordonedHostProcess)
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = domain.NewCapabilitySnapshot(caps...)
+		in.TrustProfileDigest = &profile
+		return mustAdmission(t, in)
+	}
+
+	if err := domain.AdmittedUnder(record(cordon...), policy); err != nil {
+		t.Fatalf("cordoned admission declaring the four = %v, want admitted", err)
+	}
+	err := domain.AdmittedUnder(record(cordon[:3]...), policy)
+	if !errors.Is(err, domain.ErrCapabilityBelowFloor) {
+		t.Fatalf("cordoned admission without %q = %v, want ErrCapabilityBelowFloor", cordon[3], err)
+	}
+	if !strings.Contains(err.Error(), string(cordon[3])) {
+		t.Errorf("refusal %q does not name the missing capability", err)
 	}
 }
 

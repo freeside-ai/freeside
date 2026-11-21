@@ -4671,14 +4671,20 @@ scheduled conformance's authenticated fetch never meets coverage withdrawn
 mid-pass and cannot terminate the daemon that way. Doctor applies the selected mode's full capability floor; unattended
 health therefore requires the networkless-export and enforced-provider-egress
 proofs in addition to the attended handoff floor. The minimum is per backend
-class: the one host-side class `unattended` admits, the credential-free macOS
-verification executor (`credential_free_host_verification`, package
-`internal/macverify`), needs only its own
-`supports_credential_free_host_verification` declaration, earned by its own
-conformance pass, and runs only a run's verification job. The class is
-declared, the daemon builds it from its `-macverify-*` flags and places each
-`macos_host` recipe command on its room (Prove the Executor), and doctor does
-not check it. Pass `-operating-mode
+class, and neither host-side class is held to the configured floor. The
+credential-free macOS verification executor
+(`credential_free_host_verification`, package `internal/macverify`) needs
+only its own `supports_credential_free_host_verification` declaration, earned
+by its own conformance pass, and runs only a run's verification job. The
+class is declared, the daemon builds it from its `-macverify-*` flags and
+places each `macos_host` recipe command on its room (Prove the Executor), and
+doctor does not check it. The cordoned host process
+(`cordoned_host_process`, plan §5.7 Cordoned Runs) needs exactly its four
+`supports_cordoned_*` capabilities under `unattended` (secret denial, launch
+denial, daemon protection, and run-end proof) and none under
+`attended_dev`, and it can claim no other class's capability. The class is
+registered only: no backend declares it yet, nothing writes its conformance
+record, and doctor does not check it (tracker #3462). Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
 unattended daemon. Use the `digest` field from that daemon's startup log record
 whose message is `effective reviewer configuration`; it is computed from the

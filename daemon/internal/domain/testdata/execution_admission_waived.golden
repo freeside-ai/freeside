@@ -1,11 +1,15 @@
 {
-  "id": "sha256:447cba34e3241354436f6f75d6ce237128ed8dda187fda7b6603fb3114a8f043",
+  "id": "sha256:d0d6a7fef00b136c60bee5aac83b464763ae6d9fa008d92ec73b5712f5649272",
   "invocation_id": "inv-2",
   "run_id": "run-1",
   "stage_id": "stage-1",
   "attempt_id": "attempt-2",
   "backend": "fresh_vm_read_only_volume_handoff",
   "capabilities": [
+    "supports_cordoned_daemon_protection",
+    "supports_cordoned_launch_denial",
+    "supports_cordoned_run_end_proof",
+    "supports_cordoned_secret_denial",
     "supports_credential_free_host_verification",
     "supports_credential_volume_detach",
     "supports_detachable_workspace",

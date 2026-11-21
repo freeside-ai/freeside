@@ -35,6 +35,10 @@ func TestRunnerBackendCapabilityCheck(t *testing.T) {
 		t.Errorf("refusal backend = %q, want %q", refusal.Backend, "fake-runner")
 	}
 	wantMissing := []exec.Capability{
+		exec.CapCordonedDaemonProtection,
+		exec.CapCordonedLaunchDenial,
+		exec.CapCordonedRunEndProof,
+		exec.CapCordonedSecretDenial,
 		exec.CapCredentialFreeHostVerification,
 		exec.CapCredentialVolumeDetach,
 		exec.CapDetachableWorkspace,
