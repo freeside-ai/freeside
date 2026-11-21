@@ -647,7 +647,9 @@ one; it resumes where it stopped. In order:
    If something did change, the approval command fails, prints what
    changed, and a rerun of the script reviews the new tip.
 4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
-   the approving run, applies the pass's routing and pool limits, runs
+   the approving run, keeps a replaced recipe in `retained_recipes` so the
+   root's earlier evidence still reads, applies the pass's routing and pool
+   limits, runs
    `freesided probe-lineup -root <root>`
    ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
    so a model the pinned CLIs refuse fails for the cost of one short call
@@ -1069,7 +1071,8 @@ freesided renew-codex \
   -approved-recipe <approved_recipe>
 ```
 
-Pass every approved recipe when the store uses more than one. Success reports
+Pass every approved recipe when the store uses more than one: repeat
+`-approved-recipe` for each `retained_recipes` digest. Success reports
 only readiness coordinates and creates no hold. Start the deputy again; its
 composition preflight must now pass `codex_credentials`. If renewal was
 interrupted, rerun it first to recover any pending rotation.
@@ -1094,9 +1097,9 @@ freesided -environment ephemeral -driver disabled \
   -approved-recipe <approved_recipe>
 ```
 
-`<listen>` and `<approved_recipe>` are the settings file's values. If the
-database also holds evidence for other approved recipes, repeat
-`-approved-recipe sha256:<digest>` for each so paired-client sync can
+`<listen>` and `<approved_recipe>` are the settings file's values. Repeat
+`-approved-recipe` for each `retained_recipes` digest, and for any other
+recipe the database holds evidence under, so paired-client sync can
 reconstruct it. The daemon runs no agent, opens no App authority, and takes
 no rig lease, so it needs none of the deputy's other settings.
 
