@@ -299,7 +299,8 @@ public struct MockServerTransport: ClientTransport {
             // As the daemon: only an invocation the run's timeline holds
             // under an execution admission answers; a reviewer's or another
             // run's is not found.
-            let parts = (request.path ?? "").split(separator: "/")
+            let components = URLComponents(string: request.path ?? "")
+            let parts = (components?.percentEncodedPath ?? "").split(separator: "/")
             guard parts.count == 5, parts[0] == "runs", parts[2] == "invocations", parts[4] == "transcript",
                 let runID = String(parts[1]).removingPercentEncoding,
                 let invocationID = String(parts[3]).removingPercentEncoding,
@@ -312,7 +313,24 @@ public struct MockServerTransport: ClientTransport {
                     status: .notFound, body: Components.Schemas._Error(message: "no entity exists under the identifier")
                 )
             }
-            var transcript = RunFixtures.invocationTranscript(runID: runID, invocation: invocation)
+            // As the daemon: `after` absent is 0, and one that is not a
+            // single non-negative integer is a 400.
+            let afters = components?.queryItems?.filter { $0.name == "after" } ?? []
+            var after: Int64 = 0
+            if !afters.isEmpty {
+                guard afters.count == 1, let value = afters[0].value.flatMap({ Int64($0) }), value >= 0 else {
+                    return try Self.json(
+                        status: .badRequest,
+                        body: Components.Schemas._Error(message: "after must be a non-negative integer"))
+                }
+                after = value
+            }
+            guard var transcript = RunFixtures.invocationTranscript(runID: runID, invocation: invocation, after: after)
+            else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "after is not a record boundary of the live transcript"))
+            }
             // As the daemon: a claim whose bytes are gone is served as none.
             if let claim = transcript.transcript?.value1, await server.attachmentBytes(digest: claim.digest) == nil {
                 transcript.transcript = nil

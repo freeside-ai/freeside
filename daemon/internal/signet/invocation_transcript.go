@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -23,35 +24,65 @@ const (
 	// blob store holds.
 	InvocationTranscriptAvailable InvocationTranscriptAvailability = "available"
 	// InvocationTranscriptUnavailable is no transcript claim, or one whose
-	// bytes are gone; either way no claim is served.
+	// bytes are gone, and no running writer to read; either way nothing is
+	// served.
 	InvocationTranscriptUnavailable InvocationTranscriptAvailability = "unavailable"
+	// InvocationTranscriptLive is a running writer's scanned records, read
+	// while it runs (plan §5.7, "Live view of a running writer"). They are
+	// never stored and never evidence.
+	InvocationTranscriptLive InvocationTranscriptAvailability = "live"
+	// InvocationTranscriptWithheld means a credential rule matched the
+	// running writer's transcript; nothing more is served while it runs.
+	InvocationTranscriptWithheld InvocationTranscriptAvailability = "withheld"
 )
 
 // AllInvocationTranscriptAvailabilities registers every availability.
 var AllInvocationTranscriptAvailabilities = []InvocationTranscriptAvailability{
 	InvocationTranscriptAvailable, InvocationTranscriptUnavailable,
+	InvocationTranscriptLive, InvocationTranscriptWithheld,
 }
 
 func (a InvocationTranscriptAvailability) valid() bool {
 	switch a {
-	case InvocationTranscriptAvailable, InvocationTranscriptUnavailable:
+	case InvocationTranscriptAvailable, InvocationTranscriptUnavailable,
+		InvocationTranscriptLive, InvocationTranscriptWithheld:
 		return true
 	default:
 		return false
 	}
 }
 
-// InvocationTranscript is one ended writer invocation's transcript reference
-// and the prompt it received. Both are the agent's context, never verified
-// evidence; the client fetches the transcript's bytes by digest. Transcript
-// is set only when Availability is available.
+// InvocationTranscript is one writer invocation's transcript and the prompt
+// it received. All of it is the agent's context, never verified evidence.
+// For an ended writer, Transcript references the retained transcript, whose
+// bytes the client fetches by digest; it is set only when Availability is
+// available. For a running writer, Live carries its scanned records; it is
+// set only when Availability is live.
 type InvocationTranscript struct {
 	RunID        domain.RunID                     `json:"run_id"`
 	InvocationID domain.InvocationID              `json:"invocation_id"`
 	Availability InvocationTranscriptAvailability `json:"availability"`
 	Transcript   *domain.AgentClaim               `json:"transcript"`
+	Live         *LiveTranscript                  `json:"live"`
 	Prompt       *string                          `json:"prompt"`
 }
+
+// LiveTranscript is a running writer's complete, scanned records in the
+// transcript's byte range [Start, End), concatenated, each ending in a
+// newline. Records the scan withheld for size or encoding are left out and
+// counted in UnreadableRecords. OmittedBefore says records between the
+// requested offset and Start left the daemon's bounded window.
+type LiveTranscript struct {
+	Start             int64  `json:"start"`
+	End               int64  `json:"end"`
+	Records           []byte `json:"records"`
+	OmittedBefore     bool   `json:"omitted_before"`
+	UnreadableRecords int    `json:"unreadable_records"`
+}
+
+// ErrLiveTranscriptOffset means a live read's offset isn't 0 or an end an
+// earlier answer carried. The request is malformed, not the transcript.
+var ErrLiveTranscriptOffset = errors.New("live transcript offset is not a record boundary")
 
 // GetInvocationTranscript serves the transcript recorded for one invocation
 // of one run. The invocation's recorded admission binds it to the run: an
@@ -60,12 +91,19 @@ type InvocationTranscript struct {
 // The admission is read without current policy, so a policy change never
 // hides history. A claim set that disagrees with the invocation fails the
 // read and serves nothing.
+//
+// With no claim, it asks the bound live reader for a running writer's
+// records after byte offset after, but only for an invocation the run
+// records as a writer (recordedWriter). A claim always wins, so an ended
+// writer reads as it did before the live view.
 func (s *Service) GetInvocationTranscript(
-	ctx context.Context, runID domain.RunID, invocationID domain.InvocationID,
+	ctx context.Context, runID domain.RunID, invocationID domain.InvocationID, after int64,
 ) (InvocationTranscript, error) {
 	var claim *domain.AgentClaim
+	var writer bool
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
-		if _, err := tx.GetRun(ctx, runID); err != nil {
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
 			return err
 		}
 		admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
@@ -76,14 +114,17 @@ func (s *Service) GetInvocationTranscript(
 			return fmt.Errorf("invocation %s is admitted for another run: %w", invocationID, store.ErrNotFound)
 		}
 		claims, err := tx.GetAgentClaims(ctx, invocationID)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
 			return err
+		default:
+			if claim, err = transcriptClaim(invocationID, claims); err != nil {
+				return err
+			}
 		}
-		claim, err = transcriptClaim(invocationID, claims)
-		return err
+		writer = recordedWriter(run, invocationID)
+		return nil
 	})
 	if err != nil {
 		return InvocationTranscript{}, err
@@ -97,8 +138,66 @@ func (s *Service) GetInvocationTranscript(
 		claim.Metadata.Availability = domain.EvidenceAvailable
 		out.Availability, out.Transcript = InvocationTranscriptAvailable, claim
 	}
+	if claim == nil && writer {
+		if out.Availability, out.Live, err = s.liveTranscript(ctx, invocationID, after); err != nil {
+			return InvocationTranscript{}, err
+		}
+	}
 	out.Prompt, err = s.invocationPrompt(ctx, invocationID)
 	return out, err
+}
+
+// recordedWriter reports whether the run records the invocation as an
+// attempt of an implementation stage, the only invocations the live view
+// reads. That covers a remediation round too: the engine records its stage
+// under the implementation role and the remediator as its attempt when it
+// admits it, in the same transaction as the admission this read already
+// requires. A reviewer, a verifier, and a specifier are never read live.
+func recordedWriter(run domain.Run, id domain.InvocationID) bool {
+	for _, stage := range run.Stages {
+		if role, err := domain.CanonicalStageRole(stage.Name); err != nil || role != domain.StageNameImplementation {
+			continue
+		}
+		for _, attempt := range stage.Attempts {
+			if attempt.InvocationID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// liveTranscript asks the bound reader for a running writer's records. With
+// no reader bound, or no handoff running for the invocation, it reads as
+// unavailable.
+func (s *Service) liveTranscript(
+	ctx context.Context, id domain.InvocationID, after int64,
+) (InvocationTranscriptAvailability, *LiveTranscript, error) {
+	if s.liveTranscripts == nil {
+		return InvocationTranscriptUnavailable, nil, nil
+	}
+	reader := s.liveTranscripts()
+	if reader == nil {
+		return InvocationTranscriptUnavailable, nil, nil
+	}
+	availability, live, err := reader.LiveTranscript(ctx, id, after)
+	if err != nil {
+		return "", nil, err
+	}
+	switch availability {
+	case InvocationTranscriptLive:
+		if live == nil {
+			return "", nil, errors.New("live transcript reader answered live without records")
+		}
+		if live.Records == nil {
+			live.Records = []byte{}
+		}
+		return availability, live, nil
+	case InvocationTranscriptWithheld, InvocationTranscriptUnavailable:
+		return availability, nil, nil
+	case InvocationTranscriptAvailable:
+	}
+	return "", nil, fmt.Errorf("live transcript reader answered %q", availability)
 }
 
 // transcriptClaim picks the invocation's one transcript claim, nil when it
@@ -156,8 +255,21 @@ func (s *Service) invocationPrompt(ctx context.Context, invocationID domain.Invo
 }
 
 func (h httpHandler) getInvocationTranscript(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	var after int64
+	if raw, given := r.URL.Query()["after"]; given {
+		parsed, err := strconv.ParseInt(raw[0], 10, 64)
+		if err != nil || parsed < 0 || len(raw) > 1 {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Message: "after must be a non-negative integer"})
+			return
+		}
+		after = parsed
+	}
 	transcript, err := h.service.GetInvocationTranscript(r.Context(),
-		domain.RunID(r.PathValue("run_id")), domain.InvocationID(r.PathValue("invocation_id")))
+		domain.RunID(r.PathValue("run_id")), domain.InvocationID(r.PathValue("invocation_id")), after)
+	if errors.Is(err, ErrLiveTranscriptOffset) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "after is not a record boundary of the live transcript"})
+		return
+	}
 	if err != nil {
 		writeReadError(w, err)
 		return

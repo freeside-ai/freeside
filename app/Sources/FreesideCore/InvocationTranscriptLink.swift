@@ -9,6 +9,10 @@ import SwiftUI
 /// apply, and opens the transcript sheet. A read with no transcript, one
 /// over the device's size cap, and a fetch that fails each say so under the
 /// link and open nothing.
+///
+/// A running writer's link (#1926) opens the running sheet straight away,
+/// which reads the live transcript itself and becomes the finished or
+/// failed sheet once the writer's transcript is kept.
 struct InvocationTranscriptLink: View {
     let coordinator: SyncCoordinator
     let runID: String
@@ -17,6 +21,8 @@ struct InvocationTranscriptLink: View {
     let title: String
     let outcome: AgentTranscriptSheet.Outcome
     let workingTime: TimeInterval?
+    /// When a running writer started, for its sheet's `Working for`.
+    var startedAt: Date?
     /// False in screenshots: the link draws without its action.
     var rendersInteractiveControls = true
 
@@ -43,6 +49,7 @@ struct InvocationTranscriptLink: View {
     }
 
     @State private var opened: Opened?
+    @State private var followsRunning = false
     @State private var isOpening = false
     @State private var notice: Notice?
 
@@ -62,6 +69,13 @@ struct InvocationTranscriptLink: View {
             }
             .font(FreesideFont.noticeAction)
             .foregroundStyle(Color.accentText)
+            // Its own anchor: two sheets on one view present unreliably.
+            .sheet(isPresented: $followsRunning) {
+                RunningTranscriptSheet(
+                    coordinator: coordinator, runID: runID, invocationID: invocationID, title: title,
+                    startedAt: startedAt, endedOutcome: outcome == .running ? nil : outcome,
+                    workingTime: workingTime)
+            }
             if let notice {
                 Text(notice.text)
                     .font(FreesideFont.trailingSummary)
@@ -77,6 +91,11 @@ struct InvocationTranscriptLink: View {
     }
 
     private func open() {
+        if outcome == .running {
+            notice = nil
+            followsRunning = true
+            return
+        }
         isOpening = true
         notice = nil
         Task {

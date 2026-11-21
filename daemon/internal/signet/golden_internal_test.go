@@ -313,6 +313,13 @@ func TestSignetWireGoldens(t *testing.T) {
 		},
 		{name: "error-response", value: errorResponse{Message: "fixture error"}},
 		{name: "invocation-transcript", value: invocationTranscriptFixture(t)},
+		{name: "invocation-transcript-live", value: liveInvocationTranscriptFixture()},
+		{
+			name: "invocation-transcript-withheld",
+			value: InvocationTranscript{
+				RunID: "run-570", InvocationID: "writer-570", Availability: InvocationTranscriptWithheld,
+			},
+		},
 		{
 			name:  "effect-proposal-facts-verified",
 			value: effectProposalFactsFixture(domain.ClosureProvenanceVerified, domain.ClosureFlagOriginProposeSite, true, true),
@@ -414,6 +421,21 @@ func invocationTranscriptFixture(t *testing.T) InvocationTranscript {
 	return InvocationTranscript{
 		RunID: "run-569", InvocationID: invocation,
 		Availability: InvocationTranscriptAvailable, Transcript: transcript, Prompt: &prompt,
+	}
+}
+
+// liveInvocationTranscriptFixture is a running writer's answer: two
+// records after an earlier read, one withheld record counted, and a prompt.
+func liveInvocationTranscriptFixture() InvocationTranscript {
+	prompt := "Implement the approved work item."
+	return InvocationTranscript{
+		RunID: "run-570", InvocationID: "writer-570", Availability: InvocationTranscriptLive,
+		Live: &LiveTranscript{
+			Start: 4096, End: 4160,
+			Records:           []byte("{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n"),
+			UnreadableRecords: 1,
+		},
+		Prompt: &prompt,
 	}
 }
 

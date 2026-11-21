@@ -306,4 +306,12 @@ type Runtime interface {
 	// A nil return is not evidence the bytes arrived, for the same reason and
 	// generally: the gate proves the result by observing it afterwards.
 	CopyIntoContainer(ctx context.Context, id, hostDir, targetDir string) error
+	// ExecRead runs argv as root in the running container id and returns its
+	// stdout, refusing output past maxBytes rather than truncating it. It
+	// adds no environment, mount, writable path, or network, attaches no
+	// stdin or terminal, and returns no stderr, which can carry guest bytes.
+	// Its only caller is the live transcript read (live_transcript.go),
+	// whose argv is a fixed, gate-authored read of one root-only file; the
+	// bytes it returns are untrusted.
+	ExecRead(ctx context.Context, id string, argv []string, maxBytes int) ([]byte, error)
 }

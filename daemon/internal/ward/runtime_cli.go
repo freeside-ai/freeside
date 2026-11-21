@@ -419,6 +419,50 @@ func (c *CLIRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer
 	return c.runTo(ctx, dest, false, "export", id)
 }
 
+// ExecRead runs `container exec --user 0:0 <id> <argv>...`. It passes no
+// --env, --env-file, -i, or -t, so the process gets no stdin, no terminal,
+// and no environment beyond the container's own. Stdout is capped on the
+// host: output past maxBytes fails the call instead of returning a prefix.
+// Stderr is withheld (false) because it can carry guest bytes, and this
+// error reaches the daemon's log.
+func (c *CLIRuntime) ExecRead(ctx context.Context, id string, argv []string, maxBytes int) ([]byte, error) {
+	if len(argv) == 0 {
+		return nil, errors.New("container exec: empty argv")
+	}
+	if maxBytes < 0 {
+		return nil, errors.New("container exec: negative output cap")
+	}
+	stdout := &execReadCap{limit: maxBytes}
+	args := append([]string{"exec", "--user", "0:0", id}, argv...)
+	if err := c.runTo(ctx, stdout, false, args...); err != nil {
+		return nil, err
+	}
+	if stdout.exceeded {
+		return nil, fmt.Errorf("container exec: stdout exceeded the %d-byte cap", maxBytes)
+	}
+	return stdout.buf.Bytes(), nil
+}
+
+// execReadCap keeps at most limit bytes and records whether more arrived. It
+// keeps accepting writes past the limit, discarding them, so the process is
+// never blocked on a full pipe; the caller fails the call on exceeded.
+type execReadCap struct {
+	buf      bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (w *execReadCap) Write(p []byte) (int, error) {
+	room := w.limit - w.buf.Len()
+	if len(p) > room {
+		w.exceeded = true
+		w.buf.Write(p[:room])
+		return len(p), nil
+	}
+	w.buf.Write(p)
+	return len(p), nil
+}
+
 // The 1.1.0 JSON shapes, pinned by the decode fixtures under testdata/. Only
 // the fields the gate reads are decoded; everything else is ignored by
 // construction and re-verified by the checks that consume these reports.

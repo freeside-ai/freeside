@@ -236,9 +236,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /runs/{run_id}/review/{round}/evidence`.
     /// - Remark: Generated from `#/paths//runs/{run_id}/review/{round}/evidence/get(getReviewEvidence)`.
     func getReviewEvidence(_ input: Operations.getReviewEvidence.Input) async throws -> Operations.getReviewEvidence.Output
-    /// Read an ended writer invocation's transcript reference and prompt
+    /// Read a writer invocation's transcript, ended or running, and its prompt
     ///
-    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    /// For an ended writer invocation of this run, returns the agent-transcript claim the daemon recorded and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. For a writer that is still running and has recorded no claim, returns its transcript's complete records after the `after` offset, each scanned against the daemon's credential rules before it leaves the daemon, or withheld once a rule matches. A live answer is display-only: never stored, never evidence, and inert. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
     ///
     ///
     /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
@@ -819,19 +819,21 @@ extension APIProtocol {
             headers: headers
         ))
     }
-    /// Read an ended writer invocation's transcript reference and prompt
+    /// Read a writer invocation's transcript, ended or running, and its prompt
     ///
-    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    /// For an ended writer invocation of this run, returns the agent-transcript claim the daemon recorded and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. For a writer that is still running and has recorded no claim, returns its transcript's complete records after the `after` offset, each scanned against the daemon's credential rules before it leaves the daemon, or withheld once a rule matches. A live answer is display-only: never stored, never evidence, and inert. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
     ///
     ///
     /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
     /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)`.
     public func getInvocationTranscript(
         path: Operations.getInvocationTranscript.Input.Path,
+        query: Operations.getInvocationTranscript.Input.Query = .init(),
         headers: Operations.getInvocationTranscript.Input.Headers = .init()
     ) async throws -> Operations.getInvocationTranscript.Output {
         try await getInvocationTranscript(Operations.getInvocationTranscript.Input(
             path: path,
+            query: query,
             headers: headers
         ))
     }
@@ -6655,16 +6657,18 @@ public enum Components {
                 case exit_status
             }
         }
-        /// Whether the invocation's transcript bytes can be fetched now: available when a transcript claim exists and the blob store holds its bytes, unavailable otherwise. A later contract adds a state for a running invocation's growing transcript (#1926).
+        /// What the transcript read serves now: available when a transcript claim exists and the blob store holds its bytes; live when the writer is still running and its scanned records are served in `live`; withheld when a credential rule matched the running writer's transcript, after which nothing more is served while it runs; unavailable otherwise, including a writer whose handoff has ended before its claim is recorded. A client holding live records drops them on any answer that isn't live.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/InvocationTranscriptAvailability`.
         @frozen public enum InvocationTranscriptAvailability: String, Codable, Hashable, Sendable, CaseIterable {
             case available = "available"
             case unavailable = "unavailable"
+            case live = "live"
+            case withheld = "withheld"
             case unknown = "unknown"
         }
-        /// One ended writer invocation's transcript reference and prompt. Both are agent context, never verified evidence: the transcript is the agent CLI's stream, and the prompt is the text the daemon rendered for the writer. The client fetches the transcript's bytes by digest from GET /attachments/{digest}.
+        /// One writer invocation's transcript and prompt. All of it is agent context, never verified evidence: the transcript is the agent CLI's stream, and the prompt is the text the daemon rendered for the writer. For an ended writer, the client fetches the transcript's bytes by digest from GET /attachments/{digest}. For a running writer, `live` carries its records directly.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/InvocationTranscript`.
@@ -6701,6 +6705,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/InvocationTranscript/transcript`.
             public var transcript: Components.Schemas.InvocationTranscript.transcriptPayload?
+            /// A running writer's scanned records, served only when availability is live; null otherwise.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/live`.
+            public struct livePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationTranscript/live/value1`.
+                public var value1: Components.Schemas.LiveTranscript
+                /// Creates a new `livePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.LiveTranscript) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// A running writer's scanned records, served only when availability is live; null otherwise.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/live`.
+            public var live: Components.Schemas.InvocationTranscript.livePayload?
             /// The prompt the writer received, read from the stage driver's record and re-checked against the invocation's admission; null when none is held or the record fails that check.
             ///
             ///
@@ -6713,18 +6743,21 @@ public enum Components {
             ///   - invocation_id:
             ///   - availability:
             ///   - transcript: The invocation's agent-transcript claim, served only when availability is available; null when the invocation recorded none or the blob store no longer holds its bytes.
+            ///   - live: A running writer's scanned records, served only when availability is live; null otherwise.
             ///   - prompt: The prompt the writer received, read from the stage driver's record and re-checked against the invocation's admission; null when none is held or the record fails that check.
             public init(
                 run_id: Swift.String,
                 invocation_id: Swift.String,
                 availability: Components.Schemas.InvocationTranscriptAvailability,
                 transcript: Components.Schemas.InvocationTranscript.transcriptPayload? = nil,
+                live: Components.Schemas.InvocationTranscript.livePayload? = nil,
                 prompt: Swift.String? = nil
             ) {
                 self.run_id = run_id
                 self.invocation_id = invocation_id
                 self.availability = availability
                 self.transcript = transcript
+                self.live = live
                 self.prompt = prompt
             }
             public enum CodingKeys: String, CodingKey {
@@ -6732,7 +6765,67 @@ public enum Components {
                 case invocation_id
                 case availability
                 case transcript
+                case live
                 case prompt
+            }
+        }
+        /// A running writer's complete transcript records in the byte range [start, end) of its transcript, read while it runs. The daemon holds a bounded window in memory only and stores none of it. Unverified and inert: a client renders it as text, never follows a link or loads an image from it, and drops it once an answer stops being live.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/LiveTranscript`.
+        public struct LiveTranscript: Codable, Hashable, Sendable {
+            /// The offset the records start at: the request's `after`, or a later record boundary when earlier records left the window.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/LiveTranscript/start`.
+            public var start: Swift.Int64
+            /// The offset after the last complete record the daemon has read. The client sends it as `after` on its next read.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/LiveTranscript/end`.
+            public var end: Swift.Int64
+            /// Lossless base64-encoded records, each one line of the transcript file ending in a newline, concatenated. A line is usually one JSON record of the agent's stream, but a failed writer's launcher appends the CLI's plain-text stderr to the same file, so a client must treat any line as possibly not JSON. Records withheld for size or encoding are left out and counted in unreadable_records.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/LiveTranscript/records`.
+            public var records: OpenAPIRuntime.Base64EncodedData
+            /// Records between the request's `after` and start left the daemon's window before this read, so the client missed them.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/LiveTranscript/omitted_before`.
+            public var omitted_before: Swift.Bool
+            /// How many records since the writer started were withheld whole for exceeding the record bound or not being valid UTF-8.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/LiveTranscript/unreadable_records`.
+            public var unreadable_records: Swift.Int
+            /// Creates a new `LiveTranscript`.
+            ///
+            /// - Parameters:
+            ///   - start: The offset the records start at: the request's `after`, or a later record boundary when earlier records left the window.
+            ///   - end: The offset after the last complete record the daemon has read. The client sends it as `after` on its next read.
+            ///   - records: Lossless base64-encoded records, each one line of the transcript file ending in a newline, concatenated. A line is usually one JSON record of the agent's stream, but a failed writer's launcher appends the CLI's plain-text stderr to the same file, so a client must treat any line as possibly not JSON. Records withheld for size or encoding are left out and counted in unreadable_records.
+            ///   - omitted_before: Records between the request's `after` and start left the daemon's window before this read, so the client missed them.
+            ///   - unreadable_records: How many records since the writer started were withheld whole for exceeding the record bound or not being valid UTF-8.
+            public init(
+                start: Swift.Int64,
+                end: Swift.Int64,
+                records: OpenAPIRuntime.Base64EncodedData,
+                omitted_before: Swift.Bool,
+                unreadable_records: Swift.Int
+            ) {
+                self.start = start
+                self.end = end
+                self.records = records
+                self.omitted_before = omitted_before
+                self.unreadable_records = unreadable_records
+            }
+            public enum CodingKeys: String, CodingKey {
+                case start
+                case end
+                case records
+                case omitted_before
+                case unreadable_records
             }
         }
         /// The facts behind a work_unit_completed milestone, read from the daemon's re-gated completion record: the PR whose merge satisfied the unit's completion criterion, the merge commit, the bound issue when the criterion names one, and the instant the daemon recorded the completion. The milestone itself carries none of these.
@@ -21169,9 +21262,9 @@ public enum Operations {
             }
         }
     }
-    /// Read an ended writer invocation's transcript reference and prompt
+    /// Read a writer invocation's transcript, ended or running, and its prompt
     ///
-    /// Returns the agent-transcript claim the daemon recorded for one writer invocation of this run, and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
+    /// For an ended writer invocation of this run, returns the agent-transcript claim the daemon recorded and the prompt the writer received. The claim carries a digest; the client fetches its bytes from GET /attachments/{digest}. For a writer that is still running and has recorded no claim, returns its transcript's complete records after the `after` offset, each scanned against the daemon's credential rules before it leaves the daemon, or withheld once a rule matches. A live answer is display-only: never stored, never evidence, and inert. Everything here is the agent's own, unverified account. The invocation's recorded admission must name this run, else 404. A claim set that disagrees with the invocation fails the read with no partial content.
     ///
     ///
     /// - Remark: HTTP `GET /runs/{run_id}/invocations/{invocation_id}/transcript`.
@@ -21203,6 +21296,22 @@ public enum Operations {
                 }
             }
             public var path: Operations.getInvocationTranscript.Input.Path
+            /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// For a running writer, the transcript byte offset the client already holds: 0, or the `end` of an earlier live answer for this invocation. Absent means 0. Ignored when the answer isn't live.
+                ///
+                ///
+                /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/query/after`.
+                public var after: Swift.Int64?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - after: For a running writer, the transcript byte offset the client already holds: 0, or the `end` of an earlier live answer for this invocation. Absent means 0. Ignored when the answer isn't live.
+                public init(after: Swift.Int64? = nil) {
+                    self.after = after
+                }
+            }
+            public var query: Operations.getInvocationTranscript.Input.Query
             /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/header`.
             public struct Headers: Sendable, Hashable {
                 public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getInvocationTranscript.AcceptableContentType>]
@@ -21219,12 +21328,15 @@ public enum Operations {
             ///
             /// - Parameters:
             ///   - path:
+            ///   - query:
             ///   - headers:
             public init(
                 path: Operations.getInvocationTranscript.Input.Path,
+                query: Operations.getInvocationTranscript.Input.Query = .init(),
                 headers: Operations.getInvocationTranscript.Input.Headers = .init()
             ) {
                 self.path = path
+                self.query = query
                 self.headers = headers
             }
         }
@@ -21257,7 +21369,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The transcript reference and prompt, or explicit unavailability.
+            /// The transcript reference or live records and the prompt, or explicit unavailability.
             ///
             /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)/responses/200`.
             ///
@@ -21275,6 +21387,58 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct BadRequest: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/responses/400/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/runs/{run_id}/invocations/{invocation_id}/transcript/GET/responses/400/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getInvocationTranscript.Output.BadRequest.Body
+                /// Creates a new `BadRequest`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getInvocationTranscript.Output.BadRequest.Body) {
+                    self.body = body
+                }
+            }
+            /// The `after` query parameter is not a non-negative integer, or is not 0 or the `end` of an earlier live answer the daemon can still serve from.
+            ///
+            ///
+            /// - Remark: Generated from `#/paths//runs/{run_id}/invocations/{invocation_id}/transcript/get(getInvocationTranscript)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Operations.getInvocationTranscript.Output.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Operations.getInvocationTranscript.Output.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
                             response: self
                         )
                     }

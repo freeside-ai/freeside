@@ -282,6 +282,37 @@ import Testing
         #expect(ended.unreadable.map(\.id) == [1])
     }
 
+    /// While the stream grows, a last call with no result is the call under
+    /// way: it leaves its group and takes a present-tense verb. A call whose
+    /// empty result arrived isn't under way, and an ended stream has none.
+    @Test func aGrowingStreamsLastCallWithoutAResultIsUnderWay() throws {
+        let earlier = try Self.call("t1", "Read", ["file_path": "/workspace/rig/run.go"])
+        for (name, input, verb, identifier) in [
+            ("Bash", ["command": "go test ./rig/..."], "Running", "go test ./rig/..."),
+            ("Read", ["file_path": "/workspace/rig/rig.go"], "Reading", "rig/rig.go"),
+            ("Edit", ["file_path": "/workspace/rig/rig.go"], "Editing", "rig/rig.go"),
+            ("Grep", ["pattern": "Probe"], "Searching", "Probe"),
+            ("Task", [:], "Task", nil),
+        ] as [(String, [String: Any], String, String?)] {
+            let lines = earlier + [try Self.assistant([Self.toolUse("t2", name, input)])]
+            let growing = Self.read(lines, streamEnded: false)
+            #expect(growing.underWay?.verb == verb)
+            #expect(growing.underWay?.identifier == identifier)
+            #expect(Self.calls(growing.entries.last).map(\.verb) == ["Read"])
+
+            let ended = Self.read(lines)
+            #expect(ended.underWay == nil)
+            #expect(Self.calls(ended.entries.last).count == 2)
+        }
+
+        let answered = Self.read(
+            earlier + (try Self.call("t2", "Bash", ["command": "true"], output: "")), streamEnded: false)
+        #expect(answered.underWay == nil)
+
+        let message = Self.read(earlier + [try Self.assistant([Self.text("Done reading.")])], streamEnded: false)
+        #expect(message.underWay == nil)
+    }
+
     /// One record can hold several blocks, as when the agent calls two
     /// tools at once; each keeps its own id, so its row and fold do too.
     @Test func blocksSharingARecordKeepDistinctIDs() throws {

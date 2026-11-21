@@ -151,6 +151,11 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
 
     /// The conversation before the final message, oldest first.
     package let entries: [Entry]
+    /// While the stream is still growing, the call the agent is making now:
+    /// the stream's last item, when it is a call with no result yet. It is
+    /// left out of `entries` and carries a present-tense verb (`Running`,
+    /// `Reading`). Always nil once the stream has ended.
+    package let underWay: Call?
     /// Nil while the stream is still growing, or when it ended without one.
     package let result: Result?
     /// Every line that isn't a known conversation or bookkeeping record.
@@ -213,8 +218,9 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
                 unreadable.append(Line(id: number, text: lines[index]))
             }
         }
-        let (entries, result) = builder.finish()
+        let (entries, result, underWay) = builder.finish(streamEnded: streamEnded)
         self.entries = entries
+        self.underWay = underWay
         self.result = result
         self.unreadable = unreadable
         endsWithPartialLine = partial
@@ -232,6 +238,8 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
         var items: [Item] = []
         var calls: [Call] = []
         var callIndexByToolUseID: [String: Int] = [:]
+        /// The calls a result has answered, an empty one included.
+        var answered: Set<Int> = []
         var result: Result?
         /// The next item's id: an ordinal, so blocks that share a record
         /// keep distinct ids and fold keys.
@@ -320,6 +328,7 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
                 }
             }
             for (index, output, failed) in results {
+                answered.insert(index)
                 calls[index].output = output.isEmpty ? nil : Output(output)
                 calls[index].failed = failed
                 if failed, calls[index].kind == .run { calls[index].exitCode = Self.exitCode(output) }
@@ -327,8 +336,13 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
             return true
         }
 
-        func finish() -> ([Entry], Result?) {
+        func finish(streamEnded: Bool) -> ([Entry], Result?, Call?) {
             var items = items
+            var underWay: Call?
+            if !streamEnded, case .call(let index)? = items.last, !answered.contains(index) {
+                items.removeLast()
+                underWay = Self.underWay(calls[index])
+            }
             // The result repeats the agent's last message; the sheet draws
             // it once, as the final message.
             if let final = result?.message?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -367,7 +381,21 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
                 }
             }
             flush()
-            return (entries, result)
+            return (entries, result, underWay)
+        }
+
+        /// The call with its verb in the present tense, as the call the
+        /// agent is making now. A tool with no verb keeps its own name.
+        private static func underWay(_ call: Call) -> Call {
+            let verb =
+                switch call.kind {
+                case .run: "Running"
+                case .read: "Reading"
+                case .edit: "Editing"
+                case .search: "Searching"
+                case .other: call.verb
+                }
+            return Call(id: call.id, kind: call.kind, verb: verb, identifier: call.identifier)
         }
 
         private static func call(name: String, input: [String: Any], id: Int) -> Call {

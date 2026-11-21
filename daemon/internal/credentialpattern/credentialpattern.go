@@ -39,3 +39,17 @@ var rules = []Rule{
 func All() []Rule {
 	return append([]Rule(nil), rules...)
 }
+
+// Match reports whether any rule matches b, and nothing else about the
+// match: a caller that only needs to withhold content gets no rule, offset,
+// or matched text it could echo into a log or a response. The live view of
+// a running writer (internal/exec/stage) screens each pulled byte range with
+// it, so that view and the export scan apply one rule set.
+func Match(b []byte) bool {
+	for _, rule := range rules {
+		if rule.Pattern.Match(b) {
+			return true
+		}
+	}
+	return false
+}

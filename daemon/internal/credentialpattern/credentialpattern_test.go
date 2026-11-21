@@ -131,3 +131,22 @@ func TestAllReturnsACopy(t *testing.T) {
 		t.Fatal("editing All's result changed the shared list")
 	}
 }
+
+// TestMatchCoversEveryRule proves Match applies the whole list: every rule's
+// matching case matches, embedded in other bytes, and every non-matching
+// case of every rule stays clean.
+func TestMatchCoversEveryRule(t *testing.T) {
+	t.Parallel()
+	for id, cases := range ruleCases {
+		for _, s := range cases.match {
+			if !credentialpattern.Match([]byte(`{"text":"` + s + `"}`)) {
+				t.Errorf("Match missed rule %s case %q", id, s)
+			}
+		}
+		for _, s := range cases.noMatch {
+			if credentialpattern.Match([]byte(s)) {
+				t.Errorf("Match flagged rule %s non-matching case %q", id, s)
+			}
+		}
+	}
+}

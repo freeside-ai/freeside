@@ -1,0 +1,14 @@
+{
+  "run_id": "run-570",
+  "invocation_id": "writer-570",
+  "availability": "live",
+  "transcript": null,
+  "live": {
+    "start": 4096,
+    "end": 4160,
+    "records": "eyJ0eXBlIjoiYXNzaXN0YW50In0KeyJ0eXBlIjoidXNlciJ9Cg==",
+    "omitted_before": false,
+    "unreadable_records": 1
+  },
+  "prompt": "Implement the approved work item."
+}

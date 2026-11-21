@@ -55,6 +55,9 @@ type Backend struct {
 	leaseMu      sync.Mutex
 	activeLeases map[domain.AuthIdentityID]bool
 	activeReads  map[domain.AuthIdentityID]map[domain.InvocationID]bool
+	// live registers each running writer for the live transcript read
+	// (live_transcript.go). Its zero value is ready.
+	live liveWriters
 }
 
 // imageProof is one writer image's in-memory proof state.

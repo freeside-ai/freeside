@@ -653,15 +653,20 @@ paths:
     get:
       operationId: getInvocationTranscript
       tags: [runs]
-      summary: Read an ended writer invocation's transcript reference and prompt
+      summary: Read a writer invocation's transcript, ended or running, and its prompt
       description: >
-        Returns the agent-transcript claim the daemon recorded for one writer
-        invocation of this run, and the prompt the writer received. The claim
-        carries a digest; the client fetches its bytes from
-        GET /attachments/{digest}. Everything here is the agent's own,
-        unverified account. The invocation's recorded admission must name
-        this run, else 404. A claim set that disagrees with the invocation
-        fails the read with no partial content.
+        For an ended writer invocation of this run, returns the
+        agent-transcript claim the daemon recorded and the prompt the writer
+        received. The claim carries a digest; the client fetches its bytes
+        from GET /attachments/{digest}. For a writer that is still running
+        and has recorded no claim, returns its transcript's complete records
+        after the `after` offset, each scanned against the daemon's
+        credential rules before it leaves the daemon, or withheld once a rule
+        matches. A live answer is display-only: never stored, never
+        evidence, and inert. Everything here is the agent's own, unverified
+        account. The invocation's recorded admission must name this run, else
+        404. A claim set that disagrees with the invocation fails the read
+        with no partial content.
       parameters:
         - $ref: "#/components/parameters/RunID"
         - name: invocation_id
@@ -671,13 +676,33 @@ paths:
           schema:
             type: string
             minLength: 1
+        - name: after
+          in: query
+          required: false
+          description: >
+            For a running writer, the transcript byte offset the client
+            already holds: 0, or the `end` of an earlier live answer for this
+            invocation. Absent means 0. Ignored when the answer isn't live.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
       responses:
         "200":
-          description: The transcript reference and prompt, or explicit unavailability.
+          description: The transcript reference or live records and the prompt, or explicit unavailability.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InvocationTranscript"
+        "400":
+          description: >
+            The `after` query parameter is not a non-negative integer, or is
+            not 0 or the `end` of an earlier live answer the daemon can still
+            serve from.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -4312,20 +4337,25 @@ components:
     InvocationTranscriptAvailability:
       type: "string"
       description: >
-        Whether the invocation's transcript bytes can be fetched now:
-        available when a transcript claim exists and the blob store holds its
-        bytes, unavailable otherwise. A later contract adds a state for a
-        running invocation's growing transcript (#1926).
-      enum: ["available", "unavailable", "unknown"]
+        What the transcript read serves now: available when a transcript
+        claim exists and the blob store holds its bytes; live when the writer
+        is still running and its scanned records are served in `live`;
+        withheld when a credential rule matched the running writer's
+        transcript, after which nothing more is served while it runs;
+        unavailable otherwise, including a writer whose handoff has ended
+        before its claim is recorded. A client holding live records drops
+        them on any answer that isn't live.
+      enum: ["available", "unavailable", "live", "withheld", "unknown"]
     InvocationTranscript:
       type: "object"
       description: >
-        One ended writer invocation's transcript reference and prompt. Both
-        are agent context, never verified evidence: the transcript is the
-        agent CLI's stream, and the prompt is the text the daemon rendered
-        for the writer. The client fetches the transcript's bytes by digest
-        from GET /attachments/{digest}.
-      required: ["run_id", "invocation_id", "availability", "transcript", "prompt"]
+        One writer invocation's transcript and prompt. All of it is agent
+        context, never verified evidence: the transcript is the agent CLI's
+        stream, and the prompt is the text the daemon rendered for the
+        writer. For an ended writer, the client fetches the transcript's
+        bytes by digest from GET /attachments/{digest}. For a running writer,
+        `live` carries its records directly.
+      required: ["run_id", "invocation_id", "availability", "transcript", "live", "prompt"]
       properties:
         run_id:
           type: "string"
@@ -4341,6 +4371,13 @@ components:
           nullable: true
           allOf:
             - {"$ref":"#/components/schemas/AgentClaim"}
+        live:
+          description: >
+            A running writer's scanned records, served only when availability
+            is live; null otherwise.
+          nullable: true
+          allOf:
+            - {"$ref":"#/components/schemas/LiveTranscript"}
         prompt:
           type: "string"
           description: >
@@ -4348,6 +4385,51 @@ components:
             record and re-checked against the invocation's admission; null
             when none is held or the record fails that check.
           nullable: true
+    LiveTranscript:
+      type: "object"
+      description: >
+        A running writer's complete transcript records in the byte range
+        [start, end) of its transcript, read while it runs. The daemon holds
+        a bounded window in memory only and stores none of it. Unverified and
+        inert: a client renders it as text, never follows a link or loads an
+        image from it, and drops it once an answer stops being live.
+      required: ["start", "end", "records", "omitted_before", "unreadable_records"]
+      properties:
+        start:
+          type: "integer"
+          format: "int64"
+          minimum: 0
+          description: >
+            The offset the records start at: the request's `after`, or a
+            later record boundary when earlier records left the window.
+        end:
+          type: "integer"
+          format: "int64"
+          minimum: 0
+          description: >
+            The offset after the last complete record the daemon has read.
+            The client sends it as `after` on its next read.
+        records:
+          type: "string"
+          format: "byte"
+          description: >
+            Lossless base64-encoded records, each one line of the transcript
+            file ending in a newline, concatenated. A line is usually one JSON
+            record of the agent's stream, but a failed writer's launcher
+            appends the CLI's plain-text stderr to the same file, so a client
+            must treat any line as possibly not JSON. Records withheld for size
+            or encoding are left out and counted in unreadable_records.
+        omitted_before:
+          type: "boolean"
+          description: >
+            Records between the request's `after` and start left the
+            daemon's window before this read, so the client missed them.
+        unreadable_records:
+          type: "integer"
+          minimum: 0
+          description: >
+            How many records since the writer started were withheld whole
+            for exceeding the record bound or not being valid UTF-8.
 
     WorkUnitCompletionFacts:
       type: object

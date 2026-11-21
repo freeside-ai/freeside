@@ -154,6 +154,12 @@ type Gate interface {
 	// nothing: a failed release leaves names bound, the safe direction, for
 	// the next startup reconcile.
 	ReleaseFinishedHandoffs(ctx context.Context, runIDs []string)
+	// ReadLiveTranscript returns up to maxBytes of the running writer's
+	// transcript from byte offset, or ward.ErrNoLiveWriter when the run's
+	// handoff has no registered, running writer. The bytes are untrusted and
+	// unscanned; only the live transcript tailer calls it, and it scans them
+	// before any leave the daemon (live_transcript.go).
+	ReadLiveTranscript(ctx context.Context, runID string, offset int64, maxBytes int) ([]byte, error)
 }
 
 // Seeder materializes daemon-owned checkouts at exactly base (production:

@@ -597,23 +597,67 @@ public enum RunFixtures {
 
         """
 
+    /// A running writer's transcript so far, as the daemon serves it live:
+    /// complete records only, the last a command still under way.
+    public static let runningTranscript = """
+        {"cwd":"/workspace","model":"claude-opus-5-5","subtype":"init","type":"system"}
+        {"message":{"content":[{"text":"The verifier flagged the probe's retry. I'll read the rig first.","type":"text"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+        {"message":{"content":[{"id":"t1","input":{"file_path":"/workspace/rig/probe.go"},"name":"Read","type":"tool_use"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+        {"message":{"content":[{"content":"package rig\n\nfunc Probe() error { return nil }","is_error":false,"tool_use_id":"t1","type":"tool_result"}],"role":"user"},"parent_tool_use_id":null,"type":"user"}
+        {"message":{"content":[{"id":"t2","input":{"file_path":"/workspace/rig/probe.go"},"name":"Edit","type":"tool_use"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+        {"message":{"content":[{"content":"The file has been updated.","is_error":false,"tool_use_id":"t2","type":"tool_result"}],"role":"user"},"parent_tool_use_id":null,"type":"user"}
+        {"message":{"content":[{"id":"t3","input":{"command":"go test ./rig/..."},"name":"Bash","type":"tool_use"}],"role":"assistant"},"parent_tool_use_id":null,"type":"assistant"}
+
+        """
+
+    /// A running writer's answer for records after `after`, as the daemon
+    /// serves it: from `after` when it is 0 or a record boundary, else nil,
+    /// the daemon's 400.
+    public static func liveTranscript(
+        runID: String, invocationID: String, after: Int64
+    ) -> Components.Schemas.InvocationTranscript? {
+        let bytes = Array(runningTranscript.utf8)
+        guard after >= 0, after <= bytes.count, after == 0 || bytes[Int(after) - 1] == 10 else { return nil }
+        let live = Components.Schemas.LiveTranscript(
+            start: after, end: Int64(bytes.count), records: .init(bytes[Int(after)...]),
+            omitted_before: false, unreadable_records: 0)
+        return .init(
+            run_id: runID, invocation_id: invocationID, availability: .live, transcript: nil,
+            live: .init(value1: live), prompt: writerPrompt)
+    }
+
+    /// A running writer's answer once a credential rule matched its
+    /// transcript: no records, while the writer runs.
+    public static func withheldTranscript(
+        runID: String, invocationID: String
+    ) -> Components.Schemas.InvocationTranscript {
+        .init(
+            run_id: runID, invocation_id: invocationID, availability: .withheld, transcript: nil, live: nil,
+            prompt: writerPrompt)
+    }
+
     /// Runs that kept no transcript: the failed oriole run, so the mock
     /// shows the run page's unavailable line.
     private static let transcriptlessRunIDs: Set<String> = ["run-oriole-121"]
 
     /// The transcript read for one invocation of a run, as the daemon answers
-    /// it: an ended writer's claim and prompt, or unavailable with neither.
-    /// The transport drops a claim whose bytes its byte store doesn't hold.
+    /// it: an ended writer's claim and prompt, a running writer's records
+    /// after `after`, or unavailable with neither. Nil is the daemon's 400
+    /// for an `after` that isn't a record boundary. The transport drops a
+    /// claim whose bytes its byte store doesn't hold.
     public static func invocationTranscript(
-        runID: String, invocation: Components.Schemas.InvocationObservation
-    ) -> Components.Schemas.InvocationTranscript {
+        runID: String, invocation: Components.Schemas.InvocationObservation, after: Int64 = 0
+    ) -> Components.Schemas.InvocationTranscript? {
+        if invocation.live, invocation.status == .running {
+            return liveTranscript(runID: runID, invocationID: invocation.invocation_id, after: after)
+        }
         let ended =
             !invocation.live
             && [.completed, .failed, .canceled, .blocked, .gone].contains(invocation.status)
         guard ended, !transcriptlessRunIDs.contains(runID) else {
             return .init(
                 run_id: runID, invocation_id: invocation.invocation_id, availability: .unavailable,
-                transcript: nil, prompt: nil)
+                transcript: nil, live: nil, prompt: nil)
         }
         let finished = invocation.status == .completed
         let content = finished ? finishedTranscript : failedTranscript
@@ -633,7 +677,7 @@ public enum RunFixtures {
                 availability: .available))
         return .init(
             run_id: runID, invocation_id: invocation.invocation_id, availability: .available,
-            transcript: .init(value1: claim), prompt: writerPrompt)
+            transcript: .init(value1: claim), live: nil, prompt: writerPrompt)
     }
 
     public static func reviewEvidence(

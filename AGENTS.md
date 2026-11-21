@@ -673,6 +673,13 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/exec/stage/driver.go` (decides when recovery may follow the
   current-authority re-check, and runs that re-check off the driver's
   lock).
+- **Live writer transcript:** the display-only read of a running
+  writer's transcript (#1926). `internal/ward/` reads it from the running
+  container; `internal/exec/stage/live_transcript.go` scans it as it grows
+  and withholds it on a match, `internal/daemoncompose/live_transcript.go`
+  carries what that scan passed to the API, and
+  `internal/signet/invocation_transcript.go` decides which invocations it
+  serves live and that a kept claim wins.
 - **Batch object reads:** `internal/gitrun/objects.go` (carries untrusted
   object bytes into agent-tree admission and the import and verification
   gates).

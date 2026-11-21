@@ -772,6 +772,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err := b.rt.StartContainer(ctx, names.Agent); err != nil {
 		return nil, fmt.Errorf("start agent container: %w", err)
 	}
+	// The live transcript read may reach this writer only from its start
+	// until the wait below returns. Removal runs before anything else on
+	// every path out of the wait (the defer covers the returns), and it
+	// never waits for a read in flight, so a read can't delay the delete or
+	// the absence proof (live_transcript.go).
+	unregisterLive := b.live.register(hs.RunID, names.Agent, st.agent, st.ownershipLabel)
+	defer unregisterLive()
 
 	// Check 3: writer termination is observed state, never scheduling
 	// intent (a second VM cannot attach a volume a live VM holds rw; only
@@ -782,6 +789,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	err = b.runtimeOps.waitStoppedObserving(
 		ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout, st.stall.poll,
 	)
+	unregisterLive()
 	if err != nil {
 		return nil, failw(CheckWriterTermination, err, "agent: %v", err)
 	}

@@ -296,7 +296,11 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 			return d.stall(ctx, id, stalled)
 		}
 	}
+	// The live view tails this handoff's writer only while the handoff runs,
+	// and drops what it holds when it returns, whatever the result.
+	closeLive := d.openLiveTranscript(in.InvocationID, in.RunID)
 	handoff, err := d.gate.Handoff(ctx, hs)
+	closeLive()
 	if err != nil {
 		if errors.Is(err, ward.ErrWriterFailed) {
 			recovered, recoveryErr := d.gate.Recover(ctx, in.RunID, hs)

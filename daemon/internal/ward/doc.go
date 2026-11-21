@@ -242,6 +242,8 @@
 //   - stall.go         stallWatch, the running writer's stall heartbeat (§5.12)
 //   - writer_outcome.go the writer's exit-status marker proof and ErrWriterFailed
 //   - failure_evidence.go bounded diagnostic output from a failed launch
+//   - live_transcript.go the running-writer registry and the bounded,
+//     ownership-checked read of its transcript for the live view (#1926)
 //   - read_hold.go     shared auth-store read holds for a read-only handoff
 //   - journal.go       the durable handoff record and HandoffJournal seam
 //   - cancellation_coverage.go CancellationCoverage, the tasks that predate

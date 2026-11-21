@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,12 +30,37 @@ func (s stubPrompts) InvocationPrompt(context.Context, domain.InvocationID) (str
 	return s.prompt, s.found, s.err
 }
 
-// transcriptFixture is a corpus fixture with a blob store and a prompt
-// reader the test can swap between requests.
+// stubLive answers LiveTranscript from fixed values and records each ask.
+type stubLive struct {
+	availability signet.InvocationTranscriptAvailability
+	live         *signet.LiveTranscript
+	err          error
+	mu           sync.Mutex
+	asks         []string
+}
+
+func (s *stubLive) LiveTranscript(_ context.Context, id domain.InvocationID, after int64) (
+	signet.InvocationTranscriptAvailability, *signet.LiveTranscript, error,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asks = append(s.asks, fmt.Sprintf("%s@%d", id, after))
+	return s.availability, s.live, s.err
+}
+
+func (s *stubLive) asked() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.asks)
+}
+
+// transcriptFixture is a corpus fixture with a blob store, a prompt reader,
+// and a live reader the test can swap between requests.
 type transcriptFixture struct {
 	corpusFixture
 	blobs   *signet.BlobStore
 	prompts *signet.InvocationPromptReader
+	live    *signet.LiveTranscriptReader
 	handler http.Handler
 }
 
@@ -43,11 +71,13 @@ func newTranscriptFixture(t *testing.T) transcriptFixture {
 		t.Fatal(err)
 	}
 	var reader signet.InvocationPromptReader
+	var live signet.LiveTranscriptReader
 	f := newCorpusFixture(t, signet.WithBlobStore(blobs),
-		signet.WithInvocationPrompts(func() signet.InvocationPromptReader { return reader }))
+		signet.WithInvocationPrompts(func() signet.InvocationPromptReader { return reader }),
+		signet.WithLiveTranscripts(func() signet.LiveTranscriptReader { return live }))
 	f.seedAuthIdentity(t)
 	return transcriptFixture{
-		corpusFixture: f, blobs: blobs, prompts: &reader,
+		corpusFixture: f, blobs: blobs, prompts: &reader, live: &live,
 		handler: signet.NewHTTPHandler(f.service, testAuthorizer),
 	}
 }
@@ -91,8 +121,16 @@ func (f transcriptFixture) storeBytes(t *testing.T, content []byte) domain.Diges
 
 func (f transcriptFixture) get(t *testing.T, runID domain.RunID, invocation domain.InvocationID) (int, []byte) {
 	t.Helper()
+	return f.getQuery(t, runID, invocation, "")
+}
+
+func (f transcriptFixture) getQuery(t *testing.T, runID domain.RunID, invocation domain.InvocationID, query string) (int, []byte) {
+	t.Helper()
 	response := authenticatedRequest(t, f.handler, http.MethodGet,
-		"/runs/"+string(runID)+"/invocations/"+string(invocation)+"/transcript", nil)
+		"/runs/"+string(runID)+"/invocations/"+string(invocation)+"/transcript"+query, nil)
+	if response.Code == http.StatusOK && response.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	}
 	return response.Code, response.Body.Bytes()
 }
 
@@ -245,4 +283,131 @@ func TestInvocationTranscriptPromptIsNullUnlessServed(t *testing.T) {
 			t.Errorf("%s = %#v, want a null prompt beside the transcript", tc.name, got)
 		}
 	}
+}
+
+// A running writer with no claim reads live: the reader is asked with the
+// client's offset, and its records and counts reach the client. A withheld
+// answer carries no records.
+func TestInvocationTranscriptServesARunningWriter(t *testing.T) {
+	t.Parallel()
+	f := newTranscriptFixture(t)
+	f.seedWriter(t, "run-live", "writer-live")
+	live := &stubLive{
+		availability: signet.InvocationTranscriptLive,
+		live: &signet.LiveTranscript{
+			Start: 8, End: 24, Records: []byte(`{"type":"user"}` + "\n"), OmittedBefore: true, UnreadableRecords: 2,
+		},
+	}
+	*f.live = live
+	code, body := f.getQuery(t, "run-live", "writer-live", "?after=8")
+	if code != http.StatusOK {
+		t.Fatalf("GET = %d %s", code, body)
+	}
+	var got signet.InvocationTranscript
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Availability != signet.InvocationTranscriptLive || got.Transcript != nil || got.Live == nil ||
+		string(got.Live.Records) != `{"type":"user"}`+"\n" || got.Live.Start != 8 || got.Live.End != 24 ||
+		!got.Live.OmittedBefore || got.Live.UnreadableRecords != 2 {
+		t.Fatalf("live answer = %s", body)
+	}
+	if asks := live.asked(); !slices.Equal(asks, []string{"writer-live@8"}) {
+		t.Fatalf("reader asked %q", asks)
+	}
+
+	// An empty window still serves records as an empty string, not null.
+	*f.live = &stubLive{availability: signet.InvocationTranscriptLive, live: &signet.LiveTranscript{}}
+	if _, body := f.get(t, "run-live", "writer-live"); !bytes.Contains(body, []byte(`"records":""`)) {
+		t.Errorf("empty live answer = %s", body)
+	}
+
+	*f.live = &stubLive{availability: signet.InvocationTranscriptWithheld}
+	got = f.mustGet(t, "run-live", "writer-live")
+	if got.Availability != signet.InvocationTranscriptWithheld || got.Live != nil || got.Transcript != nil {
+		t.Fatalf("withheld answer = %#v", got)
+	}
+
+	*f.live = &stubLive{availability: signet.InvocationTranscriptUnavailable}
+	if got := f.mustGet(t, "run-live", "writer-live"); got.Availability != signet.InvocationTranscriptUnavailable || got.Live != nil {
+		t.Fatalf("no handoff running = %#v", got)
+	}
+}
+
+// The live reader is never asked when a claim exists, so an ended writer
+// reads as before; nor for an invocation the run doesn't record as an
+// implementation attempt; nor for another run's invocation, which stays
+// not found.
+func TestInvocationTranscriptReadsOnlyARunningWriterLive(t *testing.T) {
+	t.Parallel()
+	f := newTranscriptFixture(t)
+	live := &stubLive{availability: signet.InvocationTranscriptLive, live: &signet.LiveTranscript{Records: []byte("leak\n")}}
+	*f.live = live
+
+	digest := f.storeBytes(t, []byte("stream\n"))
+	f.seedWriter(t, "run-ended", "writer-ended",
+		transcriptClaimFixture("writer-ended", "agent-transcript-writer-ended", digest, domain.EvidenceMediaApplicationJSONL))
+	if got := f.mustGet(t, "run-ended", "writer-ended"); got.Availability != signet.InvocationTranscriptAvailable || got.Live != nil {
+		t.Fatalf("ended writer = %#v", got)
+	}
+	absent := domain.Digest("sha256:" + string(bytes.Repeat([]byte("d"), 64)))
+	f.seedWriter(t, "run-gone", "writer-gone",
+		transcriptClaimFixture("writer-gone", "agent-transcript-writer-gone", absent, domain.EvidenceMediaApplicationJSONL))
+	if got := f.mustGet(t, "run-gone", "writer-gone"); got.Availability != signet.InvocationTranscriptUnavailable || got.Live != nil {
+		t.Fatalf("ended writer whose bytes are gone = %#v", got)
+	}
+
+	for _, name := range []string{"review", "verification", "specification"} {
+		runID := domain.RunID("run-" + name)
+		invocation := domain.InvocationID(name + "-invocation")
+		f.seedStageInvocation(t, runID, name, invocation)
+		if got := f.mustGet(t, runID, invocation); got.Availability != signet.InvocationTranscriptUnavailable || got.Live != nil {
+			t.Errorf("%s invocation = %#v, want unavailable", name, got)
+		}
+	}
+
+	f.seedWriter(t, "run-mine", "writer-mine")
+	f.seedWriter(t, "run-other", "writer-other")
+	if code, body := f.get(t, "run-mine", "writer-other"); code != http.StatusNotFound {
+		t.Errorf("another run's invocation = %d %s, want 404", code, body)
+	}
+	if asks := live.asked(); len(asks) != 0 {
+		t.Errorf("live reader asked %q, want never", asks)
+	}
+}
+
+// A malformed after, and one the reader refuses as off its records, are a
+// 400; a reader failure is a 500 with nothing served.
+func TestInvocationTranscriptRefusesABadOffset(t *testing.T) {
+	t.Parallel()
+	f := newTranscriptFixture(t)
+	f.seedWriter(t, "run-offset", "writer-offset")
+	live := &stubLive{availability: signet.InvocationTranscriptLive, live: &signet.LiveTranscript{}}
+	*f.live = live
+	for _, query := range []string{"?after=", "?after=x", "?after=-1", "?after=1.5", "?after=1&after=2"} {
+		if code, body := f.getQuery(t, "run-offset", "writer-offset", query); code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s, want 400", query, code, body)
+		}
+	}
+	if asks := live.asked(); len(asks) != 0 {
+		t.Errorf("reader asked %q for a malformed offset", asks)
+	}
+	*f.live = &stubLive{err: fmt.Errorf("wrapped: %w", signet.ErrLiveTranscriptOffset)}
+	if code, body := f.getQuery(t, "run-offset", "writer-offset", "?after=3"); code != http.StatusBadRequest {
+		t.Errorf("offset off the records = %d %s, want 400", code, body)
+	}
+	*f.live = &stubLive{err: errors.New("reader failed")}
+	if code, body := f.get(t, "run-offset", "writer-offset"); code != http.StatusInternalServerError {
+		t.Errorf("reader failure = %d %s, want 500", code, body)
+	}
+}
+
+// seedStageInvocation records an admitted invocation as the one attempt of
+// a stage named stageName.
+func (f transcriptFixture) seedStageInvocation(t *testing.T, runID domain.RunID, stageName string, invocation domain.InvocationID) {
+	t.Helper()
+	run := corpusRun(runID, corpusAttempt(runID, invocation))
+	run.Stages[0].Name = stageName
+	f.mustWrite(t, func(tx *store.WriteTx) error { return tx.PutRun(context.Background(), run) })
+	f.seedAdmission(t, runID, corpusStageID(runID), corpusAttempt(runID, invocation).ID, invocation)
 }
