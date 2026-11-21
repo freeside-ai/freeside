@@ -212,6 +212,11 @@ type Driver struct {
 	// recoveries counts the recoveries and current-policy checks Inspect
 	// started; Close waits for them.
 	recoveries sync.WaitGroup
+	// liveMu guards live, the tailer of each handoff running in this
+	// process (live_transcript.go). In memory only: no writer outlives the
+	// daemon, so a restart has nothing to tail.
+	liveMu sync.Mutex
+	live   map[domain.InvocationID]*liveTailer
 }
 
 // currentCheck is one invocation's current-policy re-check in this process.
@@ -988,7 +993,8 @@ func (d *Driver) Close(ctx context.Context) error {
 // daemon reports live=false until recovery re-observes the runtime — never
 // a synthesized liveness bit (issue #394). Inspection reads no writer
 // output: status derives from the durable intent and the driver's own
-// pipeline state, per the §5.6 containment guarantee.
+// pipeline state, per the §5.6 containment guarantee. The live view
+// (LiveTranscript) reads the writer for display only and never feeds it.
 func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Inspection, error) {
 	// A deferral can also end outside a recovery pass (a Cancel, or a
 	// terminal reconstructed below), and the engine keeps inspecting a
@@ -1201,10 +1207,11 @@ func (d *Driver) inspectIntent(
 }
 
 // Stream returns an empty transcript for a known invocation. The writer's
-// output leaves the VM only through the §5.6 evidence channel, which the
-// gate releases after the writer is proven absent, so there is no live
-// stream to follow: the gate's containment guarantee is exactly that nothing
-// reads the writer while it runs.
+// output leaves the VM to be kept only through the §5.6 evidence channel,
+// which the gate releases after the writer is proven absent, so there is no
+// stream to follow here. The operator's display-only live view reads the
+// running writer through LiveTranscript instead, and stays out of Stream
+// because the specification engine reads outcome from Stream.
 func (d *Driver) Stream(ctx context.Context, id domain.InvocationID) (io.ReadCloser, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

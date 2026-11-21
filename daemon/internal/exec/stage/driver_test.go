@@ -236,6 +236,7 @@ type stubGate struct {
 	quiescentFn    func(string) error
 	recoverFn      func(string, ward.HandoffSpec) (*ward.RecoveryResult, error)
 	authenticateFn func(string, string) error
+	liveReadFn     func(context.Context, string, int64, int) ([]byte, error)
 	// releases records each ReleaseFinishedHandoffs call's run IDs.
 	releases [][]string
 }
@@ -288,6 +289,13 @@ func (g *stubGate) AuthenticateReleasedExport(
 		return nil
 	}
 	return g.authenticateFn(runID, exportDir)
+}
+
+func (g *stubGate) ReadLiveTranscript(ctx context.Context, runID string, offset int64, maxBytes int) ([]byte, error) {
+	if g.liveReadFn == nil {
+		return nil, ward.ErrNoLiveWriter
+	}
+	return g.liveReadFn(ctx, runID, offset, maxBytes)
 }
 
 func (g *stubGate) ReleaseFinishedHandoffs(_ context.Context, runIDs []string) {
