@@ -2810,8 +2810,9 @@ outcome signal: the pinned CLI's terminal stream event can report success
 alongside an authentication error, and only the exit status tells them apart.
 The live view below is no exception.
 
-**Live view of a running writer** (revision 132; not built yet, #1926 on
-tracker #3461). The operator may watch a running stage's writer. This is the
+**Live view of a running writer** (revision 132; built in #1926 on tracker
+#3461 for implementation writers, remediations included). The operator may
+watch a running stage's writer. This is the
 one exception to reading a writer's output only after it is gone, and it
 holds only under these conditions:
 
