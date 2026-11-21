@@ -52,7 +52,9 @@
 #      approval the script hasn't pinned from yet. An approval that applied
 #      at a tip the base ref moved to after its review records that tip as
 #      its image_request.commit_sha; the state file takes it as the
-#      reviewed tip, so step 4 pins the deputy there. When the settings or the
+#      reviewed tip, so step 4 pins the deputy there. A pin that replaces
+#      the recipe adds the replaced one to retained_recipes, so evidence
+#      stored under it still reads (#3556). When the settings or the
 #      root's enrollments (from `freesided auth list`) differ from the last
 #      start that composed (a new root, a new build's prompt packages, a
 #      changed machine file, a new image, an enrollment from enroll-codex),
@@ -235,7 +237,7 @@ trap cleanup EXIT
 computed_paths='[["version"],["listen"],["seed_root"],["prompts","prompt_package"],
   ["prompts","specification_prompt_package"],["prompts","remediation_prompt_package"],
   ["repository","checkout"],["agent_tree","commit"],["agent_tree","second_writer"],
-  ["images","agent"],["approved_recipe"]]'
+  ["images","agent"],["approved_recipe"],["retained_recipes"]]'
 # leaves lists every key path that holds a non-object or an empty object;
 # arrays are leaves. clash names each path in one list that equals, or sits
 # above or below, a path in the other.
@@ -436,7 +438,7 @@ render_settings() {
       agent_tree: ({commit: $s[0].tree_commit} + (if $second == null then {} else {second_writer: $second} end)),
       images: {agent: ($s[0].image // $m[0].exit_root.placeholder.image)},
       approved_recipe: ($s[0].recipe // $m[0].exit_root.placeholder.recipe)
-    }' >"$settings.tmp"
+    } + (if ($s[0].retained_recipes // []) == [] then {} else {retained_recipes: $s[0].retained_recipes} end)' >"$settings.tmp"
   chmod 0600 "$settings.tmp"
   mv "$settings.tmp" "$settings"
 }
@@ -747,7 +749,7 @@ stop_for_approval() {
 # An approval that applied at a tip the base ref moved to after the review
 # names that tip in image_request.commit_sha, and the deputy runs there.
 pin_approved_image() {
-  local approved="$root/daemon/onboard-approved.json" source image recipe commit bound
+  local approved="$root/daemon/onboard-approved.json" source image recipe commit bound previous
   approved_complete || return 0
   source=$(git -C "$repo_root" hash-object -- "$approved")
   [[ "$source" != "$(state_get .image_source)" ]] || return 0
@@ -759,6 +761,15 @@ pin_approved_image() {
   if [[ -n "$commit" && -n "$bound" && "$commit" != "$bound" ]]; then
     state_set onboarded "$(jq -c --arg b "$commit" '.onboarded + {base_sha: $b}' "$state")"
     say "the approval applied at $commit, the base ref's tip after the review at $bound; the deputy runs there"
+  fi
+  # Evidence the root stored under the recipe this replaces still names it,
+  # and the deputy's store refuses evidence under a recipe it doesn't
+  # approve, so the replaced recipe stays retained (#3556).
+  previous=$(state_get .recipe)
+  if [[ -n "$previous" && "$previous" != "$recipe" ]]; then
+    state_set retained_recipes "$(jq -c --arg p "$previous" --arg r "$recipe" \
+      '[(.retained_recipes // [])[], $p] | unique | map(select(. != $r))' "$state")"
+    say "retained_recipes keeps $previous, so evidence stored under it still reads"
   fi
   state_set image "\"$image\""
   state_set recipe "\"$recipe\""

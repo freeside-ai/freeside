@@ -107,9 +107,10 @@ mkdir -p "$STUB_BIN"
 FAKE_IMAGE="registry.test/fixture@sha256:$(printf 'b%.0s' $(seq 1 64))"
 FAKE_IMAGE2="registry.test/fixture@sha256:$(printf '9%.0s' $(seq 1 64))"
 FAKE_RECIPE="sha256:$(printf 'c%.0s' $(seq 1 64))"
+FAKE_RECIPE2="sha256:$(printf '8%.0s' $(seq 1 64))"
 REVIEW_DIGEST="sha256:$(printf 'd%.0s' $(seq 1 64))"
 APPROVAL_DIGEST="sha256:$(printf 'a%.0s' $(seq 1 64))"
-export FAKE_IMAGE FAKE_IMAGE2 FAKE_RECIPE REVIEW_DIGEST APPROVAL_DIGEST
+export FAKE_IMAGE FAKE_IMAGE2 FAKE_RECIPE FAKE_RECIPE2 REVIEW_DIGEST APPROVAL_DIGEST
 
 cat >"$STUB_BIN/go" <<'GO_STUB'
 #!/usr/bin/env bash
@@ -205,7 +206,8 @@ prelaunch)
     # Either approved image passes, so a stale one goes unseen, as a real
     # image that still exists does.
     missing=project_image
-  elif [[ "$(jq -r '.approved_recipe' "$settings")" != "$FAKE_RECIPE" ]]; then
+  elif [[ "$(jq -r '.approved_recipe' "$settings")" != "$FAKE_RECIPE" &&
+    "$(jq -r '.approved_recipe' "$settings")" != "$FAKE_RECIPE2" ]]; then
     missing=approved_recipe
   fi
   # A deputy-owned card holds admission until the case's deputy has
@@ -334,11 +336,11 @@ onboard)
     # The trust marker stays REVIEW_DIGEST: prelaunch keeps passing the
     # profile after the review configuration moves.
     printf '%s\n' "$REVIEW_DIGEST" >"$(dirname "$db")/fake-trust"
-    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" --arg c "$live" \
+    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "${FAKE_APPROVE_RECIPE:-$FAKE_RECIPE}" --arg c "$live" \
       '{status: "complete", image_request: {commit_sha: $c}, project_image: {image_ref: $i, recipe_digest: $r}}'
   elif [[ "${FAKE_ONBOARD_MODE:-}" == carry ]]; then
     # Nothing the active approval trusts changed: the review completes.
-    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "$FAKE_RECIPE" \
+    jq -n --arg i "${FAKE_APPROVE_IMAGE:-$FAKE_IMAGE}" --arg r "${FAKE_APPROVE_RECIPE:-$FAKE_RECIPE}" \
       '{status: "complete", carried: true, project_image: {image_ref: $i, recipe_digest: $r}}'
   elif [[ "${FAKE_ONBOARD_MODE:-}" == foreign ]]; then
     # Another root's intent is pending on the same App: the error names
@@ -955,10 +957,14 @@ assert_eq "$(jq -r '.onboarded.base_sha, .onboarded.template_base_sha' "$ROOTS/c
 assert_eq "$(jq -r .repository.base_sha "$ROOTS/carry/daemon/settings.json")" "$(upstream_tip)" 'carried tip is the rendered base'
 
 begin_case "an approval that names a new image is pinned though prelaunch passes on the old one"
-CASE_DIR=$MOVES_DIR FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 approve
+CASE_DIR=$MOVES_DIR FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 FAKE_APPROVE_RECIPE=$FAKE_RECIPE2 approve
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
 assert_rc 0
 assert_eq "$(jq -r .images.agent "$ROOTS/moves/daemon/settings.json")" "$FAKE_IMAGE2" 'image from the new approval'
+# The replaced recipe stays approved, so evidence stored under it still
+# reads (#3556).
+assert_eq "$(jq -r '.approved_recipe, (.retained_recipes | join(","))' "$ROOTS/moves/daemon/settings.json" | tr '\n' ' ')" \
+  "$FAKE_RECIPE2 $FAKE_RECIPE " 'new recipe approved and the replaced one retained'
 assert_eq "$(grep -cx deputy "$CASE_DIR/calls.log")" 1 'deputy starts for the new image'
 
 begin_case "a moved review configuration re-onboards with the new digest"
