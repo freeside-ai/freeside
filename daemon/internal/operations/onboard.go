@@ -121,18 +121,25 @@ type ProjectImageReview struct {
 // nothing the active approval trusts changed (Onboard.Run). Changes lists,
 // on a review_required result for a repository with an active profile, what
 // differs from that approval.
+//
+// ReviewedCommitSHA is set only when an approval applied at a base-ref tip
+// that moved after the review: it names the reviewed commit, which the
+// approval digest binds, while ImageRequest names the live tip the image
+// serves. ApprovalDigest is then the owner's digest, computed over
+// ImageRequest with the reviewed commit in place of the tip.
 type OnboardResult struct {
-	Status         string                        `json:"status"`
-	ApprovalDigest domain.Digest                 `json:"approval_digest"`
-	Carried        bool                          `json:"carried,omitempty"`
-	Changes        []OnboardChange               `json:"changes,omitempty"`
-	Profile        domain.AutomationTrustProfile `json:"profile"`
-	Review         store.WorkflowAuditReview     `json:"review"`
-	Installation   InstallationReview            `json:"installation"`
-	ImageRequest   ProjectImageReview            `json:"image_request"`
-	ProjectImage   *domain.ProjectImage          `json:"project_image,omitempty"`
-	OperatingMode  domain.OperatingMode          `json:"operating_mode"`
-	IsolationClass string                        `json:"isolation_class"`
+	Status            string                        `json:"status"`
+	ApprovalDigest    domain.Digest                 `json:"approval_digest"`
+	ReviewedCommitSHA string                        `json:"reviewed_commit_sha,omitempty"`
+	Carried           bool                          `json:"carried,omitempty"`
+	Changes           []OnboardChange               `json:"changes,omitempty"`
+	Profile           domain.AutomationTrustProfile `json:"profile"`
+	Review            store.WorkflowAuditReview     `json:"review"`
+	Installation      InstallationReview            `json:"installation"`
+	ImageRequest      ProjectImageReview            `json:"image_request"`
+	ProjectImage      *domain.ProjectImage          `json:"project_image,omitempty"`
+	OperatingMode     domain.OperatingMode          `json:"operating_mode"`
+	IsolationClass    string                        `json:"isolation_class"`
 }
 
 // OnboardChange is one reason a review cannot carry the active approval
@@ -148,14 +155,24 @@ type OnboardChange struct {
 }
 
 // MovedTipError reports that the live base-ref tip, which the fresh workflow
-// audit covers, is not the requested commit. Onboarding audits only the live
-// tip, so the caller reruns the review at Tip.
+// audit covers, is not the requested commit, and that onboarding can't go on
+// at it. Onboarding audits only the live tip, so the caller reruns the review
+// at Tip. A review pass always ends here. An approval ends here only when
+// something it covers differs at Tip; Changes then names what, and is never
+// empty.
 type MovedTipError struct {
-	Tip    string
-	Commit string
+	Tip     string
+	Commit  string
+	Changes []OnboardChange
 }
 
 func (e *MovedTipError) Error() string {
+	if len(e.Changes) != 0 {
+		return fmt.Sprintf(
+			"onboard: the base ref's live tip is %s, not -commit %s, and what the approval covers "+
+				"differs there; the workflow audit covers only the live tip",
+			e.Tip, e.Commit)
+	}
 	return fmt.Sprintf(
 		"onboard: the base ref's live tip is %s, not -commit %s; the workflow audit covers only the live tip",
 		e.Tip, e.Commit)
@@ -208,6 +225,10 @@ type BaseInputsReader func(
 	ctx context.Context, commitSHA string, layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error)
 
+// RecipeReader reads the verification recipe the project image of one exact
+// commit bakes.
+type RecipeReader func(ctx context.Context, commitSHA string) ([]byte, error)
+
 // Onboard composes a fresh workflow audit, owner policy, and the reusable
 // project-image builder. It deliberately carries no second audit or image
 // implementation.
@@ -221,7 +242,10 @@ type Onboard struct {
 	// BaseInputs decides, with the admitted image's record, whether that
 	// image serves the requested commit without a build.
 	BaseInputs BaseInputsReader
-	Now        func() time.Time
+	// Recipe reads the recipe at a base-ref tip that moved after the review,
+	// which an approval applies at only when the recipe is the one reviewed.
+	Recipe RecipeReader
+	Now    func() time.Time
 }
 
 // Run returns the complete digest-bound review until the operator supplies
@@ -250,9 +274,19 @@ type Onboard struct {
 // workflow, setting, and policy fact the owner approved, and the image check
 // binds the recipe, base, destination, toolchain layout, and dependency
 // manifests. Anything else needs the owner, and the result's Changes say why.
+//
+// The workflow audit always covers the base ref's live tip. A review pass
+// whose request names another commit returns MovedTipError. An approval of
+// a review at a commit the tip has since left applies at the tip when
+// everything the owner approved is the same there: it recomputes the
+// profile from the tip's audit, recomputes the approval digest with the
+// reviewed commit in place of the tip, and requires that digest and the
+// tip's recipe to match the reviewed ones. It then reuses or builds the
+// image at the tip. Otherwise it returns MovedTipError naming what differs
+// (devlog/2026-11-21-0756-onboard-approval-at-moved-tip.md).
 func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, error) {
 	if o.Store == nil || o.Builder == nil || o.Auditor == nil ||
-		o.Authority == nil || o.BaseInputs == nil || o.Now == nil {
+		o.Authority == nil || o.BaseInputs == nil || o.Recipe == nil || o.Now == nil {
 		return OnboardResult{}, errors.New("onboard: nil dependency")
 	}
 	if req.Repository == "" || req.RepositoryID <= 0 ||
@@ -350,48 +384,42 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 	if err != nil {
 		return OnboardResult{}, fmt.Errorf("onboard: audit workflow authority: %w", err)
 	}
-	if audit.AuditedCommitSHA != approvedImageRequest.CommitSHA {
+	movedTip := audit.AuditedCommitSHA != approvedImageRequest.CommitSHA
+	if movedTip && req.ApprovalDigest == "" {
 		return OnboardResult{}, &MovedTipError{
 			Tip: audit.AuditedCommitSHA, Commit: approvedImageRequest.CommitSHA,
 		}
+	}
+	profile, err := proposedProfile(req, audit)
+	if err != nil {
+		return OnboardResult{}, err
+	}
+	// The approval digest binds the request as reviewed, commit included, so
+	// an approval reviewed at another commit is checked against exactly what
+	// the owner saw.
+	approvalDigest, err := onboardApprovalDigest(
+		profile.ProfileDigest, installation, projectImageReview(approvedImageRequest),
+	)
+	if err != nil {
+		return OnboardResult{}, err
+	}
+	// imageRequest is what the image serves: the approved request, or, at a
+	// moved tip, the same request at the tip with the tip's recipe bytes.
+	imageRequest := approvedImageRequest
+	var reviewedCommit string
+	if movedTip {
+		imageRequest, err = o.movedTipRequest(
+			ctx, req, audit, approvedImageRequest, profile, approvalDigest)
+		if err != nil {
+			return OnboardResult{}, err
+		}
+		reviewedCommit = approvedImageRequest.CommitSHA
 	}
 	if err := o.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.RecordWorkflowAudit(ctx, audit)
 		return err
 	}); err != nil {
 		return OnboardResult{}, fmt.Errorf("onboard: record fresh workflow audit: %w", err)
-	}
-	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
-		Repo:                       req.Repository,
-		RepositoryID:               req.RepositoryID,
-		PRExecution:                req.Policy.PRExecution,
-		CandidateAutomationChanges: req.Policy.CandidateAutomationChanges,
-		PRGitHubTokenPermissions:   audit.EffectiveTokenPerms,
-		AllowOIDC:                  audit.OIDCAvailable,
-		AllowEnvironmentSecrets:    audit.EnvironmentSecrets,
-		AllowSecretBearingPRJobs:   audit.SecretBearingPRJobs,
-		AllowSelfHostedCI:          audit.SelfHostedRunners,
-		AllowPullRequestTarget:     audit.PullRequestTarget,
-		AllowReusableWorkflows:     audit.ReusableWorkflows,
-		AllowPackagePublishing:     audit.PackagePublishing,
-		AllowArtifactConsumers:     audit.ArtifactConsumers,
-		// The issue_comment set mirrors the audit like every other observed
-		// privilege. Approving this profile's digest is the owner's acceptance
-		// of the comment operation over exactly these workflows, none
-		// included; declining it accepts no comment.
-		AllowIssueCommentWorkflows: true,
-		IssueCommentWorkflows:      audit.IssueCommentWorkflows,
-		CommitPlan:                 req.Policy.CommitPlan,
-		MessageRuleset:             req.Policy.MessageRuleset,
-		WorkflowAuditDigest:        audit.WorkflowAuditDigest,
-		Review: domain.ReviewSettings{
-			Mode: req.Policy.ReviewMode, ConfigDigest: req.Policy.ReviewConfig,
-		},
-		ProtectedPaths:    req.Policy.ProtectedPaths,
-		ExternalReviewers: req.Policy.ExternalReviewers,
-	})
-	if err != nil {
-		return OnboardResult{}, fmt.Errorf("onboard: construct trust profile: %w", err)
 	}
 	var review store.WorkflowAuditReview
 	if err := o.Store.Read(ctx, func(tx *store.ReadTx) error {
@@ -403,18 +431,14 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 	}
 	result := OnboardResult{
 		Status: "review_required", Profile: profile, Review: review,
-		Installation:   installation,
-		ImageRequest:   projectImageReview(approvedImageRequest),
-		OperatingMode:  domain.ModeAttendedDev,
-		IsolationClass: "process_local",
+		ApprovalDigest:    approvalDigest,
+		ReviewedCommitSHA: reviewedCommit,
+		Installation:      installation,
+		ImageRequest:      projectImageReview(imageRequest),
+		OperatingMode:     domain.ModeAttendedDev,
+		IsolationClass:    "process_local",
 	}
-	result.ApprovalDigest, err = onboardApprovalDigest(
-		profile.ProfileDigest, installation, result.ImageRequest,
-	)
-	if err != nil {
-		return OnboardResult{}, err
-	}
-	reusable, imageChanges, err := o.servingImage(ctx, approvedImageRequest)
+	reusable, imageChanges, err := o.servingImage(ctx, imageRequest)
 	if err != nil {
 		return OnboardResult{}, err
 	}
@@ -493,7 +517,7 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 			return OnboardResult{}, fmt.Errorf("onboard: record inactive trust profile: %w", err)
 		}
 	} else {
-		image, err = o.buildAndAdmit(ctx, req, approvedImageRequest, profile)
+		image, err = o.buildAndAdmit(ctx, req, imageRequest, profile)
 		if err != nil {
 			return OnboardResult{}, err
 		}
@@ -514,6 +538,138 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 	result.Status = "complete"
 	result.ProjectImage = &image
 	return result, nil
+}
+
+// proposedProfile is the trust profile req's policy and audit propose. The
+// review shows it, and the approval digest binds its digest.
+func proposedProfile(
+	req OnboardRequest, audit domain.WorkflowAudit,
+) (domain.AutomationTrustProfile, error) {
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       req.Repository,
+		RepositoryID:               req.RepositoryID,
+		PRExecution:                req.Policy.PRExecution,
+		CandidateAutomationChanges: req.Policy.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   audit.EffectiveTokenPerms,
+		AllowOIDC:                  audit.OIDCAvailable,
+		AllowEnvironmentSecrets:    audit.EnvironmentSecrets,
+		AllowSecretBearingPRJobs:   audit.SecretBearingPRJobs,
+		AllowSelfHostedCI:          audit.SelfHostedRunners,
+		AllowPullRequestTarget:     audit.PullRequestTarget,
+		AllowReusableWorkflows:     audit.ReusableWorkflows,
+		AllowPackagePublishing:     audit.PackagePublishing,
+		AllowArtifactConsumers:     audit.ArtifactConsumers,
+		// The issue_comment set mirrors the audit like every other observed
+		// privilege. Approving this profile's digest is the owner's acceptance
+		// of the comment operation over exactly these workflows, none
+		// included; declining it accepts no comment.
+		AllowIssueCommentWorkflows: true,
+		IssueCommentWorkflows:      audit.IssueCommentWorkflows,
+		CommitPlan:                 req.Policy.CommitPlan,
+		MessageRuleset:             req.Policy.MessageRuleset,
+		WorkflowAuditDigest:        audit.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: req.Policy.ReviewMode, ConfigDigest: req.Policy.ReviewConfig,
+		},
+		ProtectedPaths:    req.Policy.ProtectedPaths,
+		ExternalReviewers: req.Policy.ExternalReviewers,
+	})
+	if err != nil {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("onboard: construct trust profile: %w", err)
+	}
+	return profile, nil
+}
+
+// movedTipRequest decides whether req's approval, of a review at reviewed's
+// commit, applies at the live tip audit covers, and returns the request the
+// image then serves: reviewed at the tip, with the tip's recipe bytes.
+//
+// It accepts only when approvalDigest, which Run recomputed from the tip's
+// audit with the reviewed commit and recipe, equals the owner's digest, and
+// the tip's recipe digest equals the reviewed one. The first covers the
+// profile, the installation, and every image field but the commit and the
+// recipe; the second covers the recipe, which the digest took from the
+// reviewed commit. Otherwise it returns MovedTipError naming the
+// differences. The audit recorded at the reviewed commit only names them;
+// acceptance never reads it.
+func (o Onboard) movedTipRequest(
+	ctx context.Context,
+	req OnboardRequest,
+	audit domain.WorkflowAudit,
+	reviewed projectimage.Request,
+	profile domain.AutomationTrustProfile,
+	approvalDigest domain.Digest,
+) (projectimage.Request, error) {
+	tip := audit.AuditedCommitSHA
+	refuse := func(changes []OnboardChange) error {
+		return &MovedTipError{Tip: tip, Commit: reviewed.CommitSHA, Changes: changes}
+	}
+	recipe, err := o.Recipe(ctx, tip)
+	if err != nil {
+		return projectimage.Request{}, refuse([]OnboardChange{{
+			Reason: fmt.Sprintf("cannot read the verification recipe at the tip %s: %v", tip, err),
+		}})
+	}
+	var changes []OnboardChange
+	reviewedRecipe, tipRecipe := verify.RecipeDigest(reviewed.Recipe), verify.RecipeDigest(recipe)
+	if tipRecipe != reviewedRecipe {
+		change, err := fieldChange("image.recipe_digest", reviewedRecipe, tipRecipe)
+		if err != nil {
+			return projectimage.Request{}, err
+		}
+		changes = append(changes, change)
+	}
+	if approvalDigest != req.ApprovalDigest {
+		named, err := o.reviewedProfileChanges(ctx, req, reviewed.CommitSHA, profile)
+		if err != nil {
+			return projectimage.Request{}, err
+		}
+		if len(named) == 0 {
+			named = []OnboardChange{{Reason: fmt.Sprintf(
+				"approval digest %s does not match the review recomputed at the tip, %s; "+
+					"the installation or an onboarding flag differs from the review",
+				req.ApprovalDigest, approvalDigest)}}
+		}
+		changes = append(changes, named...)
+	}
+	if len(changes) != 0 {
+		return projectimage.Request{}, refuse(changes)
+	}
+	live := cloneProjectImageRequest(reviewed)
+	live.CommitSHA = tip
+	live.Recipe = recipe
+	return live, nil
+}
+
+// reviewedProfileChanges names the profile fields that differ between the
+// profile proposed at the reviewed commit, rebuilt from the latest audit
+// recorded there, and the one proposed at the tip. It names none when no
+// audit at the reviewed commit is recorded.
+func (o Onboard) reviewedProfileChanges(
+	ctx context.Context,
+	req OnboardRequest,
+	reviewedCommit string,
+	profile domain.AutomationTrustProfile,
+) ([]OnboardChange, error) {
+	var audits []store.WorkflowAuditRecord
+	if err := o.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		audits, err = tx.ListWorkflowAudits(ctx, req.Repository)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("onboard: read the reviewed commit's workflow audit: %w", err)
+	}
+	for _, rec := range slices.Backward(audits) {
+		if rec.Audit.AuditedCommitSHA != reviewedCommit {
+			continue
+		}
+		reviewedProfile, err := proposedProfile(req, rec.Audit)
+		if err != nil {
+			return nil, err
+		}
+		return profileChanges(reviewedProfile, profile)
+	}
+	return nil, nil
 }
 
 // promote converts the approved pending intent to a trusted binding. An

@@ -669,3 +669,56 @@ func TestMovedTipCommandReviewsTheTip(t *testing.T) {
 		t.Fatalf("quoted command = %q", got)
 	}
 }
+
+// TestOnboardRecipeReadsTheMovedTip: an approval at a moved tip compares the
+// tip's recipe with the reviewed one. A -recipe file is the recipe at every
+// commit; otherwise the reader takes .freeside/verify.json at the commit from
+// -source, and a commit the checkout lacks says to fetch it.
+func TestOnboardRecipeReadsTheMovedTip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	t.Run("recipe file", func(t *testing.T) {
+		t.Parallel()
+		file := []byte(`{"commands":[["npm","test"]],"capture":"none"}`)
+		read := onboardRecipe(onboardConfig{RecipePath: "/operator/verify.json"}, file)
+		got, err := read(ctx, "2223456789012345678901234567890123456789")
+		if err != nil || !bytes.Equal(got, file) {
+			t.Fatalf("recipe file at another commit = %q, %v; want %q", got, err, file)
+		}
+	})
+	t.Run("source checkout", func(t *testing.T) {
+		t.Parallel()
+		checkout := t.TempDir()
+		deputyTestGit(t, checkout, "init", "-q")
+		commit := func(recipe string) string {
+			t.Helper()
+			if err := os.MkdirAll(filepath.Join(checkout, ".freeside"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(checkout, ".freeside", "verify.json"), []byte(recipe), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			deputyTestGit(t, checkout, "add", ".freeside/verify.json")
+			deputyTestGit(t, checkout, "commit", "-q", "-m", "recipe")
+			return deputyTestGit(t, checkout, "rev-parse", "HEAD")
+		}
+		const (
+			reviewed = `{"commands":[["npm","test"]],"capture":"none"}`
+			tip      = `{"commands":[["npm","run","check"]],"capture":"none"}`
+		)
+		reviewedCommit, tipCommit := commit(reviewed), commit(tip)
+		// The bytes read at start are the reviewed commit's; the reader
+		// ignores them without -recipe.
+		read := onboardRecipe(onboardConfig{SourceDir: checkout, BaseRef: "main"}, []byte(reviewed))
+		for commitSHA, want := range map[string]string{reviewedCommit: reviewed, tipCommit: tip} {
+			got, err := read(ctx, commitSHA)
+			if err != nil || string(got) != want {
+				t.Fatalf("recipe at %s = %q, %v; want %q", commitSHA, got, err, want)
+			}
+		}
+		_, err := read(ctx, "2223456789012345678901234567890123456789")
+		if err == nil || !strings.Contains(err.Error(), "fetch main into the -source checkout") {
+			t.Fatalf("recipe at an unfetched commit: err = %v", err)
+		}
+	})
+}
