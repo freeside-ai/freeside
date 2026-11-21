@@ -1,0 +1,67 @@
+;; Rules the cordoned-verifier spike (#3526) adds to the cordoned writer's
+;; rule file, cordoned-writer.sb, which stays as #3463 left it. A writer runs
+;; under the two files concatenated, this one second, so its rules come
+;; last and win. They keep a writer from reaching a verification job that
+;; runs on the same account under cordoned-verifier.sb, and from reaching
+;; the daemon that runs uncordoned beside both. Two shared places stay
+;; writable, the owner's temporary directory and Clang module cache, because
+;; a writer's own Swift build fails without them, and a job's environment
+;; stays readable, because Seatbelt has no rule for it (report, Residuals).
+;; Paths arrive as sandbox-exec
+;; -D parameters, as the writer file's do: VERIFY_ROOT (where the daemon
+;; builds job roots), DAEMON_TMP (the daemon's own temporary directory), and
+;; USER_TEMP and USER_CACHE (the owner's confstr per-user directories, under
+;; which each job has its own freeside-verify- suffix). Report:
+;; cordoned-verifier.md.
+
+;; A job's inputs and outputs: its workspace, its home, temporary, and cache
+;; directories, and the per-user pair its suffix names; the installed
+;; executor's Go toolchain and both cache trees, which every job reads; and
+;; the daemon's scratch. A writer that can write any of them changes what a
+;; job builds, tests, or reports.
+(deny file-write*
+  (subpath (param "VERIFY_ROOT"))
+  (subpath "/Library/Freeside")
+  (subpath (param "DAEMON_TMP"))
+  (regex (string-append "^" (param "USER_TEMP") "/freeside-verify-"))
+  (regex (string-append "^" (param "USER_CACHE") "/freeside-verify-")))
+;; The job's workspace holds another task's candidate, which this writer
+;; has no reason to read.
+(deny file-read*
+  (subpath (param "VERIFY_ROOT")))
+
+;; Signals reach only processes in this writer's own sandbox: its own
+;; children and their descendants. A job runs in another sandbox and the
+;; daemon in none, so neither can be stopped or killed from here.
+;; (deny signal (target others)) loads and closes nothing.
+(deny signal)
+(allow signal (target same-sandbox))
+
+;; No task port for another process, so no debugger attach and no memory
+;; read or write. The OS already refuses task_for_pid to an unentitled
+;; caller; this closes the path through lldb's debugserver after the
+;; operator has once approved the developer-tools prompt, which macOS then
+;; honors for ten hours for every process the owner runs.
+(deny mach-priv-task-port)
+
+;; The owner's global preference domain, which every process on the account
+;; reads, a verification job among them: its appearance (AppleInterfaceStyle)
+;; changes what an unpinned render draws. Writes through cfprefsd and to the
+;; domain's file are both refused. com.apple.universalaccess (increase
+;; contrast) already refuses a write from an ordinary process.
+(deny user-preference-write (preference-domain "kCFPreferencesAnyApplication"))
+(deny file-write*
+  (regex (string-append "^" (param "HOME") "/Library/Preferences/\\.GlobalPreferences")))
+
+;; The verification jobs' reserved ports, four per job in a pool of four
+;; jobs. A writer that binds one first makes the job's test fail, or answers
+;; the job's own client in its place.
+(deny network-bind
+  (local ip "localhost:47100") (local ip "localhost:47101")
+  (local ip "localhost:47102") (local ip "localhost:47103")
+  (local ip "localhost:47104") (local ip "localhost:47105")
+  (local ip "localhost:47106") (local ip "localhost:47107")
+  (local ip "localhost:47108") (local ip "localhost:47109")
+  (local ip "localhost:47110") (local ip "localhost:47111")
+  (local ip "localhost:47112") (local ip "localhost:47113")
+  (local ip "localhost:47114") (local ip "localhost:47115"))

@@ -1,0 +1,153 @@
+;; The verifier rule file the #3526 spike ended with: a clean verification
+;; job runs on the host under this file as the owner's account, beside
+;; cordoned writers on the same account, instead of as a slot account
+;; (daemon/internal/macverify). It starts from the slot profile,
+;; daemon/internal/macverify/profile.sb, rule for rule: no network but the
+;; job's four reserved ports, no writes outside the job's own directories,
+;; no launchd jobs, no Launch Services opens. It adds what the owner's
+;; account needs and a slot's didn't: the owner's home and other jobs closed
+;; to reads, signals and task ports limited to the job's own sandbox, the
+;; owner's preferences and the Simulator closed, and the cordoned writer's
+;; secret-read denials (cordoned-writer.sb). It can't close what comes from
+;; sharing the account: the owner's temporary directory and Clang module
+;; cache, which Xcode's tools need and every writer can write; any process's
+;; environment, which any other reads; the owner's pasteboard; and the
+;; screen (report, Residuals). Paths and ports arrive as sandbox-exec -D
+;; parameters, the slot names kept so the daemon passes the same set, and
+;; VERIFY_ROOT, USER_TEMP, USER_CACHE, JOB_SUFFIX, OWNER_HOME,
+;; OWNER_CLAUDE_CONFIG, and PROJECTS for what the account shares.
+;; Seatbelt applies the last rule that matches, so each allow that carves a
+;; hole follows the deny it narrows. Report: cordoned-verifier.md.
+(version 1)
+(allow default)
+
+;; The slot profile's network rule, unchanged.
+(deny network*)
+(allow network-bind network-inbound
+  (local ip (string-append "localhost:" (param "PORT_1")))
+  (local ip (string-append "localhost:" (param "PORT_2")))
+  (local ip (string-append "localhost:" (param "PORT_3")))
+  (local ip (string-append "localhost:" (param "PORT_4"))))
+(allow network-outbound
+  (remote ip (string-append "localhost:" (param "PORT_1")))
+  (remote ip (string-append "localhost:" (param "PORT_2")))
+  (remote ip (string-append "localhost:" (param "PORT_3")))
+  (remote ip (string-append "localhost:" (param "PORT_4"))))
+(deny job-creation)
+(deny lsopen)
+
+;; The slot profile's write rule, unchanged: the job directory and the job's
+;; own home, temporary, and cache directories.
+(deny file-write*)
+(allow file-write*
+  (subpath (param "JOB_DIR"))
+  (subpath (param "SLOT_HOME"))
+  (subpath (param "SLOT_TMP"))
+  (subpath (param "SLOT_CACHE"))
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/tty")
+  (literal "/dev/dtracehelper")
+  (regex #"^/dev/fd/[0-9]+$"))
+
+;; The owner's home: no file's contents, attributes, or directory listing.
+;; A job runs the candidate's code, and whatever it reads can reach its
+;; transcript, which the daemon stores and may publish. Metadata stays
+;; readable so a path through the home still resolves, which a job root under
+;; it needs; the carve-outs below follow this rule and win.
+(deny file-read-data file-read-xattr (subpath (param "OWNER_HOME")))
+
+;; Other jobs. Every job's root sits under VERIFY_ROOT, so a job can read
+;; none of another's files; it can still look a path up through the shared
+;; parent, which every path lookup under its own root needs.
+(deny file-read-data file-read-xattr (subpath (param "VERIFY_ROOT")))
+(allow file-read-data file-read-xattr
+  (subpath (param "JOB_DIR"))
+  (subpath (param "SLOT_HOME"))
+  (subpath (param "SLOT_TMP"))
+  (subpath (param "SLOT_CACHE")))
+
+;; The owner's per-user temporary directory (confstr's DARWIN_USER_TEMP_DIR),
+;; which every process on the account shares. Xcode's tools are platform
+;; binaries: they ignore TMPDIR and the per-job suffix the job's environment
+;; sets (DIRHELPER_USER_DIR_SUFFIX), and SwiftPM and the Swift driver fail
+;; without this directory, so the job reads and writes it. Two names in it
+;; stay closed: xcrun_db, the tool-path cache the xcrun shims read back and
+;; run from, which a job that wrote it would plant for the owner's next
+;; xcrun (a job that can't write it runs uncached), and the other jobs'
+;; suffix directories. A writer on the account can write here too, which no
+;; rule in either file closes without breaking the writer's own Xcode work:
+;; this is the first of the two places a cordoned job shares (report,
+;; Residuals).
+(allow file-read* file-write* (subpath (param "USER_TEMP")))
+(deny file-read* file-write*
+  (regex (string-append "^" (param "USER_TEMP") "/xcrun_db"))
+  (regex (string-append "^" (param "USER_TEMP") "/freeside-verify-")))
+;; The per-user cache directory (DARWIN_USER_CACHE_DIR). The job gets its own
+;; suffix directory, a look at the parent, and Clang's implicit module cache:
+;; the package-manifest compile inside xcodebuild keeps its modules there
+;; whatever CLANG_MODULE_CACHE_PATH says and fails without it. That cache is
+;; the second shared place. xcodebuild's own cache beside it
+;; (com.apple.DeveloperTools) stays closed; it runs without it.
+(deny file-read* file-write* (subpath (param "USER_CACHE")))
+(allow file-read-metadata (literal (param "USER_CACHE")))
+(allow file-read* file-write*
+  (subpath (string-append (param "USER_CACHE") "/clang/ModuleCache")))
+(allow file-read* file-write*
+  (subpath (string-append (param "USER_TEMP") "/" (param "JOB_SUFFIX")))
+  (subpath (string-append (param "USER_CACHE") "/" (param "JOB_SUFFIX"))))
+
+;; Signals reach only processes in this job's own sandbox, so a job can't
+;; stop another job, a writer, or the daemon; launchctl's kickstart, kill,
+;; stop, and bootout ask launchd, which applies the same check.
+(deny signal)
+(allow signal (target same-sandbox))
+;; No task port for another process: no debugger attach, no memory read.
+(deny mach-priv-task-port)
+
+;; The owner's session services act for the job outside its rule file.
+;; cfprefsd reads and writes any app's preferences, around the home rule
+;; above: the job reads only the global domain, which carries the
+;; appearance settings a render follows, and writes none (a test's own
+;; suite then lives in memory only, which the app's tests pass with). The
+;; pasteboard stays open: the app's tests use private named pasteboards,
+;; which go through the same service as the owner's, so a job can read and
+;; replace what the owner copied (report, Residuals).
+(deny user-preference-write)
+(deny user-preference-read)
+(allow user-preference-read (preference-domain "kCFPreferencesAnyApplication"))
+;; The Simulator: CoreSimulatorService boots devices whose processes launchd
+;; starts as the owner with no rule file, so a job that reaches it runs code
+;; outside this file. The recipe builds for the Simulator but runs none.
+(deny mach-lookup (global-name-regex #"^com\.apple\.CoreSimulator\."))
+
+;; The cordoned writer's secret-read denials. A slot account owned none of
+;; these; the owner's account owns all of them.
+(deny file-read*
+  (subpath (string-append (param "OWNER_HOME") "/.ssh"))
+  (subpath (string-append (param "OWNER_HOME") "/.config/gh"))
+  (literal (string-append (param "OWNER_HOME") "/.git-credentials"))
+  (literal (string-append (param "OWNER_HOME") "/.netrc"))
+  (subpath (string-append (param "OWNER_HOME") "/.aws"))
+  (subpath (string-append (param "OWNER_HOME") "/.config/gcloud"))
+  (subpath (string-append (param "OWNER_HOME") "/.azure"))
+  (subpath (string-append (param "OWNER_HOME") "/.kube"))
+  (literal (string-append (param "OWNER_HOME") "/.docker/config.json"))
+  (subpath (string-append (param "OWNER_HOME") "/.codex"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Application Support/Google/Chrome"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Application Support/Firefox"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Safari"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Cookies"))
+  (subpath (string-append (param "OWNER_HOME") "/.claude"))
+  (literal (string-append (param "OWNER_HOME") "/.claude.json"))
+  (subpath (param "OWNER_CLAUDE_CONFIG"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Application Support/com.apple.container"))
+  (subpath (string-append (param "OWNER_HOME") "/.freeside"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Keychains"))
+  (regex (string-append "^" (param "PROJECTS") "/.*/\\.env(rc|\\..*)?$")))
+(deny file-read-data file-read-xattr
+  (subpath (string-append (param "OWNER_HOME") "/Library/Application Support/Freeside"))
+  (subpath (string-append (param "OWNER_HOME") "/Library/Application Support/Freeside Dev")))
+(deny mach-lookup
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd.xpc"))
