@@ -1,0 +1,32 @@
+;; daemon-test.sb: the macOS sandbox profile for local daemon test runs.
+;;
+;; scripts/check.sh (`daemon test`) and scripts/daemon-test-report.py start
+;; each slot-holding go test under `sandbox-exec -f` this profile, so a test
+;; bug that computes the developer's home, or any path under /Users, can't
+;; write or delete there: the kernel refuses the write whatever path the test
+;; computed. Reads stay unrestricted.
+;;
+;; The caller passes every parameter with -D, each resolved through symbolic
+;; links first, because the sandbox matches resolved paths:
+;;   REAL_HOME   the HOME the caller started with
+;;   GOCACHE     go env GOCACHE (the build and test cache)
+;;   GOMODCACHE  go env GOMODCACHE (modules and GOTOOLCHAIN downloads)
+;;   SLOT_HOME   the held slot's throwaway HOME (<slot>.home.noindex)
+;;   SLOT_TMP    the held slot's TMPDIR (<slot>.tmp.noindex)
+;;   SLOT_DECOY  the held slot's decoy repository (<slot>.decoy)
+;;
+;; The last matching rule wins, so the allows after the denies reopen only
+;; the Go caches and the slot's own directories.
+(version 1)
+(allow default)
+(deny file-write*
+  (subpath "/Users")
+  (subpath "/Volumes")
+  (subpath "/Applications")
+  (subpath (param "REAL_HOME")))
+(allow file-write*
+  (subpath (param "GOCACHE"))
+  (subpath (param "GOMODCACHE"))
+  (subpath (param "SLOT_HOME"))
+  (subpath (param "SLOT_TMP"))
+  (subpath (param "SLOT_DECOY")))

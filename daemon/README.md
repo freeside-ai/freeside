@@ -1169,6 +1169,25 @@ Each local run sizes itself to its share of the machine:
   contains `_LIVE`) keeps your `HOME` and prints a notice naming it, since
   live suites drive `claude`, `swift`, and `xcodebuild` against their real
   configuration and caches. A run without a slot keeps the inherited `HOME`.
+- **Sandbox:** on macOS, a run with the slot `HOME` also starts each
+  `go test` under `sandbox-exec` with `scripts/daemon-test.sb`. The profile
+  allows everything, then denies file writes under `/Users`, `/Volumes`,
+  `/Applications`, and your `HOME`, then allows them again under `GOCACHE`,
+  `GOMODCACHE`, and the slot's `.home.noindex`, `.tmp.noindex`, and `.decoy`
+  directories. A test that finds your home another way, through
+  `user.Current()` or an absolute path, still can't write or delete there;
+  reads are unrestricted. The step resolves each path through symbolic links
+  first, because the sandbox matches resolved paths. A test that writes into
+  the checkout fails with "operation not permitted". `DAEMON_TEST_SANDBOX=0`
+  turns the sandbox off for a run that must, such as a golden `-update` run
+  through `check.sh`; the bare `go test` recipe under Golden tests is
+  unaffected. A value other than `0` or `1` is a usage error. Before the
+  tests, the step applies the profile to
+  `/usr/bin/true`. When that fails with `sandbox_apply: Operation not
+  permitted`, the step is already inside a sandbox, which refuses a nested
+  one and already limits the tests, so it prints a notice and runs without
+  its own; any other failure fails the step. A run without a slot or with a
+  live-suite variable, a CI shard run, and a Linux run get no sandbox.
 
 A full run tests `internal/integration`, which alone would set its wall time,
 as `DAEMON_TEST_INTEGRATION_PARTITIONS` concurrent `-run` partitions (default

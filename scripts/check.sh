@@ -122,6 +122,22 @@
 # limit above 1 the child also gets GOMAXPROCS of cores / limit rounded up,
 # minimum 2, unless GOMAXPROCS is already set. A run without a slot keeps
 # TMPDIR, HOME, and GOMAXPROCS as inherited.
+# On macOS a slot-holding run with the slot HOME also starts each go test
+# under `sandbox-exec -f scripts/daemon-test.sb`, which denies file writes
+# under /Users, /Volumes, /Applications, and the caller's HOME, then allows
+# them under GOCACHE, GOMODCACHE, and the slot's .home.noindex, .tmp.noindex,
+# and .decoy directories, so a test can't write or delete the real home by
+# any path it computes. The paths pass as -D parameters with symbolic links
+# resolved, since the sandbox matches resolved paths. The partition discovery
+# pass, which runs no test, stays outside it. DAEMON_TEST_SANDBOX=0 turns it
+# off for a run that must write into the checkout, such as a golden -update
+# run; any value but 0 or 1 is a usage error. check.sh first applies the
+# profile to /usr/bin/true: a failure with `sandbox_apply: Operation not
+# permitted` means an enclosing sandbox, which refuses a nested one and
+# already limits the tests, so the run goes on without check.sh's own; any
+# other failure fails the step. Each case that turns it off prints a notice.
+# A run without a slot or with a live-suite variable, a shard run, and a
+# Linux run get no sandbox.
 # Outside CI on macOS, when git resolves to /usr/bin/git, the test step uses
 # xcrun's git through a stable directory containing only git on PATH, with
 # its helpers and config preserved. Other git installations and later steps
@@ -189,8 +205,9 @@
 #   0  every requested step passed
 #   1  a step failed (its command's output says which)
 #   2  usage error: unknown component or step, malformed daemon test limit,
-#      partition count, or Go cache limit, or a misplaced `--` (anywhere
-#      but after `daemon test`, with nothing after it, or in a shard run)
+#      partition count, sandbox setting, or Go cache limit, or a misplaced
+#      `--` (anywhere but after `daemon test`, with nothing after it, or in
+#      a shard run)
 set -euo pipefail
 
 PROG=$(basename "$0")
@@ -273,7 +290,8 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@") &
 # in launch order.
 daemon_test_partitioned() {
   local count=$1 logs=$2 plan kind package pattern integration='' rest=() patterns=()
-  local go_test=(go test -timeout 30m) pids=() pid i code rc=0
+  local go_test=(${daemon_test_sandbox[@]+"${daemon_test_sandbox[@]}"} go test -timeout 30m)
+  local pids=() pid i code rc=0
   plan=$(in_dir "$ROOT" python3 scripts/daemon-test-shards.py local --count "$count") || return 1
   while read -r kind package pattern; do
     case $kind in
@@ -328,7 +346,8 @@ daemon_test_run() {
       daemon_test_partitioned "$partitions" "$1/partitions"
     else
       # A caller's -timeout after -- comes later and wins.
-      in_dir "$ROOT/daemon" go test -timeout 30m "${args[@]}"
+      in_dir "$ROOT/daemon" ${daemon_test_sandbox[@]+"${daemon_test_sandbox[@]}"} \
+        go test -timeout 30m "${args[@]}"
     fi
     return
   fi
@@ -564,6 +583,69 @@ daemon_test_export_home() {
     GOPATH=$daemon_test_gopath GOENV=$daemon_test_goenv
 }
 
+# daemon_test_read_sandbox: checks DAEMON_TEST_SANDBOX, unset, 0, or 1.
+# Dispatch calls it before any daemon step, so a bad value stops `check.sh
+# daemon` before go build runs.
+daemon_test_read_sandbox() {
+  case ${DAEMON_TEST_SANDBOX-1} in
+    0|1) ;;
+    *)
+      echo 'daemon test: DAEMON_TEST_SANDBOX must be 0 or 1' >&2
+      return 2
+      ;;
+  esac
+}
+
+# daemon_test_resolve <dir>: prints <dir> with every symbolic link resolved,
+# since the sandbox matches resolved paths.
+daemon_test_resolve() { (cd "$1" 2>/dev/null && pwd -P); }
+
+# daemon_test_start_sandbox <home> <tmp> <decoy>: on macOS, sets
+# daemon_test_sandbox to the sandbox-exec prefix that denies the tests file
+# writes outside the Go caches and the held slot's directories
+# (scripts/daemon-test.sb). It leaves the prefix empty, with a notice, under
+# DAEMON_TEST_SANDBOX=0 or inside an enclosing sandbox, which refuses to
+# apply a nested one; any other failure to apply it fails the step.
+daemon_test_start_sandbox() {
+  local key dir resolved params=() prefix out
+  [[ $(uname -s) == Darwin ]] && ! daemon_test_shard_mode || return 0
+  if [[ ${DAEMON_TEST_SANDBOX-} == 0 ]]; then
+    echo 'daemon test: DAEMON_TEST_SANDBOX=0; running the tests without the sandbox' >&2
+    return 0
+  fi
+  # Go creates its caches on first use; the sandbox needs them to resolve.
+  if ! mkdir -p "$daemon_test_gocache" "$daemon_test_gomodcache"; then
+    echo 'daemon test: cannot create the Go caches the sandbox allows' >&2
+    return 1
+  fi
+  for key in REAL_HOME GOCACHE GOMODCACHE SLOT_HOME SLOT_TMP SLOT_DECOY; do
+    case $key in
+      REAL_HOME) dir=$HOME ;;
+      GOCACHE) dir=$daemon_test_gocache ;;
+      GOMODCACHE) dir=$daemon_test_gomodcache ;;
+      SLOT_HOME) dir=$1 ;;
+      SLOT_TMP) dir=$2 ;;
+      SLOT_DECOY) dir=$3 ;;
+    esac
+    if [[ $dir != /* ]] || ! resolved=$(daemon_test_resolve "$dir"); then
+      echo "daemon test: cannot resolve $key ('$dir') for the test sandbox" >&2
+      return 1
+    fi
+    params+=(-D "$key=$resolved")
+  done
+  prefix=(sandbox-exec -f "$ROOT/scripts/daemon-test.sb" "${params[@]}")
+  if ! out=$("${prefix[@]}" /usr/bin/true 2>&1); then
+    if [[ $out == *'sandbox_apply: Operation not permitted'* ]]; then
+      echo "daemon test: already inside a sandbox; running the tests without check.sh's own" >&2
+      return 0
+    fi
+    echo 'daemon test: cannot apply the test sandbox:' >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  daemon_test_sandbox=("${prefix[@]}")
+}
+
 # daemon_test_read_partitions: sets daemon_test_partitions, the integration
 # partition count of a full local run; shard and narrow runs ignore the
 # setting and run as one invocation. Dispatch calls it before any daemon
@@ -622,7 +704,7 @@ daemon_trim_go_cache() {
 
 daemon_test() (
   local vars decoy tmp='' home='' live rc=0
-  daemon_test_slot='' daemon_test_limit=''
+  daemon_test_slot='' daemon_test_limit='' daemon_test_sandbox=()
   daemon_test_use_real_git
   daemon_test_take_slot
   # An ambient repository (GIT_DIR from `git rebase -x`) must reach neither
@@ -662,6 +744,7 @@ daemon_test() (
     echo "daemon test: cannot create the test HOME $home" >&2
     return 1
   fi
+  if [[ -n $home ]]; then daemon_test_start_sandbox "$home" "$tmp" "$decoy" || return 1; fi
   # Bash 3.2 saves a redirection on another descriptor if applied to the
   # function call. Close it inside a subshell so orphaned children can't
   # inherit either the slot descriptor or a saved copy.
@@ -890,7 +973,7 @@ if [ "$component" = daemon ]; then
   # header. Appending keeps a caller's flags, such as a ward recipe's -p=2.
   export GOFLAGS="${GOFLAGS:+$GOFLAGS }-trimpath"
   case " $* " in
-    *' test '*) daemon_test_read_partitions ;;
+    *' test '*) daemon_test_read_partitions; daemon_test_read_sandbox ;;
   esac
   daemon_gocache_read_limit
   daemon_trim_go_cache
