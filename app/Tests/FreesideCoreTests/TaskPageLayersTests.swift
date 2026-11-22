@@ -386,6 +386,46 @@ import Testing
             })
     }
 
+    /// #3560: Current Run names the live writer its chip opens, with the
+    /// run page's title, once it holds the run's timeline and snapshot.
+    @Test func currentRunNamesItsLiveWriter() throws {
+        let page = TaskStageFixtures.page(.implementation)
+        let history = try #require(page.history)
+        let run = try #require(page.runs.first).run
+        let stage = try #require(
+            run.stages.first {
+                RunDisplay.canonicalStageName($0.name) == Components.Schemas.StageName.implementation.rawValue
+            })
+        let attempt = try #require(stage.attempts.last)
+        let writer = try #require(attempt.invocation_id)
+        let runTimeline = Components.Schemas.RunTimeline(
+            as_of_revision: 1, as_of: RunFixtures.screenshotInstant, run_id: run.id, milestones: [],
+            invocations: [
+                .init(
+                    invocation_id: writer, run_id: run.id, status: .running, live: true,
+                    observed_at: RunFixtures.screenshotInstant)
+            ],
+            review: nil, admissions: [], outcomes: RunFixtures.noOutcomes)
+        func section(
+            _ runTimelines: [String: Components.Schemas.RunTimeline], runs: [Components.Schemas.RunSnapshot]
+        ) throws -> TaskTimelinePresentation.CurrentRun {
+            try #require(
+                TaskTimelinePresentation.currentRunSection(
+                    page.task, timeline: history, runTimelines: runTimelines, runs: runs))
+        }
+
+        let live = try #require(try section([run.id: runTimeline], runs: page.runs).liveTranscript)
+        #expect(live.invocationID == writer)
+        #expect(live.title == "Implementation · Round \(attempt.number)")
+        // VoiceOver names what the chip opens and whose it is.
+        #expect(
+            CurrentRunTranscriptChip(transcript: live).spokenLabel
+                == "Transcript, Implementation · Round \(attempt.number)")
+        // Neither without the run's timeline nor without its snapshot.
+        #expect(try section([:], runs: page.runs).liveTranscript == nil)
+        #expect(try section([run.id: runTimeline], runs: []).liveTranscript == nil)
+    }
+
     /// Acceptance 3 (#2611): the Timeline has no fold around the current
     /// campaign, so it draws open with nothing stored; each earlier
     /// campaign folds below the rail, closed until opened, by its id.

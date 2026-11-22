@@ -100,6 +100,9 @@ struct TaskPageView: View {
     /// The document the document row opened in a reader, presented outside the
     /// lazy stack for the same reason.
     @State private var documentRequest: TaskDocumentRequest?
+    /// The running transcript Current Run's chip opened, held here so the
+    /// sheet outlives the chip, which leaves when the writer ends (#3560).
+    @State private var openedTranscript: CurrentRunTranscriptSheet.Opened?
     /// The attached folders the operator opened, by name; each starts
     /// folded.
     @State private var openAttachmentFolders: Set<String> = []
@@ -295,6 +298,13 @@ struct TaskPageView: View {
                     }
                 sections(timeline)
                     .padding(.top, Self.contentGap)
+                    // Its own anchor, always present: two sheets on one view
+                    // present unreliably, and the chip that opens it leaves
+                    // when the writer ends.
+                    .sheet(item: $openedTranscript) { opened in
+                        CurrentRunTranscriptSheet(coordinator: coordinator, opened: opened)
+                            .dynamicTypeSize(dynamicTypeSize)
+                    }
             }
             // Named outside the column's margin, which a standing notice in
             // the detail column changes, so a new margin moves the hold
@@ -944,7 +954,7 @@ struct TaskPageView: View {
         _ timeline: Components.Schemas.TaskTimeline
     ) -> TaskTimelinePresentation.CurrentRun? {
         TaskTimelinePresentation.currentRunSection(
-            snapshot.task, timeline: timeline, runTimelines: coordinator.timelinesByRunID)
+            snapshot.task, timeline: timeline, runTimelines: coordinator.timelinesByRunID, runs: coordinator.runs)
     }
 
     /// Current Run (◆C, #3375): what is running, as whom, and how review is
@@ -963,8 +973,7 @@ struct TaskPageView: View {
     ) -> some View {
         item(verticalPadding: 16, horizontalPadding: 18) {
             VStack(alignment: .leading, spacing: 12) {
-                KeywordLabel(text: "Current Run")
-                    .accessibilityAddTraits(.isHeader)
+                currentRunHeading(current)
                 withRunLines(timeline) { lines in
                     currentRunLead(current.run, in: timeline, lines: lines)
                 }
@@ -998,6 +1007,35 @@ struct TaskPageView: View {
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// Current Run's keyword, ended by the live writer's `Transcript` chip
+    /// while one runs (#3560). The chip overhangs the keyword's line, so
+    /// the section is as tall with it as without; at accessibility sizes,
+    /// where it can't sit beside the keyword, it wraps under it. Only the
+    /// keyword is the header, so the chip is a button of its own.
+    @ViewBuilder
+    private func currentRunHeading(_ current: TaskTimelinePresentation.CurrentRun) -> some View {
+        let keyword = KeywordLabel(text: "Current Run").accessibilityAddTraits(.isHeader)
+        if let transcript = current.liveTranscript {
+            let runID = current.run.run_id
+            let chip = CurrentRunTranscriptChip(
+                transcript: transcript,
+                open: screenshotTimeline == nil
+                    ? { openedTranscript = .init(runID: runID, transcript: transcript) } : nil)
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    keyword
+                    chip
+                }
+            } else {
+                keyword
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .trailing) { chip }
+            }
+        } else {
+            keyword
+        }
     }
 
     /// The attempt in the statement face, then why it started, dim, when
@@ -2364,6 +2402,20 @@ enum TaskTimelinePresentation {
         let showsReview: Bool
         /// The external-review round the run is working, if it is in one.
         let externalRound: ExternalRound?
+        /// The run's live writer, whose transcript the heading line's chip
+        /// opens (#3560); nil when none runs or the run's timeline isn't
+        /// loaded.
+        var liveTranscript: LiveTranscript?
+    }
+
+    /// A running writer the run page would open live, as Current Run's
+    /// chip opens it: the same invocation, title, and start.
+    struct LiveTranscript: Equatable {
+        let invocationID: String
+        /// The stage and attempt, such as `Implementation · Round 1`.
+        let title: String
+        /// When the writer started, for the running sheet's `Working for`.
+        let startedAt: Date?
     }
 
     /// An external-review round in progress on the current run (#3446): the
@@ -2456,10 +2508,11 @@ enum TaskTimelinePresentation {
 
     /// Current Run for an active task whose loaded history holds a current
     /// run; nil otherwise. A finished task has none: the rail names its
-    /// newest campaign's runs and each run page holds the rest.
+    /// newest campaign's runs and each run page holds the rest. `runs` are
+    /// the synced run snapshots, whose stages the live-writer rule reads.
     static func currentRunSection(
         _ task: Components.Schemas.Task, timeline: Components.Schemas.TaskTimeline?,
-        runTimelines: [String: Components.Schemas.RunTimeline]
+        runTimelines: [String: Components.Schemas.RunTimeline], runs: [Components.Schemas.RunSnapshot] = []
     ) -> CurrentRun? {
         guard TaskDisplay.isActive(task), let timeline, let run = currentRun(task, in: timeline) else { return nil }
         let runTimeline = runTimelines[run.run_id]
@@ -2469,7 +2522,25 @@ enum TaskTimelinePresentation {
             line: currentRunLine(task, run: run, runTimeline: runTimeline),
             showsReview: reviews && runTimeline?.review?.value1.rounds.isEmpty == false,
             externalRound: externalRound(
-                runID: run.run_id, timeline: timeline, rounds: runTimeline?.review?.value1.rounds ?? []))
+                runID: run.run_id, timeline: timeline, rounds: runTimeline?.review?.value1.rounds ?? []),
+            liveTranscript: runTimeline.flatMap { runTimeline in
+                runs.first { $0.run.id == run.run_id }.flatMap { liveTranscript(runTimeline, stages: $0.run.stages) }
+            })
+    }
+
+    /// The run page's live `Open Transcript` for this run's timeline, if it
+    /// would show one, labelled and timed as the run page does.
+    static func liveTranscript(
+        _ timeline: Components.Schemas.RunTimeline, stages: [Components.Schemas.Stage]
+    ) -> LiveTranscript? {
+        guard let writer = RunHistoryPresentation.liveWriter(in: timeline, stages: stages) else { return nil }
+        let id = writer.invocation_id
+        return LiveTranscript(
+            invocationID: id,
+            title: RunHistoryPresentation.attemptContext(
+                invocationID: id, stages: stages, reviewRounds: timeline.review?.value1.rounds ?? []) ?? id,
+            startedAt: RunTimeStrip.invocationStart(
+                id, milestones: timeline.milestones, clocks: timeline.clocks?.value1))
     }
 
     /// Current Run's mono line, in the run page's grammar: the harness,

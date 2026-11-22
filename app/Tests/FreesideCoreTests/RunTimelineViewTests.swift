@@ -248,6 +248,115 @@ import Testing
         #expect(groups[0].invocations.map(\.invocation_id) == [remediation.invocation_id, production.invocation_id])
     }
 
+    private func timeline(
+        _ run: Components.Schemas.Run, invocations: [Components.Schemas.InvocationObservation],
+        rounds: [Components.Schemas.RunReviewRound] = []
+    ) -> Components.Schemas.RunTimeline {
+        .init(
+            as_of_revision: 1, as_of: Date(timeIntervalSinceReferenceDate: 1_000), run_id: run.id, milestones: [],
+            invocations: invocations, review: rounds.isEmpty ? nil : .init(value1: .init(rounds: rounds)),
+            admissions: [], outcomes: RunFixtures.noOutcomes)
+    }
+
+    // Current Run's chip (#3560) and the run page's live link share one
+    // rule: a running writer the daemon observes live.
+    @Test func liveWriterIsTheRunningImplementationAttemptOrRemediation() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        let base = Date(timeIntervalSinceReferenceDate: 1_000)
+        let attempt = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .running, live: true, observed_at: base)
+
+        #expect(
+            RunHistoryPresentation.liveWriter(in: timeline(run, invocations: [attempt]), stages: run.stages)
+                == attempt)
+
+        // A remediation runs as an attempt of a further `implement` stage.
+        run.stages.append(
+            .init(
+                id: "remediation-1-\(run.id)", run_id: run.id, name: "implement",
+                attempts: [
+                    .init(
+                        id: "attempt-remediation-1", stage_id: "remediation-1-\(run.id)",
+                        number: 1, invocation_id: "inv-remediation-1")
+                ]))
+        var ended = attempt
+        ended.status = .completed
+        ended.live = false
+        let remediation = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-remediation-1", run_id: run.id, status: .running, live: true, observed_at: base)
+
+        #expect(
+            RunHistoryPresentation.liveWriter(
+                in: timeline(run, invocations: [ended, remediation]), stages: run.stages) == remediation)
+    }
+
+    @Test func liveWriterSkipsAReviewerAnEndedWriterAndAnUnobservedOne() throws {
+        let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        let base = Date(timeIntervalSinceReferenceDate: 1_000)
+        var round = RunFixtures.reviewRound(.running)
+        round.invocation_id = "review-\(run.id)-1"
+        let reviewer = Components.Schemas.InvocationObservation(
+            invocation_id: "review-\(run.id)-1", run_id: run.id, status: .running, live: true, observed_at: base)
+        let ended = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .completed, live: false, observed_at: base)
+
+        #expect(
+            RunHistoryPresentation.liveWriter(
+                in: timeline(run, invocations: [reviewer], rounds: [round]), stages: run.stages) == nil)
+        #expect(RunHistoryPresentation.liveWriter(in: timeline(run, invocations: [ended]), stages: run.stages) == nil)
+        #expect(RunHistoryPresentation.liveWriter(in: timeline(run, invocations: []), stages: run.stages) == nil)
+        // The run page still opens the ended writer's kept transcript.
+        #expect(RunHistoryPresentation.transcriptOpens(ended, stages: run.stages, reviewRounds: []))
+    }
+
+    @Test func liveWriterSkipsAWriterNotObservedLiveAndANonImplementationStage() throws {
+        var run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        let base = Date(timeIntervalSinceReferenceDate: 1_000)
+        let unobserved = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-\(run.id)-2", run_id: run.id, status: .running, live: false, observed_at: base)
+        run.stages.append(
+            .init(
+                id: "verify-\(run.id)", run_id: run.id, name: "verify",
+                attempts: [
+                    .init(
+                        id: "attempt-verify-1", stage_id: "verify-\(run.id)", number: 1, invocation_id: "inv-verify-1")
+                ]))
+        let verifier = Components.Schemas.InvocationObservation(
+            invocation_id: "inv-verify-1", run_id: run.id, status: .running, live: true, observed_at: base)
+
+        #expect(
+            RunHistoryPresentation.liveWriter(in: timeline(run, invocations: [unobserved]), stages: run.stages) == nil)
+        #expect(
+            RunHistoryPresentation.liveWriter(in: timeline(run, invocations: [verifier]), stages: run.stages) == nil)
+    }
+
+    // A sheet Current Run's chip opened outlives the chip (#3560): as the
+    // writer moves on it reads the ended outcome the run page's link would
+    // pass, and none while the writer hasn't ended.
+    @Test func anOpenedTranscriptReadsTheEndedOutcomeTheRunPageWouldPass() throws {
+        let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
+        let base = Date(timeIntervalSinceReferenceDate: 1_000)
+        let id = "inv-\(run.id)-2"
+        func outcome(
+            _ status: Components.Schemas.ObservedInvocationStatus, live: Bool
+        )
+            -> AgentTranscriptSheet.Outcome?
+        {
+            let writer = Components.Schemas.InvocationObservation(
+                invocation_id: id, run_id: run.id, status: status, live: live, observed_at: base)
+            return RunHistoryPresentation.endedTranscriptOutcome(
+                of: id, in: timeline(run, invocations: [writer]), stages: run.stages)
+        }
+
+        #expect(outcome(.running, live: true) == nil)
+        #expect(outcome(.running, live: false) == nil)
+        #expect(outcome(.completed, live: false) == .finished)
+        #expect(outcome(.canceled, live: false) == .failed)
+        #expect(
+            RunHistoryPresentation.endedTranscriptOutcome(
+                of: id, in: timeline(run, invocations: []), stages: run.stages) == nil)
+    }
+
     @Test func unattributedObservationsAlwaysSortLast() throws {
         let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.activeRunID }).run
         let base = Date(timeIntervalSinceReferenceDate: 1_000)

@@ -5502,6 +5502,23 @@
                         work_item_artifact_digest: .init(value1: "sha256:" + String(repeating: "e", count: 64)))))
             working.task.issue = nil
             working.task.task_lines = lines
+            // The working page while its implementation writer runs and the
+            // daemon observes it live: Current Run's heading line ends in
+            // the Transcript chip (#3560). No review and no admission, so
+            // the chip is its only difference from `task-page-working`.
+            let workingRun = try #require(working.runs.first).run
+            let writer = try #require(
+                workingRun.stages.last {
+                    RunDisplay.canonicalStageName($0.name) == Components.Schemas.StageName.implementation.rawValue
+                }?.attempts.last?.invocation_id)
+            let liveWriter = Components.Schemas.RunTimeline(
+                as_of_revision: 12, as_of: RunFixtures.screenshotInstant, run_id: workingRun.id, milestones: [],
+                invocations: [
+                    .init(
+                        invocation_id: writer, run_id: workingRun.id, status: .running, live: true,
+                        observed_at: RunFixtures.screenshotInstant)
+                ],
+                review: nil, admissions: [], outcomes: RunFixtures.noOutcomes)
             // An external review's round 2 while it verifies: Current Run
             // shows the round, and the rail starts Verification (#3446).
             var externalRound = TaskStageFixtures.page(TaskHistoryFixtures.externalRoundVerifying())
@@ -5537,17 +5554,19 @@
             // Decision group after the task's (#2607). `task-page-look-alike`
             // is the open page beside its twin, so the header draws the
             // look-alike marker over the card.
-            for (name, page, leading, identifiersOpen, others) in [
-                ("task-page-open", open, Optional(question), false, []),
-                ("task-page-open-identifiers", open, Optional(question), true, []),
-                ("task-page-look-alike", lookAlike, Optional(question), false, [twin]),
-                ("task-page-several", several, Optional(question), false, []),
-                ("task-page-working", working, nil, false, []),
-                ("task-page-external-round", externalRound, nil, false, []),
-                ("task-page-finished", finished, nil, false, []),
+            for (name, page, leading, identifiersOpen, others, runTimelines) in [
+                ("task-page-open", open, Optional(question), false, [], []),
+                ("task-page-open-identifiers", open, Optional(question), true, [], []),
+                ("task-page-look-alike", lookAlike, Optional(question), false, [twin], []),
+                ("task-page-several", several, Optional(question), false, [], []),
+                ("task-page-working", working, nil, false, [], []),
+                ("task-page-live-writer", working, nil, false, [], [liveWriter]),
+                ("task-page-external-round", externalRound, nil, false, [], []),
+                ("task-page-finished", finished, nil, false, [], []),
             ] {
                 let (coordinator, task) = try TaskStageFixtures.coordinator(
-                    page, conversations: AttentionFixtures.defaultConversations(), otherTasks: others)
+                    page, runTimelines: runTimelines, conversations: AttentionFixtures.defaultConversations(),
+                    otherTasks: others)
                 let timeline = try #require(page.history)
                 let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
                 disclosures.setExpanded(identifiersOpen, .identifiers, taskID: timeline.task_id)

@@ -544,7 +544,7 @@ struct RunTimelineView: View {
                     coordinator: coordinator, runID: snapshot.run.id, invocationID: invocation.invocation_id,
                     title: attemptContext(invocationID: invocation.invocation_id, in: timeline)
                         ?? invocation.invocation_id,
-                    outcome: transcriptOutcome(invocation),
+                    outcome: RunHistoryPresentation.transcriptOutcome(invocation),
                     workingTime: RunTimeStrip.invocationDuration(
                         invocation.invocation_id, milestones: timeline.milestones,
                         clocks: timeline.clocks?.value1),
@@ -556,13 +556,6 @@ struct RunTimelineView: View {
                 .padding(.leading, 19)
             }
         }
-    }
-
-    private func transcriptOutcome(
-        _ invocation: Components.Schemas.InvocationObservation
-    ) -> AgentTranscriptSheet.Outcome {
-        if invocation.live { return .running }
-        return invocation.status == .completed ? .finished : .failed
     }
 
     /// Labels from the timeline being rendered, not the coordinator's copy,
@@ -753,6 +746,10 @@ enum RunHistoryPresentation {
     /// link shows before the first observation: the engine records one
     /// within a reconcile pass of the writer starting, and the daemon has
     /// nothing to serve live before then.
+    ///
+    /// The one rule for both the run page's `Open Transcript` and Current
+    /// Run's `Transcript` chip (#3560), which `liveWriter` narrows to the
+    /// live branch.
     static func transcriptOpens(
         _ invocation: Components.Schemas.InvocationObservation,
         stages: [Components.Schemas.Stage],
@@ -772,6 +769,53 @@ enum RunHistoryPresentation {
         guard ended.contains(invocation.status) else { return false }
         return stages.contains { stage in stage.attempts.contains { $0.invocation_id == id } }
             || reviewRounds.contains { $0.remediation?.value1.invocation_id == id }
+    }
+
+    /// The run's running writer whose transcript opens live under
+    /// `transcriptOpens`, or nil: an ended writer, a reviewer, and a writer
+    /// not yet observed never qualify. The daemon runs one writer at a time
+    /// per run; should two qualify, the newer by attempt position wins, the
+    /// order `RunTimelineGrouping` sorts by.
+    static func liveWriter(
+        in timeline: Components.Schemas.RunTimeline, stages: [Components.Schemas.Stage]
+    ) -> Components.Schemas.InvocationObservation? {
+        let rounds = timeline.review?.value1.rounds ?? []
+        func position(_ id: String) -> (Int, Int) {
+            for (index, stage) in stages.enumerated() {
+                if let attempt = stage.attempts.first(where: { $0.invocation_id == id }) {
+                    return (index, attempt.number)
+                }
+            }
+            return (-1, -1)
+        }
+        return timeline.invocations
+            .filter { $0.live && transcriptOpens($0, stages: stages, reviewRounds: rounds) }
+            .max { position($0.invocation_id) < position($1.invocation_id) }
+    }
+
+    /// The sheet an opened transcript shows for its invocation: running
+    /// while the daemon observes it live, then finished or failed.
+    static func transcriptOutcome(
+        _ invocation: Components.Schemas.InvocationObservation
+    ) -> AgentTranscriptSheet.Outcome {
+        if invocation.live { return .running }
+        return invocation.status == .completed ? .finished : .failed
+    }
+
+    /// The ended outcome a running sheet opened on `invocationID` reads as
+    /// the run moves on, as the run page's link passes it: nil while the
+    /// writer runs, and nil while `transcriptOpens` shows no link for it
+    /// (a running writer the daemon no longer observes live), so the sheet
+    /// keeps waiting instead of giving up on a writer that hasn't ended.
+    static func endedTranscriptOutcome(
+        of invocationID: String, in timeline: Components.Schemas.RunTimeline,
+        stages: [Components.Schemas.Stage]
+    ) -> AgentTranscriptSheet.Outcome? {
+        guard let invocation = timeline.invocations.first(where: { $0.invocation_id == invocationID }),
+            transcriptOpens(invocation, stages: stages, reviewRounds: timeline.review?.value1.rounds ?? [])
+        else { return nil }
+        let outcome = transcriptOutcome(invocation)
+        return outcome == .running ? nil : outcome
     }
 
     /// The row label for an attempt or review round, shared by the decision
