@@ -450,6 +450,16 @@ import Testing
             ])
     }
 
+    /// A cordoned invocation names its class on the run page, so a cordoned
+    /// run never reads as warded (`docs/plan.md` §5.7, Cordoned Runs).
+    @Test func aCordonedInvocationReadsAsCordoned() throws {
+        let active = try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        let admission = try #require(RunDisplay.admission(for: "inv-\(RunFixtures.activeRunID)-2", in: active))
+        #expect(
+            RunDisplay.admissionRows(admission).first { $0.label == "Isolation Class" }?.value
+                == "Cordoned: host process on the owner's account")
+    }
+
     /// A fact the admission did not record reads as unavailable, never as a
     /// value from current configuration (#979).
     @Test func unrecordedAdmissionFactsReadUnavailable() {
