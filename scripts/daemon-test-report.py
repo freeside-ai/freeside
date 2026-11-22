@@ -8,8 +8,14 @@ with flock on the same files, so the report and check.sh runs count against
 one limit. While every slot is held it waits, naming the holders every 30
 seconds; the wait is not timed. Its go test child gets what check.sh gives
 its own: -timeout 30m, and while a slot is held, TMPDIR=<slot>.tmp.noindex
-(which Spotlight skips) and, under a limit above 1, GOMAXPROCS of cores /
-limit rounded up, minimum 2, unless GOMAXPROCS is already set.
+(which Spotlight skips), HOME=<slot>.home.noindex with GOCACHE, GOMODCACHE,
+GOPATH, and GOENV as go env reports them under the caller's HOME, on macOS
+the sandbox-exec profile scripts/daemon-test.sb, and, under a limit above 1,
+GOMAXPROCS of cores / limit rounded up, minimum 2, unless GOMAXPROCS is
+already set. The exceptions match check.sh's: an opt-in live-suite variable
+(FREESIDE_*_LIVE*) keeps the caller's HOME and runs without the sandbox,
+DAEMON_TEST_SANDBOX=0 turns the sandbox off, and an enclosing sandbox, which
+refuses a nested one, runs the tests without the report's own.
 """
 
 import argparse
@@ -209,12 +215,15 @@ def take_slot(limit, state, owner):
 
 
 def remove_tree(path):
-    """Removes a slot's test TMPDIR, read-only leftovers included.
+    """Removes a slot's test TMPDIR or HOME, read-only leftovers included.
 
     A test killed by its timeout skips its cleanup and can leave read-only
     directories; without the chmod, every later run in the slot would fail.
-    Symbolic links are neither followed nor changed.
+    Symbolic links are neither followed nor changed. Like check.sh, it
+    refuses any path but an absolute <slots>/<N>.tmp.noindex or .home.noindex.
     """
+    if not re.fullmatch(r"/.*/slots/[1-9][0-9]*\.(tmp|home)\.noindex", str(path), re.DOTALL):
+        raise ValueError(f"refusing to remove {path}, which is not a slot's scratch directory")
     if not os.path.lexists(path):
         return
     if not os.path.islink(path):
@@ -225,6 +234,50 @@ def remove_tree(path):
                 if not os.path.islink(child):
                     os.chmod(child, 0o700)
     shutil.rmtree(path) if not os.path.islink(path) else os.unlink(path)
+
+
+GO_VARIABLES = ("GOCACHE", "GOMODCACHE", "GOPATH", "GOENV")
+NESTED_SANDBOX = "sandbox_apply: Operation not permitted"
+
+
+def live_variable(environ):
+    """Returns the first set opt-in live-suite variable, which keeps the real HOME, or None."""
+    return next((name for name in sorted(environ) if name.startswith("FREESIDE_")
+                 and "_LIVE" in name[len("FREESIDE"):] and environ[name]), None)
+
+
+def go_values(go, daemon):
+    """Returns GO_VARIABLES as go env reports them under the current HOME."""
+    lines = subprocess.check_output([str(go), "env", *GO_VARIABLES], cwd=daemon, text=True).splitlines()
+    if len(lines) != len(GO_VARIABLES):
+        raise ValueError(f"go env printed an unexpected answer: {lines}")
+    return dict(zip(GO_VARIABLES, lines))
+
+
+def sandbox_prefix(system, environ, profile, paths):
+    """Returns the sandbox-exec prefix check.sh puts ahead of go test, or [].
+
+    paths maps each profile parameter to its directory; each passes resolved,
+    since the sandbox matches resolved paths. On macOS it first applies the
+    profile to /usr/bin/true under environ: a nested-sandbox refusal returns
+    [] with a notice, and any other failure raises.
+    """
+    if system != "Darwin":
+        return []
+    if environ.get("DAEMON_TEST_SANDBOX") == "0":
+        print("daemon-test-report: DAEMON_TEST_SANDBOX=0; running the tests without the sandbox", file=sys.stderr)
+        return []
+    prefix = ["sandbox-exec", "-f", str(profile)]
+    for key, path in paths.items():
+        prefix += ["-D", f"{key}={os.path.realpath(path)}"]
+    probe = subprocess.run(prefix + ["/usr/bin/true"], env=environ, text=True, capture_output=True)
+    if probe.returncode != 0:
+        if NESTED_SANDBOX in probe.stderr + probe.stdout:
+            print("daemon-test-report: already inside a sandbox; running the tests without the report's own",
+                  file=sys.stderr)
+            return []
+        raise OSError(f"cannot apply the test sandbox: {(probe.stderr + probe.stdout).strip()}")
+    return prefix
 
 
 def derived_gomaxprocs(cores, limit, environ):
@@ -265,6 +318,8 @@ def main():
     limit = slot_limit(os.environ)
     if limit is None:
         parser.error("DAEMON_TEST_MAX_RUNS must be a non-negative integer")
+    if os.environ.get("DAEMON_TEST_SANDBOX", "1") not in ("0", "1"):
+        parser.error("DAEMON_TEST_SANDBOX must be 0 or 1")
     # Held until exit; Python's close-on-exec keeps it from go test's children.
     slot = take_slot(limit, state_directory(os.environ), daemon.parent)
     counting = not args.no_git_count
@@ -299,12 +354,30 @@ def main():
         destination = args.out or root
         destination.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
-        test_tmp = None
+        test_tmp = test_home = None
+        sandbox = []
         if slot:
             test_tmp = Path(slot.name + ".tmp.noindex").absolute()
             remove_tree(test_tmp)
             test_tmp.mkdir()
             env["TMPDIR"] = str(test_tmp)
+            live = live_variable(env)
+            if live:
+                print(f"daemon-test-report: {live} is set; the tests keep the inherited HOME "
+                      "and run without the sandbox", file=sys.stderr)
+            else:
+                values = go_values(go, daemon)
+                test_home = Path(slot.name + ".home.noindex").absolute()
+                remove_tree(test_home)
+                test_home.mkdir()
+                for key in ("GOCACHE", "GOMODCACHE"):
+                    Path(values[key]).mkdir(parents=True, exist_ok=True)
+                # The report has no decoy; the profile still names one.
+                sandbox = sandbox_prefix(platform.system(), env, Path(__file__).resolve().parent / "daemon-test.sb",
+                                         dict(REAL_HOME=env["HOME"], GOCACHE=values["GOCACHE"],
+                                              GOMODCACHE=values["GOMODCACHE"], SLOT_HOME=test_home,
+                                              SLOT_TMP=test_tmp, SLOT_DECOY=slot.name + ".decoy"))
+                env.update(values, HOME=str(test_home))
             if limit > 1 and "GOMAXPROCS" not in env and not os.cpu_count():
                 print("daemon-test-report: cannot count cores; keeping Go's GOMAXPROCS", file=sys.stderr)
             gomaxprocs = derived_gomaxprocs(os.cpu_count(), limit, env)
@@ -326,7 +399,7 @@ def main():
         with (destination / "events.jsonl").open("w") as raw:
             try:
                 for target in targets if args.one_at_a_time else [targets]:
-                    command = [str(go), "test", "-json", "-count=1", "-timeout", "30m"]
+                    command = sandbox + [str(go), "test", "-json", "-count=1", "-timeout", "30m"]
                     if launcher:
                         command += ["-exec", shlex.quote(str(launcher))]
                     command += [target] if isinstance(target, str) else target
@@ -347,8 +420,9 @@ def main():
                 stop.set()
                 thread.join()
                 sample()
-                if test_tmp:
-                    remove_tree(test_tmp)
+                for scratch in (test_tmp, test_home):
+                    if scratch:
+                        remove_tree(scratch)
         packages, bad_lines = read_events((destination / "events.jsonl").read_text().splitlines())
         counts = git_counts(root, directories) if counting else {}
         failed = (not packages or any(returncodes)

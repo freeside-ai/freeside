@@ -1313,7 +1313,8 @@ It runs `go test -json -count=1 -timeout 30m` directly, under the same slot
 limit and state directory as `check.sh`, so a report and a `check.sh` run
 count against one limit. While every slot is held it waits, naming the
 holders every 30 seconds, and the wait isn't timed. Its `go test` gets the
-same per-slot `TMPDIR` and `GOMAXPROCS` share as a `check.sh` run (Local
+same per-slot `TMPDIR`, `HOME`, Go variables, macOS sandbox, and
+`GOMAXPROCS` share as a `check.sh` run, with the same exceptions (Local
 Test Runs on a Shared Machine). Package patterns default to `./...`. `--one-at-a-time` runs each
 listed package separately, removing contention between packages in that run.
 `--tests N` limits the slowest top-level tests to N rows (30 by default, 0 for
