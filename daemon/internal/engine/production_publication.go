@@ -122,11 +122,20 @@ type ProductionReplay struct {
 // production execution export: exact-base transport, networkless verifier,
 // store-backed execution publisher, durable blobs, and authenticated replay.
 type ProductionPublicationConfig struct {
-	WorkDir         string
-	Transport       PublicationTransport
-	Publisher       *publish.Publisher
-	Artifacts       ArtifactStore
-	ApprovedRecipes map[domain.Digest]bool
+	WorkDir string
+	// VerifyScratchDir is the parent every verification stages its
+	// workspaces under (verify.Options.ScratchParent). The composer names
+	// a directory inside the daemon's root, which a cordoned writer can't
+	// write. Construction creates it and removes the scratch a stopped
+	// daemon left there (best effort: what it can't remove is logged), so
+	// the workflow is built once per daemon, under its lock, before any
+	// verification starts. Required, even when HoldOnly, so the config has
+	// one shape.
+	VerifyScratchDir string
+	Transport        PublicationTransport
+	Publisher        *publish.Publisher
+	Artifacts        ArtifactStore
+	ApprovedRecipes  map[domain.Digest]bool
 	// RepositoryID is the daemon's one repository. The recipes image-policy
 	// adoptions approved for it join ApprovedRecipes wherever the workflow
 	// gates verification or evidence. Zero means no adoption applies.
@@ -281,9 +290,14 @@ type productionPublicationWorkflow struct {
 	store       *store.Store
 	attention   attentionService
 	workDir     string
-	transport   PublicationTransport
-	publisher   *publish.Publisher
-	artifacts   ArtifactStore
+	// verifyScratchDir is the prepared verify.Options.ScratchParent;
+	// unremovedScratch is the stale scratch its sweep couldn't remove,
+	// which engine.New logs once the logger is set.
+	verifyScratchDir string
+	unremovedScratch []error
+	transport        PublicationTransport
+	publisher        *publish.Publisher
+	artifacts        ArtifactStore
 	// operatorRecipes is the operator's approved-recipe set. Wherever an
 	// image's recipe or recipe-bearing evidence is gated, read the set
 	// through recipes or recipesIn, which add the repository's adopted
@@ -457,6 +471,17 @@ func newProductionPublicationWorkflow(
 	if err := os.MkdirAll(workDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create work directory: %w", err)
 	}
+	if strings.TrimSpace(cfg.VerifyScratchDir) == "" {
+		return nil, errors.New("empty verification scratch directory")
+	}
+	verifyScratchDir, err := filepath.Abs(cfg.VerifyScratchDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve verification scratch directory: %w", err)
+	}
+	unremovedScratch, err := verify.PrepareScratchParent(verifyScratchDir)
+	if err != nil {
+		return nil, err
+	}
 	if len(cfg.ApprovedRecipes) == 0 && !cfg.HoldOnly {
 		return nil, errors.New("approved recipe set is empty")
 	}
@@ -488,6 +513,7 @@ func newProductionPublicationWorkflow(
 	}
 	return &productionPublicationWorkflow{
 		store: st, attention: attention, workDir: workDir,
+		verifyScratchDir: verifyScratchDir, unremovedScratch: unremovedScratch,
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		operatorRecipes: mapsClone(cfg.ApprovedRecipes), repositoryID: cfg.RepositoryID,
 		newRoom: cfg.NewRoom, reviewSource: cfg.ReviewSource,

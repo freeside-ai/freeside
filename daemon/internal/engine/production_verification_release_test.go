@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -220,7 +223,7 @@ func TestProductionPublicationRefusesBoundRoomsWithoutAbsenceProof(t *testing.T)
 		return nil, errors.New("unused")
 	}
 	cfg := ProductionPublicationConfig{
-		WorkDir: t.TempDir(), Transport: fakeTransport{}, Publisher: &publish.Publisher{},
+		WorkDir: t.TempDir(), VerifyScratchDir: t.TempDir(), Transport: fakeTransport{}, Publisher: &publish.Publisher{},
 		Artifacts: fakeArtifacts{}, NewRoom: newRoom, HoldOnly: true,
 		ReviewRecovery: func(context.Context) error { return nil },
 		NewBoundRoom: func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error) {
@@ -237,5 +240,40 @@ func TestProductionPublicationRefusesBoundRoomsWithoutAbsenceProof(t *testing.T)
 	cfg.ProveVerificationContainersAbsent = func(context.Context, domain.Run, domain.InvocationID) error { return nil }
 	if _, err := newProductionPublicationWorkflow(f.store, f.signet, cfg); err != nil {
 		t.Fatalf("bound rooms with an absence proof: %v", err)
+	}
+}
+
+// TestProductionPublicationPreparesVerifyScratchDir pins that the workflow
+// needs a scratch directory for verification and sweeps it when built: an
+// empty one is refused, and a stale verification scratch in a named one
+// is removed before any verification can run.
+func TestProductionPublicationPreparesVerifyScratchDir(t *testing.T) {
+	t.Parallel()
+	f := newSpecificationFixture(t, false, 4)
+	cfg := ProductionPublicationConfig{
+		WorkDir: t.TempDir(), Transport: fakeTransport{}, Publisher: &publish.Publisher{},
+		Artifacts: fakeArtifacts{}, HoldOnly: true,
+		NewRoom: func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error) {
+			return nil, errors.New("unused")
+		},
+		ReviewRecovery: func(context.Context) error { return nil },
+	}
+	if _, err := newProductionPublicationWorkflow(f.store, f.signet, cfg); err == nil {
+		t.Fatal("an empty verification scratch directory was accepted")
+	}
+	cfg.VerifyScratchDir = t.TempDir()
+	stale := filepath.Join(cfg.VerifyScratchDir, verify.ScratchPrefix+"stale")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w, err := newProductionPublicationWorkflow(f.store, f.signet, cfg)
+	if err != nil {
+		t.Fatalf("named scratch directory: %v", err)
+	}
+	if w.verifyScratchDir != cfg.VerifyScratchDir {
+		t.Errorf("workflow scratch = %q, want %q", w.verifyScratchDir, cfg.VerifyScratchDir)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale scratch survived construction: %v", err)
 	}
 }

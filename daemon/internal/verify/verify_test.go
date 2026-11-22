@@ -57,12 +57,13 @@ func verifyFixture(t *testing.T, changes map[string]string, changeList []importe
 	})
 	room = &recordingRoom{}
 	return dir, Options{
-		HeadSHA:      heads.head,
-		BaseSHA:      heads.base,
-		InvocationID: domain.InvocationID("inv-1"),
-		RecipeSource: BaseCommitRecipe(),
-		Rooms:        imageRooms(room),
-		Changes:      changeList,
+		HeadSHA:       heads.head,
+		BaseSHA:       heads.base,
+		InvocationID:  domain.InvocationID("inv-1"),
+		RecipeSource:  BaseCommitRecipe(),
+		Rooms:         imageRooms(room),
+		ScratchParent: t.TempDir(),
+		Changes:       changeList,
 	}, room
 }
 
@@ -263,6 +264,9 @@ func TestVerifyInvalidOptions(t *testing.T) {
 		{"short base", func(o Options) Options { o.BaseSHA = "abc123"; return o }},
 		{"empty invocation", func(o Options) Options { o.InvocationID = ""; return o }},
 		{"unset recipe source", func(o Options) Options { o.RecipeSource = RecipeSource{}; return o }},
+		{"unset scratch parent", func(o Options) Options { o.ScratchParent = ""; return o }},
+		{"relative scratch parent", func(o Options) Options { o.ScratchParent = "verify-scratch"; return o }},
+		{"unclean scratch parent", func(o Options) Options { o.ScratchParent += "/../x"; return o }},
 		{"no rooms", func(o Options) Options { o.Rooms = nil; return o }},
 		{"empty rooms", func(o Options) Options { o.Rooms = map[ExecutionClass]Room{}; return o }},
 		{"nil room", func(o Options) Options { o.Rooms = imageRooms(nil); return o }},
@@ -505,8 +509,9 @@ func TestVerifyRejectsSymlinkEntrypoint(t *testing.T) {
 		HeadSHA: head, BaseSHA: base,
 		InvocationID: domain.InvocationID("inv-1"),
 		// A config recipe whose entrypoint is the repo-local symlink.
-		RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
-		Rooms:        imageRooms(room),
+		RecipeSource:  ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
+		Rooms:         imageRooms(room),
+		ScratchParent: t.TempDir(),
 	}
 	_, err := Verify(context.Background(), dir, opts)
 	if !errors.Is(err, ErrSymlinkEntrypoint) {
@@ -535,9 +540,10 @@ func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
 	room := &recordingRoom{}
 	opts := Options{
 		HeadSHA: head, BaseSHA: base,
-		InvocationID: domain.InvocationID("inv-1"),
-		RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check/verify.sh"]], "capture": "none"}`)),
-		Rooms:        imageRooms(room),
+		InvocationID:  domain.InvocationID("inv-1"),
+		RecipeSource:  ConfigRecipe([]byte(`{"commands": [["./run-check/verify.sh"]], "capture": "none"}`)),
+		Rooms:         imageRooms(room),
+		ScratchParent: t.TempDir(),
 	}
 	_, err := Verify(context.Background(), dir, opts)
 	if !errors.Is(err, ErrSymlinkEntrypoint) {
@@ -592,9 +598,10 @@ func TestVerifyOperandWithSymlinkPrefixNotEntrypoint(t *testing.T) {
 	operand := "generic/platform=iOS Simulator"
 	opts := Options{
 		HeadSHA: head, BaseSHA: base,
-		InvocationID: domain.InvocationID("inv-1"),
-		RecipeSource: ConfigRecipe([]byte(`{"commands": [["xcodebuild", "-destination", "generic/platform=iOS Simulator"]], "capture": "none"}`)),
-		Rooms:        imageRooms(room),
+		InvocationID:  domain.InvocationID("inv-1"),
+		RecipeSource:  ConfigRecipe([]byte(`{"commands": [["xcodebuild", "-destination", "generic/platform=iOS Simulator"]], "capture": "none"}`)),
+		Rooms:         imageRooms(room),
+		ScratchParent: t.TempDir(),
 		// A candidate change at the operand path proves the operand is
 		// not treated as a verification-control entrypoint.
 		Changes: []importer.Change{changed(operand)},

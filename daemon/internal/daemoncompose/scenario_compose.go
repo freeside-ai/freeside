@@ -255,8 +255,9 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			Unprovable: func(context.Context, domain.TaskID) (string, error) { return "", nil },
 		},
 		Publication: engine.ProductionPublicationConfig{
-			WorkDir:   filepath.Join(world.Dir, "publication"),
-			Transport: transport, Publisher: publisher, Artifacts: blobs,
+			WorkDir:          filepath.Join(world.Dir, "publication"),
+			VerifyScratchDir: filepath.Join(world.Dir, "verify-scratch"),
+			Transport:        transport, Publisher: publisher, Artifacts: blobs,
 			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(ScenarioRecipe): true},
 			// The scenario approves its one recipe above and records no
 			// image-policy adoption, so no adoption's recipes can apply. A

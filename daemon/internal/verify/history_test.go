@@ -96,13 +96,15 @@ func commitTree(t *testing.T, dir, tree, message string, parents ...string) stri
 	return sha
 }
 
-func historyOptions(head, base, recipe string, room Room) Options {
+func historyOptions(t *testing.T, head, base, recipe string, room Room) Options {
+	t.Helper()
 	return Options{
-		HeadSHA:      head,
-		BaseSHA:      base,
-		InvocationID: domain.InvocationID("inv-history"),
-		RecipeSource: ConfigRecipe([]byte(recipe)),
-		Rooms:        imageRooms(room),
+		HeadSHA:       head,
+		BaseSHA:       base,
+		InvocationID:  domain.InvocationID("inv-history"),
+		RecipeSource:  ConfigRecipe([]byte(recipe)),
+		Rooms:         imageRooms(room),
+		ScratchParent: t.TempDir(),
 	}
 }
 
@@ -155,7 +157,7 @@ func TestVerifyHistoryGivesExactlyTheCandidateRange(t *testing.T) {
 			commits := commitChain(t, checkout, base, tc.chain)
 			head := commits[len(commits)-1]
 			res, err := Verify(context.Background(), checkout,
-				historyOptions(head, base, historyProbeRecipe, &ProcRoom{Home: t.TempDir()}))
+				historyOptions(t, head, base, historyProbeRecipe, &ProcRoom{Home: t.TempDir()}))
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -255,7 +257,7 @@ func TestVerifyHistoryWritesOnlyTheVerifiersGitDir(t *testing.T) {
 		`{"argv": ["bash", "history-probe.sh"], "room": "project_image", "history": true}, ` +
 		`["go", "test", "./..."]], "capture": "none"}`
 	room := &envRoom{}
-	if _, err := Verify(context.Background(), checkout, historyOptions(head, base, recipe, room)); err != nil {
+	if _, err := Verify(context.Background(), checkout, historyOptions(t, head, base, recipe, room)); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if len(room.calls) != 3 {
@@ -325,7 +327,7 @@ func TestVerifyHistoryOnReentryExportsTheHeadsOwnBase(t *testing.T) {
 	head := commits[1]
 	newBase := commitChain(t, checkout, oldBase, []candidateCommit{{"Land other work", map[string]string{"landed.txt": "landed\n"}}})[0]
 	evaluated := commitWithParents(t, checkout, mergedTree(t, checkout, newBase, head), newBase, head)
-	opts := historyOptions(head, newBase, historyProbeRecipe, &ProcRoom{Home: t.TempDir()})
+	opts := historyOptions(t, head, newBase, historyProbeRecipe, &ProcRoom{Home: t.TempDir()})
 	opts.EvaluatedSHA = evaluated
 	res, err := Verify(context.Background(), checkout, opts)
 	if err != nil {
@@ -407,7 +409,7 @@ func TestVerifyHistoryRefusesWhatItCantGiveExactly(t *testing.T) {
 			checkout, base := historyBase(t, nil)
 			head, enforced := tc.setup(t, checkout, base)
 			room := &envRoom{}
-			_, err := Verify(context.Background(), checkout, historyOptions(head, enforced, historyProbeRecipe, room))
+			_, err := Verify(context.Background(), checkout, historyOptions(t, head, enforced, historyProbeRecipe, room))
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Verify = %v, want %v", err, tc.want)
 			}
@@ -424,7 +426,7 @@ func TestVerifyHistoryRefusesWhatItCantGiveExactly(t *testing.T) {
 		checkout, base := historyBase(t, nil)
 		head := commitChain(t, checkout, base, []candidateCommit{{"Add feature one", map[string]string{"feature.txt": "one\n"}}})[0]
 		room := &recordingRoom{}
-		_, err := Verify(context.Background(), checkout, historyOptions(head, base, historyProbeRecipe, room))
+		_, err := Verify(context.Background(), checkout, historyOptions(t, head, base, historyProbeRecipe, room))
 		if !errors.Is(err, ErrRoomUnavailable) {
 			t.Fatalf("Verify = %v, want ErrRoomUnavailable", err)
 		}
@@ -488,7 +490,7 @@ func TestVerifyHistoryRunsTheRepositoryChecks(t *testing.T) {
 			checkout, base := historyBase(t, files)
 			commits := commitChain(t, checkout, base, tc.chain)
 			res, err := Verify(context.Background(), checkout,
-				historyOptions(commits[len(commits)-1], base, recipe, &ProcRoom{Home: t.TempDir()}))
+				historyOptions(t, commits[len(commits)-1], base, recipe, &ProcRoom{Home: t.TempDir()}))
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -577,7 +579,7 @@ func TestVerifyHistoryMatchesAFullCloneOnMerges(t *testing.T) {
 
 			fullLog := runGit(t, checkout, "log", "--reverse", "--format=%H %s", m2+".."+head)
 
-			res, err := Verify(context.Background(), checkout, historyOptions(head, m2, recipe, &ProcRoom{Home: t.TempDir()}))
+			res, err := Verify(context.Background(), checkout, historyOptions(t, head, m2, recipe, &ProcRoom{Home: t.TempDir()}))
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
@@ -618,7 +620,7 @@ func TestVerifyHistoryReportGolden(t *testing.T) {
 	head := commitChain(t, checkout, base, []candidateCommit{{"Add feature one", map[string]string{"feature.txt": "one\n"}}})[0]
 	recipe := `{"commands": [["go", "vet", "./..."], ` +
 		`{"argv": ["bash", "history-probe.sh"], "room": "project_image", "history": true}], "capture": "none"}`
-	res, err := Verify(context.Background(), checkout, historyOptions(head, base, recipe, &envRoom{}))
+	res, err := Verify(context.Background(), checkout, historyOptions(t, head, base, recipe, &envRoom{}))
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}

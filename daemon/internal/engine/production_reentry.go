@@ -920,6 +920,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
 		RecipePath:      verify.DefaultRecipePath,
 		Rooms:           rooms,
+		ScratchParent:   w.verifyScratchDir,
 		ApprovedRecipes: recipes, Changes: changes,
 		// A stable per-cycle time, as on a first cycle: the evidence is
 		// content-addressed and write-once, so a re-run must reproduce it.

@@ -4170,6 +4170,19 @@ another room. The project image's offline proof runs only the
 `project_image` commands, because the image never runs the others, and of
 those only the commands that don't ask for history (below).
 
+**Verification stages its workspaces inside the daemon's root.** Each
+verification makes a private scratch directory (mode 0700) under
+`<state dir>/verify-scratch`, not the temporary directory, and removes it
+when verification returns. Every command's workspace, and a history
+command's `.git`, live there. A cordoned writer runs as the daemon's account
+and must be able to write the temporary directory, so a workspace there could
+change between its exact-tree check and the room's copy or mount; the cordon
+denies writes under the daemon's root. At startup, before any verification
+runs, the daemon removes the `freeside-verify-*` entries a stopped daemon left
+in that directory and leaves any other entry alone. An entry it can't remove
+is logged (`stale verification scratch left in place`) and left; it costs only
+disk, because each verification stages in a fresh directory.
+
 **A command can ask for the candidate's git history.** A `project_image`
 command object may add `"history": true`, so a check such as
 `scripts/check-commit-messages.sh` can read the candidate's commits. The

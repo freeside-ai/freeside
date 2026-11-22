@@ -29,8 +29,8 @@ const (
 )
 
 // Options configures one verification. The zero value of every field
-// except HeadSHA, BaseSHA, InvocationID, RecipeSource, and Rooms selects
-// a documented default.
+// except HeadSHA, BaseSHA, InvocationID, RecipeSource, Rooms, and
+// ScratchParent selects a documented default.
 type Options struct {
 	// HeadSHA is the candidate commit to verify: the importer's
 	// Result.CommitSHA, supplied from the daemon's own records.
@@ -63,6 +63,14 @@ type Options struct {
 	// that names a class absent here fails with ErrRoomUnavailable before
 	// any workspace is materialized.
 	Rooms map[ExecutionClass]Room
+	// ScratchParent is the directory each verification's private scratch
+	// (the git runner's home, the history .git, and every command's
+	// workspace) is created in. A room copies or mounts a workspace after
+	// its exact-tree check, so the caller names a directory a cordoned
+	// writer can't write: one inside the daemon's root, never the
+	// temporary directory, which a cordoned writer must be able to write.
+	// Required, absolute, and clean; there is no default.
+	ScratchParent string
 	// ApprovedRecipes is the trusted policy's approved-recipe set;
 	// publish eligibility of the emitted evidence derives from it. Nil
 	// approves nothing, so evidence is emitted publish-ineligible: the
@@ -157,6 +165,9 @@ func (o Options) validate() error {
 	}
 	if !o.RecipeSource.valid() {
 		return fmt.Errorf("recipe source is unset: %w", ErrInvalidOptions)
+	}
+	if err := validScratchParent(o.ScratchParent); err != nil {
+		return fmt.Errorf("scratch parent: %w: %w", err, ErrInvalidOptions)
 	}
 	if len(o.Rooms) == 0 {
 		return fmt.Errorf("no rooms supplied: %w", ErrInvalidOptions)
