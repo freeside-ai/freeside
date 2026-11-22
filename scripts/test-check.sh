@@ -16,6 +16,21 @@ export DAEMON_TEST_INTEGRATION_PARTITIONS=1
 # The Go cache trim asks go for GOCACHE before any daemon step; the other
 # go stand-ins don't answer that. The trim cases at the end set it themselves.
 export FREESIDE_GOCACHE_LIMIT_GB=0
+# A caller's live-suite variable would keep the caller's HOME in every case.
+for name in $(compgen -e); do
+  if [[ $name == FREESIDE_* && ${name#FREESIDE} == *_LIVE* ]]; then unset "$name"; fi
+done
+# A slot-holding run asks go for these four values before HOME changes; every
+# go stand-in such a run reaches answers `go env` with them, records nothing,
+# and fails that call when GO_ENV_FAIL is set.
+export FAKE_GO_ENV=$TMP/go-env
+mkdir -p "$FAKE_GO_ENV/cache" "$FAKE_GO_ENV/modcache" "$FAKE_GO_ENV/path"
+# shellcheck disable=SC2016 # The stand-ins expand these at run time.
+go_env_answer='if [[ $1 == env ]]; then
+  [[ -z ${GO_ENV_FAIL:-} ]] || exit 1
+  printf "%s\n" "$FAKE_GO_ENV/cache" "$FAKE_GO_ENV/modcache" "$FAKE_GO_ENV/path" "$FAKE_GO_ENV/env"
+  exit 0
+fi'
 trap 'rm -rf "$TMP"' EXIT
 
 pass=0
@@ -517,8 +532,8 @@ esac
 # These children use temporary state only, even when the real machine has
 # daemon suites running. A deadline keeps failed fixtures from hanging CI.
 mkdir "$TMP/local-tests"
-cat >"$TMP/local-tests/go" <<'STUB'
-#!/bin/bash
+{ echo '#!/bin/bash'; echo "$go_env_answer"; } >"$TMP/local-tests/go"
+cat >>"$TMP/local-tests/go" <<'STUB'
 touch "$RUN.started"
 end=$((SECONDS + 30))
 while [[ ! -e $RUN.release ]]; do
@@ -650,8 +665,8 @@ RUN=$TMP/immediate PATH=$test_path DAEMON_TEST_MAX_RUNS=1 GO_RC=42 run_check dae
 assert_rc 42
 
 begin_case "an orphaned test child does not keep the slot"
-cat >"$TMP/local-tests/go" <<'STUB'
-#!/bin/bash
+{ echo '#!/bin/bash'; echo "$go_env_answer"; } >"$TMP/local-tests/go"
+cat >>"$TMP/local-tests/go" <<'STUB'
 if [[ ! -e $RUN.child ]]; then
   sleep 30 &
   echo "$!" >"$RUN.child"
@@ -665,23 +680,33 @@ wait_for "$TMP/orphan-second.log" 'PASS: daemon test'
 kill "$(cat "$TMP/orphan.child")"
 wait "$waiter"
 
-# The stand-in go records its arguments and the GIT_DIR, GOMAXPROCS, and
-# TMPDIR it inherits and, on request, writes through GIT_DIR the way an
-# unscrubbed fixture helper would. The stand-in getconf reports 10 cores.
+# The stand-in go records its arguments and the GIT_DIR, GOMAXPROCS, TMPDIR,
+# HOME, and Go variables it inherits and, on request, writes through GIT_DIR
+# the way an unscrubbed fixture helper would. The stand-in getconf reports 10
+# cores.
 mkdir "$TMP/decoy-tests"
 printf '#!/bin/bash\necho Linux\n' >"$TMP/decoy-tests/uname"
 printf '#!/bin/bash\necho 10\n' >"$TMP/decoy-tests/getconf"
-cat >"$TMP/decoy-tests/go" <<'STUB'
-#!/bin/bash
+{ echo '#!/bin/bash'; echo "$go_env_answer"; } >"$TMP/decoy-tests/go"
+cat >>"$TMP/decoy-tests/go" <<'STUB'
 printf '%s\n' "$@" >"$RUN.args"
 printf '%s\n' "${GIT_DIR-unset}" >"$RUN.git-dir"
 printf '%s\n' "${GOMAXPROCS-unset}" >"$RUN.gomaxprocs"
 printf '%s\n' "${TMPDIR-unset}" >"$RUN.tmpdir"
-if [[ ${TMPDIR-} == *.tmp.noindex ]]; then
-  [[ -d $TMPDIR && -z $(ls -A "$TMPDIR") ]] || exit 5
+printf '%s\n' "${HOME-unset}" >"$RUN.home"
+printf '%s\n' "${GOCACHE-unset}" "${GOMODCACHE-unset}" "${GOPATH-unset}" "${GOENV-unset}" >"$RUN.go-env"
+for scratch in "${TMPDIR-}" "${HOME-}"; do
+  [[ $scratch == *.tmp.noindex || $scratch == *.home.noindex ]] || continue
+  [[ -d $scratch && -z $(ls -A "$scratch") ]] || exit 5
   # A test its timeout killed leaves read-only directories behind.
   [[ -z ${LEAVE_READ_ONLY:-} ]] ||
-    { mkdir -p "$TMPDIR/left/ro" && touch "$TMPDIR/left/ro/f" && chmod 500 "$TMPDIR/left/ro"; } || exit 6
+    { mkdir -p "$scratch/left/ro" && touch "$scratch/left/ro/f" && chmod 500 "$scratch/left/ro"; } || exit 6
+done
+# A test that replaced its HOME with a link must lose only the link. rmdir
+# removes only the empty slot HOME the loop above checked, never a real one.
+if [[ -n ${LINK_HOME:-} ]]; then
+  [[ $HOME == */slots/1.home.noindex ]] || exit 7
+  { rmdir "$HOME" && ln -s "$LINK_HOME" "$HOME"; } || exit 7
 fi
 # Go's version-control stamping in a test build runs git status.
 git status --porcelain >/dev/null || exit 4
@@ -820,6 +845,76 @@ assert_rc 0
   report_failure "TMPDIR without a slot was $(cat "$TMP/tmpdir.tmpdir")"
 [[ ! -e $TMP/tmpdir-off ]] || report_failure 'a run without a slot created state'
 
+# The account home as the user database reports it, which a test that skips
+# HOME (user.Current) would find.
+case $(uname -s) in
+  Darwin) account_home=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{print $2}') ;;
+  *) account_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) ;;
+esac
+
+begin_case "a held slot gives the tests a per-slot .noindex HOME, removed afterwards"
+mkdir -p "$TMP/caller-home"
+RUN=$TMP/home PATH=$decoy_path HOME=$TMP/caller-home DAEMON_TEST_MAX_RUNS=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/home-state run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/home.home") == "$TMP/home-state/slots/1.home.noindex" ]] ||
+  report_failure "HOME was $(cat "$TMP/home.home")"
+if [[ -z $account_home ]]; then
+  report_failure 'neither dscl nor getent reported the account home'
+elif [[ $(cat "$TMP/home.home") == "$account_home" ]]; then
+  report_failure "HOME was the account home $account_home"
+fi
+[[ $(cat "$TMP/home.go-env") == "$(printf '%s\n' "$FAKE_GO_ENV/cache" "$FAKE_GO_ENV/modcache" "$FAKE_GO_ENV/path" "$FAKE_GO_ENV/env")" ]] ||
+  report_failure "the tests got Go variables $(cat "$TMP/home.go-env")"
+[[ ! -e $TMP/home-state/slots/1.home.noindex ]] || report_failure 'the HOME was left behind'
+mkdir -p "$TMP/home-state/slots/1.home.noindex/stale/ro"
+touch "$TMP/home-state/slots/1.home.noindex/stale/ro/f"
+chmod 500 "$TMP/home-state/slots/1.home.noindex/stale/ro"
+RUN=$TMP/home PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 LEAVE_READ_ONLY=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/home-state run_check daemon test
+assert_rc 0
+[[ ! -e $TMP/home-state/slots/1.home.noindex ]] || report_failure 'read-only leftovers survived'
+mkdir -p "$TMP/outside-home/ro"
+touch "$TMP/outside-home/ro/f"
+chmod 500 "$TMP/outside-home/ro"
+RUN=$TMP/home PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 LINK_HOME=$TMP/outside-home \
+  DAEMON_TEST_STATE_DIR=$TMP/home-state run_check daemon test
+assert_rc 0
+[[ ! -L $TMP/home-state/slots/1.home.noindex && -e $TMP/outside-home/ro/f &&
+   $(stat -c %a "$TMP/outside-home/ro" 2>/dev/null || stat -f %Lp "$TMP/outside-home/ro") == 500 ]] ||
+  report_failure 'removing a HOME replaced by a link reached its target'
+chmod 700 "$TMP/outside-home/ro"
+
+begin_case "a run without a slot or with a live-suite variable keeps the caller's HOME"
+RUN=$TMP/home PATH=$decoy_path HOME=$TMP/caller-home DAEMON_TEST_MAX_RUNS=0 \
+  DAEMON_TEST_STATE_DIR=$TMP/home-off run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/home.home") == "$TMP/caller-home" ]] ||
+  report_failure "HOME without a slot was $(cat "$TMP/home.home")"
+[[ $(cat "$TMP/home.go-env") == $'unset\nunset\nunset\nunset' ]] ||
+  report_failure "a run without a slot got Go variables $(cat "$TMP/home.go-env")"
+RUN=$TMP/home PATH=$decoy_path HOME=$TMP/caller-home DAEMON_TEST_MAX_RUNS=1 \
+  FREESIDE_WARD_LIVE_TEST=1 DAEMON_TEST_STATE_DIR=$TMP/home-live run_check daemon test
+assert_rc 0
+assert_contains 'FREESIDE_WARD_LIVE_TEST is set; the tests keep the inherited HOME and run without the sandbox'
+[[ $(cat "$TMP/home.home") == "$TMP/caller-home" ]] ||
+  report_failure "HOME under a live variable was $(cat "$TMP/home.home")"
+[[ $(cat "$TMP/home.tmpdir") == "$TMP/home-live/slots/1.tmp.noindex" ]] ||
+  report_failure "a live run lost the slot TMPDIR: $(cat "$TMP/home.tmpdir")"
+RUN=$TMP/home PATH=$decoy_path HOME=$TMP/caller-home DAEMON_TEST_MAX_RUNS=1 \
+  FREESIDE_WARD_LIVE_TEST='' DAEMON_TEST_STATE_DIR=$TMP/home-live run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/home.home") == "$TMP/home-live/slots/1.home.noindex" ]] ||
+  report_failure "an empty live variable kept HOME $(cat "$TMP/home.home")"
+
+begin_case "a failed go env fails a slot-holding run before the tests"
+rm -f "$TMP/home.args"
+RUN=$TMP/home PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 GO_ENV_FAIL=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/home-state run_check daemon test
+assert_rc 1
+assert_contains 'go env failed'
+[[ ! -e $TMP/home.args ]] || report_failure 'go test ran after go env failed'
+
 begin_case "a misplaced or empty -- is a usage error before go runs"
 for args in 'daemon test --' 'daemon -- ./x' 'daemon build test -- ./x' \
     'daemon test build -- ./x' 'api lint -- ./x'; do
@@ -843,8 +938,8 @@ STUB
   cp "$TMP/prefix/bin/git" "$TMP/prefix/libexec/git-core/git"
   printf '#!/bin/bash\necho Darwin\n' >"$TMP/git-tools/uname"
   printf '#!/bin/bash\necho "%s/prefix/bin/git"\n' "$TMP" >"$TMP/git-tools/xcrun"
-  cat >"$TMP/git-tools/go" <<STUB
-#!/bin/bash
+  { echo '#!/bin/bash'; echo "$go_env_answer"; } >"$TMP/git-tools/go"
+  cat >>"$TMP/git-tools/go" <<STUB
 command -v git >>"$TMP/git-paths"
 printf '%s\n' "\$PATH" >"$TMP/git-environment"
 printf '%s\n' "\$@" >"$TMP/git-args"
@@ -927,6 +1022,10 @@ cat >"$TMP/partition-tests/go" <<'STUB'
 #!/usr/bin/env python3
 import json, os, signal, subprocess, sys
 args = sys.argv[1:]
+if args[:1] == ['env']:
+    root = os.environ['FAKE_GO_ENV']
+    print('\n'.join(root + '/' + name for name in ('cache', 'modcache', 'path', 'env')))
+    sys.exit(0)
 integration = 'module/internal/integration'
 families = ['TestFixtureA', 'TestFixtureB', 'TestFixtureC', 'TestFixtureD']
 with open(os.environ['RUN'] + '.record', 'a') as record:

@@ -110,10 +110,18 @@
 # A queued run names the limit, state directory, and holders every 30 seconds.
 # The local (non-shard) path passes -timeout 30m before the package
 # arguments, so a -timeout after `--` wins. While it holds a slot, the test
-# child gets TMPDIR=<slot>.tmp.noindex, emptied at the start and removed at
-# exit; Spotlight skips a directory named *.noindex. Under a limit above 1 it
-# also gets GOMAXPROCS of cores / limit rounded up, minimum 2, unless
-# GOMAXPROCS is already set. A run without a slot keeps both as inherited.
+# child gets TMPDIR=<slot>.tmp.noindex and HOME=<slot>.home.noindex, each
+# emptied at the start and removed at exit; Spotlight skips a directory named
+# *.noindex. The throwaway HOME means a test that removes os.UserHomeDir()
+# removes only that. So that Go keeps its caches, settings, and downloads,
+# the child also gets GOCACHE, GOMODCACHE, GOPATH, and GOENV as `go env`
+# reports them under the caller's HOME; a failed `go env` fails the step. A
+# run whose environment sets an opt-in live-suite variable (a name that
+# starts with FREESIDE_ and contains _LIVE) keeps the inherited HOME and
+# says so, since live suites drive tools against the real home. Under a
+# limit above 1 the child also gets GOMAXPROCS of cores / limit rounded up,
+# minimum 2, unless GOMAXPROCS is already set. A run without a slot keeps
+# TMPDIR, HOME, and GOMAXPROCS as inherited.
 # Outside CI on macOS, when git resolves to /usr/bin/git, the test step uses
 # xcrun's git through a stable directory containing only git on PATH, with
 # its helpers and config preserved. Other git installations and later steps
@@ -496,13 +504,64 @@ daemon_test_decoy() {
     cp -R "$dir/repo/.git" "$dir/before"
 }
 
-# daemon_test_remove_tmp <dir>: removes a slot's test TMPDIR. A test killed by
-# its timeout skips its cleanup and can leave read-only directories, which
-# would make rm fail on every later run in that slot. chmod -R follows no
-# symbolic links.
+# daemon_test_remove_tmp <dir>: removes a slot's test TMPDIR or HOME. A test
+# killed by its timeout skips its cleanup and can leave read-only
+# directories, which would make rm fail on every later run in that slot.
+# Neither chmod -R nor rm -rf follows a symbolic link inside <dir>, and a
+# test that replaced <dir> itself with a link loses only the link. It refuses
+# any path but an absolute <slot>.tmp.noindex or <slot>.home.noindex, so a
+# mistake upstream can't aim it anywhere else.
 daemon_test_remove_tmp() {
+  if [[ ! $1 =~ ^/.*/slots/[1-9][0-9]*\.(tmp|home)\.noindex$ ]]; then
+    echo "daemon test: refusing to remove '$1', which is not a slot's scratch directory" >&2
+    return 1
+  fi
+  if [[ -L $1 ]]; then
+    rm -f "$1"
+    return
+  fi
   chmod -R u+rwX "$1" 2>/dev/null || :
   rm -rf "$1"
+}
+
+# daemon_test_live_variable: prints the first exported opt-in live-suite
+# variable (a name that starts with FREESIDE_ and contains _LIVE) that is set
+# and non-empty. Live suites need the real home, so such a run keeps it.
+daemon_test_live_variable() {
+  local name
+  for name in $(compgen -e); do
+    if [[ $name == FREESIDE_* && ${name#FREESIDE} == *_LIVE* && -n ${!name} ]]; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+}
+
+# daemon_test_read_go_env: sets daemon_test_gocache, daemon_test_gomodcache,
+# daemon_test_gopath, and daemon_test_goenv from go env while HOME is still
+# the caller's. Exporting them keeps a slot HOME from moving Go's caches,
+# module and toolchain downloads, and `go env -w` settings.
+daemon_test_read_go_env() {
+  local out lines=() line
+  # The trailing marker keeps empty trailing values countable.
+  if ! out=$(cd "$ROOT/daemon" && go env GOCACHE GOMODCACHE GOPATH GOENV && echo end); then
+    echo 'daemon test: go env failed; cannot keep the Go caches under the slot HOME' >&2
+    return 1
+  fi
+  while IFS= read -r line; do lines+=("$line"); done <<<"$out"
+  if ((${#lines[@]} != 5)) || [[ ${lines[4]} != end ]]; then
+    echo "daemon test: go env printed an unexpected answer: $out" >&2
+    return 1
+  fi
+  daemon_test_gocache=${lines[0]} daemon_test_gomodcache=${lines[1]}
+  daemon_test_gopath=${lines[2]} daemon_test_goenv=${lines[3]}
+}
+
+# daemon_test_export_home <home>: exports the slot HOME, with the Go values
+# daemon_test_read_go_env read under the caller's, to the test child.
+daemon_test_export_home() {
+  export HOME=$1 GOCACHE=$daemon_test_gocache GOMODCACHE=$daemon_test_gomodcache \
+    GOPATH=$daemon_test_gopath GOENV=$daemon_test_goenv
 }
 
 # daemon_test_read_partitions: sets daemon_test_partitions, the integration
@@ -562,7 +621,7 @@ daemon_trim_go_cache() {
 }
 
 daemon_test() (
-  local vars decoy tmp='' rc=0
+  local vars decoy tmp='' home='' live rc=0
   daemon_test_slot='' daemon_test_limit=''
   daemon_test_use_real_git
   daemon_test_take_slot
@@ -575,13 +634,22 @@ daemon_test() (
     decoy=$daemon_test_slot.decoy
     # Spotlight skips a directory whose name ends in .noindex.
     tmp=$daemon_test_slot.tmp.noindex
+    live=$(daemon_test_live_variable)
+    if [[ -n $live ]]; then
+      echo "daemon test: $live is set; the tests keep the inherited HOME and run without the sandbox" >&2
+    else
+      home=$daemon_test_slot.home.noindex
+    fi
   else
     decoy=$(mktemp -d "${TMPDIR:-/tmp}/freeside-decoy.XXXXXX") || return 1
   fi
   # Each fixture resolves a relative GIT_DIR against its own directory.
   [[ $decoy == /* ]] || decoy=$PWD/$decoy
   [[ -z $tmp || $tmp == /* ]] || tmp=$PWD/$tmp
-  trap 'rm -rf "$decoy"; [[ -z $tmp ]] || daemon_test_remove_tmp "$tmp"' EXIT
+  [[ -z $home || $home == /* ]] || home=$PWD/$home
+  if [[ -n $home ]]; then daemon_test_read_go_env || return 1; fi
+  trap 'rm -rf "$decoy"; [[ -z $tmp ]] || daemon_test_remove_tmp "$tmp"
+    [[ -z $home ]] || daemon_test_remove_tmp "$home"' EXIT
   if ! daemon_test_decoy "$decoy"; then
     echo "daemon test: cannot build the decoy repository in $decoy" >&2
     return 1
@@ -590,11 +658,16 @@ daemon_test() (
     echo "daemon test: cannot create the test TMPDIR $tmp" >&2
     return 1
   fi
+  if [[ -n $home ]] && ! { daemon_test_remove_tmp "$home" && mkdir -p "$home"; }; then
+    echo "daemon test: cannot create the test HOME $home" >&2
+    return 1
+  fi
   # Bash 3.2 saves a redirection on another descriptor if applied to the
   # function call. Close it inside a subshell so orphaned children can't
   # inherit either the slot descriptor or a saved copy.
   ( exec 9>&-; export GIT_DIR=$decoy/repo/.git/worktrees/wt
     [[ -z $tmp ]] || export TMPDIR=$tmp
+    [[ -z $home ]] || daemon_test_export_home "$home"
     daemon_test_gomaxprocs
     daemon_test_run "$decoy" ) || rc=$?
   if ! diff -r "$decoy/before" "$decoy/repo/.git" >"$decoy/diff" 2>&1; then

@@ -1155,6 +1155,20 @@ Each local run sizes itself to its share of the machine:
   A run without a slot keeps the inherited `TMPDIR`. Spotlight still indexes
   checkouts; add the directory that holds them (for example
   `~/proj/freeside-ai`) under System Settings > Spotlight > Privacy.
+- **Home:** while a run holds a slot, its tests also get
+  `HOME=<state>/slots/<slot>.home.noindex`, emptied and removed the same way.
+  On 2026-11-22 a test cleanup that removed a path it had repointed at
+  `os.UserHomeDir()` deleted a developer's home directory; under a throwaway
+  `HOME` it removes only that. So Go keeps its caches, modules, toolchain
+  downloads, and `go env -w` settings, the step first asks `go env` for
+  `GOCACHE`, `GOMODCACHE`, `GOPATH`, and `GOENV` under your `HOME` and hands
+  the tests those values; a failed `go env` fails the step. The path stays
+  the same from run to run in a slot, so Go's test cache still replays a
+  result that read `HOME`. A run whose environment sets an
+  opt-in live-suite variable (a name that starts with `FREESIDE_` and
+  contains `_LIVE`) keeps your `HOME` and prints a notice naming it, since
+  live suites drive `claude`, `swift`, and `xcodebuild` against their real
+  configuration and caches. A run without a slot keeps the inherited `HOME`.
 
 A full run tests `internal/integration`, which alone would set its wall time,
 as `DAEMON_TEST_INTEGRATION_PARTITIONS` concurrent `-run` partitions (default
