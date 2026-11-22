@@ -537,7 +537,9 @@ struct RunTimelineView: View {
                 }
                 .padding(.leading, 19)
             }
-            if transcriptOpens(invocation, in: timeline) {
+            if RunHistoryPresentation.transcriptOpens(
+                invocation, stages: snapshot.run.stages, reviewRounds: timeline.review?.value1.rounds ?? [])
+            {
                 InvocationTranscriptLink(
                     coordinator: coordinator, runID: snapshot.run.id, invocationID: invocation.invocation_id,
                     title: attemptContext(invocationID: invocation.invocation_id, in: timeline)
@@ -554,38 +556,6 @@ struct RunTimelineView: View {
                 .padding(.leading, 19)
             }
         }
-    }
-
-    /// Rule 13: a writer's transcript opens once the writer has ended. A
-    /// writer is a stage attempt or a round's remediation, never the
-    /// reviewer, whose output the round's own evidence read serves. Ended
-    /// is a status this client knows to be final; a status from a newer
-    /// daemon decodes as `unknown` and shows no link rather than a guess.
-    ///
-    /// A running writer's transcript also opens (#1926), while the daemon
-    /// observes it live, when it is an attempt of an implementation stage:
-    /// the only invocations the daemon reads live. A remediation is one,
-    /// since the daemon runs it as an attempt of an `implement` stage. No
-    /// link shows before the first observation: the engine records one
-    /// within a reconcile pass of the writer starting, and the daemon has
-    /// nothing to serve live before then.
-    private func transcriptOpens(
-        _ invocation: Components.Schemas.InvocationObservation, in timeline: Components.Schemas.RunTimeline
-    ) -> Bool {
-        let id = invocation.invocation_id
-        if invocation.live {
-            return invocation.status == .running
-                && snapshot.run.stages.contains { stage in
-                    RunDisplay.canonicalStageName(stage.name) == Components.Schemas.StageName.implementation.rawValue
-                        && stage.attempts.contains { $0.invocation_id == id }
-                }
-        }
-        let ended: Set<Components.Schemas.ObservedInvocationStatus> = [
-            .completed, .failed, .canceled, .blocked, .gone,
-        ]
-        guard ended.contains(invocation.status) else { return false }
-        return snapshot.run.stages.contains { stage in stage.attempts.contains { $0.invocation_id == id } }
-            || (timeline.review?.value1.rounds ?? []).contains { $0.remediation?.value1.invocation_id == id }
     }
 
     private func transcriptOutcome(
@@ -768,6 +738,40 @@ enum RunHistoryPresentation {
     ) -> [Components.Schemas.RunReviewRound] {
         guard let facts else { return [] }
         return Array(facts.rounds.reversed())
+    }
+
+    /// Rule 13: a writer's transcript opens once the writer has ended. A
+    /// writer is a stage attempt or a round's remediation, never the
+    /// reviewer, whose output the round's own evidence read serves. Ended
+    /// is a status this client knows to be final; a status from a newer
+    /// daemon decodes as `unknown` and shows no link rather than a guess.
+    ///
+    /// A running writer's transcript also opens (#1926), while the daemon
+    /// observes it live, when it is an attempt of an implementation stage:
+    /// the only invocations the daemon reads live. A remediation is one,
+    /// since the daemon runs it as an attempt of an `implement` stage. No
+    /// link shows before the first observation: the engine records one
+    /// within a reconcile pass of the writer starting, and the daemon has
+    /// nothing to serve live before then.
+    static func transcriptOpens(
+        _ invocation: Components.Schemas.InvocationObservation,
+        stages: [Components.Schemas.Stage],
+        reviewRounds: [Components.Schemas.RunReviewRound]
+    ) -> Bool {
+        let id = invocation.invocation_id
+        if invocation.live {
+            return invocation.status == .running
+                && stages.contains { stage in
+                    RunDisplay.canonicalStageName(stage.name) == Components.Schemas.StageName.implementation.rawValue
+                        && stage.attempts.contains { $0.invocation_id == id }
+                }
+        }
+        let ended: Set<Components.Schemas.ObservedInvocationStatus> = [
+            .completed, .failed, .canceled, .blocked, .gone,
+        ]
+        guard ended.contains(invocation.status) else { return false }
+        return stages.contains { stage in stage.attempts.contains { $0.invocation_id == id } }
+            || reviewRounds.contains { $0.remediation?.value1.invocation_id == id }
     }
 
     /// The row label for an attempt or review round, shared by the decision
