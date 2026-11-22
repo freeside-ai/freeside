@@ -394,12 +394,15 @@ package enum RunDisplay {
         timeline.admissions.last { $0.kind == .execution && $0.role?.value1 == role }
     }
 
-    /// The admitting backend in words. The backend is an open string on the
-    /// wire; a class this client does not know shows its daemon name, which
-    /// is what `freesided doctor` prints.
+    /// The admitting backend in words. Each known class leads with warded or
+    /// cordoned, because a cordoned run is never shown as warded
+    /// (`docs/plan.md` §5.7, Cordoned Runs). The backend is an open string on
+    /// the wire; a class this client does not know shows its daemon name,
+    /// which is what `freesided doctor` prints.
     package static func isolationLabel(_ backend: String) -> String {
         switch backend {
-        case "fresh_vm_read_only_volume_handoff": "Fresh VM, read-only volume handoff"
+        case "fresh_vm_read_only_volume_handoff": "Warded: fresh VM, read-only volume handoff"
+        case "cordoned_host_process": "Cordoned: host process on the owner's account"
         default: backend
         }
     }

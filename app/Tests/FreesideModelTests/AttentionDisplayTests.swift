@@ -545,7 +545,7 @@ import Testing
                     "Failed", "Invalid configuration", "Implementation", "inv-execution_failure", "Claude Code",
                     "claude-opus-5-5", "High", "anthropic-a/claude_code", "sha256:eeeeeeeeeeee…",
                     "platform-team", "Subscription, contained", "Provider only",
-                    "Fresh VM, read-only volume handoff",
+                    "Warded: fresh VM, read-only volume handoff",
                 ])
         // The identifiers render monospaced, the admission's other facts plain.
         #expect(
