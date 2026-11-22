@@ -31,6 +31,9 @@ func testConfig(t *testing.T) Config {
 		OwnerClaudeConfig: filepath.Join(home, ".config", "claude"),
 		Projects:          filepath.Join(home, "Code"),
 		ProtectedRoots:    []string{daemonRoot, filepath.Join(root, "other-instance")},
+		UserTemp:          filepath.Join(root, "user", "T"),
+		UserCache:         filepath.Join(root, "user", "C"),
+		ReservedPorts:     []int{47100, 47101},
 		AgentCLI:          filepath.Join(root, "bin", "agent"),
 		Path:              []string{"/usr/bin", "/bin"},
 		StallLimit:        time.Minute,
@@ -48,6 +51,7 @@ func TestRenderRulesIsFixedPerConfiguration(t *testing.T) {
 	for name, change := range map[string]func(*Config){
 		"Home":           func(c *Config) { c.Home += "2" },
 		"ProtectedRoots": func(c *Config) { c.ProtectedRoots = append(c.ProtectedRoots, "/zz") },
+		"ReservedPorts":  func(c *Config) { c.ReservedPorts = append(c.ReservedPorts, 47102) },
 	} {
 		other := cfg.clone()
 		change(&other)
@@ -115,6 +119,8 @@ func TestConfigValidateRefusals(t *testing.T) {
 		},
 		"relative PATH entry": func(c *Config) { c.Path = []string{"bin"} },
 		"no stall limit":      func(c *Config) { c.StallLimit = 0 },
+		"unsorted ports":      func(c *Config) { slices.Reverse(c.ReservedPorts) },
+		"port out of range":   func(c *Config) { c.ReservedPorts = []int{0} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

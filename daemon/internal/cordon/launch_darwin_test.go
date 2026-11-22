@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,6 +260,148 @@ func unconfinedLaunchdSubmits(t *testing.T, label string) bool {
 	_ = exec.Command("/bin/launchctl", "remove", control).Run()                                                 //nolint:gosec // G204: the test's own job label
 	if err != nil {
 		t.Logf("launchd probe skipped: unconfined launchctl submit fails here: %v: %s", err, out)
+		return false
+	}
+	return true
+}
+
+// TestHostLaunchProtectsTheDaemonAndVerification probes the rules that keep
+// a launch off the daemon and off verification against stand-ins the test
+// starts outside the launch.
+func TestHostLaunchProtectsTheDaemonAndVerification(t *testing.T) {
+	t.Parallel()
+	f := newHostFixture(t)
+	// A Unix socket path is limited to 104 bytes, so the socket's protected
+	// root is a short directory of its own; t.TempDir's path is too long.
+	// The cleanup removes created, which nothing assigns again.
+	created, err := os.MkdirTemp("", "cdn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(created) })
+	sockRoot, err := filepath.EvalSymlinks(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.ProtectedRoots = append(f.cfg.ProtectedRoots, sockRoot)
+	slices.Sort(f.cfg.ProtectedRoots)
+	// The launch's own TMPDIR sits under the same root, short enough for a
+	// socket of its own.
+	f.cfg.RunsRoot = filepath.Join(sockRoot, "r")
+	f.cfg.ReservedPorts = []int{freePort(t)}
+	open := freePort(t)
+
+	daemonSocket := listenUnix(t, filepath.Join(sockRoot, "control.sock"))
+	otherSocket := listenUnix(t, filepath.Join(filepath.Dir(sockRoot), filepath.Base(sockRoot)+".open"))
+	standInPid := startStandIn(t, f.cfg.AgentCLI)
+
+	probes := []string{
+		probeLine("deny", "signal", strconv.Itoa(standInPid)),
+		probeLine("allow", "signal-child"),
+		probeLine("deny", "connect", daemonSocket),
+		probeLine("allow", "connect", otherSocket),
+		probeLine("allow", "selfsocket"),
+		probeLine("deny", "bind", strconv.Itoa(f.cfg.ReservedPorts[0])),
+		probeLine("allow", "bind", strconv.Itoa(open)),
+		probeLine("deny", "write", filepath.Join(f.cfg.UserTemp, "freeside-verify-job", "planted")),
+		probeLine("deny", "write", filepath.Join(f.cfg.UserCache, "freeside-verify-job", "planted")),
+		probeLine("allow", "write", filepath.Join(f.cfg.UserTemp, "owner-scratch")),
+		probeLine("deny", "rename", f.cfg.UserTemp, f.cfg.UserTemp+"-moved"),
+		probeLine("deny", "write", filepath.Join(f.cfg.Home, "Library/Preferences/.GlobalPreferences.plist")),
+	}
+	for _, dir := range []string{
+		filepath.Join(f.cfg.UserTemp, "freeside-verify-job"), filepath.Join(f.cfg.UserCache, "freeside-verify-job"),
+		filepath.Join(f.cfg.Home, "Library/Preferences"),
+	} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if dir := ownedExecutorDir(t); dir != "" {
+		planted := filepath.Join(dir, fmt.Sprintf("cordon-planted-%d", os.Getpid()))
+		t.Cleanup(func() { _ = os.Remove(planted) })
+		probes = append(probes, probeLine("deny", "write", planted))
+	}
+	if unconfinedAttaches(t, standInPid) {
+		probes = append(probes, probeLine("deny", "attach", strconv.Itoa(standInPid)))
+	}
+	runProbeLaunch(t, f.backend(t), "daemon", probes)
+	if !processLive(t, standInPid) {
+		t.Error("the stand-in outside the launch died")
+	}
+}
+
+// ownedExecutorDir finds a directory under /Library/Freeside the test's
+// account can write, such as an installed executor's Go cache, so the write
+// probe shows the rule refusing it rather than the directory's owner.
+func ownedExecutorDir(t *testing.T) string {
+	t.Helper()
+	executors, _ := filepath.Glob("/Library/Freeside/*/*")
+	for _, dir := range executors {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0o200 == 0 {
+			continue
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) == os.Getuid() {
+			return dir
+		}
+	}
+	t.Log("/Library/Freeside write probe skipped: no installed executor directory this account owns")
+	return ""
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func listenUnix(t *testing.T, path string) string {
+	t.Helper()
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return path
+}
+
+// startStandIn starts a process outside every launch: the test binary, so
+// it isn't a hardened platform binary a task port is refused for anyway.
+func startStandIn(t *testing.T, self string) int {
+	t.Helper()
+	cmd := exec.Command(self, fakeAgentArg, "idle")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// unconfinedAttaches is the attach probe's control: macOS refuses an
+// unentitled task_for_pid until the owner approves developer tools, so a
+// host that refuses it unconfined can't show the rules refused it.
+func unconfinedAttaches(t *testing.T, pid int) bool {
+	t.Helper()
+	out, err := exec.Command("/usr/bin/vmmap", "-summary", strconv.Itoa(pid)).CombinedOutput() //nolint:gosec // G204: vmmap on the test's stand-in pid
+	if err != nil {
+		t.Logf("attach probe skipped: unconfined vmmap fails here: %v: %.200s", err, out)
 		return false
 	}
 	return true

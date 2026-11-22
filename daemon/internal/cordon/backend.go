@@ -63,6 +63,9 @@ type conformanceConfiguration struct {
 	OwnerClaudeConfig string   `json:"owner_claude_config"`
 	Projects          string   `json:"projects"`
 	ProtectedRoots    []string `json:"protected_roots"`
+	UserTemp          string   `json:"user_temp"`
+	UserCache         string   `json:"user_cache"`
+	ReservedPorts     []int    `json:"reserved_ports"`
 	AgentCLI          string   `json:"agent_cli"`
 	Path              []string `json:"path"`
 	StallLimit        int64    `json:"stall_limit_ns"`
@@ -85,6 +88,9 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		OwnerClaudeConfig: b.cfg.OwnerClaudeConfig,
 		Projects:          b.cfg.Projects,
 		ProtectedRoots:    b.cfg.ProtectedRoots,
+		UserTemp:          b.cfg.UserTemp,
+		UserCache:         b.cfg.UserCache,
+		ReservedPorts:     b.cfg.ReservedPorts,
 		AgentCLI:          b.cfg.AgentCLI,
 		Path:              b.cfg.Path,
 		StallLimit:        int64(b.cfg.StallLimit),

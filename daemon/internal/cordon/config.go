@@ -27,7 +27,8 @@ type Config struct {
 	// directory, its own included.
 	RunsRoot string
 	// Home is the owner's home directory, the base of the fixed secret
-	// denials and the launch's HOME.
+	// denials and the launch's HOME. It must be the account's own home,
+	// because cfprefsd writes the global preferences there for the launch.
 	Home string
 	// OwnerClaudeConfig is the owner's own Claude configuration directory,
 	// denied to the launch, which runs with a Freeside-owned one.
@@ -36,11 +37,20 @@ type Config struct {
 	// .env files are denied.
 	Projects string
 	// ProtectedRoots are denied to the launch for listing, contents, and
-	// writes: the daemon's root, every other configured instance root, and
-	// any other directory the daemon or verification trusts. Metadata stays
-	// readable, because freesided resolves its default root with lstat.
-	// Sorted and unique.
+	// writes, and for connecting to a Unix socket under them: the daemon's
+	// root, every other configured instance root, and any other directory
+	// the daemon or verification trusts. Metadata stays readable, because
+	// freesided resolves its default root with lstat. Sorted and unique.
 	ProtectedRoots []string
+	// UserTemp and UserCache are the owner's per-user temporary and cache
+	// directories (confstr's DARWIN_USER_TEMP_DIR and DARWIN_USER_CACHE_DIR),
+	// under which each verification job has its own freeside-verify-
+	// directory the launch can't write.
+	UserTemp  string
+	UserCache string
+	// ReservedPorts are the ports verification jobs reserve, which the
+	// launch can't bind. Sorted and unique.
+	ReservedPorts []int
 	// AgentCLI is the absolute path of the pinned agent CLI.
 	AgentCLI string
 	// Path is the launch's PATH: absolute directories, in search order.
@@ -61,6 +71,8 @@ func (c Config) validate() error {
 		{"Home", c.Home},
 		{"OwnerClaudeConfig", c.OwnerClaudeConfig},
 		{"Projects", c.Projects},
+		{"UserTemp", c.UserTemp},
+		{"UserCache", c.UserCache},
 		{"AgentCLI", c.AgentCLI},
 	}
 	for _, f := range single {
@@ -90,6 +102,12 @@ func (c Config) validate() error {
 	}) {
 		return fmt.Errorf("%w: RunsRoot %q must be inside a protected root", ErrInvalidConfig, c.RunsRoot)
 	}
+	for i, port := range c.ReservedPorts {
+		if port < 1 || port > 65535 || (i > 0 && port <= c.ReservedPorts[i-1]) {
+			return fmt.Errorf("%w: reserved ports must be sorted, unique, and in 1-65535, %d at %d",
+				ErrInvalidConfig, port, i)
+		}
+	}
 	if len(c.Path) == 0 {
 		return fmt.Errorf("%w: Path is required", ErrInvalidConfig)
 	}
@@ -116,6 +134,7 @@ func (c Config) validate() error {
 // change a backend's configuration after New validated it.
 func (c Config) clone() Config {
 	c.ProtectedRoots = slices.Clone(c.ProtectedRoots)
+	c.ReservedPorts = slices.Clone(c.ReservedPorts)
 	c.Path = slices.Clone(c.Path)
 	return c
 }

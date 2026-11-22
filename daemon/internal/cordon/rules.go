@@ -40,16 +40,26 @@ func RenderRules(cfg Config) []byte {
 	}
 	b.WriteString(")\n\n")
 	b.WriteString(";; The configured protected roots (Config.ProtectedRoots), sorted. Metadata\n")
-	b.WriteString(";; stays readable; contents and writes are denied.\n")
+	b.WriteString(";; stays readable; contents, writes, and Unix-socket connects are denied.\n")
 	for _, root := range cfg.ProtectedRoots {
-		fmt.Fprintf(&b, "(deny file-read-data file-read-xattr file-write*\n  (subpath %s))\n", sbString(root))
+		quoted := sbString(root)
+		fmt.Fprintf(&b, "(deny file-read-data file-read-xattr file-write*\n  (subpath %s))\n", quoted)
+		fmt.Fprintf(&b, "(deny network-outbound\n  (remote unix-socket (subpath %s)))\n", quoted)
+	}
+	if len(cfg.ReservedPorts) > 0 {
+		b.WriteString("\n;; The ports verification reserves (Config.ReservedPorts), sorted. A filter\n")
+		b.WriteString(";; takes one port, so a list can't be a parameter.\n(deny network-bind")
+		for _, port := range cfg.ReservedPorts {
+			fmt.Fprintf(&b, "\n  (local ip \"localhost:%d\")", port)
+		}
+		b.WriteString(")\n")
 	}
 	b.WriteString(tail)
 	return []byte(b.String())
 }
 
 // homePath finds each HOME-relative path rules.sb denies.
-var homePath = regexp.MustCompile(`\(param "HOME"\) "(/[^"]+)"`)
+var homePath = regexp.MustCompile(`\(param "HOME(?:_RE)?"\) "(/[^"]+)"`)
 
 // renameGuards lists, sorted, every directory above a path the rules deny
 // (rules.sb's HOME-relative paths and the configured paths), up to but not
@@ -66,7 +76,7 @@ func renameGuards(cfg Config) []string {
 	for _, m := range homePath.FindAllStringSubmatch(ruleTemplate, -1) {
 		above(cfg.Home + m[1])
 	}
-	for _, path := range append([]string{cfg.Home, cfg.OwnerClaudeConfig, cfg.Projects}, cfg.ProtectedRoots...) {
+	for _, path := range append([]string{cfg.Home, cfg.OwnerClaudeConfig, cfg.Projects, cfg.UserTemp, cfg.UserCache}, cfg.ProtectedRoots...) {
 		guarded[path] = true
 		above(path)
 	}
@@ -89,8 +99,11 @@ func sbString(s string) string {
 func sandboxParams(cfg Config, runRoot, tag string) []string {
 	params := []struct{ name, value string }{
 		{"HOME", cfg.Home},
+		{"HOME_RE", regexp.QuoteMeta(cfg.Home)},
 		{"OWNER_CLAUDE_CONFIG", cfg.OwnerClaudeConfig},
 		{"PROJECTS_RE", regexp.QuoteMeta(cfg.Projects)},
+		{"USER_TEMP_RE", regexp.QuoteMeta(cfg.UserTemp)},
+		{"USER_CACHE_RE", regexp.QuoteMeta(cfg.UserCache)},
 		{"RUN_ROOT", runRoot},
 		{"LAUNCH_TAG", tag},
 	}

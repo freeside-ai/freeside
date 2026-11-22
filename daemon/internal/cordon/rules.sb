@@ -1,7 +1,8 @@
 ;; The cordon rule file a cordoned writer launch runs under (#3466). It is
 ;; the rule file the #3463 spike ended with (docs/spikes/cordoned-writer.sb)
-;; plus a plan §5.7 denial no spike carried: the container runtime's
-;; service. It allows by default and denies a short list. Network and most writes stay open; the network rule
+;; plus the two plan §5.7 denials no spike carried: the container runtime's
+;; service and a Unix socket under a protected root. It allows by default and
+;; denies a short list. Network and most writes stay open; the network rule
 ;; is #3477.
 ;;
 ;; Single-valued inputs arrive as sandbox-exec -D parameters, as
@@ -83,6 +84,37 @@
   (global-name "com.apple.SecurityServer")
   (global-name "com.apple.securityd.xpc"))
 
+;; The daemon and verification (#3526, docs/spikes/cordoned-writer-additions.sb).
+;; A launch reaches neither the daemon, which runs uncordoned beside it, nor
+;; a verification job, which runs on the same account under its own rules.
+;;
+;; Signals reach only processes in this launch's own sandbox: the CLI's
+;; children and their descendants. launchd applies the same check, so
+;; launchctl kickstart -k, kill, stop, and bootout on another job refuse too.
+;; (deny signal (target others)) loads and closes nothing.
+(deny signal)
+(allow signal (target same-sandbox))
+;; No task port for another process, so no debugger attach and no memory
+;; read or write, even after the owner has approved the developer-tools
+;; prompt, which macOS honors for ten hours for every process they run.
+(deny mach-priv-task-port)
+;; The owner's global preference domain, which every process on the account
+;; reads, a verification job among them: its appearance changes what an
+;; unpinned render draws. cfprefsd writes the account's own plist for the
+;; launch, so HOME must be the account's home. Neither rule refuses
+;; `defaults write -g` alone on macOS 27; the two together do.
+(deny user-preference-write (preference-domain "kCFPreferencesAnyApplication"))
+(deny file-write*
+  (regex (string-append "^" (param "HOME_RE") "/Library/Preferences/\\.GlobalPreferences")))
+;; The installed executor's toolchain and caches, which every job reads, and
+;; each job's per-user temporary and cache directories, which its
+;; freeside-verify- suffix names. The owner's directories themselves stay
+;; writable, because a Swift build fails without them.
+(deny file-write*
+  (subpath "/Library/Freeside")
+  (regex (string-append "^" (param "USER_TEMP_RE") "/freeside-verify-"))
+  (regex (string-append "^" (param "USER_CACHE_RE") "/freeside-verify-")))
+
 ;; Other projects' .env, .env.* and .envrc files.
 (deny file-read* file-write*
   (regex (string-append "^" (param "PROJECTS_RE") "/.*/\\.env(rc|\\..*)?$")))
@@ -103,6 +135,10 @@
 ;; file-write-unlink, a run root under PROJECTS couldn't remove a file.
 (allow file-read* file-read-data file-read-xattr file-write* file-write-unlink
   (subpath (param "RUN_ROOT")))
+;; A Unix socket the launch binds in its own directory, which the protected
+;; root's socket denial above would otherwise refuse it.
+(allow network-outbound
+  (remote unix-socket (subpath (param "RUN_ROOT"))))
 
 ;; The run-end proof's tag: only processes under this launch's rules are
 ;; denied its metadata, so sandbox_check finds them however they detached.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,7 @@ func TestMain(m *testing.M) {
 // fakeAgent is the agent CLI's stand-in.
 //
 //	exit CODE        exit with CODE
+//	idle             sleep until killed (a stand-in outside a launch)
 //	env              print the environment, one variable a line
 //	probe            run each probe line from stdin; print ok or FAIL
 //	hop              start a chain of processes that each fork the next and
@@ -47,6 +49,8 @@ func fakeAgent(args []string) int {
 	case "exit":
 		code, _ := strconv.Atoi(args[1])
 		return code
+	case "idle":
+		select {}
 	case "env":
 		for _, kv := range os.Environ() {
 			fmt.Println(kv)
@@ -111,9 +115,9 @@ func startHopChain() error {
 	return exec.Command("/usr/bin/perl", "-e", chain).Run()
 }
 
-// runProbes reads tab-separated probe lines, "deny|allow KIND ARG...", and
-// prints "ok LINE" when the outcome matches or "FAIL LINE: DETAIL" when it
-// doesn't.
+// runProbes reads tab-separated probe lines, "deny|allow|any KIND ARG...",
+// and prints "ok LINE" when the outcome matches or "FAIL LINE: DETAIL" when
+// it doesn't. "any" is for a probe whose effect the test checks itself.
 func runProbes() int {
 	status := 0
 	scanner := bufio.NewScanner(os.Stdin)
@@ -125,7 +129,7 @@ func runProbes() int {
 		}
 		err := probe(fields[1], fields[2:])
 		switch {
-		case fields[0] == "allow" && err == nil, fields[0] == "deny" && errors.Is(err, errDenied):
+		case fields[0] == "allow" && err == nil, fields[0] == "deny" && errors.Is(err, errDenied), fields[0] == "any":
 			fmt.Println("ok", line)
 		default:
 			fmt.Printf("FAIL %s: %v\n", line, err)
@@ -148,9 +152,52 @@ func probe(kind string, args []string) error {
 		return denial(os.WriteFile(args[0], []byte("x"), 0o600))
 	case "rename":
 		return denial(os.Rename(args[0], args[1]))
+	case "selfsocket":
+		// A socket the launch serves and dials in its own TMPDIR.
+		path := filepath.Join(os.Getenv("TMPDIR"), "s.sock")
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = ln.Close() }()
+		conn, err := net.Dial("unix", path) //nolint:gosec // G704: the launch's own socket in its TMPDIR
+		if err == nil {
+			_ = conn.Close()
+		}
+		return denial(err)
 	case "launchd":
 		// A launchd job runs outside the rules; job-creation refuses it.
 		return commandDenial(exec.Command("/bin/launchctl", "submit", "-l", args[0], "--", "/usr/bin/true")) //nolint:gosec // G204: launchctl with the test's own job label
+	case "signal":
+		pid, err := strconv.Atoi(args[0])
+		if err != nil {
+			return err
+		}
+		return denial(syscall.Kill(pid, syscall.SIGCONT))
+	case "signal-child":
+		child := exec.Command("/bin/sleep", "600")
+		if err := child.Start(); err != nil {
+			return err
+		}
+		defer func() { _ = child.Wait() }()
+		return denial(child.Process.Signal(syscall.SIGKILL))
+	case "attach":
+		// vmmap reads another process's memory through its task port.
+		return commandDenial(exec.Command("/usr/bin/vmmap", "-summary", args[0])) //nolint:gosec // G204: vmmap on the test's stand-in pid
+	case "connect":
+		conn, err := net.Dial("unix", args[0])
+		if err == nil {
+			_ = conn.Close()
+		}
+		return denial(err)
+	case "bind":
+		ln, err := net.Listen("tcp", "127.0.0.1:"+args[0])
+		if err == nil {
+			_ = ln.Close()
+		}
+		return denial(err)
+	case "defaults":
+		return commandDenial(exec.Command("/usr/bin/defaults", "write", "-g", args[0], "-string", "planted")) //nolint:gosec // G204: the test's own preference key
 	case "run":
 		return commandDenial(exec.Command(args[0], args[1:]...)) //nolint:gosec // G204: a command the live test names
 	case "gobuild":
