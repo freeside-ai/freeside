@@ -453,9 +453,11 @@ public enum RunFixtures {
         complete: true)
 
     /// What ran a writing invocation, as its execution admission recorded
-    /// it: Claude Code under the operator's subscription.
+    /// it: Claude Code under the operator's subscription, warded unless
+    /// `isolationClass` names another class.
     public static func writerAdmission(
-        _ invocationID: String, role: Components.Schemas.RoleName = .implementer, at admittedAt: Date
+        _ invocationID: String, role: Components.Schemas.RoleName = .implementer, at admittedAt: Date,
+        isolationClass: String = "fresh_vm_read_only_volume_handoff"
     ) -> Components.Schemas.InvocationAdmissionFacts {
         .init(
             invocation_id: invocationID, kind: .execution, role: .init(value1: role),
@@ -469,7 +471,7 @@ public enum RunFixtures {
             cost_owner: "platform-team", lineage_group: "anthropic",
             credential_mode: .init(value1: .subscription_contained),
             egress_profile: .init(value1: .provider_only), operating_mode: .init(value1: .unattended),
-            isolation_class: "fresh_vm_read_only_volume_handoff")
+            isolation_class: isolationClass)
     }
 
     /// What ran a review, as its review admission recorded it: Codex, whose
@@ -756,9 +758,12 @@ public enum RunFixtures {
                     ])),
                 completion: nil,
                 billable_cost_so_far: .init(value1: activeCost),
+                // A cordoned run (#3474): the run page names its class, so it
+                // never reads as warded. Its egress stays provider_only
+                // because the API has no host_open profile yet.
                 admissions: [
-                    writerAdmission("inv-\(activeRunID)-1", at: date(60)),
-                    writerAdmission("inv-\(activeRunID)-2", at: date(1_200)),
+                    writerAdmission("inv-\(activeRunID)-1", at: date(60), isolationClass: "cordoned_host_process"),
+                    writerAdmission("inv-\(activeRunID)-2", at: date(1_200), isolationClass: "cordoned_host_process"),
                     reviewerAdmission(
                         "review-\(activeRunID)-1", at: date(1_800),
                         implementer: .differed, remediator: .unknown),

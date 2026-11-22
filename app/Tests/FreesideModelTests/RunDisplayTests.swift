@@ -446,8 +446,18 @@ import Testing
             rows.map(\.value) == [
                 "Claude Code", "claude-opus-5-5", "High", "anthropic-a/claude_code", "sha256:eeeeeeeeeeee…",
                 "platform-team", "Subscription, contained", "Provider only",
-                "Fresh VM, read-only volume handoff", "Unattended",
+                "Warded: fresh VM, read-only volume handoff", "Unattended",
             ])
+    }
+
+    /// A cordoned invocation names its class on the run page, so a cordoned
+    /// run never reads as warded (`docs/plan.md` §5.7, Cordoned Runs).
+    @Test func aCordonedInvocationReadsAsCordoned() throws {
+        let active = try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        let admission = try #require(RunDisplay.admission(for: "inv-\(RunFixtures.activeRunID)-2", in: active))
+        #expect(
+            RunDisplay.admissionRows(admission).first { $0.label == "Isolation Class" }?.value
+                == "Cordoned: host process on the owner's account")
     }
 
     /// A fact the admission did not record reads as unavailable, never as a
@@ -460,7 +470,7 @@ import Testing
             #expect(values[label] == RunDisplay.unavailable)
         }
         #expect(values["Operating Mode"] == "Attended")
-        #expect(values["Isolation Class"] == "Fresh VM, read-only volume handoff")
+        #expect(values["Isolation Class"] == "Warded: fresh VM, read-only volume handoff")
         var unknown = legacy
         unknown.isolation_class = "future_backend"
         #expect(RunDisplay.admissionRows(unknown).first { $0.label == "Isolation Class" }?.value == "future_backend")
@@ -474,8 +484,9 @@ import Testing
             rows.filter { $0.label == "Independence" }.map(\.value) == [
                 "Differed from implementer", "Unknown against remediator",
             ])
-        // A review admission records no containment facts.
+        // A review admission records no containment facts, so no class.
         #expect(rows.first { $0.label == "Credential Mode" }?.value == RunDisplay.unavailable)
+        #expect(rows.first { $0.label == "Isolation Class" }?.value == RunDisplay.unavailable)
         #expect(rows.first { $0.label == "Enrollment" }?.value == "openai-a/codex_cli")
         #expect(rows.first { $0.label == "Selection" }?.value == "sha256:ffffffffffff…")
         var matched = review
