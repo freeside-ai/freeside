@@ -400,13 +400,33 @@ func (e *Engine) acknowledgeTaskStop(ctx context.Context, retry *taskStopRetry, 
 		TargetDigest: c.TargetDigest, State: state,
 		EvidenceDigest: digest, RecordedAt: time.Now().UTC(),
 	}
-	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+	retire := state == domain.TaskCancellationConfirmed
+	acknowledge := func(tx *store.WriteTx) error {
 		written, err := tx.AcknowledgeTaskCancellation(ctx, ack)
-		if err == nil && !written {
+		if err != nil {
+			return err
+		}
+		if !written {
 			return errReplay
 		}
-		return err
-	})
+		if retire {
+			// The cards this Stop's own cancellation raised retire with
+			// the confirmation; Reconcile catches any raised later.
+			if _, err := RetireStoppedTaskItems(ctx, tx, c.Target.TaskID); err != nil {
+				return fmt.Errorf("%w: %w", errStopItemRetirement, err)
+			}
+		}
+		return nil
+	}
+	err = e.store.Write(ctx, acknowledge)
+	if errors.Is(err, errStopItemRetirement) {
+		// No card cleanup failure may hold back the proven Stop, and its
+		// error would fail every task's pass. Confirm without retiring;
+		// the Reconcile sweep keeps retrying the cards and logging.
+		e.logger.Warn("stopped task item cleanup remains incomplete", "task", c.Target.TaskID, "error", err)
+		retire = false
+		err = e.store.Write(ctx, acknowledge)
+	}
 	if errors.Is(err, store.ErrCancellationBinding) {
 		// A changed episode or epoch cannot inherit this worker's proof.
 		e.settleTaskStop(retry, "task stop acknowledgement refused; not retrying in this process",
