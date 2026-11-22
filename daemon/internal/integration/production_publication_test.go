@@ -996,8 +996,9 @@ func (p *productionPublicationHarness) newEngineForMode(
 			},
 		})
 		options = append(options, engine.WithProductionPublication(engine.ProductionPublicationConfig{
-			WorkDir:   filepath.Join(p.workDir, "production-publication"),
-			Transport: p.transport, Publisher: p.newPublisher(t), Artifacts: p.blobs,
+			WorkDir:          filepath.Join(p.workDir, "production-publication"),
+			VerifyScratchDir: filepath.Join(p.workDir, "verify-scratch"),
+			Transport:        p.transport, Publisher: p.newPublisher(t), Artifacts: p.blobs,
 			ApprovedRecipes:                approvedRecipes,
 			PreparationDigest:              p.preparationDigest,
 			RemediationPromptPackageDigest: p.remediationPromptPackage,

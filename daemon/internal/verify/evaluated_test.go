@@ -198,10 +198,11 @@ func TestVerifyEvaluatedMergeInspectsTheMergedTree(t *testing.T) {
 		room := &recordingRoom{}
 		opts := Options{
 			HeadSHA: head, BaseSHA: advanced,
-			EvaluatedSHA: commitWithParents(t, dir, mergedTree(t, dir, advanced, head), advanced, head),
-			InvocationID: domain.InvocationID("inv-1"),
-			RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
-			Rooms:        imageRooms(room),
+			EvaluatedSHA:  commitWithParents(t, dir, mergedTree(t, dir, advanced, head), advanced, head),
+			InvocationID:  domain.InvocationID("inv-1"),
+			RecipeSource:  ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
+			Rooms:         imageRooms(room),
+			ScratchParent: t.TempDir(),
 		}
 		if _, err := Verify(context.Background(), dir, opts); !errors.Is(err, ErrSymlinkEntrypoint) {
 			t.Fatalf("err = %v, want ErrSymlinkEntrypoint for the merge's entrypoint", err)

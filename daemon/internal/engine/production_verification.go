@@ -646,6 +646,7 @@ func (w *productionPublicationWorkflow) runVerification(
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
 		RecipePath:      verify.DefaultRecipePath,
 		Rooms:           rooms,
+		ScratchParent:   w.verifyScratchDir,
 		ApprovedRecipes: recipes, Changes: imported.Changes,
 		// A stable per-verification time, not a wall clock: the emitted evidence
 		// is content-addressed and write-once, and this checkpoint can re-run, so

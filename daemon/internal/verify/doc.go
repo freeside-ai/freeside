@@ -69,6 +69,8 @@
 //   - flag.go         the verification-control path class and its flagging
 //     (§5.6)
 //   - evidence.go     the verifier-authored report and transcript artifacts
+//   - scratch.go      the scratch parent a verification stages under, and
+//     the startup sweep of scratch a stopped daemon left there
 //   - verify.go       the Verify orchestrator and Result
 //
 // Lane: gauntlet. See docs/plan.md §5.6 (workspace handoff, import, and

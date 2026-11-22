@@ -268,6 +268,9 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	if e.productionPublication != nil {
 		e.productionPublication.launchBound = e.launchBound
 		e.productionPublication.logger = e.logger
+		for _, err := range e.productionPublication.unremovedScratch {
+			e.logger.Warn("stale verification scratch left in place", "error", err)
+		}
 		e.productionPublication.running = e.running
 		e.productionPublication.beginTaskWork = e.BeginRunWork
 		e.productionPublication.claimDispatch = e.claimRunDispatch

@@ -391,9 +391,12 @@ func ComposeClaudeWorkflow(
 		claudeWiring.bindImageUpkeep(imageUpkeep.PendingResolution)
 	}
 	production.Publication = engine.ProductionPublicationConfig{
-		WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
-		Transport: claudeWiring.publicationTransport,
-		Publisher: claudeWiring.publisher, Artifacts: blobs,
+		WorkDir: filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
+		// The state dir, not the seed root: the cordon denies writes under
+		// the daemon's root, and the seed root can sit outside it.
+		VerifyScratchDir: filepath.Join(cfg.StateDir, "verify-scratch"),
+		Transport:        claudeWiring.publicationTransport,
+		Publisher:        claudeWiring.publisher, Artifacts: blobs,
 		ApprovedRecipes:                 cfg.ApprovedRecipes,
 		RepositoryID:                    cfg.Claude.RepositoryID,
 		RemediationPromptPackageDigest:  claudeWiring.remediationPromptPackage,

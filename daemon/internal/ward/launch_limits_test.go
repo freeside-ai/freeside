@@ -396,8 +396,9 @@ func TestVerifyReturnsTheRoomsMemoryLimitKill(t *testing.T) {
 
 	_, err := verify.Verify(t.Context(), checkout, verify.Options{
 		HeadSHA: head, BaseSHA: base, InvocationID: "inv-verify",
-		RecipeSource: verify.ConfigRecipe([]byte(`{"commands": [["verify"]], "capture": "none"}`)),
-		Rooms:        map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: room},
+		RecipeSource:  verify.ConfigRecipe([]byte(`{"commands": [["verify"]], "capture": "none"}`)),
+		Rooms:         map[verify.ExecutionClass]verify.Room{verify.ClassProjectImage: room},
+		ScratchParent: t.TempDir(),
 	})
 	var limit *MemoryLimitError
 	if !errors.As(err, &limit) || limit.Class != LaunchVerification || limit.Size != size {

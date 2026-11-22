@@ -48,11 +48,11 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if err := opts.validate(); err != nil {
 		return Result{}, err
 	}
-	scratch, err := os.MkdirTemp("", "freeside-verify-")
+	scratch, err := os.MkdirTemp(opts.ScratchParent, ScratchPrefix)
 	if err != nil {
 		return Result{}, fmt.Errorf("create verify scratch: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(scratch) }()
+	defer func() { _ = removeScratch(scratch) }()
 	g, err := newGitRunner(ctx, opts.GitPath, checkoutDir, scratch)
 	if err != nil {
 		return Result{}, err
@@ -280,7 +280,7 @@ func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, s
 		writeTranscriptStep(transcript, cmd.Argv, res)
 		// Remove the used workspace before the next materialization so
 		// the scratch does not hold N full checkouts at once.
-		_ = os.RemoveAll(workspace)
+		_ = removeScratch(workspace)
 		if res.ExitCode != 0 {
 			outcome = OutcomeFailed
 			break
