@@ -515,7 +515,9 @@ directory named before it in the same bullet. All under `daemon/`:
   allowlist gates), `internal/projectimage/oci_evidence.go` (decodes
   and verifies the untrusted image archive), and
   `internal/projectimage/builder_vm.go` (stops the image builder and
-  force-deletes the containers a build's reservation label marks).
+  force-deletes the containers a build's reservation label marks), and
+  `internal/cordon/` (the cordoned writer's rule file, its launch, and the
+  run-end proof that kills every process in the launch's sandbox).
 - **Rig cleanup namespace:** `internal/wardname/` (the one definition of
   the runtime names rig cleanup and stale recovery may act on) and
   `internal/daemonlock/rig.go` (admits a bound name only through those
