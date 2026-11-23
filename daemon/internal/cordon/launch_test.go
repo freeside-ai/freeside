@@ -226,7 +226,9 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 		if agent.dir != filepath.Join(cfg.RunsRoot, "run-1", "run", "worktree") {
 			t.Fatalf("agent dir = %s", agent.dir)
 		}
-		if want := append(confinedArgv(cfg, layoutFor(cfg.RunsRoot, "run-1"), cfg.AgentCLI), "-p"); !slices.Equal(agent.argv, want) {
+		want := append(confinedArgv(cfg, layoutFor(cfg.RunsRoot, "run-1"), cfg.AgentCLI),
+			"--settings", `{"sandbox":{"enabled":false}}`, "-p")
+		if !slices.Equal(agent.argv, want) {
 			t.Fatalf("agent argv = %q, want %q", agent.argv, want)
 		}
 	})
@@ -463,6 +465,28 @@ func TestLaunchRefusesAClaimedOrMalformedRunID(t *testing.T) {
 			if _, err := b.Launch(t.Context(), request(id)); err == nil {
 				t.Fatalf("Launch(%q) succeeded", id)
 			}
+		}
+	})
+}
+
+// TestLaunchRefusesACallerCLISettings shows a launch's caller can't set the
+// agent CLI's settings, which would turn its own sandbox back on or
+// replace the fixed settings.
+func TestLaunchRefusesACallerCLISettings(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{host: newFakeHost(), script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
+		b := fakeBackend(t, cfg, l)
+		for i, args := range [][]string{{"--settings", "{}"}, {"-p", `--settings={"sandbox":{"enabled":true}}`}} {
+			req := request(fmt.Sprintf("run-settings-%d", i))
+			req.Args = args
+			if _, err := b.Launch(t.Context(), req); err == nil {
+				t.Fatalf("Launch with %q succeeded", args)
+			}
+		}
+		if len(l.specs) != 0 {
+			t.Fatalf("a refused launch started %d processes", len(l.specs))
 		}
 	})
 }

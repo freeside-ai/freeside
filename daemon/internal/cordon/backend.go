@@ -103,6 +103,7 @@ type conformanceConfiguration struct {
 	ReservedPorts     []int    `json:"reserved_ports"`
 	AgentCLI          string   `json:"agent_cli"`
 	AgentCLISHA256    string   `json:"agent_cli_sha256"`
+	AgentCLISettings  []string `json:"agent_cli_settings"`
 	Path              []string `json:"path"`
 	StallLimit        int64    `json:"stall_limit_ns"`
 	EndGrace          int64    `json:"end_grace_ns"`
@@ -110,8 +111,9 @@ type conformanceConfiguration struct {
 }
 
 // ConfigurationDigest is the stable identity of the configuration a
-// conformance pass proves: the daemon executable and every Config field,
-// with the rule file entered by its digest.
+// conformance pass proves: the daemon executable, the agent CLI's fixed
+// settings, and every Config field, with the rule file entered by its
+// digest.
 func (b *Backend) ConfigurationDigest() domain.Digest {
 	if b == nil || b.rules == nil {
 		return ""
@@ -130,6 +132,7 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		ReservedPorts:     b.cfg.ReservedPorts,
 		AgentCLI:          b.cfg.AgentCLI,
 		AgentCLISHA256:    b.cfg.AgentCLISHA256,
+		AgentCLISettings:  cliSettings,
 		Path:              b.cfg.Path,
 		StallLimit:        int64(b.cfg.StallLimit),
 		EndGrace:          int64(b.cfg.EndGrace),

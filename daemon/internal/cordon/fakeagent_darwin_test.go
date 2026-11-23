@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,8 +27,13 @@ import (
 const fakeAgentArg = "cordon-fake-agent"
 
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && os.Args[1] == fakeAgentArg {
-		os.Exit(fakeAgent(os.Args[2:]))
+	args := os.Args[1:]
+	// A launch passes the CLI's fixed settings first (cliSettings).
+	if len(args) >= len(cliSettings) && slices.Equal(args[:len(cliSettings)], cliSettings) {
+		args = args[len(cliSettings):]
+	}
+	if len(args) > 0 && args[0] == fakeAgentArg {
+		os.Exit(fakeAgent(args[1:]))
 	}
 	os.Exit(m.Run())
 }
