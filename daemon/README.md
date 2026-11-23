@@ -2693,6 +2693,19 @@ one. A launch waiting for its pool slot joins that order only once the slot
 is free, and a launch nothing retries any more, such as a review that failed
 for good, leaves it five minutes after its last refusal.
 
+**A cordoned launch counts against a cap, not the budget** (#3471). A
+cordoned writer has no VM, so its execution admission reserves no memory.
+The instance's `cordoned_launches.max_concurrent` setting (Store Instance
+And Project Settings) caps how many run at once, and **no cordoned launch
+starts until a cap is set.** A cordoned launch counts from its admission
+until its export or outcome is recorded. One over the cap, or with no cap
+set, stays pending under a `cordoned_launch_cap` hold, which names no
+numbers (`freesided settings show` gives the cap) and clears when it
+starts. Free places go to the oldest task first, in an order of their own:
+a launch waiting for a cordoned place never holds back a warded launch
+that fits the budget, and one waiting for memory never holds back a
+cordoned launch under the cap. Usage-pool slots are unchanged.
+
 The publication lane advances independent runs at once (#3214). Each pass
 starts each run's pending tasks in that run's own goroutine and doesn't wait
 for them, so one long verification delays only its own run, and a task
@@ -3050,10 +3063,11 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   project's scope; without it the command works on the instance scope.
 - **The sections.** The instance scope holds `host_tools`, `images`,
   `seed_root`, `prompts`, `agent_tree`, `review`, `judgment`, `timeouts`,
-  `manual_submission_config`, `build`, and `macos_verification`; a
-  project holds `repository` (`repo`, `repository_id`, `base_ref`),
-  `allowed_paths`, `approved_recipe`, `agent_image`,
-  `hand_back_label`, and `writer_class`. A value takes the fields its `settings.json` key
+  `manual_submission_config`, `build`, `macos_verification`, and
+  `cordoned_launches` (`max_concurrent`); a project holds `repository`
+  (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
+  `approved_recipe`, `agent_image`, `hand_back_label`, and
+  `writer_class`. A value takes the fields its `settings.json` key
   has, less the launch-only ones `import` lists below; `agent_image` is
   the file's `images.agent`, and `host_tools.container` is new, because
   `settings.json` doesn't hold it.
@@ -3065,17 +3079,23 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   non-zero, and records nothing. A `repository` whose `repository_id`
   differs from the project's `projects` row is refused.
 - **Only an optional section clears.** `-clear` records a revision that
-  clears `judgment`, `manual_submission_config`, `macos_verification`, or a
-  project's `hand_back_label` or `writer_class`; clearing any other section
-  is refused.
+  clears `judgment`, `manual_submission_config`, `macos_verification`,
+  `cordoned_launches`, or a project's `hand_back_label` or
+  `writer_class`; clearing any other section is refused.
 - **`writer_class` picks the class a project's writers run on.** It is
   `cordoned_host_process` (the cordoned run, the default when unset) or
   `fresh_vm_read_only_volume_handoff` (warded); any other class is refused.
   A task can also require warded (Require A Task's Writers Run Warded). No
   writer admission reads either yet; #3472 routes writers by them.
+- **`cordoned_launches` caps concurrent cordoned launches.** Its one
+  field, `max_concurrent`, is at least 1. With the section unset or
+  cleared, no cordoned launch starts (Bound Container Memory). The
+  deputy's `settings.json` has no key for it, so set it with `set`.
 - **A change takes effect at the next start.** Every `set` prints
   `takes_effect`. Runs will load the records when the daemon starts, until
-  the project gates read them while it runs (#3209).
+  the project gates read them while it runs (#3209). The exception is
+  `cordoned_launches`, which each admission reads from the store, so a
+  set applies from the next admission.
 - **A run re-checks what's stored.** The loader a run composes from folds
   both scopes, refuses a scope that lacks a required section and names it,
   and re-runs every check above against current policy, with the
@@ -3090,8 +3110,9 @@ names the container tool by its bare name and the installed daemon's
 launchd `PATH` need not resolve it, so the import stores an absolute path:
 `-container-bin`, or the lookup of `container` on the command's own
 `PATH`, which a running daemon receives, and it refuses a relative one. It refuses
-when the instance or the file's project already has a revision; change
-sections with `set` after that. It prints both head revisions, the
+when the instance or the file's project already has a revision, other than
+an execution pause or a cordoned launch cap, which the file doesn't carry;
+change sections with `set` after that. It prints both head revisions, the
 project, `takes_effect`, and `not_imported`: the file's keys a run takes
 from its launch instead of the records, except `repository.base_sha`,
 which only preflight reads (`version`, `listen`,

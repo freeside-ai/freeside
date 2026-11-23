@@ -1334,7 +1334,7 @@ below); the macOS verification executor's slots (Section
 the image builder limit (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Project-image
 upkeep); the cap on concurrent cordoned launches (Machine Capacity;
-revision 134, not built yet, #3471 on tracker #3462); and the cap on
+revision 134, #3471); and the cap on
 concurrent cordoned verification jobs (Machine Capacity; revision 135, not
 built yet, tracker #3462). Every container the
 daemon starts on its own counts against the memory budget, and only a command
@@ -1484,8 +1484,8 @@ far more than one machine holds.
   while a task waits on a human (revision 1 item 6). So open tasks are not
   bounded by the machine, and neither Freeside nor the plan caps them
   system-wide.
-- **A count bounds cordoned launches, not the memory budget** (revision 134;
-  not built yet, #3471 on tracker #3462). A cordoned launch has no VM, so it
+- **A count bounds cordoned launches, not the memory budget** (revision 134,
+  #3471). A cordoned launch has no VM, so it
   reserves nothing against the budget. An operator-set cap per instance
   bounds how many run at once, and a launch over the cap leaves its intent
   pending under a visible hold that names the cap, never a lock wait; it
