@@ -213,6 +213,9 @@ func main() {
 		case "macverify":
 			runMacverifyMain(os.Args[2:])
 			return
+		case "cordon":
+			runCordonMain(os.Args[2:])
+			return
 		case "deputy":
 			runDeputyMain(os.Args[2:])
 			return
