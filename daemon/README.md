@@ -4780,9 +4780,16 @@ doctor does not check it. The cordoned host process
 (`cordoned_host_process`, plan §5.7 Cordoned Runs) needs exactly its four
 `supports_cordoned_*` capabilities under `unattended` (secret denial, launch
 denial, daemon protection, and run-end proof) and none under
-`attended_dev`, and it can claim no other class's capability. The class is
-registered only: no backend declares it yet, nothing writes its conformance
-record, and doctor does not check it (tracker #3462). Pass `-operating-mode
+`attended_dev`, and it can claim no other class's capability. A daemon
+with `-cordon-agent-cli` writes its conformance record at every start and
+on every scheduled doctor pass (Cordoned Launches), and doctor reports the
+newest one as `cordoned_conformance`, which names the class, the
+configuration digest, and the record's outcome, generation, and time. The
+finding is report-only: it files no `system_health` item, because a failed
+cordon holds only its own class, never the ward's writers. The daemon's
+pass supplies the digest; a one-shot doctor takes it as
+`-cordon-configuration-digest`, from the `configuration_digest` field of
+the daemon's log record for its latest pass. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
 unattended daemon. Use the `digest` field from that daemon's startup log record
 whose message is `effective reviewer configuration`; it is computed from the
@@ -6715,13 +6722,15 @@ sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, p
 `internal/cordon` runs one writer launch on the daemon's host: the agent
 CLI as the daemon's own account under a Seatbelt rule file, in a seeded
 worktree, ending in a proof that no process of the launch is alive. It also
-exports that worktree as the handoff the importer takes. It is a standalone
-API with no caller yet; the stage driver port, restart recovery (#3468),
-conformance (#3470), and admission (#3472) wire it in. The package doc
-(`internal/cordon/doc.go`) holds the layout and the mechanism; the decision
-records are `devlog/2026-11-22-1236-cordoned-host-launch.md`, for the
-export, `devlog/2026-11-22-2046-cordoned-export.md`, and, for the token,
-`devlog/2026-11-22-2039-cordoned-writer-token.md`.
+exports that worktree as the handoff the importer takes. The daemon
+composes it and proves it, but nothing launches a writer on it yet; the
+stage driver port, restart recovery (#3468), and admission (#3472) wire it
+in. The package doc (`internal/cordon/doc.go`) holds the layout and the
+mechanism; the decision records are
+`devlog/2026-11-22-1236-cordoned-host-launch.md`, for the export,
+`devlog/2026-11-22-2046-cordoned-export.md`, for the token,
+`devlog/2026-11-22-2039-cordoned-writer-token.md`, and, for conformance,
+`devlog/2026-11-22-2144-cordon-conformance-proof.md`.
 
 - **macOS with cgo only.** The run-end proof calls `sandbox_check` through
   cgo. Any other build refuses every launch before it starts anything, with
@@ -6756,7 +6765,8 @@ export, `devlog/2026-11-22-2046-cordoned-export.md`, and, for the token,
   `ctl/transcript` and its stderr to `ctl/stderr`, and both count as activity for the stall
   limit. A launch with a proven end writes `ctl/ended.json` (how it ended,
   its exit code, and the base commit) as its last step. A launch that was
-  blocked or failed before that has none.
+  blocked or failed before that has none, and so has a conformance probe's
+  launch, which shares the launch path but is never exported.
 - **Export.** `Export` runs only for a launch whose end record says it
   exited with code 0, and only once. It writes the daemon's own evidence
   descriptor (stdout as the transcript, plus the sources the caller names
@@ -6777,6 +6787,48 @@ export, `devlog/2026-11-22-2046-cordoned-export.md`, and, for the token,
   kernel forbids them. And the launch can write its own directory, so a
   symlink or hard link it leaves can name any file the account can read,
   which is why the export refuses both.
+- **The agent CLI's own sandbox is off.** Every launch passes
+  `--settings {"sandbox":{"enabled":false}}` ahead of the caller's
+  arguments and refuses a caller's `--settings`, because the CLI's sandbox
+  can't nest under the cordon's and fails every Bash call there. The suite
+  refuses managed settings that set `sandbox`, which would outrank it.
+- **The class is declared only on a recorded pass.** A new backend declares
+  nothing. `Suite.Full` runs `freesided cordon probe`, from a copy of the
+  daemon's own executable, inside real cordoned launches and declares the
+  four capabilities only once its passed record is durable. Every refusal
+  must be the sandbox's own: each target first passes a positive control
+  outside the launch, a failed control fails the pass, and a target the
+  account itself can't reach is left out. The proof binds the rule file,
+  the CLI's SHA-256, and the daemon executable's digest through the
+  configuration digest. A launch with `RequireProof` set first runs the
+  lighter pre-job probe, which passes only while the declaration it began
+  under still stands. Its failure withdraws the declaration and records
+  `failed`, not `superseded`, which the store would read as a re-proof
+  under way, so only a new full pass declares again.
+- **What the suite touches.** It reads the account's secret paths only to
+  see whether they open, and prints nothing a probe read; the environment
+  check names variables, never values. Its signal, launchd, and app
+  probes aim only at its own stand-ins: a `/bin/sleep` whose start time it
+  checks, jobs labeled `com.freeside.cordon-probe.`, and an app bundle in
+  the probe launch's own directory. It removes only the directory each
+  probe launch claimed, after its effect checks ran.
+- **Composition.** With `-driver claude`, `-cordon-agent-cli` and
+  `-cordon-agent-cli-sha256` configure the backend (empty configures none),
+  with `-cordon-projects`, a repeatable `-cordon-protected-root`, and
+  `-cordon-stall-limit`, `-cordon-end-grace`, and
+  `-cordon-end-proof-timeout`. The state directory is always protected and
+  holds the launches under `cordon-runs/`. The daemon's other configured
+  directories (`-seed-root`, `-publication-state-dir`,
+  `-publication-credentials-dir`, `-review-input-root`, and
+  `-macverify-root`) are protected too, since the rules allow what they
+  don't deny, and `-db` must sit inside a protected root. The home and per-user directories come from the user
+  database and `confstr`, never `HOME` or `TMPDIR`; the reserved ports are
+  the macOS verification executor's. The full pass runs at every start,
+  with no restore from an earlier record, and again after the ward's on
+  every scheduled doctor pass. A passed pass logs its configuration
+  digest, the value `freesided doctor -cordon-configuration-digest` takes.
+  A failed pass logs why and leaves the class undeclared; only a record
+  the store didn't take stops startup or the scheduled pass.
 
 The darwin tests launch the test binary as the fake agent, under the real
 rule file, with a fake home under the test's directory; no default test
@@ -6792,7 +6844,11 @@ afterward, and probes the owner's session services, each first run outside
 a launch as its control: it opens and quits Calculator, may create a
 Simulator device (deleted after), runs `container list` and
 `security show-keychain-info`, and bootstraps a launchd job that it boots
-out at the end.
+out at the end. It also runs the whole suite (`Suite.Full`, then the
+pre-job probe) against the real home with the real launchd and Simulator
+host; that writes nothing to the home. The suite's environment check
+fails a pass when the test's environment holds a credential-named
+variable, as an agent harness's may; unset it for the run.
 
 ```sh
 FREESIDE_CORDON_LIVE_TEST=1 bash scripts/check.sh daemon test -- ./internal/cordon/... -run Live
