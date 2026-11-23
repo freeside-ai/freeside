@@ -675,6 +675,8 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 // address and fails here. It deliberately checks structure and identity only;
 // whether the recorded class still satisfies current policy is AdmittedUnder's
 // question, because that answer depends on state this value does not carry.
+// The one class rule it does check is structural: the egress profile and the
+// runner class agree (validateEgressClass).
 func (a ExecutionAdmission) Validate() error {
 	if a.InvocationID == "" {
 		return fmt.Errorf("execution admission invocation_id: %w", ErrEmptyID)
@@ -721,6 +723,9 @@ func (a ExecutionAdmission) Validate() error {
 	if !a.EgressProfile.valid() {
 		return fmt.Errorf("execution admission %s egress_profile %q: %w",
 			a.InvocationID, a.EgressProfile, ErrInvalidEgressProfile)
+	}
+	if err := a.validateEgressClass(); err != nil {
+		return err
 	}
 	if err := a.ImageRef.Validate(); err != nil {
 		return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
@@ -825,14 +830,28 @@ func cloneStageInputSnapshot(in *StageInputSnapshot) *StageInputSnapshot {
 	return &cloned
 }
 
+// validateEgressClass binds the egress profile to the runner class, in every
+// operating mode: a host_ profile is recorded only on the cordoned class, and
+// a cordoned admission always records one, because a cordoned writer has the
+// host's network and the ward enforces none of the host_ profiles (§5.4).
+func (a ExecutionAdmission) validateEgressClass() error {
+	cordoned := a.Backend == string(BackendCordonedHostProcess)
+	if a.EgressProfile.hostNetwork() != cordoned {
+		return fmt.Errorf("execution admission %s egress_profile %q on backend %q: %w",
+			a.InvocationID, a.EgressProfile, a.Backend, ErrInvalidEgressProfile)
+	}
+	return nil
+}
+
 // validateAuthIdentity binds the provider identity to the egress profile: a
 // stage that reaches the provider runs under some identity, and a
 // clean-verification stage reaches no network at all (§5.4), so naming one
-// there would record an identity that was never used. The switch omits
-// default, so a new profile has to decide its stance here.
+// there would record an identity that was never used. A host_open run is a
+// cordoned writer under an enrollment's credential, so it names one too. The
+// switch omits default, so a new profile has to decide its stance here.
 func (a ExecutionAdmission) validateAuthIdentity() error {
 	switch a.EgressProfile {
-	case EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead:
+	case EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead, EgressHostOpen:
 		if a.AuthIdentityID == nil || *a.AuthIdentityID == "" {
 			return fmt.Errorf("execution admission %s auth_identity_id under egress %q: %w",
 				a.InvocationID, a.EgressProfile, ErrEmptyID)

@@ -209,6 +209,17 @@ func TestExecutionAdmissionValidate(t *testing.T) {
 		in.EgressProfile = domain.EgressCleanVerification
 		in.AuthIdentityID = nil
 	}
+	// The egress-class rule reads no mode, so each of its cases runs under
+	// both: the attended default and this unattended record.
+	unattended := func(in *domain.ExecutionAdmissionInput) {
+		profile := domain.Digest("sha256:profile-v1")
+		in.OperatingMode = domain.ModeUnattended
+		in.TrustProfileDigest = &profile
+	}
+	cordoned := func(in *domain.ExecutionAdmissionInput) {
+		in.Backend = string(domain.BackendCordonedHostProcess)
+		in.EgressProfile = domain.EgressHostOpen
+	}
 	cases := []struct {
 		name    string
 		mutate  func(*domain.ExecutionAdmissionInput)
@@ -285,6 +296,29 @@ func TestExecutionAdmissionValidate(t *testing.T) {
 		{"no admitted_at", func(in *domain.ExecutionAdmissionInput) {
 			in.AdmittedAt = time.Time{}
 		}, domain.ErrMissingTimestamp},
+		{"cordoned host_open", cordoned, nil},
+		{"unattended cordoned host_open", func(in *domain.ExecutionAdmissionInput) {
+			unattended(in)
+			cordoned(in)
+		}, nil},
+		{"host_open on the ward class", func(in *domain.ExecutionAdmissionInput) {
+			in.EgressProfile = domain.EgressHostOpen
+		}, domain.ErrInvalidEgressProfile},
+		{"unattended host_open on the ward class", func(in *domain.ExecutionAdmissionInput) {
+			unattended(in)
+			in.EgressProfile = domain.EgressHostOpen
+		}, domain.ErrInvalidEgressProfile},
+		{"cordoned without a host profile", func(in *domain.ExecutionAdmissionInput) {
+			in.Backend = string(domain.BackendCordonedHostProcess)
+		}, domain.ErrInvalidEgressProfile},
+		{"unattended cordoned without a host profile", func(in *domain.ExecutionAdmissionInput) {
+			unattended(in)
+			in.Backend = string(domain.BackendCordonedHostProcess)
+		}, domain.ErrInvalidEgressProfile},
+		{"cordoned host_open without an identity", func(in *domain.ExecutionAdmissionInput) {
+			cordoned(in)
+			in.AuthIdentityID = nil
+		}, domain.ErrEmptyID},
 		{"hydration skipped", func(in *domain.ExecutionAdmissionInput) {
 			in.WorkspaceHydration = domain.WorkspaceHydrationNone
 		}, nil},
@@ -774,6 +808,7 @@ func TestAdmittedUnderCordoned(t *testing.T) {
 	record := func(caps ...domain.RunnerCapability) domain.ExecutionAdmission {
 		in := admissionInput()
 		in.Backend = string(domain.BackendCordonedHostProcess)
+		in.EgressProfile = domain.EgressHostOpen
 		in.OperatingMode = domain.ModeUnattended
 		in.Capabilities = domain.NewCapabilitySnapshot(caps...)
 		in.TrustProfileDigest = &profile

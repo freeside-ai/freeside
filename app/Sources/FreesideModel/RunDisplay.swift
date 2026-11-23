@@ -441,6 +441,7 @@ package enum RunDisplay {
         case .provider_registry: "Provider and package registries"
         case .provider_web_read: "Provider and web read"
         case .clean_verification: "Clean verification"
+        case .host_open: "Host network, open"
         case .unknown: "Unknown"
         }
     }

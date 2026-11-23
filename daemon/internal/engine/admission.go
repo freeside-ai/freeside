@@ -286,6 +286,12 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 					return fmt.Errorf(
 						"with admission: enforceable egress profile %q retains an auth identity", profile)
 				}
+			case domain.EgressHostOpen:
+				// A host profile is a cordoned run's: the ward can't enforce
+				// the host's network, and ExecutionAdmission.Validate refuses
+				// it on any other class.
+				return fmt.Errorf(
+					"with admission: enforceable egress profile %q is a host profile the ward cannot enforce", profile)
 			}
 		}
 		if len(env.EnforceableEgressProfiles) != 0 {
