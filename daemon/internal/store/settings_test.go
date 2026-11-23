@@ -202,6 +202,7 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 		domain.ProjectSectionApprovedRecipe: `"sha256:` + hex64 + `"`,
 		domain.ProjectSectionAgentImage:     `"r/a@sha256:` + hex64 + `"`,
 		domain.ProjectSectionHandBackLabel:  `"needs-rework"`,
+		domain.ProjectSectionWriterClass:    `"cordoned_host_process"`,
 	}
 	for _, section := range domain.AllProjectSettingsSections {
 		if _, err := appendProjectSettings(t, s, "project-a", section, project[section]); err != nil {

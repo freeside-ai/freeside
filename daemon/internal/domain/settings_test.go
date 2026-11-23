@@ -54,6 +54,7 @@ func projectSettingsFixture() domain.ProjectSettings {
 		ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("b", 64)),
 		AgentImage:     settingsImage("agent"),
 		HandBackLabel:  new("needs-rework"),
+		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 	}
 }
 
@@ -261,6 +262,9 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.ProjectSectionApprovedRecipe, `"sha256:abc"`, "approved_recipe is not a sha256 digest"},
 		{domain.ProjectSectionAgentImage, `"registry.local/agent:latest"`, "agent_image is not a digest-pinned image reference"},
 		{domain.ProjectSectionHandBackLabel, `""`, "hand_back_label is required"},
+		{domain.ProjectSectionWriterClass, `"credential_free_host_verification"`, `writer_class "credential_free_host_verification" is not`},
+		{domain.ProjectSectionWriterClass, `"warded"`, `writer_class "warded" is not`},
+		{domain.ProjectSectionWriterClass, `""`, `writer_class "" is not`},
 	} {
 		_, err := domain.NewProjectSettingsRevision(domain.ProjectSettingsInput{
 			ProjectID: "project-widgets", Section: tc.section, Value: json.RawMessage(tc.value), SetBy: "cli:operator",

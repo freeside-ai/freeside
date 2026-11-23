@@ -71,7 +71,9 @@ func RebuildInputs(build domain.BuildSettings) projectimage.BuildInputs {
 // is a valid transport repository and its base ref a branch name, the
 // allowed paths pass engine.ExplicitAllowedPaths (the rule the Claude
 // driver refuses at start), the approved recipe is a sha256 digest, and the
-// hand-back label is a label name. Each refusal names the field. The
+// hand-back label is a label name. The writer class's only rule is the
+// domain's: it names one of the two writer classes. Each refusal names the
+// field. The
 // repository's binding to the project's projects row is store state, which
 // the loader and the store's append check.
 func CheckProjectSettingsSection(settings domain.ProjectSettings, section domain.ProjectSettingsSection) error {
@@ -99,7 +101,7 @@ func CheckProjectSettingsSection(settings domain.ProjectSettings, section domain
 		if publish.ValidateLabelName(*settings.HandBackLabel) != nil {
 			return errors.New("hand_back_label is not a label name")
 		}
-	case domain.ProjectSectionAgentImage:
+	case domain.ProjectSectionAgentImage, domain.ProjectSectionWriterClass:
 	}
 	return nil
 }
