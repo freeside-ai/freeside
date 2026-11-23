@@ -6619,6 +6619,60 @@ sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, p
   ORDER BY id DESC LIMIT 1"
 ```
 
+### Cordoned Launches
+
+`internal/cordon` runs one writer launch on the daemon's host: the agent
+CLI as the daemon's own account under a Seatbelt rule file, in a seeded
+worktree, ending in a proof that no process of the launch is alive. It is a
+standalone API with no caller yet; export (#3467), restart recovery
+(#3468), the credential (#3469), conformance (#3470), and admission (#3472)
+wire it in. The package doc (`internal/cordon/doc.go`) holds the layout and
+the mechanism; the decision record is
+`devlog/2026-11-22-1236-cordoned-host-launch.md`.
+
+- **macOS with cgo only.** The run-end proof calls `sandbox_check` through
+  cgo. Any other build refuses every launch before it starts anything, with
+  `ErrRunEndUnproven`.
+- **What a launch can't do.** Read the owner's secrets, keychain, Claude
+  configuration, or other projects' `.env` files; create a launchd job,
+  write a LaunchAgent, or open an app; reach the Simulator or container
+  services; read, write, or connect to a Unix socket under a protected
+  root; write `/Library/Freeside`, a verification job's `freeside-verify-`
+  directories, or the global preference domain; bind a reserved port; or
+  signal or attach to a process outside its own sandbox. Nor can it rename
+  any directory above a denied path, or remove or rename anything in
+  another project, since a rename moves a denied path out from under its
+  rule. It can still read
+  another process's environment and write the owner's temporary and module
+  cache directories (`docs/spikes/cordoned-verifier.md`, Residuals).
+- **Configuration.** `Config.Home` must be the account's own home: cfprefsd
+  writes the global preferences there for the launch, and on macOS 27 only
+  the preference rule and the file rule together refuse that write. Every
+  path is given resolved, and every field enters the configuration digest.
+- **A launch that can't be proven ended is blocked.** `Launch` returns a
+  `BlockedError` naming how the launch ended (exited, canceled, or
+  stalled); the caller holds the run for a person.
+
+The darwin tests launch the test binary as the fake agent, under the real
+rule file, with a fake home under the test's directory; no default test
+gives a launch, or any path a cleanup removes, the account's home. A test
+that starts a launch skips when `sandbox-exec` fails with
+`sandbox_apply: Operation not permitted`, as it does inside a sandbox with
+any deny rule, such as the test sandbox #3564 adds to `scripts/check.sh` on
+macOS; any other failure fails the test. CI and a bare `go test` have no
+outer sandbox and run them.
+The opt-in live suite uses the account's real home. It writes a test-only
+key to the global preference domain from inside a launch and deletes it
+afterward, and probes the owner's session services, each first run outside
+a launch as its control: it opens and quits Calculator, may create a
+Simulator device (deleted after), runs `container list` and
+`security show-keychain-info`, and bootstraps a launchd job that it boots
+out at the end.
+
+```sh
+FREESIDE_CORDON_LIVE_TEST=1 bash scripts/check.sh daemon test -- ./internal/cordon/... -run Live
+```
+
 ## External Review Replies
 
 With the Claude driver, the daemon checks recorded external-review outcomes

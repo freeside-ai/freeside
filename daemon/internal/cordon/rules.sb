@@ -1,0 +1,147 @@
+;; The cordon rule file a cordoned writer launch runs under (#3466). It is
+;; the rule file the #3463 spike ended with (docs/spikes/cordoned-writer.sb)
+;; plus the two plan §5.7 denials no spike carried: the container runtime's
+;; service and a Unix socket under a protected root. It allows by default and
+;; denies a short list. Network and most writes stay open; the network rule
+;; is #3477.
+;;
+;; Single-valued inputs arrive as sandbox-exec -D parameters, as
+;; daemon/internal/macverify/profile.sb takes them: HOME, OWNER_CLAUDE_CONFIG,
+;; RUN_ROOT (the launch's own directory: worktree, CLI config, TMPDIR), and
+;; LAUNCH_TAG (the path the run-end proof asks about). A parameter that goes
+;; into a regex arrives already quoted, with an _RE suffix. List-valued
+;; inputs, which a parameter can't express, and the directories above every
+;; denied path are rendered in at the marker below in a fixed order
+;; (rules.go). So the bytes stay fixed per configuration, only the
+;; per-launch RUN_ROOT and LAUNCH_TAG vary, and a digest names them.
+;;
+;; Seatbelt applies the last rule that matches, so each allow that carves a
+;; hole follows the deny it narrows, and the tag rule comes last of all.
+(version 1)
+(allow default)
+
+;; A launchd job runs outside this file and outlives the run. A plist in
+;; LaunchAgents is one too, loaded at the owner's next login.
+(deny job-creation)
+(deny lsopen)
+(deny file-write*
+  (subpath (string-append (param "HOME") "/Library/LaunchAgents")))
+
+;; A Simulator device runs outside this file, and the container runtime's
+;; service mounts any volume and reaches every ward.
+(deny mach-lookup
+  (global-name-prefix "com.apple.CoreSimulator.")
+  (global-name-prefix "com.apple.container."))
+
+;; Credentials the owner's tools keep in their home directory.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (subpath (string-append (param "HOME") "/.config/gh"))
+  (literal (string-append (param "HOME") "/.git-credentials"))
+  (literal (string-append (param "HOME") "/.netrc"))
+  (subpath (string-append (param "HOME") "/.aws"))
+  (subpath (string-append (param "HOME") "/.config/gcloud"))
+  (subpath (string-append (param "HOME") "/.azure"))
+  (subpath (string-append (param "HOME") "/.kube"))
+  (literal (string-append (param "HOME") "/.docker/config.json"))
+  (subpath (string-append (param "HOME") "/.codex")))
+
+;; Browser profiles and cookies.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/Google/Chrome"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Firefox"))
+  (subpath (string-append (param "HOME") "/Library/Safari"))
+  (subpath (string-append (param "HOME") "/Library/Cookies")))
+
+;; The owner's own Claude configuration. The launch's CLAUDE_CONFIG_DIR is
+;; Freeside's, under RUN_ROOT, so the CLI never needs these.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/.claude"))
+  (literal (string-append (param "HOME") "/.claude.json"))
+  (subpath (param "OWNER_CLAUDE_CONFIG")))
+
+;; Freeside's own state in its default places: the operator's run roots and
+;; the Apple container volume images, which hold every enrolled setup token.
+;; The configured protected roots are rendered below.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/com.apple.container"))
+  (subpath (string-append (param "HOME") "/.freeside")))
+;; The default daemon roots keep metadata readable: freesided resolves its
+;; default root with lstat to refuse a caller's path inside it. Listing and
+;; contents stay denied.
+(deny file-read-data file-read-xattr file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/Freeside"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Freeside Dev")))
+
+;; The login keychain. Under the rest of this file a tool reads any item
+;; whose access list trusts /usr/bin/security, the owner's own Claude Code
+;; credential among them, with no prompt. Either rule alone closes that; both
+;; stay so a client that reaches securityd another way still meets the file
+;; rule.
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Keychains")))
+(deny mach-lookup
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd.xpc"))
+
+;; The daemon and verification (#3526, docs/spikes/cordoned-writer-additions.sb).
+;; A launch reaches neither the daemon, which runs uncordoned beside it, nor
+;; a verification job, which runs on the same account under its own rules.
+;;
+;; Signals reach only processes in this launch's own sandbox: the CLI's
+;; children and their descendants. launchd applies the same check, so
+;; launchctl kickstart -k, kill, stop, and bootout on another job refuse too.
+;; (deny signal (target others)) loads and closes nothing.
+(deny signal)
+(allow signal (target same-sandbox))
+;; No task port for another process, so no debugger attach and no memory
+;; read or write, even after the owner has approved the developer-tools
+;; prompt, which macOS honors for ten hours for every process they run.
+(deny mach-priv-task-port)
+;; The owner's global preference domain, which every process on the account
+;; reads, a verification job among them: its appearance changes what an
+;; unpinned render draws. cfprefsd writes the account's own plist for the
+;; launch, so HOME must be the account's home. Neither rule refuses
+;; `defaults write -g` alone on macOS 27; the two together do.
+(deny user-preference-write (preference-domain "kCFPreferencesAnyApplication"))
+(deny file-write*
+  (regex (string-append "^" (param "HOME_RE") "/Library/Preferences/\\.GlobalPreferences")))
+;; The installed executor's toolchain and caches, which every job reads, and
+;; each job's per-user temporary and cache directories, which its
+;; freeside-verify- suffix names. The owner's directories themselves stay
+;; writable, because a Swift build fails without them.
+(deny file-write*
+  (subpath "/Library/Freeside")
+  (regex (string-append "^" (param "USER_TEMP_RE") "/freeside-verify-"))
+  (regex (string-append "^" (param "USER_CACHE_RE") "/freeside-verify-")))
+
+;; Other projects' .env, .env.* and .envrc files.
+(deny file-read* file-write*
+  (regex (string-append "^" (param "PROJECTS_RE") "/.*/\\.env(rc|\\..*)?$")))
+;; Nothing under the other projects is removed or renamed, so a project
+;; can't be moved out from under the .env rule and read elsewhere. Writes
+;; in place stay open.
+(deny file-write-unlink
+  (regex (string-append "^" (param "PROJECTS_RE") "/")))
+
+;; @rendered
+
+;; The launch's own directory. It follows every denial above, the protected
+;; roots among them, because a launch's directory sits under the daemon's
+;; root. Last-match holds only between rules on the same operation: a deny
+;; on file-read-data beats a later allow on file-read*, so the allow names
+;; each operation a denial above narrows. Without file-read-data here,
+;; getcwd fails in the worktree, and so does nearly every tool; without
+;; file-write-unlink, a run root under PROJECTS couldn't remove a file.
+(allow file-read* file-read-data file-read-xattr file-write* file-write-unlink
+  (subpath (param "RUN_ROOT")))
+;; A Unix socket the launch binds in its own directory, which the protected
+;; root's socket denial above would otherwise refuse it.
+(allow network-outbound
+  (remote unix-socket (subpath (param "RUN_ROOT"))))
+
+;; The run-end proof's tag: only processes under this launch's rules are
+;; denied its metadata, so sandbox_check finds them however they detached.
+;; Nothing may follow it.
+(deny file-read-metadata
+  (literal (param "LAUNCH_TAG")))
