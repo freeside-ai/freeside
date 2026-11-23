@@ -74,6 +74,21 @@ type Options struct {
 // so an export within it never trips that cap; a ward test pins the fit.
 const DefaultMaxBlobs = 9_000
 
+// DefaultOptions returns the caps every trusted export runs with: the ward's
+// exporter image takes them as freeside-export's flag defaults, and the
+// cordoned backend passes them directly, so both exporters bound a workspace
+// the same way.
+func DefaultOptions() Options {
+	return Options{
+		MaxBlobBytes:          100 << 20,
+		MaxTotalBlobBytes:     1 << 30,
+		MaxBlobs:              DefaultMaxBlobs,
+		MaxEntries:            1_000_000,
+		MaxEvidenceBlobBytes:  100 << 20,
+		MaxEvidenceTotalBytes: 1 << 30,
+	}
+}
+
 // ManifestFilename is the manifest's fixed name under the output
 // directory; blobs live beside it under blobs/sha256/.
 const ManifestFilename = "manifest.json"
