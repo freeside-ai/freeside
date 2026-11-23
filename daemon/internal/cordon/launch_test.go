@@ -21,16 +21,22 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// fakeHost is the kernel as the proof sees it: a set of live members.
+// fakeHost is the kernel as the proof sees it: a set of live members, and
+// the live supervisors, which aren't members.
 type fakeHost struct {
 	mu      sync.Mutex
 	members map[int]bool
+	// supervisors maps each live supervisor's pid to what SIGTERM does to
+	// it.
+	supervisors map[int]func()
 	// killErr, when set, fails the kill of that pid.
 	killErr map[int]error
+	// terminated lists the pids sent SIGTERM.
+	terminated []int
 }
 
 func newFakeHost() *fakeHost {
-	return &fakeHost{members: map[int]bool{}, killErr: map[int]error{}}
+	return &fakeHost{members: map[int]bool{}, supervisors: map[int]func(){}, killErr: map[int]error{}}
 }
 
 func (h *fakeHost) live() ([]hostProcess, error) {
@@ -41,6 +47,9 @@ func (h *fakeHost) live() ([]hostProcess, error) {
 	for pid := range h.members {
 		listed = append(listed, hostProcess{pid: pid, start: int64(pid), settled: true})
 	}
+	for pid := range h.supervisors {
+		listed = append(listed, hostProcess{pid: pid, start: int64(pid), settled: true})
+	}
 	slices.SortFunc(listed, func(a, b hostProcess) int { return a.pid - b.pid })
 	return listed, nil
 }
@@ -48,7 +57,41 @@ func (h *fakeHost) live() ([]hostProcess, error) {
 func (h *fakeHost) same(p hostProcess) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.members[p.pid] && p.start == int64(p.pid), nil
+	return (h.members[p.pid] || h.supervisors[p.pid] != nil) && p.start == int64(p.pid), nil
+}
+
+func (h *fakeHost) lookup(pid int) (hostProcess, bool, error) {
+	if alive, _ := h.same(hostProcess{pid: pid, start: int64(pid)}); !alive {
+		return hostProcess{}, false, nil
+	}
+	return hostProcess{pid: pid, start: int64(pid), settled: true}, true, nil
+}
+
+func (h *fakeHost) terminate(pid int) error {
+	h.mu.Lock()
+	h.terminated = append(h.terminated, pid)
+	term := h.supervisors[pid]
+	h.mu.Unlock()
+	if term != nil {
+		term()
+	}
+	return nil
+}
+
+func (h *fakeHost) setSupervisor(pid int, term func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if term == nil {
+		delete(h.supervisors, pid)
+	} else {
+		h.supervisors[pid] = term
+	}
+}
+
+func (h *fakeHost) sigterms() []int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.terminated)
 }
 
 func (h *fakeHost) member(pid int, _ proofTarget) (bool, error) {
@@ -135,22 +178,36 @@ type fakeLauncher struct {
 	host   *fakeHost
 	script agentScript
 	specs  []processSpec
-	agent  *fakeProcess
+	// secrets holds what each started process could read from its token
+	// pipe, nil for none.
+	secrets [][]byte
+	agent   *fakeProcess
 	// canaryNeverJoins keeps the canary out of the member set.
 	canaryNeverJoins bool
 	// obeyTerm makes the agent exit on SIGTERM.
 	obeyTerm bool
+	// agentStartErr, when set, fails the agent's start.
+	agentStartErr error
 }
 
 func (l *fakeLauncher) start(spec processSpec) (process, error) {
-	// Launch clears the token once the process has started, so keep a copy
-	// of what this one was given.
-	spec.secret = bytes.Clone(spec.secret)
-	l.specs = append(l.specs, spec)
+	// The supervisor closes the token's pipe once the process has started,
+	// so keep what this one could read from it.
+	var secret []byte
+	if spec.secret != nil {
+		var err error
+		if secret, err = io.ReadAll(spec.secret); err != nil {
+			return nil, err
+		}
+	}
+	l.specs, l.secrets = append(l.specs, spec), append(l.secrets, secret)
 	if slices.Contains(spec.argv, canaryProgram) {
 		p := &fakeProcess{host: l.host, id: 100, exited: make(chan int, 1)}
 		l.host.set(p.id, !l.canaryNeverJoins)
 		return p, nil
+	}
+	if l.agentStartErr != nil {
+		return nil, l.agentStartErr
 	}
 	p := &fakeProcess{host: l.host, id: 200, exited: make(chan int, 1), obeyTerm: l.obeyTerm}
 	l.agent = p
@@ -158,6 +215,50 @@ func (l *fakeLauncher) start(spec processSpec) (process, error) {
 	l.host.set(201, true)
 	go l.script(spec, p)
 	return p, nil
+}
+
+// fakeSupervisorPID is the pid an in-process supervisor claims as.
+const fakeSupervisorPID = 300
+
+// startSupervisor runs the supervisor's body in process, as
+// fakeSupervisorPID on the host, with the launcher as its process starter:
+// what RunSupervisor runs in its own process, given what b's newHost
+// returns.
+func (l *fakeLauncher) startSupervisor(b *Backend) func(supervisorSpec) (supervisorProcess, error) {
+	return func(spec supervisorSpec) (supervisorProcess, error) {
+		runsRoot, runID := spec.argv[len(spec.argv)-2], spec.argv[len(spec.argv)-1]
+		ctx, cancel := context.WithCancel(context.Background())
+		l.host.setSupervisor(fakeSupervisorPID, cancel)
+		done := make(chan int, 1)
+		go func() {
+			defer func() { _ = spec.stderr.Close() }()
+			env := superviseEnv{
+				l: layoutFor(runsRoot, runID), runID: runID, start: l.start, secret: spec.secret,
+				self: hostProcess{pid: fakeSupervisorPID, start: fakeSupervisorPID, settled: true},
+			}
+			var err error
+			status := supervisorUnproven
+			if env.host, err = b.newHost(); err == nil {
+				status = env.supervise(ctx, spec.stderr)
+			}
+			l.host.setSupervisor(fakeSupervisorPID, nil)
+			cancel()
+			done <- status
+		}()
+		return fakeSupervisor(done), nil
+	}
+}
+
+type fakeSupervisor chan int
+
+func (s fakeSupervisor) wait() int { return <-s }
+
+// useFakes makes b run on l: its host, its process starter, and an
+// in-process supervisor.
+func useFakes(b *Backend, l *fakeLauncher) {
+	b.newHost = func() (hostProcesses, error) { return l.host, nil }
+	b.start = l.start
+	b.startSupervisor = l.startSupervisor(b)
 }
 
 type fakeSeeder struct{ calls int }
@@ -173,8 +274,7 @@ func fakeBackend(t *testing.T, cfg Config, l *fakeLauncher) *Backend {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.newHost = func() (hostProcesses, error) { return l.host, nil }
-	b.start = l.start
+	useFakes(b, l)
 	return b
 }
 
@@ -278,12 +378,12 @@ func TestLaunchHandsTheTokenToTheAgentAlone(t *testing.T) {
 		if _, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-token")); err != nil {
 			t.Fatalf("Launch: %v", err)
 		}
-		canary, agent := l.specs[0], l.specs[1]
+		canary := l.specs[0]
 		if canary.secret != nil {
 			t.Fatal("the canary was given a secret")
 		}
-		if string(agent.secret) != fixtureToken {
-			t.Fatalf("the agent's secret is %d bytes, not the request's token", len(agent.secret))
+		if string(l.secrets[1]) != fixtureToken {
+			t.Fatalf("the agent's secret is %d bytes, not the request's token", len(l.secrets[1]))
 		}
 		if string(stdin) != "the prompt" {
 			t.Fatalf("the agent's stdin = %q, want the prompt alone", stdin)
@@ -310,8 +410,7 @@ func TestLaunchRefusesAMissingTokenBeforeCreatingAnything(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.newHost = func() (hostProcesses, error) { return l.host, nil }
-		b.start = l.start
+		useFakes(b, l)
 		req := request("run-notoken")
 		req.Token = ward.SetupToken{}
 		if _, err := b.Launch(t.Context(), req); err == nil {
@@ -404,19 +503,97 @@ func TestLaunchStallLimitEndsASilentAgent(t *testing.T) {
 	})
 }
 
+// TestLaunchBlocksWhenItsEndIsUnproven has a member the proof can't kill,
+// after the agent ran and when it never started.
 func TestLaunchBlocksWhenItsEndIsUnproven(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig(t)
-	synctest.Test(t, func(t *testing.T) {
-		host := newFakeHost()
-		host.killErr[201] = syscall.EPERM
-		l := &fakeLauncher{host: host, script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
-		_, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-blocked"))
-		var blocked *BlockedError
-		if !errors.As(err, &blocked) || !errors.Is(err, ErrRunEndUnproven) || blocked.EndedBy != EndedByExited {
-			t.Fatalf("Launch = %v, want a BlockedError wrapping ErrRunEndUnproven", err)
-		}
-	})
+	for _, tc := range []struct {
+		name     string
+		unkilled int
+		startErr error
+	}{
+		{"agent ran", 201, nil},
+		{"agent never started", 100, errors.New("exec failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := testConfig(t)
+			synctest.Test(t, func(t *testing.T) {
+				host := newFakeHost()
+				host.killErr[tc.unkilled] = syscall.EPERM
+				l := &fakeLauncher{host: host, agentStartErr: tc.startErr, script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
+				_, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-blocked"))
+				var blocked *BlockedError
+				if !errors.As(err, &blocked) || !errors.Is(err, ErrRunEndUnproven) || blocked.EndedBy != EndedByExited {
+					t.Fatalf("Launch = %v, want a BlockedError wrapping ErrRunEndUnproven", err)
+				}
+			})
+		})
+	}
+}
+
+// TestLaunchRetriesAFailedCancellation fails the first, or every,
+// cancellation request: Launch keeps waiting rather than return with the
+// run alive, and reports a cancellation that never took once the run ends.
+func TestLaunchRetriesAFailedCancellation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		failures int // -1 fails every request
+		took     bool
+	}{
+		{"retried", 1, true},
+		{"never took", -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := testConfig(t)
+			cfg.StallLimit = 5 * time.Second // bounds the retries a failing row makes
+			synctest.Test(t, func(t *testing.T) {
+				host := newFakeHost()
+				ctx, cancel := context.WithCancel(t.Context())
+				var mu sync.Mutex
+				failures := 0
+				l := &fakeLauncher{host: host, obeyTerm: true, script: func(processSpec, *fakeProcess) {
+					mu.Lock()
+					failures = tc.failures
+					mu.Unlock()
+					cancel()
+				}}
+				b := fakeBackend(t, cfg, l)
+				b.newHost = func() (hostProcesses, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					if failures != 0 {
+						failures--
+						return nil, errors.New("sysctl failed")
+					}
+					return host, nil
+				}
+				got, err := b.Launch(ctx, request("run-retry"))
+				ended, readErr := readEndRecord(layoutFor(cfg.RunsRoot, "run-retry"), "run-retry")
+				if readErr != nil {
+					t.Fatalf("end record: %v", readErr)
+				}
+				if signaled := slices.Contains(host.sigterms(), fakeSupervisorPID); signaled != tc.took {
+					t.Fatalf("supervisor signaled: %v, want %v", signaled, tc.took)
+				}
+				if tc.took {
+					if err != nil || got.EndedBy != EndedByCanceled {
+						t.Fatalf("Launch = %+v, %v; want canceled", got, err)
+					}
+				} else if err == nil || ended.EndedBy != EndedByCanceled {
+					// The marker was written, so the end reads as canceled,
+					// but the supervisor never heard and the stall limit
+					// ended the agent.
+					t.Fatalf("Launch = %+v, %v, end %+v; want the cancellation's failure", got, err, ended)
+				}
+				if alive := host.alive(); len(alive) != 0 {
+					t.Fatalf("members alive after Launch returned: %v", alive)
+				}
+			})
+		})
+	}
 }
 
 func TestLaunchRefusesBeforeStartingWhenNoProofIsPossible(t *testing.T) {

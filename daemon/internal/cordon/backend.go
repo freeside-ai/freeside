@@ -27,10 +27,16 @@ type Backend struct {
 	// copy of that path only once the copy hashes to it, so the probe is the
 	// binary a proof is bound to.
 	daemonPath, daemonDigest string
-	// newHost and start are the run-end proof's kernel queries and the
-	// process starter; tests replace them.
-	newHost func() (hostProcesses, error)
-	start   func(processSpec) (process, error)
+	// newHost, start, and startSupervisor are the run-end proof's kernel
+	// queries, the process starter recovery's canary uses, and the
+	// supervisor starter; tests replace them.
+	newHost         func() (hostProcesses, error)
+	start           func(processSpec) (process, error)
+	startSupervisor func(supervisorSpec) (supervisorProcess, error)
+
+	// detached closes once Detach runs.
+	detached   chan struct{}
+	detachOnce sync.Once
 
 	// proven is the declaration: set only by a recorded, generation-current
 	// passing Suite.Full.
@@ -70,7 +76,8 @@ func New(cfg Config, seeder Seeder) (*Backend, error) {
 	return &Backend{
 		cfg: cfg, rules: RenderRules(cfg), seeder: seeder,
 		daemonPath: daemonPath, daemonDigest: daemonDigest,
-		newHost: newHostProcesses, start: startExec,
+		newHost: newHostProcesses, start: startExec, startSupervisor: startSupervisorExec,
+		detached: make(chan struct{}),
 	}, nil
 }
 

@@ -321,8 +321,9 @@ func passingProbe(spec processSpec, p *fakeProcess) {
 // TestProbeLaunchChecksEffectsBeforeItRemovesTheLaunch shows the effect
 // checks run while the launch's directory, where the stand-ins leave their
 // traces, still exists, and that the directory is gone afterwards. The
-// probe shares the writer's launch path but gets no token, no token
-// descriptor, and no end record.
+// probe shares the writer's launch path, supervisor included, but gets no
+// token and no token descriptor, and its end record names no base, so it
+// never exports.
 func TestProbeLaunchChecksEffectsBeforeItRemovesTheLaunch(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
@@ -338,8 +339,8 @@ func TestProbeLaunchChecksEffectsBeforeItRemovesTheLaunch(t *testing.T) {
 			if _, err := os.Stat(l.ctl); err != nil {
 				t.Errorf("the launch's directory is gone before the effects: %v", err)
 			}
-			if _, err := os.Lstat(l.ended); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("the probe launch wrote an end record: %v", err)
+			if _, err := b.Export(t.Context(), exportRequest(filepath.Base(l.dir))); !errors.Is(err, ErrNotExportable) {
+				t.Errorf("Export of the probe launch = %v, want ErrNotExportable", err)
 			}
 			return nil
 		})

@@ -24,7 +24,8 @@ import (
 
 var (
 	// ErrNotExportable refuses a launch whose end record says it was
-	// canceled, stalled, or exited nonzero: only a clean exit exports.
+	// canceled, stalled, or exited nonzero, or that is a probe's: only a
+	// writer's clean exit exports.
 	ErrNotExportable = errors.New("cordon: the launch did not exit cleanly")
 	// ErrWorktreeReplaced refuses a launch that left run/ or run/worktree
 	// something other than the directory Launch seeded, such as a symlink
@@ -110,6 +111,11 @@ func (b *Backend) Export(ctx context.Context, req ExportRequest) (ExportResult, 
 	}
 	if end.EndedBy != EndedByExited || end.ExitCode != 0 {
 		return ExportResult{}, fmt.Errorf("%w: %s %s with exit code %d", ErrNotExportable, req.RunID, end.EndedBy, end.ExitCode)
+	}
+	// A probe launch records its end too, with no base: only a writer's
+	// launch exports.
+	if end.BaseSHA == "" {
+		return ExportResult{}, fmt.Errorf("%w: %s is not a writer's launch", ErrNotExportable, req.RunID)
 	}
 	if _, err := os.Lstat(l.exportRecord); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {

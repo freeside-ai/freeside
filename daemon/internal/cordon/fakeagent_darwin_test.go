@@ -28,6 +28,11 @@ const fakeAgentArg = "cordon-fake-agent"
 
 func TestMain(m *testing.M) {
 	args := os.Args[1:]
+	// A launch's supervisor runs from the daemon's executable, which in a
+	// test is this binary.
+	if len(args) >= len(superviseVerb) && slices.Equal(args[:len(superviseVerb)], superviseVerb) {
+		os.Exit(RunSupervisor(args[len(superviseVerb):]))
+	}
 	// A launch passes the CLI's fixed settings first (cliSettings).
 	if len(args) >= len(cliSettings) && slices.Equal(args[:len(cliSettings)], cliSettings) {
 		args = args[len(cliSettings):]

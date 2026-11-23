@@ -487,8 +487,7 @@ func TestACordonedExportImports(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.newHost = func() (hostProcesses, error) { return l.host, nil }
-		b.start = l.start
+		useFakes(b, l)
 		req := request("run-import")
 		req.BaseSHA = baseSHA
 		if _, err := b.Launch(t.Context(), req); err != nil {

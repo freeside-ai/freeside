@@ -82,6 +82,20 @@ func (darwinHost) same(p hostProcess) (bool, error) {
 	return int(k.Proc.P_pid) == p.pid && settled(&k.Proc) && startMicros(&k.Proc) == p.start, nil
 }
 
+func (darwinHost) lookup(pid int) (hostProcess, bool, error) {
+	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if errors.Is(err, syscall.EIO) || errors.Is(err, syscall.ESRCH) {
+		return hostProcess{}, false, nil
+	}
+	if err != nil {
+		return hostProcess{}, false, fmt.Errorf("read process %d: %w", pid, err)
+	}
+	if int(k.Proc.P_pid) != pid || k.Proc.P_stat == stateZombie {
+		return hostProcess{}, false, nil
+	}
+	return hostProcess{pid: pid, start: startMicros(&k.Proc), settled: settled(&k.Proc)}, true, nil
+}
+
 // settled reports a process neither being created nor exiting nor a
 // zombie. sandbox_check's answer for a process in transition can't be
 // trusted: a fork chain's links read as unsandboxed while they hand over.
@@ -138,8 +152,12 @@ func checkResult(r C.int, err error) (gone bool, _ error) {
 	return false, fmt.Errorf("sandbox_check: %w", err)
 }
 
-func (darwinHost) kill(pid int) error {
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+func (darwinHost) kill(pid int) error { return signalPid(pid, syscall.SIGKILL) }
+
+func (darwinHost) terminate(pid int) error { return signalPid(pid, syscall.SIGTERM) }
+
+func signalPid(pid int, sig syscall.Signal) error {
+	if err := syscall.Kill(pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
 	return nil
