@@ -21,6 +21,11 @@ for name in $(compgen -e); do
   if [[ $name == FREESIDE_* && ${name#FREESIDE} == *_LIVE* ]]; then unset "$name"; fi
 done
 unset DAEMON_TEST_SANDBOX
+# A slot-holding macOS case resolves HOME for the sandbox, so a case that
+# inherited the caller's HOME failed wherever that directory doesn't exist,
+# such as a project image's recipe run. Cases that test HOME set their own.
+export HOME=$TMP/home
+mkdir -p "$HOME"
 # A slot-holding run asks go for these four values before HOME changes; every
 # go stand-in such a run reaches answers `go env` with them, records nothing,
 # and fails that call when GO_ENV_FAIL is set.
@@ -1024,8 +1029,10 @@ touch "$HOME/probe" && echo slot-home-written >>"$RUN.real"
 STUB
   chmod +x "$TMP/real-sandbox/go"
   rm -f "$TMP/real.real"
+  # The caller's HOME is the account home here, so the profile's REAL_HOME
+  # rule is the one under test, not only its broader /Users rule.
   RUN=$TMP/real PATH=$TMP/real-sandbox:$PATH CI=true ACCOUNT_HOME=$account_home PROBE_ID=$$ \
-    DAEMON_TEST_MAX_RUNS=1 DAEMON_TEST_STATE_DIR=$TMP/real-state run_check daemon test
+    HOME=$account_home DAEMON_TEST_MAX_RUNS=1 DAEMON_TEST_STATE_DIR=$TMP/real-state run_check daemon test
   # In case the sandbox didn't hold, take back the one file the probe names.
   rm -f "$account_home/.freeside-sandbox-probe.$$"
   assert_rc 0
