@@ -66,8 +66,11 @@ type LaunchResult struct {
 	// ExitCode is the agent CLI's exit status, -1 when a signal ended it.
 	ExitCode int
 	EndedBy  EndedBy
-	// TranscriptPath holds the agent's stdout and stderr.
+	// TranscriptPath holds the agent's stdout alone, the stream the
+	// export hands on as transcript evidence, as the ward's is.
 	TranscriptPath string
+	// StderrPath holds the agent's stderr.
+	StderrPath string
 }
 
 // BlockedError is a launch whose end could not be proven: some process it
@@ -95,7 +98,7 @@ type layout struct {
 	runRoot, worktree, config, tmp string
 	// ctl sits outside runRoot, under a protected root, so the launch can
 	// neither read nor write it.
-	ctl, rules, tag, control, transcript string
+	ctl, rules, tag, control, transcript, stderr string
 }
 
 func layoutFor(runsRoot, runID string) layout {
@@ -106,6 +109,7 @@ func layoutFor(runsRoot, runID string) layout {
 		config: filepath.Join(runRoot, "config"), tmp: filepath.Join(runRoot, "tmp"),
 		ctl: ctl, rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
 		control: filepath.Join(ctl, "control"), transcript: filepath.Join(ctl, "transcript"),
+		stderr: filepath.Join(ctl, "stderr"),
 	}
 }
 
@@ -165,6 +169,11 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 		return LaunchResult{}, fmt.Errorf("cordon: create transcript: %w", err)
 	}
 	defer func() { _ = transcript.Close() }()
+	stderr, err := os.OpenFile(l.stderr, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("cordon: create stderr: %w", err)
+	}
+	defer func() { _ = stderr.Close() }()
 
 	target := proofTarget{tag: l.tag, control: l.control}
 	canaryHold, canaryInput := io.Pipe()
@@ -187,13 +196,14 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 		return LaunchResult{}, err
 	}
 
-	activity := newActivityWriter(transcript)
+	activity := newActivity()
 	agent, err := b.start(processSpec{
 		argv:   confinedArgv(b.cfg, l, b.cfg.AgentCLI, req.Args...),
 		dir:    l.worktree,
 		env:    launchEnv(b.cfg, l),
 		stdin:  strings.NewReader(string(req.Prompt)),
-		output: activity,
+		stdout: activity.to(transcript),
+		stderr: activity.to(stderr),
 	})
 	if err != nil {
 		if proofErr := endLaunch(context.WithoutCancel(ctx), host, target, b.cfg.EndProofTimeout); proofErr != nil {
@@ -214,9 +224,9 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 		return LaunchResult{}, fmt.Errorf("cordon: wait for the agent: %w", waitErr)
 	}
 	if err := activity.err(); err != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: write transcript: %w", err)
+		return LaunchResult{}, fmt.Errorf("cordon: write the agent's output: %w", err)
 	}
-	return LaunchResult{ExitCode: exitCode, EndedBy: endedBy, TranscriptPath: l.transcript}, nil
+	return LaunchResult{ExitCode: exitCode, EndedBy: endedBy, TranscriptPath: l.transcript, StderrPath: l.stderr}, nil
 }
 
 func (r LaunchRequest) validate() error {
@@ -307,7 +317,7 @@ type waitResult struct {
 // its output is silent for StallLimit. It returns once the agent itself has
 // exited or, if it outlasts SIGKILL, once EndProofTimeout passes; the
 // proof deals with everything else.
-func (b *Backend) watch(ctx context.Context, agent process, activity *activityWriter) (EndedBy, int, error) {
+func (b *Backend) watch(ctx context.Context, agent process, activity *activity) (EndedBy, int, error) {
 	exited := make(chan waitResult, 1)
 	go func() {
 		code, err := agent.wait()
@@ -352,40 +362,48 @@ func (b *Backend) stop(agent process, exited <-chan waitResult) waitResult {
 	}
 }
 
-// activityWriter copies the agent's output to the transcript and notes when
-// the last byte arrived, which is the stall limit's heartbeat. It keeps
-// accepting output after a write error, so a full disk never stops the
-// agent reading; Launch reports the error once the launch has ended.
-type activityWriter struct {
+// activity notes when the last byte arrived on either of the agent's output
+// streams, which is the stall limit's heartbeat, and keeps the first error
+// writing them to their files. Its streams keep accepting output after a
+// write error, so a full disk never stops the agent reading; Launch reports
+// the error once the launch has ended.
+type activity struct {
 	mu       sync.Mutex
-	w        io.Writer
 	lastByte time.Time
 	writeErr error
 }
 
-func newActivityWriter(w io.Writer) *activityWriter {
-	return &activityWriter{w: w, lastByte: time.Now()}
+func newActivity() *activity {
+	return &activity{lastByte: time.Now()}
 }
 
-func (a *activityWriter) Write(p []byte) (int, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+// to returns a stream that copies to w and counts toward the heartbeat.
+func (a *activity) to(w io.Writer) io.Writer { return activityStream{a: a, w: w} }
+
+type activityStream struct {
+	a *activity
+	w io.Writer
+}
+
+func (s activityStream) Write(p []byte) (int, error) {
+	s.a.mu.Lock()
+	defer s.a.mu.Unlock()
 	if len(p) > 0 {
-		a.lastByte = time.Now()
+		s.a.lastByte = time.Now()
 	}
-	if a.writeErr == nil {
-		_, a.writeErr = a.w.Write(p)
+	if s.a.writeErr == nil {
+		_, s.a.writeErr = s.w.Write(p)
 	}
 	return len(p), nil
 }
 
-func (a *activityWriter) last() time.Time {
+func (a *activity) last() time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.lastByte
 }
 
-func (a *activityWriter) err() error {
+func (a *activity) err() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.writeErr

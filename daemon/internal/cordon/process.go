@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,9 +22,9 @@ type processSpec struct {
 	// stdin is copied to the process until it ends or the process stops
 	// reading. Nil gives it /dev/null.
 	stdin io.Reader
-	// output receives stdout and stderr together. Nil sends them to
-	// /dev/null.
-	output io.Writer
+	// stdout and stderr receive the process's two output streams. Nil
+	// sends a stream to /dev/null.
+	stdout, stderr io.Writer
 }
 
 // process is a started process. Tests substitute their own (Backend.start).
@@ -36,8 +37,8 @@ type process interface {
 	// signalGroup signals the process's group. A group that is gone is not
 	// an error.
 	signalGroup(sig syscall.Signal) error
-	// closeIO waits up to d for the output to reach EOF, then closes the
-	// process's pipes.
+	// closeIO waits up to d for both output streams to reach EOF, then
+	// closes the process's pipes.
 	closeIO(d time.Duration)
 }
 
@@ -45,10 +46,12 @@ type process interface {
 // copies itself, so wait returns when the process exits instead of when the
 // last descendant holding its output does: those are the proof's to end.
 type execProcess struct {
-	cmd        *exec.Cmd
-	cancel     context.CancelFunc
-	stdinW     *os.File
-	outputR    *os.File
+	cmd    *exec.Cmd
+	cancel context.CancelFunc
+	stdinW *os.File
+	// outputs are the read ends of the stdout and stderr pipes the
+	// backend copies; outputDone closes once every copy has finished.
+	outputs    []*os.File
 	outputDone chan struct{}
 }
 
@@ -64,7 +67,7 @@ func startExec(spec processSpec) (process, error) {
 	p := &execProcess{cmd: cmd, cancel: cancel, outputDone: make(chan struct{})}
 	var childEnds []*os.File
 	fail := func(err error) (process, error) {
-		for _, f := range append(childEnds, p.stdinW, p.outputR) {
+		for _, f := range append(append(childEnds, p.stdinW), p.outputs...) {
 			if f != nil {
 				_ = f.Close()
 			}
@@ -80,15 +83,25 @@ func startExec(spec processSpec) (process, error) {
 		cmd.Stdin, p.stdinW = r, w
 		childEnds = append(childEnds, r)
 	}
-	if spec.output != nil {
+	var sinks []io.Writer
+	for _, stream := range []struct {
+		name string
+		sink io.Writer
+		set  func(io.Writer)
+	}{
+		{"stdout", spec.stdout, func(w io.Writer) { cmd.Stdout = w }},
+		{"stderr", spec.stderr, func(w io.Writer) { cmd.Stderr = w }},
+	} {
+		if stream.sink == nil {
+			continue
+		}
 		r, w, err := os.Pipe()
 		if err != nil {
-			return fail(fmt.Errorf("output pipe: %w", err))
+			return fail(fmt.Errorf("%s pipe: %w", stream.name, err))
 		}
-		cmd.Stdout, cmd.Stderr, p.outputR = w, w, r
+		stream.set(w)
 		childEnds = append(childEnds, w)
-	} else {
-		close(p.outputDone)
+		p.outputs, sinks = append(p.outputs, r), append(sinks, stream.sink)
 	}
 	if err := cmd.Start(); err != nil {
 		return fail(err)
@@ -104,12 +117,14 @@ func startExec(spec processSpec) (process, error) {
 			_ = p.stdinW.Close()
 		}()
 	}
-	if spec.output != nil {
-		go func() {
-			defer close(p.outputDone)
-			_, _ = io.Copy(spec.output, p.outputR)
-		}()
+	var copies sync.WaitGroup
+	for i, r := range p.outputs {
+		copies.Go(func() { _, _ = io.Copy(sinks[i], r) })
 	}
+	go func() {
+		copies.Wait()
+		close(p.outputDone)
+	}()
 	return p, nil
 }
 
@@ -132,14 +147,16 @@ func (p *execProcess) signalGroup(sig syscall.Signal) error {
 }
 
 func (p *execProcess) closeIO(d time.Duration) {
-	if p.outputR != nil {
+	if len(p.outputs) > 0 {
 		select {
 		case <-p.outputDone:
 		case <-time.After(d):
 		}
-		_ = p.outputR.Close()
-		<-p.outputDone
+		for _, r := range p.outputs {
+			_ = r.Close()
+		}
 	}
+	<-p.outputDone
 	if p.stdinW != nil {
 		_ = p.stdinW.Close()
 	}

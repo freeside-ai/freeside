@@ -16,6 +16,7 @@
 //	  config/    CLAUDE_CONFIG_DIR, Freeside's, never the owner's
 //	  tmp/       TMPDIR
 //	ctl/       the rule file, the proof's tag and control, the transcript
+//	           (the agent's stdout), and its stderr
 //
 // ctl sits under a protected root and outside RUN_ROOT, so the launch can
 // neither read nor write it. The worktree is untrusted: the daemon runs no
