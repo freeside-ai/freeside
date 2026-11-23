@@ -669,6 +669,12 @@ var (
 	ErrProjectReadinessInconsistent = errors.New("project readiness record is inconsistent")
 )
 
+// Writer class errors (issue #3471).
+var (
+	ErrInvalidWriterClass       = errors.New("not a class a writer may run on")
+	ErrTaskWriterClassNotWarded = errors.New("a task can only require the warded writer class")
+)
+
 // ErrInvalidWorkHoursPeriod refuses a work-hours period outside 1 to
 // MaxWorkHoursDays days or without a time zone (issue #3241).
 var ErrInvalidWorkHoursPeriod = errors.New("invalid work hours period")
