@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import fcntl
+import platform
 import re
 import shlex
 import subprocess
@@ -148,6 +149,8 @@ with open(os.environ['REPORT_CALLS'], 'a') as out:
     out.write(json.dumps(arguments)+'\n')
 if arguments[0] == 'version':
     print('go stand-in')
+elif arguments[0] == 'env':
+    print('\n'.join(os.environ['REPORT_GO_ENV'] + '/' + name for name in ('cache', 'modcache', 'path', 'env')))
 elif arguments[0] == 'list':
     # A build error must reach go test rather than aborting the report preflight.
     if os.environ.get('REPORT_SCENARIO') == 'build' and '-e' not in arguments:
@@ -158,15 +161,18 @@ elif arguments[0] == 'list':
         else:
             print(f'example/{name}\t{Path.cwd() / name}')
 elif arguments[0] == 'test':
-    tmpdir = os.environ.get('TMPDIR')
+    tmpdir, home = os.environ.get('TMPDIR'), os.environ.get('HOME')
     with open(os.environ['REPORT_TEST_ENV'], 'w') as out:
         json.dump(dict(TMPDIR=tmpdir, GOMAXPROCS=os.environ.get('GOMAXPROCS'),
-                       tmpdir_empty=bool(tmpdir) and os.path.isdir(tmpdir) and not os.listdir(tmpdir)), out)
-    if tmpdir and os.environ.get('LEAVE_READ_ONLY'):
-        # A test its timeout killed leaves read-only directories behind.
-        os.makedirs(os.path.join(tmpdir, 'left/ro'))
-        open(os.path.join(tmpdir, 'left/ro/f'), 'w').close()
-        os.chmod(os.path.join(tmpdir, 'left/ro'), 0o500)
+                       tmpdir_empty=bool(tmpdir) and os.path.isdir(tmpdir) and not os.listdir(tmpdir),
+                       HOME=home, home_empty=bool(home) and os.path.isdir(home) and not os.listdir(home),
+                       go=[os.environ.get(name) for name in ('GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOENV')]), out)
+    for scratch in (tmpdir, home):
+        if scratch and scratch.endswith('.noindex') and os.environ.get('LEAVE_READ_ONLY'):
+            # A test its timeout killed leaves read-only directories behind.
+            os.makedirs(os.path.join(scratch, 'left/ro'))
+            open(os.path.join(scratch, 'left/ro/f'), 'w').close()
+            os.chmod(os.path.join(scratch, 'left/ro'), 0o500)
     scenario = os.environ.get('REPORT_SCENARIO', 'pass')
     targets = [arguments[-1]] if arguments[-1].startswith(('example/', './missing-')) else ['example/a', 'example/b']
     for package in targets:
@@ -192,14 +198,33 @@ elif arguments[0] == 'test':
 else:
     sys.exit(9)
 ''')
+    # The stand-in sandbox-exec records each call's arguments, one call per
+    # line, then runs the command after its -f and -D options; SANDBOX_FAIL
+    # fails it as a nested sandbox (nested) or another way (other).
+    sandbox_calls = root / "sandbox-calls"
+    executable(bin_dir / "sandbox-exec", "#!/bin/bash\n"
+               "case ${SANDBOX_FAIL:-} in\n"
+               "  nested) echo 'sandbox-exec: sandbox_apply: Operation not permitted' >&2; exit 71 ;;\n"
+               "  other) echo 'sandbox-exec: profile parse error' >&2; exit 65 ;;\n"
+               "esac\n"
+               f"printf '%s\\n' \"$*\" >>{shlex.quote(str(sandbox_calls))}\n"
+               "while [[ $1 == -f || $1 == -D ]]; do shift 2; done\n"
+               "exec \"$@\"\n")
+    go_env = root / "go-env"
+    caller_home = root / "caller home"
+    caller_home.mkdir()
     # Every case takes its slot from temporary state, never the user's; an
     # explicit limit keeps CI's limit-off default from skipping the slot.
     state = root / "state"
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", REPORT_CALLS=str(calls),
                REPORT_TEST_ENV=str(test_env), REPORT_BINARY=str(test_binary),
-               REPORT_SCENARIO="pass", REPORT_SHARED="no",
-               DAEMON_TEST_STATE_DIR=str(state), DAEMON_TEST_MAX_RUNS="1")
-    env.pop("GOMAXPROCS", None)
+               REPORT_SCENARIO="pass", REPORT_SHARED="no", REPORT_GO_ENV=str(go_env),
+               HOME=str(caller_home), DAEMON_TEST_STATE_DIR=str(state), DAEMON_TEST_MAX_RUNS="1")
+    for name in list(env):
+        if name == "GOMAXPROCS" or name == "DAEMON_TEST_SANDBOX" or (
+                name.startswith("FREESIDE_") and "_LIVE" in name[len("FREESIDE"):]):
+            del env[name]
+    go_values = [str(go_env / name) for name in ("cache", "modcache", "path", "env")]
 
     def run(scenario="pass", *options, shared=False, extra=None):
         calls.write_text("")
@@ -224,17 +249,55 @@ else:
     assert len(test_calls) == 1
     assert test_calls[0][:6] == ['test', '-json', '-count=1', '-timeout', '30m', '-exec']
     slot_tmp = str(state / "slots/1.tmp.noindex")
-    assert json.loads(test_env.read_text()) == dict(TMPDIR=slot_tmp, GOMAXPROCS=None, tmpdir_empty=True)
-    assert not Path(slot_tmp).exists()
+    slot_home = str(state / "slots/1.home.noindex")
+    assert json.loads(test_env.read_text()) == dict(TMPDIR=slot_tmp, GOMAXPROCS=None, tmpdir_empty=True,
+                                                    HOME=slot_home, home_empty=True, go=go_values)
+    assert not Path(slot_tmp).exists() and not Path(slot_home).exists()
+    # On macOS the test child starts under the profile, after one probe.
+    if platform.system() == "Darwin":
+        resolved = os.path.realpath(state / "slots")
+        prefix = (f"-f {script.parent / 'daemon-test.sb'} -D REAL_HOME={os.path.realpath(caller_home)} "
+                  f"-D GOCACHE={os.path.realpath(go_env / 'cache')} -D GOMODCACHE={os.path.realpath(go_env / 'modcache')} "
+                  f"-D SLOT_HOME={resolved}/1.home.noindex -D SLOT_TMP={resolved}/1.tmp.noindex "
+                  f"-D SLOT_DECOY={resolved}/1.decoy")
+        lines = sandbox_calls.read_text().splitlines()
+        assert len(lines) == 2 and lines[0] == prefix + " /usr/bin/true", lines
+        assert lines[1].startswith(f"{prefix} {fake_go} test -json"), lines
+    else:
+        assert not sandbox_calls.exists()
     assert "slot_limit\t1\n" in result.stdout and "gomaxprocs\tdefault\n" in result.stdout
     assert f"tmpdir\t{slot_tmp}\n" in result.stdout
     stale = Path(slot_tmp) / "stale/ro"
     stale.mkdir(parents=True)
     (stale / "f").write_text("")
     stale.chmod(0o500)
+    stale = Path(slot_home) / "stale/ro"
+    stale.mkdir(parents=True)
+    (stale / "f").write_text("")
+    stale.chmod(0o500)
     result, _ = run(extra=dict(LEAVE_READ_ONLY="1"))
     assert result.returncode == 0, result.stderr
-    assert json.loads(test_env.read_text())["tmpdir_empty"] and not Path(slot_tmp).exists()
+    seen = json.loads(test_env.read_text())
+    assert seen["tmpdir_empty"] and seen["home_empty"]
+    assert not Path(slot_tmp).exists() and not Path(slot_home).exists()
+    # A live-suite variable keeps the caller's HOME and skips the sandbox.
+    if sandbox_calls.exists():
+        sandbox_calls.unlink()
+    result, _ = run(extra=dict(FREESIDE_WARD_LIVE_TEST="1"))
+    assert result.returncode == 0 and "FREESIDE_WARD_LIVE_TEST is set" in result.stderr, result.stderr
+    seen = json.loads(test_env.read_text())
+    assert seen["HOME"] == str(caller_home) and seen["TMPDIR"] == slot_tmp and seen["go"] == [None] * 4
+    assert not sandbox_calls.exists()
+    for value in ("2", ""):
+        refused = subprocess.run([sys.executable, str(script), "--go", str(fake_go), "--git", str(fake_git),
+                                  "--daemon", str(daemon)], env=dict(env, DAEMON_TEST_SANDBOX=value),
+                                 text=True, capture_output=True)
+        assert refused.returncode == 2 and "DAEMON_TEST_SANDBOX must be 0 or 1" in refused.stderr
+    try:
+        module.remove_tree(root / "outside.home.noindex")
+        raise AssertionError("remove_tree accepted a path outside a slots directory")
+    except ValueError:
+        pass
     outside = root / "outside"
     (outside / "ro").mkdir(parents=True)
     outside.chmod(0o500)
@@ -254,6 +317,24 @@ else:
     result, _ = run(extra=dict(DAEMON_TEST_MAX_RUNS="0", DAEMON_TEST_STATE_DIR=str(off), TMPDIR=str(root)))
     assert result.returncode == 0 and not off.exists()
     assert json.loads(test_env.read_text())["TMPDIR"] == str(root)
+    assert json.loads(test_env.read_text())["HOME"] == str(caller_home)
+
+    # The sandbox prefix on any platform, through the stand-in.
+    probe_env = dict(env)
+    paths = dict(REAL_HOME=caller_home, GOCACHE=go_env, GOMODCACHE=go_env,
+                 SLOT_HOME=root, SLOT_TMP=root, SLOT_DECOY=root / "absent")
+    profile = script.parent / "daemon-test.sb"
+    assert module.sandbox_prefix("Linux", probe_env, profile, paths) == []
+    assert module.sandbox_prefix("Darwin", dict(probe_env, DAEMON_TEST_SANDBOX="0"), profile, paths) == []
+    prefix = module.sandbox_prefix("Darwin", probe_env, profile, paths)
+    assert prefix[:3] == ["sandbox-exec", "-f", str(profile)] and len(prefix) == 15, prefix
+    assert f"SLOT_DECOY={os.path.realpath(root)}/absent" in prefix
+    assert module.sandbox_prefix("Darwin", dict(probe_env, SANDBOX_FAIL="nested"), profile, paths) == []
+    try:
+        module.sandbox_prefix("Darwin", dict(probe_env, SANDBOX_FAIL="other"), profile, paths)
+        raise AssertionError("a failed probe did not raise")
+    except OSError as error:
+        assert "profile parse error" in str(error)
     assert "slot_limit\t0\n" in result.stdout and f"tmpdir\t{root}\n" in result.stdout
 
     # A held slot makes the report wait, without starting go, until it is released.

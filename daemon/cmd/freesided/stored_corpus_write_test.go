@@ -303,14 +303,19 @@ func compactStoredCorpusDatabase(t *testing.T, dbPath string, forbidden []string
 }
 
 // storedCorpusForbiddenPaths is the producer's temporary root, as given and
-// with symlinks resolved, and $HOME.
+// with symlinks resolved, $HOME, and the account's home directory, which
+// differs from $HOME under check.sh's throwaway slot HOME.
 func storedCorpusForbiddenPaths(root string) []string {
 	paths := []string{root}
 	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != root {
 		paths = append(paths, resolved)
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
 		paths = append(paths, home)
+	}
+	if account, err := currentAccountHome(); err == nil && account != home {
+		paths = append(paths, account)
 	}
 	return paths
 }

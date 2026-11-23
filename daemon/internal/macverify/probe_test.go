@@ -56,7 +56,11 @@ func freePorts(t *testing.T, n int) []int {
 }
 
 func TestRunProbeUnconfinedFailsEverySandboxCheck(t *testing.T) {
-	t.Parallel()
+	// The probe writes its marker in the working directory, which is the
+	// package directory in the checkout; a scratch directory keeps that
+	// write out of the checkout, where the local test sandbox refuses it.
+	// t.Chdir rules out t.Parallel.
+	t.Chdir(t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
