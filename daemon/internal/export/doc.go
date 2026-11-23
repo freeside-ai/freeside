@@ -23,6 +23,9 @@
 //   - errors.go    sentinel validation errors (wrapped with %w)
 //   - walk.go      read-only workspace walk and entry classification
 //   - blob.go      digest-addressed blob writing
+//   - links.go, links_unix.go, links_other.go the opt-in refusal of
+//     hard-linked files, for an export that reads with a host account's
+//     access
 //   - ignore.go    the .gitignore hint that spends blob budgets on
 //     unignored files first
 //   - commit_plan.go opaque reserved-path lift

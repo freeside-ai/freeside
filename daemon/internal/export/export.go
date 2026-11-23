@@ -66,6 +66,17 @@ type Options struct {
 	// the reserved channel, so it fails the export closed. Zero selects
 	// DefaultMaxCommitPlanBytes; negative values are invalid.
 	MaxCommitPlanBytes int64
+	// RefuseLinkedFiles fails the export closed (ErrLinkedFile) on any
+	// regular file it would read that has more than one hard link: a
+	// workspace file, the evidence descriptor, an evidence source, or the
+	// commit plan. It is checked from the lstat the export already makes,
+	// before the file is opened, so a refused file's bytes are never read.
+	// An exporter that runs with more read access than the workspace needs
+	// sets it, because a hard link in the workspace can name any file that
+	// access reaches: the cordoned backend exports in the daemon's process.
+	// The ward's exporter VM sees only the workspace volume and leaves it
+	// off.
+	RefuseLinkedFiles bool
 }
 
 // DefaultMaxBlobs is the exporter image's blob-count budget. It leaves 1,000
@@ -103,7 +114,7 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err := ensureEmptyOutput(outDir); err != nil {
 		return Manifest{}, err
 	}
-	entries, err := walkWorkspace(fsys, opts.MaxEntries)
+	entries, err := walkWorkspace(fsys, opts)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -123,7 +134,7 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if maxCommitPlanBytes < 0 {
 		return Manifest{}, fmt.Errorf("negative commit-plan cap")
 	}
-	plan, err := resolveCommitPlan(fsys, maxCommitPlanBytes)
+	plan, err := resolveCommitPlan(fsys, maxCommitPlanBytes, opts)
 	if err != nil {
 		return Manifest{}, err
 	}

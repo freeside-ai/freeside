@@ -42,7 +42,7 @@ const DefaultMaxCommitPlanBytes int64 = 64 << 20
 // performs no JSON parsing and never consults workspace git state. Absence is
 // benign, but any present irregular inode or over-cap file fails the export
 // closed before manifest.json, the handoff commit marker, is written.
-func resolveCommitPlan(fsys fs.FS, maxBytes int64) ([]byte, error) {
+func resolveCommitPlan(fsys fs.FS, maxBytes int64, opts Options) ([]byte, error) {
 	info, err := fs.Lstat(fsys, CommitPlanFilename)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -52,6 +52,9 @@ func resolveCommitPlan(fsys fs.FS, maxBytes int64) ([]byte, error) {
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("commit plan %q: %w", CommitPlanFilename, ErrCommitPlanNotRegular)
+	}
+	if err := opts.checkLinks(CommitPlanFilename, info); err != nil {
+		return nil, err
 	}
 	f, err := fsys.Open(CommitPlanFilename)
 	if err != nil {

@@ -45,7 +45,7 @@ func TestWalkWorkspaceRealFilesystem(t *testing.T) {
 		t.Skip("filesystem drops setuid; cannot exercise unusual_mode here")
 	}
 
-	got, err := walkWorkspace(os.DirFS(dir), 0)
+	got, err := walkWorkspace(os.DirFS(dir), Options{})
 	if err != nil {
 		t.Fatalf("walkWorkspace: %v", err)
 	}

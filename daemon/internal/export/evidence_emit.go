@@ -56,6 +56,9 @@ func resolveEvidence(fsys fs.FS, opts Options) ([]resolvedEvidenceSource, error)
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("evidence descriptor %q: %w", EvidenceDescriptorPath, ErrEvidenceSourceNotRegular)
 	}
+	if err := opts.checkLinks(EvidenceDescriptorPath, info); err != nil {
+		return nil, err
+	}
 	raw, err := readReservedFile(fsys, EvidenceDescriptorPath, maxEvidenceDescriptorBytes)
 	if err != nil {
 		return nil, err
@@ -77,6 +80,9 @@ func resolveEvidence(fsys fs.FS, opts Options) ([]resolvedEvidenceSource, error)
 		}
 		if !finfo.Mode().IsRegular() {
 			return nil, fmt.Errorf("evidence source %q path %q: %w", s.Label, s.Path, ErrEvidenceSourceNotRegular)
+		}
+		if err := opts.checkLinks(s.Path, finfo); err != nil {
+			return nil, err
 		}
 		size := finfo.Size()
 		if opts.MaxEvidenceBlobBytes > 0 && size > opts.MaxEvidenceBlobBytes {

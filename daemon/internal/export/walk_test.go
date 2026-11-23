@@ -33,7 +33,7 @@ func TestWalkWorkspaceClassification(t *testing.T) {
 		"tools/run.sh":         {Data: []byte("#!/bin/sh\n"), Mode: 0o755},
 	}
 
-	got, err := walkWorkspace(fsys, 0)
+	got, err := walkWorkspace(fsys, Options{})
 	if err != nil {
 		t.Fatalf("walkWorkspace: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestWalkWorkspaceRootGitFile(t *testing.T) {
 		"main.go": {Data: []byte("package main\n")},
 	}
 
-	got, err := walkWorkspace(fsys, 0)
+	got, err := walkWorkspace(fsys, Options{})
 	if err != nil {
 		t.Fatalf("walkWorkspace: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestWalkWorkspaceUnknownDirEntryType(t *testing.T) {
 		"plain.txt": {Data: []byte("hello\n")},
 	}}
 
-	got, err := walkWorkspace(fsys, 0)
+	got, err := walkWorkspace(fsys, Options{})
 	if err != nil {
 		t.Fatalf("walkWorkspace: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestWalkSymlinkTargetNonUTF8(t *testing.T) {
 	fsys := fstest.MapFS{
 		"link": {Mode: fs.ModeSymlink, Data: []byte("bad\xfftarget")},
 	}
-	got, err := walkWorkspace(fsys, 0)
+	got, err := walkWorkspace(fsys, Options{})
 	if err != nil {
 		t.Fatalf("walkWorkspace: %v", err)
 	}

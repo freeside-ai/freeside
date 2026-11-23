@@ -22,7 +22,7 @@ const readDirBatch = 512
 // manifest entries, sorted bytewise by raw name. Regular entries come back
 // without a digest; the blob step fills it from the single streamed read,
 // and the final Manifest.Validate fails loud if any is left unset.
-// maxEntries counts every walked name, files and directories alike, and
+// opts.MaxEntries counts every walked name, files and directories alike, and
 // fails the walk closed as soon as the workspace exceeds it (zero or
 // negative disables the cap), so a hostile workspace of countless blobless
 // entries (empty files, empty directories, symlinks, invalid names) cannot
@@ -35,8 +35,8 @@ const readDirBatch = 512
 // entry instead. Directories are otherwise not listed: like git, the
 // manifest implies them through their children, so an empty directory is
 // unrepresentable by design.
-func walkWorkspace(fsys fs.FS, maxEntries int) ([]Entry, error) {
-	w := &walker{fsys: fsys, maxEntries: maxEntries}
+func walkWorkspace(fsys fs.FS, opts Options) ([]Entry, error) {
+	w := &walker{fsys: fsys, opts: opts}
 	if err := w.walkDir("."); err != nil {
 		return nil, err
 	}
@@ -47,10 +47,10 @@ func walkWorkspace(fsys fs.FS, maxEntries int) ([]Entry, error) {
 }
 
 type walker struct {
-	fsys       fs.FS
-	maxEntries int
-	seen       int
-	entries    []Entry
+	fsys    fs.FS
+	opts    Options
+	seen    int
+	entries []Entry
 }
 
 // walkDir enumerates one directory in bounded batches, records its
@@ -100,8 +100,8 @@ func (w *walker) walkDir(dir string) error {
 // when there is one.
 func (w *walker) visit(dir string, de fs.DirEntry) (string, error) {
 	w.seen++
-	if w.maxEntries > 0 && w.seen > w.maxEntries {
-		return "", fmt.Errorf("at %q, cap %d: %w", path.Join(dir, de.Name()), w.maxEntries, ErrTooManyEntries)
+	if w.opts.MaxEntries > 0 && w.seen > w.opts.MaxEntries {
+		return "", fmt.Errorf("at %q, cap %d: %w", path.Join(dir, de.Name()), w.opts.MaxEntries, ErrTooManyEntries)
 	}
 	p := path.Join(dir, de.Name())
 	// One canonicality gate, shared with Entry.Validate: any name it
@@ -152,6 +152,11 @@ func (w *walker) visit(dir string, de fs.DirEntry) (string, error) {
 	entry, err := classifyFile(w.fsys, p, info)
 	if err != nil {
 		return "", err
+	}
+	if entry.Kind == EntryRegular {
+		if err := w.opts.checkLinks(p, info); err != nil {
+			return "", err
+		}
 	}
 	w.entries = append(w.entries, entry)
 	return "", nil

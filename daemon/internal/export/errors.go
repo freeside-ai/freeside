@@ -55,4 +55,5 @@ var (
 	ErrWorkspaceChanged = errors.New("workspace content changed during export")
 	ErrTooManyEntries   = errors.New("workspace exceeds the manifest entry cap")
 	ErrOutputNotEmpty   = errors.New("output directory is not empty")
+	ErrLinkedFile       = errors.New("regular file has more than one hard link")
 )
