@@ -101,8 +101,11 @@ type layout struct {
 	// ctl sits outside runRoot, under a protected root, so the launch can
 	// neither read nor write it.
 	ctl, rules, tag, control, transcript, stderr string
-	// ended is the end record (record.go).
-	ended string
+	// ended and exportRecord are the end and export records (record.go).
+	ended, exportRecord string
+	// export is the export's output, beside run/ and ctl/: outside
+	// RUN_ROOT, so no launch can write it.
+	export string
 }
 
 func layoutFor(runsRoot, runID string) layout {
@@ -114,6 +117,7 @@ func layoutFor(runsRoot, runID string) layout {
 		ctl: ctl, rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
 		control: filepath.Join(ctl, "control"), transcript: filepath.Join(ctl, "transcript"),
 		stderr: filepath.Join(ctl, "stderr"), ended: filepath.Join(ctl, "ended.json"),
+		exportRecord: filepath.Join(ctl, "export.json"), export: filepath.Join(dir, "export"),
 	}
 }
 
