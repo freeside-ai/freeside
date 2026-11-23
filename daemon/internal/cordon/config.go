@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -53,6 +54,10 @@ type Config struct {
 	ReservedPorts []int
 	// AgentCLI is the absolute path of the pinned agent CLI.
 	AgentCLI string
+	// AgentCLISHA256 pins the agent CLI's exact build: its SHA-256, in
+	// lowercase hex. A proof binds it, and the pre-job probe refuses a CLI
+	// that no longer hashes to it.
+	AgentCLISHA256 string
 	// Path is the launch's PATH: absolute directories, in search order.
 	Path []string
 	// StallLimit ends a launch whose output has been silent this long.
@@ -79,6 +84,9 @@ func (c Config) validate() error {
 		if err := resolvedPath(f.path); err != nil {
 			return fmt.Errorf("%w: %s: %w", ErrInvalidConfig, f.name, err)
 		}
+	}
+	if !sha256Hex.MatchString(c.AgentCLISHA256) {
+		return fmt.Errorf("%w: AgentCLISHA256 must be 64 lowercase hex digits", ErrInvalidConfig)
 	}
 	if len(c.ProtectedRoots) == 0 {
 		return fmt.Errorf("%w: at least one protected root is required", ErrInvalidConfig)
@@ -129,6 +137,8 @@ func (c Config) validate() error {
 	}
 	return nil
 }
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // clone copies the configuration's reference fields, so a caller can't
 // change a backend's configuration after New validated it.

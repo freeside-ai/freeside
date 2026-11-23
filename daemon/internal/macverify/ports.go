@@ -85,6 +85,16 @@ func (c Config) ReservesPort(port int) bool {
 	return port >= c.PortBase && port <= last
 }
 
+// ReservedPortList is every slot's reserved port, ascending: the ports a
+// cordoned launch must not bind, so it can't hold one a job needs.
+func (c Config) ReservedPortList() []int {
+	ports := make([]int, 0, portsPerSlot*len(c.Slots))
+	for port := c.PortBase; port < c.PortBase+portsPerSlot*len(c.Slots); port++ {
+		ports = append(ports, port)
+	}
+	return ports
+}
+
 // RenderPortsConf renders the bin/ports.conf install writes and slot-run
 // reads: one line per slot, `<slot> <p1> <p2> <p3> <p4>`, the slots sorted.
 func RenderPortsConf(base int, slots []string) []byte {

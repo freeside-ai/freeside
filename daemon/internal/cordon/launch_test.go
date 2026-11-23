@@ -226,7 +226,9 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 		if agent.dir != filepath.Join(cfg.RunsRoot, "run-1", "run", "worktree") {
 			t.Fatalf("agent dir = %s", agent.dir)
 		}
-		if want := append(confinedArgv(cfg, layoutFor(cfg.RunsRoot, "run-1"), cfg.AgentCLI), "-p"); !slices.Equal(agent.argv, want) {
+		want := append(confinedArgv(cfg, layoutFor(cfg.RunsRoot, "run-1"), cfg.AgentCLI),
+			"--settings", `{"sandbox":{"enabled":false}}`, "-p")
+		if !slices.Equal(agent.argv, want) {
 			t.Fatalf("agent argv = %q, want %q", agent.argv, want)
 		}
 	})
@@ -467,6 +469,28 @@ func TestLaunchRefusesAClaimedOrMalformedRunID(t *testing.T) {
 	})
 }
 
+// TestLaunchRefusesACallerCLISettings shows a launch's caller can't set the
+// agent CLI's settings, which would turn its own sandbox back on or
+// replace the fixed settings.
+func TestLaunchRefusesACallerCLISettings(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{host: newFakeHost(), script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
+		b := fakeBackend(t, cfg, l)
+		for i, args := range [][]string{{"--settings", "{}"}, {"-p", `--settings={"sandbox":{"enabled":true}}`}} {
+			req := request(fmt.Sprintf("run-settings-%d", i))
+			req.Args = args
+			if _, err := b.Launch(t.Context(), req); err == nil {
+				t.Fatalf("Launch with %q succeeded", args)
+			}
+		}
+		if len(l.specs) != 0 {
+			t.Fatalf("a refused launch started %d processes", len(l.specs))
+		}
+	})
+}
+
 // TestLaunchesUnderOneConfigurationRunIdenticalRules shows the bytes a
 // launch runs are the configuration's rendered rules, whatever the launch.
 func TestLaunchesUnderOneConfigurationRunIdenticalRules(t *testing.T) {
@@ -517,7 +541,7 @@ func TestEndedByRegistration(t *testing.T) {
 	}
 }
 
-func TestBackendDeclaresTheCordonedClass(t *testing.T) {
+func TestBackendIdentityEntersTheConfigurationDigest(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
 	b, err := New(cfg, &fakeSeeder{})
@@ -526,9 +550,6 @@ func TestBackendDeclaresTheCordonedClass(t *testing.T) {
 	}
 	if b.Name() != string(domain.BackendCordonedHostProcess) {
 		t.Fatalf("Name = %s", b.Name())
-	}
-	if got := b.Capabilities().Snapshot(); !slices.Equal(got, domain.NewCapabilitySnapshot(domain.CordonedCapabilities()...)) {
-		t.Fatalf("Capabilities = %v", got)
 	}
 	digest := b.ConfigurationDigest()
 	changes := map[string]func(*Config){
@@ -541,6 +562,7 @@ func TestBackendDeclaresTheCordonedClass(t *testing.T) {
 		"UserCache":         func(c *Config) { c.UserCache += "2" },
 		"ReservedPorts":     func(c *Config) { c.ReservedPorts = append(c.ReservedPorts, 47102) },
 		"AgentCLI":          func(c *Config) { c.AgentCLI += "2" },
+		"AgentCLISHA256":    func(c *Config) { c.AgentCLISHA256 = strings.Repeat("cd", 32) },
 		"Path":              func(c *Config) { c.Path = append(c.Path, "/sbin") },
 		"StallLimit":        func(c *Config) { c.StallLimit++ },
 		"EndGrace":          func(c *Config) { c.EndGrace++ },
@@ -556,6 +578,17 @@ func TestBackendDeclaresTheCordonedClass(t *testing.T) {
 		if ob.ConfigurationDigest() == digest {
 			t.Errorf("changing %s left the configuration digest unchanged", name)
 		}
+	}
+	rebuilt, err := New(cfg, &fakeSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.ConfigurationDigest() != digest {
+		t.Fatal("two backends over one configuration and binary have different digests")
+	}
+	rebuilt.daemonDigest = strings.Repeat("0", 64)
+	if rebuilt.ConfigurationDigest() == digest {
+		t.Error("a different daemon executable left the configuration digest unchanged")
 	}
 	if (&Backend{}).ConfigurationDigest() != "" || len((&Backend{}).Capabilities()) != 0 {
 		t.Fatal("the zero Backend declares something")

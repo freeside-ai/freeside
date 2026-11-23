@@ -1,6 +1,7 @@
 package cordon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -67,6 +69,11 @@ type LaunchRequest struct {
 	// environment, the launch's directory, or the canary; a launch without
 	// one is refused.
 	Token ward.SetupToken
+	// RequireProof runs the attached suite's pre-job probe before anything
+	// else and refuses the launch when no recorded pass declares the class
+	// or the probe fails, which also withdraws the declaration. Every
+	// unattended launch must set it.
+	RequireProof bool
 }
 
 // LaunchResult is how a launch ended, once no process from it is alive.
@@ -169,6 +176,18 @@ func confinedArgv(cfg Config, l layout, program string, args ...string) []string
 	return append(append(argv, program), args...)
 }
 
+// cliSettings fixes the agent CLI's own confinement mode off. Seatbelt
+// can't be applied twice, so with it on every Bash call fails before it
+// starts (docs/spikes/cordoned-writer.md, the bashsandbox step); the cordon
+// is the CLI's confinement. Launch places it before the caller's arguments
+// and refuses a caller argument that would set the CLI's settings again.
+var cliSettings = []string{"--settings", `{"sandbox":{"enabled":false}}`}
+
+// agentArgs is the agent CLI's whole argument list for a launch.
+func agentArgs(args []string) []string {
+	return append(slices.Clone(cliSettings), args...)
+}
+
 // Launch runs one writer launch and returns once no process from it is
 // alive. It seeds the worktree, starts the canary and then the agent under
 // the rule file, watches the agent's output, and ends the launch when the
@@ -183,92 +202,40 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	if err := req.validate(); err != nil {
 		return LaunchResult{}, err
 	}
-	// Refuse before starting anything a proof couldn't follow.
-	host, err := b.newHost()
-	if err != nil {
-		return LaunchResult{}, err
-	}
-	l := layoutFor(b.cfg.RunsRoot, req.RunID)
-	if err := b.prepare(ctx, req, l); err != nil {
-		return LaunchResult{}, err
-	}
-	transcript, err := os.OpenFile(l.transcript, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: create transcript: %w", err)
-	}
-	defer func() { _ = transcript.Close() }()
-	stderr, err := os.OpenFile(l.stderr, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: create stderr: %w", err)
-	}
-	defer func() { _ = stderr.Close() }()
-
-	target := proofTarget{tag: l.tag, control: l.control}
-	canaryHold, canaryInput := io.Pipe()
-	canary, err := b.start(processSpec{
-		argv: confinedArgv(b.cfg, l, canaryProgram), dir: l.runRoot, env: launchEnv(b.cfg, l), stdin: canaryHold,
-	})
-	if err != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: start the canary: %w", err)
-	}
-	target.canary = canary.pid()
-	defer func() {
-		// A backstop: the proof has already killed the canary, unless it
-		// failed before it got that far.
-		_ = canary.signalGroup(syscall.SIGKILL)
-		_ = canaryInput.Close()
-		_, _ = canary.wait()
-		canary.closeIO(0)
-	}()
-	if err := awaitMember(ctx, host, target, b.cfg.EndProofTimeout); err != nil {
-		return LaunchResult{}, err
-	}
-
-	activity := newActivity()
-	token := req.Token.Reveal()
-	agent, err := b.start(processSpec{
-		argv:   confinedArgv(b.cfg, l, b.cfg.AgentCLI, req.Args...),
-		dir:    l.worktree,
-		env:    agentEnv(b.cfg, l),
-		stdin:  strings.NewReader(string(req.Prompt)),
-		secret: token,
-		stdout: activity.to(transcript),
-		stderr: activity.to(stderr),
-	})
-	// The pipe holds the token now, or nothing does; the daemon keeps no
-	// copy beyond the request's own.
-	clear(token)
-	if err != nil {
-		if proofErr := endLaunch(context.WithoutCancel(ctx), host, target, b.cfg.EndProofTimeout); proofErr != nil {
-			return LaunchResult{}, &BlockedError{RunID: req.RunID, EndedBy: EndedByExited, Err: proofErr}
+	if req.RequireProof {
+		suite := b.suite.Load()
+		if suite == nil {
+			return LaunchResult{}, failure("declaration", "no conformance suite is attached to the backend")
 		}
-		return LaunchResult{}, fmt.Errorf("cordon: start the agent: %w", err)
+		if err := suite.ProbeBeforeJob(ctx); err != nil {
+			return LaunchResult{}, err
+		}
 	}
-
-	endedBy, exitCode, waitErr := b.watch(ctx, agent, activity)
-	// The CLI's exit doesn't end its children (#3463), so every ending
-	// runs the proof, and runs it even though ctx may be canceled.
-	if err := endLaunch(context.WithoutCancel(ctx), host, target, b.cfg.EndProofTimeout); err != nil {
-		return LaunchResult{}, &BlockedError{RunID: req.RunID, EndedBy: endedBy, Err: err}
+	ln, err := b.openLaunch(ctx, req.RunID, func(l layout) error {
+		return b.seed(ctx, req, l)
+	})
+	if err != nil {
+		return LaunchResult{}, err
 	}
-	// Every writer is dead, so the output reaches EOF at once.
-	agent.closeIO(b.cfg.EndGrace)
-	if waitErr != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: wait for the agent: %w", waitErr)
+	defer ln.close()
+	exitCode, endedBy, err := ln.run(ctx, processSpec{
+		argv:   confinedArgv(b.cfg, ln.l, b.cfg.AgentCLI, agentArgs(req.Args)...),
+		dir:    ln.l.worktree,
+		env:    agentEnv(b.cfg, ln.l),
+		stdin:  bytes.NewReader(req.Prompt),
+		secret: req.Token.Reveal(),
+	})
+	if err != nil {
+		return LaunchResult{}, err
 	}
-	if err := activity.err(); err != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: write the agent's output: %w", err)
-	}
-	if err := errors.Join(transcript.Sync(), stderr.Sync()); err != nil {
-		return LaunchResult{}, fmt.Errorf("cordon: sync the agent's output: %w", err)
-	}
-	if err := writeEndRecord(l, endRecord{
+	// Only a writer's launch is exported, so only it records its end.
+	if err := writeEndRecord(ln.l, endRecord{
 		RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
 		EndedBy: endedBy, ExitCode: exitCode,
 	}); err != nil {
 		return LaunchResult{}, err
 	}
-	return LaunchResult{ExitCode: exitCode, EndedBy: endedBy, TranscriptPath: l.transcript, StderrPath: l.stderr}, nil
+	return LaunchResult{ExitCode: exitCode, EndedBy: endedBy, TranscriptPath: ln.l.transcript, StderrPath: ln.l.stderr}, nil
 }
 
 func (r LaunchRequest) validate() error {
@@ -278,6 +245,11 @@ func (r LaunchRequest) validate() error {
 	if r.Repository == "" || r.BaseRef == "" || r.BaseSHA == "" {
 		return errors.New("cordon: a launch needs its repository, base ref, and base commit")
 	}
+	for _, arg := range r.Args {
+		if arg == cliSettings[0] || strings.HasPrefix(arg, cliSettings[0]+"=") {
+			return fmt.Errorf("cordon: a launch fixes the agent CLI's %s itself", cliSettings[0])
+		}
+	}
 	token := r.Token.Reveal()
 	defer clear(token)
 	if len(token) == 0 {
@@ -286,12 +258,130 @@ func (r LaunchRequest) validate() error {
 	return nil
 }
 
-// prepare claims the launch's directory, writes the rule file and the
-// proof's two files, seeds the worktree, and gives it the evidence
-// directory the agent stages evidence in. The tag and control exist
-// from before anything starts until the proof ends, because sandbox_check
-// reads a missing path as denied.
-func (b *Backend) prepare(ctx context.Context, req LaunchRequest, l layout) error {
+// launch is one launch between its canary joining and its run-end proof:
+// its directory is prepared, its canary is a member, and it runs one
+// program. Build it with openLaunch and always close it.
+type launch struct {
+	b                  *Backend
+	runID              string
+	l                  layout
+	host               hostProcesses
+	target             proofTarget
+	transcript, stderr *os.File
+	canary             process
+	canaryInput        io.Closer
+	ran                bool
+}
+
+// openLaunch claims runID's directory, writes the rule file and the proof's
+// files, runs prepare on the layout (the seed, or a probe's staging),
+// creates the output files, and starts the canary, returning once it reads
+// as a member. A launch that fails here started nothing the proof would
+// need to end but the canary, which close kills.
+func (b *Backend) openLaunch(ctx context.Context, runID string, prepare func(layout) error) (_ *launch, err error) {
+	// Refuse before starting anything a proof couldn't follow.
+	host, err := b.newHost()
+	if err != nil {
+		return nil, err
+	}
+	l := layoutFor(b.cfg.RunsRoot, runID)
+	if err := b.prepare(l); err != nil {
+		return nil, err
+	}
+	if err := prepare(l); err != nil {
+		return nil, err
+	}
+	ln := &launch{b: b, runID: runID, l: l, host: host, target: proofTarget{tag: l.tag, control: l.control}}
+	defer func() {
+		if err != nil {
+			ln.close()
+		}
+	}()
+	if ln.transcript, err = os.OpenFile(l.transcript, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
+		return nil, fmt.Errorf("cordon: create transcript: %w", err)
+	}
+	if ln.stderr, err = os.OpenFile(l.stderr, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
+		return nil, fmt.Errorf("cordon: create stderr: %w", err)
+	}
+	canaryHold, canaryInput := io.Pipe()
+	ln.canaryInput = canaryInput
+	if ln.canary, err = b.start(processSpec{
+		argv: confinedArgv(b.cfg, l, canaryProgram), dir: l.runRoot, env: launchEnv(b.cfg, l), stdin: canaryHold,
+	}); err != nil {
+		return nil, fmt.Errorf("cordon: start the canary: %w", err)
+	}
+	ln.target.canary = ln.canary.pid()
+	if err := awaitMember(ctx, ln.host, ln.target, b.cfg.EndProofTimeout); err != nil {
+		return nil, err
+	}
+	return ln, nil
+}
+
+// run starts spec, which must already be confined (confinedArgv), with its
+// output going to the launch's transcript and stderr files, watches it as
+// Launch describes, and ends the launch with the run-end proof. A launch
+// runs one program: the proof kills its canary. run clears spec.secret once
+// the program holds it, so the daemon keeps no copy beyond its caller's.
+func (ln *launch) run(ctx context.Context, spec processSpec) (int, EndedBy, error) {
+	if ln.ran {
+		return 0, "", errors.New("cordon: a launch runs one program")
+	}
+	ln.ran = true
+	b := ln.b
+	activity := newActivity()
+	spec.stdout, spec.stderr = activity.to(ln.transcript), activity.to(ln.stderr)
+	agent, err := b.start(spec)
+	// The pipe holds the secret now, or nothing does.
+	clear(spec.secret)
+	if err != nil {
+		if proofErr := endLaunch(context.WithoutCancel(ctx), ln.host, ln.target, b.cfg.EndProofTimeout); proofErr != nil {
+			return 0, "", &BlockedError{RunID: ln.runID, EndedBy: EndedByExited, Err: proofErr}
+		}
+		return 0, "", fmt.Errorf("cordon: start the agent: %w", err)
+	}
+
+	endedBy, exitCode, waitErr := b.watch(ctx, agent, activity)
+	// The CLI's exit doesn't end its children (#3463), so every ending
+	// runs the proof, and runs it even though ctx may be canceled.
+	if err := endLaunch(context.WithoutCancel(ctx), ln.host, ln.target, b.cfg.EndProofTimeout); err != nil {
+		return 0, "", &BlockedError{RunID: ln.runID, EndedBy: endedBy, Err: err}
+	}
+	// Every writer is dead, so the output reaches EOF at once.
+	agent.closeIO(b.cfg.EndGrace)
+	if waitErr != nil {
+		return 0, "", fmt.Errorf("cordon: wait for the agent: %w", waitErr)
+	}
+	if err := activity.err(); err != nil {
+		return 0, "", fmt.Errorf("cordon: write the agent's output: %w", err)
+	}
+	if err := errors.Join(ln.transcript.Sync(), ln.stderr.Sync()); err != nil {
+		return 0, "", fmt.Errorf("cordon: sync the agent's output: %w", err)
+	}
+	return exitCode, endedBy, nil
+}
+
+// close is a backstop: the proof has already killed the canary, unless it
+// failed before it got that far.
+func (ln *launch) close() {
+	if ln.canary != nil {
+		_ = ln.canary.signalGroup(syscall.SIGKILL)
+		_ = ln.canaryInput.Close()
+		_, _ = ln.canary.wait()
+		ln.canary.closeIO(0)
+	}
+	if ln.transcript != nil {
+		_ = ln.transcript.Close()
+	}
+	if ln.stderr != nil {
+		_ = ln.stderr.Close()
+	}
+}
+
+// prepare claims the launch's directory and writes the rule file and the
+// proof's two files. The tag and control exist from before anything starts
+// until the proof ends, because sandbox_check reads a missing path as
+// denied.
+func (b *Backend) prepare(l layout) error {
 	if err := os.MkdirAll(b.cfg.RunsRoot, 0o700); err != nil {
 		return fmt.Errorf("cordon: create runs root: %w", err)
 	}
@@ -312,6 +402,12 @@ func (b *Backend) prepare(ctx context.Context, req LaunchRequest, l layout) erro
 			return err
 		}
 	}
+	return nil
+}
+
+// seed is a writer launch's preparation: it seeds the worktree and gives
+// it the evidence directory the agent stages evidence in.
+func (b *Backend) seed(ctx context.Context, req LaunchRequest, l layout) error {
 	if err := b.seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
 		return fmt.Errorf("cordon: seed worktree: %w", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,8 +27,17 @@ import (
 const fakeAgentArg = "cordon-fake-agent"
 
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && os.Args[1] == fakeAgentArg {
-		os.Exit(fakeAgent(os.Args[2:]))
+	args := os.Args[1:]
+	// A launch passes the CLI's fixed settings first (cliSettings).
+	if len(args) >= len(cliSettings) && slices.Equal(args[:len(cliSettings)], cliSettings) {
+		args = args[len(cliSettings):]
+	}
+	// A probe launch runs the staged copy of this binary as the daemon.
+	if len(args) > len(probeVerb) && slices.Equal(args[:len(probeVerb)], probeVerb) {
+		os.Exit(RunProbe(args[len(probeVerb):], os.Stdout))
+	}
+	if len(args) > 0 && args[0] == fakeAgentArg {
+		os.Exit(fakeAgent(args[1:]))
 	}
 	os.Exit(m.Run())
 }
@@ -162,7 +172,7 @@ func runProbes() int {
 		if len(fields) < 2 {
 			continue
 		}
-		err := probe(fields[1], fields[2:])
+		err := fakeProbe(fields[1], fields[2:])
 		switch {
 		case fields[0] == "allow" && err == nil, fields[0] == "deny" && errors.Is(err, errDenied), fields[0] == "any":
 			fmt.Println("ok", line)
@@ -178,7 +188,7 @@ func runProbes() int {
 // for another reason, so a missing stand-in never reads as a denial.
 var errDenied = errors.New("denied")
 
-func probe(kind string, args []string) error {
+func fakeProbe(kind string, args []string) error {
 	switch kind {
 	case "read":
 		_, err := os.ReadFile(args[0])

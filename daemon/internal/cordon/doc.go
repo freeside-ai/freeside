@@ -44,9 +44,20 @@
 // ward's exporter VM, and where it is weaker:
 // devlog/2026-11-22-2046-cordoned-export.md.
 //
+// The backend declares the class's four capabilities only after a
+// Suite's Full pass is recorded for its ConfigurationDigest (suite.go).
+// Full runs this package's probe (probe.go, as `freesided cordon probe`,
+// from a copy of the daemon's executable) inside real cordoned launches,
+// against stand-in targets the suite creates, each with a positive control
+// outside the launch, so every refusal is the sandbox's own. A launch with
+// RequireProof first runs the lighter pre-job probe, whose failure
+// withdraws the declaration. Rationale:
+// devlog/2026-11-22-2144-cordon-conformance-proof.md.
+//
 // This package is the launch and export halves of a cordoned handoff,
-// behind its own API: it does not implement the stage driver's Gate port,
-// and nothing outside the package calls it yet. The driver port, restart
-// recovery (#3468), conformance (#3470), and admission (#3472), which
-// composes the daemon's token read with the launch, are later units.
+// behind its own API: it does not implement the stage driver's Gate port.
+// The daemon composes the backend and proves it, but launches no writer on
+// it yet. The driver port, restart recovery (#3468), and admission
+// (#3472), which composes the daemon's token read with the launch, are
+// later units.
 package cordon
