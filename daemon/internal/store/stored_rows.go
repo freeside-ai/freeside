@@ -589,6 +589,10 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard2(tx.getLaunchReservation(ctx, domain.InvocationID(k.s[0])))
 		})},
+	{"task writer class", []string{"task_writer_classes"}, eachKey(`SELECT task_id FROM task_writer_classes`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.TaskWriterClass(ctx, domain.TaskID(k.s[0])))
+		})},
 	{"launch wait", []string{"launch_waits"}, eachKey(`SELECT invocation_id FROM launch_waits`, "s",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard2(tx.LaunchWaitRefusedAt(ctx, domain.InvocationID(k.s[0])))

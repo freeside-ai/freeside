@@ -198,6 +198,9 @@ func main() {
 		case "task-line":
 			runTaskLineMain(os.Args[2:])
 			return
+		case "task-writer-class":
+			runTaskWriterClassMain(os.Args[2:])
+			return
 		case "routing":
 			runRoutingMain(os.Args[2:])
 			return

@@ -17,6 +17,7 @@ import (
 // keeping its rows, and 0148 forgotten.
 func rewindRunMilestoneKinds(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindCordonedRunSettings(t, ctx, db)
 	for _, statement := range []string{
 		`CREATE TABLE run_milestones_0147 (
 		    id            INTEGER PRIMARY KEY,

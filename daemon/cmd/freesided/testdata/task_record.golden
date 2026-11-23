@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v20",
+  "version": "freeside-task-record-v21",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -1211,6 +1211,8 @@
     }
   ],
   "task_lines_error": null,
+  "writer_class": null,
+  "writer_class_error": null,
   "counts": {
     "items_by_type": [
       {
