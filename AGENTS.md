@@ -540,7 +540,13 @@ directory named before it in the same bullet. All under `daemon/`:
   executor and chooses the durable proof it declares from),
   `internal/domain/wardless_admission.go`,
   `internal/domain/agent_selection.go` (the served-tuple rule admission
-  enforces when it resolves a selection), `internal/admissionauth/`
+  enforces when it resolves a selection),
+  `internal/domain/writer_class.go` (the classes a writer may run on and
+  the resolver that picks a writer's class from the project's setting and
+  the task's requirement), `internal/store/task_writer_class.go` (stores a
+  task's requirement and refuses a stored row naming any class but the
+  warded one), `cmd/freesided/task_writer_class.go` (the operator command
+  that sets or clears it), `internal/admissionauth/`
   (the admission and import authority, which re-checks a recorded
   admission, its path policy, its specification or production marker, and
   its commit author before the driver starts or imports, and its trust
