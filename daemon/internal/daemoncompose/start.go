@@ -318,6 +318,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if cfg.Claude != nil {
 		claude := *cfg.Claude
 		claude.AuthorityLock = authorityLock
+		claude.Cordon.Database = cfg.DBPath
 		cfg.Claude = &claude
 	}
 	// The budget's checks wait for the store, because a budget recorded there

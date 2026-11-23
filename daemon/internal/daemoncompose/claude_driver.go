@@ -111,6 +111,9 @@ type ClaudeDriverConfig struct {
 	// HostVerification names the macOS verification executor; an empty root
 	// configures none (ComposeHostVerificationExecutor).
 	HostVerification MacverifyExecutorConfig
+	// Cordon names the cordoned host launch backend; an empty AgentCLI
+	// configures none (composeConfiguredCordon).
+	Cordon CordonBackendConfig
 	// StateRoot and CredentialsDir locate the GitHub App authority and
 	// credential material the exact-base transport authenticates with.
 	StateRoot      string
@@ -718,8 +721,12 @@ type ClaudeComposition struct {
 	// hostVerification is the macOS verification executor, nil when none
 	// is configured.
 	hostVerification *macverify.Backend
-	Closer           SessionCloser
-	janitor          *janitorSession
+	// cordon is the cordoned host launch backend, nil when none is
+	// configured. Nothing launches on it yet; unattended admission (#3472)
+	// takes it from here.
+	cordon  *ComposedCordon
+	Closer  SessionCloser
+	janitor *janitorSession
 	// observeRepositoryTip is the conditional ref read through the publish
 	// reconciler (§5.11 conditional requests) for the active-resource
 	// reconciler's tip watch and image upkeep, which feed project-image
@@ -1145,6 +1152,10 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
+	cordonBackend, err := composeConfiguredCordon(ctx, st, cfg, transportSeeder{transport: transport}, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	// The follower is composed after the driver, whose pre-job hook reports
 	// each unattended start's image to it (conformanceFollower.use).
@@ -1327,7 +1338,12 @@ func composeClaudeDriver(
 		derive:                          claudeAdmissionDerivation(st, cfg),
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
-		runConformance:                  follower.runScheduled,
+		// The cordon's pass follows the ward's; it returns only a record
+		// the store didn't take, so a failed pass never stops the daemon.
+		runConformance: func(runCtx context.Context) error {
+			return errors.Join(follower.runScheduled(runCtx), cordonBackend.RunScheduled(runCtx))
+		},
+		cordon: cordonBackend,
 		// The follower and the base fetches stop first, so a pass or fetch
 		// in flight ends before the janitor its fetches ride on closes.
 		Closer:  sessionGroup{follower, baseInputs, driver, janitor},

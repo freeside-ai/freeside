@@ -515,11 +515,16 @@ directory named before it in the same bullet. All under `daemon/`:
   allowlist gates), `internal/projectimage/oci_evidence.go` (decodes
   and verifies the untrusted image archive), and
   `internal/projectimage/builder_vm.go` (stops the image builder and
-  force-deletes the containers a build's reservation label marks), and
+  force-deletes the containers a build's reservation label marks),
   `internal/cordon/` (the cordoned writer's rule file, its launch, the
   setup token it hands the CLI on its own descriptor, the run-end proof
-  that kills every process in the launch's sandbox, and the export that
-  reads the worktree once that proof has passed).
+  that kills every process in the launch's sandbox, the export that reads
+  the worktree once that proof has passed, and the conformance suite
+  whose recorded pass declares the class),
+  `internal/daemoncompose/cordon_backend.go` (builds the cordon's
+  configuration and chooses which proof its backend declares from), and
+  `cmd/freesided/cordon.go` (the probe verb a probe launch runs, and the
+  flags the configuration comes from).
 - **Rig cleanup namespace:** `internal/wardname/` (the one definition of
   the runtime names rig cleanup and stale recovery may act on) and
   `internal/daemonlock/rig.go` (admits a bound name only through those

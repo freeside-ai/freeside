@@ -315,6 +315,7 @@ func main() {
 	runConformance := flags.Bool("run-conformance", false,
 		"run and durably record the full ward suite for this exact Claude configuration before admission")
 	hostVerification := macverifyExecutorFlags(flags)
+	cordonBackend := cordonBackendFlags(flags)
 	operatingMode := flags.String(
 		"operating-mode", string(domain.ModeAttendedDev),
 		"operating mode: attended_dev (default) or unattended")
@@ -532,6 +533,7 @@ func main() {
 			ShadowReviewWorkspaceSizeMB: review.ShadowWorkspaceSizeMB,
 			ShadowReviewRate:            review.ShadowRate,
 			HostVerification:            hostVerification(*listenAddr),
+			Cordon:                      cordonBackend(),
 		}
 	}
 	h, err := run(ctx, stop, daemonConfig)
