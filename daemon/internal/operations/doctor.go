@@ -59,6 +59,10 @@ type Doctor struct {
 	// IdentityLabel optionally renders an identity's masked label for a
 	// credential-integrity item. Nil names the identity by its id alone.
 	IdentityLabel func(domain.AuthIdentity) string
+	// CordonConfigurationDigest optionally names the cordoned launch
+	// backend's configuration, which adds the cordoned_conformance finding.
+	// Empty when no cordon is configured.
+	CordonConfigurationDigest domain.Digest
 }
 
 // ConvergeReviewConfiguration re-evaluates only the activated-profile
@@ -285,6 +289,13 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 		return DoctorReport{}, err
 	}
 	findings = append(findings, integrity)
+	if d.CordonConfigurationDigest != "" {
+		cordoned, err := d.cordonedConformanceFinding(ctx)
+		if err != nil {
+			return DoctorReport{}, err
+		}
+		findings = append(findings, cordoned)
+	}
 	report := DoctorReport{
 		Healthy: true, OperatingMode: d.Mode,
 		IsolationClass: string(d.Backend), Findings: findings,
@@ -393,6 +404,37 @@ func (d Doctor) conformanceFindings(
 	conformance.Detail = strings.Join(details[0], "; ")
 	handoff.Detail = strings.Join(details[1], "; ")
 	return conformance, handoff, nil
+}
+
+// cordonedConformanceFinding reports the cordoned class's newest record
+// for CordonConfigurationDigest; it is healthy when that record passed. It
+// stays out of converge, whose blocking item holds every unattended
+// attempt: a cordon that failed its pass holds only its own class, which
+// admission refuses by that record, so the ward's writers keep running.
+func (d Doctor) cordonedConformanceFinding(ctx context.Context) (DoctorFinding, error) {
+	const backend = domain.BackendCordonedHostProcess
+	var (
+		record domain.BackendConformance
+		found  bool
+	)
+	if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, found, err = tx.LatestConfigurationConformance(ctx, backend, d.CordonConfigurationDigest)
+		return err
+	}); err != nil {
+		return DoctorFinding{}, fmt.Errorf("doctor: read cordoned conformance: %w", err)
+	}
+	finding := DoctorFinding{Code: "cordoned_conformance"}
+	if !found {
+		finding.Detail = fmt.Sprintf("%s: no durable conformance result for configuration %s",
+			backend, d.CordonConfigurationDigest)
+		return finding, nil
+	}
+	finding.Healthy = record.Outcome == domain.ConformancePassed && record.ConfigurationBound()
+	finding.Detail = fmt.Sprintf("%s: generation %d is %s for configuration %s at %s",
+		backend, record.Generation, record.Outcome, record.ConfigurationDigest,
+		record.ProvedAt.UTC().Format(time.RFC3339))
+	return finding, nil
 }
 
 func workspaceHandoffDetail(

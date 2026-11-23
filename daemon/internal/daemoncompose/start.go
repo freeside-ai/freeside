@@ -892,6 +892,7 @@ func newDoctorPass(
 			Now:                       cfg.Now,
 			CredentialIntegrityProbe:  replay,
 			IdentityLabel:             cfg.IdentityLabel,
+			CordonConfigurationDigest: claudeWiring.cordon.ConfigurationDigest(),
 		}
 		_, err = doctor.Run(runCtx)
 		// A readiness card this daemon does not evaluate was left by a

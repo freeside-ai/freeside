@@ -45,6 +45,9 @@ func runDoctorCommand(
 	reviewConfigurationDigest := flags.String(
 		"review-configuration-digest", "",
 		"effective review configuration digest (required in unattended mode)")
+	cordonConfigurationDigest := flags.String(
+		"cordon-configuration-digest", "",
+		"cordoned launch backend configuration digest; reports its newest conformance record (optional)")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest (repeatable)")
@@ -66,6 +69,9 @@ func runDoctorCommand(
 	}
 	if *reviewConfigurationDigest != "" && !contentaddr.Valid(*reviewConfigurationDigest) {
 		return errors.New("-review-configuration-digest must be a canonical sha256 digest")
+	}
+	if *cordonConfigurationDigest != "" && !contentaddr.Valid(*cordonConfigurationDigest) {
+		return errors.New("-cordon-configuration-digest must be a canonical sha256 digest")
 	}
 	if mode == domain.ModeUnattended && *reviewConfigurationDigest == "" {
 		return errors.New("-review-configuration-digest is required in unattended mode")
@@ -153,6 +159,7 @@ func runDoctorCommand(
 		Mode:                      mode,
 		CredentialIntegrityProbe:  integrityProbe,
 		IdentityLabel:             credentialIdentityLabel,
+		CordonConfigurationDigest: domain.Digest(*cordonConfigurationDigest),
 	}).Run(ctx)
 	if err != nil {
 		return err
