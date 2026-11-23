@@ -124,6 +124,31 @@ func exerciseSettingsSetAndShow(t *testing.T, ctx context.Context, dbPath string
 	}
 }
 
+// TestSettingsSetCordonedLaunchesAppliesAtTheNextAdmission: a set of the
+// cordoned launch cap reports that it applies at the next admission, not
+// the daemon's next start, and a cap below one is refused.
+func TestSettingsSetCordonedLaunchesAppliesAtTheNextAdmission(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	out, err := runSettings(t, t.Context(), "set", "-db", dbPath, "-section", "cordoned_launches",
+		"-value", `{"max_concurrent":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set settingsSetResult
+	if err := json.Unmarshal([]byte(out), &set); err != nil {
+		t.Fatalf("decode %q: %v", out, err)
+	}
+	if set.TakesEffect != cordonedLaunchesTakeEffect {
+		t.Fatalf("takes effect %q, want %q", set.TakesEffect, cordonedLaunchesTakeEffect)
+	}
+	if _, err := runSettings(t, t.Context(), "set", "-db", dbPath, "-section", "cordoned_launches",
+		"-value", `{"max_concurrent":0}`); err == nil || !strings.Contains(err.Error(), "max_concurrent") {
+		t.Fatalf("cap of zero: error %v, want it to name max_concurrent", err)
+	}
+}
+
 func TestSettingsSetAndShowWithTheDaemonStopped(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
@@ -259,7 +284,10 @@ func TestSettingsImportRefusesAProjectAlreadySet(t *testing.T) {
 // TestSettingsImportAcceptsAStoreOnlyEverPaused pins that an execution pause
 // is not run configuration: a store whose instance revisions only paused and
 // resumed prod still takes an import.
-func TestSettingsImportAcceptsAStoreOnlyEverPaused(t *testing.T) {
+// TestSettingsImportAcceptsAStoreOnlyEverPausedOrCapped: an execution
+// pause and a cordoned launch cap aren't configuration the deputy's file
+// carries, so a store that only ever held them still takes an import.
+func TestSettingsImportAcceptsAStoreOnlyEverPausedOrCapped(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
@@ -268,10 +296,13 @@ func TestSettingsImportAcceptsAStoreOnlyEverPaused(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
-		for _, value := range []string{`{"state":"requested"}`, ""} {
-			if _, err := tx.AppendInstanceSettingsRevision(t.Context(), domain.InstanceSettingsInput{
-				Section: domain.InstanceSectionExecutionPause, Value: json.RawMessage(value), SetBy: "cli:operator",
-			}, time.Now().UTC()); err != nil {
+		for _, input := range []domain.InstanceSettingsInput{
+			{Section: domain.InstanceSectionExecutionPause, Value: json.RawMessage(`{"state":"requested"}`)},
+			{Section: domain.InstanceSectionExecutionPause},
+			{Section: domain.InstanceSectionCordonedLaunches, Value: json.RawMessage(`{"max_concurrent":2}`)},
+		} {
+			input.SetBy = "cli:operator"
+			if _, err := tx.AppendInstanceSettingsRevision(t.Context(), input, time.Now().UTC()); err != nil {
 				return err
 			}
 		}
@@ -286,14 +317,14 @@ func TestSettingsImportAcceptsAStoreOnlyEverPaused(t *testing.T) {
 	out, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
 		"-container-bin", settingsTestContainer)
 	if err != nil {
-		t.Fatalf("import into a store only ever paused: %v", err)
+		t.Fatalf("import into a store only ever paused or capped: %v", err)
 	}
 	var result settingsImportResult
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.InstanceRevision <= 2 {
-		t.Fatalf("import result %+v, want revisions after the pause's two", result)
+	if result.InstanceRevision <= 3 {
+		t.Fatalf("import result %+v, want revisions after the pause's two and the cap's one", result)
 	}
 }
 

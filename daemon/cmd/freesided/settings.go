@@ -30,6 +30,19 @@ const settingsRoute = "/settings"
 // project gates read them live (#3209).
 const settingsTakeEffect = "at the daemon's next start"
 
+// cordonedLaunchesTakeEffect is when a set of the cordoned launch cap
+// applies: the admitting transaction reads it from the stored record on
+// each admission (#3471).
+const cordonedLaunchesTakeEffect = "at the next admission"
+
+// settingsSetTakesEffect is when a set of the named section applies.
+func settingsSetTakesEffect(project domain.ProjectID, section string) string {
+	if project == "" && section == string(domain.InstanceSectionCordonedLaunches) {
+		return cordonedLaunchesTakeEffect
+	}
+	return settingsTakeEffect
+}
+
 // runSettingsMain is the stored run settings verb (issue #2082): `settings
 // show` prints a scope's record, `settings set` records a revision of one
 // section, and `settings import` turns a deputy settings file into the
@@ -177,7 +190,8 @@ func runSettingsSetCommand(ctx context.Context, args []string, stdout, stderr io
 	}); err != nil {
 		return err
 	}
-	if err := json.NewEncoder(stdout).Encode(settingsSetResult{Revision: revision, TakesEffect: settingsTakeEffect}); err != nil {
+	result := settingsSetResult{Revision: revision, TakesEffect: settingsSetTakesEffect(domain.ProjectID(*project), *sectionName)}
+	if err := json.NewEncoder(stdout).Encode(result); err != nil {
 		return fmt.Errorf("write settings revision: %w", err)
 	}
 	return nil
@@ -353,10 +367,12 @@ func importRunSettings(
 	if err != nil {
 		return 0, 0, err
 	}
-	// An execution pause, set or cleared, is not run configuration, so a
-	// store that was only ever paused still takes an import.
+	// An execution pause or a cordoned launch cap, set or cleared, is not
+	// configuration the deputy's file carries, so a store that only ever
+	// held them still takes an import.
 	for _, revision := range instanceRevisions {
-		if revision.Section != domain.InstanceSectionExecutionPause {
+		if revision.Section != domain.InstanceSectionExecutionPause &&
+			revision.Section != domain.InstanceSectionCordonedLaunches {
 			return 0, 0, fmt.Errorf("instance settings already have revision %d; set sections with settings set",
 				instanceRevisions[len(instanceRevisions)-1].Revision)
 		}
