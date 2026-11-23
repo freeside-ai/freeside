@@ -40,6 +40,9 @@ type Backend struct {
 	// publishes over it.
 	proofMu         sync.Mutex
 	proofGeneration uint64
+	// suite is the conformance suite NewSuite attached, which runs the
+	// pre-job probe of a launch that requires proof.
+	suite atomic.Pointer[Suite]
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -180,10 +183,18 @@ func (b *Backend) concludeConformanceProof(generation uint64, proved bool, recor
 	return true, recordErr
 }
 
-// withdrawConformance clears the declaration after a pre-job probe found a
-// denial broken, and runs the durable superseding step under the guard. It
-// takes a generation, so a pass that began before the failure can't publish
-// over it. Only a new Full pass declares again.
+// declaredGeneration reports the current proof generation and whether it
+// declares the class, read together under the guard.
+func (b *Backend) declaredGeneration() (uint64, bool) {
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	return b.proofGeneration, b.proven.Load()
+}
+
+// withdrawConformance clears the declaration after a pre-job probe failed,
+// and runs the durable failure step under the guard. It moves to a new
+// generation, so a pass that began before the failure can't publish over
+// it. Only a new Full pass declares again.
 func (b *Backend) withdrawConformance(record func() error) error {
 	b.proofMu.Lock()
 	defer b.proofMu.Unlock()

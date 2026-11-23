@@ -8,8 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // The live suite probes what a launch must not reach on the owner's
@@ -151,4 +154,56 @@ func launchdPid(t *testing.T, target string) int {
 	}
 	pid, _ := strconv.Atoi(string(m[1]))
 	return pid
+}
+
+// TestLiveFullProvesTheCordonOnTheOwnersAccount runs the whole suite with
+// the real outside host against the account's real home, launchd domain,
+// and Simulator. It writes nothing to the home: the controls open the
+// account's own secret paths only to see whether they are readable, and
+// print nothing they read. Its launchd job and app are the suite's own
+// stand-ins.
+func TestLiveFullProvesTheCordonOnTheOwnersAccount(t *testing.T) {
+	t.Parallel()
+	requireLive(t)
+	cfg := liveFixture(t).cfg
+	cfg.OwnerClaudeConfig = filepath.Join(cfg.Home, ".claude")
+	// A short protected root of its own holds the runs root, for the
+	// suite's socket; the cleanup removes created, which nothing assigns
+	// again.
+	created, err := os.MkdirTemp("", "cdn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(created) })
+	sockRoot, err := filepath.EvalSymlinks(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ProtectedRoots = append(cfg.ProtectedRoots, sockRoot)
+	slices.Sort(cfg.ProtectedRoots)
+	cfg.RunsRoot = filepath.Join(sockRoot, "r")
+	if cfg.AgentCLISHA256, err = fileSHA256(cfg.AgentCLI); err != nil {
+		t.Fatal(err)
+	}
+	ports := []int{freePort(t), freePort(t)}
+	slices.Sort(ports)
+	cfg.ReservedPorts = slices.Compact(ports)
+	b, err := New(cfg, moduleSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &fakeRecorder{}
+	suite, err := NewSuite(b, WithConformanceRecorder(recorder))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := suite.Full(t.Context()); err != nil {
+		t.Fatalf("Full on the owner's account: %v", err)
+	}
+	if !b.Capabilities().Has(domain.CordonedCapabilities()[0]) {
+		t.Fatal("a passed live pass declares nothing")
+	}
+	if err := suite.ProbeBeforeJob(t.Context()); err != nil {
+		t.Fatalf("the pre-job probe after a live pass: %v", err)
+	}
 }

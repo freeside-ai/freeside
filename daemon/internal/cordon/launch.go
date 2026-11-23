@@ -69,6 +69,11 @@ type LaunchRequest struct {
 	// environment, the launch's directory, or the canary; a launch without
 	// one is refused.
 	Token ward.SetupToken
+	// RequireProof runs the attached suite's pre-job probe before anything
+	// else and refuses the launch when no recorded pass declares the class
+	// or the probe fails, which also withdraws the declaration. Every
+	// unattended launch must set it.
+	RequireProof bool
 }
 
 // LaunchResult is how a launch ended, once no process from it is alive.
@@ -196,6 +201,15 @@ func agentArgs(args []string) []string {
 func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, error) {
 	if err := req.validate(); err != nil {
 		return LaunchResult{}, err
+	}
+	if req.RequireProof {
+		suite := b.suite.Load()
+		if suite == nil {
+			return LaunchResult{}, failure("declaration", "no conformance suite is attached to the backend")
+		}
+		if err := suite.ProbeBeforeJob(ctx); err != nil {
+			return LaunchResult{}, err
+		}
 	}
 	ln, err := b.openLaunch(ctx, req.RunID, func(l layout) error {
 		return b.seed(ctx, req, l)
