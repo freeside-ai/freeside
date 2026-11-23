@@ -6716,12 +6716,12 @@ sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, p
 CLI as the daemon's own account under a Seatbelt rule file, in a seeded
 worktree, ending in a proof that no process of the launch is alive. It also
 exports that worktree as the handoff the importer takes. It is a standalone
-API with no caller yet; the stage driver port, restart recovery (#3468), the
-credential (#3469), conformance (#3470), and admission (#3472) wire it in.
-The package doc (`internal/cordon/doc.go`) holds the layout and the
-mechanism; the decision records are
-`devlog/2026-11-22-1236-cordoned-host-launch.md` and, for the export,
-`devlog/2026-11-22-2046-cordoned-export.md`.
+API with no caller yet; the stage driver port, restart recovery (#3468),
+conformance (#3470), and admission (#3472) wire it in. The package doc
+(`internal/cordon/doc.go`) holds the layout and the mechanism; the decision
+records are `devlog/2026-11-22-1236-cordoned-host-launch.md`, for the
+export, `devlog/2026-11-22-2046-cordoned-export.md`, and, for the token,
+`devlog/2026-11-22-2039-cordoned-writer-token.md`.
 
 - **macOS with cgo only.** The run-end proof calls `sandbox_check` through
   cgo. Any other build refuses every launch before it starts anything, with
@@ -6742,6 +6742,13 @@ mechanism; the decision records are
   writes the global preferences there for the launch, and on macOS 27 only
   the preference rule and the file rule together refuse that write. Every
   path is given resolved, and every field enters the configuration digest.
+- **The token reaches the CLI alone.** `LaunchRequest.Token` carries the
+  enrolled identity's setup token, and a request without one is refused
+  before anything is created. The agent reads it from its own pipe on fd 3,
+  named by `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3`; the prompt stays
+  alone on stdin, the canary gets nothing, and the CLI keeps its config in
+  the launch's own `run/config`. No argv, environment, transcript, or file
+  under the launch's directory holds the token.
 - **A launch that can't be proven ended is blocked.** `Launch` returns a
   `BlockedError` naming how the launch ended (exited, canceled, or
   stalled); the caller holds the run for a person.

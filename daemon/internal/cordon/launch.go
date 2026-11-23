@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // EndedBy names what ended a launch.
@@ -61,6 +62,11 @@ type LaunchRequest struct {
 	Prompt []byte
 	// Args are the agent CLI's arguments.
 	Args []string
+	// Token is the enrolled identity's Claude setup token. It goes to the
+	// agent alone, on its own pipe (tokenFD), and never into argv, an
+	// environment, the launch's directory, or the canary; a launch without
+	// one is refused.
+	Token ward.SetupToken
 }
 
 // LaunchResult is how a launch ended, once no process from it is alive.
@@ -137,6 +143,19 @@ func launchEnv(cfg Config, l layout) []string {
 	}
 }
 
+// tokenFD is the descriptor the agent reads its token from: the first of
+// exec.Cmd's ExtraFiles. The CLI reads the descriptor
+// CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names to end of file and keeps the
+// token out of its tools' environment and descriptors (#3463), so the
+// token stays off the prompt's stdin and out of every environment.
+const tokenFD = 3
+
+// agentEnv is the agent's environment: the launch's, plus the name of the
+// descriptor its token arrives on.
+func agentEnv(cfg Config, l layout) []string {
+	return append(launchEnv(cfg, l), fmt.Sprintf("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=%d", tokenFD))
+}
+
 // sandboxExec is the one program a launch starts directly.
 const sandboxExec = "/usr/bin/sandbox-exec"
 
@@ -206,14 +225,19 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	}
 
 	activity := newActivity()
+	token := req.Token.Reveal()
 	agent, err := b.start(processSpec{
 		argv:   confinedArgv(b.cfg, l, b.cfg.AgentCLI, req.Args...),
 		dir:    l.worktree,
-		env:    launchEnv(b.cfg, l),
+		env:    agentEnv(b.cfg, l),
 		stdin:  strings.NewReader(string(req.Prompt)),
+		secret: token,
 		stdout: activity.to(transcript),
 		stderr: activity.to(stderr),
 	})
+	// The pipe holds the token now, or nothing does; the daemon keeps no
+	// copy beyond the request's own.
+	clear(token)
 	if err != nil {
 		if proofErr := endLaunch(context.WithoutCancel(ctx), host, target, b.cfg.EndProofTimeout); proofErr != nil {
 			return LaunchResult{}, &BlockedError{RunID: req.RunID, EndedBy: EndedByExited, Err: proofErr}
@@ -253,6 +277,11 @@ func (r LaunchRequest) validate() error {
 	}
 	if r.Repository == "" || r.BaseRef == "" || r.BaseSHA == "" {
 		return errors.New("cordon: a launch needs its repository, base ref, and base commit")
+	}
+	token := r.Token.Reveal()
+	defer clear(token)
+	if len(token) == 0 {
+		return errors.New("cordon: a launch needs the identity's setup token")
 	}
 	return nil
 }

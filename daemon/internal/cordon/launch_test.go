@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // fakeHost is the kernel as the proof sees it: a set of live members.
@@ -141,6 +143,9 @@ type fakeLauncher struct {
 }
 
 func (l *fakeLauncher) start(spec processSpec) (process, error) {
+	// Launch clears the token once the process has started, so keep a copy
+	// of what this one was given.
+	spec.secret = bytes.Clone(spec.secret)
 	l.specs = append(l.specs, spec)
 	if slices.Contains(spec.argv, canaryProgram) {
 		p := &fakeProcess{host: l.host, id: 100, exited: make(chan int, 1)}
@@ -173,10 +178,18 @@ func fakeBackend(t *testing.T, cfg Config, l *fakeLauncher) *Backend {
 	return b
 }
 
+// fixtureToken is a setup token's shape, split so no tracked line matches
+// the credential rules (scripts/check-credential-literals.sh).
+const fixtureToken = "sk-ant-" + "oat01-cordon-fixture-0123456789abcdefghijklmnopqrstuvwxyz"
+
 func request(id string) LaunchRequest {
+	token, err := ward.NewSetupToken([]byte(fixtureToken))
+	if err != nil {
+		panic(err)
+	}
 	return LaunchRequest{
 		RunID: id, Repository: "owner/repo", BaseRef: "main", BaseSHA: "0123456789abcdef0123456789abcdef01234567",
-		Prompt: []byte("the prompt"), Args: []string{"-p"},
+		Prompt: []byte("the prompt"), Args: []string{"-p"}, Token: token,
 	}
 }
 
@@ -220,7 +233,8 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 }
 
 // TestLaunchEnvironmentIsTheFixedList shows the daemon's own environment
-// never reaches a launch.
+// never reaches a launch: the canary gets the fixed list, and the agent the
+// fixed list plus the name of its token's descriptor.
 func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 	t.Setenv("FREESIDE_CORDON_DAEMON_ONLY", "leak")
 	cfg := testConfig(t)
@@ -235,10 +249,97 @@ func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 			"DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		}
+		if len(l.specs) != 2 {
+			t.Fatalf("started %d processes, want the canary and the agent", len(l.specs))
+		}
+		if canary := l.specs[0]; !slices.Equal(canary.env, want) {
+			t.Fatalf("canary env = %q, want %q", canary.env, want)
+		}
+		if agent := l.specs[1]; !slices.Equal(agent.env, append(want, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3")) {
+			t.Fatalf("agent env = %q, want the fixed list and the token's descriptor", agent.env)
+		}
+	})
+}
+
+// TestLaunchHandsTheTokenToTheAgentAlone shows the token reaches the agent
+// on its own pipe and nowhere else a spec carries: not the canary, not an
+// argument, not the environment, and not the prompt's stdin.
+func TestLaunchHandsTheTokenToTheAgentAlone(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		var stdin []byte
+		l := &fakeLauncher{host: newFakeHost(), script: func(spec processSpec, p *fakeProcess) {
+			stdin, _ = io.ReadAll(spec.stdin)
+			p.exit(0)
+		}}
+		if _, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-token")); err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		canary, agent := l.specs[0], l.specs[1]
+		if canary.secret != nil {
+			t.Fatal("the canary was given a secret")
+		}
+		if string(agent.secret) != fixtureToken {
+			t.Fatalf("the agent's secret is %d bytes, not the request's token", len(agent.secret))
+		}
+		if string(stdin) != "the prompt" {
+			t.Fatalf("the agent's stdin = %q, want the prompt alone", stdin)
+		}
 		for _, spec := range l.specs {
-			if !slices.Equal(spec.env, want) {
-				t.Fatalf("env = %q, want %q", spec.env, want)
+			for _, field := range slices.Concat(spec.argv, spec.env, []string{spec.dir}) {
+				if strings.Contains(field, fixtureToken) {
+					t.Fatal("a process's argv, environment, or directory holds the token")
+				}
 			}
+		}
+	})
+}
+
+// TestLaunchRefusesAMissingTokenBeforeCreatingAnything covers a request
+// with the zero token: nothing is claimed, seeded, or started.
+func TestLaunchRefusesAMissingTokenBeforeCreatingAnything(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{host: newFakeHost()}
+		seeder := &fakeSeeder{}
+		b, err := New(cfg, seeder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.newHost = func() (hostProcesses, error) { return l.host, nil }
+		b.start = l.start
+		req := request("run-notoken")
+		req.Token = ward.SetupToken{}
+		if _, err := b.Launch(t.Context(), req); err == nil {
+			t.Fatal("Launch without a token succeeded")
+		}
+		if len(l.specs) != 0 || seeder.calls != 0 {
+			t.Fatalf("started %d processes and seeded %d times", len(l.specs), seeder.calls)
+		}
+		if _, err := os.Stat(filepath.Join(cfg.RunsRoot, "run-notoken")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the launch directory exists: %v", err)
+		}
+	})
+}
+
+// TestLaunchRequestRendersNoToken covers a request or a launch error that
+// reaches a log line: neither carries the token.
+func TestLaunchRequestRendersNoToken(t *testing.T) {
+	t.Parallel()
+	req := request("run-render")
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%q"} {
+		if got := fmt.Sprintf(verb, req); strings.Contains(got, fixtureToken) || strings.Contains(got, fmt.Sprintf("%x", fixtureToken)) {
+			t.Errorf("%s of a LaunchRequest renders the token", verb)
+		}
+	}
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{host: newFakeHost(), canaryNeverJoins: true}
+		_, err := fakeBackend(t, cfg, l).Launch(t.Context(), req)
+		if err == nil || strings.Contains(fmt.Sprintf("%+v", err), fixtureToken) {
+			t.Fatalf("Launch = %v, want an error that holds no token", err)
 		}
 	})
 }
