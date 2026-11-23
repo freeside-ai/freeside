@@ -213,7 +213,7 @@ func recordLaunchOrder(
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if join {
-			return tx.RecordLaunchWait(ctx, invocationID, runID, now)
+			return tx.RecordLaunchWait(ctx, invocationID, runID, store.LaunchWaitMemory, now)
 		}
 		return tx.LeaveLaunchWait(ctx, invocationID)
 	}); err != nil {

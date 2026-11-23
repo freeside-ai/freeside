@@ -7,7 +7,7 @@ import (
 )
 
 // rewindCordonedRunSettings returns a migrated store to the schema 0148
-// leaves: it drops the table 0149 adds and forgets 0149.
+// leaves: it drops the table and the column 0149 adds and forgets 0149.
 // The migration is add-only, so it has no test of its own (daemon/README.md,
 // Testing conventions); the rewind keeps the earlier migrations' tests at
 // head.
@@ -15,6 +15,7 @@ func rewindCordonedRunSettings(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	for _, statement := range []string{
 		`DROP TABLE task_writer_classes`,
+		`ALTER TABLE launch_waits DROP COLUMN resource`,
 		`DELETE FROM schema_migrations WHERE name = '0149_cordoned_run_settings.sql'`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

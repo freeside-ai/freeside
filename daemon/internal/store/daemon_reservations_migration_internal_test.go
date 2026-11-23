@@ -111,7 +111,7 @@ func TestDaemonReservationsMigrationKeepsRows(t *testing.T) {
 		return parsed
 	}
 	want := launchWait{
-		invocation: "inv-wait", run: "run-3", taskCreatedAt: at("2026-01-02T03:00:00Z"),
+		invocation: "inv-wait", resource: LaunchWaitMemory, run: "run-3", taskCreatedAt: at("2026-01-02T03:00:00Z"),
 		waitingSince: at("2026-01-02T03:05:05Z"), refusedAt: at("2026-01-02T03:06:05Z"), keptAt: at("2026-01-02T03:07:05Z"),
 	}
 	if len(waits) != 1 || waits[0] != want {
