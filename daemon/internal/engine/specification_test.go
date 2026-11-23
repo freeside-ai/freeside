@@ -240,6 +240,8 @@ type specificationFixture struct {
 	// beyond post-exit export. The test backend has none of them, so any
 	// entry makes admission refuse.
 	admissionFloor []exec.Capability
+	// backend is the backend the engine admits on; nil is stageInputBackend.
+	backend exec.RunnerBackend
 }
 
 func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int) specificationFixture {
@@ -466,8 +468,12 @@ func (f specificationFixture) newEngineWithTransitionHook(
 	if !f.withoutExports {
 		driver = exportingSpecificationDriver{StageDriver: driver, store: f.store, now: f.now}
 	}
+	var backend exec.RunnerBackend = stageInputBackend{}
+	if f.backend != nil {
+		backend = f.backend
+	}
 	engine, err := New(f.store, f.signet, driver,
-		WithAdmission(stageInputBackend{}, append([]exec.Capability{exec.CapPostExitExport}, f.admissionFloor...), AdmissionEnvironment{
+		WithAdmission(backend, append([]exec.Capability{exec.CapPostExitExport}, f.admissionFloor...), AdmissionEnvironment{
 			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
 			EgressProfile:       domain.EgressProviderOnly,
 			ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
