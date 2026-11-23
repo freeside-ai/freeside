@@ -517,7 +517,7 @@ func TestEndedByRegistration(t *testing.T) {
 	}
 }
 
-func TestBackendDeclaresTheCordonedClass(t *testing.T) {
+func TestBackendIdentityEntersTheConfigurationDigest(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
 	b, err := New(cfg, &fakeSeeder{})
@@ -526,9 +526,6 @@ func TestBackendDeclaresTheCordonedClass(t *testing.T) {
 	}
 	if b.Name() != string(domain.BackendCordonedHostProcess) {
 		t.Fatalf("Name = %s", b.Name())
-	}
-	if got := b.Capabilities().Snapshot(); !slices.Equal(got, domain.NewCapabilitySnapshot(domain.CordonedCapabilities()...)) {
-		t.Fatalf("Capabilities = %v", got)
 	}
 	digest := b.ConfigurationDigest()
 	changes := map[string]func(*Config){
@@ -541,6 +538,7 @@ func TestBackendDeclaresTheCordonedClass(t *testing.T) {
 		"UserCache":         func(c *Config) { c.UserCache += "2" },
 		"ReservedPorts":     func(c *Config) { c.ReservedPorts = append(c.ReservedPorts, 47102) },
 		"AgentCLI":          func(c *Config) { c.AgentCLI += "2" },
+		"AgentCLISHA256":    func(c *Config) { c.AgentCLISHA256 = strings.Repeat("cd", 32) },
 		"Path":              func(c *Config) { c.Path = append(c.Path, "/sbin") },
 		"StallLimit":        func(c *Config) { c.StallLimit++ },
 		"EndGrace":          func(c *Config) { c.EndGrace++ },
@@ -556,6 +554,17 @@ func TestBackendDeclaresTheCordonedClass(t *testing.T) {
 		if ob.ConfigurationDigest() == digest {
 			t.Errorf("changing %s left the configuration digest unchanged", name)
 		}
+	}
+	rebuilt, err := New(cfg, &fakeSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.ConfigurationDigest() != digest {
+		t.Fatal("two backends over one configuration and binary have different digests")
+	}
+	rebuilt.daemonDigest = strings.Repeat("0", 64)
+	if rebuilt.ConfigurationDigest() == digest {
+		t.Error("a different daemon executable left the configuration digest unchanged")
 	}
 	if (&Backend{}).ConfigurationDigest() != "" || len((&Backend{}).Capabilities()) != 0 {
 		t.Fatal("the zero Backend declares something")

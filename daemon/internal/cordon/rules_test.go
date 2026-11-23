@@ -35,6 +35,7 @@ func testConfig(t *testing.T) Config {
 		UserCache:         filepath.Join(root, "user", "C"),
 		ReservedPorts:     []int{47100, 47101},
 		AgentCLI:          filepath.Join(root, "bin", "agent"),
+		AgentCLISHA256:    strings.Repeat("ab", 32),
 		Path:              []string{"/usr/bin", "/bin"},
 		StallLimit:        time.Minute,
 		EndGrace:          time.Second,
@@ -121,6 +122,8 @@ func TestConfigValidateRefusals(t *testing.T) {
 		"no stall limit":      func(c *Config) { c.StallLimit = 0 },
 		"unsorted ports":      func(c *Config) { slices.Reverse(c.ReservedPorts) },
 		"port out of range":   func(c *Config) { c.ReservedPorts = []int{0} },
+		"no CLI pin":          func(c *Config) { c.AgentCLISHA256 = "" },
+		"uppercase CLI pin":   func(c *Config) { c.AgentCLISHA256 = strings.Repeat("AB", 32) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
