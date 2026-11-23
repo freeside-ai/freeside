@@ -328,6 +328,7 @@ var (
 	ErrAdmissionInconsistent             = errors.New("execution admission id does not match its content")
 	ErrUsagePoolExhausted                = errors.New("usage pool execution limit reached")
 	ErrMachineCapacity                   = errors.New("launch memory reservation does not fit the instance budget yet")
+	ErrCordonedLaunchCap                 = errors.New("cordoned launch cap reached, unset, or an older cordoned launch waits")
 	ErrLaunchNeverFits                   = errors.New("launch memory reservation exceeds the whole instance budget")
 	ErrRuntimeOverheadUnknown            = errors.New("container runtime version has no recorded per-VM overhead")
 	ErrInvalidLaunchReservationKind      = errors.New("invalid launch reservation kind")

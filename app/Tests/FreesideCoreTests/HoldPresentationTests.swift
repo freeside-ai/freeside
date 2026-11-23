@@ -31,6 +31,7 @@ import Testing
             .quota_window_exhausted: "Waiting for quota window to reset",
             .machine_capacity: "Waiting for machine capacity",
             .update_drain: "Waiting for an update",
+            .cordoned_launch_cap: "Waiting for cordoned launch capacity",
             .unknown: "Held for a reason this app doesn't recognize",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
@@ -66,6 +67,17 @@ import Testing
                 == "This machine's memory budget can't take this launch yet. This work is queued; no action is needed for this wait."
         )
         #expect(position.holdFacts?.machine_capacity?.value1.ahead == 1)
+    }
+
+    @Test func cordonedLaunchCapGuidanceAsksForALimitWhenNoneIsSet() throws {
+        let position = try #require(HoldPresentationFixtures.make("Cordoned launch cap").position)
+        #expect(position.status == "Queued")
+        #expect(position.hold == "Waiting for cordoned launch capacity")
+        #expect(
+            position.guidance
+                == "This machine's cordoned launch limit can't take this launch yet. This work is queued; "
+                + "if no cordoned launch limit is set, set one to start it."
+        )
     }
 
     @Test func holdFactWordsOnlyTheFactThatBelongsToTheHold() throws {
@@ -312,6 +324,7 @@ import Testing
             "Usage pool": "Hold: Waiting for agent capacity",
             "Usage pool without facts": "Hold: Waiting for agent capacity",
             "Machine capacity": "Hold: Waiting for machine capacity",
+            "Cordoned launch cap": "Hold: Waiting for cordoned launch capacity",
         ]
         #expect(Set(holds.keys) == Set(HoldPresentationFixtures.groups.joined()))
         for (name, hold) in holds {
@@ -341,7 +354,7 @@ enum HoldPresentationFixtures {
             "Stop failed beside capacity",
         ],
         ["Stopped beside capacity", "Historical capacity", "Missing cause", "Failed beside capacity"],
-        ["Usage pool", "Usage pool without facts", "Machine capacity"],
+        ["Usage pool", "Usage pool without facts", "Machine capacity", "Cordoned launch cap"],
     ]
 
     static func make(_ name: String) -> TaskProgressFixtures.Case {
@@ -363,6 +376,7 @@ enum HoldPresentationFixtures {
         case "Unattended operation stopped": reason = .operation_stopped
         case "Missing cause": reason = nil
         case "Machine capacity": reason = .machine_capacity
+        case "Cordoned launch cap": reason = .cordoned_launch_cap
         case "Usage pool", "Usage pool without facts": reason = .usage_pool_exhausted
         case "Quota window": reason = .quota_window_exhausted
         default: reason = .identity_parallelism
@@ -430,6 +444,10 @@ enum HoldPresentationFixtures {
                 machine_capacity: .init(
                     value1: .init(reservation_mib: 2560, reserved_mib: 7168, budget_mib: 8192, ahead: 1)),
                 first_observed_at: observed, last_observed_at: observed)
+        case "Cordoned launch cap":
+            // The hold names the cap but carries no numbers (#3471).
+            return .init(
+                run_id: runID, reason: .cordoned_launch_cap, first_observed_at: observed, last_observed_at: observed)
         default:
             return nil
         }

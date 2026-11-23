@@ -280,14 +280,22 @@ package enum TaskDisplay {
                 // A pool wait names its pool once the timeline supplies it;
                 // a stored `identity_parallelism` hold never names one. A
                 // memory wait is either a launch that doesn't fit or one
-                // behind older launches, so its sentence fits both.
+                // behind older launches, so its sentence fits both, and so is
+                // a cordoned launch wait.
                 let pool = position.holdReason == .usage_pool_exhausted ? position.holdFacts?.usage_pool : nil
-                let cause =
-                    position.holdReason == .machine_capacity
-                    ? "This machine's memory budget can't take this launch yet."
-                    : pool.map { "Pool \($0) is at its limit of parallel runs." }
-                        ?? "The configured agent account is busy."
-                position.guidance = "\(cause) This work is queued; no action is needed for this wait."
+                let queued = "This work is queued; no action is needed for this wait."
+                position.guidance =
+                    switch position.holdReason {
+                    case .machine_capacity: "This machine's memory budget can't take this launch yet. \(queued)"
+                    // The hold can't say whether the limit is full or was
+                    // never set, and an unset one waits for the operator.
+                    case .cordoned_launch_cap:
+                        "This machine's cordoned launch limit can't take this launch yet. This work is queued; "
+                            + "if no cordoned launch limit is set, set one to start it."
+                    default:
+                        (pool.map { "Pool \($0) is at its limit of parallel runs." }
+                            ?? "The configured agent account is busy.") + " \(queued)"
+                    }
             }
             if position.holdReason == .admission_policy_refused,
                 let unserved = position.holdFacts?.detail?.value1.unserved?.value1
@@ -324,11 +332,13 @@ package enum TaskDisplay {
         return position
     }
 
-    /// A wait for a free execution slot or for machine memory: queued work,
-    /// not a held run. A stored `identity_parallelism` hold reads the same as
-    /// the pool hold that replaced it.
+    /// A wait for a free execution slot, for machine memory, or for a
+    /// cordoned launch place: queued work, not a held run. A stored
+    /// `identity_parallelism` hold reads the same as the pool hold that
+    /// replaced it.
     private static func isCapacityWait(_ reason: Components.Schemas.RunHoldReason?) -> Bool {
         reason == .usage_pool_exhausted || reason == .identity_parallelism || reason == .machine_capacity
+            || reason == .cordoned_launch_cap
     }
 
     /// The agents a current task's hold offers to move it to

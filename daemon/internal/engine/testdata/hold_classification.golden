@@ -88,6 +88,17 @@
     "refusal_hold_reason": false
   },
   {
+    "case": "cordoned launch cap reached, unset, or an older cordoned launch waits",
+    "hold_reason": "cordoned_launch_cap",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": true,
+    "refusal_hold_reason": false
+  },
+  {
     "case": "image upkeep is pending for the run's base",
     "hold_reason": "image_upkeep_pending",
     "admission_refusal": null,

@@ -6916,6 +6916,7 @@ public enum Components {
             case quota_window_exhausted = "quota_window_exhausted"
             case machine_capacity = "machine_capacity"
             case update_drain = "update_drain"
+            case cordoned_launch_cap = "cordoned_launch_cap"
             case unknown = "unknown"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.

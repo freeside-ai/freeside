@@ -105,8 +105,9 @@ var holdClasses = []holdClass{
 		sentinel: store.ErrExecutionPauseInForce, action: holdActionInvocation,
 		reason: domain.HoldBlockingSystemHealth, clearsOnStart: true,
 	},
-	// Capacity, memory, image-upkeep, and quota-window holds are current
-	// scheduling state, not history, so starting the invocation clears them.
+	// Capacity, memory, cordoned-launch, image-upkeep, and quota-window holds
+	// are current scheduling state, not history, so starting the invocation
+	// clears them.
 	{
 		sentinel: domain.ErrUsagePoolExhausted, action: holdActionInvocation,
 		reason: domain.HoldUsagePoolExhausted, clearsOnStart: true,
@@ -114,6 +115,10 @@ var holdClasses = []holdClass{
 	{
 		sentinel: domain.ErrMachineCapacity, action: holdActionInvocation,
 		reason: domain.HoldMachineCapacity, clearsOnStart: true,
+	},
+	{
+		sentinel: domain.ErrCordonedLaunchCap, action: holdActionInvocation,
+		reason: domain.HoldCordonedLaunchCap, clearsOnStart: true,
 	},
 	{
 		sentinel: ErrImageUpkeepPending, action: holdActionInvocation,
