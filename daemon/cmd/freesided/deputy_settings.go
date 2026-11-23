@@ -74,6 +74,11 @@ type deputySettings struct {
 		// request it hands back for rework; Freeside then reworks the pull
 		// request (issue #3160). Empty leaves hand-backs with a person.
 		HandBackLabel string `json:"hand_back_label,omitempty"`
+		// WriterClass is the class the project's writers run on (#3471):
+		// cordoned_host_process or fresh_vm_read_only_volume_handoff.
+		// Empty means the default, cordoned. The deputy validates and
+		// carries it; no writer admission reads it until #3472.
+		WriterClass domain.RunnerBackendClass `json:"writer_class,omitempty"`
 	} `json:"repository"`
 	Prompts struct {
 		PromptPackage              string `json:"prompt_package"`
@@ -344,6 +349,10 @@ func (s *loadedDeputySettings) validate() error {
 	if s.Repository.HandBackLabel != "" && publish.ValidateLabelName(s.Repository.HandBackLabel) != nil {
 		return errors.New("repository.hand_back_label is not a label name")
 	}
+	if s.Repository.WriterClass != "" && domain.ValidateWriterClass(s.Repository.WriterClass) != nil {
+		return fmt.Errorf("repository.writer_class %q is not %s or %s", s.Repository.WriterClass,
+			domain.BackendCordonedHostProcess, domain.BackendFreshVMReadOnlyVolumeHandoff)
+	}
 	if len(s.Repository.AllowedPaths) == 0 {
 		return errors.New("repository.allowed_paths is empty")
 	}
@@ -530,6 +539,9 @@ func (s *loadedDeputySettings) runSettings(containerBin string) daemoncompose.Ru
 	}
 	if s.Repository.HandBackLabel != "" {
 		project.HandBackLabel = new(s.Repository.HandBackLabel)
+	}
+	if s.Repository.WriterClass != "" {
+		project.WriterClass = new(s.Repository.WriterClass)
 	}
 	return daemoncompose.RunSettings{
 		Instance: instance, ProjectID: s.Repository.Project, Project: project,

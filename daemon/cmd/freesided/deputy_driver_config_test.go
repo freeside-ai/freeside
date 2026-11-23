@@ -26,6 +26,7 @@ func deputySettingsFixtureWithEveryOption(t *testing.T) map[string]any {
 	settings["build"] = map[string]any{"proxy": "", "base_build_ref": "base:local", "dns": []string{"1.1.1.1"}}
 	settings["macos_verification"] = macosVerificationFixture()
 	settings["repository"].(map[string]any)["hand_back_label"] = "needs-rework"
+	settings["repository"].(map[string]any)["writer_class"] = "fresh_vm_read_only_volume_handoff"
 	return settings
 }
 
