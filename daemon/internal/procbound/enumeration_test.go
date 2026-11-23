@@ -30,6 +30,9 @@ var unboundSites = map[string]string{
 	"internal/macverify/launcher.go:command": "sudo runs slot-run as root, so the daemon can " +
 		"neither signal nor kill its process group; both callers set WaitDelay, and the " +
 		"room proves the slot's processes gone by uid instead (#2877)",
+	"internal/cordon/supervisor.go:startSupervisorExec": "a cordoned launch's supervisor must " +
+		"outlive the daemon, so nothing may end it with the daemon's group; it gets no pipe " +
+		"(stdin and stdout on /dev/null, stderr an *os.File), so Wait waits on it alone (#3468)",
 }
 
 // TestEveryCommandSiteIsBound is the enumeration as a ratchet. The bug is

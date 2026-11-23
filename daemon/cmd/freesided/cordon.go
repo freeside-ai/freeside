@@ -10,15 +10,23 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 )
 
-// runCordonMain answers the cordon's hidden verbs. The only one is probe:
-// the conformance probe a cordoned probe launch runs, from a copy of this
-// binary, so the probe is the build the conformance record names. It needs
-// no daemon root and prints only its report.
+// runCordonMain answers the cordon's hidden verbs. probe is the
+// conformance probe a cordoned probe launch runs, from a copy of this
+// binary, so the probe is the build the conformance record names; it prints
+// only its report. supervise is the process that owns one cordoned launch:
+// the daemon starts it in its own session so the launch outlives a daemon
+// restart. Neither needs a daemon root.
 func runCordonMain(args []string) {
-	if len(args) > 0 && args[0] == "probe" {
-		os.Exit(cordon.RunProbe(args[1:], os.Stdout))
+	if len(args) > 0 {
+		switch args[0] {
+		case "probe":
+			os.Exit(cordon.RunProbe(args[1:], os.Stdout))
+		case "supervise":
+			os.Exit(cordon.RunSupervisor(args[1:]))
+		}
 	}
 	fmt.Fprintln(os.Stderr, "usage: freesided cordon probe <spec-json>")
+	fmt.Fprintln(os.Stderr, "       freesided cordon supervise <runs-root> <run-id>")
 	os.Exit(2)
 }
 

@@ -733,81 +733,82 @@ func (s *Suite) effects(ctx context.Context, stand launchStandIns) error {
 }
 
 // probeLaunch runs the probe once, in a cordoned launch of its own under
-// RunsRoot/conformance-<nonce>: it stages the probe copy in the launch's run
-// directory, has build set up the spec once the canary is a member, checks
-// the rule file the launch runs under, runs the probe, checks its report,
-// and, with the launch ended, runs ended (nil for none) on the detached
-// process the report named, before anything in the launch's directory is
-// gone. It removes the launch's directory, the one path it deletes, only
-// when this call claimed it and nothing from the launch can be alive: the
-// run-end proof passed, or nothing but the canary, which close kills and
-// reaps, ever started.
+// RunsRoot/conformance-<nonce>, through a supervisor as a writer's launch
+// runs: it stages the probe copy in the launch's run directory, has build
+// set up the spec, checks the rule file the launch runs under, runs the
+// probe, checks its report, and, with the launch ended, runs ended (nil for
+// none) on the detached process the report named, before anything in the
+// launch's directory is gone. It removes the launch's directory, the one
+// path it deletes, only when this call claimed it and nothing from the
+// launch can be alive: the run-end proof passed, or no supervisor started.
 func (s *Suite) probeLaunch(ctx context.Context, nonce string, build func(layout) (probeSpec, error),
 	ended func(*probeStandIn) error,
 ) (err error) {
 	b := s.b
 	runID := "conformance-" + nonce
-	if !runIDPattern.MatchString(runID) {
+	if !plainRunID(runID) {
 		return fmt.Errorf("cordon: probe run id %q", runID)
 	}
 	launchDir := filepath.Join(b.cfg.RunsRoot, runID)
-	// claimed is set once openLaunch's exclusive mkdir of launchDir has
-	// succeeded, which is when it calls prepare.
+	// claimed is set once claimLaunch's exclusive mkdir of launchDir has
+	// succeeded.
 	claimed := false
 	defer func() {
 		var blocked *BlockedError
-		if !claimed || errors.As(err, &blocked) {
+		if !claimed || errors.As(err, &blocked) || errors.Is(err, ErrDetached) {
 			return
 		}
 		if rmErr := os.RemoveAll(launchDir); rmErr != nil && err == nil {
 			err = fmt.Errorf("cordon: remove the probe launch: %w", rmErr)
 		}
 	}()
-	var probe string
-	ln, err := b.openLaunch(ctx, runID, func(l layout) error {
-		claimed = true
-		probe = filepath.Join(l.runRoot, probeExecutable)
-		return stageProbe(b.daemonPath, b.daemonDigest, probe)
-	})
+	l, err := b.claimLaunch(runID)
 	if err != nil {
 		return fmt.Errorf("cordon: open the probe launch: %w", err)
 	}
-	detached, err := s.runProbe(ctx, ln, probe, build)
-	ln.close()
+	claimed = true
+	probe := filepath.Join(l.runRoot, probeExecutable)
+	if err := stageProbe(b.daemonPath, b.daemonDigest, probe); err != nil {
+		return fmt.Errorf("cordon: open the probe launch: %w", err)
+	}
+	detached, err := s.runProbe(ctx, l, probe, build)
 	if err != nil || ended == nil {
 		return err
 	}
 	return ended(detached)
 }
 
-func (s *Suite) runProbe(ctx context.Context, ln *launch, probe string, build func(layout) (probeSpec, error)) (*probeStandIn, error) {
-	spec, err := build(ln.l)
+func (s *Suite) runProbe(ctx context.Context, l layout, probe string, build func(layout) (probeSpec, error)) (*probeStandIn, error) {
+	spec, err := build(l)
 	if err != nil {
 		return nil, err
 	}
-	rules, err := os.ReadFile(ln.l.rules)
+	rules, err := os.ReadFile(l.rules)
 	if err != nil || !bytes.Equal(rules, s.b.rules) {
 		return nil, failure("rule file", "the probe launch's rule file is not the backend's: %v", err)
 	}
 	args := append(slices.Clone(probeVerb), spec.arg())
 	// The probe gets the launch's environment, not the agent's: it
 	// receives no token, so it names no token descriptor.
-	exitCode, endedBy, err := ln.run(ctx, processSpec{
-		argv: confinedArgv(s.b.cfg, ln.l, probe, args...),
-		dir:  ln.l.runRoot,
-		env:  launchEnv(s.b.cfg, ln.l),
-	})
+	res, err := s.b.supervise(ctx, l, supervisorRequest{
+		RunID: filepath.Base(l.dir),
+		Program: supervisedProcess{
+			Argv: confinedArgv(s.b.cfg, l, probe, args...),
+			Dir:  l.runRoot,
+			Env:  launchEnv(s.b.cfg, l),
+		},
+	}, nil)
 	if err != nil {
 		return nil, err
 	}
-	if endedBy != EndedByExited {
-		return nil, failure("probe report", "the probe launch ended %s", endedBy)
+	if res.EndedBy != EndedByExited {
+		return nil, failure("probe report", "the probe launch ended %s", res.EndedBy)
 	}
-	report, err := os.ReadFile(ln.l.transcript)
+	report, err := os.ReadFile(l.transcript)
 	if err != nil {
 		return nil, fmt.Errorf("cordon: read the probe report: %w", err)
 	}
-	return checkProbeReport(spec, report, exitCode)
+	return checkProbeReport(spec, report, res.ExitCode)
 }
 
 // stageProbe copies the daemon executable at src to dst, a new file, and

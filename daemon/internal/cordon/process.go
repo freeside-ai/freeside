@@ -22,11 +22,11 @@ type processSpec struct {
 	// stdin is copied to the process until it ends or the process stops
 	// reading. Nil gives it /dev/null.
 	stdin io.Reader
-	// secret, when set, is what the process reads from its own pipe on
-	// tokenFD. The whole secret is written and the write end closed before
-	// the process starts, so its read reaches end of file and no other
-	// process ever holds the pipe's write end.
-	secret []byte
+	// secret, when set, is the read end of a pipe holding the secret,
+	// whose write end is already closed (secretPipe): the process gets it
+	// on tokenFD, so its read reaches end of file. The caller keeps and
+	// closes its own copy.
+	secret *os.File
 	// stdout and stderr receive the process's two output streams. Nil
 	// sends a stream to /dev/null.
 	stdout, stderr io.Writer
@@ -89,12 +89,7 @@ func startExec(spec processSpec) (process, error) {
 		childEnds = append(childEnds, r)
 	}
 	if spec.secret != nil {
-		r, err := secretPipe(spec.secret)
-		if err != nil {
-			return fail(err)
-		}
-		cmd.ExtraFiles = []*os.File{r}
-		childEnds = append(childEnds, r)
+		cmd.ExtraFiles = []*os.File{spec.secret}
 	}
 	var sinks []io.Writer
 	for _, stream := range []struct {

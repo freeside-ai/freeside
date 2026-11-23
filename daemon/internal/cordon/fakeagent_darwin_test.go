@@ -28,6 +28,11 @@ const fakeAgentArg = "cordon-fake-agent"
 
 func TestMain(m *testing.M) {
 	args := os.Args[1:]
+	// A launch's supervisor runs from the daemon's executable, which in a
+	// test is this binary.
+	if len(args) >= len(superviseVerb) && slices.Equal(args[:len(superviseVerb)], superviseVerb) {
+		os.Exit(RunSupervisor(args[len(superviseVerb):]))
+	}
 	// A launch passes the CLI's fixed settings first (cliSettings).
 	if len(args) >= len(cliSettings) && slices.Equal(args[:len(cliSettings)], cliSettings) {
 		args = args[len(cliSettings):]
@@ -38,6 +43,9 @@ func TestMain(m *testing.M) {
 	}
 	if len(args) > 0 && args[0] == fakeAgentArg {
 		os.Exit(fakeAgent(args[1:]))
+	}
+	if len(args) == 3 && args[0] == daemonStandInArg {
+		os.Exit(daemonStandIn(args[1], args[2]))
 	}
 	os.Exit(m.Run())
 }
@@ -53,9 +61,11 @@ func TestMain(m *testing.M) {
 //	probe            run each probe line from stdin; print ok or FAIL
 //	hop              start a chain of processes that each fork the next and
 //	                 exit at once, appending to ./hops as it goes; exit
-//	spawn THEN       start three detached children, write their pids to
-//	                 ./pids, then THEN: exit, chatter (print until killed),
-//	                 or silent (print nothing until killed)
+//	spawn THEN       write its own pid to ./agent.pid, start three detached
+//	                 children, write their pids to ./pids, then THEN: exit,
+//	                 chatter (print until killed), silent (print nothing
+//	                 until killed), or release (print until ./release
+//	                 exists, then exit 0)
 func fakeAgent(args []string) int {
 	if len(args) == 0 {
 		return 2
@@ -82,6 +92,10 @@ func fakeAgent(args []string) int {
 		}
 		return 0
 	case "spawn":
+		if err := writeByRename("agent.pid", fmt.Sprintf("%d\n", os.Getpid())); err != nil {
+			fmt.Println("FAIL agent.pid:", err)
+			return 1
+		}
 		if err := spawnSurvivors(); err != nil {
 			fmt.Println("FAIL spawn:", err)
 			return 1
@@ -94,6 +108,14 @@ func fakeAgent(args []string) int {
 			}
 		case "silent":
 			select {}
+		case "release":
+			for {
+				if _, err := os.Stat("release"); err == nil {
+					return 0
+				}
+				fmt.Println("working")
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 		return 0
 	}
@@ -141,13 +163,17 @@ func spawnSurvivors() error {
 	if err := setsid.Start(); err != nil {
 		return err
 	}
-	pids := fmt.Sprintf("%d\n%s\n%d\n", nohup.Process.Pid, doubleFork, setsid.Process.Pid)
-	// Rename it into place: a test cancels the launch once pids appears, and
-	// a kill between creating and writing it would leave it empty.
-	if err := os.WriteFile("pids.tmp", []byte(pids), 0o600); err != nil {
+	return writeByRename("pids", fmt.Sprintf("%d\n%s\n%d\n", nohup.Process.Pid, doubleFork, setsid.Process.Pid))
+}
+
+// writeByRename writes body to name through a rename: a test acts once
+// name appears, and a kill between creating and writing it would leave it
+// empty.
+func writeByRename(name, body string) error {
+	if err := os.WriteFile(name+".tmp", []byte(body), 0o600); err != nil {
 		return err
 	}
-	return os.Rename("pids.tmp", "pids")
+	return os.Rename(name+".tmp", name)
 }
 
 // startHopChain starts a process that is never alive for long: each link

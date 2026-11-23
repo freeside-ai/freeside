@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +18,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-// The launch's two records live in its ctl directory, which no launch can
-// read or write, so each says only what the daemon wrote. Both are created
-// once and never replaced.
+// A launch's records live in its ctl directory, which no launch can read or
+// write, so each says only what the daemon or its supervisor wrote. Each is
+// created once and never replaced. No record names a path: every path a
+// reader acts on follows from RunsRoot and the run ID (layoutFor).
 
 // ErrNoEndRecord means a launch has no proven end: it is running, it was
 // blocked, or it failed before it returned a result.
@@ -50,7 +52,9 @@ func writeEndRecord(l layout, rec endRecord) error {
 }
 
 // readEndRecord reads runID's end record, refusing one that isn't this
-// run's or doesn't parse.
+// run's or doesn't parse. A cancellation marker outranks the recorded
+// ending: a run whose cancellation was requested reads as canceled, even
+// when its agent exited cleanly first, so it is never exported.
 func readEndRecord(l layout, runID string) (endRecord, error) {
 	var rec endRecord
 	if err := readRecord(l.ended, &rec); err != nil {
@@ -59,10 +63,134 @@ func readEndRecord(l layout, runID string) (endRecord, error) {
 		}
 		return endRecord{}, err
 	}
-	if rec.Version != endRecordVersion || rec.RunID != runID || !rec.EndedBy.valid() || rec.BaseSHA == "" {
+	if rec.Version != endRecordVersion || rec.RunID != runID || !rec.EndedBy.valid() {
 		return endRecord{}, fmt.Errorf("cordon: end record for %s is not this run's", runID)
 	}
+	canceled, err := cancellationRequested(l, runID)
+	if err != nil {
+		return endRecord{}, err
+	}
+	if canceled {
+		rec.EndedBy = EndedByCanceled
+	}
 	return rec, nil
+}
+
+const requestVersion = "freeside.cordon.supervise/v1"
+
+// supervisedProcess is one process a supervisor starts, already confined
+// (confinedArgv) by the daemon that wrote the request.
+type supervisedProcess struct {
+	Argv []string `json:"argv"`
+	Dir  string   `json:"dir"`
+	Env  []string `json:"env"`
+}
+
+// supervisorRequest is ctl/request.json: everything a supervisor runs, so
+// it needs nothing from the daemon but the run's directory and, for a
+// writer, the token's pipe on tokenFD. The daemon writes it after the seed
+// and before it starts the supervisor.
+type supervisorRequest struct {
+	Version string `json:"version"`
+	RunID   string `json:"run_id"`
+	// Repository, BaseRef, and BaseSHA go into the end record; a probe
+	// launch, which is never exported, has none.
+	Repository string            `json:"repository"`
+	BaseRef    string            `json:"base_ref"`
+	BaseSHA    string            `json:"base_sha"`
+	Canary     supervisedProcess `json:"canary"`
+	Program    supervisedProcess `json:"program"`
+	// Prompt gives the program ctl/prompt on stdin, and /dev/null without
+	// it. Secret gives it the supervisor's tokenFD as its own.
+	Prompt          bool  `json:"prompt"`
+	Secret          bool  `json:"secret"`
+	StallLimit      int64 `json:"stall_limit_ns"`
+	EndGrace        int64 `json:"end_grace_ns"`
+	EndProofTimeout int64 `json:"end_proof_timeout_ns"`
+}
+
+func (r supervisorRequest) check(runID string) error {
+	if r.Version != requestVersion || r.RunID != runID {
+		return fmt.Errorf("cordon: the supervisor request is not %s's", runID)
+	}
+	if len(r.Canary.Argv) == 0 || len(r.Program.Argv) == 0 {
+		return errors.New("cordon: the supervisor request names no program")
+	}
+	if r.StallLimit <= 0 || r.EndGrace <= 0 || r.EndProofTimeout <= 0 {
+		return errors.New("cordon: the supervisor request has a non-positive limit")
+	}
+	return nil
+}
+
+const claimVersion = "freeside.cordon.claim/v1"
+
+// supervisorClaim is ctl/supervisor.json, the one decision of who owns a
+// run: its supervisor, which claims before it starts anything, or recovery,
+// which claims a run no supervisor claimed so that none ever starts it.
+// Whoever creates it first owns the run.
+type supervisorClaim struct {
+	Version string `json:"version"`
+	RunID   string `json:"run_id"`
+	// Supervisor is the supervisor's pid and start time, so nothing
+	// signals or waits on a later process that reuses its pid. It is null
+	// in recovery's claim.
+	Supervisor *claimedProcess `json:"supervisor"`
+}
+
+type claimedProcess struct {
+	PID   int   `json:"pid"`
+	Start int64 `json:"start_us"`
+}
+
+func (p claimedProcess) hostProcess() hostProcess {
+	return hostProcess{pid: p.PID, start: p.Start, settled: true}
+}
+
+// claimRun writes runID's claim, naming supervisor or, when it is nil,
+// recovery. won is false when the run was already claimed.
+func claimRun(l layout, runID string, supervisor *claimedProcess) (won bool, _ error) {
+	err := writeRecord(l.claim, supervisorClaim{Version: claimVersion, RunID: runID, Supervisor: supervisor})
+	if errors.Is(err, fs.ErrExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// readClaim reads runID's claim. A missing claim's error matches
+// os.ErrNotExist.
+func readClaim(l layout, runID string) (supervisorClaim, error) {
+	var c supervisorClaim
+	if err := readRecord(l.claim, &c); err != nil {
+		return supervisorClaim{}, err
+	}
+	if c.Version != claimVersion || c.RunID != runID || (c.Supervisor != nil && (c.Supervisor.PID <= 1 || c.Supervisor.Start <= 0)) {
+		return supervisorClaim{}, fmt.Errorf("cordon: the claim is not %s's", runID)
+	}
+	return c, nil
+}
+
+const cancelVersion = "freeside.cordon.cancel/v1"
+
+// cancelMarker is ctl/cancel.json, the durable cancellation request.
+type cancelMarker struct {
+	Version string `json:"version"`
+	RunID   string `json:"run_id"`
+}
+
+// cancellationRequested reports whether runID's cancellation marker exists.
+func cancellationRequested(l layout, runID string) (bool, error) {
+	var m cancelMarker
+	err := readRecord(l.cancel, &m)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if m.Version != cancelVersion || m.RunID != runID {
+		return false, fmt.Errorf("cordon: the cancellation marker is not %s's", runID)
+	}
+	return true, nil
 }
 
 const exportRecordVersion = "freeside.cordon.export/v1"
@@ -179,6 +307,10 @@ func writeRecord(path string, rec any) error {
 	body, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("cordon: encode %s: %w", path, err)
+	}
+	// readRecord refuses more than this, so never write what can't be read.
+	if len(body) > maxRecordBytes {
+		return fmt.Errorf("cordon: %s would exceed %d bytes", path, maxRecordBytes)
 	}
 	if err := atomicfile.WriteFileNoReplace(path, body, 0o600); err != nil {
 		return fmt.Errorf("cordon: write %s: %w", path, err)

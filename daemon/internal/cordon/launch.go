@@ -1,7 +1,6 @@
 package cordon
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,14 +28,18 @@ const (
 	EndedByCanceled EndedBy = "canceled"
 	// EndedByStalled means the agent wrote nothing for Config.StallLimit.
 	EndedByStalled EndedBy = "stalled"
+	// EndedByLost means recovery ended a run no supervisor recorded an end
+	// for: its supervisor died, or never started it. Recovery writes it only
+	// once the run-end proof has passed, and a lost run is never exported.
+	EndedByLost EndedBy = "lost"
 )
 
 // AllEndedBy lists every valid EndedBy; it is the single registration point.
-var AllEndedBy = []EndedBy{EndedByExited, EndedByCanceled, EndedByStalled}
+var AllEndedBy = []EndedBy{EndedByExited, EndedByCanceled, EndedByStalled, EndedByLost}
 
 func (e EndedBy) valid() bool {
 	switch e {
-	case EndedByExited, EndedByCanceled, EndedByStalled:
+	case EndedByExited, EndedByCanceled, EndedByStalled, EndedByLost:
 		return true
 	default:
 		return false
@@ -89,7 +92,8 @@ type LaunchResult struct {
 }
 
 // BlockedError is a launch whose end could not be proven: some process it
-// started may still be alive. Err wraps ErrRunEndUnproven.
+// started may still be alive. Err wraps ErrRunEndUnproven. EndedBy is
+// empty when the supervisor died before it said how the launch ended.
 type BlockedError struct {
 	RunID   string
 	EndedBy EndedBy
@@ -97,6 +101,9 @@ type BlockedError struct {
 }
 
 func (e *BlockedError) Error() string {
+	if e.EndedBy == "" {
+		return fmt.Sprintf("cordon: launch %s is blocked: %v", e.RunID, e.Err)
+	}
 	return fmt.Sprintf("cordon: launch %s is blocked after it %s: %v", e.RunID, e.EndedBy, e.Err)
 }
 
@@ -104,6 +111,10 @@ func (e *BlockedError) Unwrap() error { return e.Err }
 
 // runIDPattern keeps a RunID one plain path component.
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func plainRunID(runID string) bool {
+	return runIDPattern.MatchString(runID) && !strings.Contains(runID, "..")
+}
 
 // layout is a launch's directories. Every path follows from RunsRoot and
 // RunID alone, so a restarted daemon can rebuild it (#3468).
@@ -114,11 +125,16 @@ type layout struct {
 	// ctl sits outside runRoot, under a protected root, so the launch can
 	// neither read nor write it.
 	ctl, rules, tag, control, transcript, stderr string
-	// ended and exportRecord are the end and export records (record.go).
-	ended, exportRecord string
-	// export is the export's output, beside run/ and ctl/: outside
-	// RUN_ROOT, so no launch can write it.
-	export string
+	// ended and exportRecord are the end and export records, and request,
+	// claim, and cancel the supervisor's request, its claim, and the
+	// cancellation marker (record.go).
+	ended, exportRecord, request, claim, cancel string
+	// prompt is the agent's stdin, and supervisorStderr the supervisor's
+	// own stderr, where it says why it failed.
+	prompt, supervisorStderr string
+	// dir is the launch's directory; export is the export's output, beside
+	// run/ and ctl/: outside RUN_ROOT, so no launch can write it.
+	dir, export string
 }
 
 func layoutFor(runsRoot, runID string) layout {
@@ -130,7 +146,10 @@ func layoutFor(runsRoot, runID string) layout {
 		ctl: ctl, rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
 		control: filepath.Join(ctl, "control"), transcript: filepath.Join(ctl, "transcript"),
 		stderr: filepath.Join(ctl, "stderr"), ended: filepath.Join(ctl, "ended.json"),
-		exportRecord: filepath.Join(ctl, "export.json"), export: filepath.Join(dir, "export"),
+		exportRecord: filepath.Join(ctl, "export.json"), request: filepath.Join(ctl, "request.json"),
+		claim: filepath.Join(ctl, "supervisor.json"), cancel: filepath.Join(ctl, "cancel.json"),
+		prompt: filepath.Join(ctl, "prompt"), supervisorStderr: filepath.Join(ctl, "supervisor.stderr"),
+		dir: dir, export: filepath.Join(dir, "export"),
 	}
 }
 
@@ -167,8 +186,9 @@ func agentEnv(cfg Config, l layout) []string {
 const sandboxExec = "/usr/bin/sandbox-exec"
 
 // canaryProgram is the proof's positive control: it reads its stdin, which
-// the backend holds open, so it stays alive until the proof kills it and
-// exits by itself if the daemon dies.
+// its starter holds open, so it stays alive until the proof kills it and
+// exits by itself if its starter dies. Recovery starts a fresh one under the
+// run's rule file, which reads as a member just the same.
 const canaryProgram = "/bin/cat"
 
 func confinedArgv(cfg Config, l layout, program string, args ...string) []string {
@@ -189,12 +209,18 @@ func agentArgs(args []string) []string {
 }
 
 // Launch runs one writer launch and returns once no process from it is
-// alive. It seeds the worktree, starts the canary and then the agent under
-// the rule file, watches the agent's output, and ends the launch when the
-// agent exits, ctx is canceled, or the output stalls. Every ending runs the
+// alive. It seeds the worktree and starts the launch's supervisor
+// (supervisor.go), which starts the canary and then the agent under the
+// rule file, watches the agent's output, and ends the launch when the agent
+// exits, the launch is canceled, or the output stalls. Every ending runs the
 // run-end proof; a launch whose end can't be proven returns a *BlockedError
-// and no result. A launch that returns a result has written its end record
-// (record.go) first, which is what Export requires.
+// and no result. A launch that returns a result has its end record
+// (record.go), which is what Export requires.
+//
+// The supervisor outlives the daemon, so a daemon that exits mid-launch
+// loses nothing: Recover adopts the run. Canceling ctx requests the run's
+// cancellation and keeps waiting for its end; Detach returns at once and
+// leaves it running.
 //
 // Nothing in the worktree is read, run, or inspected by the daemon once the
 // agent starts; the seed runs before it.
@@ -211,35 +237,31 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 			return LaunchResult{}, err
 		}
 	}
-	ln, err := b.openLaunch(ctx, req.RunID, func(l layout) error {
-		return b.seed(ctx, req, l)
-	})
+	l, err := b.claimLaunch(req.RunID)
 	if err != nil {
 		return LaunchResult{}, err
 	}
-	defer ln.close()
-	exitCode, endedBy, err := ln.run(ctx, processSpec{
-		argv:   confinedArgv(b.cfg, ln.l, b.cfg.AgentCLI, agentArgs(req.Args)...),
-		dir:    ln.l.worktree,
-		env:    agentEnv(b.cfg, ln.l),
-		stdin:  bytes.NewReader(req.Prompt),
-		secret: req.Token.Reveal(),
-	})
-	if err != nil {
+	if err := b.seed(ctx, req, l); err != nil {
 		return LaunchResult{}, err
 	}
-	// Only a writer's launch is exported, so only it records its end.
-	if err := writeEndRecord(ln.l, endRecord{
+	if err := writeExclusive(l.prompt, req.Prompt); err != nil {
+		return LaunchResult{}, err
+	}
+	token := req.Token.Reveal()
+	defer clear(token)
+	return b.supervise(ctx, l, supervisorRequest{
 		RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
-		EndedBy: endedBy, ExitCode: exitCode,
-	}); err != nil {
-		return LaunchResult{}, err
-	}
-	return LaunchResult{ExitCode: exitCode, EndedBy: endedBy, TranscriptPath: ln.l.transcript, StderrPath: ln.l.stderr}, nil
+		Program: supervisedProcess{
+			Argv: confinedArgv(b.cfg, l, b.cfg.AgentCLI, agentArgs(req.Args)...),
+			Dir:  l.worktree,
+			Env:  agentEnv(b.cfg, l),
+		},
+		Prompt: true, Secret: true,
+	}, token)
 }
 
 func (r LaunchRequest) validate() error {
-	if !runIDPattern.MatchString(r.RunID) || strings.Contains(r.RunID, "..") {
+	if !plainRunID(r.RunID) {
 		return fmt.Errorf("cordon: run id %q must be one plain path component", r.RunID)
 	}
 	if r.Repository == "" || r.BaseRef == "" || r.BaseSHA == "" {
@@ -258,123 +280,18 @@ func (r LaunchRequest) validate() error {
 	return nil
 }
 
-// launch is one launch between its canary joining and its run-end proof:
-// its directory is prepared, its canary is a member, and it runs one
-// program. Build it with openLaunch and always close it.
-type launch struct {
-	b                  *Backend
-	runID              string
-	l                  layout
-	host               hostProcesses
-	target             proofTarget
-	transcript, stderr *os.File
-	canary             process
-	canaryInput        io.Closer
-	ran                bool
-}
-
-// openLaunch claims runID's directory, writes the rule file and the proof's
-// files, runs prepare on the layout (the seed, or a probe's staging),
-// creates the output files, and starts the canary, returning once it reads
-// as a member. A launch that fails here started nothing the proof would
-// need to end but the canary, which close kills.
-func (b *Backend) openLaunch(ctx context.Context, runID string, prepare func(layout) error) (_ *launch, err error) {
-	// Refuse before starting anything a proof couldn't follow.
-	host, err := b.newHost()
-	if err != nil {
-		return nil, err
+// claimLaunch refuses before claiming anything when the backend is
+// detached or no proof could follow the launch, then claims runID's
+// directory (prepare).
+func (b *Backend) claimLaunch(runID string) (layout, error) {
+	if err := b.attached(); err != nil {
+		return layout{}, err
+	}
+	if _, err := b.newHost(); err != nil {
+		return layout{}, err
 	}
 	l := layoutFor(b.cfg.RunsRoot, runID)
-	if err := b.prepare(l); err != nil {
-		return nil, err
-	}
-	if err := prepare(l); err != nil {
-		return nil, err
-	}
-	ln := &launch{b: b, runID: runID, l: l, host: host, target: proofTarget{tag: l.tag, control: l.control}}
-	defer func() {
-		if err != nil {
-			ln.close()
-		}
-	}()
-	if ln.transcript, err = os.OpenFile(l.transcript, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
-		return nil, fmt.Errorf("cordon: create transcript: %w", err)
-	}
-	if ln.stderr, err = os.OpenFile(l.stderr, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
-		return nil, fmt.Errorf("cordon: create stderr: %w", err)
-	}
-	canaryHold, canaryInput := io.Pipe()
-	ln.canaryInput = canaryInput
-	if ln.canary, err = b.start(processSpec{
-		argv: confinedArgv(b.cfg, l, canaryProgram), dir: l.runRoot, env: launchEnv(b.cfg, l), stdin: canaryHold,
-	}); err != nil {
-		return nil, fmt.Errorf("cordon: start the canary: %w", err)
-	}
-	ln.target.canary = ln.canary.pid()
-	if err := awaitMember(ctx, ln.host, ln.target, b.cfg.EndProofTimeout); err != nil {
-		return nil, err
-	}
-	return ln, nil
-}
-
-// run starts spec, which must already be confined (confinedArgv), with its
-// output going to the launch's transcript and stderr files, watches it as
-// Launch describes, and ends the launch with the run-end proof. A launch
-// runs one program: the proof kills its canary. run clears spec.secret once
-// the program holds it, so the daemon keeps no copy beyond its caller's.
-func (ln *launch) run(ctx context.Context, spec processSpec) (int, EndedBy, error) {
-	if ln.ran {
-		return 0, "", errors.New("cordon: a launch runs one program")
-	}
-	ln.ran = true
-	b := ln.b
-	activity := newActivity()
-	spec.stdout, spec.stderr = activity.to(ln.transcript), activity.to(ln.stderr)
-	agent, err := b.start(spec)
-	// The pipe holds the secret now, or nothing does.
-	clear(spec.secret)
-	if err != nil {
-		if proofErr := endLaunch(context.WithoutCancel(ctx), ln.host, ln.target, b.cfg.EndProofTimeout); proofErr != nil {
-			return 0, "", &BlockedError{RunID: ln.runID, EndedBy: EndedByExited, Err: proofErr}
-		}
-		return 0, "", fmt.Errorf("cordon: start the agent: %w", err)
-	}
-
-	endedBy, exitCode, waitErr := b.watch(ctx, agent, activity)
-	// The CLI's exit doesn't end its children (#3463), so every ending
-	// runs the proof, and runs it even though ctx may be canceled.
-	if err := endLaunch(context.WithoutCancel(ctx), ln.host, ln.target, b.cfg.EndProofTimeout); err != nil {
-		return 0, "", &BlockedError{RunID: ln.runID, EndedBy: endedBy, Err: err}
-	}
-	// Every writer is dead, so the output reaches EOF at once.
-	agent.closeIO(b.cfg.EndGrace)
-	if waitErr != nil {
-		return 0, "", fmt.Errorf("cordon: wait for the agent: %w", waitErr)
-	}
-	if err := activity.err(); err != nil {
-		return 0, "", fmt.Errorf("cordon: write the agent's output: %w", err)
-	}
-	if err := errors.Join(ln.transcript.Sync(), ln.stderr.Sync()); err != nil {
-		return 0, "", fmt.Errorf("cordon: sync the agent's output: %w", err)
-	}
-	return exitCode, endedBy, nil
-}
-
-// close is a backstop: the proof has already killed the canary, unless it
-// failed before it got that far.
-func (ln *launch) close() {
-	if ln.canary != nil {
-		_ = ln.canary.signalGroup(syscall.SIGKILL)
-		_ = ln.canaryInput.Close()
-		_, _ = ln.canary.wait()
-		ln.canary.closeIO(0)
-	}
-	if ln.transcript != nil {
-		_ = ln.transcript.Close()
-	}
-	if ln.stderr != nil {
-		_ = ln.stderr.Close()
-	}
+	return l, b.prepare(l)
 }
 
 // prepare claims the launch's directory and writes the rule file and the
@@ -492,50 +409,56 @@ type waitResult struct {
 	err      error
 }
 
+// limits are a launch's three durations, from Config by way of the
+// supervisor's request.
+type limits struct {
+	stall, endGrace, endProof time.Duration
+}
+
 // watch waits for the agent to exit, ending it first if ctx is canceled or
-// its output is silent for StallLimit. It returns once the agent itself has
-// exited or, if it outlasts SIGKILL, once EndProofTimeout passes; the
-// proof deals with everything else.
-func (b *Backend) watch(ctx context.Context, agent process, activity *activity) (EndedBy, int, error) {
+// its output is silent for the stall limit. It returns once the agent
+// itself has exited or, if it outlasts SIGKILL, once the proof's timeout
+// passes; the proof deals with everything else.
+func watch(ctx context.Context, lim limits, agent process, activity *activity) (EndedBy, int, error) {
 	exited := make(chan waitResult, 1)
 	go func() {
 		code, err := agent.wait()
 		exited <- waitResult{code, err}
 	}()
-	stall := time.NewTimer(b.cfg.StallLimit)
+	stall := time.NewTimer(lim.stall)
 	defer stall.Stop()
 	for {
 		select {
 		case r := <-exited:
 			return EndedByExited, r.exitCode, r.err
 		case <-ctx.Done():
-			r := b.stop(agent, exited)
+			r := stop(lim, agent, exited)
 			return EndedByCanceled, r.exitCode, r.err
 		case <-stall.C:
-			if idle := time.Since(activity.last()); idle < b.cfg.StallLimit {
-				stall.Reset(b.cfg.StallLimit - idle)
+			if idle := time.Since(activity.last()); idle < lim.stall {
+				stall.Reset(lim.stall - idle)
 				continue
 			}
-			r := b.stop(agent, exited)
+			r := stop(lim, agent, exited)
 			return EndedByStalled, r.exitCode, r.err
 		}
 	}
 }
 
-// stop ends the agent's process group: SIGTERM, EndGrace for it to exit,
-// then SIGKILL. A descendant that left the group is the proof's.
-func (b *Backend) stop(agent process, exited <-chan waitResult) waitResult {
+// stop ends the agent's process group: SIGTERM, the end grace for it to
+// exit, then SIGKILL. A descendant that left the group is the proof's.
+func stop(lim limits, agent process, exited <-chan waitResult) waitResult {
 	_ = agent.signalGroup(syscall.SIGTERM)
 	select {
 	case r := <-exited:
 		return r
-	case <-time.After(b.cfg.EndGrace):
+	case <-time.After(lim.endGrace):
 	}
 	_ = agent.signalGroup(syscall.SIGKILL)
 	select {
 	case r := <-exited:
 		return r
-	case <-time.After(b.cfg.EndProofTimeout):
+	case <-time.After(lim.endProof):
 		// The proof will fail to kill it too, and block the launch.
 		return waitResult{exitCode: -1}
 	}

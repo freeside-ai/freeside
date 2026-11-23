@@ -52,6 +52,13 @@ type hostProcesses interface {
 	// kill sends SIGKILL to pid. A pid that no longer exists is not an
 	// error.
 	kill(pid int) error
+	// lookup reads pid's entry, so a supervisor can name itself in its
+	// claim by pid and start time. found is false for a pid with no live
+	// process.
+	lookup(pid int) (p hostProcess, found bool, _ error)
+	// terminate sends SIGTERM to pid. A pid that no longer exists is not an
+	// error.
+	terminate(pid int) error
 }
 
 // proofPollInterval paces the proof's passes while a killed member is
