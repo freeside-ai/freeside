@@ -6657,12 +6657,14 @@ sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, p
 
 `internal/cordon` runs one writer launch on the daemon's host: the agent
 CLI as the daemon's own account under a Seatbelt rule file, in a seeded
-worktree, ending in a proof that no process of the launch is alive. It is a
-standalone API with no caller yet; export (#3467), restart recovery
-(#3468), the credential (#3469), conformance (#3470), and admission (#3472)
-wire it in. The package doc (`internal/cordon/doc.go`) holds the layout and
-the mechanism; the decision record is
-`devlog/2026-11-22-1236-cordoned-host-launch.md`.
+worktree, ending in a proof that no process of the launch is alive. It also
+exports that worktree as the handoff the importer takes. It is a standalone
+API with no caller yet; the stage driver port, restart recovery (#3468), the
+credential (#3469), conformance (#3470), and admission (#3472) wire it in.
+The package doc (`internal/cordon/doc.go`) holds the layout and the
+mechanism; the decision records are
+`devlog/2026-11-22-1236-cordoned-host-launch.md` and, for the export,
+`devlog/2026-11-22-2046-cordoned-export.md`.
 
 - **macOS with cgo only.** The run-end proof calls `sandbox_check` through
   cgo. Any other build refuses every launch before it starts anything, with
@@ -6686,6 +6688,31 @@ the mechanism; the decision record is
 - **A launch that can't be proven ended is blocked.** `Launch` returns a
   `BlockedError` naming how the launch ended (exited, canceled, or
   stalled); the caller holds the run for a person.
+- **Output and records.** The agent's stdout goes to
+  `ctl/transcript` and its stderr to `ctl/stderr`, and both count as activity for the stall
+  limit. A launch with a proven end writes `ctl/ended.json` (how it ended,
+  its exit code, and the base commit) as its last step. A launch that was
+  blocked or failed before that has none.
+- **Export.** `Export` runs only for a launch whose end record says it
+  exited with code 0, and only once. It writes the daemon's own evidence
+  descriptor (stdout as the transcript, plus the sources the caller names
+  that exist as regular files), walks the worktree with the trusted export
+  package in the daemon's process, refuses a `run/` or `run/worktree` the
+  launch replaced with a symlink and any hard-linked file, runs the
+  export credential scan, and writes `<RunsRoot>/<RunID>/export` and
+  `ctl/export.json`, which binds the digests of the export's manifest,
+  evidence, and commit plan. A refusal for the launch's end or an earlier
+  export writes nothing; a later one leaves no export record, so `AuthenticateReleasedExport`, which
+  accepts an export directory only when its members still match that
+  record, refuses what it wrote. Removing that is restart recovery's
+  (#3468).
+- **Where the export is weaker than the ward's.** It has no exporter VM, so
+  a defect in the walk runs with the daemon's privileges. It has no
+  read-only mount: the tree holds still because no process of the run is
+  alive and every other launch is denied writes there, not because the
+  kernel forbids them. And the launch can write its own directory, so a
+  symlink or hard link it leaves can name any file the account can read,
+  which is why the export refuses both.
 
 The darwin tests launch the test binary as the fake agent, under the real
 rule file, with a fake home under the test's directory; no default test
