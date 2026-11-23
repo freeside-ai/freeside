@@ -126,6 +126,11 @@ type StartSpec struct {
 	// hydrate as the driver's composition says; omitempty keeps every
 	// existing journaled spec byte-identical to the one its admission renders.
 	WorkspaceHydration domain.WorkspaceHydration `json:"workspace_hydration,omitempty"`
+	// RunnerClass is the class the admission named, set only for a cordoned
+	// admission so the stage driver can run it on the cordon instead of the
+	// ward. Unset means the warded class; omitempty keeps every journaled
+	// warded spec byte-identical to the one its admission renders.
+	RunnerClass domain.RunnerBackendClass `json:"runner_class,omitempty"`
 }
 
 // StartSpecFromAdmission renders the durable admission record as the spec its
@@ -152,6 +157,9 @@ func StartSpecFromAdmission(a domain.ExecutionAdmission) StartSpec {
 	}
 	if a.AuthIdentityID != nil {
 		spec.AuthIdentityID = *a.AuthIdentityID
+	}
+	if a.Backend == string(domain.BackendCordonedHostProcess) {
+		spec.RunnerClass = domain.BackendCordonedHostProcess
 	}
 	if a.AgentBinding != nil {
 		spec.RouteModelID = a.AgentBinding.RouteModelID

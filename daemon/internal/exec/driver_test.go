@@ -99,12 +99,31 @@ func skippingHydration(t *testing.T, a domain.ExecutionAdmission) domain.Executi
 	return a
 }
 
+// cordoning re-addresses an admission onto the cordoned class with its host
+// profile, the class fullAdmission leaves at the ward.
+func cordoning(t *testing.T, a domain.ExecutionAdmission) domain.ExecutionAdmission {
+	t.Helper()
+	a.Backend = string(domain.BackendCordonedHostProcess)
+	a.EgressProfile = domain.EgressHostOpen
+	id, err := a.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.ID = id
+	if err := a.Validate(); err != nil {
+		t.Fatalf("cordoned admission: %v", err)
+	}
+	return a
+}
+
 // TestStartSpecFromAdmissionCarriesEveryField is the drift guard between the
 // spec and the record it is rendered from: a field added to StartSpec and left
-// unmapped stays zero here and fails, rather than reaching a driver empty.
+// unmapped stays zero here and fails, rather than reaching a driver empty. It
+// runs on a cordoned admission, the one shape that sets every field.
 func TestStartSpecFromAdmissionCarriesEveryField(t *testing.T) {
 	identity := domain.AuthIdentityID("auth-1")
-	admission := skippingHydration(t, fullAdmission(t, &identity, domain.EgressProviderOnly, explicitAgentBinding()))
+	admission := cordoning(t,
+		skippingHydration(t, fullAdmission(t, &identity, domain.EgressProviderOnly, explicitAgentBinding())))
 	spec := exec.StartSpecFromAdmission(admission)
 
 	v := reflect.ValueOf(spec)
@@ -148,6 +167,27 @@ func TestStartSpecFromAdmissionCarriesWorkspaceHydration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := exec.StartSpecFromAdmission(tc.admission).WorkspaceHydration; got != tc.want {
 				t.Fatalf("spec workspace_hydration = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The stage driver picks the cordon over the ward from the spec, so the
+// conversion names the class for a cordoned admission and leaves it unset for
+// a warded one, whose journaled spec then stays equal to today's.
+func TestStartSpecFromAdmissionCarriesRunnerClass(t *testing.T) {
+	identity := domain.AuthIdentityID("auth-1")
+	warded := fullAdmission(t, &identity, domain.EgressProviderOnly, agentBinding())
+	for name, tc := range map[string]struct {
+		admission domain.ExecutionAdmission
+		want      domain.RunnerBackendClass
+	}{
+		"warded":   {warded, ""},
+		"cordoned": {cordoning(t, warded), domain.BackendCordonedHostProcess},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := exec.StartSpecFromAdmission(tc.admission).RunnerClass; got != tc.want {
+				t.Fatalf("spec runner_class = %q, want %q", got, tc.want)
 			}
 		})
 	}
