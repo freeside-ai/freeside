@@ -33,17 +33,18 @@ func run(args []string, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	workspace := flags.String("workspace", export.HelperWorkspaceDir, "read-only workspace mount to export")
 	out := flags.String("out", export.HelperHandoffDir, "output directory for the manifest and content blobs")
-	maxBlobBytes := flags.Int64("max-blob-bytes", 100<<20,
+	defaults := export.DefaultOptions()
+	maxBlobBytes := flags.Int64("max-blob-bytes", defaults.MaxBlobBytes,
 		"largest file that still gets a content blob; larger files are recorded blob_omitted; 0 disables the cap")
-	maxTotalBlobBytes := flags.Int64("max-total-blob-bytes", 1<<30,
+	maxTotalBlobBytes := flags.Int64("max-total-blob-bytes", defaults.MaxTotalBlobBytes,
 		"aggregate bytes written under blobs/ before further blobs are recorded blob_omitted; 0 disables the cap")
-	maxBlobs := flags.Int("max-blobs", export.DefaultMaxBlobs,
+	maxBlobs := flags.Int("max-blobs", defaults.MaxBlobs,
 		"distinct blobs written under blobs/ before further files are recorded blob_omitted; 0 disables the cap")
-	maxEntries := flags.Int("max-entries", 1_000_000,
+	maxEntries := flags.Int("max-entries", defaults.MaxEntries,
 		"fail the export when the walk touches more names (files and directories) than this; 0 disables the cap")
-	maxEvidenceBlobBytes := flags.Int64("max-evidence-blob-bytes", 100<<20,
+	maxEvidenceBlobBytes := flags.Int64("max-evidence-blob-bytes", defaults.MaxEvidenceBlobBytes,
 		"largest evidence source that still gets a blob; a larger source fails the export (evidence blobs cannot be omitted); 0 disables the cap")
-	maxEvidenceTotalBytes := flags.Int64("max-evidence-total-bytes", 1<<30,
+	maxEvidenceTotalBytes := flags.Int64("max-evidence-total-bytes", defaults.MaxEvidenceTotalBytes,
 		"aggregate bytes written under evidence/ before an evidence source fails the export; 0 disables the cap")
 	if err := flags.Parse(args); err != nil {
 		return err

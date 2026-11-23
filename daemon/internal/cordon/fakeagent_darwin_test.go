@@ -102,7 +102,12 @@ func spawnSurvivors() error {
 		return err
 	}
 	pids := fmt.Sprintf("%d\n%s\n%d\n", nohup.Process.Pid, doubleFork, setsid.Process.Pid)
-	return os.WriteFile("pids", []byte(pids), 0o600)
+	// Rename it into place: a test cancels the launch once pids appears, and
+	// a kill between creating and writing it would leave it empty.
+	if err := os.WriteFile("pids.tmp", []byte(pids), 0o600); err != nil {
+		return err
+	}
+	return os.Rename("pids.tmp", "pids")
 }
 
 // startHopChain starts a process that is never alive for long: each link

@@ -499,3 +499,20 @@ func writeFixture(t *testing.T, dir, rel, content string, mode fs.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+// TestDefaultOptionsKeepTheExporterImageCaps pins the caps the exporter
+// image ran with before they moved here from freeside-export's flags, so a
+// change to either exporter's bounds is a visible change to both.
+func TestDefaultOptionsKeepTheExporterImageCaps(t *testing.T) {
+	want := export.Options{
+		MaxBlobBytes:          100 << 20,
+		MaxTotalBlobBytes:     1 << 30,
+		MaxBlobs:              9_000,
+		MaxEntries:            1_000_000,
+		MaxEvidenceBlobBytes:  100 << 20,
+		MaxEvidenceTotalBytes: 1 << 30,
+	}
+	if got := export.DefaultOptions(); got != want {
+		t.Fatalf("DefaultOptions() = %+v, want %+v", got, want)
+	}
+}

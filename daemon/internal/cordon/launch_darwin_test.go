@@ -166,6 +166,31 @@ func TestHostLaunchPassesTheExitStatusThrough(t *testing.T) {
 	}
 }
 
+// TestHostLaunchExports shows a real launch's worktree exports once its end
+// is proven: the agent writes a file and exits 0, and nothing the seed or
+// the launch left in the worktree trips the hard-link refusal.
+func TestHostLaunchExports(t *testing.T) {
+	t.Parallel()
+	f := newHostFixture(t)
+	b := f.backend(t)
+	written := filepath.Join(layoutFor(f.cfg.RunsRoot, "export").worktree, "written.txt")
+	runProbeLaunch(t, b, "export", []string{probeLine("allow", "write", written)})
+	res, err := b.Export(t.Context(), exportRequest("export"))
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	var paths []string
+	for _, e := range res.Manifest.Entries {
+		paths = append(paths, e.Path)
+	}
+	if want := []string{"go.mod", "main.go", "written.txt"}; !slices.Equal(paths, want) {
+		t.Fatalf("exported %q, want %q", paths, want)
+	}
+	if err := b.AuthenticateReleasedExport(t.Context(), "export", res.Dir); err != nil {
+		t.Fatalf("AuthenticateReleasedExport: %v", err)
+	}
+}
+
 // TestHostLaunchEnvironmentIsTheFixedList shows what reaches the agent is
 // exactly the fixed list: neither os/exec nor sandbox-exec adds to it.
 func TestHostLaunchEnvironmentIsTheFixedList(t *testing.T) {

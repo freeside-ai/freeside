@@ -187,7 +187,8 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 		host := newFakeHost()
 		l := &fakeLauncher{host: host, script: func(spec processSpec, p *fakeProcess) {
 			prompt, _ := io.ReadAll(spec.stdin)
-			_, _ = fmt.Fprintf(spec.output, "read %q\n", prompt)
+			_, _ = fmt.Fprintf(spec.stdout, "read %q\n", prompt)
+			_, _ = io.WriteString(spec.stderr, "a warning\n")
 			p.exit(3)
 		}}
 		got, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-1"))
@@ -203,6 +204,10 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 		transcript, err := os.ReadFile(got.TranscriptPath)
 		if err != nil || string(transcript) != "read \"the prompt\"\n" {
 			t.Fatalf("transcript = %q, %v", transcript, err)
+		}
+		stderr, err := os.ReadFile(got.StderrPath)
+		if err != nil || string(stderr) != "a warning\n" {
+			t.Fatalf("stderr = %q, %v", stderr, err)
 		}
 		agent := l.specs[1]
 		if agent.dir != filepath.Join(cfg.RunsRoot, "run-1", "run", "worktree") {
@@ -268,10 +273,11 @@ func TestLaunchStallLimitEndsASilentAgent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		host := newFakeHost()
 		l := &fakeLauncher{host: host, obeyTerm: true, script: func(spec processSpec, _ *fakeProcess) {
-			// Output more often than the limit keeps the launch alive.
-			for range 3 {
+			// Output on either stream more often than the limit keeps the
+			// launch alive.
+			for _, stream := range []io.Writer{spec.stdout, spec.stderr, spec.stdout} {
 				time.Sleep(cfg.StallLimit / 2)
-				_, _ = io.WriteString(spec.output, "tick\n")
+				_, _ = io.WriteString(stream, "tick\n")
 			}
 		}}
 		start := time.Now()
