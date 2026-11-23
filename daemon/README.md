@@ -6722,15 +6722,16 @@ sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, p
 `internal/cordon` runs one writer launch on the daemon's host: the agent
 CLI as the daemon's own account under a Seatbelt rule file, in a seeded
 worktree, ending in a proof that no process of the launch is alive. It also
-exports that worktree as the handoff the importer takes. The daemon
-composes it and proves it, but nothing launches a writer on it yet; the
-stage driver port, restart recovery (#3468), and admission (#3472) wire it
-in. The package doc (`internal/cordon/doc.go`) holds the layout and the
-mechanism; the decision records are
+exports that worktree as the handoff the importer takes, and recovers a
+launch a daemon restart interrupted. The daemon composes it and proves it,
+but nothing launches a writer on it yet; the stage driver port and
+admission (#3472) wire it in. The package doc (`internal/cordon/doc.go`)
+holds the layout and the mechanism; the decision records are
 `devlog/2026-11-22-1236-cordoned-host-launch.md`, for the export,
 `devlog/2026-11-22-2046-cordoned-export.md`, for the token,
-`devlog/2026-11-22-2039-cordoned-writer-token.md`, and, for conformance,
-`devlog/2026-11-22-2144-cordon-conformance-proof.md`.
+`devlog/2026-11-22-2039-cordoned-writer-token.md`, for conformance,
+`devlog/2026-11-22-2144-cordon-conformance-proof.md`, and, for recovery,
+`devlog/2026-11-23-0752-cordon-restart-recovery.md`.
 
 - **macOS with cgo only.** The run-end proof calls `sandbox_check` through
   cgo. Any other build refuses every launch before it starts anything, with
@@ -6758,15 +6759,54 @@ mechanism; the decision records are
   alone on stdin, the canary gets nothing, and the CLI keeps its config in
   the launch's own `run/config`. No argv, environment, transcript, or file
   under the launch's directory holds the token.
+- **A supervisor, not the daemon, runs each launch.** The daemon writes
+  `ctl/request.json` and starts `freesided cordon supervise <runs-root>
+  <run-id>` from its own executable, in a session of its own, with no
+  environment, the token's pipe on fd 3, and its stderr in
+  `ctl/supervisor.stderr`. The supervisor claims the run by creating
+  `ctl/supervisor.json` with its pid and start time, then starts the
+  canary and the agent, copies their output, watches the stall limit, runs
+  the proof, and writes the end record. The daemon only waits, so a
+  launch outlives a daemon restart. `Detach` makes every waiting `Launch`
+  and `Recover` return `ErrDetached` and leaves the runs to their
+  supervisors.
+- **Recovery adopts a run by its ID.** `Recover` returns an authenticated
+  export already written; waits for a supervisor still alive with its
+  claimed start time; removes an export directory with no export record
+  and exports a clean exit again; and returns `failed` for a stall or a
+  nonzero exit. A run no supervisor recorded an end for ends `lost`, never
+  exported: when its supervisor is gone, only after the run-end proof,
+  with a fresh canary under the run's rule file, finds every member dead.
+  A run nothing claimed is claimed for recovery first, so a supervisor
+  that starts later starts nothing. A recovery error commits nothing and
+  is retryable.
+- **Cancellation is durable.** `RequestCancellation` writes
+  `ctl/cancel.json` and then sends SIGTERM to the claimed supervisor, only
+  while its pid has the claimed start time. The marker outranks a clean
+  exit, so a run canceled before it exported reads as canceled and never
+  exports; an export already recorded stands. A supervisor that claims
+  after the marker exists starts no program. A daemon shutting down calls
+  `Detach` before it cancels a `Launch`'s context, since that cancellation
+  cancels the run for good.
+- **Release removes only a finished run.** `ReleaseFinished` removes
+  `<RunsRoot>/<RunID>` for a run with an end record whose claimed
+  supervisor isn't alive, and leaves any other; a run that will never get
+  an end record gets one from `Recover`, so recover such a run before
+  releasing it. A removal that fails, such
+  as on a tree the agent made undeletable, is reported and leaves the
+  directory.
 - **A launch that can't be proven ended is blocked.** `Launch` returns a
   `BlockedError` naming how the launch ended (exited, canceled, or
   stalled); the caller holds the run for a person.
 - **Output and records.** The agent's stdout goes to
   `ctl/transcript` and its stderr to `ctl/stderr`, and both count as activity for the stall
   limit. A launch with a proven end writes `ctl/ended.json` (how it ended,
-  its exit code, and the base commit) as its last step. A launch that was
-  blocked or failed before that has none, and so has a conformance probe's
-  launch, which shares the launch path but is never exported.
+  its exit code, and the base commit) as its last step; a launch that was
+  blocked or failed before that has none. A conformance probe's launch
+  runs through a supervisor too and records an end with no base commit,
+  which `Export` refuses. Records name no path: every path follows from
+  `RunsRoot` and the run ID, and every record is read strictly and refused
+  when it names another run.
 - **Export.** `Export` runs only for a launch whose end record says it
   exited with code 0, and only once. It writes the daemon's own evidence
   descriptor (stdout as the transcript, plus the sources the caller names
@@ -6778,8 +6818,7 @@ mechanism; the decision records are
   evidence, and commit plan. A refusal for the launch's end or an earlier
   export writes nothing; a later one leaves no export record, so `AuthenticateReleasedExport`, which
   accepts an export directory only when its members still match that
-  record, refuses what it wrote. Removing that is restart recovery's
-  (#3468).
+  record, refuses what it wrote. `Recover` removes it and exports again.
 - **Where the export is weaker than the ward's.** It has no exporter VM, so
   a defect in the walk runs with the daemon's privileges. It has no
   read-only mount: the tree holds still because no process of the run is

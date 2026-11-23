@@ -21,8 +21,10 @@
 //	  config/    CLAUDE_CONFIG_DIR, Freeside's, never the owner's
 //	  tmp/       TMPDIR
 //	ctl/       the rule file, the proof's tag and control, the transcript
-//	           (the agent's stdout), its stderr, and the end and export
-//	           records (record.go)
+//	           (the agent's stdout), its stderr, the prompt, the
+//	           supervisor's stderr, and the records (record.go): the
+//	           supervisor's request, the claim, the cancellation marker,
+//	           and the end and export records
 //	export/    the export's manifests and blobs, once Export runs
 //
 // ctl and export sit under a protected root and outside RUN_ROOT, so the
@@ -35,6 +37,24 @@
 // applies to, however they detached. It needs cgo on macOS; any other build
 // refuses every launch before starting it. Rationale and the alternatives
 // rejected: devlog/2026-11-22-1236-cordoned-host-launch.md.
+//
+// The daemon runs no launch itself. It writes the launch's request and
+// starts a supervisor (supervisor.go, as `freesided cordon supervise`, from
+// the daemon's own executable, in a session of its own) that claims the run
+// by creating ctl/supervisor.json with its pid and start time, then starts
+// the canary and the agent as their parent, copies their output, runs the
+// proof, and writes the end record. A launch therefore outlives a daemon
+// restart, and a restarted daemon finds everything it needs under the
+// run's directory (recover.go): Recover waits for a live supervisor,
+// finishes an interrupted export, and ends lost, after the proof, a run
+// whose supervisor died with no end record or never claimed it. Whoever
+// creates the claim first owns the run, so a supervisor that starts after
+// recovery claimed it starts nothing. RequestCancellation writes a durable
+// marker that outranks a clean exit, so a canceled run never exports, and
+// ReleaseFinished removes only a run whose end is recorded and whose
+// supervisor is gone. No record names a path, and a process is signaled
+// only while its pid has the start time its claim records. Rationale:
+// devlog/2026-11-23-0752-cordon-restart-recovery.md.
 //
 // Export (export.go) turns a launch with a clean, proven end into the
 // handoff the importer takes: the trusted exporter's walk, run in the
@@ -54,10 +74,9 @@
 // withdraws the declaration. Rationale:
 // devlog/2026-11-22-2144-cordon-conformance-proof.md.
 //
-// This package is the launch and export halves of a cordoned handoff,
-// behind its own API: it does not implement the stage driver's Gate port.
-// The daemon composes the backend and proves it, but launches no writer on
-// it yet. The driver port, restart recovery (#3468), and admission
-// (#3472), which composes the daemon's token read with the launch, are
-// later units.
+// This package is the launch, recovery, and export halves of a cordoned
+// handoff, behind its own API: it does not implement the stage driver's
+// Gate port. The daemon composes the backend and proves it, but launches no
+// writer on it yet. The driver port and admission (#3472), which composes
+// the daemon's token read with the launch, are later units.
 package cordon

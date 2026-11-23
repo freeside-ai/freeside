@@ -519,12 +519,15 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/cordon/` (the cordoned writer's rule file, its launch, the
   setup token it hands the CLI on its own descriptor, the run-end proof
   that kills every process in the launch's sandbox, the export that reads
-  the worktree once that proof has passed, and the conformance suite
-  whose recorded pass declares the class),
+  the worktree once that proof has passed, the conformance suite whose
+  recorded pass declares the class, and the supervisor and restart
+  recovery that decide which process is signaled, which run is exported
+  or ended lost, and which run's directory is removed),
   `internal/daemoncompose/cordon_backend.go` (builds the cordon's
   configuration and chooses which proof its backend declares from), and
-  `cmd/freesided/cordon.go` (the probe verb a probe launch runs, and the
-  flags the configuration comes from).
+  `cmd/freesided/cordon.go` (the probe verb a probe launch runs, the
+  supervise verb that runs every launch, and the flags the configuration
+  comes from).
 - **Rig cleanup namespace:** `internal/wardname/` (the one definition of
   the runtime names rig cleanup and stale recovery may act on) and
   `internal/daemonlock/rig.go` (admits a bound name only through those
