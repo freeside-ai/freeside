@@ -6798,6 +6798,29 @@ out at the end.
 FREESIDE_CORDON_LIVE_TEST=1 bash scripts/check.sh daemon test -- ./internal/cordon/... -run Live
 ```
 
+The credential live suite, `TestLiveCredentialLaunchAuthenticates`, has its
+own opt-in, because it reads a real token and spends one short turn of its
+identity's quota. It reads the token from an enrolled identity's credential
+volume with `ward.ReadSetupToken`, runs the given CLI in a real launch, and
+passes when the CLI authenticates and a tool it runs finds the token in no
+environment of its own process chain or of any same-user process, on none of
+fds 3 to 9, and in nothing under the launch's directory, with the owner's
+Claude config denied. Once opted in, a missing input fails. Run it with the
+CLI pinned in `images/agent-claude/` (the darwin-arm64 build of the same
+version) on every CLI version bump: it re-proves the pinned-CLI behaviors the
+token handoff relies on, which the decision note lists. Don't run it while
+that identity is being enrolled or renewed: the read takes no lease. Like the
+other launch tests, it skips under `scripts/check.sh`'s macOS sandbox, so run
+it with a bare `go test`:
+
+```sh
+cd daemon && FREESIDE_CORDON_CREDENTIAL_LIVE_TEST=1 \
+  FREESIDE_CORDON_LIVE_CLI=<pinned claude binary> \
+  FREESIDE_CORDON_LIVE_TOKEN_VOLUME=<credential volume> \
+  FREESIDE_WARD_EXPORTER_IMAGE=<digest-pinned exporter image> \
+  go test ./internal/cordon -run LiveCredential -v
+```
+
 ## External Review Replies
 
 With the Claude driver, the daemon checks recorded external-review outcomes
