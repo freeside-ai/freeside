@@ -28,14 +28,18 @@ const (
 	EndedByCanceled EndedBy = "canceled"
 	// EndedByStalled means the agent wrote nothing for Config.StallLimit.
 	EndedByStalled EndedBy = "stalled"
+	// EndedByLost means recovery ended a run no supervisor recorded an end
+	// for: its supervisor died, or never started it. Recovery writes it only
+	// once the run-end proof has passed, and a lost run is never exported.
+	EndedByLost EndedBy = "lost"
 )
 
 // AllEndedBy lists every valid EndedBy; it is the single registration point.
-var AllEndedBy = []EndedBy{EndedByExited, EndedByCanceled, EndedByStalled}
+var AllEndedBy = []EndedBy{EndedByExited, EndedByCanceled, EndedByStalled, EndedByLost}
 
 func (e EndedBy) valid() bool {
 	switch e {
-	case EndedByExited, EndedByCanceled, EndedByStalled:
+	case EndedByExited, EndedByCanceled, EndedByStalled, EndedByLost:
 		return true
 	default:
 		return false
@@ -214,7 +218,7 @@ func agentArgs(args []string) []string {
 // (record.go), which is what Export requires.
 //
 // The supervisor outlives the daemon, so a daemon that exits mid-launch
-// loses nothing: the run keeps going for a later daemon. Canceling ctx requests the run's
+// loses nothing: Recover adopts the run. Canceling ctx requests the run's
 // cancellation and keeps waiting for its end; Detach returns at once and
 // leaves it running.
 //

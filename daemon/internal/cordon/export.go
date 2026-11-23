@@ -24,8 +24,8 @@ import (
 
 var (
 	// ErrNotExportable refuses a launch whose end record says it was
-	// canceled, stalled, or exited nonzero, or that is a probe's: only a
-	// writer's clean exit exports.
+	// canceled, stalled, lost, or exited nonzero, or that is a probe's: only
+	// a writer's clean exit exports.
 	ErrNotExportable = errors.New("cordon: the launch did not exit cleanly")
 	// ErrWorktreeReplaced refuses a launch that left run/ or run/worktree
 	// something other than the directory Launch seeded, such as a symlink
@@ -96,7 +96,7 @@ type ExportResult struct {
 // Before exporting, the daemon writes the evidence descriptor itself,
 // replacing any the agent wrote, and the transcript beside it. A refusal or
 // failure leaves no export record, so AuthenticateReleasedExport refuses
-// whatever it wrote; removing it is restart recovery's (#3468). An error
+// whatever it wrote; Recover removes it before it exports again. An error
 // other than a ScanRefusalError can carry a path the agent chose, so a
 // caller screens it before it reaches a card, as it screens a warded
 // handoff's failure.
