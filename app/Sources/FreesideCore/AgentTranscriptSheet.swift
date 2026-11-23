@@ -307,17 +307,13 @@ private struct ConversationContent: View {
                 .overlay(alignment: .bottom) { Hairline() }
                 if fold("worked").wrappedValue {
                     entries
-                    if presentation.result?.message != nil { Hairline() }
+                    if presentation.result?.message != nil || presentation.result?.answer != nil { Hairline() }
                 }
-                if let message = presentation.result?.message {
-                    MessageText(text: message)
-                }
+                ending
             case .failed:
                 // Rule 9: nothing folds, and the run's end is said.
                 entries
-                if let message = presentation.result?.message {
-                    MessageText(text: message)
-                }
+                ending
                 VStack(alignment: .leading, spacing: 2) {
                     Text(AgentTranscriptSheetText.failed(workingTime, locale: locale))
                         .font(FreesideFont.cardBody(strong: true, code: false))
@@ -352,6 +348,18 @@ private struct ConversationContent: View {
         }
         .font(FreesideFont.factLabel)
         .textSelection(.enabled)
+    }
+
+    /// The final message, then a schema-constrained run's answer (#3568),
+    /// whole, as formatted JSON.
+    @ViewBuilder
+    private var ending: some View {
+        if let message = presentation.result?.message {
+            MessageText(text: message)
+        }
+        if let answer = presentation.result?.answer {
+            AnswerBlock(text: answer)
+        }
     }
 
     @ViewBuilder
@@ -686,6 +694,23 @@ private struct OutputBlock: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(Color.ground, in: RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// A structured answer, in a call output's style with no tail or fold: the
+/// owner chose to show it whole (#3568).
+private struct AnswerBlock: View {
+    let text: String
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(Color.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color.ground, in: RoundedRectangle(cornerRadius: 6))
     }
 }
 

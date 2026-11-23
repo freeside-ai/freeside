@@ -10,6 +10,11 @@ import Foundation
 /// and a stream with no final message is a valid stream. Once the stream
 /// has ended, that line is a record cut off by a killed writer, and it
 /// counts as unreadable, so the conversation still names it.
+///
+/// A run launched with a JSON Schema (#3568) answers through the CLI's
+/// `StructuredOutput` tool, and its `result` record carries that answer in
+/// `structured_output`; the presentation shows it once, formatted, in place
+/// of the serialized copy in the record's text and the tool call.
 package struct AgentTranscriptPresentation: Sendable, Equatable {
     /// One tool call and, once its result arrives, the result.
     package struct Call: Identifiable, Sendable, Equatable {
@@ -136,8 +141,14 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
 
     /// The stream's closing `result` record.
     package struct Result: Sendable, Equatable {
-        /// The agent's final message; nil when the record carries none.
+        /// The agent's final message; nil when the record carries none, or
+        /// when its text is only the structured answer serialized.
         package let message: String?
+        /// A schema-constrained run's answer, the record's non-null
+        /// `structured_output`, pretty-printed with sorted keys, because
+        /// Foundation's parse doesn't keep the model's key order. Nil for a
+        /// prose run, even when its text happens to be JSON.
+        package let answer: String?
         package let isError: Bool
         /// The CLI's subtype, such as `success` or `error_max_turns`.
         package let subtype: String?
@@ -240,6 +251,9 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
         var callIndexByToolUseID: [String: Int] = [:]
         /// The calls a result has answered, an empty one included.
         var answered: Set<Int> = []
+        /// Each `StructuredOutput` call's input, formatted as an answer is,
+        /// by call index, so the call that carried the answer is dropped.
+        var structuredInputs: [Int: String] = [:]
         var result: Result?
         /// The next item's id: an ordinal, so blocks that share a record
         /// keep distinct ids and fold keys.
@@ -258,9 +272,19 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
             case "user": return applyUser(object)
             case "result":
                 guard let isError = object["is_error"] as? Bool else { return false }
+                let answer = Self.formattedJSON(object["structured_output"])
+                var message = object["result"] as? String
+                // The CLI serializes the answer into the text too; the sheet
+                // shows it once, as the answer.
+                if let answer, let text = message,
+                    Self.formattedJSON(
+                        try? JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed))
+                        == answer
+                {
+                    message = nil
+                }
                 result = Result(
-                    message: object["result"] as? String, isError: isError,
-                    subtype: object["subtype"] as? String)
+                    message: message, answer: answer, isError: isError, subtype: object["subtype"] as? String)
                 return true
             default: return false
             }
@@ -272,6 +296,7 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
             else { return false }
             var newItems: [Item] = []
             var newCalls: [(toolUseID: String, call: Call)] = []
+            var newStructuredInputs: [Int: String] = [:]
             var id = nextID
             for block in content {
                 defer { id += 1 }
@@ -292,7 +317,11 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
                     guard let toolUseID = block["id"] as? String, let name = block["name"] as? String
                     else { return false }
                     let input = block["input"] as? [String: Any] ?? [:]
-                    newItems.append(.call(index: calls.count + newCalls.count))
+                    let index = calls.count + newCalls.count
+                    if name == "StructuredOutput" {
+                        newStructuredInputs[index] = Self.formattedJSON(block["input"])
+                    }
+                    newItems.append(.call(index: index))
                     newCalls.append((toolUseID, Self.call(name: name, input: input, id: id)))
                 default:
                     return false
@@ -303,6 +332,7 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
                 calls.append(call)
             }
             items.append(contentsOf: newItems)
+            structuredInputs.merge(newStructuredInputs) { _, new in new }
             nextID = id
             return true
         }
@@ -342,6 +372,14 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
             if !streamEnded, case .call(let index)? = items.last, !answered.contains(index) {
                 items.removeLast()
                 underWay = Self.underWay(calls[index])
+            }
+            // The answer is drawn once, as the answer: a `StructuredOutput`
+            // call that carried it goes, and one with any other input, such
+            // as an attempt the CLI rejected, stays.
+            if let answer = result?.answer {
+                items.removeAll { item in
+                    if case .call(let index) = item { structuredInputs[index] == answer } else { false }
+                }
             }
             // The result repeats the agent's last message; the sheet draws
             // it once, as the final message.
@@ -435,6 +473,22 @@ package struct AgentTranscriptPresentation: Sendable, Equatable {
                 default: nil
                 }
             }.joined(separator: "\n")
+        }
+
+        /// A parsed JSON value pretty-printed with sorted keys; nil for a
+        /// missing value or JSON null. Only values `JSONSerialization` parsed
+        /// reach it, and those always encode, so the write can't raise.
+        private static func formattedJSON(_ value: Any?) -> String? {
+            guard let value, !(value is NSNull),
+                let data = try? JSONSerialization.data(
+                    withJSONObject: value,
+                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
+            else { return nil }
+            // Foundation writes an empty array or object over three lines,
+            // the middle one blank. A raw newline never occurs inside a JSON
+            // string, so an opener followed by one is structural.
+            return String(decoding: data, as: UTF8.self).replacingOccurrences(
+                of: #"([\[{])\n\s*([\]}])"#, with: "$1$2", options: .regularExpression)
         }
 
         /// The CLI starts a failed command's result with `Exit code N`.
