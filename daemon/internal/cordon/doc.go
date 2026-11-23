@@ -9,6 +9,11 @@
 // the CLI's own confinement mode stays off because Seatbelt can't be
 // applied twice.
 //
+// The agent gets the enrolled identity's setup token on its own pipe, fd 3,
+// named by CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR; the prompt stays alone
+// on stdin, and no argv, environment, or file under the launch's directory
+// carries the token. Rationale: devlog/2026-11-22-2039-cordoned-writer-token.md.
+//
 // A launch's directory, <RunsRoot>/<RunID>, holds three parts:
 //
 //	run/       RUN_ROOT, the one place the rules reopen
@@ -42,6 +47,6 @@
 // This package is the launch and export halves of a cordoned handoff,
 // behind its own API: it does not implement the stage driver's Gate port,
 // and nothing outside the package calls it yet. The driver port, restart
-// recovery (#3468), the credential (#3469), conformance (#3470), and
-// admission (#3472) are later units.
+// recovery (#3468), conformance (#3470), and admission (#3472), which
+// composes the daemon's token read with the launch, are later units.
 package cordon

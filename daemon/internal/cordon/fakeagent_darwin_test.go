@@ -4,8 +4,10 @@ package cordon
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -35,6 +37,9 @@ func TestMain(m *testing.M) {
 //	exit CODE        exit with CODE
 //	idle             sleep until killed (a stand-in outside a launch)
 //	env              print the environment, one variable a line
+//	token            read the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+//	                 names to end of file and print its length and SHA-256,
+//	                 never its bytes; then print stdin
 //	probe            run each probe line from stdin; print ok or FAIL
 //	hop              start a chain of processes that each fork the next and
 //	                 exit at once, appending to ./hops as it goes; exit
@@ -56,6 +61,8 @@ func fakeAgent(args []string) int {
 			fmt.Println(kv)
 		}
 		return 0
+	case "token":
+		return readToken()
 	case "probe":
 		return runProbes()
 	case "hop":
@@ -81,6 +88,29 @@ func fakeAgent(args []string) int {
 		return 0
 	}
 	return 2
+}
+
+// readToken reads the token the way the CLI does: the named descriptor, to
+// end of file. A write end left open anywhere would hang it until the stall
+// limit ends the launch.
+func readToken() int {
+	fd, err := strconv.Atoi(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"))
+	if err != nil {
+		fmt.Println("FAIL token descriptor:", err)
+		return 1
+	}
+	token, err := io.ReadAll(os.NewFile(uintptr(fd), "token"))
+	if err != nil {
+		fmt.Println("FAIL token read:", err)
+		return 1
+	}
+	stdin, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Println("FAIL stdin read:", err)
+		return 1
+	}
+	fmt.Printf("token %d %x\nstdin %q\n", len(token), sha256.Sum256(token), stdin)
+	return 0
 }
 
 // spawnSurvivors starts the three children #3463 found outlive a CLI: one

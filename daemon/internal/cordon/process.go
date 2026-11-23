@@ -22,6 +22,11 @@ type processSpec struct {
 	// stdin is copied to the process until it ends or the process stops
 	// reading. Nil gives it /dev/null.
 	stdin io.Reader
+	// secret, when set, is what the process reads from its own pipe on
+	// tokenFD. The whole secret is written and the write end closed before
+	// the process starts, so its read reaches end of file and no other
+	// process ever holds the pipe's write end.
+	secret []byte
 	// stdout and stderr receive the process's two output streams. Nil
 	// sends a stream to /dev/null.
 	stdout, stderr io.Writer
@@ -83,6 +88,14 @@ func startExec(spec processSpec) (process, error) {
 		cmd.Stdin, p.stdinW = r, w
 		childEnds = append(childEnds, r)
 	}
+	if spec.secret != nil {
+		r, err := secretPipe(spec.secret)
+		if err != nil {
+			return fail(err)
+		}
+		cmd.ExtraFiles = []*os.File{r}
+		childEnds = append(childEnds, r)
+	}
 	var sinks []io.Writer
 	for _, stream := range []struct {
 		name string
@@ -126,6 +139,28 @@ func startExec(spec processSpec) (process, error) {
 		close(p.outputDone)
 	}()
 	return p, nil
+}
+
+// secretPipe returns the read end of a pipe that holds secret and whose
+// write end is already closed. Writing before the reader starts can't
+// block: a setup token is at most ward.MaxSetupTokenBytes, 4096, and a
+// macOS pipe buffers at least 16 KiB. os.Pipe sets close-on-exec on both
+// ends, so only the process that gets the read end in ExtraFiles inherits
+// it.
+func secretPipe(secret []byte) (*os.File, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("secret pipe: %w", err)
+	}
+	_, err = w.Write(secret)
+	if closeErr := w.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = r.Close()
+		return nil, fmt.Errorf("write secret pipe: %w", err)
+	}
+	return r, nil
 }
 
 func (p *execProcess) pid() int { return p.cmd.Process.Pid }

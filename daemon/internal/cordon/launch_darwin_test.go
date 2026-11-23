@@ -3,9 +3,12 @@
 package cordon
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -192,7 +195,8 @@ func TestHostLaunchExports(t *testing.T) {
 }
 
 // TestHostLaunchEnvironmentIsTheFixedList shows what reaches the agent is
-// exactly the fixed list: neither os/exec nor sandbox-exec adds to it.
+// exactly the fixed list and its token's descriptor: neither os/exec nor
+// sandbox-exec adds to it.
 func TestHostLaunchEnvironmentIsTheFixedList(t *testing.T) {
 	t.Parallel()
 	f := newHostFixture(t)
@@ -205,11 +209,55 @@ func TestHostLaunchEnvironmentIsTheFixedList(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := strings.Split(strings.TrimSpace(string(transcript)), "\n")
-	want := launchEnv(f.cfg, layoutFor(f.cfg.RunsRoot, "env"))
+	want := agentEnv(f.cfg, layoutFor(f.cfg.RunsRoot, "env"))
 	slices.Sort(env)
 	slices.Sort(want)
 	if !slices.Equal(env, want) {
 		t.Fatalf("agent environment = %q, want %q", env, want)
+	}
+}
+
+// TestHostLaunchHandsTheTokenOnItsDescriptor shows the token's bytes reach
+// the agent on the descriptor its environment names, that the read reaches
+// end of file, that stdin holds the prompt alone, and that nothing the
+// launch leaves in its directory holds the token.
+func TestHostLaunchHandsTheTokenOnItsDescriptor(t *testing.T) {
+	t.Parallel()
+	f := newHostFixture(t)
+	got, err := f.backend(t).Launch(t.Context(), hostRequest("token", "the prompt", "token"))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	transcript, err := os.ReadFile(got.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("token %d %x\nstdin %q\n", len(fixtureToken), sha256.Sum256([]byte(fixtureToken)), "the prompt")
+	if got.ExitCode != 0 || string(transcript) != want {
+		t.Fatalf("exit %d, transcript %q, want %q", got.ExitCode, transcript, want)
+	}
+	requireNoToken(t, filepath.Dir(layoutFor(f.cfg.RunsRoot, "token").runRoot), []byte(fixtureToken))
+}
+
+// requireNoToken fails the test when any file under dir holds token. It
+// names the file and the offset, never the bytes around them.
+func requireNoToken(t *testing.T, dir string, token []byte) {
+	t.Helper()
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		body, err := os.ReadFile(path) //nolint:gosec // G304: a file under the test's own launch directory
+		if err != nil {
+			return err
+		}
+		if at := bytes.Index(body, token); at >= 0 {
+			t.Errorf("%s holds the token at offset %d", path, at)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
 	}
 }
 
