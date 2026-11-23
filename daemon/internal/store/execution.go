@@ -289,6 +289,9 @@ func (tx *WriteTx) requireNewAdmissionGates(
 	if err := tx.RequireUsagePoolCapacity(ctx, admission); err != nil {
 		return err
 	}
+	if err := tx.RequireCordonedLaunchCap(ctx, admission); err != nil {
+		return err
+	}
 	return tx.RequireExecutionMemory(ctx, admission, memory)
 }
 

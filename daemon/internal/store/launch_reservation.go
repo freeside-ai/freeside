@@ -34,19 +34,19 @@ UPDATE launch_reservations SET released_at = ?1
 WHERE kind = 'verification' AND released_at IS NULL
   AND run_id IN (SELECT id FROM runs WHERE task_id = ?2)`
 	recordLaunchWaitSQL = `
-INSERT INTO launch_waits (invocation_id, run_id, task_created_at, waiting_since, refused_at)
-VALUES (?1, ?2, ?3, ?4, ?4)
-ON CONFLICT (invocation_id) DO UPDATE SET refused_at = excluded.refused_at`
+INSERT INTO launch_waits (invocation_id, run_id, task_created_at, waiting_since, refused_at, resource)
+VALUES (?1, ?2, ?3, ?4, ?4, ?5)
+ON CONFLICT (invocation_id) DO UPDATE SET refused_at = excluded.refused_at, resource = excluded.resource`
 	deleteLaunchWaitSQL = `DELETE FROM launch_waits WHERE invocation_id = ?`
-	launchWaitSQL       = `SELECT refused_at FROM launch_waits WHERE invocation_id = ?`
+	launchWaitSQL       = `SELECT refused_at, resource FROM launch_waits WHERE invocation_id = ?`
 	listLaunchWaitsSQL  = `
-SELECT invocation_id, run_id, task_created_at, waiting_since, refused_at, kept_at FROM launch_waits`
+SELECT invocation_id, run_id, task_created_at, waiting_since, refused_at, kept_at, resource FROM launch_waits`
 	keepLaunchWaitSQL = `UPDATE launch_waits SET kept_at = ? WHERE invocation_id = ?`
 	// A daemon wait names no run and no task; it keeps its first waiting_since
 	// across refreshes, as a run's wait keeps its place.
 	recordDaemonLaunchWaitSQL = `
-INSERT INTO launch_waits (invocation_id, run_id, task_created_at, waiting_since, refused_at)
-VALUES (?1, NULL, NULL, ?2, ?2)
+INSERT INTO launch_waits (invocation_id, run_id, task_created_at, waiting_since, refused_at, resource)
+VALUES (?1, NULL, NULL, ?2, ?2, 'memory')
 ON CONFLICT (invocation_id) DO UPDATE SET refused_at = excluded.refused_at
 WHERE launch_waits.run_id IS NULL`
 	daemonLaunchWaitSinceSQL  = `SELECT waiting_since FROM launch_waits WHERE invocation_id = ? AND run_id IS NULL`
@@ -126,7 +126,11 @@ func (tx *WriteTx) RequireMachineCapacity(
 				SizeMiB: reservation.MemoryMiB, OverheadMiB: reservation.OverheadMiB, BudgetMiB: budgetMiB,
 			}
 		}
-		ahead, err := tx.launchesAhead(ctx, reservation, holders, at)
+		self, err := tx.selfWait(ctx, reservation, at)
+		if err != nil {
+			return fmt.Errorf("reserve launch %q memory: %w", reservation.InvocationID, err)
+		}
+		ahead, err := tx.launchesAhead(ctx, LaunchWaitMemory, self, holders, at)
 		if err != nil {
 			return fmt.Errorf("reserve launch %q memory: %w", reservation.InvocationID, err)
 		}
@@ -326,10 +330,40 @@ func (tx *ReadTx) queryLaunchReservations(ctx context.Context, query string) ([]
 	return open, nil
 }
 
-// launchWait is one row of the memory order. A wait for the daemon's own work
+// LaunchWaitResource names the order a launch waits in (#3471): memory
+// under the instance's budget, or a place under the cordoned launch cap.
+// Each gate counts only its own resource's waits, so a cap waiter never
+// holds back a warded launch and a memory waiter never holds back a
+// cordoned one. A wait for the daemon's own work is always a memory wait.
+type LaunchWaitResource string
+
+const (
+	LaunchWaitMemory         LaunchWaitResource = "memory"
+	LaunchWaitCordonedLaunch LaunchWaitResource = "cordoned_launch"
+)
+
+// ErrInvalidLaunchWaitResource refuses a wait resource outside
+// AllLaunchWaitResources, on write and on decode.
+var ErrInvalidLaunchWaitResource = errors.New("invalid launch wait resource")
+
+// AllLaunchWaitResources is the single registration point for wait
+// resources.
+var AllLaunchWaitResources = []LaunchWaitResource{LaunchWaitMemory, LaunchWaitCordonedLaunch}
+
+func (r LaunchWaitResource) valid() bool {
+	switch r {
+	case LaunchWaitMemory, LaunchWaitCordonedLaunch:
+		return true
+	default:
+		return false
+	}
+}
+
+// launchWait is one row of a launch order. A wait for the daemon's own work
 // names no run, and its taskCreatedAt is zero.
 type launchWait struct {
 	invocation    domain.InvocationID
+	resource      LaunchWaitResource
 	run           domain.RunID
 	taskCreatedAt time.Time
 	waitingSince  time.Time
@@ -367,26 +401,23 @@ func (w launchWait) before(other launchWait) bool {
 	return w.invocation < other.invocation
 }
 
-// launchesAhead counts the waits for memory that come before this launch in
-// the memory order (launchWait.before). A wait whose launch now holds memory,
+// launchesAhead counts the waits for resource that come before self in that
+// resource's order (launchWait.before). A wait whose launch is now a holder,
 // whose refusal and keepalive have both lapsed (launchWaitLease), or whose run
 // can no longer launch is no longer in the order; it is deleted here, so a
 // launch nothing pursues cannot block everyone behind it. A daemon wait has no
-// run to ask, so only its lease ends it.
+// run to ask, so only its lease ends it. Another resource's waits are neither
+// counted nor ended here; their own gate ends them.
 func (tx *WriteTx) launchesAhead(
-	ctx context.Context, reservation domain.LaunchReservation, holders []domain.InvocationID, at time.Time,
+	ctx context.Context, resource LaunchWaitResource, self launchWait, holders []domain.InvocationID, at time.Time,
 ) (int, error) {
-	self, err := tx.selfWait(ctx, reservation, at)
-	if err != nil {
-		return 0, err
-	}
 	waits, err := tx.listLaunchWaits(ctx)
 	if err != nil {
 		return 0, err
 	}
 	ahead := 0
 	for _, wait := range waits {
-		if wait.invocation == reservation.InvocationID {
+		if wait.resource != resource || wait.invocation == self.invocation {
 			continue
 		}
 		live := !slices.Contains(holders, wait.invocation) && at.Sub(wait.refreshedAt()) < launchWaitLease
@@ -408,14 +439,14 @@ func (tx *WriteTx) launchesAhead(
 	return ahead, nil
 }
 
-// selfWait is the place this reservation asks from. A launch asks from its
-// task's submission. The daemon's own work asks from when it first waited, or
+// selfWait is the place this reservation asks from in the memory order. A
+// launch asks from its task's submission. The daemon's own work asks from when it first waited, or
 // from at when it has not waited yet, so a daemon reservation asking for the
 // first time comes after every daemon wait already recorded.
 func (tx *WriteTx) selfWait(
 	ctx context.Context, reservation domain.LaunchReservation, at time.Time,
 ) (launchWait, error) {
-	self := launchWait{invocation: reservation.InvocationID, run: reservation.RunID}
+	self := launchWait{invocation: reservation.InvocationID, resource: LaunchWaitMemory, run: reservation.RunID}
 	if reservation.Kind.ForRun() {
 		createdAt, err := tx.runTaskCreatedAt(ctx, reservation.RunID)
 		self.taskCreatedAt = createdAt
@@ -444,8 +475,14 @@ func (tx *ReadTx) listLaunchWaits(ctx context.Context) ([]launchWait, error) {
 			waitingSince, refusedAt string
 			err                     error
 		)
-		if err := row.Scan(&wait.invocation, &run, &createdAt, &waitingSince, &refusedAt, &keptAt); err != nil {
+		if err := row.Scan(
+			&wait.invocation, &run, &createdAt, &waitingSince, &refusedAt, &keptAt, &wait.resource,
+		); err != nil {
 			return launchWait{}, err
+		}
+		if !wait.resource.valid() {
+			return launchWait{}, fmt.Errorf("launch wait %q resource %q: %w",
+				wait.invocation, wait.resource, ErrInvalidLaunchWaitResource)
 		}
 		wait.run = domain.RunID(run.String)
 		// The table ties the two columns: both name a run's wait, or neither.
@@ -490,20 +527,24 @@ func (tx *ReadTx) runTaskCreatedAt(ctx context.Context, runID domain.RunID) (tim
 	return task.CreatedAt, nil
 }
 
-// RecordLaunchWait places a launch the memory gate refused at at in the order,
-// or refreshes its wait. It runs in its own transaction after the refusal, so
-// a launch with no row yet waits one more pass at most. Recording again keeps
-// the row's place and moves only its refusal; the order is by task
-// submission, so leaving and rejoining loses no place.
+// RecordLaunchWait places a launch the resource's gate refused at at in that
+// resource's order, or refreshes its wait. It runs in its own transaction
+// after the refusal, so a launch with no row yet waits one more pass at
+// most. Recording again keeps the row's place and moves only its refusal
+// and resource; the order is by task submission, so leaving and rejoining
+// loses no place.
 func (tx *WriteTx) RecordLaunchWait(
-	ctx context.Context, invocation domain.InvocationID, runID domain.RunID, at time.Time,
+	ctx context.Context, invocation domain.InvocationID, runID domain.RunID, resource LaunchWaitResource, at time.Time,
 ) error {
+	if !resource.valid() {
+		return fmt.Errorf("record launch %q wait on %q: %w", invocation, resource, ErrInvalidLaunchWaitResource)
+	}
 	createdAt, err := tx.runTaskCreatedAt(ctx, runID)
 	if err != nil {
 		return fmt.Errorf("record launch %q wait: %w", invocation, err)
 	}
 	if _, err := tx.tx.ExecContext(ctx, recordLaunchWaitSQL,
-		invocation, runID, formatTime(createdAt), formatTime(at)); err != nil {
+		invocation, runID, formatTime(createdAt), formatTime(at), resource); err != nil {
 		return fmt.Errorf("record launch %q wait: %w", invocation, err)
 	}
 	return nil
@@ -570,36 +611,53 @@ func (tx *InternalTx) KeepLaunchWaits(ctx context.Context, since, at time.Time) 
 	return nil
 }
 
-// LaunchWaiting reports whether a launch is in the memory order.
+// LaunchWaiting reports whether a launch is in a launch order.
 func (tx *ReadTx) LaunchWaiting(ctx context.Context, invocation domain.InvocationID) (bool, error) {
 	_, waiting, err := tx.LaunchWaitRefusedAt(ctx, invocation)
 	return waiting, err
 }
 
-// LaunchWaitRefusedAt reports whether a launch is in the memory order and the
+// LaunchWaitRefusedAt reports whether a launch is in a launch order and the
 // latest refusal its wait records. A keepalive (KeepLaunchWaits) is not a
 // refusal and does not move it.
 func (tx *ReadTx) LaunchWaitRefusedAt(
 	ctx context.Context, invocation domain.InvocationID,
 ) (time.Time, bool, error) {
-	var refusedAt string
-	err := tx.tx.QueryRowContext(ctx, launchWaitSQL, invocation).Scan(&refusedAt)
+	at, _, waiting, err := tx.LaunchWait(ctx, invocation)
+	return at, waiting, err
+}
+
+// LaunchWait reports whether a launch is in a launch order, the latest
+// refusal its wait records, and the resource it waits on.
+func (tx *ReadTx) LaunchWait(
+	ctx context.Context, invocation domain.InvocationID,
+) (time.Time, LaunchWaitResource, bool, error) {
+	var (
+		refusedAt string
+		resource  LaunchWaitResource
+	)
+	err := tx.tx.QueryRowContext(ctx, launchWaitSQL, invocation).Scan(&refusedAt, &resource)
 	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, nil
+		return time.Time{}, "", false, nil
 	}
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("launch %q wait: %w", invocation, err)
+		return time.Time{}, "", false, fmt.Errorf("launch %q wait: %w", invocation, err)
+	}
+	if !resource.valid() {
+		return time.Time{}, "", false, fmt.Errorf("launch %q wait resource %q: %w",
+			invocation, resource, ErrInvalidLaunchWaitResource)
 	}
 	at, err := parseTime(refusedAt)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("launch %q wait refused_at: %w", invocation, err)
+		return time.Time{}, "", false, fmt.Errorf("launch %q wait refused_at: %w", invocation, err)
 	}
-	return at, true, nil
+	return at, resource, true, nil
 }
 
-// LeaveLaunchWait removes a launch from the memory order because something
-// other than memory refused it, such as a pool slot taken since it joined.
-// It rejoins at its task's place once only memory refuses it again.
+// LeaveLaunchWait removes a launch from its launch order because something
+// other than its resource refused it, such as a pool slot taken since it
+// joined. It rejoins at its task's place once only its resource refuses it
+// again.
 func (tx *WriteTx) LeaveLaunchWait(ctx context.Context, invocation domain.InvocationID) error {
 	if _, err := tx.tx.ExecContext(ctx, deleteLaunchWaitSQL, invocation); err != nil {
 		return fmt.Errorf("leave launch %q wait: %w", invocation, err)

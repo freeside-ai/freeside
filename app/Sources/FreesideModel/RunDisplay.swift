@@ -589,6 +589,7 @@ package enum RunDisplay {
         case .quota_window_exhausted: "Waiting for quota window to reset"
         case .machine_capacity: "Waiting for machine capacity"
         case .update_drain: "Waiting for an update"
+        case .cordoned_launch_cap: "Waiting for cordoned launch capacity"
         case .unknown: "Held for a reason this app doesn't recognize"
         }
     }

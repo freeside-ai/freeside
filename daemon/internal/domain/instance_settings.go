@@ -35,6 +35,10 @@ const (
 	// execution. Only freesided execution pause and resume write it; it
 	// configures no run.
 	InstanceSectionExecutionPause InstanceSettingsSection = "execution_pause"
+	// InstanceSectionCordonedLaunches bounds how many cordoned launches run
+	// at once (#3471). The admitting transaction reads it on each
+	// admission, so a change applies to the next one without a restart.
+	InstanceSectionCordonedLaunches InstanceSettingsSection = "cordoned_launches"
 )
 
 // AllInstanceSettingsSections lists every InstanceSettingsSection in the
@@ -43,7 +47,7 @@ var AllInstanceSettingsSections = []InstanceSettingsSection{
 	InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 	InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 	InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
-	InstanceSectionExecutionPause,
+	InstanceSectionExecutionPause, InstanceSectionCordonedLaunches,
 }
 
 func (s InstanceSettingsSection) valid() bool {
@@ -51,7 +55,7 @@ func (s InstanceSettingsSection) valid() bool {
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 		InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
-		InstanceSectionExecutionPause:
+		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches:
 		return true
 	default:
 		return false
@@ -71,7 +75,7 @@ func ParseInstanceSettingsSection(name string) (InstanceSettingsSection, error) 
 func (s InstanceSettingsSection) Optional() bool {
 	switch s {
 	case InstanceSectionJudgment, InstanceSectionManualSubmissionConfig, InstanceSectionMacosVerification,
-		InstanceSectionExecutionPause:
+		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches:
 		return true
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
@@ -238,6 +242,14 @@ type ExecutionPauseSettings struct {
 	State ExecutionPauseState `json:"state"`
 }
 
+// CordonedLaunchSettings is the cordoned_launches section's value: the most
+// cordoned launches that may run at once. A cordoned launch has no VM, so it
+// reserves nothing against the memory budget; this count is what bounds it.
+// The section unset means no cordoned launch starts.
+type CordonedLaunchSettings struct {
+	MaxConcurrent int `json:"max_concurrent"`
+}
+
 // InstanceSettings is every instance section's value. An optional section is
 // a pointer, nil when unset. The rules here are shape rules only; the rules
 // of the packages that use a value (the allowed review auth modes, the build
@@ -255,6 +267,7 @@ type InstanceSettings struct {
 	Build                  BuildSettings              `json:"build"`
 	MacosVerification      *MacosVerificationSettings `json:"macos_verification"`
 	ExecutionPause         *ExecutionPauseSettings    `json:"execution_pause"`
+	CordonedLaunches       *CordonedLaunchSettings    `json:"cordoned_launches"`
 }
 
 // Validate checks every section that is set and that every required one
@@ -282,6 +295,8 @@ func (s InstanceSettings) unset(section InstanceSettingsSection) bool {
 		return s.MacosVerification == nil
 	case InstanceSectionExecutionPause:
 		return s.ExecutionPause == nil
+	case InstanceSectionCordonedLaunches:
+		return s.CordonedLaunches == nil
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
 		return false
@@ -345,6 +360,14 @@ func (s InstanceSettings) ValidateSection(section InstanceSettingsSection) error
 		}
 		if !s.ExecutionPause.State.valid() {
 			return fmt.Errorf("execution_pause.state %q is not requested or released", s.ExecutionPause.State)
+		}
+		return nil
+	case InstanceSectionCordonedLaunches:
+		if s.CordonedLaunches == nil {
+			return errors.New("cordoned_launches is required")
+		}
+		if s.CordonedLaunches.MaxConcurrent < 1 {
+			return fmt.Errorf("cordoned_launches.max_concurrent %d must be at least 1", s.CordonedLaunches.MaxConcurrent)
 		}
 		return nil
 	}
@@ -427,6 +450,8 @@ func (s *InstanceSettings) field(section InstanceSettingsSection) any {
 		return &s.MacosVerification
 	case InstanceSectionExecutionPause:
 		return &s.ExecutionPause
+	case InstanceSectionCordonedLaunches:
+		return &s.CordonedLaunches
 	}
 	return nil
 }
@@ -593,20 +618,35 @@ func (r InstanceSettingsRecord) Settings() (InstanceSettings, error) {
 // lacks the sections a run needs, as prod's does until it composes from
 // settings.
 func (r InstanceSettingsRecord) ExecutionPause() (*ExecutionPauseSettings, error) {
+	settings, err := r.sectionAlone(InstanceSectionExecutionPause)
+	return settings.ExecutionPause, err
+}
+
+// CordonedLaunches is the cordoned launch cap the record holds, or nil when
+// none is set. Like ExecutionPause it reads only that section, so the cap's
+// gate works on a record that lacks the sections a run needs.
+func (r InstanceSettingsRecord) CordonedLaunches() (*CordonedLaunchSettings, error) {
+	settings, err := r.sectionAlone(InstanceSectionCordonedLaunches)
+	return settings.CordonedLaunches, err
+}
+
+// sectionAlone decodes and validates one section of the record into an
+// otherwise empty settings value, which is empty when the section is unset.
+func (r InstanceSettingsRecord) sectionAlone(section InstanceSettingsSection) (InstanceSettings, error) {
+	var settings InstanceSettings
 	for _, revision := range r.Sections {
-		if revision.Section != InstanceSectionExecutionPause {
+		if revision.Section != section {
 			continue
 		}
-		var settings InstanceSettings
 		if err := decodeSettingsValue(revision.Value, settings.field(revision.Section)); err != nil {
-			return nil, fmt.Errorf("instance settings revision %d: %s: %w", revision.Revision, revision.Section, err)
+			return InstanceSettings{}, fmt.Errorf("instance settings revision %d: %s: %w", revision.Revision, revision.Section, err)
 		}
-		if err := settings.ValidateSection(InstanceSectionExecutionPause); err != nil {
-			return nil, fmt.Errorf("instance settings revision %d: %w", revision.Revision, err)
+		if err := settings.ValidateSection(section); err != nil {
+			return InstanceSettings{}, fmt.Errorf("instance settings revision %d: %w", revision.Revision, err)
 		}
-		return settings.ExecutionPause, nil
+		return settings, nil
 	}
-	return nil, nil
+	return InstanceSettings{}, nil
 }
 
 // maxSettingsValueBytes bounds one section's value: the largest is a list of

@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v20"
+const taskRecordVersion = "freeside-task-record-v21"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -45,7 +45,19 @@ type taskRecord struct {
 	// here.
 	TaskLines      []taskRecordTaskLine `json:"task_lines"`
 	TaskLinesError *taskRecordError     `json:"task_lines_error"`
-	Counts         taskRecordCounts     `json:"counts"`
+	// WriterClass is the task's requirement that its writers run warded
+	// (#3471), null when it has none and its writers take the project's
+	// class.
+	WriterClass      *taskRecordWriterClass `json:"writer_class"`
+	WriterClassError *taskRecordError       `json:"writer_class_error"`
+	Counts           taskRecordCounts       `json:"counts"`
+}
+
+// taskRecordWriterClass lists a task writer class requirement's fields.
+type taskRecordWriterClass struct {
+	Class domain.RunnerBackendClass `json:"class"`
+	SetBy string                    `json:"set_by"`
+	SetAt time.Time                 `json:"set_at"`
 }
 
 // taskRecordTaskLine lists a task line's fields instead of embedding
@@ -501,7 +513,7 @@ func newTaskRecordError(err error) *taskRecordError {
 // hasErrorKind reports whether any section of the record, or any item or
 // run in it, was left unread by an error of the given kind.
 func (r taskRecord) hasErrorKind(kind taskRecordErrorKind) bool {
-	for _, e := range []*taskRecordError{r.TaskError, r.TimelineError, r.ItemsError, r.TaskLinesError} {
+	for _, e := range []*taskRecordError{r.TaskError, r.TimelineError, r.ItemsError, r.TaskLinesError, r.WriterClassError} {
 		if e != nil && e.Kind == kind {
 			return true
 		}
@@ -569,6 +581,13 @@ func readTaskRecord(ctx context.Context, tx *store.ReadTx, id domain.TaskID, asO
 		record.TaskLinesError = newTaskRecordError(err)
 	} else {
 		record.TaskLines = projectTaskRecordTaskLines(lines)
+	}
+	if requirement, err := tx.TaskWriterClass(ctx, id); err != nil {
+		record.WriterClassError = newTaskRecordError(err)
+	} else if requirement != nil {
+		record.WriterClass = &taskRecordWriterClass{
+			Class: requirement.Class, SetBy: requirement.SetBy, SetAt: requirement.SetAt,
+		}
 	}
 	var unattributed int
 	if record.Items, unattributed, err = readTaskRecordItems(ctx, tx, id, record.Runs); err != nil {

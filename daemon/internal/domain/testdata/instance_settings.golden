@@ -49,5 +49,8 @@
   },
   "execution_pause": {
     "state": "requested"
+  },
+  "cordoned_launches": {
+    "max_concurrent": 2
   }
 }

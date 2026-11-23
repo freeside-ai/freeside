@@ -43,7 +43,8 @@ func instanceSettingsFixture() domain.InstanceSettings {
 		MacosVerification: &domain.MacosVerificationSettings{
 			Root: "/opt/macverify", Slots: []string{"fvslot1", "fvslot2"}, XcodeBuild: "17A100", Swift: "swiftlang-6.2",
 		},
-		ExecutionPause: &domain.ExecutionPauseSettings{State: domain.ExecutionPauseRequested},
+		ExecutionPause:   &domain.ExecutionPauseSettings{State: domain.ExecutionPauseRequested},
+		CordonedLaunches: &domain.CordonedLaunchSettings{MaxConcurrent: 2},
 	}
 }
 
@@ -54,6 +55,7 @@ func projectSettingsFixture() domain.ProjectSettings {
 		ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("b", 64)),
 		AgentImage:     settingsImage("agent"),
 		HandBackLabel:  new("needs-rework"),
+		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 	}
 }
 
@@ -237,6 +239,9 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.InstanceSectionMacosVerification, `{"root":"/m","slots":[],"xcode_build":"1","swift":"s"}`, "macos_verification.slots is empty"},
 		{domain.InstanceSectionExecutionPause, `{"state":"paused"}`, `execution_pause.state "paused" is not requested or released`},
 		{domain.InstanceSectionExecutionPause, `{}`, "execution_pause: state: required settings key is absent"},
+		{domain.InstanceSectionCordonedLaunches, `{"max_concurrent":0}`, "cordoned_launches.max_concurrent 0 must be at least 1"},
+		{domain.InstanceSectionCordonedLaunches, `{"max_concurrent":-1}`, "cordoned_launches.max_concurrent -1 must be at least 1"},
+		{domain.InstanceSectionCordonedLaunches, `{}`, "cordoned_launches: max_concurrent: required settings key is absent"},
 		{domain.InstanceSectionHostTools, `{"container":"/c","extra":1}`, "unknown"},
 		{domain.InstanceSectionHostTools, `{"container":"/c","container":"/d"}`, "duplicate"},
 	} {
@@ -261,6 +266,9 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.ProjectSectionApprovedRecipe, `"sha256:abc"`, "approved_recipe is not a sha256 digest"},
 		{domain.ProjectSectionAgentImage, `"registry.local/agent:latest"`, "agent_image is not a digest-pinned image reference"},
 		{domain.ProjectSectionHandBackLabel, `""`, "hand_back_label is required"},
+		{domain.ProjectSectionWriterClass, `"credential_free_host_verification"`, `writer_class "credential_free_host_verification" is not`},
+		{domain.ProjectSectionWriterClass, `"warded"`, `writer_class "warded" is not`},
+		{domain.ProjectSectionWriterClass, `""`, `writer_class "" is not`},
 	} {
 		_, err := domain.NewProjectSettingsRevision(domain.ProjectSettingsInput{
 			ProjectID: "project-widgets", Section: tc.section, Value: json.RawMessage(tc.value), SetBy: "cli:operator",
@@ -380,6 +388,34 @@ func TestExecutionPauseReadsAloneAndFollowsTheFold(t *testing.T) {
 		}
 		if pause == nil || pause.State != want {
 			t.Fatalf("revision %d: pause = %+v, want %s", i+1, pause, want)
+		}
+	}
+}
+
+// TestCordonedLaunchesReadsAloneAndFollowsTheFold pins the cap read the
+// admitting transaction makes: it answers from a record that holds no run
+// section, follows a later cap, and reads none after a clear.
+func TestCordonedLaunchesReadsAloneAndFollowsTheFold(t *testing.T) {
+	var revisions []domain.InstanceSettingsRevision
+	for i, value := range []string{`{"max_concurrent":1}`, `{"max_concurrent":3}`, ``} {
+		revisions = append(revisions, instanceRevision(t, i+1, domain.InstanceSectionCordonedLaunches, json.RawMessage(value)))
+		record, err := domain.NewInstanceSettingsRecord(revisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		launches, err := record.CordonedLaunches()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[int]int{0: 1, 1: 3}[i]
+		if want == 0 {
+			if launches != nil {
+				t.Fatalf("after the clear, cap = %+v, want none", launches)
+			}
+			continue
+		}
+		if launches == nil || launches.MaxConcurrent != want {
+			t.Fatalf("revision %d: cap = %+v, want %d", i+1, launches, want)
 		}
 	}
 }

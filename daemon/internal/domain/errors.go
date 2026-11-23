@@ -328,6 +328,7 @@ var (
 	ErrAdmissionInconsistent             = errors.New("execution admission id does not match its content")
 	ErrUsagePoolExhausted                = errors.New("usage pool execution limit reached")
 	ErrMachineCapacity                   = errors.New("launch memory reservation does not fit the instance budget yet")
+	ErrCordonedLaunchCap                 = errors.New("cordoned launch cap reached, unset, or an older cordoned launch waits")
 	ErrLaunchNeverFits                   = errors.New("launch memory reservation exceeds the whole instance budget")
 	ErrRuntimeOverheadUnknown            = errors.New("container runtime version has no recorded per-VM overhead")
 	ErrInvalidLaunchReservationKind      = errors.New("invalid launch reservation kind")
@@ -667,6 +668,12 @@ var (
 	// revisions, or holds a check that has not passed.
 	ErrProjectNotReady              = errors.New("project is not ready to run unattended work")
 	ErrProjectReadinessInconsistent = errors.New("project readiness record is inconsistent")
+)
+
+// Writer class errors (issue #3471).
+var (
+	ErrInvalidWriterClass       = errors.New("not a class a writer may run on")
+	ErrTaskWriterClassNotWarded = errors.New("a task can only require the warded writer class")
 )
 
 // ErrInvalidWorkHoursPeriod refuses a work-hours period outside 1 to

@@ -2,6 +2,7 @@ package daemoncompose_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -56,8 +57,18 @@ func seedRunSettings(
 	t *testing.T, instance map[domain.InstanceSettingsSection]string, project map[domain.ProjectSettingsSection]string,
 ) *store.Store {
 	t.Helper()
+	return seedRunSettingsAt(t, filepath.Join(t.TempDir(), "freeside.db"), instance, project)
+}
+
+// seedRunSettingsAt is seedRunSettings on a database at a path the caller
+// knows.
+func seedRunSettingsAt(
+	t *testing.T, path string,
+	instance map[domain.InstanceSettingsSection]string, project map[domain.ProjectSettingsSection]string,
+) *store.Store {
+	t.Helper()
 	ctx := context.Background()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	st := storetest.Open(t, path, store.Options{})
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		for _, section := range domain.AllInstanceSettingsSections {
 			value, ok := instance[section]
@@ -169,6 +180,40 @@ func TestLoadRunSettingsRefusesWhatCurrentPolicyRefuses(t *testing.T) {
 				t.Fatalf("loader returned settings %+v with its refusal", settings)
 			}
 		})
+	}
+}
+
+// TestLoadRunSettingsRefusesAStoredWriterClassNoWriterRunsOn rewrites a
+// stored writer_class to the host verification class, which no append
+// accepts: the loader re-checks the stored value and refuses it before a
+// run composes from it.
+func TestLoadRunSettingsRefusesAStoredWriterClassNoWriterRunsOn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	project := storedProjectSections()
+	project[domain.ProjectSectionWriterClass] = `"fresh_vm_read_only_volume_handoff"`
+	st := seedRunSettingsAt(t, path, storedInstanceSections(), project)
+	settings, err := daemoncompose.LoadRunSettings(ctx, st, runSettingsProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.Project.WriterClass; got == nil || *got != domain.BackendFreshVMReadOnlyVolumeHandoff {
+		t.Fatalf("loaded writer_class %v, want the warded class", got)
+	}
+	raw, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.ExecContext(ctx, `UPDATE project_settings_revisions
+		SET body = json_set(body, '$.value', 'credential_free_host_verification')
+		WHERE project_id = ? AND section = 'writer_class'`, runSettingsProject); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemoncompose.LoadRunSettings(ctx, st, runSettingsProject); err == nil ||
+		!strings.Contains(err.Error(), "writer_class") {
+		t.Fatalf("error %v, want the stored writer_class refused", err)
 	}
 }
 

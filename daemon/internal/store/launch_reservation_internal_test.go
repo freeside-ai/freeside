@@ -74,7 +74,7 @@ func refuseAndWait(t *testing.T, st *Store, r domain.LaunchReservation) domain.M
 		t.Fatalf("reserve %s = %v, want a machine capacity refusal", r.InvocationID, err)
 	}
 	if err := st.Write(t.Context(), func(tx *WriteTx) error {
-		return tx.RecordLaunchWait(t.Context(), r.InvocationID, r.RunID, slotAt)
+		return tx.RecordLaunchWait(t.Context(), r.InvocationID, r.RunID, LaunchWaitMemory, slotAt)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func reserveAt(t *testing.T, st *Store, r domain.LaunchReservation, at time.Time
 func refreshWait(t *testing.T, st *Store, r domain.LaunchReservation, at time.Time) {
 	t.Helper()
 	if err := st.Write(t.Context(), func(tx *WriteTx) error {
-		return tx.RecordLaunchWait(t.Context(), r.InvocationID, r.RunID, at)
+		return tx.RecordLaunchWait(t.Context(), r.InvocationID, r.RunID, LaunchWaitMemory, at)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -600,5 +600,40 @@ func TestMachineCapacityConfirmedStopReleasesVerification(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLaunchWaitsKeepTheirResource: a wait reads back with the resource it
+// was recorded on, for every resource, and the memory gate counts only
+// memory waits, so an older task waiting under the cordoned launch cap
+// puts no memory launch behind it (#3471).
+func TestLaunchWaitsKeepTheirResource(t *testing.T) {
+	t.Parallel()
+	st := openSlotStore(t)
+	seedCapacityRuns(t, st, "1-older", "2-newer")
+	older, newer := verificationLaunch("1-older", 1024), verificationLaunch("2-newer", 1024)
+	for _, resource := range AllLaunchWaitResources {
+		if err := st.Write(t.Context(), func(tx *WriteTx) error {
+			return tx.RecordLaunchWait(t.Context(), older.InvocationID, older.RunID, resource, slotAt)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Read(t.Context(), func(tx *ReadTx) error {
+			_, got, waiting, err := tx.LaunchWait(t.Context(), older.InvocationID)
+			if err == nil && (!waiting || got != resource) {
+				err = fmt.Errorf("wait reads back as %q (waiting %t), want %q", got, waiting, resource)
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := reserve(t, st, newer); err != nil {
+		t.Fatalf("newer launch behind an older cordoned launch wait: %v", err)
+	}
+	if err := st.Write(t.Context(), func(tx *WriteTx) error {
+		return tx.RecordLaunchWait(t.Context(), older.InvocationID, older.RunID, "cpu", slotAt)
+	}); !errors.Is(err, ErrInvalidLaunchWaitResource) {
+		t.Fatalf("record on an unknown resource = %v, want ErrInvalidLaunchWaitResource", err)
 	}
 }

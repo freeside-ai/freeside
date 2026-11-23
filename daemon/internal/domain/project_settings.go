@@ -23,19 +23,20 @@ const (
 	ProjectSectionApprovedRecipe ProjectSettingsSection = "approved_recipe"
 	ProjectSectionAgentImage     ProjectSettingsSection = "agent_image"
 	ProjectSectionHandBackLabel  ProjectSettingsSection = "hand_back_label"
+	ProjectSectionWriterClass    ProjectSettingsSection = "writer_class"
 )
 
 // AllProjectSettingsSections lists every ProjectSettingsSection in the order
 // a record shows them; it is the single registration point.
 var AllProjectSettingsSections = []ProjectSettingsSection{
 	ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-	ProjectSectionAgentImage, ProjectSectionHandBackLabel,
+	ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass,
 }
 
 func (s ProjectSettingsSection) valid() bool {
 	switch s {
 	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-		ProjectSectionAgentImage, ProjectSectionHandBackLabel:
+		ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass:
 		return true
 	default:
 		return false
@@ -54,7 +55,7 @@ func ParseProjectSettingsSection(name string) (ProjectSettingsSection, error) {
 // section, so a revision may clear it.
 func (s ProjectSettingsSection) Optional() bool {
 	switch s {
-	case ProjectSectionHandBackLabel:
+	case ProjectSectionHandBackLabel, ProjectSectionWriterClass:
 		return true
 	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
 		ProjectSectionAgentImage:
@@ -73,8 +74,8 @@ type ProjectRepositorySettings struct {
 	BaseRef      string `json:"base_ref"`
 }
 
-// ProjectSettings is every project section's value. The optional hand-back
-// label is a pointer, nil when unset. The rules here are shape rules only;
+// ProjectSettings is every project section's value. The optional sections
+// are pointers, nil when unset. The rules here are shape rules only;
 // the rules of the packages that use a value (the explicit-path rule, the
 // transport's repository, branch, and label forms) are re-run by the
 // settings gate in daemoncompose.
@@ -86,13 +87,17 @@ type ProjectSettings struct {
 	// HandBackLabel is the label the landing batch puts on a pull request it
 	// hands back for rework (#3160); unset leaves hand-backs with a person.
 	HandBackLabel *string `json:"hand_back_label"`
+	// WriterClass is the class the project's writers run on (#3471): one of
+	// the two writer classes ValidateWriterClass accepts. Unset means the
+	// default, cordoned; ResolveWriterClass reads it.
+	WriterClass *RunnerBackendClass `json:"writer_class"`
 }
 
 // Validate checks every section that is set and that every required one
 // holds a value.
 func (s ProjectSettings) Validate() error {
 	for _, section := range AllProjectSettingsSections {
-		if section == ProjectSectionHandBackLabel && s.HandBackLabel == nil {
+		if s.unset(section) {
 			continue
 		}
 		if err := s.ValidateSection(section); err != nil {
@@ -133,6 +138,15 @@ func (s ProjectSettings) ValidateSection(section ProjectSettingsSection) error {
 			return errors.New("hand_back_label is required")
 		}
 		return nil
+	case ProjectSectionWriterClass:
+		if s.WriterClass == nil {
+			return errors.New("writer_class is required")
+		}
+		if ValidateWriterClass(*s.WriterClass) != nil {
+			return fmt.Errorf("writer_class %q is not %s or %s",
+				*s.WriterClass, BackendCordonedHostProcess, BackendFreshVMReadOnlyVolumeHandoff)
+		}
+		return nil
 	}
 	return fmt.Errorf("project settings section %q: %w", section, ErrUnknownSettingsSection)
 }
@@ -164,6 +178,8 @@ func (s *ProjectSettings) field(section ProjectSettingsSection) any {
 		return &s.AgentImage
 	case ProjectSectionHandBackLabel:
 		return &s.HandBackLabel
+	case ProjectSectionWriterClass:
+		return &s.WriterClass
 	}
 	return nil
 }
@@ -174,10 +190,23 @@ func (s ProjectSettings) SectionValue(section ProjectSettingsSection) (json.RawM
 	if !section.valid() {
 		return nil, fmt.Errorf("project settings section %q: %w", section, ErrUnknownSettingsSection)
 	}
-	if section == ProjectSectionHandBackLabel && s.HandBackLabel == nil {
+	if s.unset(section) {
 		return nil, nil
 	}
 	return json.Marshal(s.field(section))
+}
+
+// unset reports whether an optional section holds no value.
+func (s ProjectSettings) unset(section ProjectSettingsSection) bool {
+	switch section {
+	case ProjectSectionHandBackLabel:
+		return s.HandBackLabel == nil
+	case ProjectSectionWriterClass:
+		return s.WriterClass == nil
+	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
+		ProjectSectionAgentImage:
+	}
+	return false
 }
 
 // DecodeProjectSection strictly decodes a non-null value into a fresh

@@ -297,6 +297,11 @@ const (
 	// the daemon to restart on a new build instead of starting work the
 	// update would cancel (issue #3103).
 	HoldUpdateDrain RunHoldReason = "update_drain"
+	// HoldCordonedLaunchCap: the instance's cap on concurrent cordoned
+	// launches is reached or unset, or an older task's cordoned launch waits
+	// ahead of it (plan §5.4, issue #3471). The hold carries no numbers;
+	// `freesided settings show` gives the cap.
+	HoldCordonedLaunchCap RunHoldReason = "cordoned_launch_cap"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -324,6 +329,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldQuotaWindowExhausted,
 	HoldMachineCapacity,
 	HoldUpdateDrain,
+	HoldCordonedLaunchCap,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -336,7 +342,7 @@ func (r RunHoldReason) valid() bool {
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
 		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending,
 		HoldVerificationMemoryLimit,
-		HoldQuotaWindowExhausted, HoldMachineCapacity, HoldUpdateDrain:
+		HoldQuotaWindowExhausted, HoldMachineCapacity, HoldUpdateDrain, HoldCordonedLaunchCap:
 		return true
 	default:
 		return false

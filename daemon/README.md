@@ -1778,7 +1778,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v20`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v21`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1795,6 +1795,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `usage`: each admitted invocation's `invocation_id`, `coverage` (`complete` when its route reported the whole invocation, `partial` when it ended early and its tokens are a lower bound from the transcript it left, `missing` when nothing was recorded), `tokens` (the reported token totals by `metric`, only those observed; a partial Claude invocation has no `output_tokens`, because its transcript doesn't hold them), and `wall_seconds` (its working time in the timeline's clocks, rounded down; `null` while it is working, when it never started, or when the timeline didn't read), `publication` (`null` until the run publishes), `verifications`: each verification step with its `invocation_id`, `started_at` (`null` for a verdict recorded without running the verifier), and `finished_at` and `result` (`passed` or `failed`; both `null` while it runs), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers), `specification_retries`: each operator retry of a failed specification invocation, with the `invocation_id` it added, the `retried_invocation_id`, and the `reason`, and `review_admissions`: each routed and shadow review admission, with its `invocation_id`, `role`, `lineage_group`, `admitted_at`, and `agent`, and `outcomes`: the outcome list the run timeline serves, the follow-up filings and issue comments the run posted or tried to post with where each stands, and the findings it declined or deferred; an entry the read could not reconstruct reports under `outcome_entries` and leaves `complete` false. |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the writer-stall and stalled-recovery notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure` with its outcome and failure `cause`, the `handoff_check` that refused it (`check`, screened `evidence`, and `content_evidence`), the first gauntlet findings of an `export_rejection` (`kind` and screened `path`, with the `total`), and its `retry_outlook` (`would_repeat` or `may_succeed`; absent on an item raised before it existed), `interpretation_failure` with the `cause` of a failure found after the invocation exported, `publish_block`, `blocked_on`), the item's `conversation_id` (`null` when it has none), the `alternate_agents` a card offers to retry its failed role on (`enrollment`, `pool`, `harness`, `model`, `qualification`, and a pre-#2735 offer's `agent`; empty when it offers none), the commands applied (command id, action, device id), and the deliveries. |
 | `task_lines` | Every line version of the task, ordered by role then version: `id`, `role`, `version`, `predecessor_id`, `agent` (a v1 line's agent name), `selection` (a v2 line's `enrollment_id`, `model_id`, and `effort`), `source`, `set_by`, `set_at`, `provenance` (a router or alternate-agent-move line's routing reading), and `cleared`. |
+| `writer_class` | The task's requirement that its writers run warded, from `freesided task-writer-class`: `class`, `set_by`, and `set_at`; `null` when it has none and its writers take the project's class. |
 | `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
 
 Only an unknown task id or a failed read fails the command (exit status 1; a
@@ -1802,8 +1803,9 @@ usage error exits 2). A section that fails a store check stays in the record
 as `null`, with an error that says why. An empty list was read and holds
 nothing.
 
-- **`task_error`, `timeline_error`, `items_error`, and `task_lines_error`**
-  sit beside `task`, `timeline`, `items`, and `task_lines`. `items_error` means the item list itself could
+- **`task_error`, `timeline_error`, `items_error`, `task_lines_error`, and
+  `writer_class_error`** sit beside `task`, `timeline`, `items`,
+  `task_lines`, and `writer_class`. `items_error` means the item list itself could
   not be read. The item counts are `null` when the items are, and
   `failed_stops` when the task is.
 - **`error` on an item** says why the store refused that one item. A refused
@@ -1918,7 +1920,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v20`.
+  `freeside-task-record-v21`.
 - **`agent` says which enrollment, model, and effort an admission ran on.**
   On an execution admission and a review admission alike it carries the
   binding's digests, `route_model_id`, `enrollment_id`,
@@ -2691,6 +2693,19 @@ one. A launch waiting for its pool slot joins that order only once the slot
 is free, and a launch nothing retries any more, such as a review that failed
 for good, leaves it five minutes after its last refusal.
 
+**A cordoned launch counts against a cap, not the budget** (#3471). A
+cordoned writer has no VM, so its execution admission reserves no memory.
+The instance's `cordoned_launches.max_concurrent` setting (Store Instance
+And Project Settings) caps how many run at once, and **no cordoned launch
+starts until a cap is set.** A cordoned launch counts from its admission
+until its export or outcome is recorded. One over the cap, or with no cap
+set, stays pending under a `cordoned_launch_cap` hold, which names no
+numbers (`freesided settings show` gives the cap) and clears when it
+starts. Free places go to the oldest task first, in an order of their own:
+a launch waiting for a cordoned place never holds back a warded launch
+that fits the budget, and one waiting for memory never holds back a
+cordoned launch under the cap. Usage-pool slots are unchanged.
+
 The publication lane advances independent runs at once (#3214). Each pass
 starts each run's pending tasks in that run's own goroutine and doesn't wait
 for them, so one long verification delays only its own run, and a task
@@ -2997,6 +3012,28 @@ either all of `-enrollment`, `-model`, and `-effort`, or `-clear`.
   its own path retries; a review refused at admission requested nothing, so
   its line can change straight away.
 
+### Require A Task's Writers Run Warded
+
+`freesided task-writer-class` requires one task's writers to run warded,
+in a VM, or clears that requirement. A writer runs warded when its project's
+`writer_class` names warded or its task requires it; a task can't move
+itself onto the cordon when its project is warded, so the only class the
+command takes is `fresh_vm_read_only_volume_handoff`. It works with the
+daemon running or stopped: on a running daemon it goes through that daemon,
+which holds the store. It prints the task, the requirement (`null` after a
+clear), and whether a clear `removed` one.
+
+```sh
+freesided task-writer-class -db "$DB" -task "$TASK" \
+  -class fresh_vm_read_only_volume_handoff
+freesided task-writer-class -db "$DB" -task "$TASK" -clear
+```
+
+It refuses a task the store doesn't hold and any other class, and records
+nothing then. The task's record shows the requirement as `writer_class`.
+No writer admission reads it yet; #3472 routes writers by it and decides
+what a change after a task's first writer admission does.
+
 ### Store Instance And Project Settings
 
 `freesided settings` stores the settings a run takes from configuration
@@ -3026,26 +3063,39 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   project's scope; without it the command works on the instance scope.
 - **The sections.** The instance scope holds `host_tools`, `images`,
   `seed_root`, `prompts`, `agent_tree`, `review`, `judgment`, `timeouts`,
-  `manual_submission_config`, `build`, and `macos_verification`; a
-  project holds `repository` (`repo`, `repository_id`, `base_ref`),
-  `allowed_paths`, `approved_recipe`, `agent_image`, and
-  `hand_back_label`. A value takes the fields its `settings.json` key
+  `manual_submission_config`, `build`, `macos_verification`, and
+  `cordoned_launches` (`max_concurrent`); a project holds `repository`
+  (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
+  `approved_recipe`, `agent_image`, `hand_back_label`, and
+  `writer_class`. A value takes the fields its `settings.json` key
   has, less the launch-only ones `import` lists below; `agent_image` is
   the file's `images.agent`, and `host_tools.container` is new, because
   `settings.json` doesn't hold it.
 - **A set checks the value first.** `set` decodes the value strictly into
   the section's shape and checks it against current policy: absolute,
   clean paths, digest-pinned images, a sha256 recipe, explicit allowed
-  paths (no `**`), a branch-name base ref, a label name, a known review
-  auth mode, and valid build inputs. A refusal names the field, exits
+  paths (no `**`), a branch-name base ref, a label name, a writer class,
+  a known review auth mode, and valid build inputs. A refusal names the field, exits
   non-zero, and records nothing. A `repository` whose `repository_id`
   differs from the project's `projects` row is refused.
 - **Only an optional section clears.** `-clear` records a revision that
-  clears `judgment`, `manual_submission_config`, `macos_verification`, or a
-  project's `hand_back_label`; clearing any other section is refused.
+  clears `judgment`, `manual_submission_config`, `macos_verification`,
+  `cordoned_launches`, or a project's `hand_back_label` or
+  `writer_class`; clearing any other section is refused.
+- **`writer_class` picks the class a project's writers run on.** It is
+  `cordoned_host_process` (the cordoned run, the default when unset) or
+  `fresh_vm_read_only_volume_handoff` (warded); any other class is refused.
+  A task can also require warded (Require A Task's Writers Run Warded). No
+  writer admission reads either yet; #3472 routes writers by them.
+- **`cordoned_launches` caps concurrent cordoned launches.** Its one
+  field, `max_concurrent`, is at least 1. With the section unset or
+  cleared, no cordoned launch starts (Bound Container Memory). The
+  deputy's `settings.json` has no key for it, so set it with `set`.
 - **A change takes effect at the next start.** Every `set` prints
   `takes_effect`. Runs will load the records when the daemon starts, until
-  the project gates read them while it runs (#3209).
+  the project gates read them while it runs (#3209). The exception is
+  `cordoned_launches`, which each admission reads from the store, so a
+  set applies from the next admission.
 - **A run re-checks what's stored.** The loader a run composes from folds
   both scopes, refuses a scope that lacks a required section and names it,
   and re-runs every check above against current policy, with the
@@ -3060,8 +3110,9 @@ names the container tool by its bare name and the installed daemon's
 launchd `PATH` need not resolve it, so the import stores an absolute path:
 `-container-bin`, or the lookup of `container` on the command's own
 `PATH`, which a running daemon receives, and it refuses a relative one. It refuses
-when the instance or the file's project already has a revision; change
-sections with `set` after that. It prints both head revisions, the
+when the instance or the file's project already has a revision, other than
+an execution pause or a cordoned launch cap, which the file doesn't carry;
+change sections with `set` after that. It prints both head revisions, the
 project, `takes_effect`, and `not_imported`: the file's keys a run takes
 from its launch instead of the records, except `repository.base_sha`,
 which only preflight reads (`version`, `listen`,
@@ -5317,7 +5368,7 @@ container volume, not a host path.
 | --- | --- |
 | top level | `listen`, `seed_root`, `approved_recipe`, the optional `retained_recipes`, `manual_submission_config`, `memory_budget_mib` (positive; Bound Container Memory) |
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
-| `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project`, and the optional `hand_back_label` |
+| `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project`, and the optional `hand_back_label` and `writer_class` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
 | `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` and `second_writer`. `pricing_revision` and `offer_not_after` are still required but ignored, because the tree carries no offers (#2599) |
 | `review` | `input_root`, `auth_mode` (`subscription` with a Codex reviewer, `setup_token` with a Claude one; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
@@ -5352,6 +5403,12 @@ two. Each root has its own database, so no run, wave, or date suffix is needed
 to keep runs apart. The exit run's fixture pass is the one exception: it keeps
 the `fixture` its settings table fixes
 ([Rehearse Before The Real Run](../docs/production-walkthrough.md#rehearse-before-the-real-run)).
+
+`repository.writer_class` is the class the project's writers run on, as the
+stored `writer_class` section holds it (Store Instance And Project
+Settings): `cordoned_host_process`, the default when it is absent, or
+`fresh_vm_read_only_volume_handoff`. The deputy refuses any other value and
+`settings import` stores it; no writer admission reads it until #3472.
 
 `repository.hand_back_label` is the label the landing batch puts on a pull
 request it hands back for rework (`needs-rework` for a repository whose

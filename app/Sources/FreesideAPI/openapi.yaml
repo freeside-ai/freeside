@@ -4512,6 +4512,7 @@ components:
         - quota_window_exhausted
         - machine_capacity
         - update_drain
+        - cordoned_launch_cap
         - unknown
 
     ImageUpkeepPending:

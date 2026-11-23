@@ -63,14 +63,16 @@ func currentLaunchBound(ctx context.Context, st *store.Store, startup ward.Launc
 // executionMemory is the reservation an execution admission of run makes,
 // read in the transaction that gates it: the writer size the run's policy
 // resolves, which is the size the stage driver will declare. It is nil with
-// no budget, and for an admission that names no identity, which takes no pool
-// slot and starts no ward writer (store.RequireExecutionMemory). Whether it
+// no budget, for an admission that names no identity, which takes no pool
+// slot and starts no ward writer (store.RequireExecutionMemory), and for a
+// cordoned admission, which starts no VM: the cordoned launch cap bounds it
+// instead (store.RequireCordonedLaunchCap; #3471). Whether it
 // fits is the gate's to decide, so a replayed admission that already holds
 // its reservation passes under a budget lowered below it.
 func (e *Engine) executionMemory(
 	ctx context.Context, tx *store.ReadTx, run domain.Run, admission domain.ExecutionAdmission,
 ) (*store.MemoryReservation, error) {
-	if admission.AuthIdentityID == nil {
+	if admission.AuthIdentityID == nil || admission.Backend == string(domain.BackendCordonedHostProcess) {
 		return nil, nil
 	}
 	bound, err := launchBoundAt(ctx, tx, e.launchBound)
@@ -174,11 +176,13 @@ func noticeLaunchMemoryRefusal(
 		ctx, st, attention, launchMemoryRefusedPrefix, runID, projectID, launchMemoryRefusalReason(refusal))
 }
 
-// recordLaunchOrder keeps a launch's place in the memory order in step with
-// why it was refused. A launch refused for memory joins the order, or
-// refreshes its wait so the gate keeps counting it (store.LaunchWaitRefresh);
-// one refused for anything else, such as a pool slot taken since it joined,
-// leaves it, so it holds back no launch on another pool. An update drain
+// recordLaunchOrder keeps a launch's place in a launch order in step with
+// why it was refused. A launch refused for memory joins the memory order, and
+// one the cordoned launch cap refused joins the cordoned launch order
+// (store.LaunchWaitResource), or refreshes its wait so the gate keeps
+// counting it (store.LaunchWaitRefresh); one refused for anything else, such
+// as a pool slot taken since it joined, leaves it, so it holds back no launch
+// on another pool. An update drain
 // changes nothing: it holds every launch alike, so a waiter keeps its place
 // for the lift (issue #3104). A refused launch is retried every pass and
 // every write advances the revision, so the order is written only when it
@@ -186,7 +190,8 @@ func noticeLaunchMemoryRefusal(
 // wait is due a refresh. Between a publication-lane launch's refusals, the
 // pass running keeps its wait alive (launchWaitKeeper), so a wait's refused_at
 // stays its latest real refusal, which this throttles by. With no budget
-// nothing joins, so nothing is written.
+// nothing joins the memory order, so nothing is written. A launch whose wait
+// is on the other resource rewrites it at once.
 // A launch that joins fits the budget, so a notice that a smaller budget
 // refused it for good no longer describes its run and is retired.
 func recordLaunchOrder(
@@ -196,28 +201,32 @@ func recordLaunchOrder(
 	if refusal == nil || store.NewWorkClosed(refusal) {
 		return nil
 	}
-	join := errors.Is(refusal, domain.ErrMachineCapacity)
+	resource, join := store.LaunchWaitMemory, errors.Is(refusal, domain.ErrMachineCapacity)
+	if errors.Is(refusal, domain.ErrCordonedLaunchCap) {
+		resource, join = store.LaunchWaitCordonedLaunch, true
+	}
 	var (
 		waiting   bool
 		refusedAt time.Time
+		waitsOn   store.LaunchWaitResource
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		refusedAt, waiting, err = tx.LaunchWaitRefusedAt(ctx, invocationID)
+		refusedAt, waitsOn, waiting, err = tx.LaunchWait(ctx, invocationID)
 		return err
 	}); err != nil {
-		return fmt.Errorf("launch %q memory order: %w", invocationID, err)
+		return fmt.Errorf("launch %q launch order: %w", invocationID, err)
 	}
-	if join == waiting && (!join || now.Sub(refusedAt) < store.LaunchWaitRefresh) {
+	if join == waiting && (!join || (waitsOn == resource && now.Sub(refusedAt) < store.LaunchWaitRefresh)) {
 		return nil
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if join {
-			return tx.RecordLaunchWait(ctx, invocationID, runID, now)
+			return tx.RecordLaunchWait(ctx, invocationID, runID, resource, now)
 		}
 		return tx.LeaveLaunchWait(ctx, invocationID)
 	}); err != nil {
-		return fmt.Errorf("launch %q memory order: %w", invocationID, err)
+		return fmt.Errorf("launch %q launch order: %w", invocationID, err)
 	}
 	if join && !waiting {
 		return releaseProductionQuarantine(ctx, st, attention, launchMemoryRefusedPrefix, runID)

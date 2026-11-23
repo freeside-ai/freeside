@@ -259,6 +259,7 @@ func (p *pairingControl) registerControlRoutes(
 	command("/memory-budget", runSetMemoryBudgetCommand)
 	command(releaseVerificationMemoryRoute, runReleaseVerificationMemoryCommand)
 	command("/tasks/lines", runTaskLineCommand)
+	command(taskWriterClassRoute, runTaskWriterClassCommand)
 	command(routingPolicyRoute, runRoutingCommand)
 	command(settingsRoute, runSettingsCommand)
 	command("/auth/list", runAuthListCommand)

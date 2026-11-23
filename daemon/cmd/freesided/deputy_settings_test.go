@@ -190,6 +190,12 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"empty allowed paths": {func(s map[string]any) {
 			s["repository"].(map[string]any)["allowed_paths"] = []string{}
 		}, "repository.allowed_paths is empty"},
+		"writer class no writer runs on": {func(s map[string]any) {
+			s["repository"].(map[string]any)["writer_class"] = "credential_free_host_verification"
+		}, `repository.writer_class "credential_free_host_verification" is not`},
+		"unknown writer class": {func(s map[string]any) {
+			s["repository"].(map[string]any)["writer_class"] = "warded"
+		}, `repository.writer_class "warded" is not`},
 		"match-everything paths": {func(s map[string]any) {
 			s["repository"].(map[string]any)["allowed_paths"] = []string{"**"}
 		}, "repository.allowed_paths must name explicit declared paths"},

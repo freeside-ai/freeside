@@ -190,6 +190,7 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 		domain.InstanceSectionManualSubmissionConfig: `"/rig/manual.json"`,
 		domain.InstanceSectionBuild:                  `{"proxy":"","base_build_ref":"","dns":[]}`,
 		domain.InstanceSectionMacosVerification:      `{"root":"/m","slots":["a"],"xcode_build":"1","swift":"s"}`,
+		domain.InstanceSectionCordonedLaunches:       `{"max_concurrent":2}`,
 	}
 	for _, section := range domain.AllInstanceSettingsSections {
 		if _, err := appendInstanceSettings(t, s, section, instance[section]); err != nil {
@@ -202,6 +203,7 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 		domain.ProjectSectionApprovedRecipe: `"sha256:` + hex64 + `"`,
 		domain.ProjectSectionAgentImage:     `"r/a@sha256:` + hex64 + `"`,
 		domain.ProjectSectionHandBackLabel:  `"needs-rework"`,
+		domain.ProjectSectionWriterClass:    `"cordoned_host_process"`,
 	}
 	for _, section := range domain.AllProjectSettingsSections {
 		if _, err := appendProjectSettings(t, s, "project-a", section, project[section]); err != nil {

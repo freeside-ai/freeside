@@ -9,5 +9,6 @@
   ],
   "approved_recipe": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "agent_image": "registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "hand_back_label": "needs-rework"
+  "hand_back_label": "needs-rework",
+  "writer_class": "fresh_vm_read_only_volume_handoff"
 }
