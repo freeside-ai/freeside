@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 // EndedBy names what ended a launch.
@@ -99,6 +101,8 @@ type layout struct {
 	// ctl sits outside runRoot, under a protected root, so the launch can
 	// neither read nor write it.
 	ctl, rules, tag, control, transcript, stderr string
+	// ended is the end record (record.go).
+	ended string
 }
 
 func layoutFor(runsRoot, runID string) layout {
@@ -109,7 +113,7 @@ func layoutFor(runsRoot, runID string) layout {
 		config: filepath.Join(runRoot, "config"), tmp: filepath.Join(runRoot, "tmp"),
 		ctl: ctl, rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
 		control: filepath.Join(ctl, "control"), transcript: filepath.Join(ctl, "transcript"),
-		stderr: filepath.Join(ctl, "stderr"),
+		stderr: filepath.Join(ctl, "stderr"), ended: filepath.Join(ctl, "ended.json"),
 	}
 }
 
@@ -147,7 +151,8 @@ func confinedArgv(cfg Config, l layout, program string, args ...string) []string
 // the rule file, watches the agent's output, and ends the launch when the
 // agent exits, ctx is canceled, or the output stalls. Every ending runs the
 // run-end proof; a launch whose end can't be proven returns a *BlockedError
-// and no result.
+// and no result. A launch that returns a result has written its end record
+// (record.go) first, which is what Export requires.
 //
 // Nothing in the worktree is read, run, or inspected by the daemon once the
 // agent starts; the seed runs before it.
@@ -226,6 +231,15 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	if err := activity.err(); err != nil {
 		return LaunchResult{}, fmt.Errorf("cordon: write the agent's output: %w", err)
 	}
+	if err := errors.Join(transcript.Sync(), stderr.Sync()); err != nil {
+		return LaunchResult{}, fmt.Errorf("cordon: sync the agent's output: %w", err)
+	}
+	if err := writeEndRecord(l, endRecord{
+		RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
+		EndedBy: endedBy, ExitCode: exitCode,
+	}); err != nil {
+		return LaunchResult{}, err
+	}
 	return LaunchResult{ExitCode: exitCode, EndedBy: endedBy, TranscriptPath: l.transcript, StderrPath: l.stderr}, nil
 }
 
@@ -240,7 +254,8 @@ func (r LaunchRequest) validate() error {
 }
 
 // prepare claims the launch's directory, writes the rule file and the
-// proof's two files, and seeds the worktree. The tag and control exist
+// proof's two files, seeds the worktree, and gives it the evidence
+// directory the agent stages evidence in. The tag and control exist
 // from before anything starts until the proof ends, because sandbox_check
 // reads a missing path as denied.
 func (b *Backend) prepare(ctx context.Context, req LaunchRequest, l layout) error {
@@ -266,6 +281,41 @@ func (b *Backend) prepare(ctx context.Context, req LaunchRequest, l layout) erro
 	}
 	if err := b.seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
 		return fmt.Errorf("cordon: seed worktree: %w", err)
+	}
+	if err := os.Mkdir(filepath.Join(l.worktree, export.EvidenceWorkspaceDir), 0o700); err != nil {
+		return fmt.Errorf("cordon: create the evidence directory: %w", err)
+	}
+	return excludeReservedPaths(l.worktree)
+}
+
+// excludeReservedPaths appends Freeside's reserved workspace paths to the
+// seeded checkout's own exclude file, as the ward's launcher does
+// (internal/exec/claude/spec.go), so a tool that honors git excludes skips
+// what the agent stages there. It runs before the agent starts, while the
+// tree holds only the seed, and only when .git is a real directory.
+func excludeReservedPaths(worktree string) error {
+	gitDir := filepath.Join(worktree, ".git")
+	info, err := os.Lstat(gitDir)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cordon: inspect the seeded .git: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(gitDir, "info"), 0o700); err != nil {
+		return fmt.Errorf("cordon: create .git/info: %w", err)
+	}
+	exclude := filepath.Join(gitDir, "info", "exclude")
+	f, err := os.OpenFile(exclude, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600) //nolint:gosec // G304: the daemon's own seed
+	if err != nil {
+		return fmt.Errorf("cordon: open %s: %w", exclude, err)
+	}
+	_, err = fmt.Fprintf(f, "\n/%s/\n/%s\n", export.EvidenceWorkspaceDir, export.CommitPlanFilename)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("cordon: write %s: %w", exclude, err)
 	}
 	return nil
 }
