@@ -30,6 +30,13 @@
             /// A writer still running (#1926): nothing folds, the call under
             /// way is the last line, and the clock closes the sheet.
             case running
+            /// A specifier run with `--json-schema` (#3568): its answer is the
+            /// `result` record's `structured_output`, shown once as formatted
+            /// JSON where the final message goes.
+            case structured
+            /// The same stream on a failed run: the CLI accepted the answer
+            /// and the daemon then rejected it.
+            case structuredFailed
 
             var surface: String {
                 switch self {
@@ -40,6 +47,8 @@
                 case .unreadable: "agent-transcript-unreadable"
                 case .raw: "agent-transcript-raw"
                 case .running: "agent-transcript-running"
+                case .structured: "agent-transcript-structured"
+                case .structuredFailed: "agent-transcript-structured-failed"
                 }
             }
         }
@@ -49,12 +58,16 @@
         /// The sheet in `state`, laid out in place of its scroll view.
         static func sheet(_ state: State) -> AnyView {
             if state == .running { return runningSheet() }
-            let bytes = Array(transcript(state).utf8)
+            let structured = state == .structured || state == .structuredFailed
+            let failed = state == .failed || state == .structuredFailed
+            let bytes = Array((structured ? structuredTranscript() : transcript(state)).utf8)
             let presentation = AgentTranscriptPresentation(bytes: bytes, streamEnded: true)
             let sheet = AgentTranscriptSheet(
                 digest: digest, bytes: bytes, mediaType: "application/jsonl",
-                title: "Implementation · Attempt 1", outcome: state == .failed ? .failed : .finished,
-                workingTime: state == .failed ? 9 * 60 : 16 * 60, prompt: state == .raw ? nil : prompt,
+                title: structured ? "First Draft · Attempt 1" : "Implementation · Attempt 1",
+                outcome: failed ? .failed : .finished,
+                workingTime: structured ? 3 * 60 : failed ? 9 * 60 : 16 * 60,
+                prompt: state == .raw ? nil : structured ? specificationPrompt : prompt,
                 folds: AgentTranscriptFoldPreferences(defaults: nil, open: [digest: openFolds(state, presentation)]),
                 presentation: presentation, showsRaw: state == .raw, rendersScrollableContent: false,
                 screenshotHeight: state == .end || state == .raw ? 560 : nil)
@@ -83,7 +96,7 @@
                 return nil
             }
             switch state {
-            case .finished, .failed, .raw, .running:
+            case .finished, .failed, .raw, .running, .structured, .structuredFailed:
                 return []
             case .unreadable:
                 return ["unreadable"]
@@ -184,6 +197,41 @@
             lines += [
                 say(final), record(["type": "result", "subtype": "success", "is_error": false, "result": final]),
             ]
+            return lines.joined(separator: "\n") + "\n"
+        }
+
+        /// The specifier's prompt, shortened.
+        private static let specificationPrompt =
+            "Draft an implementation-ready specification for issue #12: the acceptance rig probes before its fixture server listens."
+        /// A First Draft answer, small but with a Markdown body, so its
+        /// escaped line breaks show.
+        private static let answer: [String: Any] = [
+            "decisions": [Any](), "fetch_requests": [Any](), "reply": NSNull(),
+            "specification": [
+                "addressals": [Any](),
+                "body":
+                    "## Objective\n\nStart the fixture server before the first probe.\n\n## Acceptance\n\n- `TestProbeWaitsForListener` passes.",
+                "summary": "Bind the fixture server before the rig probes it.",
+                "title": "Fix the acceptance rig's probe race",
+            ],
+        ]
+
+        /// A specifier's stream: it reads, then answers through the CLI's
+        /// `StructuredOutput` tool, and the `result` record carries the
+        /// answer in `structured_output` and serialized in `result`.
+        static func structuredTranscript() -> String {
+            var lines = [
+                record(["type": "system", "subtype": "init", "cwd": "/workspace", "model": "claude-opus-5-5"]),
+                say("I’ll read the rig’s runner before drafting."),
+            ]
+            lines += call("s1", "Read", ["file_path": "/workspace/rig/runner.go"], "package rig")
+            lines += call("s2", "Grep", ["pattern": "probe.Start"], "rig/runner.go:52")
+            lines += call("s3", "StructuredOutput", answer, "Structured output provided successfully")
+            lines.append(
+                record([
+                    "type": "result", "subtype": "success", "is_error": false, "result": record(answer),
+                    "structured_output": answer,
+                ]))
             return lines.joined(separator: "\n") + "\n"
         }
 

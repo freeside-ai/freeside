@@ -45,8 +45,10 @@ import Testing
         ["type": "tool_result", "tool_use_id": id, "content": content, "is_error": isError]
     }
 
+    /// A nil `structuredOutput` leaves the field out; `NSNull()` writes
+    /// JSON null.
     private static func result(
-        _ message: String?, isError: Bool = false, subtype: String = "success"
+        _ message: String?, isError: Bool = false, subtype: String = "success", structuredOutput: Any? = nil
     ) throws
         -> String
     {
@@ -55,6 +57,7 @@ import Testing
             "usage": ["input_tokens": 10],
         ]
         object["result"] = message
+        object["structured_output"] = structuredOutput
         return try json(object)
     }
 
@@ -114,7 +117,9 @@ import Testing
         #expect(read.output?.text == "package rig")
         // The result repeats the last message, so it is drawn once, as
         // the final message; its cost and usage are not read.
-        #expect(value.result == .init(message: "Fixed: the bind now runs first.", isError: false, subtype: "success"))
+        #expect(
+            value.result
+                == .init(message: "Fixed: the bind now runs first.", answer: nil, isError: false, subtype: "success"))
     }
 
     @Test func callsBetweenMessagesGroupUnderOneSummary() throws {
@@ -354,5 +359,66 @@ import Testing
         ])
         #expect(value.entries.count == 1)
         #expect(value.result?.message == "All done.")
+    }
+
+    // MARK: Structured Output
+
+    private static var answer: [String: Any] {
+        ["specification": ["summary": "S", "body": "a/b\nc", "addressals": [Any]()], "reply": NSNull()]
+    }
+
+    private static func callNames(_ value: Presentation) -> [String] {
+        value.entries.flatMap { Self.calls($0) }.map(\.verb)
+    }
+
+    @Test func aStructuredAnswerIsShownOnceAsFormattedJSON() throws {
+        // The CLI's serialization of the answer, compact and in no set key
+        // order, is the same value as the answer, so it isn't shown again.
+        let serialized = String(
+            decoding: try JSONSerialization.data(withJSONObject: Self.answer), as: UTF8.self)
+        var lines = [try Self.assistant([Self.text("I'll read the runner first.")])]
+        lines += try Self.call("t1", "Read", ["file_path": "/workspace/rig/runner.go"])
+        lines += try Self.call("t2", "StructuredOutput", Self.answer, output: "Structured output provided successfully")
+        lines.append(try Self.result(serialized, structuredOutput: Self.answer))
+        let value = Self.read(lines)
+        #expect(value.unreadable.isEmpty)
+        #expect(
+            value.result?.answer == """
+                {
+                  "reply" : null,
+                  "specification" : {
+                    "addressals" : [],
+                    "body" : "a/b\\nc",
+                    "summary" : "S"
+                  }
+                }
+                """)
+        #expect(value.result?.message == nil)
+        #expect(Self.callNames(value) == ["Read"])
+    }
+
+    @Test func aResultWithoutStructuredOutputKeepsItsTextEvenWhenItIsJSON() throws {
+        for structuredOutput: Any? in [nil, NSNull()] {
+            let value = Self.read([try Self.result(#"{"reply":"hi"}"#, structuredOutput: structuredOutput)])
+            #expect(value.result?.message == #"{"reply":"hi"}"#)
+            #expect(value.result?.answer == nil)
+        }
+    }
+
+    @Test func aStructuredOutputCallWithAnotherInputStays() throws {
+        let value = Self.read(
+            (try Self.call("t1", "StructuredOutput", ["reply": 1], output: "Invalid output", isError: true))
+                + (try Self.call("t2", "StructuredOutput", Self.answer))
+                + [try Self.result(nil, structuredOutput: Self.answer)])
+        let calls = value.entries.flatMap { Self.calls($0) }
+        #expect(calls.map(\.verb) == ["StructuredOutput"])
+        #expect(calls.first?.failed == true)
+        #expect(value.result?.answer != nil)
+    }
+
+    @Test func aProseResultBesideStructuredOutputKeepsBoth() throws {
+        let value = Self.read([try Self.result("Here is the draft.", structuredOutput: Self.answer)])
+        #expect(value.result?.message == "Here is the draft.")
+        #expect(value.result?.answer != nil)
     }
 }
