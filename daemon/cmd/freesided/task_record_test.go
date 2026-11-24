@@ -949,47 +949,171 @@ func closureCheckpointJSON(runID domain.RunID, publication domain.InvocationID, 
 	return `{"version":"1","run_id":"` + string(runID) + `","publication_id":"` + string(publication) + `"` + proposal + `}`
 }
 
+// seedClosureRecordRun seeds a project, a run, its policy and work-unit
+// declaration, so a closure proposal over the run passes the store's gated
+// read. A verified source is a task bound to one of the project's issues; a
+// recommended one is the task a run gets with no issue subject.
+func seedClosureRecordRun(
+	t *testing.T, st *store.Store, runID domain.RunID, provenance domain.ClosureProvenance,
+) (domain.ResolvedPolicy, domain.ClosableSource) {
+	t.Helper()
+	ctx := t.Context()
+	const projectID, repo, repositoryID = domain.ProjectID("project-closure"), "owner/closure", int64(4242)
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := domain.ClosableSource{
+		Present: true, Provenance: provenance, Repo: repo, RepositoryID: repositoryID,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RegisterProject(ctx, domain.Project{ID: projectID, Repo: repo, RepositoryID: repositoryID}); err != nil {
+			return err
+		}
+		var taskID domain.TaskID
+		if provenance == domain.ClosureProvenanceVerified {
+			source.IssueNumber = 117
+			task, err := tx.GetOrCreateTask(ctx, projectID, domain.SpecificationSource{
+				Kind: domain.SpecificationSourceIssueSubject,
+				IssueSubject: &domain.IssueSubjectRef{
+					Repo: repo, RepositoryID: repositoryID, IssueNumber: source.IssueNumber,
+				},
+			})
+			if err != nil {
+				return err
+			}
+			taskID = task.ID
+		}
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: projectID, TaskID: taskID,
+			SpecDigest: "sha256:spec", PolicyDigest: policy.Digest, Stages: []domain.Stage{},
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+			CompletionCriterion: domain.CompletionBoundPRMerged, DeclaredPaths: domain.CanonicalDeclaredPaths(policy),
+		}, runID, projectID, proposalSeedAt.Add(-time.Hour))
+		if err != nil {
+			return err
+		}
+		return tx.RecordWorkUnitDeclaration(ctx, declaration)
+	}); err != nil {
+		t.Fatalf("seed closure run: %v", err)
+	}
+	return policy, source
+}
+
+// allocateClosureInstance admits a closure proposal of origin over the seeded
+// source, as admitClosureProposal does, and returns its instance id.
+func allocateClosureInstance(
+	t *testing.T, st *store.Store, policy domain.ResolvedPolicy, source domain.ClosableSource,
+	origin domain.ClosureFlagOrigin,
+) domain.ProposalInstanceID {
+	t.Helper()
+	ctx := t.Context()
+	proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID)),
+		Source:        source,
+		ProposedTarget: domain.IssueSubjectRef{
+			Repo: source.Repo, RepositoryID: source.RepositoryID, IssueNumber: 9,
+		},
+		Origin: origin, Resolves: true,
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var instance domain.ProposalInstance
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		instance, _, err = tx.AllocateProposalInstance(ctx,
+			domain.ProposalAdmissionKey{Source: domain.ProposalSourceUpstreamEvent, UpstreamEventID: "closure-record"},
+			domain.ProposalBatchID("batch-closure-record"), proposal, proposalSeedAt)
+		return err
+	}); err != nil {
+		t.Fatalf("allocate closure instance: %v", err)
+	}
+	return instance.ID
+}
+
 func TestTaskRecordReportsClosure(t *testing.T) {
 	t.Parallel()
 	const kind = "production_closure_checkpoint"
+	verified, recommended := domain.ClosureProvenanceVerified, domain.ClosureProvenanceRecommended
 	for _, tc := range []struct {
-		label, kind, proposal string
+		label, kind string
+		// provenance is the seeded run's closable source.
+		provenance domain.ClosureProvenance
+		// origin is the checkpoint's proposal, "" for has_proposal false;
+		// a proposal names a seeded instance unless missing names one the
+		// store has no row for.
+		origin  domain.ClosureFlagOrigin
+		reason  string
+		missing bool
 		// want is the run's closure as JSON; "" expects a closure error.
 		want string
 	}{
-		{"no answer yet", "", "", "null"},
+		{label: "no answer yet", provenance: verified, want: "null"},
 		{
-			"fallback with a cause", kind,
-			`,"has_proposal":true,"instance_id":"proposal-1","origin":"daemon_fallback","reason":"resolve author input failed: read source issue text"`,
-			`{"origin":"daemon_fallback","fallback_cause":"resolve author input failed: read source issue text"}`,
+			label: "fallback with a cause", kind: kind, provenance: verified,
+			origin: domain.ClosureFlagOriginDaemonFallback, reason: "resolve author input failed: read source issue text",
+			want: `{"origin":"daemon_fallback","provenance":"verified","fallback_cause":"resolve author input failed: read source issue text"}`,
 		},
 		{
-			"fallback recorded before causes", kind,
-			`,"has_proposal":true,"instance_id":"proposal-1","origin":"daemon_fallback"`,
-			`{"origin":"daemon_fallback","fallback_cause":null}`,
+			label: "fallback recorded before causes", kind: kind, provenance: recommended,
+			origin: domain.ClosureFlagOriginDaemonFallback,
+			want:   `{"origin":"daemon_fallback","provenance":"recommended","fallback_cause":null}`,
 		},
 		{
-			"propose site answer", kind,
-			`,"has_proposal":true,"instance_id":"proposal-1","origin":"propose_site"`,
-			`{"origin":"propose_site","fallback_cause":null}`,
+			label: "propose site answer", kind: kind, provenance: recommended,
+			origin: domain.ClosureFlagOriginProposeSite,
+			want:   `{"origin":"propose_site","provenance":"recommended","fallback_cause":null}`,
 		},
 		{
-			"default policy close", kind,
-			`,"has_proposal":true,"instance_id":"proposal-1","origin":"policy_default"`,
-			`{"origin":"policy_default","fallback_cause":null}`,
+			label: "default policy close over a verified source", kind: kind, provenance: verified,
+			origin: domain.ClosureFlagOriginPolicyDefault,
+			want:   `{"origin":"policy_default","provenance":"verified","fallback_cause":null}`,
 		},
-		{"no proposal made", kind, `,"has_proposal":false`, `{"origin":null,"fallback_cause":null}`},
-		{"unreadable row", "not_a_closure_checkpoint", "", ""},
+		{
+			label: "default policy close over a recommended source", kind: kind, provenance: recommended,
+			origin: domain.ClosureFlagOriginPolicyDefault,
+			want:   `{"origin":"policy_default","provenance":"recommended","fallback_cause":null}`,
+		},
+		{
+			label: "no proposal made", kind: kind, provenance: verified,
+			want: `{"origin":null,"provenance":null,"fallback_cause":null}`,
+		},
+		{
+			label: "instance the store has no row for", kind: kind, provenance: verified,
+			origin: domain.ClosureFlagOriginPolicyDefault, missing: true,
+		},
+		{label: "unreadable row", kind: "not_a_closure_checkpoint", provenance: verified},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			t.Parallel()
 			st := schedTestStore(t)
 			ctx := t.Context()
 			runID := domain.RunID("run-closure")
-			seedCaptureRun(t, st, runID)
+			policy, source := seedClosureRecordRun(t, st, runID, tc.provenance)
 			if tc.kind != "" {
+				proposal := `,"has_proposal":false`
+				if tc.origin != "" {
+					instanceID := domain.ProposalInstanceID("proposal-missing")
+					if !tc.missing {
+						instanceID = allocateClosureInstance(t, st, policy, source, tc.origin)
+					}
+					proposal = fmt.Sprintf(`,"has_proposal":true,"instance_id":%q,"origin":%q`, instanceID, tc.origin)
+					if tc.reason != "" {
+						proposal += fmt.Sprintf(`,"reason":%q`, tc.reason)
+					}
+				}
 				publication := domain.ProductionPublicationInvocationID(runID)
-				putClosureCheckpoint(t, st, runID, publication, tc.kind, closureCheckpointJSON(runID, publication, tc.proposal))
+				putClosureCheckpoint(t, st, runID, publication, tc.kind, closureCheckpointJSON(runID, publication, proposal))
 			}
 			var run taskRecordRun
 			if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -999,17 +1123,17 @@ func TestTaskRecordReportsClosure(t *testing.T) {
 				t.Fatal(err)
 			}
 			sections := runErrorSections(run)
-			if slices.Contains(sections, taskRecordRunClosureCards) || run.ClosureCards == nil {
+			if run.ClosureCards == nil {
 				t.Fatalf("closure cards = %v, errors = %+v; want them read", run.ClosureCards, run.Errors)
 			}
 			if tc.want == "" {
-				index := slices.IndexFunc(run.Errors, func(e taskRecordRunError) bool { return e.Section == taskRecordRunClosure })
-				if index < 0 || run.Errors[index].Kind != taskRecordErrorIntegrity || run.Closure != nil {
-					t.Fatalf("closure = %+v, errors = %+v; want an integrity error on the closure", run.Closure, run.Errors)
+				if !slices.Equal(sections, []taskRecordRunSection{taskRecordRunClosure}) ||
+					run.Errors[0].Kind != taskRecordErrorIntegrity || run.Closure != nil {
+					t.Fatalf("closure = %+v, errors = %+v; want an integrity error on the closure alone", run.Closure, run.Errors)
 				}
 				return
 			}
-			if slices.Contains(sections, taskRecordRunClosure) {
+			if len(sections) != 0 {
 				t.Fatalf("errors = %+v", run.Errors)
 			}
 			if got := string(mustJSON(t, run.Closure)); got != tc.want {
@@ -1022,7 +1146,8 @@ func TestTaskRecordReportsClosure(t *testing.T) {
 // TestTaskRecordClosureFollowsPublishedCycle proves the record shows the
 // closure answer of the cycle whose pull request the run carries: a sealed
 // successor that has not published yet leaves the first publication's answer
-// in place, even once the successor records its own.
+// in place, even once the successor records its own. The successor's answer
+// names an instance with no row, so reading it would fail the closure.
 func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
 	t.Parallel()
 	st := schedTestStore(t)
@@ -1030,8 +1155,8 @@ func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
 	item := reentryReadyItem(t, st, "run-record-closure-cycle")
 	runID := *item.Subject.RunID
 	first := domain.ProductionPublicationInvocationID(runID)
-	putClosureCheckpoint(t, st, runID, first, "production_closure_checkpoint", closureCheckpointJSON(runID, first,
-		`,"has_proposal":true,"instance_id":"proposal-1","origin":"daemon_fallback","reason":"propose call failed"`))
+	putClosureCheckpoint(t, st, runID, first, "production_closure_checkpoint",
+		closureCheckpointJSON(runID, first, `,"has_proposal":false`))
 	readClosure := func() *taskRecordClosure {
 		t.Helper()
 		var run taskRecordRun
@@ -1047,7 +1172,7 @@ func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
 		return run.Closure
 	}
 	if got, want := string(mustJSON(t, readClosure())),
-		`{"origin":"daemon_fallback","fallback_cause":"propose call failed"}`; got != want {
+		`{"origin":null,"provenance":null,"fallback_cause":null}`; got != want {
 		t.Fatalf("closure of the first publication = %s, want %s", got, want)
 	}
 	armActiveTestSchedules(t, st, item)
@@ -1061,7 +1186,7 @@ func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
 	putClosureCheckpoint(t, st, runID, successor.PublicationID(), "production_closure_checkpoint",
 		closureCheckpointJSON(runID, successor.PublicationID(), `,"has_proposal":true,"instance_id":"proposal-2","origin":"propose_site"`))
 	if got, want := string(mustJSON(t, readClosure())),
-		`{"origin":"daemon_fallback","fallback_cause":"propose call failed"}`; got != want {
+		`{"origin":null,"provenance":null,"fallback_cause":null}`; got != want {
 		t.Fatalf("closure with an unpublished successor = %s, want the published cycle's %s", got, want)
 	}
 }
