@@ -13819,7 +13819,7 @@ public enum Components {
                 case digest
             }
         }
-        /// The network exposure a stage runs under (plan §5.4). provider_registry adds only the project policy's declared set of public package-registry hosts to provider_only.
+        /// The network exposure a stage runs under (plan §5.4). provider_registry adds only the project policy's declared set of public package-registry hosts to provider_only. host_open is a cordoned run's profile: the writer has the host's network.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EgressProfile`.
@@ -13828,6 +13828,7 @@ public enum Components {
             case provider_registry = "provider_registry"
             case provider_web_read = "provider_web_read"
             case clean_verification = "clean_verification"
+            case host_open = "host_open"
             case unknown = "unknown"
         }
         /// A definitive publication trust rule surfaced on a blocked card.

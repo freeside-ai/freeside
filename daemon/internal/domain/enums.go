@@ -2305,6 +2305,10 @@ func (m CredentialMode) valid() bool {
 // wider credential-exfiltration exposure and requires an explicit record of
 // it, which is why the profile is part of the durable admission record;
 // clean_verification is the plan's no-network verification profile.
+// host_open is a cordoned run's profile (§5.4, §5.7 Cordoned Runs): the
+// writer runs as a host process with the host's network, so nothing narrows
+// its egress until a cordon network rule does. The host_ profiles belong to
+// the cordoned class only; the ward enforces none of them.
 type EgressProfile string
 
 const (
@@ -2312,16 +2316,31 @@ const (
 	EgressProviderRegistry  EgressProfile = "provider_registry"
 	EgressProviderWebRead   EgressProfile = "provider_web_read"
 	EgressCleanVerification EgressProfile = "clean_verification"
+	EgressHostOpen          EgressProfile = "host_open"
 )
 
 // AllEgressProfiles lists every valid EgressProfile.
 var AllEgressProfiles = []EgressProfile{
 	EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead, EgressCleanVerification,
+	EgressHostOpen,
 }
 
 func (p EgressProfile) valid() bool {
 	switch p {
-	case EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead, EgressCleanVerification:
+	case EgressProviderOnly, EgressProviderRegistry, EgressProviderWebRead, EgressCleanVerification,
+		EgressHostOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// hostNetwork reports whether p is a host_ profile: the run has the host's
+// network rather than a ward-enforced one, so only a cordoned admission may
+// record it.
+func (p EgressProfile) hostNetwork() bool {
+	switch p {
+	case EgressHostOpen:
 		return true
 	default:
 		return false

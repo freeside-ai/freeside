@@ -78,16 +78,17 @@ func cordonedCapStore(t *testing.T, names ...string) *Store {
 func cordonedCapAdmission(t *testing.T, name string, class domain.RunnerBackendClass) domain.ExecutionAdmission {
 	t.Helper()
 	identity := domain.AuthIdentityID("auth-" + name)
-	capabilities := domain.CordonedCapabilities()
+	capabilities, egress := domain.CordonedCapabilities(), domain.EgressHostOpen
 	if class != domain.BackendCordonedHostProcess {
 		capabilities = domain.NewCapabilitySnapshot(domain.CapDetachableWorkspace, domain.CapPostExitExport)
+		egress = domain.EgressProviderOnly
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: domain.InvocationID("inv-" + name), RunID: capacityRun(name),
 		StageID: domain.StageID("stage-" + name), AttemptID: domain.AttemptID("attempt-" + name),
 		Backend: string(class), Capabilities: capabilities,
 		OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile: domain.EgressProviderOnly,
+		EgressProfile: egress,
 		ImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
 		SpecDigest:    "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
 		Base: domain.BaseRevision{

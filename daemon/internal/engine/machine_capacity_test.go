@@ -137,6 +137,23 @@ func TestExecutionMemoryReservesOnlyAnIdentity(t *testing.T) {
 	}
 }
 
+// TestCordonedExecutionReservesNoMemory: a cordoned writer runs as a host
+// process, not a ward VM, so its admission reserves nothing though it names
+// an identity and a budget applies. The nil transaction proves the skip comes
+// before any budget read.
+func TestCordonedExecutionReservesNoMemory(t *testing.T) {
+	t.Parallel()
+	e := &Engine{launchBound: ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: "9.9.9"}}
+	identity := domain.AuthIdentityID("auth-1")
+	memory, err := e.executionMemory(t.Context(), nil, domain.Run{ID: "run-1"}, domain.ExecutionAdmission{
+		InvocationID: "inv-1", RunID: "run-1", AuthIdentityID: &identity,
+		Backend: string(domain.BackendCordonedHostProcess), EgressProfile: domain.EgressHostOpen,
+	})
+	if err != nil || memory != nil {
+		t.Fatalf("executionMemory = %+v, %v; want nothing reserved", memory, err)
+	}
+}
+
 // TestReviewUnderAnUnrecordedRuntimeIsRefusedForGood: a review admission
 // under a runtime with no recorded overhead is a launch memory refusal, which
 // the callers report under the notice, not a wait or a source failure, and it

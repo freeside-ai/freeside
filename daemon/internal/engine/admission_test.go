@@ -139,6 +139,44 @@ func TestWithAdmissionRejectsUnconformedVendorInstructionBinding(t *testing.T) {
 	}
 }
 
+// TestWithAdmissionRefusesHostEgress: the ward enforces no host_ profile, so
+// WithAdmission refuses host_open whether it is listed as enforceable or is
+// the lone default the option copies into that list.
+func TestWithAdmissionRefusesHostEgress(t *testing.T) {
+	t.Parallel()
+	identity := domain.AuthIdentityID("auth-1")
+	for _, tc := range []struct {
+		name        string
+		profile     domain.EgressProfile
+		enforceable []domain.EgressProfile
+	}{
+		{"enforceable", domain.EgressProviderOnly, []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressHostOpen}},
+		{"lone default", domain.EgressHostOpen, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			option := WithAdmission(
+				stageInputBackend{}, nil,
+				AdmissionEnvironment{
+					PromptPackageDigest: domain.Digest("sha256:" + strings.Repeat("1", 64)),
+					VendorInstructions: VendorInstructionConfig{
+						Vendor:   domain.AgentVendorClaude,
+						Delivery: domain.VendorInstructionDeliveryAppendFile,
+						HostPath: "/nonexistent/freeside-test-claude-instructions",
+					},
+					AuthIdentityID:            &identity,
+					EgressProfile:             tc.profile,
+					EnforceableEgressProfiles: tc.enforceable,
+				},
+				time.Now,
+			)
+			err := option(&Engine{})
+			if err == nil || !strings.Contains(err.Error(), "host profile") {
+				t.Fatalf("WithAdmission() = %v, want the host profile refused", err)
+			}
+		})
+	}
+}
+
 func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) {
 	t.Parallel()
 	option := WithAdmission(
