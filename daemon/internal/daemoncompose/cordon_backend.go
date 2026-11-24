@@ -97,6 +97,22 @@ func darwinUserDir(name string) (string, error) {
 // control directory.
 const cordonRunsDir = "cordon-runs"
 
+// cordonRunsRoot is the cordon's runs root under the resolved state
+// directory, as the cordon's configuration names it. The stage driver takes
+// it whether or not a cordon is composed, so a cordoned intent's history
+// stays readable after the cordon is unconfigured.
+func cordonRunsRoot(stateDir string) (string, error) {
+	state, err := resolveExisting("the daemon's state directory", stateDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(state, cordonRunsDir), nil
+}
+
+// cordonScanDir is where cordonGate scans a failed run's transcript, under
+// the daemon's state directory, which the backend denies to every launch.
+const cordonScanDir = "cordon-scan"
+
 // cordonSystemPath follows the agent CLI's own directory in a launch's
 // PATH.
 var cordonSystemPath = []string{"/usr/bin", "/bin", "/usr/sbin", "/sbin"}
