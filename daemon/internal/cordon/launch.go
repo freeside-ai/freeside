@@ -196,12 +196,21 @@ func confinedArgv(cfg Config, l layout, program string, args ...string) []string
 	return append(append(argv, program), args...)
 }
 
-// cliSettings fixes the agent CLI's own confinement mode off. Seatbelt
-// can't be applied twice, so with it on every Bash call fails before it
-// starts (docs/spikes/cordoned-writer.md, the bashsandbox step); the cordon
-// is the CLI's confinement. Launch places it before the caller's arguments
-// and refuses a caller argument that would set the CLI's settings again.
-var cliSettings = []string{"--settings", `{"sandbox":{"enabled":false}}`}
+// cliSettings is the agent CLI's one settings object. It turns the CLI's
+// own confinement mode off: Seatbelt can't be applied twice, so with it on
+// every Bash call fails before it starts (docs/spikes/cordoned-writer.md,
+// the bashsandbox step); the cordon is the CLI's confinement. It also
+// carries the warded writer's settings (attributionOffSettings in
+// internal/exec/claude/spec.go): commit and PR attribution empty, so the
+// CLI doesn't ask for a Co-Authored-By trailer that commit plans refuse,
+// and the bundled agents-md plugin off, so safe mode can't load repository
+// instructions through it. The CLI takes one --settings, so Launch places
+// this before the caller's arguments and refuses a caller argument that
+// would set the CLI's settings again.
+var cliSettings = []string{
+	"--settings",
+	`{"sandbox":{"enabled":false},"attribution":{"commit":"","pr":""},"enabledPlugins":{"agents-md@builtin":false}}`,
+}
 
 // agentArgs is the agent CLI's whole argument list for a launch.
 func agentArgs(args []string) []string {

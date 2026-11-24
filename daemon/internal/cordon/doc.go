@@ -75,8 +75,9 @@
 // devlog/2026-11-22-2144-cordon-conformance-proof.md.
 //
 // This package is the launch, recovery, and export halves of a cordoned
-// handoff, behind its own API: it does not implement the stage driver's
-// Gate port. The daemon composes the backend and proves it, but launches no
-// writer on it yet. The driver port and admission (#3472), which composes
-// the daemon's token read with the launch, are later units.
+// handoff, behind its own API. The stage driver reaches it through its
+// CordonGate port (internal/exec/stage/cordon.go), which a daemoncompose
+// adapter maps onto this API and composes with the daemon's token read
+// (internal/daemoncompose/cordon_gate.go). Nothing admits a cordoned
+// attempt until admission chooses the class (#3472).
 package cordon
