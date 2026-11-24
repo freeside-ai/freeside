@@ -258,63 +258,8 @@ func agentCommandWithSettings(
 		scopes = "CLAUDE_CODE_OAUTH_SCOPES=" + shellQuote(usageOAuthScopes) + " "
 		runner = "node " + shellQuote(usageDriverPath) + " "
 	}
-	transcriptSource := export.EvidenceSource{
-		Label: "agent-transcript", MediaType: "application/jsonl",
-		Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-		SensitivityClass:     export.EvidenceSensitivitySensitive,
-		ProducerInvocationID: string(invocationID),
-	}
-	summarySource := export.EvidenceSource{
-		Label: export.SummaryEvidenceLabel, MediaType: "text/markdown",
-		Path: export.SummaryEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-		SensitivityClass:     export.EvidenceSensitivitySensitive,
-		ProducerInvocationID: string(invocationID),
-	}
-	// The blocked outcome is the second launcher-fixed source: the agent
-	// controls only whether the file exists and its decisions, never the
-	// label, path, media type, or provenance the daemon attaches.
-	blockedSource := export.EvidenceSource{
-		Label: export.BlockedEvidenceLabel, MediaType: "application/json",
-		Path: export.BlockedEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-		SensitivityClass:     export.EvidenceSensitivityNormal,
-		ProducerInvocationID: string(invocationID),
-	}
 	descriptorPrefix := evidenceDescriptorPrefix()
-	publicationSource := export.EvidenceSource{
-		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown",
-		Path: export.PublicationEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-		SensitivityClass:     export.EvidenceSensitivityNormal,
-		ProducerInvocationID: string(invocationID),
-	}
-	scopeConflictSource := export.EvidenceSource{
-		Label: export.ScopeConflictEvidenceLabel, MediaType: "application/json",
-		Path: export.ScopeConflictEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-		SensitivityClass:     export.EvidenceSensitivityNormal,
-		ProducerInvocationID: string(invocationID),
-	}
-	// The review guide rides inline on the ready card, as the summary does,
-	// so it shares the summary's sensitivity. The launcher declares it
-	// head-independent because no commit exists yet; the importer binds the
-	// claim to the commit it builds.
-	reviewGuideSource := export.EvidenceSource{
-		Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json",
-		Path: export.ReviewGuideEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
-		SensitivityClass:     export.EvidenceSensitivitySensitive,
-		ProducerInvocationID: string(invocationID),
-	}
-	type reservedSource struct {
-		name   string
-		source export.EvidenceSource
-	}
-	reserved := []reservedSource{
-		{"publication", publicationSource},
-		{"summary", summarySource},
-		{"blocked", blockedSource},
-		{"scope-conflict", scopeConflictSource},
-	}
-	if reviewGuide {
-		reserved = append(reserved, reservedSource{"review-guide", reviewGuideSource})
-	}
+	transcriptSource, reserved := writerEvidenceSources(invocationID, reviewGuide)
 	sourceFragment := evidenceSourceFragment
 	fileExists := func(p string) string {
 		return "[ -f " + shellQuote(p) + " ] && [ ! -L " + shellQuote(p) + " ]"
@@ -422,6 +367,75 @@ func agentCommandWithSettings(
 		shellQuote(ward.WriterNoncePlaceholder),
 		shellQuote(writerOutcomePath),
 	)}
+}
+
+// reservedSource is one launcher-fixed evidence source a writer may stage,
+// with the name its descriptor fragment is built under.
+type reservedSource struct {
+	name   string
+	source export.EvidenceSource
+}
+
+// writerEvidenceSources is the transcript and the reserved sources a writer
+// may stage, in descriptor order. The warded launcher and a cordoned launch
+// declare the same set, so a blocked outcome or publication text crosses
+// from either. reviewGuide adds the review guide source.
+func writerEvidenceSources(
+	invocationID domain.InvocationID, reviewGuide bool,
+) (export.EvidenceSource, []reservedSource) {
+	transcriptSource := export.EvidenceSource{
+		Label: "agent-transcript", MediaType: "application/jsonl",
+		Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: string(invocationID),
+	}
+	summarySource := export.EvidenceSource{
+		Label: export.SummaryEvidenceLabel, MediaType: "text/markdown",
+		Path: export.SummaryEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: string(invocationID),
+	}
+	// The blocked outcome is the second launcher-fixed source: the agent
+	// controls only whether the file exists and its decisions, never the
+	// label, path, media type, or provenance the daemon attaches.
+	blockedSource := export.EvidenceSource{
+		Label: export.BlockedEvidenceLabel, MediaType: "application/json",
+		Path: export.BlockedEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivityNormal,
+		ProducerInvocationID: string(invocationID),
+	}
+	publicationSource := export.EvidenceSource{
+		Label: export.PublicationEvidenceLabel, MediaType: "text/markdown",
+		Path: export.PublicationEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivityNormal,
+		ProducerInvocationID: string(invocationID),
+	}
+	scopeConflictSource := export.EvidenceSource{
+		Label: export.ScopeConflictEvidenceLabel, MediaType: "application/json",
+		Path: export.ScopeConflictEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivityNormal,
+		ProducerInvocationID: string(invocationID),
+	}
+	// The review guide rides inline on the ready card, as the summary does,
+	// so it shares the summary's sensitivity. The launcher declares it
+	// head-independent because no commit exists yet; the importer binds the
+	// claim to the commit it builds.
+	reviewGuideSource := export.EvidenceSource{
+		Label: export.ReviewGuideEvidenceLabel, MediaType: "application/json",
+		Path: export.ReviewGuideEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+		SensitivityClass:     export.EvidenceSensitivitySensitive,
+		ProducerInvocationID: string(invocationID),
+	}
+	reserved := []reservedSource{
+		{"publication", publicationSource},
+		{"summary", summarySource},
+		{"blocked", blockedSource},
+		{"scope-conflict", scopeConflictSource},
+	}
+	if reviewGuide {
+		reserved = append(reserved, reservedSource{"review-guide", reviewGuideSource})
+	}
+	return transcriptSource, reserved
 }
 
 // evidenceSourceFragment renders one fixed evidence source as the JSON
@@ -729,6 +743,91 @@ func (p claudeProvider) HandoffSpec(
 		return hs, nil
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, in.PromptDelivery)
+}
+
+// cordonInstructionArgBytes bounds the operator-host instructions a
+// cordoned launch passes in argv. macOS caps argv and the environment
+// together at 1 MiB (ARG_MAX), which the ward's 1 MiB instruction ceiling
+// would fill on its own.
+const cordonInstructionArgBytes = 256 << 10
+
+// The stage driver finds the cordoned launch by type assertion, so a
+// signature drift would refuse every cordoned start instead of failing the
+// build.
+var _ stage.CordonLaunchProvider = claudeProvider{}
+
+// CordonLaunch renders one admitted start as a cordoned launch: the warded
+// writer's CLI flags without its shell, and the same evidence sources. The
+// cordon seeds the worktree, feeds the prompt on stdin, hands the setup
+// token on its own descriptor, and fixes the CLI's settings, so none of
+// those appear here.
+//
+// The operator-host instructions go in argv with --append-system-prompt,
+// because the cordon has no file the writer can read for
+// --append-system-prompt-file. Trusted-base repository instructions, which
+// ward composes into the warded writer's bundle, aren't delivered: safe
+// mode and the disabled agents-md plugin keep the CLI from reading them
+// from the worktree.
+func (claudeProvider) CordonLaunch(
+	_ context.Context, in stage.ProviderHandoffInput,
+) (stage.CordonLaunch, stage.CordonExportRequest, error) {
+	id, spec := in.InvocationID, in.Spec
+	refuse := func(format string, args ...any) (stage.CordonLaunch, stage.CordonExportRequest, error) {
+		return stage.CordonLaunch{}, stage.CordonExportRequest{}, fmt.Errorf(
+			"%w: "+format, append([]any{ErrUnsupportedStart}, args...)...)
+	}
+	switch {
+	case spec.CredentialMode != domain.CredentialSubscriptionContained:
+		return refuse("credential mode %q is not subscription_contained", spec.CredentialMode)
+	case spec.EgressProfile != domain.EgressHostOpen:
+		return refuse("egress profile %q is not host_open", spec.EgressProfile)
+	case spec.AuthIdentityID == "":
+		return refuse("an agent stage requires an auth identity")
+	case !launchFlagValueSafe(spec.RouteModelID):
+		return refuse("route model id %q carries a CLI delimiter", spec.RouteModelID)
+	case !launchFlagValueSafe(spec.NativeEffort):
+		return refuse("native effort %q carries a CLI delimiter", spec.NativeEffort)
+	case in.PromptDelivery != stage.PromptFileV8:
+		return refuse("unknown prompt delivery %q", in.PromptDelivery)
+	}
+	args := []string{
+		"-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
+		"--safe-mode", "--session-id", sessionIDFor(id),
+	}
+	if in.Instructions.Present {
+		body := in.Instructions.Body
+		switch {
+		case in.Instructions.Vendor != domain.AgentVendorClaude:
+			return refuse("vendor instructions are for %q", in.Instructions.Vendor)
+		case len(body) > cordonInstructionArgBytes:
+			return refuse("vendor instructions are %d bytes, over the cordon's %d-byte argument limit",
+				len(body), cordonInstructionArgBytes)
+		case bytes.IndexByte(body, 0) >= 0:
+			return refuse("vendor instructions carry a NUL byte, which argv can't")
+		}
+		args = append(args, "--append-system-prompt", string(body))
+	}
+	// As for a warded run, a specification stage asks for the specifier's
+	// schema; no cordoned stage runs under the usage driver.
+	if spec.StageID == domain.SpecificationStageID(spec.RunID) {
+		args = append(args, "--json-schema", specify.OutputJSONSchema)
+	}
+	if spec.RouteModelID != "" {
+		args = append(args, "--model", spec.RouteModelID)
+	}
+	if spec.NativeEffort != "" {
+		args = append(args, "--effort", spec.NativeEffort)
+	}
+	transcript, reserved := writerEvidenceSources(id, true)
+	sources := make([]export.EvidenceSource, len(reserved))
+	for i, r := range reserved {
+		sources[i] = r.source
+	}
+	launch := stage.CordonLaunch{
+		InvocationID: id, RunID: in.RunID, Base: spec.Base,
+		Prompt: []byte(in.Prompt), Args: args,
+	}
+	return launch, stage.CordonExportRequest{RunID: in.RunID, Transcript: transcript, Sources: sources}, nil
 }
 
 // transcriptPath is where the CLI's stream-json transcript ends: inside the
