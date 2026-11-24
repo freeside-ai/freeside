@@ -61,6 +61,14 @@ type Config struct {
 	// Artifacts persists released evidence before the export directory is
 	// removed; a result may name only what it has stored.
 	Artifacts Artifacts
+	// Cordon is the port a cordoned start runs through
+	// (exec.StartSpec.RunnerClass). Nil refuses every cordoned start.
+	Cordon CordonGate
+	// CordonRunsRoot is the cordon's runs root. A cordoned run's released
+	// export must be exactly <CordonRunsRoot>/<runID>/export. It is
+	// required with Cordon, and may be set without one so a cordoned
+	// intent's history stays readable after the cordon is unconfigured.
+	CordonRunsRoot string
 	// PreJob is the production backend's lightweight fail-closed probe. It
 	// runs after duplicate arbitration and before materialization or intent
 	// persistence, so a refused probe starts no work and a duplicate replay
@@ -149,6 +157,8 @@ type Driver struct {
 	// success clears the entry.
 	seedCleanupWarned map[domain.InvocationID]string
 	gate              Gate
+	cordon            CordonGate
+	cordonRunsRoot    string
 	seeder            Seeder
 	exports           ExportRecorder
 	importStarts      ImportStartRecorder
@@ -598,6 +608,10 @@ func New(cfg Config) (*Driver, error) {
 		return nil, newError("clean absolute export root is required")
 	case cfg.Gate == nil:
 		return nil, newError("nil gate")
+	case cfg.Cordon != nil && !cleanAbsoluteRoot(cfg.CordonRunsRoot):
+		return nil, newError("clean absolute cordon runs root is required with a cordon")
+	case cfg.CordonRunsRoot != "" && !cleanAbsoluteRoot(cfg.CordonRunsRoot):
+		return nil, newError("cordon runs root must be a clean absolute path")
 	case cfg.Seeder == nil:
 		return nil, newError("nil seeder")
 	case cfg.Exports == nil:
@@ -644,6 +658,7 @@ func New(cfg Config) (*Driver, error) {
 		errorPrefix: cfg.ErrorPrefix, displayName: cfg.DisplayName,
 		dir: cfg.Dir, seedRoot: cfg.SeedRoot, exportRoot: cfg.ExportRoot,
 		gate: cfg.Gate, seeder: cfg.Seeder,
+		cordon: cfg.Cordon, cordonRunsRoot: cfg.CordonRunsRoot,
 		seedFS:  seedFS,
 		exports: cfg.Exports, importStarts: cfg.ImportStarts,
 		outcomes: cfg.Outcomes, authority: cfg.Authority,
@@ -745,6 +760,17 @@ func (d *Driver) StartWithInputs(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// A spec whose class this driver can't run is refused before anything
+	// is probed, bound, or saved.
+	cordoned, err := runnerClassOf(spec)
+	if err != nil {
+		return err
+	}
+	if cordoned {
+		if _, err := d.cordonPort(); err != nil {
+			return err
+		}
+	}
 	// The pre-job hook binds the run's handoff namespace. Only a seeding
 	// intent that may exist lets anything create under those names without
 	// binding them again: recovery resumes it and never reruns the hook. Every
@@ -752,14 +778,22 @@ func (d *Driver) StartWithInputs(
 	// invocation runs the hook again, so the names are released. The release
 	// runs before mu unlocks, so no other start of this invocation can bind and
 	// create in between.
+	// A cordoned start binds no ward names: its pre-job probe is the
+	// cordon's, and the cordon claims the run's directory only in Launch.
 	seedingMayExist := false
 	defer func() {
-		if !seedingMayExist {
+		if !seedingMayExist && !cordoned {
 			d.gate.ReleaseFinishedHandoffs(ctx, []string{runID})
 		}
 	}()
-	if d.preJob != nil {
-		if err := d.preJob(ctx, id, spec.ImageRef); err != nil {
+	preJob := d.preJob
+	if cordoned {
+		preJob = func(ctx context.Context, id domain.InvocationID, _ domain.ImageRef) error {
+			return d.cordon.PreJob(ctx, id)
+		}
+	}
+	if preJob != nil {
+		if err := preJob(ctx, id, spec.ImageRef); err != nil {
 			return fmt.Errorf("pre-job probe: %w",
 				errors.Join(exec.ErrPreJobRefused, err))
 		}
@@ -804,6 +838,11 @@ func (d *Driver) StartWithInputs(
 	case domain.WorkspaceHydrationNone:
 		preparation = nil
 	}
+	// The host has no project image to hydrate in, so a cordoned start
+	// records no preparation, whatever composition holds.
+	if cordoned {
+		preparation = nil
+	}
 	now := d.now().UTC()
 	in := intent{
 		InvocationID: id, RunID: runID, Phase: phaseSeeding, Spec: spec,
@@ -844,8 +883,12 @@ func (d *Driver) StartWithInputs(
 	}
 	// The handoff spec is built and rejected before the intent is durable:
 	// a refusal must leave no record claiming an invocation this driver
-	// cannot run.
-	if _, err := d.handoffSpec(ctx, in); err != nil {
+	// cannot run. A cordoned start builds its launch instead.
+	if cordoned {
+		if _, _, err := d.cordonLaunch(ctx, in); err != nil {
+			return err
+		}
+	} else if _, err := d.handoffSpec(ctx, in); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -914,10 +957,11 @@ func WithTaskCancellation(ctx, task context.Context) context.Context {
 // remains recoverable if terminal persistence cannot complete during shutdown.
 func (d *Driver) Close(ctx context.Context) error {
 	type sessionRef struct {
-		id    domain.InvocationID
-		runID string
-		phase phase
-		sess  *session
+		id       domain.InvocationID
+		runID    string
+		phase    phase
+		cordoned bool
+		sess     *session
 	}
 	d.mu.Lock()
 	d.closed = true
@@ -939,9 +983,13 @@ func (d *Driver) Close(ctx context.Context) error {
 		}
 		ref.runID = in.RunID
 		ref.phase = in.Phase
+		ref.cordoned, _ = runnerClassOf(in.Spec)
 	}
 	for _, ref := range sessions {
-		if ref.phase == phaseRunning {
+		// A cordoned run is left to its supervisor: the daemon's shutdown
+		// detached the cordon before this, so its Launch has returned or
+		// will without canceling it, and the next daemon recovers it.
+		if ref.phase == phaseRunning && !ref.cordoned {
 			if err := d.gate.RequestCancellation(ctx, ref.runID); err != nil &&
 				!errors.Is(err, ward.ErrJournalRecordNotFound) {
 				closeErrs = append(closeErrs, fmt.Errorf(
@@ -1262,8 +1310,10 @@ func (d *Driver) Cancel(ctx context.Context, id domain.InvocationID) error {
 			return d.recoverIntent(ctx, in)
 		}
 	}
-	cancelErr := d.gate.RequestCancellation(ctx, in.RunID)
-	preJournal := errors.Is(cancelErr, ward.ErrJournalRecordNotFound)
+	cancelErr := d.requestCancellation(ctx, in)
+	// A cordoned run with no directory started nothing, as a ward handoff
+	// with no journal did.
+	preJournal := errors.Is(cancelErr, ward.ErrJournalRecordNotFound) || errors.Is(cancelErr, ErrCordonNoRun)
 	if cancelErr != nil && !preJournal {
 		return fmt.Errorf("invocation %s cancellation intent: %w", id, cancelErr)
 	}
@@ -1320,21 +1370,16 @@ func (d *Driver) CancelAndConfirm(ctx context.Context, id domain.InvocationID) e
 			return fmt.Errorf("%w: pipeline is still active", ErrRecoveryRetryable)
 		}
 	}
-	started, err := d.gate.HandoffStarted(ctx, in.RunID)
-	if err != nil {
+	// A cordoned run needs no separate quiescence proof: the stage seeds
+	// nothing on the host for it, and the cordon gives a run an end only
+	// after its run-end proof, so the terminal disposition required below
+	// already proves nothing from it is alive.
+	if cordoned, err := runnerClassOf(in.Spec); err != nil {
 		return err
-	}
-	if !started {
-		return fmt.Errorf("%w: pre-journal host-process quiescence is unproven", ErrRecoveryRetryable)
-	}
-	proof, ok := d.gate.(interface {
-		HandoffQuiescent(context.Context, string) error
-	})
-	if !ok {
-		return errors.New("handoff runtime cannot prove task cancellation quiescence")
-	}
-	if err := proof.HandoffQuiescent(ctx, in.RunID); err != nil {
-		return fmt.Errorf("invocation %s owned-runtime absence: %w", id, err)
+	} else if !cordoned {
+		if err := d.confirmWardQuiescence(ctx, id, in.RunID); err != nil {
+			return err
+		}
 	}
 	// A canceled live handoff can close its ward journal while the generic
 	// pipeline deliberately leaves phaseRunning unchanged. Recover that closed
@@ -1358,6 +1403,28 @@ func (d *Driver) CancelAndConfirm(ctx context.Context, id domain.InvocationID) e
 	}
 	if live || (in.Phase != phaseCommitted && in.Phase != phaseLost) {
 		return fmt.Errorf("%w: invocation %s has no durable terminal disposition", ErrRecoveryRetryable, id)
+	}
+	return nil
+}
+
+// confirmWardQuiescence requires ward's fresh owned-resource absence proof
+// for a canceled warded handoff.
+func (d *Driver) confirmWardQuiescence(ctx context.Context, id domain.InvocationID, runID string) error {
+	started, err := d.gate.HandoffStarted(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return fmt.Errorf("%w: pre-journal host-process quiescence is unproven", ErrRecoveryRetryable)
+	}
+	proof, ok := d.gate.(interface {
+		HandoffQuiescent(context.Context, string) error
+	})
+	if !ok {
+		return errors.New("handoff runtime cannot prove task cancellation quiescence")
+	}
+	if err := proof.HandoffQuiescent(ctx, runID); err != nil {
+		return fmt.Errorf("invocation %s owned-runtime absence: %w", id, err)
 	}
 	return nil
 }
@@ -1425,7 +1492,7 @@ func (d *Driver) commitPreJournalCancellationLocked(
 		// evidence, rather than an earlier journal miss, owns disposition.
 		return false, nil
 	case phaseRunning:
-		started, err := d.gate.HandoffStarted(context.Background(), in.RunID)
+		started, err := d.handoffStarted(context.Background(), in)
 		if err != nil {
 			return false, fmt.Errorf("confirm absent handoff journal: %w", err)
 		}

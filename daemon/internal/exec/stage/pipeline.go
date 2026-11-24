@@ -81,7 +81,10 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	log.Debug("pipeline started", "phase", string(in.Phase))
 	result, err := d.handoffAndImport(ctx, in)
 	if err == nil {
-		if result.Status == exec.StatusFailed {
+		// A failed or canceled result returned without an error is a writer
+		// end its gate already proved (ward recovery, or the cordon's run-end
+		// proof), so the running-phase guard in commitResult must not hold it.
+		if result.Status == exec.StatusFailed || result.Status == exec.StatusCanceled {
 			if err := d.commitRecoveredTerminal(in.InvocationID, result); err != nil {
 				log.Error("failed writer terminal remains pending", "error", err)
 			}
@@ -164,7 +167,7 @@ func (d *Driver) releaseTerminalHandoff(id domain.InvocationID) {
 	if err != nil || (in.Phase != phaseCommitted && in.Phase != phaseLost) {
 		return
 	}
-	d.gate.ReleaseFinishedHandoffs(context.Background(), []string{in.RunID})
+	d.releaseFinished(context.Background(), []intent{in})
 }
 
 // handoffSpecRefusal marks a handoff spec the driver refused to build for an
@@ -266,6 +269,13 @@ func (d *Driver) commitRejection(
 // export into a candidate commit, and records the ExecutionExport before
 // returning the collectable result.
 func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageResult, error) {
+	cordoned, err := runnerClassOf(in.Spec)
+	if err != nil {
+		return exec.StageResult{}, handoffSpecRefusal{err}
+	}
+	if cordoned {
+		return d.cordonHandoff(ctx, in)
+	}
 	if err := d.seedBase(ctx, in); err != nil {
 		return exec.StageResult{}, err
 	}
@@ -320,10 +330,16 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 		commitPlanPresent: handoff.CommitPlanPresent,
 		observedBaseSHA:   handoff.Workspace.ObservedBaseSHA,
 	}
-	// Handoff has already closed its journal. Persist the complete return before
-	// authentication, validation, or any other fallible work; phaseExported is
-	// replay data, not trust, and every reconstruction re-authenticates it
-	// before using or deleting the named directory.
+	// Handoff has already closed its journal.
+	return d.importReleased(ctx, in, out)
+}
+
+// importReleased takes a live handoff's release through import, from either
+// gate. Persist the complete return before authentication, validation, or
+// any other fallible work; phaseExported is replay data, not trust, and
+// every reconstruction re-authenticates it before using or deleting the
+// named directory.
+func (d *Driver) importReleased(ctx context.Context, in intent, out exportOutcome) (exec.StageResult, error) {
 	if err := d.advance(&in, phaseExported, releasedFrom(out)); err != nil {
 		if retainErr := d.retainPendingIntent(in, err); retainErr != nil {
 			return exec.StageResult{}, errors.Join(err, retainErr)
@@ -732,7 +748,7 @@ func (d *Driver) currentImportStarted(ctx context.Context, in intent) (bool, err
 func (d *Driver) completeReleasedExportWithOptions(
 	ctx context.Context, in intent, out exportOutcome, importOptions importOptionsProvider,
 ) (exec.StageResult, error) {
-	if err := validateReleasedExport(d.exportRoot, in, out); err != nil {
+	if err := validateReleasedExport(d.releasedExportRoots(), in, out); err != nil {
 		return classifyExportCompletion(out.dir, exec.StageResult{}, err)
 	}
 	// The authenticated evidence is the usage source, so observe it before any
@@ -1123,8 +1139,8 @@ func (d *Driver) recordExecutionReplay(in intent, replay executionReplay) error 
 // validateReleasedExport re-authenticates every field returned by the gate or
 // decoded from private recovery state before the driver imports from or
 // deletes the named directory.
-func validateReleasedExport(exportRoot string, in intent, out exportOutcome) error {
-	if err := validateReleasedExportPath(exportRoot, in, out.dir); err != nil {
+func validateReleasedExport(roots releasedExportRoots, in intent, out exportOutcome) error {
+	if err := validateReleasedExportPath(roots, in, out.dir); err != nil {
 		return fmt.Errorf("%w: %w", errDefinitiveExportRejection, err)
 	}
 	clean := filepath.Clean(out.dir)
@@ -1197,9 +1213,9 @@ func validateReleasedExport(exportRoot string, in intent, out exportOutcome) err
 // recovery path. The write-once export row binds the decoded release payload;
 // only then may its evidence entries reconstruct a completed result.
 func validateReleasedExportRecord(
-	exportRoot string, in intent, out exportOutcome, record domain.ExecutionExport,
+	roots releasedExportRoots, in intent, out exportOutcome, record domain.ExecutionExport,
 ) ([]domain.Digest, error) {
-	if err := validateReleasedExportPath(exportRoot, in, out.dir); err != nil {
+	if err := validateReleasedExportPath(roots, in, out.dir); err != nil {
 		return nil, err
 	}
 	if record.InvocationID != in.InvocationID ||
@@ -1246,10 +1262,35 @@ func digestBytes(body []byte) domain.Digest {
 	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
-func validateReleasedExportPath(exportRoot string, in intent, dir string) error {
+// releasedExportRoots are where a released export may sit: directly under
+// the ward's export root for a warded run, and at the run's own export
+// directory under the cordon's runs root for a cordoned one.
+type releasedExportRoots struct {
+	ward       string
+	cordonRuns string
+}
+
+func (d *Driver) releasedExportRoots() releasedExportRoots {
+	return releasedExportRoots{ward: d.exportRoot, cordonRuns: d.cordonRunsRoot}
+}
+
+func validateReleasedExportPath(roots releasedExportRoots, in intent, dir string) error {
+	cordoned, err := runnerClassOf(in.Spec)
+	if err != nil {
+		return err
+	}
+	if cordoned {
+		// The cordon exports each run to one fixed directory inside the
+		// run's own, so nothing else is accepted (#3584).
+		if roots.cordonRuns == "" || dir != filepath.Join(roots.cordonRuns, in.RunID, "export") {
+			return fmt.Errorf("released export path %q is not cordoned run %s's export: %w",
+				dir, in.RunID, ErrUnsupportedStart)
+		}
+		return nil
+	}
 	clean := filepath.Clean(dir)
 	wantPrefix := "freeside-handoff-" + in.RunID + "-out-"
-	if clean != dir || filepath.Dir(clean) != exportRoot ||
+	if clean != dir || filepath.Dir(clean) != roots.ward ||
 		!strings.HasPrefix(filepath.Base(clean), wantPrefix) ||
 		len(filepath.Base(clean)) == len(wantPrefix) {
 		return fmt.Errorf("released export path %q is not owned by run %s: %w",
@@ -1259,10 +1300,20 @@ func validateReleasedExportPath(exportRoot string, in intent, dir string) error 
 }
 
 func (d *Driver) authenticateReleasedExport(ctx context.Context, in intent, dir string) error {
-	if err := validateReleasedExportPath(d.exportRoot, in, dir); err != nil {
+	if err := validateReleasedExportPath(d.releasedExportRoots(), in, dir); err != nil {
 		return err
 	}
-	if err := d.gate.AuthenticateReleasedExport(ctx, in.RunID, dir); err != nil {
+	cordoned, err := runnerClassOf(in.Spec)
+	if err != nil {
+		return err
+	}
+	authenticate := d.gate.AuthenticateReleasedExport
+	if cordoned {
+		authenticate = func(ctx context.Context, _, dir string) error {
+			return d.authenticateCordonExport(ctx, in, dir)
+		}
+	}
+	if err := authenticate(ctx, in.RunID, dir); err != nil {
 		return fmt.Errorf("authenticate released export for %s: %w", in.InvocationID, err)
 	}
 	return nil
@@ -1747,6 +1798,14 @@ func (d *Driver) retryPendingResultLocked(id domain.InvocationID) error {
 	delete(d.running, id)
 	// The intent is terminal now, so nothing resumes it under these names;
 	// without this, a retried write would keep them bound until startup.
+	// Only an intent that reads back as cordoned leaves the ward's release,
+	// so a warded intent's release never depends on that read.
+	if in, err := d.loadIntentAdmission(context.Background(), id); err == nil {
+		if cordoned, classErr := runnerClassOf(in.Spec); classErr == nil && cordoned {
+			d.releaseFinished(context.Background(), []intent{in})
+			return nil
+		}
+	}
 	d.gate.ReleaseFinishedHandoffs(context.Background(), []string{d.provider.RunID(id)})
 	return nil
 }
@@ -2027,17 +2086,29 @@ func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (Recovery
 			Cause: failure.cause, Err: failure.err,
 		})
 	}
-	var terminal []string
+	var terminal []intent
 	for _, in := range intents {
 		if in.Phase == phaseCommitted || in.Phase == phaseLost {
 			d.reportTerminalSeedCleanup(in)
-			terminal = append(terminal, in.RunID)
+			terminal = append(terminal, in)
 			continue
 		}
 		d.mu.Lock()
 		_, live := d.running[in.InvocationID]
 		d.mu.Unlock()
 		if live {
+			continue
+		}
+		// A cordoned run may still be running under its supervisor, and the
+		// cordon's Recover waits for its end, which startup must not do. So
+		// this pass holds it, and the attempt's Inspect recovers it off the
+		// caller (startRecovery), as it retries any held intent.
+		if cordoned, err := runnerClassOf(in.Spec); err == nil && cordoned && in.Phase == phaseRunning {
+			record(IntentFailure{
+				Entry: filepath.Base(d.intentPath(in.RunID)), Invocation: in.InvocationID,
+				Err: fmt.Errorf("%w: cordoned run %s is recovered by its attempt's Inspect",
+					ErrRecoveryRetryable, in.RunID),
+			})
 			continue
 		}
 		if err := d.reconcileIntent(ctx, in); err != nil {
@@ -2054,7 +2125,7 @@ func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (Recovery
 	// A terminal intent's names may still be bound after a crash between its
 	// close and release, or after a release that failed. One batched call
 	// releases them all; the gate keeps any run whose journal is still open.
-	d.gate.ReleaseFinishedHandoffs(ctx, terminal)
+	d.releaseFinished(ctx, terminal)
 	quarantined := make(map[string]struct{}, len(report.Quarantined))
 	for _, failure := range report.Quarantined {
 		quarantined[failure.Entry] = struct{}{}
@@ -2354,7 +2425,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// already persisted phaseRunning. Confirmed journal absence proves no
 		// ward object or writer existed, so return to the rerunnable phase.
 		// Any opened record remains exclusively ward recovery's authority.
-		started, err := d.gate.HandoffStarted(ctx, in.RunID)
+		started, err := d.handoffStarted(ctx, in)
 		if err != nil {
 			return fmt.Errorf("%w: inspect running handoff authority: %w",
 				ErrRecoveryRetryable, err)
@@ -2390,7 +2461,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		}
 		// A pre-existing task fence permits only cancellation recovery.
 		// Persist that authority before ward can observe or export anything.
-		if err := d.gate.RequestCancellation(ctx, in.RunID); err != nil {
+		if err := d.requestCancellation(ctx, in); err != nil {
 			return err
 		}
 	}
@@ -2401,6 +2472,13 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 // ward recovery, and retaining its result. Stop must join the actual operation,
 // not merely the lookup that supplies its cancellation context.
 func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
+	cordoned, err := runnerClassOf(in.Spec)
+	if err != nil {
+		return fmt.Errorf("%w: rebuild running handoff: %w", ErrRecoveryRetryable, err)
+	}
+	if cordoned {
+		return d.recoverCordoned(ctx, in)
+	}
 	hs, err := d.handoffSpec(ctx, in)
 	if err != nil {
 		return fmt.Errorf("%w: rebuild running handoff: %w", ErrRecoveryRetryable, err)
@@ -2418,80 +2496,7 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 			observedBaseSHA:   recovered.Workspace.ObservedBaseSHA,
 		}
 		// Recover has now closed the same journal as a successful Handoff.
-		// Persist its complete return as untrusted replay data before any
-		// authentication or validation can fail. If the write itself fails,
-		// retain the exact return in a completed synthetic session so Inspect
-		// can retry it without asking ward to recover a closed record again.
-		if err := d.advance(&in, phaseExported, releasedFrom(out)); err != nil {
-			if retainErr := d.retainRecoveredIntent(in, err); retainErr != nil {
-				return errors.Join(err, retainErr)
-			}
-			return fmt.Errorf("%w: persist recovered handoff: %w",
-				ErrRecoveryRetryable, err)
-		}
-		if err := d.authenticateReleasedExport(ctx, in, out.dir); err != nil {
-			return classifyReleasedExportAuthentication(err)
-		}
-		if err := d.recordCurrentImportStart(ctx, in); err != nil {
-			return fmt.Errorf("%w: record recovered current-policy import authority: %w",
-				ErrRecoveryRetryable, err)
-		}
-		if err := d.advance(&in, phaseImportPending, nil); err != nil {
-			if retainErr := d.retainRecoveredIntent(in, err); retainErr != nil {
-				return errors.Join(err, retainErr)
-			}
-			return fmt.Errorf("%w: record recovered current-policy import: %w",
-				ErrRecoveryRetryable, err)
-		}
-		result, err := d.completeReleasedExport(ctx, in, out)
-		if err != nil {
-			if errors.Is(err, errExportAuthorityConflict) {
-				return err
-			}
-			if errors.Is(err, ErrRecoveryRetryable) {
-				return err
-			}
-			// A daemon killed mid-recovery reports canceled, not failed: the
-			// run is recoverable, and recording it as a failure would be a
-			// durable verdict about the work rather than about the shutdown.
-			status := exec.StatusFailed
-			if ctx.Err() != nil {
-				status = exec.StatusCanceled
-			}
-			// A re-derived definitive rejection routes through commitRejection,
-			// the same terminal path as the live pipeline and recoverExported, so
-			// its diagnostic detail is written beside the outcome rather than
-			// dropped by a generic commitResult (the directory is already gone).
-			var rej *definitiveRejection
-			if errors.As(err, &rej) {
-				if commitErr := d.commitRejection(ctx,
-					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
-					in, status, rej, result.Usage, result.ClaudeUsage); commitErr != nil {
-					return fmt.Errorf("%w: commit recovery result: %w",
-						ErrRecoveryRetryable, commitErr)
-				}
-				return nil
-			}
-			var cause domain.FailureCause
-			var check *domain.HandoffCheckFailure
-			if status == exec.StatusFailed {
-				cause, check = failureCause(err)
-			}
-			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
-				InvocationID: in.InvocationID, Status: status,
-				Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
-				ClaudeUsage: result.ClaudeUsage, Cause: cause, CheckFailure: check,
-			}); commitErr != nil {
-				return fmt.Errorf("%w: commit recovery result: %w",
-					ErrRecoveryRetryable, commitErr)
-			}
-			return nil
-		}
-		if err := d.commitResult(in.InvocationID, result); err != nil {
-			return fmt.Errorf("%w: commit recovered result: %w",
-				ErrRecoveryRetryable, err)
-		}
-		return nil
+		return d.recoverReleased(ctx, in, out)
 	case ward.RecoveryLoss:
 		// Every runtime object was proven absent with nothing released, so
 		// the invocation ends with no result: Collect reports ErrNoResult and
@@ -2528,6 +2533,84 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 	}
 	return fmt.Errorf("%w: gate reported recovery outcome %q",
 		ErrRecoveryRetryable, recovered.Outcome)
+}
+
+// recoverReleased takes a recovered release through import, from either
+// gate. Persist its complete return as untrusted replay data before any
+// authentication or validation can fail. If the write itself fails, retain
+// the exact return in a completed synthetic session so Inspect can retry it
+// without asking the gate to recover a released run again.
+func (d *Driver) recoverReleased(ctx context.Context, in intent, out exportOutcome) error {
+	if err := d.advance(&in, phaseExported, releasedFrom(out)); err != nil {
+		if retainErr := d.retainRecoveredIntent(in, err); retainErr != nil {
+			return errors.Join(err, retainErr)
+		}
+		return fmt.Errorf("%w: persist recovered handoff: %w",
+			ErrRecoveryRetryable, err)
+	}
+	if err := d.authenticateReleasedExport(ctx, in, out.dir); err != nil {
+		return classifyReleasedExportAuthentication(err)
+	}
+	if err := d.recordCurrentImportStart(ctx, in); err != nil {
+		return fmt.Errorf("%w: record recovered current-policy import authority: %w",
+			ErrRecoveryRetryable, err)
+	}
+	if err := d.advance(&in, phaseImportPending, nil); err != nil {
+		if retainErr := d.retainRecoveredIntent(in, err); retainErr != nil {
+			return errors.Join(err, retainErr)
+		}
+		return fmt.Errorf("%w: record recovered current-policy import: %w",
+			ErrRecoveryRetryable, err)
+	}
+	result, err := d.completeReleasedExport(ctx, in, out)
+	if err != nil {
+		if errors.Is(err, errExportAuthorityConflict) {
+			return err
+		}
+		if errors.Is(err, ErrRecoveryRetryable) {
+			return err
+		}
+		// A daemon killed mid-recovery reports canceled, not failed: the
+		// run is recoverable, and recording it as a failure would be a
+		// durable verdict about the work rather than about the shutdown.
+		status := exec.StatusFailed
+		if ctx.Err() != nil {
+			status = exec.StatusCanceled
+		}
+		// A re-derived definitive rejection routes through commitRejection,
+		// the same terminal path as the live pipeline and recoverExported, so
+		// its diagnostic detail is written beside the outcome rather than
+		// dropped by a generic commitResult (the directory is already gone).
+		var rej *definitiveRejection
+		if errors.As(err, &rej) {
+			if commitErr := d.commitRejection(ctx,
+				d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
+				in, status, rej, result.Usage, result.ClaudeUsage); commitErr != nil {
+				return fmt.Errorf("%w: commit recovery result: %w",
+					ErrRecoveryRetryable, commitErr)
+			}
+			return nil
+		}
+		var cause domain.FailureCause
+		var check *domain.HandoffCheckFailure
+		if status == exec.StatusFailed {
+			cause, check = failureCause(err)
+		}
+		if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
+			InvocationID: in.InvocationID, Status: status,
+			Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
+			ClaudeUsage: result.ClaudeUsage, Cause: cause, CheckFailure: check,
+		}); commitErr != nil {
+			return fmt.Errorf("%w: commit recovery result: %w",
+				ErrRecoveryRetryable, commitErr)
+		}
+		return nil
+	}
+	if err := d.commitResult(in.InvocationID, result); err != nil {
+		return fmt.Errorf("%w: commit recovered result: %w",
+			ErrRecoveryRetryable, err)
+	}
+	return nil
 }
 
 // commitRecoveredTerminal is the phaseRunning counterpart to commitLost:
@@ -2859,7 +2942,7 @@ func cloneDigest(digest *domain.Digest) *domain.Digest {
 func (d *Driver) commitRecordedExport(
 	in intent, out exportOutcome, record domain.ExecutionExport,
 ) error {
-	artifacts, err := validateReleasedExportRecord(d.exportRoot, in, out, record)
+	artifacts, err := validateReleasedExportRecord(d.releasedExportRoots(), in, out, record)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errExportAuthorityConflict, err)
 	}
