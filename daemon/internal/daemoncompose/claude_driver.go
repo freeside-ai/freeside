@@ -1913,6 +1913,18 @@ func storedRepositoryTip(ctx context.Context, st *store.Store, cfg ClaudeDriverC
 	}, nil
 }
 
+// GitCredentialDir is where a git invocation that carries an installation
+// token reads it from: a header file written there for that invocation
+// only. It sits in the publication credentials directory, beside the
+// keystore's own subdirectory, for two reasons: the cordon denies that
+// directory to every launch (cordonDaemonDirs), and the file is only as
+// private as that denial makes it; and checkpoints exclude it, while the
+// state directory is the backup surface no credential may sit in
+// (publish.ErrCredentialsInsideStateDir).
+func GitCredentialDir(publicationCredentialsDir string) string {
+	return filepath.Join(publicationCredentialsDir, "git-credentials")
+}
+
 // claudeTransport builds the authenticated exact-base transport the driver
 // seeds workspaces and import checkouts from. It reuses the publication
 // lane's App-authority chain and janitor. Filing shares that authority but
@@ -1970,7 +1982,7 @@ func claudeTransport(
 	}
 	transport, err := publish.NewTransport(
 		tokens,
-		publish.TransportOptions{RemoteBase: DefaultGitHubRemoteBase},
+		publish.TransportOptions{RemoteBase: DefaultGitHubRemoteBase, CredentialDir: GitCredentialDir(cfg.CredentialsDir)},
 	)
 	if err != nil {
 		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err

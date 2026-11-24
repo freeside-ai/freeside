@@ -57,7 +57,7 @@ func TestLiveTransportFetchPush(t *testing.T) {
 	}
 	ctx := context.Background()
 	ts := publish.NewCachedTokenSource(m, time.Now)
-	tr, err := publish.NewTransport(ts, publish.TransportOptions{})
+	tr, err := publish.NewTransport(ts, publish.TransportOptions{CredentialDir: filepath.Join(t.TempDir(), "git-credentials")})
 	if err != nil {
 		t.Fatal(err)
 	}

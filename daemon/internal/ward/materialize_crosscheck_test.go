@@ -43,7 +43,7 @@ func TestPublishMaterializationPassesWardBaseProof(t *testing.T) {
 	}
 	base := commitLiveSeedCheckout(t, checkout)
 
-	transport, err := publish.NewTransport(unusedMaterializationTokenSource{}, publish.TransportOptions{})
+	transport, err := publish.NewTransport(unusedMaterializationTokenSource{}, publish.TransportOptions{CredentialDir: filepath.Join(t.TempDir(), "git-credentials")})
 	if err != nil {
 		t.Fatal(err)
 	}

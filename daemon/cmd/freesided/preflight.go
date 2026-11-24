@@ -1429,7 +1429,10 @@ func inspectRepositoryAuthority(
 		minter, authorityStore, selected.AppID, cfg.RepositoryID,
 	)
 	transport, err := publish.NewTransport(
-		tokens, publish.TransportOptions{GitPath: "git", RemoteBase: daemoncompose.DefaultGitHubRemoteBase},
+		tokens, publish.TransportOptions{
+			GitPath: "git", RemoteBase: daemoncompose.DefaultGitHubRemoteBase,
+			CredentialDir: daemoncompose.GitCredentialDir(cfg.PublicationCredentialsDir),
+		},
 	)
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}

@@ -41,6 +41,9 @@ type Transport struct {
 	gitPath    string
 	remoteBase string
 	scheme     string
+	// credentialDir holds each authenticated invocation's header file
+	// (netRunner).
+	credentialDir string
 	// publisher is the one authority whose gate verdicts this transport
 	// honours, claimed once by AuthorizePublisher and never replaceable.
 	// It lives here, on the credential-bearing side, precisely so that
@@ -50,14 +53,22 @@ type Transport struct {
 	publisher *Publisher
 }
 
-// TransportOptions carries the two injectable transport inputs.
+// TransportOptions carries the injectable transport inputs.
 // RemoteBase exists so live tests can point at a forge fixture; it
 // must be an https URL — the runner's protocol policy admits nothing
 // else in production, and tests inside the package construct their
 // file-scheme Transport directly.
+//
+// CredentialDir is required: the directory each authenticated git
+// invocation's token header file is written to and removed from. It
+// must sit in a daemon credentials directory the cordon denies, since
+// the file is only as private as that denial makes it, and outside the
+// state directory, which checkpoints copy; NewTransport creates it 0700
+// and refuses one any other user can enter.
 type TransportOptions struct {
-	GitPath    string // git binary; default "git" from PATH
-	RemoteBase string // base URL repositories hang off; default "https://github.com"
+	GitPath       string // git binary; default "git" from PATH
+	RemoteBase    string // base URL repositories hang off; default "https://github.com"
+	CredentialDir string
 }
 
 // NewTransport validates and wires the production (https-only)
@@ -77,12 +88,38 @@ func NewTransport(ts TokenSource, opts TransportOptions) (*Transport, error) {
 	if err := validRemoteBase(remoteBase); err != nil {
 		return nil, err
 	}
+	if err := privateCredentialDir(opts.CredentialDir); err != nil {
+		return nil, err
+	}
 	return &Transport{
-		tokens:     ts,
-		gitPath:    gitPath,
-		remoteBase: strings.TrimSuffix(remoteBase, "/"),
-		scheme:     "https",
+		tokens:        ts,
+		gitPath:       gitPath,
+		remoteBase:    strings.TrimSuffix(remoteBase, "/"),
+		scheme:        "https",
+		credentialDir: opts.CredentialDir,
 	}, nil
+}
+
+// privateCredentialDir creates dir 0700 when it is missing and refuses
+// it unless it is a directory, not a link, that only its owner can
+// enter. A token header file written there is then readable only by the
+// daemon's own account, and the cordon's denial of the directory keeps
+// a cordoned writer on that account out.
+func privateCredentialDir(dir string) error {
+	if dir == "" {
+		return errors.New("transport: credential directory is required")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("transport: create credential directory: %w", err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("transport: inspect credential directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("transport: credential directory %s is not a private directory", dir)
+	}
+	return nil
 }
 
 // validRemoteBase admits only a plain https origin (optionally with a
@@ -314,7 +351,7 @@ func (t *Transport) RetainWorktree(ctx context.Context, source, dest, commitSHA 
 		return fmt.Errorf("create transport scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
-	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	r, err := newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return err
 	}
@@ -344,7 +381,7 @@ func (t *Transport) RetainWorktree(ctx context.Context, source, dest, commitSHA 
 	if err := copyRetainedRepository(ctx, source, dest); err != nil {
 		return fmt.Errorf("copy retained checkout: %w", err)
 	}
-	destRunner, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	destRunner, err := newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return err
 	}
@@ -547,7 +584,7 @@ func (t *Transport) fetchBase(
 		return Checkout{}, fmt.Errorf("create transport scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
-	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	r, err := newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return Checkout{}, err
 	}
@@ -726,7 +763,7 @@ func (t *Transport) pushHead(ctx context.Context, co Checkout, gh GatedHead, exp
 		return PushResult{}, fmt.Errorf("create transport scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
-	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	r, err := newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return PushResult{}, err
 	}

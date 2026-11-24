@@ -68,9 +68,10 @@
 // environment, no hooks or user config,
 // protocol access closed to a single scheme, create-only single-ref
 // pushes, and the installation token crossing only as a per-invocation
-// header config entry in the child environment — never argv, never
-// disk, never the daemon's own environment — with transport errors
-// carrying a classified refusal and no output streams.
+// header config file in a credentials directory the cordon denies,
+// removed when the invocation returns — never argv, never any process's
+// environment — with transport errors carrying a classified refusal and
+// no output streams.
 //
 // Later units: the EvidencePublisher (1B, §5.15).
 //

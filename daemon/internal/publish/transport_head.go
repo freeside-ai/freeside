@@ -217,7 +217,7 @@ func (t *Transport) authedCheckoutRunner(
 		cleanup()
 		return nil, InstallationToken{}, "", nil, err
 	}
-	r, err = newNetRunner(t.gitPath, scratch, t.scheme)
+	r, err = newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return fail(err)
 	}
@@ -370,7 +370,7 @@ func (t *Transport) ProveRebase(
 		return RebaseProof{}, fmt.Errorf("create transport scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
-	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	r, err := newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return RebaseProof{}, err
 	}
@@ -646,7 +646,7 @@ func (t *Transport) prospectiveMerge(ctx context.Context, co Checkout, baseSHA, 
 		return "", fmt.Errorf("create transport scratch: %w", err)
 	}
 	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
-	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	r, err := newNetRunner(t.gitPath, scratch, t.credentialDir, t.scheme)
 	if err != nil {
 		return "", err
 	}

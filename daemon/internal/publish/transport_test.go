@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,12 +84,36 @@ func TestNewTransportValidates(t *testing.T) {
 	if _, err := NewTransport(staticTokenSource{}, TransportOptions{RemoteBase: "file:///tmp/x"}); err == nil {
 		t.Error("file remote base accepted by the production constructor")
 	}
-	tr, err := NewTransport(staticTokenSource{}, TransportOptions{})
+	if _, err := NewTransport(staticTokenSource{}, TransportOptions{}); err == nil {
+		t.Error("missing credential directory accepted")
+	}
+	shared := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o750); err != nil { //nolint:gosec // G302: the shared directory the constructor must refuse
+		t.Fatal(err)
+	}
+	if _, err := NewTransport(staticTokenSource{}, TransportOptions{CredentialDir: shared}); err == nil {
+		t.Error("credential directory another user can enter accepted")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTransport(staticTokenSource{}, TransportOptions{CredentialDir: link}); err == nil {
+		t.Error("linked credential directory accepted")
+	}
+	dir := filepath.Join(t.TempDir(), "state", "git-credentials")
+	tr, err := NewTransport(staticTokenSource{}, TransportOptions{CredentialDir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tr.remoteBase != "https://github.com" || tr.gitPath != "git" || tr.scheme != "https" {
-		t.Errorf("defaults = %q %q %q", tr.remoteBase, tr.gitPath, tr.scheme)
+	if tr.remoteBase != "https://github.com" || tr.gitPath != "git" || tr.scheme != "https" || tr.credentialDir != dir {
+		t.Errorf("defaults = %q %q %q %q", tr.remoteBase, tr.gitPath, tr.scheme, tr.credentialDir)
+	}
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("created credential directory = %v, %v; want mode 0700", info, err)
 	}
 }
 

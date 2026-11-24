@@ -36,7 +36,7 @@ func TestCappedMaterializationBufferStopsStreamingCommand(t *testing.T) {
 		[]byte("#!/bin/sh\nwhile :; do printf '0123456789abcdef0123456789abcdef\\n'; done\n"),
 		0o700,
 	)
-	runner, err := newNetRunner(producer, t.TempDir(), "file")
+	runner, err := newNetRunner(producer, t.TempDir(), "", "file")
 	if err != nil {
 		t.Fatal(err)
 	}

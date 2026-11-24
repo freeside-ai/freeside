@@ -129,17 +129,25 @@ func classifyTransportFailure(stdout, stderr []byte) TransportRefusal {
 // importer's gitRunner; the two stay per-lane copies by design.
 //
 // The installation token crosses into git through exactly one channel:
-// a per-invocation GIT_CONFIG_{COUNT,KEY_0,VALUE_0} environment triple
-// carrying http.extraHeader, appended to the constructed child
-// environment and gone when the invocation exits. It is never argv
-// material, never written to any config file, and the daemon's own
-// environment is never mutated.
+// an http.extraHeader line in a per-invocation config file, mode 0600,
+// that the authenticated invocation's GIT_CONFIG_GLOBAL names and that
+// is removed when the invocation returns (writeCredentialConfig). It is
+// never argv material and never environment material: no rule hides one
+// process's environment from another on the same account, so a
+// cordoned writer could read a token there (plan §5.7, Cordoned Runs).
+// A pipe can't carry it, because git and git-remote-https each read
+// their config. The file sits in credentialDir, a daemon credentials
+// directory the cordon denies and checkpoints exclude, never the
+// account's temporary directory, which the cordon leaves open. The
+// daemon's own environment is never mutated.
 type netRunner struct {
 	gitPath string
 	dir     string // working directory for every invocation (the scratch)
-	env     []string
-	scheme  string
-	pinned  bool // a repository is pinned, so its config is readable and gated
+	// credentialDir holds the authenticated invocations' header files.
+	credentialDir string
+	env           []string
+	scheme        string
+	pinned        bool // a repository is pinned, so its config is readable and gated
 }
 
 // transportConfig is the hardened -c prefix for every transport
@@ -168,7 +176,7 @@ func transportSchemeValid(scheme string) bool {
 // newNetRunner builds the hardened base context. The checkout may not
 // exist yet (FetchBase runs git init through this runner), so the git
 // dir is pinned separately by pinRepo once it does.
-func newNetRunner(gitPath, scratch, scheme string) (*netRunner, error) {
+func newNetRunner(gitPath, scratch, credentialDir, scheme string) (*netRunner, error) {
 	if !transportSchemeValid(scheme) {
 		return nil, fmt.Errorf("transport scheme %q is not allowed", scheme)
 	}
@@ -177,9 +185,10 @@ func newNetRunner(gitPath, scratch, scheme string) (*netRunner, error) {
 		return nil, fmt.Errorf("create scratch home: %w", err)
 	}
 	return &netRunner{
-		gitPath: gitPath,
-		dir:     scratch,
-		scheme:  scheme,
+		gitPath:       gitPath,
+		dir:           scratch,
+		credentialDir: credentialDir,
+		scheme:        scheme,
 		env: []string{
 			"PATH=" + os.Getenv("PATH"),
 			"HOME=" + home,
@@ -299,14 +308,30 @@ func (r *netRunner) argv(args ...string) []string {
 // errors; a failed invocation surfaces as *TransportGitError carrying
 // only the classified refusal.
 func (r *netRunner) run(ctx context.Context, tok *InstallationToken, args ...string) (stdout, stderr []byte, err error) {
-	cmd := exec.CommandContext(ctx, r.gitPath, r.argv(args...)...) //nolint:gosec // G204: fixed transport argv from daemon-validated refs and SHAs; the token travels via the child environment, never as an argument
-	cmd.Dir = r.dir
 	env := r.env
 	if tok != nil {
-		// The one credential crossing: a fresh slice so the runner's
-		// own env never retains the header between invocations.
-		env = append(append([]string(nil), r.env...), tokenEnv(*tok)...)
+		// The one credential crossing: the header goes to a file only this
+		// invocation names, in a fresh slice so the runner's own env never
+		// retains the path between invocations.
+		config, writeErr := writeCredentialConfig(r.credentialDir, *tok)
+		if writeErr != nil {
+			return nil, nil, &TransportGitError{Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: writeErr}
+		}
+		defer func() {
+			// A file left behind still holds a live token, so failing to
+			// remove it fails the invocation.
+			if removeErr := os.Remove(config); removeErr != nil {
+				stdout, stderr = nil, nil
+				err = errors.Join(err, &TransportGitError{
+					Args: args, ExitCode: -1, Refusal: RefusalUnknown,
+					Err: fmt.Errorf("remove credential config: %w", removeErr),
+				})
+			}
+		}()
+		env = credentialEnv(r.env, config)
 	}
+	cmd := exec.CommandContext(ctx, r.gitPath, r.argv(args...)...) //nolint:gosec // G204: fixed transport argv from daemon-validated refs and SHAs; the token travels in a config file the child's GIT_CONFIG_GLOBAL names, never as an argument
+	cmd.Dir = r.dir
 	cmd.Env = env
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
@@ -458,15 +483,44 @@ func (r *netRunner) runAuthed(ctx context.Context, tok InstallationToken, args .
 	return r.run(ctx, &tok, args...)
 }
 
-// tokenEnv renders the installation token as the per-invocation
-// environment config triple. GitHub's documented git-over-HTTPS form
-// for installation tokens is basic auth with the x-access-token user;
-// Reveal sits here so the crossing is visible at exactly one site.
-func tokenEnv(tok InstallationToken) []string {
-	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok.Token.Reveal()))
-	return []string{
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.extraHeader",
-		"GIT_CONFIG_VALUE_0=Authorization: Basic " + basic,
+// writeCredentialConfig writes the installation token as an
+// http.extraHeader line to a new config file in dir, mode 0600, and
+// returns its path; the caller removes it once the invocation returns.
+// GitHub's documented git-over-HTTPS form for installation tokens is
+// basic auth with the x-access-token user; Reveal sits here so the
+// crossing is visible at exactly one site. The base64 alphabet needs no
+// quoting in a config value.
+func writeCredentialConfig(dir string, tok InstallationToken) (string, error) {
+	if dir == "" {
+		return "", errors.New("transport has no credential directory")
 	}
+	f, err := os.CreateTemp(dir, "git-auth-*.config")
+	if err != nil {
+		return "", fmt.Errorf("create credential config: %w", err)
+	}
+	path := f.Name()
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + tok.Token.Reveal()))
+	_, err = io.WriteString(f, "[http]\n\textraHeader = Authorization: Basic "+basic+"\n")
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", errors.Join(fmt.Errorf("write credential config: %w", err), os.Remove(path))
+	}
+	return path, nil
+}
+
+// credentialEnv is base with GIT_CONFIG_GLOBAL pointed at config, in a
+// fresh slice. Only GIT_CONFIG_GLOBAL changes: the system config stays
+// /dev/null, and the -c hardening, which outranks every config file,
+// still pins redirects, helpers, and protocols.
+func credentialEnv(base []string, config string) []string {
+	env := make([]string, 0, len(base))
+	for _, e := range base {
+		if strings.HasPrefix(e, "GIT_CONFIG_GLOBAL=") {
+			e = "GIT_CONFIG_GLOBAL=" + config
+		}
+		env = append(env, e)
+	}
+	return env
 }
