@@ -131,7 +131,14 @@ type Options struct {
 	// It must return the exact read-only onboarding permission set; nil keeps
 	// the standalone public-repository builder anonymous.
 	Tokens publish.TokenSource
-	Record func(context.Context, domain.ProjectImage) error
+	// CredentialDir is where an authenticated clone writes its token's
+	// header file, for that one git invocation only. It is required
+	// whenever Tokens is set, and must sit in a daemon credentials
+	// directory the cordon denies, since the file is only as private as
+	// that denial makes it; New creates it 0700 and refuses one any other
+	// user can enter.
+	CredentialDir string
+	Record        func(context.Context, domain.ProjectImage) error
 	// LookupRecordedRef reports whether a published image reference already
 	// backs a durably recorded ProjectImage row. Failure-path residue
 	// removal consults it before deleting, so a rebuild that reproduces an
@@ -288,8 +295,13 @@ func New(opts Options) (*Builder, error) {
 	if opts.Record == nil {
 		return nil, fmt.Errorf("project image recorder is required: %w", ErrInvalidRequest)
 	}
+	if opts.Tokens != nil {
+		if err := privateCredentialDir(opts.CredentialDir); err != nil {
+			return nil, err
+		}
+	}
 	return &Builder{
-		source:   gitSource{gitPath: git, runner: runner, tokens: opts.Tokens},
+		source:   gitSource{gitPath: git, runner: runner, tokens: opts.Tokens, credentialDir: opts.CredentialDir},
 		resolver: defaultRepositoryResolver(opts.Tokens),
 		backend: appleBackend{
 			containerPath: container, runner: runner, registryMemory: opts.Registry, manageBuilder: opts.ManageBuilder,
