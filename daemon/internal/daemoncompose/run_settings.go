@@ -158,6 +158,7 @@ func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverC
 		SettingsRevisions:     settings.revisions(),
 		ProjectID:             settings.ProjectID,
 		ApprovedRecipe:        project.ApprovedRecipe,
+		WriterClass:           project.WriterClass,
 	}
 }
 

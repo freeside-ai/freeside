@@ -951,6 +951,7 @@ func (p *productionPublicationHarness) newEngineForMode(
 			HostPath: "/nonexistent/production-publication-claude-md",
 		},
 		AuthIdentityID: &identity,
+		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 	}
 	if p.agents != nil {
 		// The lineup names the identity each writer runs under.

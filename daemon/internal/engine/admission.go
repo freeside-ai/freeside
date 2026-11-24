@@ -104,6 +104,11 @@ type AdmissionEnvironment struct {
 	// composed from, recorded on every admission; nil for a composition from
 	// a settings file.
 	SettingsRevisions *domain.SettingsRevisions
+	// WriterClass is the project's writer_class setting, nil when unset.
+	// With the task's own requirement it resolves the class an implementer
+	// or remediator attempt runs on (domain.ResolveWriterClass); unset
+	// resolves to the cordon (plan §5.7, Cordoned Runs).
+	WriterClass *domain.RunnerBackendClass
 }
 
 // clone detaches the environment from the caller's pointers.
@@ -125,6 +130,10 @@ func (e AdmissionEnvironment) clone() AdmissionEnvironment {
 	if e.SettingsRevisions != nil {
 		revisions := *e.SettingsRevisions
 		e.SettingsRevisions = &revisions
+	}
+	if e.WriterClass != nil {
+		class := *e.WriterClass
+		e.WriterClass = &class
 	}
 	return e
 }
@@ -196,6 +205,187 @@ type admitter struct {
 	floor                      []exec.Capability
 	environment                AdmissionEnvironment
 	now                        func() time.Time
+	// cordon is the cordoned writer backend (WithCordonedWriters), nil
+	// when the daemon composed none; a writer attempt resolved to the
+	// cordon then holds rather than run in the ward. Its configuration
+	// digest is fixed for the backend's life, so it is read once.
+	cordon                    exec.ConfigurationBoundBackend
+	cordonConfigurationDigest domain.Digest
+}
+
+// ErrCordonNotConformant holds a writer attempt resolved to the cordoned
+// class while this daemon can't admit it there: no cordon is composed, or
+// the cordon declares less than the class's floor because no current pass
+// proves it. It holds that one attempt under backend_not_conformant, as
+// ErrImageNotProved does, because the cordon's proof says nothing about the
+// ward's work behind it in the outbox. The attempt never falls back to the
+// ward (plan §5.7, Cordoned Runs).
+var ErrCordonNotConformant = errors.New(
+	"the cordoned_host_process class has no current proof on this daemon")
+
+// ErrWriterClassChanged holds a writer attempt whose resolved class is not
+// the class its run's first writer admission recorded. A run's writers
+// share one worktree history, export path, and verification image, so the
+// class is fixed for the run: admission neither follows the new setting
+// nor ignores it, and the operator restores the setting or stops the task.
+// It also holds a capability retry whose run now resolves the cordon: the
+// retry's manifest names a profile only the ward enforces.
+var ErrWriterClassChanged = errors.New("the run's writer class has changed since its first writer admission")
+
+// writerClassChangedPrefix names the notice of a refused class change.
+const writerClassChangedPrefix = "writer-class-changed-"
+
+// WithCordonedWriters gives the admitter the cordoned writer backend, so an
+// implementer or remediator attempt whose resolved class is the cordon is
+// admitted on it (plan §5.7, Cordoned Runs). It applies after WithAdmission,
+// whose mode decides whether the cordon's configuration digest must be
+// bound. Without it a cordoned writer attempt holds under
+// backend_not_conformant.
+func WithCordonedWriters(cordon exec.ConfigurationBoundBackend) Option {
+	return func(e *Engine) error {
+		if cordon == nil {
+			return errors.New("with cordoned writers: nil backend")
+		}
+		if cordon.Name() != string(domain.BackendCordonedHostProcess) {
+			return fmt.Errorf("with cordoned writers: backend %q is not %s",
+				cordon.Name(), domain.BackendCordonedHostProcess)
+		}
+		if e.admission == nil {
+			return errors.New("with cordoned writers: admission is not configured")
+		}
+		digest := cordon.ConfigurationDigest()
+		if e.admission.environment.OperatingMode == domain.ModeUnattended &&
+			(!contentaddr.Valid(string(digest)) || digest == domain.UnboundBackendConfigurationDigest) {
+			return fmt.Errorf("with cordoned writers: unattended cordon configuration digest %q is not bound", digest)
+		}
+		e.admission.cordon, e.admission.cordonConfigurationDigest = cordon, digest
+		return nil
+	}
+}
+
+// runningConfigurationDigest is the backend configuration digest a fresh
+// unattended admission of an attempt of class on image binds: the digest
+// admitAttemptIn reads for it. It is the function the start authority
+// checks a recorded admission against
+// (admissionauth.Authority.BackendConfigurationDigestFor), and it is fixed
+// for the life of the process. A cordoned attempt with no cordon composed
+// yields "", which matches no recorded admission.
+func (a *admitter) runningConfigurationDigest(class string, image domain.ImageRef) domain.Digest {
+	if class == string(domain.BackendCordonedHostProcess) {
+		if a.cordon == nil {
+			return ""
+		}
+		return a.cordonConfigurationDigest
+	}
+	if bound, ok := a.backend.(exec.ImageBoundBackend); ok {
+		digest, _, _ := bound.ConformanceFor(string(image))
+		return digest
+	}
+	return a.backendConfigurationDigest
+}
+
+// writerClass resolves the class an implementer or remediator attempt of
+// run runs on: the task's requirement, else the project's setting, else the
+// cordon (domain.ResolveWriterClass). The run's first writer admission
+// fixes it: a later writer admission whose resolved class differs is
+// refused with ErrWriterClassChanged and raises one notice on the run, so
+// a remediation never runs on another containment than the candidate it
+// fixes, and re-admission never supersedes across classes.
+//
+// An admission counts as cordoned only when it names the cordon's class;
+// every other one was placed on the admitter's ward backend.
+func (e *Engine) writerClass(ctx context.Context, run domain.Run) (domain.RunnerBackendClass, error) {
+	var (
+		requirement *domain.TaskWriterClass
+		admissions  []domain.ExecutionAdmission
+	)
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if run.TaskID != "" {
+			if requirement, err = tx.TaskWriterClass(ctx, run.TaskID); err != nil {
+				return err
+			}
+		}
+		admissions, err = tx.ListRunExecutionAdmissionRecords(ctx, run.ID)
+		return err
+	}); err != nil {
+		return "", fmt.Errorf("read run %s writer class: %w", run.ID, err)
+	}
+	resolved, err := domain.ResolveWriterClass(e.admission.environment.WriterClass, requirement)
+	if err != nil {
+		return "", err
+	}
+	writerStages := make(map[domain.StageID]bool, len(run.Stages))
+	for _, stage := range run.Stages {
+		writerStages[stage.ID] = stage.Name == productionStageName
+	}
+	for _, admission := range admissions {
+		if !writerStages[admission.StageID] {
+			continue
+		}
+		pinned := domain.BackendFreshVMReadOnlyVolumeHandoff
+		if admission.Backend == string(domain.BackendCordonedHostProcess) {
+			pinned = domain.BackendCordonedHostProcess
+		}
+		if pinned == resolved {
+			return resolved, nil
+		}
+		if err := recordProductionQuarantine(ctx, e.store, e.signet, writerClassChangedPrefix,
+			run.ID, run.ProjectID, writerClassChangedReason(pinned, resolved),
+		); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("run %s writers run on %s, its settings now resolve %s: %w",
+			run.ID, pinned, resolved, errors.Join(ErrWriterClassChanged, domain.ErrAdmissionConfigurationMismatch))
+	}
+	return resolved, nil
+}
+
+// refuseCordonedManifest refuses a cordoned writer whose run is a
+// capability retry: its attempt names a manifest, which only a warded
+// writer's egress honors, and the store refuses an admission that drops it.
+// The refusal holds the invocation and raises one notice, as a class change
+// does.
+func (e *Engine) refuseCordonedManifest(ctx context.Context, run domain.Run) error {
+	var attempt domain.ProductionAttempt
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		attempt, err = tx.GetProductionAttemptByRun(ctx, run.ID)
+		return err
+	}); errors.Is(err, store.ErrNotFound) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("production attempt: %w", err)
+	}
+	if attempt.CapabilityManifestDigest == nil {
+		return nil
+	}
+	if err := recordProductionQuarantine(ctx, e.store, e.signet, writerClassChangedPrefix,
+		run.ID, run.ProjectID, cordonedManifestReason(*attempt.CapabilityManifestDigest),
+	); err != nil {
+		return err
+	}
+	return fmt.Errorf("run %s retries with capability manifest %s, which a %s writer can't honor: %w",
+		run.ID, *attempt.CapabilityManifestDigest, domain.BackendCordonedHostProcess,
+		errors.Join(ErrWriterClassChanged, domain.ErrAdmissionConfigurationMismatch))
+}
+
+// cordonedManifestReason is the notice's operator-facing reason when a
+// capability retry resolves the cordon.
+func cordonedManifestReason(manifest domain.Digest) string {
+	return fmt.Sprintf("This run retries with capability manifest %s, which only a warded writer honors, "+
+		"but its task and project settings now resolve %s. Its writer attempt waits under backend_not_conformant. "+
+		"Set the writer class to %s to let it continue, or stop the task.",
+		manifest, domain.BackendCordonedHostProcess, domain.BackendFreshVMReadOnlyVolumeHandoff)
+}
+
+// writerClassChangedReason is the class-change notice's operator-facing
+// reason.
+func writerClassChangedReason(pinned, resolved domain.RunnerBackendClass) string {
+	return fmt.Sprintf("This run's writers run on %s, but its task and project settings now resolve %s, "+
+		"after a setting changed or, for a run admitted before cordoned writers, because the default did. "+
+		"A run keeps one writer class, so its next writer attempt waits under backend_not_conformant. "+
+		"Set the writer class to %s to let it continue, or stop the task.", pinned, resolved, pinned)
 }
 
 // WithAdmission makes the engine admit every dispatched attempt against
@@ -548,6 +738,23 @@ func (e *Engine) admitAttemptIn(
 	ctx context.Context, env AdmissionEnvironment, binding invocationBinding, stage domain.Stage,
 	invocationID domain.InvocationID,
 ) (domain.ExecutionAdmission, bool, error) {
+	// Only the implementer and the remediator have a writer class; the
+	// specifier and clean verification run on the ward. A cordoned writer
+	// is never placed on the ward, and a warded one never on the cordon.
+	cordoned := false
+	if role, ok := wardRole(binding.run, stage, invocationID); ok &&
+		(role == domain.RoleImplementer || role == domain.RoleRemediator) {
+		class, err := e.writerClass(ctx, binding.run)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+		}
+		cordoned = class == domain.BackendCordonedHostProcess
+		if cordoned && e.admission.cordon == nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: no %s backend is composed: %w", invocationID,
+				domain.BackendCordonedHostProcess, errors.Join(ErrCordonNotConformant, store.ErrBackendNotConformant))
+		}
+	}
 	// The image is decided before the capability gate, so an attempt waiting
 	// on upkeep, or on a proof of its image, holds under that cause rather
 	// than under the capabilities its image has not earned yet. A maintenance task's
@@ -574,12 +781,32 @@ func (e *Engine) admitAttemptIn(
 	// image's proof, never another image's. An unattended attempt on an image
 	// with no published proof holds under backend_not_conformant, as image
 	// selection holds it, rather than as a capability refusal.
+	//
+	// A cordoned writer still records the selected image, because
+	// verification and rebuild compare the candidate's image with the writer
+	// admission's, but its proof is the cordon's one configuration: its floor
+	// is the class's own (domain.RequiredCapabilities), not the ward's, and a
+	// cordon that declares less holds the attempt as unproven.
 	backendConfigurationDigest := e.admission.backendConfigurationDigest
 	var (
 		snapshot exec.Admission
 		err      error
 	)
-	if bound, ok := e.admission.backend.(exec.ImageBoundBackend); ok {
+	if cordoned {
+		floor, floorErr := domain.RequiredCapabilities(env.OperatingMode, domain.BackendCordonedHostProcess, nil)
+		if floorErr != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, floorErr)
+		}
+		snapshot, err = exec.CheckCapabilities(e.admission.cordon, floor)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID,
+				errors.Join(ErrCordonNotConformant, store.ErrBackendNotConformant, err))
+		}
+		backendConfigurationDigest = ""
+		if env.OperatingMode == domain.ModeUnattended {
+			backendConfigurationDigest = e.admission.cordonConfigurationDigest
+		}
+	} else if bound, ok := e.admission.backend.(exec.ImageBoundBackend); ok {
 		digest, declared, proved := bound.ConformanceFor(string(env.ImageRef))
 		if env.OperatingMode == domain.ModeUnattended {
 			if !proved {
@@ -675,7 +902,19 @@ func (e *Engine) admitAttemptIn(
 		promptPackageDigest = e.productionPublication.remediationPromptPackage
 	}
 	var capabilityManifestDigest *domain.Digest
-	if stage.Name == productionStageName {
+	if cordoned {
+		// A cordoned writer has the host's network, whatever the run's
+		// policy requests: the policy's profiles and a capability manifest
+		// describe the ward's proxy, which a cordoned run never passes
+		// through (plan §5.4). A project that needs provider_only sets
+		// itself warded. A capability retry the operator chose for a warded
+		// failure carries a manifest the cordon can't honor, so it holds
+		// until the setting is warded again rather than run without it.
+		if err := e.refuseCordonedManifest(ctx, binding.run); err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+		}
+		env.EgressProfile = domain.EgressHostOpen
+	} else if stage.Name == productionStageName {
 		// Project policy, not the composition, requests the writer's profile
 		// (plan §5.4). A capability manifest selected for a retry still wins
 		// below, because the operator chose it for this attempt.
@@ -726,6 +965,18 @@ func (e *Engine) admitAttemptIn(
 		return domain.ExecutionAdmission{}, false, fmt.Errorf(
 			"admit invocation %q stage inputs: %w", invocationID,
 			undeliverableWriterInputs(binding.run, stage, invocationID, err))
+	}
+	// The cordoned driver can't deliver attachments yet (#3593), so the
+	// attempt is refused here, with its reason, before anything is recorded.
+	// It never runs without them and never moves to the ward.
+	if cordoned && len(stageInputs.Attachments) > 0 {
+		refusal := fmt.Errorf("%w: a %s writer can't receive the %d attached files; "+
+			"set the task or project writer class to %s before the run's first writer to deliver them",
+			errOperatorInputsUndeliverable, domain.BackendCordonedHostProcess, len(stageInputs.Attachments),
+			domain.BackendFreshVMReadOnlyVolumeHandoff)
+		return domain.ExecutionAdmission{}, false, fmt.Errorf(
+			"admit invocation %q stage inputs: %w", invocationID,
+			undeliverableWriterInputs(binding.run, stage, invocationID, refusal))
 	}
 	// A mode that must be anchored to an approved trust profile records the
 	// exact revision it was admitted under, read here rather than configured:

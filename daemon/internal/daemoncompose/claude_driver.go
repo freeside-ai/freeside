@@ -106,6 +106,10 @@ type ClaudeDriverConfig struct {
 	// built from, and is required when ProjectID is set.
 	ProjectID      domain.ProjectID
 	ApprovedRecipe domain.Digest
+	// WriterClass is the project's writer_class setting, nil when unset or
+	// composed from flags. Admission resolves each writer attempt's class
+	// from it and the task's requirement; unset resolves to the cordon.
+	WriterClass *domain.RunnerBackendClass
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -723,8 +727,8 @@ type ClaudeComposition struct {
 	// is configured.
 	hostVerification *macverify.Backend
 	// cordon is the cordoned host launch backend, nil when none is
-	// configured. The driver launches a cordoned admission on it through
-	// cordonGate; nothing admits one until #3472.
+	// configured. Admission places cordoned writer attempts on it, and the
+	// driver launches them through cordonGate.
 	cordon  *ComposedCordon
 	Closer  SessionCloser
 	janitor *janitorSession
@@ -1275,6 +1279,7 @@ func composeClaudeDriver(
 		// is submitted.
 		Agents:            agents,
 		SettingsRevisions: cfg.SettingsRevisions,
+		WriterClass:       cfg.WriterClass,
 	}
 	follower = newConformanceFollower(followerConfig{
 		Ledger: backend,

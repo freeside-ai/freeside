@@ -52,6 +52,7 @@ func admissionEnvironment() engine.AdmissionEnvironment {
 			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 		},
 		Workspace:      "freeside-handoff-run-235-ws",
+		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		AuthIdentityID: &identity,
 	}
 }

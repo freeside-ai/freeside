@@ -51,9 +51,17 @@ func (e *Engine) capabilityManifestForRun(
 // covers a profile the composition does not enforce and a provider_registry
 // manifest under a policy with no valid declared set. A policy whose
 // manifests do not reconstruct offers nothing.
+//
+// A host_open attempt offers nothing either. Only a cordoned writer is
+// admitted under host_open (WithAdmission refuses it for the ward), and a
+// manifest names a profile the ward's proxy enforces: the retry would
+// resolve the cordon again and hold on the manifest it can't apply (#3472).
 func offerableManifests(
 	enforceable []domain.EgressProfile, policy domain.ResolvedPolicy, admitted domain.EgressProfile,
 ) []domain.CapabilityManifestOffer {
+	if admitted == domain.EgressHostOpen {
+		return nil
+	}
 	manifests, err := domain.CapabilityManifestsFromPolicy(policy)
 	if err != nil {
 		return nil

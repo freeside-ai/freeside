@@ -129,6 +129,9 @@ func TestOfferableManifestsOmitChoicesAdmissionWouldRefuse(t *testing.T) {
 			all, declared, domain.EgressProviderRegistry,
 			[]domain.CapabilityManifestOffer{webRead.Offer()},
 		},
+		"a cordoned writer's host_open attempt offers nothing": {
+			all, declared, domain.EgressHostOpen, nil,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := offerableManifests(tc.enforceable, policy(t, tc.policy), tc.admitted)

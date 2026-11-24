@@ -218,6 +218,9 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			// another agent.
 			AuthIdentityID: nil,
 			Agents:         &agents,
+			// The scenario composes no cordon, so its writers run warded
+			// on its fake stage driver.
+			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		},
 		AdmissionNow: now,
 		Derive: func(context.Context, domain.InvocationID) (string, domain.BaseRevision, error) {
