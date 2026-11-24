@@ -101,14 +101,20 @@ func testDriver(t *testing.T, script string) *Driver {
 
 func TestCompleteIsolatesCredentialAndInput(t *testing.T) {
 	b, _ := json.Marshal(completion())
-	script := `test "$CLAUDE_CODE_OAUTH_TOKEN" = 'synthetic-credential' || exit 2
+	// The token arrives only on the descriptor the environment names: no
+	// environment entry and no argument carries it, and stdin holds only the
+	// request body.
+	script := `test -z "$CLAUDE_CODE_OAUTH_TOKEN" || exit 2
+test "$CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" = 3 || exit 2
+test "$(cat <&3)" = 'synthetic-credential' || exit 2
+env | grep -q synthetic-credential && exit 2
 test -z "$ANTHROPIC_API_KEY$ANTHROPIC_BASE_URL$CODEX_HOME" || exit 3
 test "$HOME" -ef "$PWD" && test "$CLAUDE_CONFIG_DIR" -ef "$PWD" || exit 4
 test "$CLAUDE_CODE_MAX_OUTPUT_TOKENS" = 10000 || exit 5
 test "$MAX_THINKING_TOKENS" = 0 || exit 6
 case "$*" in *synthetic-credential*|*synthetic-input*) exit 7;; esac
 input=$(cat)
-case "$input" in *synthetic-input*) ;; *) exit 8;; esac
+case "$input" in *synthetic-credential*) exit 8;; *synthetic-input*) ;; *) exit 8;; esac
 printf '%s' '` + string(b) + `'
 `
 	d := testDriver(t, script)
@@ -138,6 +144,19 @@ func TestCompleteRejectsUnsupportedSitesAndCancellation(t *testing.T) {
 	cancel()
 	if _, err := d.Complete(ctx, classifierRequest(), "token"); err == nil {
 		t.Fatal("accepted canceled call")
+	}
+}
+
+func TestCompleteRefusesAnOversizeCredentialBeforeLaunch(t *testing.T) {
+	b, _ := json.Marshal(completion())
+	marker := filepath.Join(t.TempDir(), "launched")
+	d := testDriver(t, "cat >/dev/null\n: >'"+marker+"'\nprintf '%s' '"+string(b)+"'\n")
+	oversize := inference.Secret(strings.Repeat("t", maxCredentialBytes+1))
+	if _, err := d.Complete(t.Context(), classifierRequest(), oversize); err == nil {
+		t.Fatal("accepted a credential larger than its pipe holds")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("oversize credential launched the CLI: %v", err)
 	}
 }
 

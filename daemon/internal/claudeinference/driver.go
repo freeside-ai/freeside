@@ -157,7 +157,7 @@ func (d *Driver) Complete(ctx context.Context, req inference.Request, credential
 // never supplies that proof; a daemon crash before return remains unproven.
 func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, credential inference.Secret) (result inference.Response, quiescent bool, err error) {
 	prompt, site, err := promptFor(req)
-	if err != nil || req.MaxComputeUnits < 1 || req.MaxComputeUnits > site.MaxComputeUnits || req.MaxOutput < 1 || req.MaxOutput > site.MaxOutputBytes || credential.Reveal() == "" {
+	if err != nil || req.MaxComputeUnits < 1 || req.MaxComputeUnits > site.MaxComputeUnits || req.MaxOutput < 1 || req.MaxOutput > site.MaxOutputBytes || !credentialFits(credential) {
 		return inference.Response{}, true, errCompletion
 	}
 	body, err := json.Marshal(req.Fields)
@@ -196,12 +196,19 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	if err := d.writePrivateBinary(binary); err != nil {
 		return inference.Response{}, true, errCompletion
 	}
+	token, err := credentialPipe(credential)
+	if err != nil {
+		return inference.Response{}, true, errCompletion
+	}
+	// The child inherits its own copy of the read end at start.
+	defer func() { _ = token.Close() }()
 	cmd := exec.CommandContext(callCtx, binary, commandArgs(req.Model, req.NativeEffort, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy; arguments are daemon-owned but for the model and effort checked above; no shell.
 	cmd.Dir = root
 	// Do not inherit API keys, alternative endpoints, plugins, debug paths,
-	// proxy settings, or host CLI configuration. The existing setup token is
-	// handed to the native CLI only in its private child environment.
-	cmd.Env = commandEnv(root, credential, req, site)
+	// proxy settings, or host CLI configuration. The existing setup token
+	// reaches the native CLI only on its own pipe (credentialPipe).
+	cmd.Env = commandEnv(root, req, site)
+	cmd.ExtraFiles = []*os.File{token}
 	cmd.Stdin = bytes.NewReader(body)
 	output := &boundedOutput{limit: 2*req.MaxOutput + 64<<10, cancel: cancel}
 	cmd.Stdout = output
@@ -229,15 +236,62 @@ func commandArgs(model, effort, prompt string) []string {
 	)
 }
 
-func commandEnv(root string, credential inference.Secret, req inference.Request, site inference.Site) []string {
+// commandEnv is the whole environment of a call. It holds no secret: no
+// rule hides one process's environment from another on the same account,
+// so a cordoned writer could read a token here (plan §5.7, Cordoned Runs).
+// The token rides the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+// names, which the caller fills with credentialPipe and passes as
+// ExtraFiles[0].
+func commandEnv(root string, req inference.Request, site inference.Site) []string {
 	return []string{
 		"PATH=/usr/bin:/bin", "HOME=" + root, "CLAUDE_CONFIG_DIR=" + root,
-		"CLAUDE_CODE_OAUTH_TOKEN=" + credential.Reveal(), "DISABLE_AUTOUPDATER=1",
+		"CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=" + strconv.Itoa(tokenFD), "DISABLE_AUTOUPDATER=1",
 		"DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"CLAUDE_CODE_MAX_OUTPUT_TOKENS=" + strconv.FormatInt(req.MaxComputeUnits, 10),
 		"MAX_THINKING_TOKENS=0", "API_TIMEOUT_MS=" + strconv.FormatInt(site.Timeout.Milliseconds(), 10),
 	}
+}
+
+// tokenFD is the descriptor the CLI reads its setup token from: a child's
+// ExtraFiles[0] is its descriptor 3.
+const tokenFD = 3
+
+// maxCredentialBytes bounds the token credentialPipe writes before the CLI
+// starts, so that write never blocks on a pipe nobody reads yet: a setup
+// token is at most 4096 bytes (ward.MaxSetupTokenBytes), and a pipe holds
+// at least 16 KiB unread on macOS and Linux.
+const maxCredentialBytes = 16 << 10
+
+// credentialFits reports whether a call can hand credential to the CLI.
+func credentialFits(credential inference.Secret) bool {
+	return credential != "" && len(credential) <= maxCredentialBytes
+}
+
+// credentialPipe returns the read end of a pipe that holds the token and
+// whose write end is already closed, so the CLI reads it to end of file.
+// os.Pipe sets close-on-exec on both ends, so only the child that gets the
+// read end in ExtraFiles inherits it. It is a local copy of the cordon's
+// secretPipe: two Tier A packages, and two uses, don't earn a shared one.
+func credentialPipe(credential inference.Secret) (*os.File, error) {
+	if !credentialFits(credential) {
+		return nil, errCompletion
+	}
+	secret := []byte(credential.Reveal())
+	defer clear(secret)
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	_, err = w.Write(secret)
+	if closeErr := w.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = r.Close()
+		return nil, err
+	}
+	return r, nil
 }
 
 // boundedOutput holds its buffer in a named field rather than embedding it:

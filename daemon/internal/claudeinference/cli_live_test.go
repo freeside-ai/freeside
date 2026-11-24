@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
@@ -50,6 +51,9 @@ func TestPinnedClaudeCLIProtocol(t *testing.T) {
 
 const probeModel = "claude-sonnet-4-6"
 
+// liveSyntheticToken is no credential: the probe's provider is a local fake.
+const liveSyntheticToken inference.Secret = "synthetic-test-only"
+
 // probePinnedCLI runs one launch with the given native effort, "" for none,
 // and holds it to the audited contract: one request, to the model passed,
 // with no tools, the site's compute bound, thinking disabled, the task data
@@ -76,6 +80,11 @@ func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
+		// The token reaches the CLI only on its descriptor, so a request
+		// carrying it proves the CLI read that descriptor.
+		if !strings.Contains(r.Header.Get("Authorization"), string(liveSyntheticToken)) {
+			t.Error("CLI request did not carry the token handed on its descriptor")
+		}
 		b, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 		if err != nil {
 			t.Error(err)
@@ -149,7 +158,14 @@ func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 	}
 	cmd := exec.CommandContext(t.Context(), copyPath, commandArgs(model, effort, prompt)...) //nolint:gosec // G204: private content-verified native CLI in an opt-in synthetic probe.
 	cmd.Dir = root
-	cmd.Env = append(commandEnv(root, "synthetic-test-only", req, site), "ANTHROPIC_BASE_URL="+server.URL)
+	token, err := credentialPipe(liveSyntheticToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The child inherits its own copy of the read end at start.
+	defer func() { _ = token.Close() }()
+	cmd.Env = append(commandEnv(root, req, site), "ANTHROPIC_BASE_URL="+server.URL)
+	cmd.ExtraFiles = []*os.File{token}
 	cmd.Stdin = bytes.NewReader(input)
 	output, err := cmd.Output()
 	if err != nil {
