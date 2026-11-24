@@ -38,7 +38,16 @@ func (d *Driver) failedWriterResult(
 		recovered.ExportDir != "" || len(recovered.Manifest.Entries) != 0 {
 		return result, fmt.Errorf("%w: invalid failed writer result", ErrRecoveryRetryable)
 	}
-	evidence := recovered.FailureEvidence
+	return d.retainFailureEvidence(ctx, in, result, recovered.FailureEvidence)
+}
+
+// retainFailureEvidence completes a failed writer's result from its
+// diagnostic transcript, from either gate: it checks the bytes, reads them
+// for a quota refusal and spent usage, and stores them as sensitive
+// evidence. A nil evidence leaves the result as it is.
+func (d *Driver) retainFailureEvidence(
+	ctx context.Context, in intent, result exec.StageResult, evidence *ward.FailureEvidence,
+) (exec.StageResult, error) {
 	if evidence == nil {
 		return result, nil
 	}

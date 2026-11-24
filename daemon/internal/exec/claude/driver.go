@@ -77,6 +77,12 @@ type Config struct {
 
 	// AdoptedRegistryHosts is stage.Config.AdoptedRegistryHosts.
 	AdoptedRegistryHosts func(context.Context, int64) ([]string, error)
+
+	// Cordon and CordonRunsRoot are stage.Config.Cordon and
+	// stage.Config.CordonRunsRoot: the port a cordoned admission launches
+	// through, nil when the daemon composes no cordon.
+	Cordon         stage.CordonGate
+	CordonRunsRoot string
 }
 
 // New constructs the Claude provider over the shared durable stage machine.
@@ -113,5 +119,8 @@ func New(cfg Config) (*Driver, error) {
 		Logger:              cfg.Logger,
 
 		AdoptedRegistryHosts: cfg.AdoptedRegistryHosts,
+
+		Cordon:         cfg.Cordon,
+		CordonRunsRoot: cfg.CordonRunsRoot,
 	})
 }

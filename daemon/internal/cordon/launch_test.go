@@ -327,7 +327,9 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 			t.Fatalf("agent dir = %s", agent.dir)
 		}
 		want := append(confinedArgv(cfg, layoutFor(cfg.RunsRoot, "run-1"), cfg.AgentCLI),
-			"--settings", `{"sandbox":{"enabled":false}}`, "-p")
+			"--settings",
+			`{"sandbox":{"enabled":false},"attribution":{"commit":"","pr":""},"enabledPlugins":{"agents-md@builtin":false}}`,
+			"-p")
 		if !slices.Equal(agent.argv, want) {
 			t.Fatalf("agent argv = %q, want %q", agent.argv, want)
 		}

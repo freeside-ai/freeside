@@ -707,7 +707,7 @@ func TestReleasedExportPathUsesConfiguredDurableRoot(t *testing.T) {
 	root := t.TempDir()
 	in := intent{RunID: testRunIDFor(testInvoke)}
 	valid := filepath.Join(root, "freeside-handoff-"+in.RunID+"-out-valid")
-	if err := validateReleasedExportPath(root, in, valid); err != nil {
+	if err := validateReleasedExportPath(releasedExportRoots{ward: root}, in, valid); err != nil {
 		t.Fatalf("configured durable export path: %v", err)
 	}
 	for _, path := range []string{
@@ -715,7 +715,7 @@ func TestReleasedExportPathUsesConfiguredDurableRoot(t *testing.T) {
 		filepath.Join(root, "freeside-handoff-"+in.RunID+"-out-"),
 		filepath.Join(root, "freeside-handoff-foreign-out-valid"),
 	} {
-		if err := validateReleasedExportPath(root, in, path); err == nil {
+		if err := validateReleasedExportPath(releasedExportRoots{ward: root}, in, path); err == nil {
 			t.Errorf("accepted released export outside the exact run root: %q", path)
 		}
 	}
@@ -776,7 +776,7 @@ func TestReleasedExportBoundaryRejectsTamperedFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in, out := makeExport(t)
 			tc.mutate(t, &out)
-			if err := validateReleasedExport(exportRoot, in, out); err == nil {
+			if err := validateReleasedExport(releasedExportRoots{ward: exportRoot}, in, out); err == nil {
 				t.Fatal("tampered gate return was accepted")
 			}
 		})

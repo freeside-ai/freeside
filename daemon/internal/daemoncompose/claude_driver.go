@@ -28,6 +28,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/exportscan"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
@@ -722,8 +723,8 @@ type ClaudeComposition struct {
 	// is configured.
 	hostVerification *macverify.Backend
 	// cordon is the cordoned host launch backend, nil when none is
-	// configured. Nothing launches on it yet; unattended admission (#3472)
-	// takes it from here.
+	// configured. The driver launches a cordoned admission on it through
+	// cordonGate; nothing admits one until #3472.
 	cordon  *ComposedCordon
 	Closer  SessionCloser
 	janitor *janitorSession
@@ -1156,12 +1157,35 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
+	// A canceled cordoned Launch cancels its run for good, so with a cordon
+	// the driver's lifetime ends only after the gate detaches, and the gate
+	// closes first in the session group, before the driver cancels its
+	// sessions. Without one the driver lives on ctx as before.
+	driverLifetime := ctx
+	var (
+		cordonPort   stage.CordonGate
+		cordonCloser SessionCloser
+	)
+	cordonRuns, err := cordonRunsRoot(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	if cordonBackend != nil {
+		gate := newCordonGate(cordonBackend, st, wardstore.CredentialReader{
+			Store: st,
+			ReadSetupToken: ProductionSetupTokenReader(
+				runtime, cfg.ExporterImage, ProductionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)),
+			Now: utcNow,
+		}.Read, cfg.OperatingMode == domain.ModeUnattended, filepath.Join(cfg.StateDir, cordonScanDir), logger)
+		driverLifetime = cordonDriverLifetime(ctx, gate.Detach)
+		cordonPort, cordonCloser = gate, gate
+	}
 
 	// The follower is composed after the driver, whose pre-job hook reports
 	// each unattended start's image to it (conformanceFollower.use).
 	var follower *conformanceFollower
 	driver, driverErr := claude.New(claude.Config{
-		Lifetime:     ctx,
+		Lifetime:     driverLifetime,
 		Dir:          filepath.Join(cfg.StateDir, "claude-driver"),
 		SeedRoot:     cfg.SeedRoot,
 		ExportRoot:   filepath.Join(cfg.StateDir, "ward-exports"),
@@ -1210,9 +1234,11 @@ func composeClaudeDriver(
 		Import: importer.Options{
 			Policy: importer.Policy{Allowlist: cfg.AllowedPaths},
 		},
-		Preparation: preparation,
-		Now:         func() time.Time { return time.Now().UTC() },
-		Logger:      logger,
+		Preparation:    preparation,
+		Now:            func() time.Time { return time.Now().UTC() },
+		Logger:         logger,
+		Cordon:         cordonPort,
+		CordonRunsRoot: cordonRuns,
 	})
 	if driverErr != nil {
 		return nil, fmt.Errorf("compose claude driver: %w", driverErr)
@@ -1344,9 +1370,11 @@ func composeClaudeDriver(
 			return errors.Join(follower.runScheduled(runCtx), cordonBackend.RunScheduled(runCtx))
 		},
 		cordon: cordonBackend,
-		// The follower and the base fetches stop first, so a pass or fetch
-		// in flight ends before the janitor its fetches ride on closes.
-		Closer:  sessionGroup{follower, baseInputs, driver, janitor},
+		// The cordon detaches first, so no session the driver cancels
+		// cancels a cordoned run. The follower and the base fetches stop
+		// next, so a pass or fetch in flight ends before the janitor its
+		// fetches ride on closes.
+		Closer:  sessionGroup{cordonCloser, follower, baseInputs, driver, janitor},
 		janitor: janitor,
 	}
 	if cfg.OperatingMode == domain.ModeUnattended && cfg.ProjectID != "" {

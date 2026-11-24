@@ -585,6 +585,10 @@ func (d *Driver) regateWithCurrentPolicy(
 	if err != nil {
 		return err
 	}
+	cordoned, err := runnerClassOf(i.Spec)
+	if err != nil {
+		return fmt.Errorf("intent %s: %w", i.InvocationID, err)
+	}
 	switch {
 	case i.RunID != runID:
 		return fmt.Errorf("%w: intent %s names run %q, derivation gives %q",
@@ -592,8 +596,9 @@ func (d *Driver) regateWithCurrentPolicy(
 	case i.Spec.CredentialMode != domain.CredentialSubscriptionContained:
 		return fmt.Errorf("%w: intent %s carries credential mode %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.CredentialMode)
-	case i.Spec.EgressProfile != domain.EgressProviderOnly &&
-		i.Spec.EgressProfile != domain.EgressProviderRegistry:
+	// A cordoned writer has the host's network, which admission records as
+	// host_open; a warded one has only the profiles ward enforces.
+	case !egressFitsClass(cordoned, i.Spec.EgressProfile):
 		return fmt.Errorf("%w: intent %s carries egress profile %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.EgressProfile)
 	case i.Spec.AuthIdentityID == "":
@@ -732,7 +737,7 @@ func (d *Driver) regateWithCurrentPolicy(
 					ErrUnsupportedStart, i.InvocationID)
 			}
 			artifacts, err := validateReleasedExportRecord(
-				d.exportRoot, i, i.Export.outcome(), record,
+				d.releasedExportRoots(), i, i.Export.outcome(), record,
 			)
 			if err != nil {
 				return err
@@ -777,7 +782,7 @@ func (d *Driver) regateWithCurrentPolicy(
 		}
 		if found {
 			if _, err := validateReleasedExportRecord(
-				d.exportRoot, i, i.Export.outcome(), record,
+				d.releasedExportRoots(), i, i.Export.outcome(), record,
 			); err != nil {
 				return fmt.Errorf("%w: %w", errExportAuthorityConflict, err)
 			}

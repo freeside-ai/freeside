@@ -6723,15 +6723,16 @@ sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, p
 CLI as the daemon's own account under a Seatbelt rule file, in a seeded
 worktree, ending in a proof that no process of the launch is alive. It also
 exports that worktree as the handoff the importer takes, and recovers a
-launch a daemon restart interrupted. The daemon composes it and proves it,
-but nothing launches a writer on it yet; the stage driver port and
-admission (#3472) wire it in. The package doc (`internal/cordon/doc.go`)
-holds the layout and the mechanism; the decision records are
-`devlog/2026-11-22-1236-cordoned-host-launch.md`, for the export,
-`devlog/2026-11-22-2046-cordoned-export.md`, for the token,
-`devlog/2026-11-22-2039-cordoned-writer-token.md`, for conformance,
-`devlog/2026-11-22-2144-cordon-conformance-proof.md`, and, for recovery,
-`devlog/2026-11-23-0752-cordon-restart-recovery.md`.
+launch a daemon restart interrupted. The daemon composes it, proves it,
+and hands it to the Claude stage driver as the driver's cordon port, but
+nothing admits a cordoned writer yet; admission (#3472) does. The package
+doc (`internal/cordon/doc.go`) holds the layout and the mechanism; the
+decision records are `devlog/2026-11-22-1236-cordoned-host-launch.md`,
+for the export, `devlog/2026-11-22-2046-cordoned-export.md`, for the
+token, `devlog/2026-11-22-2039-cordoned-writer-token.md`, for
+conformance, `devlog/2026-11-22-2144-cordon-conformance-proof.md`, for
+recovery, `devlog/2026-11-23-0752-cordon-restart-recovery.md`, and, for
+the stage driver port, `devlog/2026-11-24-1005-cordon-stage-port.md`.
 
 - **macOS with cgo only.** The run-end proof calls `sandbox_check` through
   cgo. Any other build refuses every launch before it starts anything, with
@@ -6851,6 +6852,38 @@ holds the layout and the mechanism; the decision records are
   checks, jobs labeled `com.freeside.cordon-probe.`, and an app bundle in
   the probe launch's own directory. It removes only the directory each
   probe launch claimed, after its effect checks ran.
+- **The stage driver launches through a port.** A start whose
+  `exec.StartSpec.RunnerClass` is `cordoned_host_process` runs through
+  `stage.CordonGate` instead of a ward handoff; an empty class is the
+  ward's, and any other value is refused before the intent is saved, as
+  are a cordoned start with no composed cordon, one with attachments, and
+  an egress profile that doesn't fit the class (`host_open` for the
+  cordon, a ward profile for the ward). The provider builds the CLI
+  arguments and the export request (`stage.CordonLaunchProvider`; Claude's
+  is in `internal/exec/claude/spec.go`). After the export the run shares
+  the ward's path: `AuthenticateReleasedExport`, the importer, the export
+  record, and the outcome. A writer that exits nonzero or stalls records
+  a failed outcome, and a canceled one a canceled outcome. After a
+  restart, startup's recovery pass holds a running cordoned intent rather
+  than wait for a writer that may still be alive, and the attempt's next
+  Inspect recovers it through `Recover`, off the caller; a canceled intent
+  is canceled through `RequestCancellation`. A committed intent's durable
+  export record or outcome authenticates its history, so it stays readable
+  once its run is released, or after the cordon is unconfigured. Detail:
+  the comment at the top of `internal/exec/stage/cordon.go`.
+- **The composition adapts the backend.** `internal/daemoncompose/cordon_gate.go`
+  reads the setup token for the enrollment generation the admission
+  bound, sets `RequireProof` and runs the pre-job probe when the daemon or
+  the admission is unattended, and keeps a failed run's transcript and stderr as failure
+  evidence only when they are bounded, valid UTF-8, and pass the export
+  credential scan, as the ward does. On shutdown it detaches before the
+  driver's lifetime ends and closes first in the session group, so no
+  context a shutdown cancels reaches a run.
+- **Only the operator's host instructions reach a cordoned writer.** The
+  Claude provider passes them with `--append-system-prompt`, refused over
+  256 KiB; the repository's `CLAUDE.md` files the ward composes from the
+  trusted base aren't delivered yet. A cordoned run has no usage reading
+  and no live transcript.
 - **Composition.** With `-driver claude`, `-cordon-agent-cli` and
   `-cordon-agent-cli-sha256` configure the backend (empty configures none),
   with `-cordon-projects`, a repeatable `-cordon-protected-root`, and

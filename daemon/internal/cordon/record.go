@@ -208,13 +208,11 @@ type exportRecord struct {
 }
 
 // AuthenticateReleasedExport accepts exportDir only as runID's export
-// directory with every fixed member's bytes matching its export record. It
-// has stage.Gate's signature only: the stage pipeline's released-export
-// path check accepts only the ward's handoff directories, and its retry
-// classification would retry ErrExportUnauthenticated rather than refuse
-// for good, so the driver port that wires this in changes both. The
-// recorded digests are only compared: they never choose what is read or
-// removed.
+// directory with every fixed member's bytes matching its export record.
+// The stage driver's cordon port refuses a cordoned run's export for good
+// on ErrExportUnauthenticated rather than retrying it, and its own path
+// check accepts only this run's export directory. The recorded digests are
+// only compared: they never choose what is read or removed.
 func (b *Backend) AuthenticateReleasedExport(ctx context.Context, runID, exportDir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
