@@ -157,6 +157,10 @@ func TestTransportLeavesNoTokenOnDisk(t *testing.T) {
 	}
 	scanTreeForTokenForms(t, co.Dir())
 	scanTreeForTokenForms(t, remote.bare)
+	scanTreeForTokenForms(t, remote.transport.credentialDir)
+	if left, err := os.ReadDir(remote.transport.credentialDir); err != nil || len(left) != 0 {
+		t.Errorf("credential directory after the push = %v, %v; want empty", left, err)
+	}
 }
 
 // TestPinRepoRefusesForeignGitDir is the discovery-walk-up
@@ -172,7 +176,7 @@ func TestPinRepoRefusesForeignGitDir(t *testing.T) {
 	if err := os.MkdirAll(inner, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	r, err := newNetRunner("git", t.TempDir(), "file")
+	r, err := newNetRunner("git", t.TempDir(), "", "file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +230,7 @@ func TestPushRefusesRedirectingCheckoutConfig(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			remote := newLocalRemote(t)
 			counter := &countingTokenSource{}
-			tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file"}
+			tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file", credentialDir: t.TempDir()}
 			co, err := tr.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 			if err != nil {
 				t.Fatal(err)
@@ -260,7 +264,7 @@ func TestAuthenticatedInvocationRechecksConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := newNetRunner("git", t.TempDir(), "file")
+	r, err := newNetRunner("git", t.TempDir(), "", "file")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +330,7 @@ func TestPushLeaseRefusesExistingRefAtProtocolLevel(t *testing.T) {
 	gitOut(t, remote.work, "push", remote.bare, remote.baseSHA+":refs/heads/"+branch)
 
 	scratch := t.TempDir()
-	r, err := newNetRunner("git", scratch, "file")
+	r, err := newNetRunner("git", scratch, t.TempDir(), "file")
 	if err != nil {
 		t.Fatal(err)
 	}

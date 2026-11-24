@@ -48,7 +48,8 @@ type ProbeOutput struct {
 }
 
 // Probe makes one judgment launch with a fixed prompt: the verified private
-// copy of the pinned CLI, the argument list and environment Complete uses,
+// copy of the pinned CLI, the argument list, environment, and credential
+// pipe Complete uses,
 // and the model and effort a judgment line names. It answers whether that
 // CLI serves that model at that effort for this credential, which Complete
 // cannot say, since it collapses every failure into errCompletion.
@@ -58,7 +59,7 @@ type ProbeOutput struct {
 // ran and refused returns its output and a nil error.
 func (d *Driver) Probe(ctx context.Context, model, nativeEffort string, credential inference.Secret) (out ProbeOutput, err error) {
 	if model == "" || !inference.ValidLaunchValue(model) || !inference.ValidLaunchValue(nativeEffort) ||
-		credential.Reveal() == "" {
+		!credentialFits(credential) {
 		return ProbeOutput{}, errors.New("claude probe needs a credential and valid launch values")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, probeTimeout)
@@ -94,10 +95,17 @@ func (d *Driver) Probe(ctx context.Context, model, nativeEffort string, credenti
 	if versionErr != nil {
 		return ProbeOutput{}, errors.New("claude probe: --version failed")
 	}
+	token, err := credentialPipe(credential)
+	if err != nil {
+		return ProbeOutput{}, errors.New("claude probe: hand the CLI its credential")
+	}
+	// The child inherits its own copy of the read end at start.
+	defer func() { _ = token.Close() }()
 	cmd := exec.CommandContext(callCtx, binary, commandArgs(model, nativeEffort, ProbePrompt)...) //nolint:gosec // G204: private content-pinned CLI copy; model and effort checked above; no shell.
 	cmd.Dir = root
-	cmd.Env = commandEnv(root, credential,
+	cmd.Env = commandEnv(root,
 		inference.Request{MaxComputeUnits: probeMaxOutputTokens}, inference.Site{Timeout: probeTimeout})
+	cmd.ExtraFiles = []*os.File{token}
 	cmd.Stdin = bytes.NewReader([]byte(ProbeInput))
 	stdout := &boundedOutput{limit: probeOutputLimit, cancel: cancel}
 	stderr := &boundedOutput{limit: probeOutputLimit, cancel: cancel}

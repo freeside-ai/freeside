@@ -574,6 +574,9 @@ directory named before it in the same bullet. All under `daemon/`:
   discover each enrollment's models),
   `internal/exec/claude/spec.go` (the credential mount),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
+  `internal/claudeinference/driver.go` and
+  `internal/claudeinference/probe.go` (hand the setup token to the host
+  judgment CLI on its own pipe, never its environment),
   `internal/exec/capability.go`, and the `CredentialMode` and
   `EgressProfile` fields in `internal/exec/driver.go`. The alternate-agent
   retry, which lets an operator choose another agent's credential after a

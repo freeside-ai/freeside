@@ -148,6 +148,9 @@ func newLocalRemoteForRepo(t *testing.T, repo string) *localRemote {
 			gitPath:    "git",
 			remoteBase: "file://" + root,
 			scheme:     "file",
+			// Each fixture gets its own credential directory, so a scan
+			// of it after a push reads every header file left behind.
+			credentialDir: t.TempDir(),
 		},
 		repo:    repo,
 		bare:    filepath.Join(dir, bareRel),
@@ -365,7 +368,7 @@ func TestRejectedCallsMintNoToken(t *testing.T) {
 	t.Parallel()
 	remote := newLocalRemote(t)
 	counter := &countingTokenSource{}
-	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file"}
+	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file", credentialDir: t.TempDir()}
 
 	if _, err := tr.FetchBase(t.Context(), remote.repo, "absent branch name", remote.baseSHA, checkoutDir(t)); err == nil {
 		t.Fatal("invalid base ref accepted")
@@ -511,7 +514,7 @@ func TestPushHeadRefusesUngatedHead(t *testing.T) {
 	t.Parallel()
 	remote := newLocalRemote(t)
 	counter := &countingTokenSource{}
-	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file"}
+	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file", credentialDir: t.TempDir()}
 	co, err := tr.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
 		t.Fatal(err)

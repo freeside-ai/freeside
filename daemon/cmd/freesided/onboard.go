@@ -359,6 +359,9 @@ func runOnboardCommand(
 		builder, builderErr := projectimage.New(projectimage.Options{
 			GitPath: cfg.GitPath, ContainerPath: cfg.ContainerPath,
 			TempDir: cfg.TempDir, Log: stderr, Tokens: tokens,
+			// The clone's token header file sits in the App credentials
+			// directory, which the cordon denies and checkpoints exclude.
+			CredentialDir: daemoncompose.GitCredentialDir(cfg.CredentialsDir),
 			// An onboarding build can run for most of an hour: narrate it and
 			// keep every step's whole output for the operator (#3442).
 			LogDir:    filepath.Join(cfg.StateDir, "project-image-logs"),

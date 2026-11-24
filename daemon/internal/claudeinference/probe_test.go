@@ -13,11 +13,14 @@ import (
 // before printing body and exiting with status.
 func probeScript(body, status string) string {
 	return `if [ "$1" = --version ]; then
-  test -z "$CLAUDE_CODE_OAUTH_TOKEN" || exit 9
+  test -z "$CLAUDE_CODE_OAUTH_TOKEN$CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" || exit 9
+  (: <&3) 2>/dev/null && exit 9
   echo '2.1.267 (Claude Code)'
   exit 0
 fi
-test "$CLAUDE_CODE_OAUTH_TOKEN" = 'synthetic-credential' || exit 2
+test -z "$CLAUDE_CODE_OAUTH_TOKEN" || exit 2
+test "$CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" = 3 || exit 2
+test "$(cat <&3)" = 'synthetic-credential' || exit 2
 case "$*" in *synthetic-credential*) exit 3;; esac
 case "$*" in *"--model probe-model --effort high --safe-mode --tools  "*"--max-turns 1 --system-prompt ` + ProbePrompt + `") ;; *) exit 4;; esac
 test "$(cat)" = '` + ProbeInput + `' || exit 5

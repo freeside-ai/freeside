@@ -3254,10 +3254,12 @@ of this section), rechecked by the probe before every unattended job:
 
 No rule hides one process's environment from another on the same account, so
 no process the daemon starts, the daemon included, carries a secret in its
-arguments or environment. Today the daemon's token-bearing git commands and
-its one-shot model calls do, so the cordoned class is not admitted until
-#3550 moves those secrets out (Section [14](#14-risks)). The rule covers
-cordoned verification jobs too: a job reads the environment of every process
+arguments or environment. #3550 moved out the last secrets that did: a
+one-shot model call reads its token from a pipe, and a token-bearing git
+command reads its header from a file written for that command alone, in a
+daemon credentials directory the cordon denies. The cordoned class is not
+admitted before #3550 (Section [14](#14-risks)). The rule covers cordoned
+verification jobs too: a job reads the environment of every process
 on the account, the daemon's and every agent CLI's included, and a writer
 reads a job's, so neither cordoned class is admitted before #3550 (revision
 135).
