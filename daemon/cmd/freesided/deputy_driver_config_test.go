@@ -69,6 +69,8 @@ func TestDeputyClaudeDriverConfigForTheFixture(t *testing.T) {
 	}
 	everyOption.Rebuild = projectimage.BuildInputs{BaseBuildRef: "base:local", DNS: []string{"1.1.1.1"}}
 	everyOption.HandBackLabel = "needs-rework"
+	// The project's writer class reaches admission (#3472).
+	everyOption.WriterClass = new(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	everyOption.HostVerification = daemoncompose.MacverifyExecutorConfig{
 		Root: "/Library/Freeside/macverify", Slots: []string{"fvslot2", "fvslot1"},
 		XcodeBuild: "17F42", Swift: "swiftlang-6.1.2.1.2", PortBase: macverify.DefaultPortBase, ListenPort: 7340,

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/cordon"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -24,7 +25,7 @@ import (
 // none of them. Required fields always become their option, nil or not, so
 // the engine's own checks still fail startup on a missing part. Optional
 // fields (SelectImage, Inference, HealthRefresh, Logger, UsageSink,
-// HostVerification, Running, ReadinessGate, StartAuthority) become their
+// HostVerification, Cordon, Running, ReadinessGate, StartAuthority) become their
 // option only when non-nil, because each of those engine options rejects
 // nil; a nil optional field means the part is not installed.
 type ProductionEngine struct {
@@ -52,6 +53,9 @@ type ProductionEngine struct {
 	// HostVerification, when set, is the macOS verification executor the
 	// engine admits macos_host recipe commands onto.
 	HostVerification *macverify.Backend
+	// Cordon, when set, is the cordoned writer backend admission places a
+	// writer attempt on when its resolved class is the cordon.
+	Cordon *cordon.Backend
 	// Running is the daemon's count of in-process work, which the restart
 	// readiness read reports.
 	Running *engine.RunningWork
@@ -72,6 +76,9 @@ func (p ProductionEngine) Options() []engine.Option {
 		engine.WithMachineCapacity(p.Bound),
 		engine.WithAdmission(p.Backend, p.AdmissionFloor, p.Admission, p.AdmissionNow),
 		engine.WithAdmissionDerivation(p.Derive),
+	}
+	if p.Cordon != nil {
+		options = append(options, engine.WithCordonedWriters(p.Cordon))
 	}
 	if p.SelectImage != nil {
 		options = append(options, engine.WithAdmissionImageSelection(p.SelectImage))

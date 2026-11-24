@@ -263,6 +263,7 @@ func testSubmitCommandSpecificationDigest(
 			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 		},
 		Workspace: "workspace-submit", AuthIdentityID: &identity,
+		WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 	}
 	if preallocateRetry {
 		retryRunID, err := engine.ProductionAttemptRunID(submitted.CampaignID, 2)
@@ -516,6 +517,7 @@ func approveSubmittedSpecification(t *testing.T, acceptedBody string) approvedSu
 				BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 			},
 			Workspace: "workspace-submit", AuthIdentityID: &identity,
+			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		}, func() time.Time { return now }),
 		engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },

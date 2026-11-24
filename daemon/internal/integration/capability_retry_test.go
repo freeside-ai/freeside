@@ -591,3 +591,75 @@ func TestCapabilityRetryRefusesAnUnenforceableManifest(t *testing.T) {
 		t.Error("driver started the refused retry invocation")
 	}
 }
+
+// TestCapabilityRetryHoldsWhenItsRunNowResolvesTheCordon: a capability retry
+// chosen for a warded failure names a manifest only a warded writer honors.
+// When the project's setting is cleared before the retry is admitted, the
+// retry run resolves the cordon, so its writer holds under
+// backend_not_conformant with one notice instead of being admitted without
+// its manifest or failing the pass (#3472).
+func TestCapabilityRetryHoldsWhenItsRunNowResolvesTheCordon(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	f := openWideCapabilityRetryFixture(t, root, true)
+	selection := driveCapabilityRetrySelection(t, f)
+	scriptCapabilityRetryStage(f, selection)
+	f.close(t)
+
+	cordon := fake.RunnerBackend{
+		BackendName: string(domain.BackendCordonedHostProcess),
+		Caps:        exec.NewCapabilitySet(domain.CordonedCapabilities()...),
+	}
+	restarted := openUnattendedFixtureWith(t, root, false, testIdentity, testPoolLimit,
+		func(env *engine.AdmissionEnvironment) {
+			env.EnforceableEgressProfiles = []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressProviderWebRead}
+			env.WriterClass = nil
+		},
+		func(st *store.Store, blobs *signet.BlobStore) []engine.Option {
+			fetcher, err := specify.NewFetcher(st, blobs, nil)
+			if err != nil {
+				t.Fatalf("specify.NewFetcher: %v", err)
+			}
+			return []engine.Option{
+				engine.WithSpecification(engine.SpecificationConfig{
+					Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return admittedAt },
+					PromptPackageDigest: capabilityRetrySpecificationPrompt,
+				}),
+				engine.WithCordonedWriters(cordon),
+			}
+		})
+	for pass := range 2 {
+		if result := reconcileCapabilityRetryPass(t, restarted, "cordoned capability retry"); result.InvocationsStarted != 0 {
+			t.Fatalf("pass %d started %d invocations, want the retry held", pass, result.InvocationsStarted)
+		}
+	}
+	if err := restarted.store.Read(ctx, func(tx *store.ReadTx) error {
+		hold, found, err := tx.GetRunHold(ctx, selection.retryRunID)
+		if err != nil {
+			return err
+		}
+		if !found || hold.Reason != domain.HoldBackendNotConformant {
+			t.Errorf("retry hold = %+v, found %t; want backend_not_conformant", hold, found)
+		}
+		if _, err := tx.GetExecutionAdmissionRecord(ctx, selection.retryInvocation); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("retry admission err = %v, want none recorded", err)
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		notices := 0
+		for _, item := range items {
+			if strings.HasPrefix(string(item.Value.ID), "writer-class-changed-") {
+				notices++
+			}
+		}
+		if notices != 1 {
+			t.Errorf("class-change notices = %d, want 1", notices)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

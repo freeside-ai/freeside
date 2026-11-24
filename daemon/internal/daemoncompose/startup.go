@@ -245,6 +245,7 @@ func ComposeClaudeWorkflow(
 		Derive:           claudeWiring.derive,
 		SelectImage:      claudeWiring.selectImage,
 		HostVerification: claudeWiring.hostVerification,
+		Cordon:           claudeWiring.cordonWriters(),
 		Logger:           cfg.Logger,
 		UsageSink:        claudeUsageCaptures,
 		Running:          running,

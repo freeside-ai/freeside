@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v21"
+const taskRecordVersion = "freeside-task-record-v22"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -343,11 +343,14 @@ type taskRecordConclusion struct {
 // taskRecordAdmission is the governing identity of one recorded admission.
 // It leaves out the workspace and the auth identity.
 type taskRecordAdmission struct {
-	ID                 domain.Digest         `json:"id"`
-	InvocationID       domain.InvocationID   `json:"invocation_id"`
-	StageID            domain.StageID        `json:"stage_id"`
-	AttemptID          domain.AttemptID      `json:"attempt_id"`
-	AdmittedAt         time.Time             `json:"admitted_at"`
+	ID           domain.Digest       `json:"id"`
+	InvocationID domain.InvocationID `json:"invocation_id"`
+	StageID      domain.StageID      `json:"stage_id"`
+	AttemptID    domain.AttemptID    `json:"attempt_id"`
+	AdmittedAt   time.Time           `json:"admitted_at"`
+	// Backend is the runner class the attempt was placed on, so a reader
+	// sees whether a writer ran warded or cordoned (#3472).
+	Backend            string                `json:"backend"`
 	OperatingMode      domain.OperatingMode  `json:"operating_mode"`
 	CredentialMode     domain.CredentialMode `json:"credential_mode"`
 	EgressProfile      domain.EgressProfile  `json:"egress_profile"`
@@ -980,6 +983,7 @@ func projectTaskRecordAdmission(admission domain.ExecutionAdmission) taskRecordA
 	out := taskRecordAdmission{
 		ID: admission.ID, InvocationID: admission.InvocationID,
 		StageID: admission.StageID, AttemptID: admission.AttemptID, AdmittedAt: admission.AdmittedAt,
+		Backend:       admission.Backend,
 		OperatingMode: admission.OperatingMode, CredentialMode: admission.CredentialMode,
 		EgressProfile: admission.EgressProfile, ImageRef: admission.ImageRef, Base: admission.Base,
 		SpecDigest: admission.SpecDigest, PolicyDigest: admission.PolicyDigest, InputDigest: admission.InputDigest,

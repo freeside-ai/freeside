@@ -137,6 +137,19 @@ var holdClasses = []holdClass{
 		sentinel: ErrImageNotProved, action: holdActionInvocation,
 		reason: domain.HoldBackendNotConformant,
 	},
+	// A writer attempt resolved to a cordon this daemon can't admit it on,
+	// or to a class its run didn't start on, holds only itself too: the
+	// cordon's proof and one run's class say nothing about the ward's work
+	// behind it. Each precedes the store and configuration rows it is joined
+	// with, and the capability row an unproven cordon's refusal carries.
+	{
+		sentinel: ErrCordonNotConformant, action: holdActionInvocation,
+		reason: domain.HoldBackendNotConformant,
+	},
+	{
+		sentinel: ErrWriterClassChanged, action: holdActionInvocation,
+		reason: domain.HoldBackendNotConformant,
+	},
 	{
 		sentinel: store.ErrBackendNotConformant, action: holdActionPassMutablePolicy,
 		reason: domain.HoldBackendNotConformant,

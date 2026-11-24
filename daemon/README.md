@@ -1778,7 +1778,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v21`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v22`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1792,7 +1792,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | --- | --- |
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
-| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `usage`: each admitted invocation's `invocation_id`, `coverage` (`complete` when its route reported the whole invocation, `partial` when it ended early and its tokens are a lower bound from the transcript it left, `missing` when nothing was recorded), `tokens` (the reported token totals by `metric`, only those observed; a partial Claude invocation has no `output_tokens`, because its transcript doesn't hold them), and `wall_seconds` (its working time in the timeline's clocks, rounded down; `null` while it is working, when it never started, or when the timeline didn't read), `publication` (`null` until the run publishes), `verifications`: each verification step with its `invocation_id`, `started_at` (`null` for a verdict recorded without running the verifier), and `finished_at` and `result` (`passed` or `failed`; both `null` while it runs), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers), `specification_retries`: each operator retry of a failed specification invocation, with the `invocation_id` it added, the `retried_invocation_id`, and the `reason`, and `review_admissions`: each routed and shadow review admission, with its `invocation_id`, `role`, `lineage_group`, `admitted_at`, and `agent`, and `outcomes`: the outcome list the run timeline serves, the follow-up filings and issue comments the run posted or tried to post with where each stands, and the findings it declined or deferred; an entry the read could not reconstruct reports under `outcome_entries` and leaves `complete` false. |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission and its `backend`, the runner class it was placed on (`cordoned_host_process` or `fresh_vm_read_only_volume_handoff`), the resolved policy digest, `billable_cost` (`null` when none was recorded), `usage`: each admitted invocation's `invocation_id`, `coverage` (`complete` when its route reported the whole invocation, `partial` when it ended early and its tokens are a lower bound from the transcript it left, `missing` when nothing was recorded), `tokens` (the reported token totals by `metric`, only those observed; a partial Claude invocation has no `output_tokens`, because its transcript doesn't hold them), and `wall_seconds` (its working time in the timeline's clocks, rounded down; `null` while it is working, when it never started, or when the timeline didn't read), `publication` (`null` until the run publishes), `verifications`: each verification step with its `invocation_id`, `started_at` (`null` for a verdict recorded without running the verifier), and `finished_at` and `result` (`passed` or `failed`; both `null` while it runs), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers), `specification_retries`: each operator retry of a failed specification invocation, with the `invocation_id` it added, the `retried_invocation_id`, and the `reason`, and `review_admissions`: each routed and shadow review admission, with its `invocation_id`, `role`, `lineage_group`, `admitted_at`, and `agent`, and `outcomes`: the outcome list the run timeline serves, the follow-up filings and issue comments the run posted or tried to post with where each stands, and the findings it declined or deferred; an entry the read could not reconstruct reports under `outcome_entries` and leaves `complete` false. |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the writer-stall and stalled-recovery notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure` with its outcome and failure `cause`, the `handoff_check` that refused it (`check`, screened `evidence`, and `content_evidence`), the first gauntlet findings of an `export_rejection` (`kind` and screened `path`, with the `total`), and its `retry_outlook` (`would_repeat` or `may_succeed`; absent on an item raised before it existed), `interpretation_failure` with the `cause` of a failure found after the invocation exported, `publish_block`, `blocked_on`), the item's `conversation_id` (`null` when it has none), the `alternate_agents` a card offers to retry its failed role on (`enrollment`, `pool`, `harness`, `model`, `qualification`, and a pre-#2735 offer's `agent`; empty when it offers none), the commands applied (command id, action, device id), and the deliveries. |
 | `task_lines` | Every line version of the task, ordered by role then version: `id`, `role`, `version`, `predecessor_id`, `agent` (a v1 line's agent name), `selection` (a v2 line's `enrollment_id`, `model_id`, and `effort`), `source`, `set_by`, `set_at`, `provenance` (a router or alternate-agent-move line's routing reading), and `cleared`. |
 | `writer_class` | The task's requirement that its writers run warded, from `freesided task-writer-class`: `class`, `set_by`, and `set_at`; `null` when it has none and its writers take the project's class. |
@@ -1920,7 +1920,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v21`.
+  `freeside-task-record-v22`.
 - **`agent` says which enrollment, model, and effort an admission ran on.**
   On an execution admission and a review admission alike it carries the
   binding's digests, `route_model_id`, `enrollment_id`,
@@ -3031,8 +3031,12 @@ freesided task-writer-class -db "$DB" -task "$TASK" -clear
 
 It refuses a task the store doesn't hold and any other class, and records
 nothing then. The task's record shows the requirement as `writer_class`.
-No writer admission reads it yet; #3472 routes writers by it and decides
-what a change after a task's first writer admission does.
+Admission reads it with the project's setting for every implementer and
+remediator attempt (Cordoned Launches, Admission). A run keeps the class of
+its first writer admission: set the requirement before the task's first
+run starts writing. Changing it afterwards holds that run's next writer
+attempt under `backend_not_conformant` with an `execution_failure` notice,
+until the setting is restored or the task is stopped.
 
 ### Store Instance And Project Settings
 
@@ -6724,15 +6728,16 @@ CLI as the daemon's own account under a Seatbelt rule file, in a seeded
 worktree, ending in a proof that no process of the launch is alive. It also
 exports that worktree as the handoff the importer takes, and recovers a
 launch a daemon restart interrupted. The daemon composes it, proves it,
-and hands it to the Claude stage driver as the driver's cordon port, but
-nothing admits a cordoned writer yet; admission (#3472) does. The package
+and hands it to the Claude stage driver as the driver's cordon port, and
+admission places implementer and remediator attempts on it (#3472). The package
 doc (`internal/cordon/doc.go`) holds the layout and the mechanism; the
 decision records are `devlog/2026-11-22-1236-cordoned-host-launch.md`,
 for the export, `devlog/2026-11-22-2046-cordoned-export.md`, for the
 token, `devlog/2026-11-22-2039-cordoned-writer-token.md`, for
 conformance, `devlog/2026-11-22-2144-cordon-conformance-proof.md`, for
-recovery, `devlog/2026-11-23-0752-cordon-restart-recovery.md`, and, for
-the stage driver port, `devlog/2026-11-24-1005-cordon-stage-port.md`.
+recovery, `devlog/2026-11-23-0752-cordon-restart-recovery.md`, for
+the stage driver port, `devlog/2026-11-24-1005-cordon-stage-port.md`, and,
+for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
 
 - **macOS with cgo only.** The run-end proof calls `sandbox_check` through
   cgo. Any other build refuses every launch before it starts anything, with
@@ -6879,6 +6884,48 @@ the stage driver port, `devlog/2026-11-24-1005-cordon-stage-port.md`.
   credential scan, as the ward does. On shutdown it detaches before the
   driver's lifetime ends and closes first in the session group, so no
   context a shutdown cancels reaches a run.
+- **Admission places writers on the cordon by default.** An implementer or
+  remediator attempt resolves its class from the task's
+  `task-writer-class` requirement, then the project's `writer_class`
+  setting, then the cordon (`domain.ResolveWriterClass`); the specifier and
+  clean verification stay on the ward. A cordoned admission records
+  `cordoned_host_process`, `host_open` whatever egress the run's policy
+  asks for, and the image selection picked, which verification and rebuild
+  compare against. Under `unattended` its floor is the cordon's four
+  capabilities and it binds the cordon's configuration digest, which the
+  store's proof gate and the start authority re-check; under
+  `attended_dev` it needs none. `freesided inspect task` shows the class as
+  each admission's `backend`.
+- **A run keeps its first writer's class.** Every later writer admission
+  of the run, a remediation round or an operator-feedback turn, must
+  resolve the class the run's first writer admission recorded. One that
+  doesn't is refused with `ErrWriterClassChanged`, holds only its own
+  invocation under `backend_not_conformant`, and raises one
+  `execution_failure` notice; once the setting is restored, the next pass
+  admits it. The same
+  gate keeps a stale warded admission from being re-admitted on the
+  cordon, so it never leaves a memory reservation behind. A run admitted
+  warded before this change, in a project with no `writer_class`, now
+  resolves the cordon and waits this way: set `writer_class` to
+  `fresh_vm_read_only_volume_handoff` to let it finish warded.
+  A capability retry, a new run whose attempt names a manifest, holds the
+  same way when it resolves the cordon, because only the ward's proxy
+  applies a manifest; a cordoned writer's failure card offers no
+  manifests.
+- **A missing or unproven cordon holds, never falls back.** A writer
+  resolved to the cordon on a daemon that composed none, or under
+  `unattended` with a cordon that declares less than its four
+  capabilities, holds its own invocation under `backend_not_conformant`
+  (`ErrCordonNotConformant`) and records nothing. It never runs on the
+  ward. So a daemon with no `-cordon-agent-cli` holds every writer until a
+  project sets `writer_class` to warded.
+- **Attachments refuse a cordoned writer.** The cordoned driver can't
+  deliver attached files yet (#3593), so an attempt whose stage inputs
+  carry any stops before it starts, as any undeliverable writer input does, with a
+  failure card whose reason names the warded setting, rather than run
+  without them. Set a task warded before its first writer when it carries
+  files; a run already writing on the cordon keeps its class, so its
+  feedback turns can't take files.
 - **Only the operator's host instructions reach a cordoned writer.** The
   Claude provider passes them with `--append-system-prompt`, refused over
   256 KiB; the repository's `CLAUDE.md` files the ward composes from the

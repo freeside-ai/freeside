@@ -252,8 +252,8 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	running := oldDigest
 	authority := admissionauth.Authority{
 		Store: st, Blobs: blobs, AllowedPaths: []string{"daemon/**"}, CommitAuthors: resolver,
-		BackendConfigurationDigestFor: func(image string) domain.Digest {
-			if image != string(admission.ImageRef) {
+		BackendConfigurationDigestFor: func(class domain.RunnerBackendClass, image string) domain.Digest {
+			if class != domain.RunnerBackendClass(admission.Backend) || image != string(admission.ImageRef) {
 				return domain.Digest("sha256:" + strings.Repeat("9", 64))
 			}
 			return running

@@ -248,6 +248,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 					Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 				},
 				Workspace: "workspace-1", Agents: &selection,
+				WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 				// WithAdmission defaults this set; a directly built admitter
 				// states it.
 				EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},

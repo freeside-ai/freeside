@@ -15,20 +15,6 @@ import (
 // (readmitStaleAdmission).
 const admissionConfigurationChangedPrefix = "admission-configuration-changed-"
 
-// runningConfigurationDigest is the backend configuration digest a fresh
-// unattended admission of an attempt on image binds: the digest admitAttemptIn
-// reads for the image. For the ward backend it is the function the start
-// authority checks a recorded admission against
-// (admissionauth.Authority.BackendConfigurationDigestFor), and it is fixed for
-// the life of the process.
-func (a *admitter) runningConfigurationDigest(image domain.ImageRef) domain.Digest {
-	if bound, ok := a.backend.(exec.ImageBoundBackend); ok {
-		digest, _, _ := bound.ConformanceFor(string(image))
-		return digest
-	}
-	return a.backendConfigurationDigest
-}
-
 // readmitStaleAdmission gives a recorded, never-started unattended attempt a
 // fresh admission when the daemon or its backend changed since the attempt
 // was admitted (issue #3433). The start authority refuses an admission bound
@@ -43,6 +29,10 @@ func (a *admitter) runningConfigurationDigest(image domain.ImageRef) domain.Dige
 // any runtime object exists, and only this engine's pass calls Start. That
 // attempt is admitted again under the running configuration and the stored
 // admission is superseded in one write (store.SupersedeUnstartedExecutionAdmission).
+// The fresh admission keeps the stale one's class, because a run's first
+// writer admission fixes it (Engine.writerClass): a class change refuses
+// instead, so a warded admission is never superseded by a cordoned one and
+// never leaves its memory reservation behind.
 // A refused fresh admission returns its refusal, so the attempt holds as a new
 // admission would, keeps its stored admission, and a later pass retries.
 //
@@ -85,7 +75,7 @@ func (e *Engine) readmitStaleAdmission(
 	if !found || stale.OperatingMode != domain.ModeUnattended {
 		return false, nil
 	}
-	running := e.admission.runningConfigurationDigest(stale.ImageRef)
+	running := e.admission.runningConfigurationDigest(stale.Backend, stale.ImageRef)
 	if running == stale.BackendConfigurationDigest {
 		return false, nil
 	}

@@ -287,6 +287,7 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 				Repo: "owner/repo", RepositoryID: 785, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 			},
 			Workspace: "workspace-785", AuthIdentityID: &identity,
+			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		}, func() time.Time { return now }),
 		engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },

@@ -106,6 +106,10 @@ type ClaudeDriverConfig struct {
 	// built from, and is required when ProjectID is set.
 	ProjectID      domain.ProjectID
 	ApprovedRecipe domain.Digest
+	// WriterClass is the project's writer_class setting, nil when unset or
+	// composed from flags. Admission resolves each writer attempt's class
+	// from it and the task's requirement; unset resolves to the cordon.
+	WriterClass *domain.RunnerBackendClass
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -723,8 +727,8 @@ type ClaudeComposition struct {
 	// is configured.
 	hostVerification *macverify.Backend
 	// cordon is the cordoned host launch backend, nil when none is
-	// configured. The driver launches a cordoned admission on it through
-	// cordonGate; nothing admits one until #3472.
+	// configured. Admission places cordoned writer attempts on it, and the
+	// driver launches them through cordonGate.
 	cordon  *ComposedCordon
 	Closer  SessionCloser
 	janitor *janitorSession
@@ -1199,8 +1203,10 @@ func composeClaudeDriver(
 			CommitAuthors: commitAuthors,
 			StartAuthors:  admissionauth.NewCommitAuthorCache(),
 			// An attempt admitted under configuration A starts only while
-			// this process yields A for its image (#3211).
-			BackendConfigurationDigestFor: backend.ConfigurationDigestFor,
+			// this process yields A for its image (#3211), on the backend of
+			// the class it was admitted to: the ward's per image, the
+			// cordon's one configuration (#3472).
+			BackendConfigurationDigestFor: runningConfigurationDigestFor(backend, cordonBackend),
 		},
 		Artifacts: artifactStore{blobs: blobs, store: st},
 		Volumes:   adapters.Leaser,
@@ -1273,6 +1279,7 @@ func composeClaudeDriver(
 		// is submitted.
 		Agents:            agents,
 		SettingsRevisions: cfg.SettingsRevisions,
+		WriterClass:       cfg.WriterClass,
 	}
 	follower = newConformanceFollower(followerConfig{
 		Ledger: backend,
@@ -1391,6 +1398,27 @@ func composeClaudeDriver(
 		}
 	}
 	return composition, nil
+}
+
+// runningConfigurationDigestFor is the start authority's view of which
+// configuration this process runs each class under: the ward's per writer
+// image, the cordon's one configuration when a cordon is composed, and ""
+// otherwise, which matches no recorded admission. It reads the same digests
+// admission binds (engine.WithAdmission and engine.WithCordonedWriters), so
+// an admission starts only on the backend of the class it was admitted to.
+func runningConfigurationDigestFor(
+	wardBackend *ward.Backend, cordon *ComposedCordon,
+) func(domain.RunnerBackendClass, string) domain.Digest {
+	return func(class domain.RunnerBackendClass, image string) domain.Digest {
+		switch class {
+		case domain.BackendFreshVMReadOnlyVolumeHandoff:
+			return wardBackend.ConfigurationDigestFor(image)
+		case domain.BackendCordonedHostProcess:
+			return cordon.ConfigurationDigest()
+		case domain.BackendCredentialFreeHostVerification:
+		}
+		return ""
+	}
 }
 
 // startupProofs is the part of ward's backend a start drives.

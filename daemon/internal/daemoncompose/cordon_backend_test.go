@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/cordon"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -189,5 +190,38 @@ func TestComposeCordonBackendOnlyStopsOnAnUnwrittenRecord(t *testing.T) {
 	// At start, an unwritten record fails the composition.
 	if _, err := ComposeCordonBackend(t.Context(), st, config, refusingSeeder{}, nil, prove); !errors.Is(err, cordon.ErrConformanceRecord) {
 		t.Fatalf("an unwritten record at start = %v, want ErrConformanceRecord", err)
+	}
+}
+
+// The start authority reads each admission's running digest from its own
+// class: a cordoned admission from the cordon, or none when no cordon is
+// composed, and never from the ward; a class with no running writer
+// backend yields none, which refuses (#3472).
+func TestRunningConfigurationDigestReadsTheAdmissionsClass(t *testing.T) {
+	t.Parallel()
+	cfg, account, state := cordonFixture(t)
+	config, err := CordonConfig(cfg, account, state, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := cordon.New(config, refusingSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed := &ComposedCordon{Backend: backend}
+	const image = "agent@sha256:image"
+	withCordon := runningConfigurationDigestFor(nil, composed)
+	if got := withCordon(domain.BackendCordonedHostProcess, image); got != backend.ConfigurationDigest() || got == "" {
+		t.Fatalf("cordoned digest = %q, want the cordon's %q", got, backend.ConfigurationDigest())
+	}
+	for _, class := range []domain.RunnerBackendClass{
+		domain.BackendFreshVMReadOnlyVolumeHandoff, domain.BackendCredentialFreeHostVerification,
+	} {
+		if got := withCordon(class, image); got != "" {
+			t.Fatalf("%s digest = %q, want none from a composition with no ward", class, got)
+		}
+	}
+	if got := runningConfigurationDigestFor(nil, nil)(domain.BackendCordonedHostProcess, image); got != "" {
+		t.Fatalf("cordoned digest with no cordon = %q, want none", got)
 	}
 }

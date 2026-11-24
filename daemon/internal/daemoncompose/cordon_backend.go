@@ -343,3 +343,12 @@ func cordonDaemonDirs(cfg ClaudeDriverConfig) []DaemonDir {
 	}
 	return dirs
 }
+
+// cordonWriters is the cordon admission places cordoned writer attempts on,
+// nil when the composition configures none.
+func (c *ClaudeComposition) cordonWriters() *cordon.Backend {
+	if c.cordon == nil {
+		return nil
+	}
+	return c.cordon.Backend
+}

@@ -33,9 +33,11 @@ import (
 //     record without it.
 //   - Current backend conformance, before a start or recovery only
 //     (AuthenticateStart): an unattended intent starts only when the running
-//     backend yields the admission's configuration digest for the admission's
-//     image (BackendConfigurationDigestFor), and that configuration's current
-//     durable record still authorizes it.
+//     backend of the admission's class yields the admission's configuration
+//     digest for the admission's image (BackendConfigurationDigestFor), and
+//     that configuration's current durable record still authorizes it. A
+//     cordoned admission is checked against the cordon, a warded one against
+//     the ward, so neither starts on the other's configuration.
 //   - The resolved policy's digest against the admission and, under current
 //     policy, its path allowlist against this daemon's configured
 //     AllowedPaths (AdmittedPathAllowlist): every recorded pattern must
@@ -77,10 +79,13 @@ type Authority struct {
 	// invocation; nil authenticates on every start.
 	StartAuthors *CommitAuthorCache
 	// BackendConfigurationDigestFor returns the configuration digest the
-	// running runner backend yields for a writer image. An unattended start or
+	// running backend of class yields for a writer image: the ward's per
+	// image, the cordon's one configuration whatever the image, and "" for a
+	// class this process composes no backend for. An unattended start or
 	// recovery is refused unless it returns the admission's recorded digest
-	// for the admission's image; nil refuses every unattended start.
-	BackendConfigurationDigestFor func(image string) domain.Digest
+	// for the admission's class and image; nil refuses every unattended
+	// start.
+	BackendConfigurationDigestFor func(class domain.RunnerBackendClass, image string) domain.Digest
 }
 
 // CommitAuthorResolver resolves the GitHub App identity selected for a
@@ -237,8 +242,8 @@ func (a Authority) admission(
 }
 
 // requireRunnableConfiguration re-checks, for an unattended admission, that
-// the running backend yields the admission's recorded configuration digest
-// for the admission's image. It is the gate that stops an attempt admitted
+// the running backend of the admission's class yields the admission's
+// recorded configuration digest for the admission's image. It is the gate that stops an attempt admitted
 // under one configuration from starting or recovering in a process that
 // runs another, for example after a restart with a changed runtime, daemon
 // binary, or ward setting. The store's gate cannot: it judges each
@@ -257,11 +262,12 @@ func (a Authority) requireRunnableConfiguration(admission domain.ExecutionAdmiss
 		return fmt.Errorf("admission %s: no backend configuration to check against: %w",
 			admission.ID, domain.ErrAdmissionConfigurationMismatch)
 	}
-	current := a.BackendConfigurationDigestFor(string(admission.ImageRef))
+	class := domain.RunnerBackendClass(admission.Backend)
+	current := a.BackendConfigurationDigestFor(class, string(admission.ImageRef))
 	if current != admission.BackendConfigurationDigest {
 		return fmt.Errorf(
-			"admission %s configuration %s, running backend yields %q for image %s: %w",
-			admission.ID, admission.BackendConfigurationDigest, current, admission.ImageRef,
+			"admission %s configuration %s, running %s backend yields %q for image %s: %w",
+			admission.ID, admission.BackendConfigurationDigest, class, current, admission.ImageRef,
 			domain.ErrAdmissionConfigurationMismatch)
 	}
 	return nil
