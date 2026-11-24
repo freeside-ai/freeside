@@ -524,7 +524,12 @@ directory named before it in the same bullet. All under `daemon/`:
   recovery that decide which process is signaled, which run is exported
   or ended lost, and which run's directory is removed),
   `internal/daemoncompose/cordon_backend.go` (builds the cordon's
-  configuration and chooses which proof its backend declares from), and
+  configuration and chooses which proof its backend declares from),
+  `internal/daemoncompose/cordon_gate.go` (reads the setup token a
+  cordoned launch runs with for the admission's own generation, decides
+  when a launch requires the class's proof, keeps a shutdown from
+  canceling a run, and screens a failed run's transcript before it is
+  kept), and
   `cmd/freesided/cordon.go` (the probe verb a probe launch runs, the
   supervise verb that runs every launch, and the flags the configuration
   comes from).
@@ -572,13 +577,16 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/daemoncompose/model_discovery.go` (reads setup tokens and
   Codex probe credentials and hands them to the probe containers that
   discover each enrollment's models),
-  `internal/exec/claude/spec.go` (the credential mount),
+  `internal/exec/claude/spec.go` (the credential mount and a cordoned
+  launch's arguments),
   `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
   `internal/claudeinference/driver.go` and
   `internal/claudeinference/probe.go` (hand the setup token to the host
   judgment CLI on its own pipe, never its environment),
-  `internal/exec/capability.go`, and the `CredentialMode` and
-  `EgressProfile` fields in `internal/exec/driver.go`. The alternate-agent
+  `internal/exec/capability.go`, and the `CredentialMode`,
+  `EgressProfile`, and `RunnerClass` fields in `internal/exec/driver.go`
+  (the last decides whether a start runs in the ward or as a cordoned
+  host process). The alternate-agent
   retry, which lets an operator choose another agent's credential after a
   failure, joins them: `internal/domain/alternate_agent_retry.go`
   (the rule an alternate must meet), `internal/engine/alternate_agent.go`
@@ -690,10 +698,12 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/exec/stage/state.go`
   (the restart reconstruction gate on a decoded intent),
   `internal/exec/stage/pipeline.go` (released-export authentication and
-  what restart recovery holds, quarantines, or adopts), and
+  what restart recovery holds, quarantines, or adopts),
   `internal/exec/stage/driver.go` (decides when recovery may follow the
   current-authority re-check, and runs that re-check off the driver's
-  lock).
+  lock), and `internal/exec/stage/cordon.go` (routes a start by its runner
+  class, holds a cordoned launch to its intent, and decides what a
+  cordoned run's end or recovery commits).
 - **Live writer transcript:** the display-only read of a running
   writer's transcript (#1926). `internal/ward/` reads it from the running
   container; `internal/exec/stage/live_transcript.go` scans it as it grows
