@@ -1103,8 +1103,8 @@ inherit it, and the mounted file is readable at agent privilege). That is the
 documented residual this mode accepts in a ward, backstopped there by
 `provider_only` egress and export secret scanning.
 
-**A cordoned writer under `subscription_contained`** (revision 134; not built
-yet, #3469 on tracker #3462). The daemon hands the enrolled identity's token,
+**A cordoned writer under `subscription_contained`** (revision 134, #3469,
+#3472). The daemon hands the enrolled identity's token,
 never the owner's own login, to the CLI alone. The token never appears in argv,
 in any process's environment, or in records and journals, and the CLI keeps its
 configuration in a directory Freeside owns for the run, never the owner's. The
@@ -1175,9 +1175,10 @@ sit above the credential-mode floor and represent different risk classes:
 | `host_web_read` | A cordoned run's profile once the network rule lands (#3477): search and read anything, send nothing. The rules follow the table. |
 | Clean verification | No network access, except a macOS verification job's own reserved ports on the host's own addresses, on a slot or cordoned (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution and Cordoned Verification). A cordoned job has the sandbox alone behind that rule, with no packet filter (revision 135). |
 
-**A cordoned run's network, in two steps** (revision 134; not built yet,
-tracker #3462). Its profile names what the run can reach, and the isolation
-class recorded beside it names what holds the agent (Section
+**A cordoned run's network, in two steps** (revision 134; step 1 built by
+#3472, step 2 not built yet, #3477 on tracker #3462). Its profile names
+what the run can reach, and the isolation class recorded beside it names
+what holds the agent (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
 Runs). The `host_` profiles are cordoned-only, so no cordoned run's egress
 record reads as a warded run's, and its credential mode,
@@ -2763,7 +2764,7 @@ refutes it. Release 1.1.0 exposes no host hot-detach, and a guest unmount is not
 a credential-device detach: the credential block device stays attached and
 remountable. Freeside must not implement or declare that class.
 
-**The cordoned handoff** (revision 134; not built yet, tracker #3462). A
+**The cordoned handoff** (revision 134, #3467, #3584). A
 cordoned run has no VM to end and no volume to remount, so its class proves
 its own sequence:
 
@@ -3172,7 +3173,8 @@ ward remains a registry-resolved digest reference.
 #### Cordoned Runs: Writers on the Host
 
 **A cordoned run is a writer on the daemon's host, held by fixed denials
-instead of a VM** (revision 134; not built yet, tracker #3462). The agent CLI
+instead of a VM** (revision 134, #3472; the grants and the network's second
+step not built yet, tracker #3462). The agent CLI
 and every process it starts run as ordinary processes under the daemon's own
 account, which is the owner's, with no VM and no second account, and share
 the host's memory and CPU the way the owner's hand-run sessions do. The whole
@@ -3585,7 +3587,7 @@ Section [14](#14-risks), Cordoned verification on the owner's account.
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires all of these: successful conformance of the run's own class, including that class's handoff gate; a valid trust profile; an approved credential mode; every runner minimum of the run's class; current backup health including encryption status; and no blocking `system_health` item. The runner minimum is per class. A warded run needs the ward's handoff gate, the proven `supports_networkless_export` exporter boundary, and the proven `supports_enforced_provider_egress` writer egress boundary. A cordoned run (Cordoned Runs, not yet built) needs the cordon's own capabilities and none of those three. A host-side class is admitted only as one of three, each with its own declaration current: the credential-free macOS verification class, with `supports_credential_free_host_verification` (macOS Execution); the cordoned class; or the cordoned verification class (Cordoned Verification, not yet built), with its own four capabilities. |
+| `unattended` | Requires all of these: successful conformance of the run's own class, including that class's handoff gate; a valid trust profile; an approved credential mode; every runner minimum of the run's class; current backup health including encryption status; and no blocking `system_health` item. The runner minimum is per class. A warded run needs the ward's handoff gate, the proven `supports_networkless_export` exporter boundary, and the proven `supports_enforced_provider_egress` writer egress boundary. A cordoned run (Cordoned Runs) needs the cordon's own capabilities and none of those three. A host-side class is admitted only as one of three, each with its own declaration current: the credential-free macOS verification class, with `supports_credential_free_host_verification` (macOS Execution); the cordoned class; or the cordoned verification class (Cordoned Verification, not yet built), with its own four capabilities. |
 
 Run the full conformance suite for every class at startup, after
 configuration changes, and on the doctor's schedule. Run a lightweight probe
@@ -7585,7 +7587,7 @@ scopes are not the Workflow settings layers of Section
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
   Execution), which holds no credential and runs no agent; the cordoned
   class (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-  Cordoned Runs; revision 134, not built yet), which runs a writer on the
+  Cordoned Runs; revision 134), which runs a writer on the
   daemon's host only; and the cordoned verification class (Section
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
   Verification; revision 135, not built yet), which holds no credential, runs
