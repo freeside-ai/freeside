@@ -1199,8 +1199,10 @@ func composeClaudeDriver(
 			CommitAuthors: commitAuthors,
 			StartAuthors:  admissionauth.NewCommitAuthorCache(),
 			// An attempt admitted under configuration A starts only while
-			// this process yields A for its image (#3211).
-			BackendConfigurationDigestFor: backend.ConfigurationDigestFor,
+			// this process yields A for its image (#3211), on the backend of
+			// the class it was admitted to: the ward's per image, the
+			// cordon's one configuration (#3472).
+			BackendConfigurationDigestFor: runningConfigurationDigestFor(backend, cordonBackend),
 		},
 		Artifacts: artifactStore{blobs: blobs, store: st},
 		Volumes:   adapters.Leaser,
@@ -1391,6 +1393,27 @@ func composeClaudeDriver(
 		}
 	}
 	return composition, nil
+}
+
+// runningConfigurationDigestFor is the start authority's view of which
+// configuration this process runs each class under: the ward's per writer
+// image, the cordon's one configuration when a cordon is composed, and ""
+// otherwise, which matches no recorded admission. It reads the same digests
+// admission binds (engine.WithAdmission and engine.WithCordonedWriters), so
+// an admission starts only on the backend of the class it was admitted to.
+func runningConfigurationDigestFor(
+	wardBackend *ward.Backend, cordon *ComposedCordon,
+) func(domain.RunnerBackendClass, string) domain.Digest {
+	return func(class domain.RunnerBackendClass, image string) domain.Digest {
+		switch class {
+		case domain.BackendFreshVMReadOnlyVolumeHandoff:
+			return wardBackend.ConfigurationDigestFor(image)
+		case domain.BackendCordonedHostProcess:
+			return cordon.ConfigurationDigest()
+		case domain.BackendCredentialFreeHostVerification:
+		}
+		return ""
+	}
 }
 
 // startupProofs is the part of ward's backend a start drives.

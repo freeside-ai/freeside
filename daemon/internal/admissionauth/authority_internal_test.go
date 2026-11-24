@@ -701,3 +701,42 @@ func TestAttendedProtectedPatternsWithoutProfile(t *testing.T) {
 		t.Fatalf("bound profile missing = %v, want ErrNotFound", err)
 	}
 }
+
+// The start authority checks an admission's bound configuration against the
+// running backend of the admission's own class, so an unattended cordoned
+// admission starts only while the cordon yields its digest, and a warded
+// one only while the ward does (#3472).
+func TestRunnableConfigurationReadsTheAdmissionsClass(t *testing.T) {
+	t.Parallel()
+	ward := domain.Digest("sha256:" + strings.Repeat("1", 64))
+	cordon := domain.Digest("sha256:" + strings.Repeat("2", 64))
+	authority := Authority{
+		BackendConfigurationDigestFor: func(class domain.RunnerBackendClass, _ string) domain.Digest {
+			if class == domain.BackendCordonedHostProcess {
+				return cordon
+			}
+			return ward
+		},
+	}
+	for _, tc := range []struct {
+		class  domain.RunnerBackendClass
+		bound  domain.Digest
+		starts bool
+	}{
+		{domain.BackendCordonedHostProcess, cordon, true},
+		{domain.BackendCordonedHostProcess, ward, false},
+		{domain.BackendFreshVMReadOnlyVolumeHandoff, ward, true},
+		{domain.BackendFreshVMReadOnlyVolumeHandoff, cordon, false},
+	} {
+		err := authority.requireRunnableConfiguration(domain.ExecutionAdmission{
+			ID: "inv-config", OperatingMode: domain.ModeUnattended,
+			Backend: string(tc.class), BackendConfigurationDigest: tc.bound,
+		})
+		if tc.starts && err != nil {
+			t.Fatalf("%s admission bound to its running digest refused: %v", tc.class, err)
+		}
+		if !tc.starts && !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
+			t.Fatalf("%s admission bound to the other class's digest = %v, want a mismatch", tc.class, err)
+		}
+	}
+}
