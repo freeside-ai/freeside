@@ -24,6 +24,7 @@ func BackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 		KindOperatorFeedbackInvocationRequested:     OperatorFeedbackInvocationBackupPayloadDigests,
 		domain.PublicationSuccessorKind:             PublicationSuccessorBackupPayloadDigests,
 		domain.PublicationContinuationRequestedKind: PublicationContinuationBackupPayloadDigests,
+		domain.RequiredCheckFailureKind:             RequiredCheckFailureBackupPayloadDigests,
 		KindSpecificationInvocationRequested:        SpecificationInvocationBackupPayloadDigests,
 		KindSpecificationDiscussionRequested:        SpecificationDiscussionBackupPayloadDigests,
 		KindSpecificationImplementationClaim:        SpecificationImplementationClaimBackupPayloadDigests,

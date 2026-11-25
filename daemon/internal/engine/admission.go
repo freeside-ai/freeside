@@ -1421,6 +1421,10 @@ func (e *Engine) stageInputSnapshotWithArtifacts(
 // from it, before its review routed a finding to a fix. The repository coordinates are the
 // run's production admission's, the ones the handoff audited, so the caller
 // refuses a derived base of another repository or branch.
+//
+// A remediation under a check_failure authority (issue #3598) is admitted at
+// that authority's base, the one the cycle's clean review used, which its
+// input names as the exact base.
 func handoffConflictAdmission(
 	ctx context.Context, st *store.Store, runID domain.RunID, invocationID domain.InvocationID,
 ) (domain.BaseRevision, bool, error) {
@@ -1446,7 +1450,8 @@ func handoffConflictAdmission(
 			return err
 		}
 		successor, err := tx.GetPublicationSuccessor(ctx, runID, request.SuccessorPublicationID)
-		if err != nil || (!successor.RemediatesHandoffConflict() && !successor.HandsBack()) {
+		if err != nil || (!successor.RemediatesHandoffConflict() && !successor.HandsBack() &&
+			!successor.ReworksCheckFailure()) {
 			return err
 		}
 		if !successor.AllowsRemediation(domain.RemediationInvocationIntent(request)) {
@@ -1542,7 +1547,8 @@ func handoffConflictTipAdmission(
 			return err
 		}
 		if !slices.ContainsFunc(chain, func(s domain.PublicationSuccessor) bool {
-			return (s.RemediatesHandoffConflict() || s.HandsBack()) && s.Reentry.BaseSHA == requested
+			return (s.RemediatesHandoffConflict() || s.HandsBack() || s.ReworksCheckFailure()) &&
+				s.Reentry.BaseSHA == requested
 		}) {
 			return nil
 		}
