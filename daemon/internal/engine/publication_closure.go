@@ -591,12 +591,15 @@ func readClosureCheckpoint(
 
 // ProductionClosureAnswer is the source-issue-closure answer a publication
 // recorded. HasProposal is false when no proposal was made (no closable
-// source). Origin is the admitted proposal's origin (policy_default for a
-// default-policy close), and Reason a
+// source). InstanceID names the admitted proposal instance, empty exactly when
+// HasProposal is false; a reader resolves the proposal through the store's
+// gated read, never from this answer. Origin is the admitted proposal's origin
+// (policy_default for a default-policy close), and Reason a
 // daemon_fallback's fixed-text cause, empty for a row written before causes
 // were recorded.
 type ProductionClosureAnswer struct {
 	HasProposal bool
+	InstanceID  domain.ProposalInstanceID
 	Origin      domain.ClosureFlagOrigin
 	Reason      string
 }
@@ -631,7 +634,8 @@ func ProductionPublicationClosure(
 		return ProductionClosureAnswer{}, false, err
 	}
 	return ProductionClosureAnswer{
-		HasProposal: checkpoint.HasProposal, Origin: checkpoint.Origin, Reason: checkpoint.Reason,
+		HasProposal: checkpoint.HasProposal, InstanceID: checkpoint.InstanceID,
+		Origin: checkpoint.Origin, Reason: checkpoint.Reason,
 	}, true, nil
 }
 

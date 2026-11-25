@@ -19,7 +19,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v22"
+const taskRecordVersion = "freeside-task-record-v23"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -221,12 +221,15 @@ type taskRecordSpecificationRetry struct {
 
 // taskRecordClosure is a publication's source-issue-closure answer. Origin is
 // null when no proposal was made, and policy_default when the default policy
-// closed without asking the propose site (#3023). FallbackCause is a daemon_fallback's
+// closed without asking the propose site (#3023). Provenance is the admitted
+// proposal's provenance, read from its instance through the store's gated
+// read, and null exactly when Origin is. FallbackCause is a daemon_fallback's
 // fixed-text cause, null for any other origin and for a fallback recorded
 // before causes were, except an older control-file refusal, which stored the
 // refusal text alone.
 type taskRecordClosure struct {
 	Origin        *domain.ClosureFlagOrigin `json:"origin"`
+	Provenance    *domain.ClosureProvenance `json:"provenance"`
 	FallbackCause *string                   `json:"fallback_cause"`
 }
 
@@ -728,10 +731,10 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 			out.ClosureCards = append(out.ClosureCards, readProposalCard(ctx, tx, id))
 		}
 	}
-	if answer, found, err := engine.ProductionPublicationClosure(ctx, tx, runID); err != nil {
+	if closure, err := readTaskRecordClosure(ctx, tx, runID); err != nil {
 		fail(taskRecordRunClosure, err)
-	} else if found {
-		out.Closure = projectTaskRecordClosure(answer)
+	} else {
+		out.Closure = closure
 	}
 	if retries, err := engine.SpecificationRetries(ctx, tx, runID); err != nil {
 		fail(taskRecordRunSpecificationRetries, err)
@@ -840,18 +843,35 @@ func authenticatedTaskRecordConclusion(
 	return signet.AuthenticatedRunConclusion(ctx, tx, run, observation, readyAuthenticated)
 }
 
-func projectTaskRecordClosure(answer engine.ProductionClosureAnswer) *taskRecordClosure {
+// readTaskRecordClosure reads the closure answer of the run's published cycle
+// and, when a proposal was made, the provenance of the instance it names. It
+// returns nil until that cycle records an answer. A proposal whose instance
+// the store refuses, or that is not a closure proposal, fails the whole
+// answer, so the record never shows an origin without its provenance.
+func readTaskRecordClosure(ctx context.Context, tx *store.ReadTx, runID domain.RunID) (*taskRecordClosure, error) {
+	answer, found, err := engine.ProductionPublicationClosure(ctx, tx, runID)
+	if err != nil || !found {
+		return nil, err
+	}
 	out := &taskRecordClosure{}
 	if !answer.HasProposal {
-		return out
+		return out, nil
 	}
-	origin := answer.Origin
-	out.Origin = &origin
+	instance, err := tx.GetProposalInstance(ctx, answer.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+	if instance.Proposal.Kind != domain.EffectSourceIssueClosure || instance.Proposal.ClosureProposal == nil {
+		return nil, fmt.Errorf("closure instance %q has kind %q: %w",
+			answer.InstanceID, instance.Proposal.Kind, domain.ErrParentKeyMismatch)
+	}
+	origin, provenance := answer.Origin, instance.Proposal.ClosureProposal.Provenance
+	out.Origin, out.Provenance = &origin, &provenance
 	if origin == domain.ClosureFlagOriginDaemonFallback && answer.Reason != "" {
 		cause := answer.Reason
 		out.FallbackCause = &cause
 	}
-	return out
+	return out, nil
 }
 
 // readTaskRecordPublication reads the run's last published cycle the way the
