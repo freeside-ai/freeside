@@ -4130,7 +4130,16 @@ daemon first; onboarding refuses a database it holds. It:
    `-resume` and `-approve`, which opens a new intent and a new approval
    digest to review. A `-resume` that waited until expiry also names the
    installations the janitor's last pass listed for the registration, or
-   says it listed none; that listing is a diagnostic and grants nothing;
+   says it listed none; that listing is a diagnostic and grants nothing.
+   When the installation is already trusted, onboarding records no
+   envelope and instead waits up to `-install-wait` for the janitor to
+   cover the repository. While it waits it prints the janitor's fault for
+   the registration on stderr when the fault appears, changes, or clears.
+   A mint hold on any of the registration's installations leaves the whole
+   registration uncovered, so a hold that ends at or after the wait's end
+   fails the wait at once, naming the installation and the hold's end;
+   rerun after that time. A wait that runs out names the last fault it
+   saw. The faults are diagnostics; only coverage ends the wait;
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
    requires its resolved commit to equal `-commit` on a review, and retains

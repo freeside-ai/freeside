@@ -433,7 +433,8 @@ func runOnboardCommand(
 	}
 	if trusted != nil {
 		return withInstallationJanitor(
-			ctx, st, authority, authorityLock, cfg.CredentialsDir, cfg.InstallWait,
+			ctx, st, authority, authorityLock, cfg.CredentialsDir,
+			cfg.RegistrationID, cfg.InstallWait, stderr,
 			func(janitor *publish.InstallationJanitor) (bool, error) {
 				return janitor.AllowsRepository(
 					cfg.RegistrationID, trusted.InstallationID, cfg.RepositoryID,
@@ -1147,7 +1148,9 @@ func withInstallationJanitor(
 	authority *publish.InstallationAuthorityStore,
 	authorityLock *publish.AuthorityWriterLock,
 	credentialsDir string,
+	registrationID int64,
 	wait time.Duration,
+	stderr io.Writer,
 	ready func(*publish.InstallationJanitor) (bool, error),
 	run func(*publish.InstallationJanitor, *publish.Keystore, *http.Client) error,
 ) error {
@@ -1181,20 +1184,82 @@ func withInstallationJanitor(
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- janitor.Run(runCtx, 500*time.Millisecond) }()
+	if err := awaitTrustedInstallation(
+		func() (bool, error) { return ready(janitor) },
+		janitor.RegistrationFaults, registrationID, wait, stderr, cancel, done,
+	); err != nil {
+		return err
+	}
+	runErr := run(janitor, keystore, client)
+	cancel()
+	return errors.Join(runErr, <-done)
+}
+
+// awaitTrustedInstallation polls ready until it holds, the wait runs out, or
+// the janitor stops. done carries the janitor's Run result, and cancel stops
+// it. A nil return means ready held and the janitor still runs; every error
+// return has already stopped the janitor and received from done, so the
+// caller receives from done only after a nil return.
+//
+// While it waits, it prints the janitor's fault for registrationID to stderr
+// when its text first appears, changes, or clears; a fault each pass
+// republishes unchanged prints once. A mint hold that ends at or after the
+// wait's deadline fails the wait at once, since no pass can cover the
+// registration in time. The faults are diagnostics only: ready stays the sole
+// gate.
+func awaitTrustedInstallation(
+	ready func() (bool, error),
+	faults func() []publish.JanitorRegistrationFault,
+	registrationID int64,
+	wait time.Duration,
+	stderr io.Writer,
+	cancel context.CancelFunc,
+	done <-chan error,
+) error {
+	deadline := time.Now().Add(wait)
+	stop := func(err error) error {
+		cancel()
+		return errors.Join(err, <-done)
+	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
+	lastFault := ""
+	// observe reads the registration's current faults, so it must run before
+	// cancel: they are empty once the janitor stops.
+	observe := func() []publish.JanitorRegistrationFault {
+		current := registrationFaults(faults(), registrationID)
+		text := faultText(current)
+		if text != lastFault {
+			if text == "" {
+				_, _ = fmt.Fprintf(stderr, "onboard: janitor fault for registration %d cleared\n", registrationID)
+			} else {
+				_, _ = fmt.Fprintf(stderr, "onboard: janitor cannot cover registration %d yet: %s\n", registrationID, text)
+			}
+			lastFault = text
+		}
+		return current
+	}
 	for {
-		isReady, readyErr := ready(janitor)
+		isReady, readyErr := ready()
 		if readyErr != nil {
-			cancel()
-			return errors.Join(readyErr, <-done)
+			return stop(readyErr)
 		}
 		if isReady {
-			runErr := run(janitor, keystore, client)
-			cancel()
-			return errors.Join(runErr, <-done)
+			return nil
+		}
+		for _, fault := range observe() {
+			var held *publish.JanitorMintHeldError
+			if errors.As(fault.Err, &held) && !held.HeldUntil.Before(deadline) {
+				return stop(fmt.Errorf(
+					"wait for selected installation: installation %d's mint hold ends at %s, at or after this wait's end at %s: %w",
+					held.InstallationID,
+					held.HeldUntil.UTC().Format(time.RFC3339),
+					deadline.UTC().Format(time.RFC3339),
+					fault.Err,
+				))
+			}
 		}
 		select {
 		case err := <-done:
@@ -1204,11 +1269,34 @@ func withInstallationJanitor(
 			return err
 		case <-ticker.C:
 		case <-timer.C:
-			cancel()
-			return errors.Join(
-				fmt.Errorf("wait for selected installation: %w", context.DeadlineExceeded),
-				<-done,
-			)
+			observe()
+			cause := fmt.Sprintf("the janitor reported no fault for registration %d", registrationID)
+			if lastFault != "" {
+				cause = fmt.Sprintf("the janitor's last fault for registration %d: %s", registrationID, lastFault)
+			}
+			return stop(fmt.Errorf("wait for selected installation: %w; %s", context.DeadlineExceeded, cause))
 		}
 	}
+}
+
+// registrationFaults keeps the faults that name registrationID.
+func registrationFaults(
+	faults []publish.JanitorRegistrationFault, registrationID int64,
+) []publish.JanitorRegistrationFault {
+	var kept []publish.JanitorRegistrationFault
+	for _, fault := range faults {
+		if fault.RegistrationID == registrationID {
+			kept = append(kept, fault)
+		}
+	}
+	return kept
+}
+
+// faultText joins the faults' messages, or is empty when there are none.
+func faultText(faults []publish.JanitorRegistrationFault) string {
+	texts := make([]string, len(faults))
+	for i, fault := range faults {
+		texts[i] = fault.Err.Error()
+	}
+	return strings.Join(texts, "; ")
 }
