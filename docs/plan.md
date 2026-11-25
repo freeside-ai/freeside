@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 136
+revision: 137
 status: active
-updated: 2026-11-21
+updated: 2026-11-25
 ---
 
 # Freeside
@@ -63,7 +63,7 @@ why.
     - [Golden Agent and Project Images](#golden-agent-and-project-images)
     - [Cordoned Runs: Writers on the Host](#cordoned-runs-writers-on-the-host)
     - [macOS Execution: Linux-First Cores and a Credential-Free Verifier](#macos-execution-linux-first-cores-and-a-credential-free-verifier)
-    - [Cordoned Verification: macOS Checks of a Cordoned Candidate](#cordoned-verification-macos-checks-of-a-cordoned-candidate)
+    - [Cordoned Verification: A Cordoned Candidate's Self-Check](#cordoned-verification-a-cordoned-candidates-self-check)
     - [Operating Modes](#operating-modes)
     - [Execution Hosts](#execution-hosts)
   - [5.8 Control-Plane Trust](#58-control-plane-trust)
@@ -204,8 +204,8 @@ and API name the entity `Task` and reference it by `task_id`.
 5. After the agent exits, a proven workspace handoff carries the result into
    the hostile import boundary, which runs out of process, and then into a
    fresh checkout.
-6. A trusted recipe verifies the candidate and captures evidence in a clean
-   environment.
+6. A trusted recipe verifies the candidate and captures evidence, in a clean
+   environment or, for a cordoned candidate, as a self-check on a host.
 7. Independent review, finding adjudication, and yield-driven remediation
    run within explicit emergency brakes.
 8. The daemon publishes the verified, reviewed candidate under an audited
@@ -273,9 +273,11 @@ maintenance still decide whether Freeside creates a positive return.
 7. **Operate remotely from iPhone.** The human judges at gates, then performs
    final review and merge on GitHub.
 8. **Let chat author artifacts and the engine execute them.**
-9. **Let verification define completion.** It is deterministic, recipe-trusted,
-   and clean-room. The verifier captures visual evidence; the implementer does
-   not claim it. Provenance is machine-enforced (Section [5.15](#515-evidence-and-images)).
+9. **Let verification define completion.** It is deterministic and
+   recipe-trusted, and clean-room except for a cordoned candidate, whose check
+   is the agent's own work checked again on a host, with the project's CI and
+   the owner's review as the independent check (revision 137). The verifier
+   captures visual evidence; the implementer does not claim it. Provenance is machine-enforced (Section [5.15](#515-evidence-and-images)).
 10. **Make decisions durable.** Committed decisions survive restart; external
     effects converge; database and artifact state restore coherently from
     complete encrypted checkpoints; clients converge on daemon state.
@@ -341,8 +343,9 @@ The following classes are non-waivable:
 - stale-approval rejection;
 - failed runner conformance of the run's own class, including that class's
   workspace-handoff gate; a cordoned run's denials are never waived, and a
-  per-run Simulator or desktop-control grant waives none: it records the run
-  as uncordoned (Section
+  project's Simulator or desktop-control setting waives none: it lifts only
+  its own part, on a host whose run account isn't the daemon owner's, and
+  records the run as uncordoned (Section
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
   Runs);
 - host reachability;
@@ -419,13 +422,15 @@ Linux becomes supported only when one named distribution, architecture, and
 and upgrade suite. Running provider credentials on a cloud host adds exposure;
 that exposure must appear in the residual-risk documentation. (Decider: user.)
 
-A Linux host enters as an execution host (Section
+A Linux host would enter as an execution host (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts),
-never as the control plane. The credential exposure above applies to every
-execution host, and `subscription_injected` (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency))
-is required on any host the owner does not physically hold (revision 95).
-That mode is held by owner decision (revision 103), so no such host is
-enrolled until a revision lifts the hold.
+never as the control plane. Execution hosts run cordoned launches on macOS
+today and wards stay on the daemon's host (revision 137), so a Linux host
+waits for a later revision. `subscription_injected` (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)) would be required
+on any host the owner does not physically hold (revision 95). That mode is
+held by owner decision (revision 103), so no such host is enrolled until a
+revision lifts the hold.
 
 ### 3.4 Simplicity
 
@@ -517,7 +522,10 @@ Every item declares an immutable posture:
   unattended operation is explicitly stopped, or a validated configuration
   supersedes it.
 - `advisory` stays open and visible without blocking unrelated unattended
-  admission.
+  admission. A type may clear it when its diagnostic ends, as an execution
+  host's state does (Section
+  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+  Hosts).
 
 A stop is a durable operating transition: only an explicit resume reopens
 unattended admission; a restart alone never does.
@@ -777,7 +785,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **ReviewSource** | Runs the Freeside-invoked review stage; the first production binding is a local Codex invocation (Section [7](#7-review-policy)). A permanent fake supports deterministic tests. |
 | **Finding classifier** | Adds versioned annotations to immutable raw review findings. |
 | **ward** | Provides runner capability classes, workspace-handoff capabilities, per-stage egress, operating modes, and conformance checks. |
-| **gauntlet** | Runs out of process. It normalizes export, treats import and evidence as hostile, builds a fresh checkout, and starts clean verification and evidence capture. |
+| **gauntlet** | Runs out of process. It normalizes export, treats import and evidence as hostile, builds a fresh checkout, and starts verification, clean or a cordoned candidate's self-check, and evidence capture. |
 | **Git/publish** | Owns all GitHub credentials, deterministic external identities, invocation reconciliation, and, in 1B, the EvidencePublisher. |
 | **Store** | Uses SQLite with inbox/outbox and a content-addressed artifact store. Section [5.10](#510-coherent-backup-encrypted-checkpoints) defines encrypted checkpointed backup. |
 | **Sync API** | Serves atomic snapshots with revision, epoch, and invalidation semantics. |
@@ -925,7 +933,7 @@ is attempted again without the operator, within the limit and in the order
 Section [5.9](#59-durability-effectively-once) sets. Repeated restarts hold
 every launch and raise one item, so a daemon that keeps crashing doesn't spend
 each invocation's limit and raise a card for each. That hold is a system stop,
-so no restart lifts it. A launch lost on a runner
+so no restart lifts it. A launch lost on an extra
 host keeps its own rule (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
 Hosts). The implementing units set the limit and what counts as repeated.
@@ -1026,7 +1034,10 @@ every external start, then reconciles every later operation by that ID:
 - review: `request_review`, inspect, poll, verify.
 
 **Execution guarantee:** one committed invocation intent produces at most one
-accepted result. The workflow never advances twice.
+accepted result. The workflow never advances twice. Steering a running writer
+(Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
+Outcome Authority; revision 137) sends it the operator's message mid-turn;
+the stage stays one bounded job with one outcome.
 
 Phase 1 uses:
 
@@ -1080,8 +1091,8 @@ Every run declares and records one credential mode:
 
 | Mode | Meaning |
 | --- | --- |
-| `subscription_contained` | Phase 1 default. The native vendor CLI holds the identity's own token, in a ward's agent VM or cordoned on the host (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs). The mode says who holds the token; the run's isolation class says what holds the agent. In a ward the credential mount is read-only where permitted. The remaining exposure is an accepted, documented residual risk. |
-| `subscription_injected` | Held by owner decision (revision 103); nothing schedules it until a revision lifts the hold. The design: the native vendor CLI runs unmodified with a per-run placeholder in the token's place. The run's proxy on the daemon host terminates provider TLS under a per-run CA and substitutes the identity's token on the declared provider authorities and paths only. The writer, and any execution host, holds no provider secret. |
+| `subscription_contained` | Phase 1 default. The native vendor CLI holds the identity's own token, in a ward's agent VM or cordoned on a host (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs). The mode says who holds the token; the run's isolation class says what holds the agent. In a ward the credential mount is read-only where permitted. The remaining exposure is an accepted, documented residual risk. |
+| `subscription_injected` | Held by owner decision (revision 103); nothing schedules it until a revision lifts the hold. The design: the native vendor CLI runs unmodified with a per-run placeholder in the token's place. The run's proxy on the daemon host terminates provider TLS under a per-run CA and substitutes the identity's token on the declared provider authorities and paths only. The writer holds no provider secret. |
 | `api_key_isolated` | Held with `subscription_injected` (revision 103), because it reuses that path with an API key in the token's place. |
 | `local_trusted` | Permitted only for explicitly trusted inputs. |
 
@@ -1104,19 +1115,22 @@ documented residual this mode accepts in a ward, backstopped there by
 `provider_only` egress and export secret scanning.
 
 **A cordoned writer under `subscription_contained`** (revision 134, #3469,
-#3472). The daemon hands the enrolled identity's token,
-never the owner's own login, to the CLI alone. The token never appears in argv,
-in any process's environment, or in records and journals, and the CLI keeps its
-configuration in a directory Freeside owns for the run, never the owner's. The
-CLI keeps the token out of its tools' environment, a pinned-CLI behavior
-re-proved with the others below, and the cordon denies the run the credential
-volumes, so a tool the agent runs doesn't hold it. Residual: the CLI process
-holds the token in memory, and a secret any other process on the account keeps
-in its environment is readable from the run, because no rule hides it (Section
-[14](#14-risks)). The run is backed by the cordon's denials and export secret
-scanning, and by the network rule once it lands (#3477), not by
-`provider_only`. The hold on `subscription_injected` stays: a cordoned writer
-holds no placeholder.
+#3472). The daemon hands the enrolled identity's token, never the owner's own
+login, to the CLI alone. The token never appears in argv, in any process's
+environment, or in records and journals, and the CLI keeps its configuration
+in a directory Freeside owns for the run, never the owner's. The CLI keeps the
+token out of its tools' environment, a pinned-CLI behavior re-proved with the
+others below, and the cordon denies the run the credential volumes, so a tool
+the agent runs doesn't hold it. On an extra host the token travels with each
+launch and reaches the run's supervisor on an inherited pipe, and no extra
+host stores it (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts;
+revision 137). Residual: the CLI process holds the token in memory, and a
+secret any other process on the account keeps in its environment is readable
+from the run, because no rule hides it (Section [14](#14-risks)). The run is
+backed by the cordon's denials and export secret scanning, and by the network
+rule if it lands (#3477), not by `provider_only`. The hold on
+`subscription_injected` stays: a cordoned writer holds no placeholder.
 
 The vendor behaviors this path depends on are pinned-CLI
 empirical contracts, re-proved on every CLI version bump, not vendor-documented
@@ -1148,8 +1162,7 @@ substitution is recorded on the handoff result beside the realized
 allowlist, never bodies or token values. The CA and the placeholder mapping
 exist only for the run: a placeholder presented to another run's proxy, or to
 anything else, authorizes nothing. The identity's token stays on the daemon
-host. An injected run mounts no credential volume, and no execution host
-receives one. The mode is a stronger class than `subscription_contained`,
+host. An injected run mounts no credential volume. The mode is a stronger class than `subscription_contained`,
 never a silent downgrade of it, and admission records which one a run had.
 The image is unchanged, and the per-bump probe set re-proves that both pinned
 CLIs accept the run's CA (Section [5.8](#58-control-plane-trust)). Mechanism
@@ -1171,12 +1184,17 @@ sit above the credential-mode floor and represent different risk classes:
 | `provider_only` | Default in a ward. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate (Section [5.2](#52-the-daemon-and-its-supervisor) states its loopback half). Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. The profile does not by itself withhold a web search that runs on the provider's servers, as the pinned Claude CLI's does (#1620); the launch decides which roles get that tool (research for the specifier, below). |
 | `provider_registry` | Opt-in per project policy; `provider_only` stays the default, and the rules follow the table. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
-| `host_open` | A cordoned run's profile until the network rule lands (#3477): the run's processes have the host's network, so anything a tool can read, it can send. Every cordoned run in this step records it; none is recorded as `provider_only` or `provider_registry`. |
-| `host_web_read` | A cordoned run's profile once the network rule lands (#3477): search and read anything, send nothing. The rules follow the table. |
-| Clean verification | No network access, except a macOS verification job's own reserved ports on the host's own addresses, on a slot or cordoned (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution and Cordoned Verification). A cordoned job has the sandbox alone behind that rule, with no packet filter (revision 135). |
+| `host_open` | A cordoned run's profile on every host, the day-one profile until the network rule is revisited (#3477): the run's processes have the host's network, so anything a tool can read, it can send. Every cordoned run and every self-check in this step records it; none is recorded as `provider_only` or `provider_registry`. |
+| `host_web_read` | A cordoned run's profile if the network rule lands (#3477), held until extra hosts run (revision 137): search and read anything, send nothing. The rules follow the table. |
+| Clean verification | No network access, except a macOS verification job's own reserved ports on the host's own addresses, on a slot (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). A cordoned candidate's self-check is not clean verification and has its host's network, `host_open` (Cordoned Verification; revision 137). |
 
 **A cordoned run's network, in two steps** (revision 134; step 1 built by
-#3472, step 2 not built yet, #3477 on tracker #3462). Its profile names
+#3472; step 2 held, revision 137). Step 2 rests on the daemon's host: #3476
+serves its page fetch from the daemon's loopback listener and #3477 routes
+the run's traffic through the daemon's proxy, and neither exists on another
+host. So step 1's open network stays the day-one profile on every host, and
+the owner revisits #3476 and #3477, both held on tracker #3462, once extra
+hosts run. Its profile names
 what the run can reach, and the isolation class recorded beside it names
 what holds the agent (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
@@ -1187,7 +1205,8 @@ record reads as a warded run's, and its credential mode,
 1. **First, open as the host.** A cordoned run records `host_open`. Its
    residual is the whole of what the run can read (Section
    [14](#14-risks)).
-2. **Then search and read anything, send nothing.** Under `host_web_read` the
+2. **Then search and read anything, send nothing,** as designed before the
+   hold. Under `host_web_read` the
    run's own processes reach the network only through the daemon's proxy, for
    the provider and the project's declared package registries under the
    `provider_registry` rules below; every other connection and name lookup, and
@@ -1239,7 +1258,8 @@ launch, not a consequence of the profile: the Claude CLI's search works
 under `provider_only` (#1620), so the adapter withholds web tools from the
 specifier and its conformance record proves that per build (#1657). Revision
 134 settles the cordoned writers: a cordoned implementer or remediator launch
-offers search, and the daemon-run page fetch once it lands (#3476). Whether a
+offers search, and the daemon-run page fetch if it lands (#3476, held with the
+network's second step, above). Whether a
 warded writer's launch and the review launches keep provider-side search
 stays open (#1659). The specifier's
 research reaches it only as immutable, digest-addressed artifacts, and its
@@ -1327,17 +1347,16 @@ injection-exposed stage. The rejected alternatives are in the
 
 **Only shared resources bound throughput, never the project or the process**
 (revision 125; not built yet, Stage 2 of tracker #3201). A task waits only for
-a resource limit the operator sets or for its own project's state. The limits
-are six: the instance's memory budget (Machine Capacity below); each usage
+a resource limit or for its own project's state. The limits are five: the
+instance's memory budget (Machine Capacity below); each usage
 pool's limits, its parallel executions and its calls per judgment site (item 2
 below); the macOS verification executor's slots (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution);
 the image builder limit (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Project-image
-upkeep); the cap on concurrent cordoned launches (Machine Capacity;
-revision 134, #3471); and the cap on
-concurrent cordoned verification jobs (Machine Capacity; revision 135, not
-built yet, tracker #3462). Every container the
+upkeep); and the cordoned count on each host, which covers writers and
+self-checks, beside which a host's memory pressure holds new launches
+(Machine Capacity; revisions 134 and 137, #3471, #3423). Every container the
 daemon starts on its own counts against the memory budget, and only a command
 the operator runs by hand stays outside it (Stage 1 of tracker #3201). No
 daemon-wide lane makes one task's long work wait behind another's, and no lock
@@ -1394,8 +1413,9 @@ Vendor tooling stays native and unmodified.
 
 #### Machine Capacity
 
-The host that runs the ward is a scheduled resource of its own, separate from
-every provider's (revision 72). Pool limits bound how much inference an account
+The daemon's host, which runs every ward, is a scheduled resource of its own,
+separate from every provider's (revision 72), and so is each extra host,
+which runs cordoned launches only (revision 137). Pool limits bound how much inference an account
 runs at once. They say nothing about whether the host has the memory
 those containers need, and with several accounts their limits can add up to
 far more than one machine holds.
@@ -1485,32 +1505,32 @@ far more than one machine holds.
   while a task waits on a human (revision 1 item 6). So open tasks are not
   bounded by the machine, and neither Freeside nor the plan caps them
   system-wide.
-- **A count bounds cordoned launches, not the memory budget** (revision 134,
-  #3471). A cordoned launch has no VM, so it
-  reserves nothing against the budget. An operator-set cap per instance
-  bounds how many run at once, and a launch over the cap leaves its intent
-  pending under a visible hold that names the cap, never a lock wait; it
-  joins the oldest-task-first order above. The cap is a count, not a
-  measurement: it can't see what each run's builds use. The evidence for
-  setting it is in [`docs/spikes/cordoned-writer.md`](spikes/cordoned-writer.md)
-  (Density): eight cordoned writers held normal memory pressure on the
-  reference host, the CLI adding about 125 MiB each; writers are CPU-bound
-  there as wards are, and the host's CPU saturates by four writers'
-  builds ([`docs/spikes/ward-density.md`](spikes/ward-density.md)).
-- **A count bounds cordoned verification jobs too** (revision 135; not built
-  yet, tracker #3462). A cordoned verification job (Section
+- **A count per host bounds cordoned runs, not the memory budget**
+  (revisions 134 and 137, #3471; the count per host and the pressure hold
+  not built yet, tracker #3462). A cordoned writer or self-check (Section
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-  Verification) has no VM and takes no slot, so it reserves nothing against
-  the budget; its recipe's Linux commands still reserve as any verification
-  job's do. An operator-set cap per instance, separate from the cap on
-  cordoned launches, bounds how many run at once, and a job over the cap
-  waits under a visible hold that names the cap, in the oldest-task-first
-  order above. The cap is a count, not a measurement. The evidence for
-  setting it is the Density section of
-  [`docs/spikes/cordoned-verifier.md`](spikes/cordoned-verifier.md) (#3526): four
-  jobs ran the recipe's Mac build at once beside four cordoned writers, each
-  job about 1.8 times as slow as one alone and each writer about 1.3 times,
-  with no failure.
+  Runs and Cordoned Verification) has no VM, so it reserves nothing against
+  the budget; a recipe command that runs in a ward still reserves as any
+  verification job's does. One count per instance and per host bounds how
+  many cordoned writers and checks run there at once. It has a built-in
+  default, which the operator may override, because a number set by hand on
+  every host is per-host hand work. A launch that no eligible host has room
+  for leaves its intent pending under a visible hold that names the count,
+  never a lock wait, and joins the oldest-task-first order above. While a
+  host's memory pressure isn't normal, the host takes no new launch, and
+  the runs already there carry on, never killed (#3423); #3596 measured
+  that a launch reads the host's pressure as the run account does outside
+  it. The count is a count, not a measurement: it can't see what each run's
+  builds use. The evidence for its default is the Density sections of
+  [`docs/spikes/cordoned-writer.md`](spikes/cordoned-writer.md), where eight
+  cordoned writers held normal memory pressure on the reference host, the
+  CLI adding about 125 MiB each, and writers are CPU-bound as wards are, the
+  host's CPU saturating by four writers' builds
+  ([`docs/spikes/ward-density.md`](spikes/ward-density.md)), and of
+  [`docs/spikes/cordoned-verifier.md`](spikes/cordoned-verifier.md) (#3526),
+  where four checks of the recipe's Mac build ran beside four cordoned
+  writers, each check about 1.8 times as slow as one alone and each writer
+  about 1.3 times, with no failure.
 - **Calls and hand-run commands stay outside.** A call launch runs on the
   host with no container and reserves nothing. Only a command the operator
   runs by hand, such as onboarding (its image builds, their probes, and the
@@ -1531,25 +1551,20 @@ containers, so the operator keeps the budgets of every instance on one host
 (`prod`, `dev`, and any `ephemeral` runs, Section [10](#10-operations-and-onboarding), Environments) within
 what the host holds. Freeside has no host-wide coordinator across instances:
 it would add state shared across the instances that the environment tiers keep
-apart on purpose.
+apart on purpose. The cordoned count is per instance and per host for the
+same reason, so instances that share a host add their counts, and the
+pressure hold, which reads the host itself, is what holds them together
+there.
 
-Execution hosts (Section
-[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts)
-extend the budget per host, not across instances (revision 94). Each enrolled
-execution host declares its own budget at host enrollment; the daemon host's
-budget is the instance budget above. Each host counts the per-VM overhead
-recorded for its own runtime and version (revision 105). The admission
-transaction reserves a launch's declared size plus that host's overhead against
-the host it is placed on, and the reservation ends when every container of the
-launch is proved absent on that host. The waiting order stays oldest task first
-across hosts, with one addition: a launch at the head waits only for the hosts
-it is eligible for and never holds back a launch that is eligible only for hosts
-the head cannot use. A launch whose reservation is larger than every host's
-whole budget fails at once, naming its size and, for the host that comes
-closest to fitting it, that host's overhead and budget. The runner refuses a
-launch whose declared size plus the overhead recorded for the runner's runtime
-and version is above its own declared budget as a fail-closed check, never as a
-second scheduler.
+Wards run on the daemon's host only until a later revision (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts;
+revision 137), so the memory budget is that host's alone. Revision 94's
+budget per execution host, with its per-VM overhead per runtime (revision
+105), served wards on other hosts and left with them; it stays in the
+history. The waiting order stays oldest task first across hosts, with one
+addition: a launch at the head waits only for the hosts it is eligible for
+and never holds back a launch that is eligible only for hosts the head
+cannot use.
 
 #### Admitted Agents
 
@@ -2499,8 +2514,17 @@ edits only the comment whose ID it stored from that create's response. It
 makes no other call, and only the publisher's own code keeps it from editing
 any other comment. No ward and no agent-run process ever receives it.
 
-**Standing prohibition:** the daemon host is never a self-hosted Actions runner
-for a managed repository.
+**Standing prohibition:** no execution host, the daemon's or an extra one, is
+ever a self-hosted Actions runner for a managed repository, because each run's
+provider token passes through it (revision 137).
+
+**A repository's CI is the independent check of a cordoned candidate.** A
+cordoned candidate's own check is a self-check on a host (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+Verification), so the project's CI and the owner's review are what check it
+independently (revision 137). A project with no CI gets the same self-check,
+and the publisher's Verification section on its pull request says that no
+independent check ran (Section [5.15](#515-evidence-and-images)).
 
 ### 5.6 The Gauntlet: Workspace Handoff, Import, and Clean Verification
 
@@ -2515,9 +2539,10 @@ export helper emits content blobs + normalized change manifest + optional
 commit plan + evidence manifest ──▶ gauntlet worker (unprivileged, out of
    process) validates
 gauntlet ──▶ fresh daemon-owned checkout; daemon re-authors clean commits
-fresh checkout ──▶ clean verification workspace (no credentials, no network;
-   trusted recipe runs checks and captures evidence; a cordoned candidate's
-   macOS-host commands run as the owner under a verifier rule file)
+fresh checkout ──▶ verification workspace (no credentials; trusted recipe
+   runs checks and captures evidence; clean and networkless in a ward or a
+   slot; a cordoned candidate's is a self-check, cordoned on a host, as the
+   run account, with the host's network)
 verified candidate ──▶ required review pass (Section 7; pre-publication,
    adjudicated findings drive remediation and reverification)
 reviewed candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
@@ -2526,12 +2551,14 @@ reviewed candidate ──▶ git/publish ──▶ GitHub PR (under trust profil
 The handoff is the gate of the run's runner class (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), The First Ward
 Gate): a warded run's VM handoff, or a cordoned run's, which exports only
-after the daemon shows that no process of the run is alive (revision 134; not
-built yet, tracker #3462). Everything from the export helper onward is the
-same for both classes, except that a recipe's macOS-host commands run cordoned
-for a candidate that only cordoned runs wrote (Section
+after the run's host shows that no process of the run is alive (revision 134).
+A cordoned run may run on an extra host, whose export crosses to the daemon's
+host as untrusted input (revision 137). Everything from the export helper
+onward is the same for both classes, except that a candidate that only
+cordoned or uncordoned runs wrote is checked by a self-check on a host, which
+is no clean room (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-Verification; revision 135).
+Verification; revision 137).
 
 Once ward authenticates a completed, released handoff, importing that output
 cannot start or resume the provider. A daemon upgrade may change the backend
@@ -2562,7 +2589,8 @@ The live view of a running writer (Section [5.7](#57-the-ward-runners-handoff-ga
 Writer Outcome Authority) is neither channel. It is a display-only route out
 of the running writer that reads the transcript, which sits outside the
 workspace, under that section's conditions, and it stores nothing it
-shows.
+shows. Steering a running writer (same section; revision 137) is neither
+channel either: it carries the operator's message in, not output out.
 
 The agent commits normally with git, but no trusted component ever reads or
 imports anything from its `.git`: no objects, hooks, configuration, or history
@@ -2642,9 +2670,10 @@ risk-flags, and gates changes to verification-control files.
 Named residual risk: candidate test code runs inside the warded verifier, or,
 for a Swift project's Apple-only modules, as a pooled uid in the macOS
 verification executor (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution), or,
-for a cordoned candidate's, as the owner's account under a verifier rule file
-(Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-Cordoned Verification; revision 135), with the weaker promises Section
+for a cordoned candidate, under the cordon as a host's run account, a
+self-check that proves no clean room (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+Cordoned Verification; revision 137), with the weaker promises Section
 [14](#14-risks) lists.
 
 ### 5.7 The Ward: Runners, Handoff Gate, and Operating Modes
@@ -2692,42 +2721,24 @@ last proves how a run ends:
   cordon: through launchd or Launch Services, as a launchd job that loads
   later, or in a Simulator device;
 - `supports_cordoned_daemon_protection`: a run can't signal or attach to a
-  process outside the run, and can't write anything the daemon, import, clean
-  verification, or publication trusts, other than the owner's temporary
-  directory and Clang module cache, which Xcode's tools share with every
-  process on the account (Section [14](#14-risks)); since revision 135 that
-  includes a cordoned verification job's own directories (its workspace,
-  home, and private temporary and cache directories), which the run can't
-  read either, the cordoned verifier's own toolchain and caches, a job's
-  reserved ports,
-  which the run can't bind, and the preferences a job reads; and
+  process outside the run, or reach the program that starts runs on a host,
+  and can't write anything the daemon, import, clean verification, or
+  publication trusts, other than the owner's temporary directory and Clang
+  module cache, which Xcode's tools share with every process on the account
+  (Section [14](#14-risks)), or read or write another task's checkout; and
 - `supports_cordoned_run_end_proof`: the daemon finds every process a run
   started, ends any still alive, and shows that none remains before export.
 
-The network rule's capability joins them when that rule lands (#3477).
-
-The cordoned verification class, `cordoned_host_verification` (Cordoned
-Verification, below; revision 135), runs a cordoned candidate's macOS-host
-commands. It declares none of the ward's, the cordoned writer's, or the slot
-executor's capabilities, and none of those classes declares its own. Each
-capability proves a group of its denials:
-
-- `supports_cordoned_verification_read_denial`: a job can't read the
-  contents of the owner's home, the owner's credentials or the login
-  keychain, any instance's daemon state or the enrolled tokens, another
-  job's workspace, or other apps' preferences (denial 1);
-- `supports_cordoned_verification_confinement`: a job writes files only in
-  its own places, binds and connects only at its own ports, and takes dependencies only from the
-  offline cache (denials 2, 3, and 5);
-- `supports_cordoned_verification_host_protection`: a job can't signal or
-  attach to a process outside it, use the Simulator's services, or start a
-  program of its choosing outside its rule file (denial 4); and
-- `supports_cordoned_verification_job_end_proof`: the daemon finds every
-  process a job started, ends any still alive, and shows that none remains
-  before it records a verdict (denial 6).
-
-It proves none of three things the slot executor's declaration covers:
-teardown by uid, a packet-filter layer, and a login session of its own.
+A host proves them for itself, and a pass on one host admits nothing on
+another (Execution Hosts, below; revision 137). An uncordoned run proves the
+same capabilities less the part its project's setting lifts, under a proof
+of its own, and is recorded as uncordoned; a host's proof also shows that a
+run without desktop control can't capture the screen or post input (Cordoned
+Runs, #3602). A self-check of a cordoned candidate runs under the same class
+and declares nothing of its own (Cordoned Verification, below). The network
+rule's capability would join them if that rule lands, and it is held until
+extra hosts run (#3477; Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)).
 
 Operator input files, a task's attachments and those on user-authored
 discussion messages, reach a writer only through a Ward-staged volume mounted
@@ -2739,7 +2750,9 @@ never discussion attachments, through the same kind of proved read-only
 volume, which Ward proves again before the reviewer starts. A cordoned writer
 has no volume mounts: the daemon stages its operator input files outside the
 worktree, readable and not writable by the run, under the same delivery
-rules, a requirement its launch meets and its proof checks (#3466).
+rules, a requirement its launch meets and its proof checks (#3466). On an
+extra host the daemon sends them with the launch, and the host stages them
+the same way (revision 137).
 
 #### The First Ward Gate
 
@@ -2770,11 +2783,16 @@ its own sequence:
 
 1. Write files in the run's worktree.
 2. The agent exits, or the daemon ends it.
-3. The daemon shows that no process of the run is alive, ending any the run
-   left behind, because the agent's exit doesn't end its children.
-4. The trusted exporter, run by the daemon outside the cordon, reads the
-   worktree as untrusted bytes and gives the importer the same manifests, under
-   the same stray rule and whole-output secret scan, as a warded handoff.
+3. The run's host shows that no process of the run is alive, ending any the
+   run left behind, because the agent's exit doesn't end its children. For a
+   run with the Simulator setting it also shuts down and deletes the devices
+   the run created and shows their processes gone (Cordoned Runs).
+4. The trusted exporter, run outside the cordon, by the daemon on its own
+   host or by the program that starts runs on an extra host, reads the
+   worktree as untrusted bytes and gives the importer the same manifests,
+   under the same stray rule and whole-output secret scan, as a warded
+   handoff. An export from an extra host crosses to the daemon's host, whose
+   import treats it as hostile, as it does every export (Execution Hosts).
 
 It is weaker than the ward's sequence. No VM boundary ends the run's processes
 and nothing remounts the worktree read-only, so the proof rests on the daemon
@@ -2784,11 +2802,10 @@ account, so the exporter can't rely on the run's end alone. Cordoned worktrees
 live under one directory the rule file names, and each run's rule file denies
 writes to every other run's worktree, including runs that start later, and the
 exporter never follows a link out of the worktree it reads (#3466, #3470).
-Import, review, and publication are the same for both classes. Clean
-verification differs only where a recipe runs macOS-host commands: a
-candidate that only cordoned runs wrote has those commands verified cordoned,
-and any other candidate on the slot executor (Cordoned Verification, below;
-revision 135).
+Import, review, and publication are the same for both classes. Verification
+differs: a candidate that only cordoned or uncordoned runs wrote is checked by
+a self-check on a host, which is no clean room, and any other candidate as
+before (Cordoned Verification, below; revision 137).
 
 #### Writer Outcome Authority
 
@@ -2875,8 +2892,8 @@ watch a running stage's writer. This is the
 one exception to reading a writer's output only after it is gone, and it
 holds only under these conditions:
 
-- **Read-only.** The view has no write path into the running writer;
-  mid-turn steering stays in Phase 3 (Section [11](#11-roadmap-build-order-and-coordination)).
+- **Read-only.** The view has no write path into the running writer.
+  Steering is a separate primitive (below), not a path through the view.
 - **The daemon pulls.** The writer gains no new outbound channel and no
   egress. The pull reads only the writer's transcript, follows no path the
   agent chooses, reaches no daemon state or host credential, and treats
@@ -2899,6 +2916,16 @@ holds only under these conditions:
 
 Reviewers and discussion replies are not covered and stay unread while
 they run.
+
+**Steering a running writer** (revision 137; not built yet, on a tracker the
+owner starts by fiat). The operator may send a message to a running writer,
+and the message is recorded in the writer's transcript. It is one primitive
+and doesn't depend on hosts. The message is operator input, like a task's
+text, never agent output or an outcome signal, and steering changes none of
+the live view's conditions above. A cordoned launch is a one-shot run today,
+so steering needs the CLI to take streamed input, a requirement on the unit
+that builds it. ACP interactive attachment stays in Phase 3 (Section
+[11](#11-roadmap-build-order-and-coordination)).
 
 #### Golden Agent and Project Images
 
@@ -2936,6 +2963,17 @@ returns a digest-pinned image reference. Per-project image definitions and
 copied dependency manifests do not live in the Freeside control-plane source,
 so a changed dependency manifest rebuilds the runtime artifact without a
 Freeside source change.
+
+**A project may have no project image** (revision 137; not built yet, tracker
+#3462). A project that runs cordoned only needs none, and Python, bash, Rust,
+and Elixir projects have no builder path. Its recipe is read from the
+repository at the reviewed commit, approved as any recipe is (Section
+[5.8](#58-control-plane-trust), image policy), and bound by its own digest
+wherever a proof names the recipe, since no image carries it. Image upkeep
+doesn't apply to it, a warded setting for it is refused, and every candidate
+of it gets the self-check (Cordoned Verification, below). Freeside's own agent
+and exporter images stay on the daemon's host, and an extra host needs no
+container runtime (Execution Hosts, below).
 
 **Toolchains (revision 92).** The builder supports two toolchains, selected by
 the manifests at the repository root or in one module directory the project
@@ -3172,87 +3210,108 @@ ward remains a registry-resolved digest reference.
 
 #### Cordoned Runs: Writers on the Host
 
-**A cordoned run is a writer on the daemon's host, held by fixed denials
-instead of a VM** (revision 134, #3472; the grants and the network's second
-step not built yet, tracker #3462). The agent CLI
-and every process it starts run as ordinary processes under the daemon's own
-account, which is the owner's, with no VM and no second account, and share
-the host's memory and CPU the way the owner's hand-run sessions do. The whole
-CLI starts inside the cordon, so its own file tools are held, not only the
-commands its shell runs. The **cordon** is a short list of fixed denials on
-an otherwise open machine, not a deny-by-default box: what it doesn't deny,
-the run may do. Why: a warded run holds a VM whose memory never returns to
-the host, so the reference host carries far fewer warded writers than the
-six to ten hand-run agents the owner runs on it at once
-([cordoned runs note](../devlog/2026-11-20-2237-cordoned-runs.md)). The
-measurements behind this section are in
-[`docs/spikes/cordoned-writer.md`](spikes/cordoned-writer.md) (#3463) and
-[`docs/spikes/cordoned-verifier.md`](spikes/cordoned-verifier.md) (#3526).
+**A cordoned run is a writer on a host, held by fixed denials instead of a
+VM** (revisions 134 and 137, #3472; the project settings, the network's second
+step, and runs on an extra host not built yet, tracker #3462). It runs on the
+daemon's host or on an extra host enrolled to the daemon (Execution Hosts,
+below), as that host's **run account**: the owner's account on the daemon's
+host, and on an extra host the standard account `agent`, the account and
+desktop session the owner's own unconfined agent sessions already use there.
+One daemon, on the daemon's host, starts every host's runs. The agent CLI and
+every process it starts run as ordinary processes under the run account, with
+no VM and no second account, and share the host's memory and CPU the way
+hand-run sessions do. The whole CLI starts inside the cordon, with its own
+sandbox off, so its own file tools are held, not only the commands its shell
+runs. The **cordon** is a short list of fixed denials on an otherwise open
+machine, not a deny-by-default box: what it doesn't deny, the run may do. Why:
+a warded run holds a VM whose memory never returns to the host, so the
+reference host carries far fewer warded writers than the six to ten hand-run
+agents the owner runs on it at once
+([cordoned runs note](../devlog/2026-11-20-2237-cordoned-runs.md)), and more
+hosts are for capacity first, the owner's hand-run workflows on dedicated
+machines with no step a person repeats per host or per run
+([cordoned hosts note](../devlog/2026-11-25-0151-cordoned-runs-on-hosts.md)).
+The measurements behind this section are in
+[`docs/spikes/cordoned-writer.md`](spikes/cordoned-writer.md) (#3463),
+[`docs/spikes/cordoned-verifier.md`](spikes/cordoned-verifier.md) (#3526), and
+[`docs/spikes/cordoned-shared-host.md`](spikes/cordoned-shared-host.md)
+(#3596), which ran the cordon as `agent` on the Mac mini beside the owner's
+own sessions, with stand-ins for the daemon's launch.
 
-**Roles.** The cordoned class is the default for the implementer and the
-remediator. The specifier, researcher, reviewer, and shadow reviewer stay
-warded until a later revision. Clean verification is not a cordoned run's:
-a recipe's Linux commands run in the project image's room in a ward, and its
-macOS-host commands run cordoned for a candidate that only cordoned runs
-wrote, and on the macOS verification executor's slots for any other
-(Cordoned Verification, revision 135).
+**Roles.** The cordoned class is the first runner class and the ward the
+second. It is the default for the implementer and the remediator, which run on
+any eligible host (Execution Hosts, Placement). The specifier, researcher,
+reviewer, and shadow reviewer stay warded until a later revision, and they,
+import, and publication stay on the daemon's host. A cordoned candidate is
+checked after import by a self-check on a host, not in a clean room (Cordoned
+Verification, below).
 
 **When a writer run is warded instead.** By what the run handles, never by
 whether the owner is present. A writer run is warded when the operator's
 setting for its project or its task says so (#3471): for material the owner
 doesn't trust, or for a grant of something sensitive beyond the project.
-Admission reads that setting and never infers trust from a run's inputs. The
-class never changes silently: admission records the
-class a run gets, and a run whose required class has no current proof is
-refused, never moved to the other class.
+Admission reads that setting and never infers trust from a run's inputs. A
+warded run runs on the daemon's host (Execution Hosts). A project with no
+project image (Golden Agent and Project Images) runs cordoned only, so a
+warded setting for it is refused, never served cordoned. The class never
+changes silently: admission records the class a run gets, and a run whose
+required class has no current proof is refused, never moved to the other
+class.
 
 **The denials.** Each is a capability the class proves (the list at the head
-of this section), rechecked by the probe before every unattended job:
+of this section), rechecked by the probe before every unattended job, on each
+host. They are a fixed list: they name the run account's credentials and
+Freeside's state, not everything a person keeps on a shared account, and a run
+can read what the list doesn't name (Section [14](#14-risks); #3600, #3603).
 
-1. **No secrets.** A run can't read the owner's credentials, such as SSH
+1. **No secrets.** A run can't read the run account's credentials, such as SSH
    keys, forge, cloud, and agent logins, and browser profiles, or the login
    keychain, or use one through a service that holds it, such as the SSH
-   agent or another key agent's socket.
+   agent or another key agent's socket. On an extra host these are the
+   owner's own, kept on `agent` by the owner's unconfined sessions.
 2. **No Freeside state.** A run can't read or write any instance's daemon state
    on the host, `prod`'s, `dev`'s, and every `ephemeral` root's, wherever the
    root sits, or the credential volumes that hold the enrolled tokens, or reach
    them through the container runtime's service, which runs as the owner,
    mounts any volume it is asked to, and reaches every live ward; the cordon
    denies the run that service. #3470 proves the rule against a root outside
-   the default places and against the runtime. Instances share the owner's
+   the default places and against the runtime. Instances share the run
    account, so the cordon denies all of them, not only the launching
-   instance's.
+   instance's. On an extra host the rule covers whatever Freeside keeps
+   there, the program that starts runs and its state included.
 3. **Nothing started outside the cordon.** A run can't start anything
    through launchd or Launch Services, install a launchd job that loads
    later, such as at the owner's next login, or reach the Simulator's
-   services, which run a device's processes as the owner outside the
-   cordon.
+   services, which run a device's processes as the run account outside the
+   cordon. Only its project's Simulator setting lifts the last, on an
+   eligible host (Seeing its own work, below).
 4. **No reach into other processes.** A run can't signal, stop, restart, or
    attach to a process outside the run, the daemon's included, or connect to a
    socket any instance's daemon serves, such as its control socket, wherever
-   the socket sits, other than the run's own proxy and page-fetch endpoints
-   under `host_web_read`. That socket trusts any caller on the daemon's
-   account, so without this denial a run would be the operator (Section
-   [10](#10-operations-and-onboarding)). Nor can a run bind a cordoned
-   verification job's reserved ports, which would fail the job's tests or
-   answer its client (revision 135).
+   the socket sits, or to the program that starts runs on a host, other than
+   the run's own proxy and page-fetch endpoints under `host_web_read`. That
+   socket trusts any caller on the daemon's account, so without this denial a
+   run would be the operator (Section [10](#10-operations-and-onboarding)),
+   and a run that reached a host's launcher could start a command under a
+   rule file of its own choosing. #3596's stand-in launcher was reachable from
+   a run, so #3602 proves this rule on an extra host.
 5. **Nothing the gates trust.** A run can't write anything the daemon, import,
    clean verification, or publication trusts, other than the two per-user
    places Xcode's tools share (below): the daemon's binary, state, and
-   scratch, and the macOS verification executor's installation, toolchain, and
-   caches. It covers every program the daemon runs outside the cordon, such as
-   git, the container CLI, the pinned agent CLI, and the system tools it calls
-   by name: the daemon runs each from a path the cordon denies writes to, never
-   one found on a `PATH` the run can write. The cordon meets this rule whether
-   or not those inputs are later made unwritable by the owner's account.
-   Since revision 135 it also covers what a cordoned verification job reads
-   (Cordoned Verification): a run can't write a job's own directories (its
-   workspace, home, and private temporary and cache directories), the cordoned
-   verifier's own toolchain and caches, or the owner's global preferences,
-   which a job reads. The owner's temporary directory and Clang module cache,
-   which Xcode's tools share with every process on the account, stay
-   writable (Section [14](#14-risks)). A run also can't read a job's own directories, whose workspace holds another
-   task's candidate.
+   scratch, the program that starts runs on a host, and the macOS verification
+   executor's installation, toolchain, and caches. It covers every program
+   Freeside runs outside the cordon on any host, such as git for the checkout,
+   the container CLI, the pinned agent CLI, the Simulator shutdown, and the
+   system tools it calls by name: Freeside runs each from a path the cordon
+   denies writes to, never one found on a `PATH` the run can write, and the
+   version-manager directories on a run's `PATH` (Tool versions, below) are
+   writable by runs. The cordon meets this rule whether or not those inputs
+   are later made unwritable by the run account. A self-check is not among the
+   gates it protects: a check runs on the `PATH` and caches a run can write
+   (Cordoned Verification). The owner's temporary directory and Clang module
+   cache, which Xcode's tools share with every process on the account, stay
+   writable (Section [14](#14-risks)). A run can't read or write another
+   task's checkout, a writer's worktree or a check's.
 
 No rule hides one process's environment from another on the same account, so
 no process the daemon starts, the daemon included, carries a secret in its
@@ -3260,11 +3319,10 @@ arguments or environment. #3550 moved out the last secrets that did: a
 one-shot model call reads its token from a pipe, and a token-bearing git
 command reads its header from a file written for that command alone, in a
 daemon credentials directory the cordon denies. The cordoned class is not
-admitted before #3550 (Section [14](#14-risks)). The rule covers cordoned
-verification jobs too: a job reads the environment of every process
-on the account, the daemon's and every agent CLI's included, and a writer
-reads a job's, so neither cordoned class is admitted before #3550 (revision
-135).
+admitted before #3550 (Section [14](#14-risks)). On an extra host the owner's
+own unconfined sessions share the run account, so a run reads their
+environment and they read a run's; the program that starts runs carries no
+secret in its environment either.
 
 **The harness's review of each action is a second check, not a boundary.** A
 cordoned writer's CLI runs with the harness's model review of each action and
@@ -3275,44 +3333,108 @@ empirical contract, re-checked on every CLI version bump
 (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), and no
 denial above rests on it.
 
-**Seeing its own work is standard.** A cordoned writer may render its views
-in-process, run the Mac app it built as the run's own child, and open a web
-preview of a server the run starts itself, without a grant. Two things need an
-operator's grant for one run, never a default and never project-wide, and each
-records the run as uncordoned, never as cordoned:
+**Seeing its own work is standard.** With no setting, a cordoned writer may
+render its views in-process, run the Mac app it built as the run's own child,
+started from its binary and never through Launch Services, open a web preview
+of a server the run starts itself, and load its own pages in a headless
+browser. The browser's own sandbox is off, because it can't nest inside the
+cordon's, so the cordon is the only wall around a page's content (Section
+[14](#14-risks); #3596 measured Chrome, not Chromium). What a run sees is for
+the agent: a writer's screenshot is never evidence, and capture stays the
+verifier's (Section [5.15](#515-evidence-and-images)). Building for the
+Simulator needs no setting. Two things need a standing project setting, never
+a default. Each is honored only on a host whose run account isn't the daemon
+owner's, so never on the daemon's host, and each records the run as
+uncordoned, never as cordoned:
 
-- **The Simulator** (#3473). Its services and every process inside a device
-  run as the owner outside the cordon, and the run wrote the app the device
-  launches, so a run with a Simulator could step around every denial
-  (#3526). A Simulator grant is its own kind, narrower than desktop control.
-  Before export, the daemon shuts down a granted run's devices and shows
-  their processes gone (#3473). Building for the Simulator needs no grant.
-- **Full desktop control** (#3478), driving other apps in the owner's
-  session, which acts through processes the cordon doesn't hold.
+- **The Simulator.** Its services and every process inside a device run as
+  the run account outside the cordon, and the run wrote the app the device
+  launches, so a run with a Simulator can step around every denial (#3526).
+  #3596 measured a run that built an app, booted a device, and took its
+  screenshot. The run-end proof doesn't see a device, which outlived it, so
+  export waits on a second condition: the host shuts down and deletes the
+  devices the run created and shows their processes gone. Two launchd
+  services outlive that shutdown (Section [14](#14-risks)).
+- **Desktop control.** One setting covers screen capture and input: capturing
+  a window or the screen, a screenshot of a Mac app window with a system
+  capture tool included, and clicking and typing, a browser driven on screen
+  included. It needs the host's screen-recording and accessibility approvals,
+  which an administrator gives at the host's console as fleet setup and
+  Freeside never asks for per run (Execution Hosts, Host states). It is
+  offered only while the run account holds the console, because the
+  off-console case is unmeasured, and the daemon admits at most one run with
+  the setting per host at a time. The rule: a run whose project lacks the
+  setting can't capture the screen or post input, and the host's proof shows
+  it. As measured, it doesn't hold yet: macOS charges both approvals to the
+  program that starts runs, so on an approved host they reach every run (#3596
+  items 4 and 5). Until a host has that proof (#3602), a host that holds the
+  approvals runs only projects with the setting, so one run at a time, whether
+  or not the run account holds the console, and a host without them runs the
+  rest.
 
-How a granted run is admitted and exported is #3473's and #3478's to
-define. Until a revision does, an uncordoned run on the host is no exception
-to Section [10](#10-operations-and-onboarding)'s rule that host-side runners
-are `ephemeral` only. That rule limits where such a run is admitted, not what
-it reaches: an `ephemeral` instance shares the owner's account.
+**The run account bounds such a run.** Device processes, and commands a
+desktop run types into another app, run as the run account outside the rule
+file and outside the run-end proof. On `agent` that reaches everything `agent`
+can, other runs' worktrees and later runs' tokens included (Section
+[14](#14-risks)), which is why neither setting is honored on the owner's
+account. The one-at-a-time rule doesn't extend to Simulator runs unless the
+unit that builds the device shutdown can't tell one run's devices from
+another's. Revision 134's per-run grants (#3473, #3478) are gone.
+
+**How an uncordoned run is admitted.** `unattended` admits one only on a host
+whose run account isn't the daemon owner's, on a proof of its own that keeps
+every denial its project's setting doesn't lift (Operating Modes); the
+daemon's host is never eligible. A launch whose project has a setting and that
+finds no eligible host waits under a visible hold that names why, and never
+runs without the setting. Its run-end proof covers the run's own sandboxed
+processes, and a Simulator run exports only once its devices are gone too
+(The First Ward Gate). A setting waives no denial (Section
+[3.1](#31-autonomy-inside-the-ward)); it lifts its own part and records the
+run as uncordoned. Section [10](#10-operations-and-onboarding)'s rule that
+host-side runners are `ephemeral` only names it as an exception.
+
+**Tool versions.** Each project's own files pick its tool versions through
+the tool's native manager: Go through `go.mod`, Rust through rustup, Swift
+through Xcode, Python through uv, and Node, Erlang, Elixir, and small
+command-line tools through mise. Freeside resolves no version. The fleet
+repository installs the managers on each host, and a run's `PATH` gains one
+fixed list of their directories, the same on every host. Nothing outside a
+confined run reads a repository's manager configuration. Tool and dependency
+caches are shared across runs, so builds start warm. #3596 measured Go, uv,
+and cargo fetching tools and dependencies and building; a `toolchain` line in
+`go.mod`, a rustup toolchain download, and switching Xcode versions are
+unmeasured. mise can't install under the cordon yet (#3599), and a plain
+`mise install` leaves a trust entry that outlives the run (#3601), so a
+project that needs mise isn't run cordoned until both land.
+
+**What a run can do from day one,** within the limits above: build and test
+with warm caches; fetch dependencies and tools over the open network (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)), mise excepted;
+keep long-lived helpers alive while it runs, which end with it; see its own
+work through the standard ways above, and, with its project's setting on an
+eligible host, the Simulator and desktop control; and let the operator watch
+and steer it live (Writer Outcome Authority).
 
 **How it ends.** By the cordoned handoff (The First Ward Gate): the daemon
-exports the worktree only after it shows that no process of the run is alive.
-The transcript is evidence, never an outcome, as for a warded writer (Writer
+exports the worktree only after the run's host shows that no process of the
+run is alive and, for a Simulator run, that its devices are gone. The
+transcript is evidence, never an outcome, as for a warded writer (Writer
 Outcome Authority).
 
-**Where it runs.** On the daemon's host only, never on an execution host, in
-every instance tier (Section [10](#10-operations-and-onboarding),
-Environments). Its credential, network, and capacity are in Section
+**Where it runs.** On any eligible host, the daemon's or an extra one
+(Execution Hosts, Placement), in every instance tier (Section
+[10](#10-operations-and-onboarding), Environments). Its credential, network,
+and capacity are in Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency); `unattended`
-admits it on its own conformance (Operating Modes).
+admits it on its own conformance on its host (Operating Modes).
 
-**It reports its class.** A cordoned run records and reports its isolation
-class wherever a warded run reports its own: its admission, its record, and
-the clients (#3474). It is never recorded or shown as warded.
+**It reports its class and its host.** A cordoned run records and reports its
+isolation class wherever a warded run reports its own: its admission, its
+record, and the clients (#3474). It is never recorded or shown as warded. Its
+record names its host (Section [8](#8-observability-and-optimization-telemetry)).
 
 **What it can't be promised** is listed in Section [14](#14-risks), Cordoned
-runs on the owner's account.
+runs on a shared account.
 
 #### macOS Execution: Linux-First Cores and a Credential-Free Verifier
 
@@ -3340,22 +3462,19 @@ verification executor** is a credential-free host-side execution class for the
 Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)
 clean verification of a project's Apple-only modules: it runs the trusted
 recipe against the daemon-materialized exact head and authors only the evidence
-channel. It serves every candidate that cordoned runs alone didn't write, and
-a cordoned candidate only by the operator's explicit setting (Cordoned
-Verification, revision 135). It never runs an agent, and it holds no provider or GitHub credential
+channel. It serves every candidate the self-check doesn't take, and a cordoned
+candidate only by the operator's explicit setting (Cordoned Verification,
+revision 137). It never runs an agent, and it holds no provider or GitHub credential
 and no placeholder, so it sits outside the credential modes (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency)) and needs none of
-the cordon's denials of a writer, which holds a token. It is the verification
+the cordon's denials of a writer, which holds a token. It is a verification
 room (Section
-[5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)) of the
-runner on a macOS execution host (Execution Hosts): the daemon host by default,
-in-process, or a second Mac enrolled in the runner role, the Capability start
-trigger's case; admission places the job as it places any launch, and the
-executor is never a separate agent or product. One installation per host serves
-every managed project, and concurrency comes from slots, not machines: a pool
-of unprivileged accounts, one per slot, with a job running as its slot's uid.
-In-process on the daemon host, the executor needs nothing from the
-execution-hosts tracker (#2161). Each job is confined four ways, and each
+[5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)) on the
+daemon's host, in-process, and never a separate agent or product; slots on
+another host wait with warded launches there (Execution Hosts). One
+installation serves every managed project, and concurrency comes from slots,
+not machines: a pool of unprivileged accounts, one per slot, with a job
+running as its slot's uid. Each job is confined four ways, and each
 confinement is conformance-proven and probed live, as the slot uid, before the
 recipe runs:
 
@@ -3398,30 +3517,28 @@ recipe runs:
   nothing a candidate wrote survives into the next.
 
 The slot never logs in, so it has no window-server session; the spike that
-showed the app suite's SwiftUI rendering works without one is in the
-[macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md).
-The executor plugs in at the verifier's room seam,
-so no trust decision moves: recipe resolution, head binding, and evidence
-stamping stay with the verifier. Each command of a trusted recipe names the
-kind of room that runs it, the project image or the macOS host, so one recipe
-verifies a repository whose checks span both; Freeside's `app/` is onboarded
-this way (Section [11](#11-roadmap-build-order-and-coordination), revision 113). Which class serves a macOS-host command
-is the daemon's choice, by the rule in Cordoned Verification below, never the
-recipe's. The executor is admitted in `unattended` (Operating Modes) as one
-of three host-side classes, beside the cordoned writer and cordoned
-verification classes, under its own capability declaration,
-`supports_credential_free_host_verification`, proven by the full conformance
-pass and rechecked by the pre-job probe. The Section [10](#10-operations-and-onboarding) rule that confines
-other host-side runners to `attended_dev` and `ephemeral` names all three as
-its exceptions.
+showed the app suite's SwiftUI rendering works without one is in the [macOS
+verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md). The
+executor plugs in at the verifier's room seam, so no trust decision moves:
+recipe resolution, head binding, and evidence stamping stay with the verifier.
+Each command of a trusted recipe names the kind of room that runs it, the
+project image or the macOS host, so one recipe verifies a repository whose
+checks span both; Freeside's `app/` is onboarded this way (Section
+[11](#11-roadmap-build-order-and-coordination), revision 113). Which class
+serves a macOS-host command is the daemon's choice, by the rule in Cordoned
+Verification below, never the recipe's. The executor is admitted in
+`unattended` (Operating Modes) as one of three host-side exceptions, beside
+the cordoned class and an uncordoned run on an extra host, under its own
+capability declaration, `supports_credential_free_host_verification`, proven
+by the full conformance pass and rechecked by the pre-job probe. The Section
+[10](#10-operations-and-onboarding) rule that confines other host-side runners
+to `attended_dev` and `ephemeral` names all three as its exceptions.
 
 Named residual: candidate test code runs as a pooled uid on the operator's
 host rather than in a VM. The sandbox profile and uid separation, with the
 operator's state and credentials at `0700` and `0600`, bound what it can
 read; a sandbox or kernel escape reaches the host. That is the same class the
-warded verifier names, with a wider blast radius; placing the executor on a
-second Mac enrolled as an execution host shrinks it without changing the
-class. The escape residual is unchanged by the loopback reservation, since
+warded verifier names, with a wider blast radius. The escape residual is unchanged by the loopback reservation, since
 an escape already reached all of loopback, but the reservation adds two
 narrower ones. A host process that binds one of a slot's reserved ports by
 number during a job, on any of the host's addresses, is reachable from that
@@ -3438,160 +3555,124 @@ or an Xcode-only build, is not served by the executor. A cordoned writer
 serves it (Cordoned Runs): it holds the identity's own token under
 `subscription_contained` (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency)), builds the
-app for macOS and the Simulator, and runs and screenshots the Mac app on the
-daemon's host; running a Simulator takes a per-run grant. Revision
+app for macOS and the Simulator, and runs the Mac app it built and renders
+its views on any eligible host; running it in a Simulator or driving it on
+screen takes its project's setting, on a host whose run account isn't the
+owner's (revision 137). Revision
 95 had a host-run writer wait for `subscription_injected`, so that it held only
 a placeholder, and revision 103 held that mode. Revision 134 replaces the
 wait: the cordon's denials take the placeholder's place, the owner accepts
 the residual in Section [14](#14-risks), and the hold on
 `subscription_injected` stays. The **UI-writer tier**, a
-Virtualization.framework VM or a second Mac enrolled as an execution host,
-remains for macOS writer work that warrants a ward; it is not scheduled, and
+Virtualization.framework VM, remains for macOS writer work that warrants a
+ward; it is not scheduled, and
 Phase 4 keeps it. The two-guest limit is a kernel quota per Apple host, not
 only a license term, and the reference host cannot hold even two Xcode guests
 (the quota, its rejected bypass, and the host's limits are in the
 [macOS verifier note](../devlog/2026-10-22-1205-macos-verifier-executor.md)).
 
-#### Cordoned Verification: macOS Checks of a Cordoned Candidate
+#### Cordoned Verification: A Cordoned Candidate's Self-Check
 
-**A cordoned candidate's macOS-host commands run cordoned: on the daemon's
-host, as the daemon's own account, under a verifier rule file** (revision
-135; not built yet, tracker #3462). A candidate that only cordoned runs wrote
-has already run as the owner, and the daemon, its verdict records, and the
-App key already rest on the writer's cordon. So the owner accepts a weaker
-verifier for it than the slot executor's (macOS Execution), and review, the
-owner's approval, and the repository's own CI still stand between a verdict
-and a merge
-([cordoned verification note](../devlog/2026-11-21-0854-cordoned-verification.md)).
-[`docs/spikes/cordoned-verifier.md`](spikes/cordoned-verifier.md) (#3526)
-measured what this section promises,
-except where it says otherwise.
+**A cordoned candidate is checked on a host, after import, on a fresh checkout
+of the imported commit** (revision 137, replacing revision 135's cordoned
+verifier; not built yet, tracker #3462). Local verification is the agent's own
+work checked again. Its verdict proves that the recipe's commands passed on
+that host for that commit, and no more: it doesn't prove a clean room. The
+independent check is the project's CI and the owner's review of the pull
+request
+([cordoned hosts note](../devlog/2026-11-25-0151-cordoned-runs-on-hosts.md)).
+No check has run on an extra host yet (#3596 used stand-ins), so this section
+states the design and the requirements on the unit that builds it.
 
-**What it serves.** The macOS-host commands of a trusted recipe, for a
-cordoned candidate. The recipe's Linux commands stay in the project image's
-room in a ward. Like a slot, a cordoned job runs the trusted recipe against
-the daemon-materialized exact head and authors only the evidence channel. It
-holds no provider or GitHub credential and no placeholder and runs no agent,
-so it sits outside the credential modes (Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency)). It plugs in at
-the same room seam, so recipe resolution, head binding, and evidence stamping
-stay with the verifier.
+**Where it runs.** A check is placed as a writer is (Execution Hosts,
+Placement): first on the host that holds the task's worktree, which for the
+first check is its writer's host, then on the least loaded eligible host.
+Each check is a fresh checkout, so a remediation round, re-entry against a new
+base, and the handoff check of a moved tip (Section [7](#7-review-policy)) go
+to any eligible host when the writer's host is busy or gone.
 
-**Which class verifies a candidate.** The daemon picks it from its own record
-of the runs that wrote the candidate (#3472); the recipe and the candidate
-never pick it. A candidate is cordoned when Freeside runs wrote every one of
-its changes over the trusted base and each of those runs ran cordoned. Its
-macOS-host commands then run
-cordoned in every verification of it: the first cycle, each remediation
-round, re-entry against a new base, and the handoff check. Any other
-candidate goes to the slot executor: a warded candidate, one a warded run
-helped write, and a head with any change no Freeside run wrote, such as one
-adopted at a hand-back, even after a cordoned run writes on top of it. A
-warded candidate is never verified cordoned. The
-class never changes silently: each job's admission records the class it
-got.
+**What holds it.** A check runs under the same cordon as a writer, as the
+host's run account, with every writer denial, and holds no provider or GitHub
+credential and no placeholder and runs no agent, so it sits outside the
+credential modes (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)). Its end is
+proven as a writer's is before the host reports a verdict. The verifier's
+shape doesn't change: the daemon binds the trusted recipe to the imported
+commit, the host runs each command in a fresh workspace made from that
+commit, and the verdict is bound to the commit. Recipe resolution, head
+binding, and evidence stamping stay with the verifier. A check uses the run's
+`PATH`, the tool and dependency caches every run shares, and the host's
+network (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)),
+which is why its verdict proves no clean room. Revision 135's walls are gone
+for a cordoned candidate: the network rule of its own, the offline dependency
+cache, the verifier rule file, and reserved ports.
 
-**When the class has no current proof.** A cordoned candidate's job is
-refused: nothing runs, and the refusal is recorded and shown to the
-operator. The job never moves to the slot executor on its own. The operator
-may send a project's or one task's cordoned candidates to the slot executor
-by an explicit setting, and the verdict is then recorded as the slot
-executor's.
+**Which candidates get it.** The daemon picks from its own record of the runs
+that wrote the candidate (#3472); the recipe and the candidate never pick it.
 
-**What it denies.** Each denial is part of a capability the class proves (the
-list at the head of this section), rechecked by the pre-job probe:
+- **A project with a project image.** A candidate that only cordoned or
+  uncordoned runs wrote gets the self-check, in every verification of it. A
+  recipe command that names the project image's room still runs in that room,
+  in a ward on the daemon's host; a project that wants every check on a host
+  onboards with no image. Any other candidate keeps the macOS verification
+  executor's slots for its macOS-host commands (macOS Execution): a warded
+  candidate, one a warded run helped write, and a head with any change no
+  Freeside run wrote, such as one adopted at a hand-back, even after a
+  cordoned run writes on top of it.
+- **A project with no project image.** It has no ward room and no slot cache,
+  so every candidate of it gets the self-check, an adopted head included.
 
-1. **No reads of secrets, Freeside state, other jobs, or other apps'
-   preferences.** A job can't read the contents of the owner's
-   home, the owner's credentials or the login keychain, any instance's daemon
-   state or the enrolled tokens, another job's workspace, or other apps'
-   preferences, including through the preferences service, which reads them
-   on the job's behalf. The spike probed the home rule and the preference
-   reads from a job; the credential, keychain, and Freeside-state rules come
-   from the writer's rule file, which #3463 probed for a writer, and the
-   room's proof shows them for a job.
-2. **Writes only to its own places.** A job writes files only in its own directories
-   and the owner's temporary directory and Clang module cache, which Xcode's
-   tools use whatever the job asks and every writer on the account can also
-   write (Section [14](#14-risks)). It writes no preferences. The pasteboard
-   is a session service outside this rule: a job can replace what the owner
-   copied.
-3. **Network only at its own ports.** A job binds and connects only at its own
-   reserved ports on the host's own addresses: no other port, no local socket
-   outside the job, a daemon's control socket and a key agent's included, no
-   name resolution, and no outbound connection off the host. The sandbox
-   alone holds this line. It filters by port, not by address, so, though the
-   spike didn't probe inbound connections, a job's listener on a reserved port also accepts connections from other processes
-   on the account, writers included, and from off the host, with no packet
-   filter in front of it (Section [14](#14-risks)).
-4. **No reach into other processes.** A job can't signal, stop, restart, or
-   attach to a process outside the job, and can't use the Simulator's
-   services, which run a device's processes as the owner outside any rule
-   file.
-5. **Dependencies from a trusted offline cache** keyed by digest, never
-   fetched, as on a slot. The spike seeded a job from the installed cache;
-   the room's proof shows that a digest the cache lacks fails closed.
-6. **A proven end.** The daemon finds every process the job started, its
-   children and theirs, by a mark the job can't shed, ends any still alive,
-   and shows that none remains before it records a verdict. A helper launchd
-   starts for the job, such as one Xcode's build asks for, carries no mark,
-   so this proof doesn't reach it (Section [14](#14-risks)). The room's
-   conformance plants processes that leave the job's group, session, and
-   directory and must find each, so a macOS change that breaks the finder
-   fails conformance and closes the class.
+A candidate an uncordoned run helped write is checked on a host whose run
+account isn't the daemon owner's, under the same project setting, and its
+verdict is recorded as uncordoned; every other self-check's verdict is
+recorded as cordoned. The class never changes silently: each check's
+admission records the class it got.
 
-The spike didn't probe two more parts of denial 4, so the room's proof has to
-show them before the class is admitted: a job can't start a program of its
-choosing through launchd or Launch Services, and can't reach the container
-runtime's service.
-It also didn't show that a job's rule file can deny the window server while
-in-process renders still pass. The room's proof tries; if it can't, a job
-reaches the screen, and Section [14](#14-risks) says so.
+**When no host can take it.** A check waits for an eligible host under a
+visible hold, and never moves to another room on its own. The operator may
+send a project's or one task's cordoned candidates to the slot executor by an
+explicit setting, when the project has an image, and the verdict is then
+recorded as the slot executor's.
 
-**What it doesn't prove that a slot does:** teardown by uid, which a sweep by
-the job's mark replaces; a packet-filter layer; and a login session of its
-own. A job runs inside the owner's session, so the preferences service, the
-pasteboard, the window server, and helpers that launchd starts for a build
-act for it outside its rule file.
+**What still gates publication.** A failed required command blocks
+publication at the re-gate, as any failed check does (Section
+[6](#6-verification)). A project with no CI gets the same check, and its pull
+request says that no independent check ran (Sections
+[5.5](#55-the-ci-trust-boundary) and [5.15](#515-evidence-and-images)).
 
-**Capture.** In-process renders only, never a Simulator, a window, or the
-screen (Section [5.15](#515-evidence-and-images)).
+**Capture.** Unchanged: the verifier captures in-process renders only, never a
+Simulator, a window, or the screen (Section [5.15](#515-evidence-and-images)),
+and a writer's own screenshots are for the agent, never evidence. Verifier
+screenshots are #472's.
 
-**Admission.** `unattended` admits the class on its own conformance and
-pre-job probe (Operating Modes), in every instance tier, and not before #3550
-lands (Cordoned Runs). It runs on the daemon's host only, never on an
-execution host.
-
-**Concurrency.** An operator-set cap per instance bounds how many cordoned
-jobs run at once, separate from the cap on cordoned writers; a job over it
-waits under a visible hold that names the cap (Section
+**Admission, count, and record.** A self-check is a cordoned run with no
+agent, not a class of its own: `unattended` admits it on the cordoned class's
+conformance on its host, or an uncordoned run's (Operating Modes). It counts
+against its host's cordoned count (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine
-Capacity).
+Capacity). A verdict names the class and the host that ran each of its
+commands, and one with any command run on a host is recorded and shown with
+that class, never as the slot executor's or the ward's, even when some of its
+commands ran in a ward.
 
-**Its record.** A verdict names the class that ran each of its commands. A
-verdict with any command run cordoned is recorded and shown as cordoned,
-wherever a verdict's class shows, never as the slot executor's or the ward's,
-even when the recipe's Linux commands ran in a ward.
+**Later.** Checking in the writer's own worktree, which saves the rebuild, is
+deferred until rebuild time is measured to cost real capacity.
 
-**Writers keep out of a job.** Cordoned writers share the account, so the
-writer cordon also denies a run a job's own directories, the cordoned verifier's
-own toolchain and caches, a job's reserved ports, and the preferences a job reads
-(Cordoned Runs, denials 4 and 5).
-
-**The slot executor stays** for every candidate this section doesn't send
-cordoned (macOS Execution). **What a cordoned job can't be promised** is in
-Section [14](#14-risks), Cordoned verification on the owner's account.
+**The slot executor stays** for every candidate this section doesn't take
+(macOS Execution). **What a self-check can't be promised** is in Section
+[14](#14-risks), A cordoned candidate's self-check.
 
 #### Operating Modes
 
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires all of these: successful conformance of the run's own class, including that class's handoff gate; a valid trust profile; an approved credential mode; every runner minimum of the run's class; current backup health including encryption status; and no blocking `system_health` item. The runner minimum is per class. A warded run needs the ward's handoff gate, the proven `supports_networkless_export` exporter boundary, and the proven `supports_enforced_provider_egress` writer egress boundary. A cordoned run (Cordoned Runs) needs the cordon's own capabilities and none of those three. A host-side class is admitted only as one of three, each with its own declaration current: the credential-free macOS verification class, with `supports_credential_free_host_verification` (macOS Execution); the cordoned class; or the cordoned verification class (Cordoned Verification, not yet built), with its own four capabilities. |
+| `unattended` | Requires all of these: successful conformance of the run's own class, including that class's handoff gate; a valid trust profile; an approved credential mode; every runner minimum of the run's class; current backup health including encryption status; and no blocking `system_health` item. The runner minimum is per class. A warded run needs the ward's handoff gate, the proven `supports_networkless_export` exporter boundary, and the proven `supports_enforced_provider_egress` writer egress boundary. A cordoned run (Cordoned Runs) needs the cordon's own capabilities, proven on its own host, and none of those three. A host-side run is admitted only as one of three, each with its own declaration current: the credential-free macOS verification class, with `supports_credential_free_host_verification` (macOS Execution), on the daemon's host; or the cordoned class on the host that runs it, whose self-check of a candidate needs no class of its own (Cordoned Verification); or an uncordoned run, only on a host whose run account isn't the daemon owner's, on a proof of its own that keeps every denial its project's setting doesn't lift (revision 137). |
 
 Run the full conformance suite for every class at startup, after
-configuration changes, and on the doctor's schedule. Run a lightweight probe
-of the run's own class before every unattended job.
+configuration changes, and on the doctor's schedule, on each host that runs
+the class, in its desktop session. Run a lightweight probe of the run's own
+class before every unattended job.
 Golden images pin CLI versions, and a cordoned run runs the macOS build of
 the same pinned version on the host; the re-proof on each version bump covers
 that build. Warded workspaces use VM-local disk.
@@ -3605,7 +3686,9 @@ the pass fails and the capabilities are never declared, because publication
 follows the durable append. A recorded declaration can never exceed its class's
 registered provable ceiling.
 
-A declaration is per configuration. The ward backend yields one configuration
+A declaration is per configuration, and for the cordoned class per host as
+well: identical hosts never share a pass (Execution Hosts; revision 137). The
+ward backend yields one configuration
 per writer image, holds a proof for each image in use, and judges each by its
 own newest record, so proving, failing, or retiring one image's configuration
 never admits or refuses another's. A failed pass therefore closes only its own
@@ -3640,197 +3723,138 @@ image are conformance-proven (macOS Execution, revision 96).
 
 #### Execution Hosts
 
-An execution host is an enrolled host (Section
-[5.9](#59-durability-effectively-once)) with the `runner` role that runs
-launches for exactly one control plane (revision 94; [decision
-note](../devlog/2026-10-22-1042-execution-hosts.md); tracker #2161). The
-daemon's own host is the default, so a one-host deployment is the degenerate
-case and no consumer special-cases it. An execution host is a runner backend
-reached over the network, never a second daemon: the control plane keeps every
-durable record, every forge credential, the gauntlet, and publication.
+An execution host is a machine that runs cordoned launches for exactly one
+daemon (revision 137, replacing revision 94's ward runners; not built yet,
+tracker #3462, with tracker #2161's units re-cut for it). The daemon's own host
+is the first, so a one-host deployment is the degenerate case and no consumer
+special-cases it. Extra hosts are for capacity: two or three now and six or
+seven at most, all owner-held, kept uniform by a fleet repository that sets
+them up outside Freeside, so Freeside asks for no step per host of its own. An
+execution host is never a second daemon: the daemon keeps every durable
+record, every forge credential, import, review, and publication
+([cordoned hosts note](../devlog/2026-11-25-0151-cordoned-runs-on-hosts.md)).
+[`docs/spikes/cordoned-shared-host.md`](spikes/cordoned-shared-host.md) (#3596)
+measured this design on the Mac mini with stand-ins for the daemon's launch: no
+real agent CLI, provider token, or check has run on an extra host yet.
 
-**The runner.** Each execution host will run `freesided runner`, the daemon
-binary in its runner role, which is not built yet (Start triggers, below). It
-owns that host's runtime, per-run host-only networks and
-CONNECT proxy, handoff gate, verification room, and conformance suite, and
-serves them to its enrolled control plane over one session its outbound
-connector opens (Transport, below). It holds no durable state: the handoff
-journal, Begin, and Recover stay on the control plane, which supplies each run's
-ownership token and drives recovery from its own record after a restart on
-either side. A runner restart is recover-only for the runs it held, as a daemon
-restart is: the proxy's egress proof is process-local and dies with it, so no
-run survives a runner restart as live. It holds no forge credential: seeding
-runs on the control plane, which digests the exact-base tree before shipping it;
-the released export streams back, and the control plane re-verifies its manifest
-and blob digests before the gauntlet sees it. Why the control plane does not
-drive the runtime over SSH is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
+**What a host is trusted with.** Each run's provider token while the run
+lives; the task's source and its operator input files; and its report of a
+run's end and of a self-check's verdict. The token travels with each launch
+and reaches the run's supervisor on an inherited pipe, as it does on the
+daemon's host, never through a login shell a run can rewrite. **What Freeside
+never puts on an extra host:** a stored provider credential, a GitHub
+credential, the App key, or daemon state, all of which stay on the daemon's
+host. A host still holds credentials: the owner's own sit on the run account,
+behind the cordon's denials (Cordoned Runs).
 
-**Transport.** The runner connects out to the control plane and opens no
-listener. The control plane listens for runners beside its API, bound under the
-same Section [5.2](#52-the-daemon-and-its-supervisor) gate to loopback or its
-exact Tailscale-owned address, and the runner's outbound connector connects to
-the address its host enrollment record names, over the owner's tailnet in the
-first increment. Over that one long-lived session the control plane issues the
-gate's calls and the runner streams results and the released export back, the
-shape every hosted CI runner takes. The session is mutually authenticated at the
-application layer: each side proves its enrolled Section
-[5.9](#59-durability-effectively-once) host key and pins the other's, and no
-certificate authority, hostname, or Tailscale identity is consulted, because
-Tailscale provides reachability and never authentication (Section
-[5.2](#52-the-daemon-and-its-supervisor)). Why the runner connects out rather
-than listening is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md). The managed relay (Section
-[5.19](#519-deferred-subsystems-provisional-contracts)), when it exists, changes only the
-connector's target: it connects to the relay instead of the tailnet address, and
-the relay carries the same end-to-end authenticated session as an opaque channel
-under that section's prohibitions. The first increment depends on no relay; the
-tailnet connection is the first reachability implementation and the relay would
-be the second, so no abstraction over them enters the daemon before the second
-exists (Section [5.2](#52-the-daemon-and-its-supervisor)). The wire protocol is
-daemon-internal and carries its own version: the host record carries the
-runner's build, but a host needs the control plane's runner protocol version,
-not its build, so an update that leaves the protocol alone asks nothing of the
-other hosts (revision 116; not built yet, #3112 on tracker #2161). A host on
-another protocol version is awaiting update (An unreachable host, below).
+**Who is inside a host's trust.** The owner's unconfined sessions on the run
+account, and anything else that runs as that account outside the cordon: any
+of them can reach the program that starts runs. That includes code a run
+plants for them, such as a shell startup file an unconfined session later
+sources, and what an uncordoned run starts outside the rule file (Cordoned
+Runs; Section [14](#14-risks)). A cordoned run itself is not: it can't reach
+that program, and the host's proof shows it (#3602). Nothing that runs as the
+run account can replace that program: the fleet repository installs it where
+the run account can't write. A host runs the daemon's build, replacing
+revision 116's rule that a host needs only the runner protocol version: a host
+on any other build takes no new launch until the fleet updates it, and the
+fleet updates a host only once it holds no launch, so its runs drain first. A
+run whose end the daemon can't read from a host on another build is recovered
+as a returning host's runs are (A host lost mid-run, below; #3112).
 
-**The daemon host.** The daemon host runs no separate runner process. The daemon
-composes the ward package in-process behind the same runner-backend interface,
-so the local backend is the remote backend minus the wire, and both share one
-implementation of the runtime, proxy, gate, and suite. Why the first increment
-runs no separate runner process on the daemon host, and when to revisit that,
-is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
+**What import trusts.** Nothing new. What a host returns, an export and a
+check's artifacts, is untrusted input to import and the verifier on the
+daemon's host, as every export is. A host's report of a run's end and of a
+verdict is trusted as far as the host is (Section [14](#14-risks)).
 
-**Installation.** An execution host is an ordinary Freeside installation in the
-runner role, never a separate agent or product. The same `freesided` binary is
-installed by the path the daemon takes on that host's tier (Section
-[5.2](#52-the-daemon-and-its-supervisor): the operator app's per-user
-LaunchAgent on the Mac-first path, the elevation helper's unit on the hardened
-path) and supervised with `KeepAlive`. After that first installation a runner
-host will install the control plane's build by itself when it is idle, never
-picking a version for itself, and an update drain (Section
-[5.2](#52-the-daemon-and-its-supervisor)) will cover every host (revision 116;
-not built yet, #3112 on tracker #2161). In the runner
-role the unit gets its own root: the host key in
-platform-protected storage, the host enrollment record (the control plane's
-address and key, the registry it names), the credential volumes, and the image
-cache, and no control-plane database, checkpoint, or backup, so the root is
-disposable. The host needs the runtime its backend class needs (Apple
-`container` 1.1.0 in the first increment) and reach to a registry the control
-plane names, because ward resolves an image only through a registry
-(`images/README.md`); a loopback-only local registry on the daemon host does not
-qualify, so that registry is bound to the daemon host's Tailscale address for
-runners or a shared registry is used. The runner pulls each approved digest the
-control plane names before it reports that digest present. A runner
-enrollment command will run the host side of the pairing ceremony below, and
-the doctor on the control plane will report every host; neither is built yet.
+**Enrollment.** The operator names each host to the daemon once; there is no
+pairing ceremony. A launch sent to the wrong machine would hand over a
+provider token, so the daemon sends a launch only to a host it has
+authenticated, and nothing the run account can read lets anything on it pose
+as the host or as the daemon; what runs on the account and reaches the program
+that starts runs is inside the host's trust (above). Section
+[5.9](#59-durability-effectively-once)'s host key doesn't apply to a host that
+only runs cordoned launches. How the daemon reaches a host is mechanism,
+recorded in the note.
 
-**Host enrollment and credentials.** Host enrollment is a pairing ceremony in
-the shape of device pairing (Section
-[5.14](#514-client-synchronization-and-conversations)); it records each side's
-public key and the host's runtime facts (operating system, architecture, runtime
-and version, daemon build) and its declared budget. Pushing tokens is a separate
-step the operator confirms per host, with both key fingerprints shown on each
-side. Under `subscription_contained` the daemon-owned identity enrollment
-transaction (Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency)) pushes each
-identity's setup token over that link, and the runner authors the same read-only
-per-identity credential volume the local path authors, writing the token nowhere
-else. Under the held `subscription_injected` mode no execution host would
-receive a credential volume (control-plane injection, below; revisions 95 and
-103). Rotation re-authors the volume on every
-enrolled host while no execution can use the identity; removing a host names
-the identities it held so the operator can rotate them at the vendor. An identity whose credential store
-mutates under the Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency) lease (a Codex
-subscription identity) is pinned to one host, because a leased mutation on one
-host leaves every other copy stale; re-authoring every host's volume under the
-lease is a later decision. The residual is a copy of each token on every
-enrolled host, accepted for owner-held machines on the owner's tailnet. Proxy
-credential injection, where the writer holds a placeholder and a TLS-terminating
-proxy substitutes the credential, is the `subscription_injected` mode
-(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 95; #2175,
-with spikes #2173 and #2174), held by owner decision with the control-plane
-injection below (revision 103). On an execution host it changes where the
-token lives, not the runner: the runner's per-run proxy terminates the writer's TLS
-under the per-run CA as the local proxy does, but forwards the request over the
-runner session to the control plane, which substitutes the credential and
-originates the provider connection from the daemon host, so the host holds the
-per-run CA key and the placeholder and never the token. That control-plane
-injection is a unit of its own, held with #2175 and filed once #2175
-merges; until it lands every execution host runs under `subscription_contained` with the volume above. It is
-required on any execution host the owner does not physically hold, so the Linux
-host waits for it and no such host is enrolled while the hold stands; the
-owner-held Mac mini does not wait. Why relaying the writer's tunnel without termination
-is no credential measure is in the [execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md).
+**Placement.** Admission chooses the host in the launch transaction. Writing,
+remediation, and their checks go to any eligible host: first the one that
+holds the task's worktree, then the least loaded, with no preference for the
+daemon's host. A run whose project has the Simulator or desktop-control
+setting goes only to a host that offers it (Cordoned Runs). Specification,
+research, review, import, and publication stay on the daemon's host, and so
+does every warded launch. A host is eligible when its current proof covers the
+launch's class, it has a desktop session, it is reachable, it runs the
+daemon's build, and it has room under its cordoned count and its pressure hold
+(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine
+Capacity). Hosts carry no capability labels or tool probes: the fleet
+repository keeps them uniform, and every run's record names its host (Section
+[8](#8-observability-and-optimization-telemetry)).
 
-**Placement.** Admission chooses the host in the launch transaction. A host is
-eligible when its current durable conformance record covers the launch's
-capability minimums and class, it has the approved image digest for its
-architecture, and the launch's declared size plus the host's per-VM overhead
-fits its budget (Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity).
-The daemon host is preferred; among eligible remote hosts, the one with the most
-free budget, its budget less its reservations. Review launches stay on the
-daemon host until placement evidence asks otherwise. A cordoned launch runs on
-the daemon host only and is never placed on an execution host (Cordoned Runs;
-revision 134), and so does a cordoned verification job (Cordoned
-Verification; revision 135); placement of warded launches is unchanged.
+**Conformance per host.** Each host takes the full suite at its start, after
+its configuration changes, and on the doctor schedule, in its desktop session,
+where the keychain probe can run, and the pre-job probe before each job it
+serves. The daemon records each pass bound to the host and its configuration,
+with a proof generation per host; a pass on one host admits nothing on
+another, and a failed or superseded pass closes admission on that host alone.
+Doctor reports every host's record and state.
 
-**Conformance per host.** Each runner executes the full suite at its start,
-after its configuration changes, and on the doctor schedule, and the pre-job
-probe before each job it serves. The control plane records each pass bound to
-the host identity and configuration digest, with a proof generation per host; a
-pass on one host admits nothing on another, and a failed or superseded pass
-closes admission on that host alone. Doctor reports every host's record and
-reachability.
+**Host states.** Four states make a host ineligible: no desktop session, no
+reach from the daemon, a failed or lapsed proof, and a build other than the
+daemon's. Each raises one `advisory` `system_health` item (Section
+[4](#4-the-attention-model)) that names the host and clears itself when the
+state ends, and new launches go to other hosts; one host's trouble never stops
+admission on another. Missing or lapsed screen-recording and accessibility
+approvals, or a run account that doesn't hold the console, make a host
+ineligible for desktop-control work, and a host that holds the approvals stays
+closed to work without the setting until its proof shows otherwise (Cordoned
+Runs). The daemon's host never honors the setting, so it runs no cordoned work
+while the program that starts runs there holds either approval. Freeside asks
+for no step per run. macOS requires a person at a host's console for three
+things, which are fleet setup and which these states show: logging the run
+account in after every restart, since a host with no desktop session runs
+nothing; the two approvals, once per host and again whenever the signing
+identity or identifier of the program that starts runs changes; and a
+screen-capture prompt that macOS repeats on its own schedule (inferred, not
+measured, #3596 item 4).
 
-**An unreachable host.** While the control plane cannot reach a runner that
-holds a launch, the attempt stays requested or failed (Section
-[5.9](#59-durability-effectively-once)), its identity lease and host reservation
-stay held, and one `system_health` item names the host and its launches. A
-returning runner is recovered launch by launch: a writer-complete run is
-adopted, everything else is torn down and lost, and the ordinary
-`execution_failure` card offers the retry. The operator may declare the host
-lost, which fails every attempt on it, releases their leases and reservations,
-and refuses the host until a returning runner proves it has torn down every
-object bearing the control plane's ownership labels. Declaring a host lost is
-the operator's accepted exception to the single-writer rule: a writer may still
-be running on that host, so the declaration names the identities it held for
-rotation at the vendor. No other path starts a second writer under an identity
-whose first writer may still be alive. That is what stays rejected about
-automatic failover of a running launch: starting a second writer while the
-first may still be alive. The re-run of an invocation the control plane lost to
-its own restart or a forced update starts only after that loss is proven, so
-it is a new attempt, not failover (Section
+**A host lost mid-run.** While the daemon can't reach a host that holds a
+launch, the attempt stays requested or failed (Section
+[5.9](#59-durability-effectively-once)), its identity lease and its place in
+the host's count stay held, and the host's item names its launches. A
+returning host is recovered run by run: a run whose end the host shows is
+exported as usual, and everything else is ended, shown gone, and lost, with
+the ordinary `execution_failure` card offering the retry. The operator may
+declare the host lost, which fails every attempt on it, releases their leases
+and places, and refuses the host until it shows that no run of the daemon's is
+alive there and no Simulator device a lost run created remains. Declaring a
+host lost is the operator's accepted exception to the single-writer rule: a
+writer may still be running on that host, so the declaration names the
+identities it held for rotation at the vendor. No other path starts a second
+writer under an identity whose first writer may still be alive. That is what
+stays rejected about automatic failover of a running launch, and about ending
+a run lost when its host is unreachable: a network fault at the daemon's host
+would duplicate every running writer. The re-run of an invocation the daemon
+lost to its own restart or a forced update starts only after that loss is
+proven, so it is a new attempt, not failover (Section
 [5.9](#59-durability-effectively-once); revision 116; not built yet, tracker
-#3113). A sleeping machine is an unreachable host; a runner keeps its host
-awake while it holds a launch. A host that holds no launch and is on another
-runner protocol version than the control plane's is awaiting update, not
-unreachable: it raises no alarm and holds no lease (revision 116; not built
-yet, #3112 on tracker #2161). A host that holds a launch stays under the rule
-above.
+#3113). A sleeping machine is an unreachable host; a host keeps itself awake
+while it holds a launch.
 
-**Start triggers.** The units are filed fenced (tracker #2161). The first
-increment, an owner-held Mac mini on the same runtime and backend class
-([note](../devlog/2026-11-18-2202-mac-mini-first-host.md)), starts when
-any one of these holds; capacity is measured from recorded holds, so it needs
-the host memory budget (#1598) merged first:
+**Warded launches stay on the daemon's host.** Revision 94's design for wards
+on another host, a dial-out runner with pairing, a token volume per host with
+its per-host confirmation, and control-plane injection, leaves the plan body;
+it stays in [the history](history/decisions.md#revision-94-execution-hosts) and the
+[execution-hosts note](../devlog/2026-10-22-1042-execution-hosts.md). A
+warded launch runs on the daemon's host until a later revision specifies
+otherwise (tracker #2161). The Linux desktop, which would run wards, waits
+with it, and so does any host the owner does not physically hold (#3421).
 
-- **Capacity:** over fourteen consecutive days the daemon host's
-  machine-capacity hold has held launches for four hours in total, or one launch
-  waited thirty minutes. While the daemon host's budget sits below its default
-  half, raise it first.
-- **Capability:** a scheduled unit needs a launch class the daemon host cannot
-  provide, such as a Swift verifier that needs a macOS guest or an x86_64-only
-  toolchain.
-- **Interactive use:** the owner decides ward load degrades the daemon host's
-  other use, after lowering its budget would put work under the capacity
-  measure.
-
-The Linux desktop is a later increment. It needs `subscription_injected` (#2175)
-and the control-plane-injection unit filed after it, both held (revision 103), multi-arch project images
-with per-arch digests (images are `linux/arm64` only), and a `linux_vm` backend
-on KVM that passes the full suite (Section [3.3](#33-portability)), developed on
-that machine because nested virtualization is unavailable on Apple silicon.
+**When the first extra host runs.** The first cordoned run on an extra host
+waits on #3602, which keeps the program that starts runs, and the host's
+screen and input approvals, from every run without the setting (tracker
+#3462). #3600 and #3603 have added the denials of the owner's files on `agent`
+that the spike found readable.
 
 ### 5.8 Control-Plane Trust
 
@@ -3845,7 +3869,9 @@ The following are control-plane content:
 
 Freeside loads every class only from an approved default-branch commit,
 except host vendor instructions and image policy, the part of policy that
-holds recipe approval and the registry set. Every running stage snapshots the
+holds recipe approval and the registry set, for a project with no project
+image too (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+Golden Agent and Project Images; revision 137). Every running stage snapshots the
 trusted configuration digests. Copies inside an agent workspace are untrusted data.
 
 Host vendor instructions are the narrow second trust class. At admission,
@@ -3990,8 +4016,8 @@ invocation that Freeside owns, never the owner's or a shared one;
 a journalled session ID; and no second process while a predecessor may still
 exist. Unlike the ward's read-only root, the run can write its configuration
 directory, so nothing in it is trusted after the launch. `--safe-mode` keeps
-loading the administrator policy, which on the host is the owner's machine's,
-not an image's; how a cordoned launch binds or excludes that file is #3466's
+loading the administrator policy, which on a host is that machine's, not an
+image's; how a cordoned launch binds or excludes that file is #3466's
 to settle, as #1424 is for call launches.
 
 This topology is an empirical contract with the pinned CLI. Before a CLI
@@ -4018,10 +4044,7 @@ interpretation; one HTTP version negotiated with the provider on purpose. It
 also changes who may reach the proxy: today's listener binds every interface
 and admits by the run's subnet, which holds nothing; a terminating listener
 holds the token, so it admits only the run's own network, with the subnets
-of concurrent runs proven distinct; an execution host's requests arrive
-already parsed over the authenticated runner session, never as raw
-connections (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-Execution Hosts). The per-run
+of concurrent runs proven distinct. The per-run
 CA key is trusted by one writer whose only route is that proxy and is
 discarded at teardown.
 
@@ -4095,8 +4118,8 @@ One logical control plane has a stable `control_plane_id`, and one or more
 enrolled hosts with distinct host identities. Exactly one host is active: a
 single global seat of authority. Execution hosts (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts)
-run launches under that seat and never hold it; enrolling a host as a runner is
-not activation (revision 94). GitHub App private keys stay per-machine
+run cordoned launches under that seat and never hold it, and enrolling one is
+not activation (revisions 94 and 137). GitHub App private keys stay per-machine
 credentials; the logical identity does not turn them into shared secrets. A
 standby may verify replica and takeover readiness but serves no authoritative
 work. It does not process inbox or restored outbox work, run agents, mutate
@@ -4104,9 +4127,12 @@ workflow state, or execute external effects.
 
 **Enrolled host identity is cryptographically backed.** Reviewed at revision 35:
 no host identity is persisted yet, so this is a forward requirement, not a
-migration; the execution-host contract (#2162) lands the record with a role,
-`control_plane` or `runner`, and the replica and epoch contract (#265) builds on
-it (revision 94). An enrolled host record carries a stable identifier and a host
+migration; the replica and epoch contract (#265) builds on it. An execution
+host that only runs cordoned launches isn't an enrolled host in this sense
+and carries no such key: the daemon
+authenticates it before each launch by the means its unit settles (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts;
+revision 137, replacing revision 94's `runner` role). An enrolled host record carries a stable identifier and a host
 public key. The private key stays in platform protected
 storage. The host proves it holds that key when it authenticates to
 infrastructure services (a future relay connector, portable-store provisioning,
@@ -5525,10 +5551,10 @@ twice.
 On agent completion, Freeside finalizes and fsyncs blobs, then commits the
 message, transition, and replacement item in one SQLite transaction. A failed
 transaction leaves only harmless orphan blobs. Live streaming of a discussion
-reply and mid-turn steering wait until Phase 3. A read-only live view of a
-running stage's writer comes forward under the conditions in Section
+reply waits until Phase 3. A read-only live view of a running stage's writer,
+and steering a running writer with a message, come forward under Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer Outcome
-Authority (revision 132).
+Authority (revisions 132 and 137).
 
 Workflow closure consumes an unstarted discussion intent and returns its
 conversation to idle without inventing an answer. A previously claimed,
@@ -5580,16 +5606,17 @@ Four machine-enforced rules govern evidence:
    Credential-free, network-free rooms capture “before” at the base SHA and
    “after” at the candidate. Agent workspaces do not load capture skills.
    Clean-room capture is the pixel-side secret mitigation. Text scanning cannot
-   inspect pixels; OCR waits until Phase 2. A cordoned verification job
-   (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-   Cordoned Verification; revision 135) captures in-process renders only,
-   never a Simulator, a window, or the screen. Its artifacts are verifier
-   artifacts under the same publication policy as any other, and the class
-   shows through the producing invocation's admission. Its room is
-   credential-free but not clean in full, because it runs on the owner's
-   account: a job can render what it can read, such as the pasteboard or
-   another process's environment, into an image text scanning can't inspect
-   (Section [14](#14-risks)).
+   inspect pixels; OCR waits until Phase 2. A cordoned candidate's
+   self-check (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Cordoned Verification; revision 137) captures in-process renders only,
+   never a Simulator, a window, or the screen, and a writer's own
+   screenshots are for the agent, never evidence. A check's artifacts are
+   verifier artifacts under the same publication policy as any other, and
+   the class shows through the producing invocation's admission. Its room is
+   credential-free but neither clean nor networkless, because it runs as a
+   host's run account with the host's network: a check can render what it
+   can read, such as the pasteboard or another process's environment, into
+   an image text scanning can't inspect (Section [14](#14-risks)).
 2. **Every artifact carries provenance:**
 
    `Provenance {producer_class: verifier | agent | daemon,
@@ -5763,6 +5790,8 @@ final identity marker (`publish.ValidateCandidateBody`), and reported checks
 remain claims. Verification is written for the target repository's reviewer:
 each command Freeside ran at the head, the independent review's outcome, and
 each declined or deferred finding with its recorded reason, labeled as claims.
+For a project with no CI, it also says that no independent check ran (Section
+[5.5](#55-the-ci-trust-boundary); revision 137).
 These publisher sections are not frozen by recipe, so a change to them applies
 to every record the publisher next converges. The implementer continues to write the v1 claim
 as the deterministic fallback; v2 layers the authoring role over it and adds no
@@ -6168,13 +6197,16 @@ doctor consumes it.
 
 ## 6. Verification
 
-Verification defines “done.” It is deterministic, engine-run, clean-room, and
-controlled by a trusted recipe. It includes evidence capture. A cordoned
-candidate's macOS-host checks run cordoned, on the owner's account under a
-rule file, with the weaker promises Section [14](#14-risks) lists, and a
-verdict records the class that ran each of its commands (Section
+Verification defines “done.” It is deterministic, engine-run, and controlled
+by a trusted recipe. It includes evidence capture. A ward's room and the slot
+executor's are clean rooms. A cordoned candidate's check is not: it is a
+self-check on a host, under the cordon as the run account, that proves the
+recipe's commands passed there for that commit, with the weaker promises
+Section [14](#14-risks) lists, and the project's CI and the owner's review
+are the independent check. A verdict records the class and host that ran each
+of its commands (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-Verification; revision 135). Its outputs are
+Verification; revision 137). Its outputs are
 run-bound artifacts cited by AttentionItems. False-ready tracking under Section
 [12](#12-exit-criteria-definitions) starts on day one.
 
@@ -6191,7 +6223,10 @@ policy, and any durable sampling decision. Both branches share that binding, so
 a proof cannot structurally occupy another requirement's state. A pass carries
 proof: the candidate head; the base or prospective-merge identity for any
 requirement whose evidence depends on one (integration checks, Section [7](#7-review-policy) review
-passes); the recipe digest; and the resolution digest. The re-gate binds the
+passes); the recipe digest, which for a project with no project image is the
+recipe's own (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent
+and Project Images); and the resolution digest. The re-gate binds the
 candidate head and the requirement-set digest, never the current target tip.
 The base a proof names is evidence of what ran, so a later advance of the
 target branch leaves the proof valid (revision 110). The handoff check's own
@@ -6285,7 +6320,10 @@ count as a moved tip. When the tip is the evidence base, the head's own proofs
 satisfy the handoff check and the daemon publishes. When it differs, the daemon
 builds the prospective merge of the unchanged head into that tip in its own
 checkout and never pushes it. It verifies the merge under the admitted recipe,
-records the tip and merge it checked, and publishes the unchanged head. Review
+on an eligible host for a candidate the self-check serves (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+Verification), records the tip and merge it checked, and publishes the
+unchanged head. Review
 is not rerun, because it covers the head and the merge adds nothing Freeside
 wrote. The tip stays the one the audit resolved: an advance while the merge is
 verified, or before the publication lands, starts nothing. Every publication
@@ -7009,6 +7047,9 @@ Each run records:
   digest, and the requested, admitted, and observed selection facts (Section
   [5.4](#54-credential-modes-egress-profiles-and-concurrency));
 - driver, credential mode, egress profile, and operating mode;
+- the host the invocation ran on (Section
+  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+  Hosts; revision 137);
 - artifacts and their provenance;
 - tokens and cost, as billable cost, reported usage, and quota consumed
   where the upstream exposes a unit, with the raw usage payload kept as a
@@ -7318,7 +7359,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | Command | Function |
 | --- | --- |
 | `freesided setup` | Performs installation. On the Mac-first path, the operator app registers the daemon LaunchAgent (Section [5.2](#52-the-daemon-and-its-supervisor)) and no step is privileged. When a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper. The daemon never retains root. |
-| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, invokes the proven reusable project-image builder, and seeds the project's admitted-image pointer (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); it reuses the pointed-to image instead when that image serves the commit (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Reuse across compatible commits), and a re-review whose profile digest and image are unchanged completes without a new approval. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
+| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, invokes the proven reusable project-image builder, and seeds the project's admitted-image pointer (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), or, for a project that runs cordoned only, onboards it with no project image and approves its recipe by its own digest (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent and Project Images; revision 137); it reuses the pointed-to image instead when that image serves the commit (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Reuse across compatible commits), and a re-review whose profile digest and image are unchanged completes without a new approval. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, from 1B.1, stored-credential integrity (a truncation and corruption probe), and, from 1B.2, the image-upkeep backstop check (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
 | `freesided submit` | Creates a new task, specification workflow, campaign, and reserved implementation run for each deliberate submission. Only explicit manual Retry reuses a saved submission identity and its original inputs. The `submit_task` client command uses the same acceptance primitives. |
@@ -7431,7 +7472,9 @@ The project-image builder is an internal primitive, not an onboarding-only
 implementation. Phase 1A proves that primitive by hand against the selected
 repository before the first real run. Then, after the run path has survived
 real use, `freesided onboard` packages the same primitive. Onboarding must not
-carry a second image builder or a second copy of recipe semantics.
+carry a second image builder or a second copy of recipe semantics. A project
+with no project image onboards without the builder, and its recipe keeps the
+same semantics and approval (revision 137).
 
 The operator client installs Mac-first: a locally built, personal-team-signed
 FreesideMac with a direct install-and-update script, an icon from the Section
@@ -7606,20 +7649,21 @@ scopes are not the Workflow settings layers of Section
 - **Host-side runners are `ephemeral` only.** A runner class that executes on
   the host rather than in a ward runs only under the `attended_dev` operating
   mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes))
-  and only in an `ephemeral` instance. Three classes are exceptions, each
-  admitted in `unattended` under its own conformance and in every instance
-  tier: the macOS verification executor (Section
+  and only in an `ephemeral` instance. Three are exceptions, each admitted in
+  `unattended` under its own conformance and in every instance tier: the
+  macOS verification executor (Section
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
-  Execution), which holds no credential and runs no agent; the cordoned
-  class (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-  Cordoned Runs; revision 134), which runs a writer on the
-  daemon's host only; and the cordoned verification class (Section
+  Execution), which holds no credential, runs no agent, and runs on the
+  daemon's host; the cordoned class (Section
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-  Verification; revision 135, not built yet), which holds no credential, runs
-  no agent, and runs a cordoned candidate's macOS-host checks on the daemon's
-  host only. Because `prod`, `dev`, and `ephemeral` instances share the
-  owner's account, the cordon denies a run, and the verifier's rule file a
-  job, every instance's state on the host, not only its own instance's.
+  Runs; revisions 134 and 137), which runs a writer or a candidate's
+  self-check on any eligible host, the daemon's or an extra one; and an
+  uncordoned run, admitted only on an extra host whose run account isn't
+  the daemon owner's, on a proof of its own (revision 137). Because `prod`,
+  `dev`, and `ephemeral` instances share the daemon's host and its owner's
+  account, and every instance's runs share an extra host's run account, the
+  cordon denies a run every instance's state on the host, not only its own
+  instance's.
 - **Supervised tiers keep fixed ports.** The app keys its Keychain device
   credential by a hash of the daemon URL, so moving a supervised port orphans
   the pairing. `ephemeral` listens on port `0` by default and pairs afresh on
@@ -7651,8 +7695,11 @@ scopes are not the Workflow settings layers of Section
   remains the first: `prod` adopts a merged daemon change when the operator
   re-runs `app/scripts/install-mac-app.sh --daemon-path ...`. The control
   plane's daemon has no self-updater: the operator starts every update of it.
-  A runner host will install the control plane's build by itself (Section
-  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts; not built yet, #3112 on tracker #2161).
+  An execution host runs the daemon's build, which the fleet repository
+  installs where no run can write it, and a host on another build is
+  ineligible (Section
+  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+  Hosts; revision 137; not built yet, #3112).
   The installer drains through the daemon before it swaps the bundle (Section
   [5.2](#52-the-daemon-and-its-supervisor), Update drain; revision 116). That drain is not built yet (tracker
   #3113): today the installer's re-run restarts the daemon with no drain.
@@ -7935,9 +7982,9 @@ waits until the project image, carrying the Go and Swift toolchain paths,
 verifies the Linux-clean checks and the macOS verification executor verifies
 the Apple-only ones, both networkless under the criteria above (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Toolchains and
-macOS Execution). A cordoned candidate's Apple-only checks run cordoned
-instead, and until that class is admitted they are refused unless the
-operator sends them to the executor (Cordoned Verification; revision 135).
+macOS Execution). A cordoned candidate's checks are a self-check on a host
+instead, and until that is built they are refused unless the operator sends
+them to the executor (Cordoned Verification; revision 137).
 Freeside's trust profile protects no repository-specific path and marks
 automation-control advisory (owner, 2026-11-11; Freeside's profile takes
 `advisory` at its next onboarding review), so agents may edit verification recipes such as `scripts/check.sh`,
@@ -7948,32 +7995,32 @@ request. The work runs on the ad hoc tracker #2873, starts by fiat, and does not
 1B.1 exit.
 
 **macOS execution: Linux-first cores and a credential-free verifier (revision
-96).** The class revision 92 left open is decided in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
-Execution: a Swift project's agents develop in Linux wards against a Swift
-project image; a credential-free macOS verification executor, the
-verification room of the runner on a macOS execution host (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-Execution Hosts), verifies the Apple-only modules under `unattended` as
+96).** The class revision 92 left open is decided in Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution:
+a Swift project's agents develop in Linux wards against a Swift project image;
+a credential-free macOS verification executor, the which revision 137 keeps on
+the daemon's host, verifies the Apple-only modules under `unattended` as
 pooled per-slot accounts; and writer work that needs macOS waits for a
-UI-writer tier (a VM, or a second Mac enrolled as an execution host) that
-Phase 4 keeps. The executor holds neither a token nor a placeholder, so it
-sits outside the credential modes. A UI writer in a VM guest holds a provider
-token as a file under `subscription_contained`, as a ward does; a host-run
-writer context, on either Mac, waits for `subscription_injected` (Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency)), where it holds a placeholder, which is what makes it defensible at
-all (revision 95). That mode is held (revision 103), so these writers keep
-waiting and never fall back to copying the token. Two spikes on the reference host gated the text:
-SwiftUI `ImageRenderer` renders for a uid with no window-server session, and
-per-uid packet-filter rules refute off-host egress while a sandbox profile
-closes loopback and the system resolver. Freeside's module split is done
-(#2182), so the Linux-clean half of `app/` can build and test in a ward once
-the Swift toolchain path lands. The order
-of work, on tracker #2873 (revision 113): the Swift toolchain path for
-project images (#2183); one image that carries both Go and Swift (#2881);
-trusted recipe commands that name their room (#2875); the executor (#2876,
-#2877, #2878, #2879, #2880); verification across both rooms (#2882); the
-whole-repository onboarding (#2883); and the live run (#2382).
-Straylight still needs its module split, in its own repository, before it
-can follow the same order. `app/` is onboarded once the executor is
+UI-writer tier (a VM since revision 137) that Phase 4 keeps. The executor
+holds neither a token nor a placeholder, so it sits outside the credential
+modes. A UI writer in a VM guest holds a provider token as a file under
+`subscription_contained`, as a ward does; a host-run writer context, on either
+Mac, waits for `subscription_injected` (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)), where it holds a
+placeholder, which is what makes it defensible at all (revision 95). That mode
+is held (revision 103), so these writers keep waiting and never fall back to
+copying the token. Two spikes on the reference host gated the text: SwiftUI
+`ImageRenderer` renders for a uid with no window-server session, and per-uid
+packet-filter rules refute off-host egress while a sandbox profile closes
+loopback and the system resolver. Freeside's module split is done (#2182), so
+the Linux-clean half of `app/` can build and test in a ward once the Swift
+toolchain path lands. The order of work, on tracker #2873 (revision 113): the
+Swift toolchain path for project images (#2183); one image that carries both
+Go and Swift (#2881); trusted recipe commands that name their room (#2875);
+the executor (#2876, #2877, #2878, #2879, #2880); verification across both
+rooms (#2882); the whole-repository onboarding (#2883); and the live run
+(#2382). Straylight still needs its module split, in its own repository,
+before it can follow the same order. `app/` is onboarded once the executor is
 conformance-proven; writer work that itself needs macOS stays under the
 bootstrap exception.
 
@@ -7986,6 +8033,14 @@ Apple-only checks from the executor's slots to cordoned verification on the
 daemon's host; the executor keeps every other candidate (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
 Verification; tracker #3462).
+
+Revision 137 runs cordoned writers and their checks on extra hosts as well as
+the daemon's, as each host's run account, and replaces revision 135's
+cordoned verifier with a self-check on a host, which proves no clean room;
+the project's CI and the owner's review are the independent check, and the
+executor still keeps every candidate the self-check doesn't take (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs,
+Cordoned Verification, and Execution Hosts; tracker #3462).
 
 ### Phase 1A: The Secure Publish Path, in Three Internal Exits
 
@@ -8259,13 +8314,13 @@ working, until it closes.
   other; and with the memory budget full, image upkeep and a scheduled proof
   pass wait for memory.
 - **Stage 2: many projects, and the process-wide waits removed.** Every
-  gate and loop resolves per project, and a task waits only for the four
+  gate and loop resolves per project, and a task waits only for the five
   resource limits or its own project's state. Exit: tasks from two
   projects on different images are in flight at once in one daemon, their
   verifications overlap, and breaking one project's readiness holds only
   that project; and with one project's GitHub, research, and provider calls
   stalled, the other still dispatches, verifies, and publishes, and the only
-  waits observed are the four resource limits (Section
+  waits observed are the five resource limits (Section
   [5.4](#54-credential-modes-egress-profiles-and-concurrency)), a project's
   own state, and bounds kept on purpose, such as oldest-first memory order.
 - **Stage 3: operate and measure.** Measure the installed daemon's pace with
@@ -8418,9 +8473,11 @@ Expand beyond the first constrained path:
 - APNs;
 - `provider_web_read` where explicitly accepted;
 - OCR image scanning if warranted;
-- execution hosts beyond the daemon's (Section
-  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts;
-  tracker #2161), fenced until a start trigger there holds (revision 94); and
+- warded launches on hosts beyond the daemon's, which a later revision
+  specifies (Section
+  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+  Hosts; tracker #2161; revision 137); cordoned runs on extra hosts are
+  tracker #3462's; and
 - the Linux deployment matrix if wanted, entering as an execution host.
 
 `subscription_injected` and `api_key_isolated` (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) are held by
@@ -8438,14 +8495,15 @@ initiative view moved to 1B.2 (revision 25), basic usage display to 1B.1
 99), the work status view, which this paragraph called "WIP views", to
 tracker #3231 (revision 126), and a read-only live view of a running writer
 to tracker #3461 (revision 132; Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-Writer Outcome Authority). Routing on task class, quality, latency, and cost
-stays here, and so does ACP interactive attachment, which carries mid-turn
-steering.
+Writer Outcome Authority). Steering a running writer with a message moved to a
+tracker the owner starts by fiat (revision 137; same section). Routing on task
+class, quality, latency, and cost stays here, and so does ACP interactive
+attachment.
 
 ### Phase 4: Generalization
 
 After three real workflow shapes, consider a pipeline DSL. Add more agents and
-skills, a macOS UI-writer tier (a VM or a second Mac; Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
+skills, a macOS UI-writer tier (a VM; Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
 Execution) for macOS writer work that warrants a ward, App Intents,
 widgets, Live Activities, and voice. Cordoned writers end macOS writer
 work's wait for that tier (revision 134).
@@ -8501,53 +8559,123 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 136 ("React to a Published Pull Request's Required Check"):
+Revision 137 ("Cordoned Runs on Several Hosts"):
 
-1. **Freeside reads the required check while the ready card is open**
-   (Section [7](#7-review-policy)): every check the target branch requires,
-   from the GitHub Actions jobs on the head it handed off, shown on the card
-   as pending, passed, or failed. The card is shown with the check's state,
-   not held until it settles. This replaces the named gap of "Freeside neither
-   requires nor verifies them" for that interval; the gap stays for later
-   tips and after the card closes.
-2. **A failed job that never got a runner is rerun,** at most twice per head,
-   on a token narrowed to rerunning. The App gains `actions: write`, which the
-   owner accepts on GitHub; until then nothing reruns.
-3. **A job that failed at a step starts a check-failure cycle** on the head
-   Freeside published, run as a hand-back cycle is, under its own authority:
-   it never adopts a head someone else pushed.
+1. **Cordoned runs execute on any eligible host, as its run account** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs
+   and Execution Hosts). One daemon, on the daemon's host, starts them. The
+   run account is the owner's there and the standard account `agent` on an
+   extra host. Cordoned is the first runner class and the ward the second.
+   Writing, remediation, and their checks go first to the host that holds
+   the task's worktree, then to the least loaded; specification, research,
+   review, import, publication, and every warded launch stay on the daemon's
+   host.
+2. **An extra host holds no stored credential** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). The token travels with each launch to the run's supervisor on an
+   inherited pipe, never through a login shell. A host is trusted with each
+   run's token while it runs, the task's inputs, and its report of a run's
+   end and a verdict; the owner's unconfined sessions on the run account are
+   inside its trust, and no cordoned run is, though code a run plants for
+   those sessions runs with their reach. Nothing on the run account can
+   replace the program that starts runs. The operator names each host once;
+   the daemon authenticates a host before each launch; a host runs the
+   daemon's build, replacing revision 116's protocol-version rule. Revision
+   94's runner, pairing, and token volumes leave the plan body, and warded
+   launches stay on the daemon's host until a later revision. No execution
+   host runs a self-hosted Actions runner.
+3. **A cordoned candidate gets a self-check on a host** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+   Verification). After import, on a fresh checkout of the imported commit,
+   under the writer's cordon with no credential and no agent. It proves the
+   recipe passed there for that commit, not a clean room; CI and the owner's
+   review are the independent check, and a project with no CI says so on its
+   pull request. Revision 135's class and its walls go. A failed required
+   command still blocks publication.
+4. **The Simulator and desktop control are standing project settings**
+   (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Cordoned Runs), honored only on a host whose run account isn't the daemon
+   owner's and recorded as uncordoned. Desktop control covers capture and
+   input, needs the console approvals, runs only while the run account holds
+   the console, one run at a time per host, and, until a host proves that
+   runs without it can't capture or type (#3602), an approved host runs only
+   projects with it. A Simulator run exports only after its devices are shut
+   down and deleted. Revision 134's per-run grants go.
+5. **Hosts are fleet-managed and show trouble as states** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). Freeside asks for no step per run and none of its own per host; the
+   console steps macOS requires are fleet setup. No desktop session, no
+   reach, a failed proof, or another build makes a host ineligible with one
+   `advisory` item that clears itself (Section [4](#4-the-attention-model));
+   a lost host stays the owner's call.
+6. **One count per host and instance, with a default, and a pressure hold**
+   (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency),
+   Machine Capacity), covering writers and checks; the limits are five.
+7. **The open network stays on every host** (Section
+   [5.4](#54-credential-modes-egress-profiles-and-concurrency)); #3476 and
+   #3477 are held until extra hosts run.
+8. **A project may onboard with no project image** (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent
+   and Project Images): its recipe is bound by its own digest, it runs
+   cordoned only, and every candidate of it gets the self-check.
+9. **Each project's files pick tool versions** through native managers, on
+   a fixed `PATH` list the same on every host; mise waits on #3599 and #3601.
+   What Freeside itself runs on a host comes from paths no run can write.
+10. **The operator can steer a running writer** (Section
+    [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
+    Outcome Authority), on a tracker started by fiat; ACP interactive
+    attachment stays in Phase 3.
+11. **The owner accepts the residuals** (Section [14](#14-risks)): a run
+    reads what the account holds beyond the fixed denials and the
+    environments of the account's processes, and writes shared caches and
+    startup files that run later outside the cordon; a Simulator or desktop
+    run reaches everything `agent` can, and a desktop run can type into any
+    app in the session; a run's browser has its own sandbox off; two
+    Simulator services outlive a Simulator run; the owner's unconfined
+    sessions, and code a run plants for them, reach the program that starts
+    runs; and a host supplies the self-check verdict.
 
-Rejected: holding the ready card until the check settles, because the card is
-what the reconciler observes a published pull request through; a project
-setting that names the check, because the base branch already says which
-checks it requires; reusing the hand-back authority, because that authority
-adopts a head Freeside did not push; and rerunning without a new permission,
-which GitHub doesn't allow.
+Rejected: the plan's dial-out runner with pairing, more than a cordoned run
+needs and a host credential the owner's sessions could read; a command over
+SSH per launch, which passes the token through a login shell a run can
+rewrite; per-run grants for the Simulator and the desktop, recurring owner
+work; a broker for Simulator operations; a per-run Simulator device set as
+isolation, which nothing makes a run use; verification in the writer's
+worktree first, which needs new binding logic; ending a run lost
+automatically when its host is unreachable, which a network fault would turn
+into duplicate writers; killing a run under memory pressure; and capability
+labels and tool probes per host, since the fleet keeps hosts uniform.
 
-(Owner decisions of 2026-11-24 on #3598, from #2382's routing rerun;
-[decision note](../devlog/2026-11-24-2350-required-check-reaction.md).)
+Nothing in this revision is built yet: tracker #3462 builds it, and the first
+cordoned run on an extra host waits on #3602; #3600 and #3603 have added the
+denials of the owner's files the spike found readable.
+
+(Owner decisions of 2026-11-24 on #3597, with that issue's recommended
+answers to its open decisions, measured by the #3596 spike
+([report](spikes/cordoned-shared-host.md));
+[decision note](../devlog/2026-11-25-0151-cordoned-runs-on-hosts.md).)
 
 ## 14. Risks
 
 | Risk | Current response |
 | --- | --- |
-| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected`, held by owner decision (revision 103), would remove the token from the writer and bound a leak to the run's own provider use on declared paths; the search channel would remain. A cordoned writer also holds its identity's token, on the host under the cordon rather than in a VM, with its own residual (Cordoned runs on the owner's account, below; revision 134). |
+| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected`, held by owner decision (revision 103), would remove the token from the writer and bound a leak to the run's own provider use on declared paths; the search channel would remain. A cordoned writer also holds its identity's token, on a host under the cordon rather than in a VM, with its own residual (Cordoned runs on a shared account, below; revisions 134 and 137). |
 | Provider traffic terminated at the control plane under `subscription_injected` | Held by owner decision (revision 103): nothing runs this design until a revision lifts the hold, and the rest of this row is the held design's response. The proxy holds no durable key: a per-run CA, discarded at teardown; the identity's token stays on the credential volume and in the run's proxy memory. It substitutes the placeholder on the declared provider authorities and paths only, refuses credential shape anywhere else and every refresh or account path, verifies the provider's certificate against the system roots with the server name pinned, admits only the run's network, and records every substitution without bodies. The owner accepts what the provider now sees: the daemon's TLS and HTTP client in place of the vendor CLI's, which a provider's bot defence may treat differently; the egress address is unchanged, since the daemon host already originates every tunnel. Residual: a compromised writer still spends the run's identity, request by request, visibly. The subscription-terms judgment on a substituting proxy is the owner's, per vendor. For Claude it is one reason for the hold: with a subscription token, Anthropic would see the daemon's TLS and HTTP client sending Claude Code's requests, close to the Usage Policy's bar on services that "route requests through consumer subscriptions or misrepresent the product or client being used" (effective 2026-11-12). |
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable; no wider escape is offered while `api_key_isolated` is held (revision 103). Under the held `subscription_injected` design the registry tunnel would be unchanged, but the writer would hold no provider token for such a publish to carry. |
-| Live view of a running writer | Show a running writer's transcript only under the conditions in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer Outcome Authority: the daemon pulls it, scans it as it grows, ends it on a match, stores nothing it shows, and clients render it inertly as unverified agent output. Residual, accepted by the owner (revision 132): content the credential rules miss, such as an encoded or partial token, reaches the operator's clients while the writer runs, and content displayed before a later match can't be taken back, though that match withholds the whole retained transcript. |
-| CI privilege crossing | Attest effective authority; block candidate automation changes by default; fail closed on drift, except a workflow change that a merged, surfaced Freeside pull request explains (Section [5.5](#55-the-ci-trust-boundary); not yet built, #3140); prohibit the daemon host as a runner. Residuals under an `advisory` profile: a candidate's workflow runs before review with whatever authority the repository's settings give a pull-request job, can merge a pull request where the branch rules let its token, and can rewrite the pull request's body, advisory section included. So the owner keeps secrets, environments, runners, and merging out of reach of pull-request jobs before opting in, and acceptance counts the advisory on the ready card, which no candidate can edit. And the profile's limits don't describe jobs on other triggers, so the advisory's job list and the owner's merge are the check on those. |
+| Live view of a running writer | Show a running writer's transcript only under the conditions in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer Outcome Authority: the daemon pulls it, scans it as it grows, ends it on a match, stores nothing it shows, and clients render it inertly as unverified agent output. Residual, accepted by the owner (revision 132): content the credential rules miss, such as an encoded or partial token, reaches the operator's clients while the writer runs, and content displayed before a later match can't be taken back, though that match withholds the whole retained transcript. Steering a running writer (revision 137) adds operator input to the transcript, never agent output, and changes none of these conditions. |
+| CI privilege crossing | Attest effective authority; block candidate automation changes by default; fail closed on drift, except a workflow change that a merged, surfaced Freeside pull request explains (Section [5.5](#55-the-ci-trust-boundary); not yet built, #3140); prohibit every execution host as a runner (revision 137). Residuals under an `advisory` profile: a candidate's workflow runs before review with whatever authority the repository's settings give a pull-request job, can merge a pull request where the branch rules let its token, and can rewrite the pull request's body, advisory section included. So the owner keeps secrets, environments, runners, and merging out of reach of pull-request jobs before opting in, and acceptance counts the advisory on the ready card, which no candidate can edit. And the profile's limits don't describe jobs on other triggers, so the advisory's job list and the owner's merge are the check on those. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipes v2 and v3 (Section [5.15](#515-evidence-and-images)) render authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
 | **Agent text in a public issue comment** | The specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts a digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, reserved Freeside markers, and command shapes. It posts when the daemon accepts the specification, so screened agent text reaches a public issue before a person reads it, and with `gates.spec_approval` off a person may never read it first; the screen, not a reader, is the check. One comment per task is edited in place, and a revision whose public plan the screen refuses shows the frame alone. Residual: an edit that is refused or hasn't landed leaves the earlier rendering, and an ambiguous create can leave a comment and claim the daemon cannot edit, which the `system_health` item asks a person to delete. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token, which edits only the comment whose ID the daemon stored. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each create and each edit. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment, and possibly an edit, resets stale-issue timers; each sees one screened comment per task, and each state change is another `issue_comment` event with the `edited` action. |
 | **Maintenance tasks Freeside opens for itself** | Project-image upkeep submits a task only for a refusal that needs a repository repair, through the ordinary submission primitive with a daemon origin and the refusal record as its source (Section [5.12](#512-workflow-definition-initiators-and-artifacts)). It passes the ordinary specification approval and the full publication gate like any operator-submitted task, never files an issue, and opens at most one task per refusal record. Residual: operator attention on a task nobody asked for, bounded by the refusal classes that may open one (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose enrollment shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
-| **Host-side macOS verification** | This row is the slot executor, which verifies the macOS-host commands of every candidate that cordoned runs alone didn't write, and of a cordoned candidate only by the operator's setting; a cordoned candidate's have their own row below (revision 135). The executor holds no credential and runs no agent; a sandbox profile that denies all network but the slot's own reserved ports on the host's own addresses, plus per-uid packet-filter rules for off-host traffic, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. A job's listener on a reserved port is reachable from other uids on the host, and from off-host only past the packet filter, a layer the probe can't exercise; and a host process that binds a reserved port during a job is reachable from it. |
-| **Cordoned runs on the owner's account** | A cordoned writer runs as the owner on the daemon's host, held by fixed denials, each conformance-proven and probed before every unattended job: no reading the owner's credentials or the login keychain or using them through a key agent, no reading or writing any instance's daemon state or the enrolled tokens, directly or through the container runtime, nothing started outside the cordon through launchd, Launch Services, or a Simulator, no signal, attach, or connection to a daemon's socket outside the run, and no write to anything the daemon, import, clean verification, or publication trusts but the owner's temporary directory and Clang module cache, including the programs the daemon runs and, since revision 135, a cordoned verification job's own directories, the verifier's own toolchain and caches, and the preferences a job reads, with no read of a job's directories and no bind of its ports (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs). The token reaches the CLI alone, no process the daemon starts carries a secret in its arguments or environment (admission waits on #3550), export waits until no process of the run is alive, and import, review, and publication are unchanged. A candidate that only cordoned runs wrote has its macOS-host checks verified cordoned (Cordoned verification on the owner's account, below). A writer run the operator marks for material the owner doesn't trust gets a warded run, and a Simulator-granted run's devices are shut down before export. The harness's review of each action is a second check, not a boundary. The owner accepts the residual (revision 134), the exposure hand-run sessions on the same account already carry. Residual: a missed rule or a sandbox bug exposes the owner's account; the owner's credentials and Freeside's App key sit on the same account as the agent, behind the denials alone; the CLI process holds the provider token; the end-of-run proof rests on finding every process the run started, weaker than a VM's end; and the network is open until the network rule lands (#3477), so anything a tool can read, it can send. What the spikes measured and no rule closes: a tool reads the environment of any other process on the account, so a secret another session keeps in its environment, such as another agent's token, is exposed; a run can write outside the denied places, including files that run code later, outside the cordon, such as other projects' source and Git hooks, shell startup files, and Git configuration; cordoned runs that share the account aren't isolated from each other beyond the denial of writes to each other's worktrees; the clipboard and the screen are open; the Simulator's services and devices run as the owner outside the cordon, where a process in a device listed `~/.ssh` and the login keychain's directory (#3526), so the cordon denies the Simulator and a run granted one is recorded as uncordoned; and the nested sandboxes of SwiftPM, Xcode, and the CLI are off, because the cordon's can't nest. |
-| **Cordoned verification on the owner's account** | A candidate that only cordoned runs wrote has its macOS-host commands run on the daemon's host as the owner, under a verifier rule file whose denials are each conformance-proven and probed before every job: no reads beyond the job, writes only to its own places, network only at its own reserved ports, no reach into other processes or the Simulator, dependencies from the offline cache, and a proven end (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Verification). A warded candidate, and any head a warded or uncordoned run, or no Freeside run, helped write, keeps the slot executor; a cordoned candidate reaches the slot executor only by the operator's setting, and a lapsed cordoned proof refuses the job rather than moving it. A verdict with any command run cordoned is recorded as cordoned. The owner accepts the residual for cordoned candidates (revision 135): the slot's wall was set when nothing untrusted ran as the owner, but a cordoned candidate has already run as the owner, the daemon, its verdict records, and the App key already rest on the writer's cordon, and review, the owner's approval, and the repository's own CI still stand between a verdict and a merge. Residual, measured by the cordoned-verifier spike (#3526): Xcode's tools share the owner's temporary directory and Clang module cache with every writer and every other job, so a writer could plant what a job reads, such as a module the package-manifest compile loads and the job then runs (write access was shown; no poisoned module was built); any process on the account reads another's environment, so a job reads the daemon's and every agent CLI's, and a writer reads a job's; a job reads and replaces the owner's pasteboard, and reaches the screen unless its rule file is shown to deny the window server; helpers launchd starts for a job, such as Xcode's interface builder service, run outside its rule file, and the end-of-job proof doesn't find them, so whether one outlives the job is unmeasured; teardown finds a job's processes by sandbox membership, not by uid, and rests on a private system call that a macOS update could break, which conformance would then catch by failing; and the sandbox is the only network layer. Unprobed but following from that rule, which filters by port and not by address: a job's listener on a reserved port accepts connections from writers and other processes on the account and from off the host, with no packet filter in front of it. A job's artifacts publish under the same policy as any verifier artifact, so a job can render what it can read, such as the pasteboard or another process's environment, into an image text scanning can't inspect. |
+| **Host-side macOS verification** | This row is the slot executor, which verifies the macOS-host commands of every candidate the self-check doesn't take, and of a cordoned candidate only by the operator's setting; a cordoned candidate's self-check has its own row below (revision 137). The executor holds no credential and runs no agent; a sandbox profile that denies all network but the slot's own reserved ports on the host's own addresses, plus per-uid packet-filter rules for off-host traffic, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes. A job's listener on a reserved port is reachable from other uids on the host, and from off-host only past the packet filter, a layer the probe can't exercise; and a host process that binds a reserved port during a job is reachable from it. |
+| **Cordoned runs on a shared account** | A cordoned writer runs on a host as that host's run account, held by fixed denials, each conformance-proven on its host and probed before every unattended job. The run account is the owner's on the daemon's host, and on an extra host `agent`, which the owner's own unconfined sessions share. The denials: no reading the run account's credentials or the login keychain or using them through a key agent; no reading or writing any instance's daemon state or the enrolled tokens, directly or through the container runtime; nothing started outside the cordon through launchd, Launch Services, or a Simulator; no signal, attach, or connection to a daemon's socket or to the program that starts runs on a host; no write to anything the daemon, import, clean verification, or publication trusts but the owner's temporary directory and Clang module cache, including the programs Freeside runs on any host; and no read or write of another task's checkout (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs). The token reaches the CLI alone and travels to an extra host with each launch, stored on none; no process the daemon starts carries a secret in its arguments or environment; export waits until no process of the run is alive; and import, review, and publication are unchanged. A writer run the operator marks for material the owner doesn't trust gets a warded run on the daemon's host. The harness's review of each action is a second check, not a boundary. The owner accepts the residual (revisions 134 and 137), the exposure hand-run sessions on the same account already carry. Residual: a missed rule or a sandbox bug exposes the run account; on the daemon's host the owner's credentials and Freeside's App key sit on the same account as the agent, behind the denials alone; the CLI process holds the provider token; the end-of-run proof rests on finding every process the run started, weaker than a VM's end; and the network is open on every host while the network rule is held (#3477), so anything a tool can read, it can send. What the spikes measured and no rule closes: a tool reads the environment of any other process on the account, so a secret another session keeps in its environment, such as another agent's token, is exposed, and on an extra host the owner's unconfined sessions read a run's environment and a run reads theirs; a run can write outside the denied places, including files that run code later outside the cordon, such as other projects' source and Git hooks, shell startup files, Git configuration, and the version-manager directories and tool and dependency caches that every run and the owner's sessions share (#3596); the denials are a fixed list, so a run reads whatever the account can read and the list doesn't name, such as the second Claude configuration directory and the fleet's signing key the spike found on the Mac mini, which #3600 and #3603 have since denied; cordoned runs that share the account aren't isolated from each other beyond the denial of each other's checkouts; the clipboard is open, and so are the screen and input on a host where the program that starts runs holds their approvals, which is why such a host runs only projects with the setting and the daemon's host runs no cordoned work while that program holds either (#3602); a run's headless browser runs with its own sandbox off, so the cordon is the only wall around a page's content, and it writes two preference files outside the run; and the nested sandboxes of SwiftPM, Xcode, the CLI, and the browser are off, because the cordon's can't nest. The Simulator and desktop control, each a standing project setting honored only on a host whose run account isn't the daemon owner's, record the run as uncordoned, and such a run reaches everything its run account can, other runs' worktrees and later runs' tokens included, because device processes and the commands it types run outside the rule file and the run-end proof. Measured by #3596: a desktop-control run can type into any app in the session, so it can run commands outside the cordon, and the owner's own keystrokes land in its window while it is frontmost; macOS charges the screen and input approvals to the program that starts runs, so they reach every run on an approved host, which runs only projects with the setting until its proof shows otherwise (#3602); two Simulator launchd services outlive each Simulator run's device shutdown; and the owner's unconfined sessions on `agent` reach the program that starts runs, and so does code a cordoned run plants for them, such as a shell startup file the fleet's automation sources (#3596 item 1), which then runs with the account's whole reach, other runs' checkouts, later runs' tokens, and the host's reports of run ends and verdicts included, so a host is trusted as far as those sessions are; the spike's stand-in also sat where they could replace it, and the fleet's install doesn't (#3602). |
+| **A cordoned candidate's self-check** | A candidate that only cordoned or uncordoned runs wrote, and every candidate of a project with no project image, is checked after import on a host: a fresh checkout of the imported commit, under the writer's cordon as the run account, with no credential and no agent, a fresh workspace per command, and a verdict bound to that commit (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Verification). Its verdict proves that the recipe's commands passed on that host for that commit, not a clean room: a check uses the run's `PATH`, the tool and dependency caches every run and the owner's sessions share, and the host's network, so a writer, an earlier run, or an owner's session could plant what a check runs. A failed required command still blocks publication at the re-gate. The project's CI and the owner's review of the pull request are the independent check; a project with no CI gets the same self-check, and its pull request says no independent check ran (Section [5.5](#55-the-ci-trust-boundary)). A warded candidate, and any head a warded run or no Freeside run helped write, keeps the slot executor in a project with a project image. The owner accepts the residual (revision 137, replacing revision 135's cordoned verifier). Residual: a host supplies the verdict, so a compromised host, or code a run planted for an unconfined session there, can report a pass, with CI and the owner's review behind it; a check reads the environment of every process on the account and whatever the account can read beyond the denials, and can render it into an image text scanning can't inspect; and no check has run on an extra host yet, since #3596 used stand-ins. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
-| Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. Cordoned launches reserve no VM, so an operator-set count per instance bounds them, not the memory budget (revision 134), and a separate count bounds cordoned verification jobs (revision 135); neither count can see what each run's or job's builds use. |
-| Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold needs `subscription_injected` through control-plane injection, under which it would receive no copy (revision 95); that mode is held (revision 103), so such a host waits and is not enrolled meanwhile. |
+| Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. Cordoned runs reserve no VM, so one count per instance and per host bounds writers and self-checks together, with a built-in default the operator may override, and a host whose memory pressure isn't normal takes no new launch (revisions 134 and 137). Residual: the count can't see what each run's builds use, and instances that share a host add their counts. |
+| Execution host trust | No extra host stores a provider credential: each run's token travels with its launch and lives on the host only while the run does, and Freeside puts no GitHub credential, App key, or daemon state on an extra host (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts; revision 137, replacing revision 94's token volume on every host). The daemon sends a launch only to a host it has authenticated, and every host is owner-held. Residual: a host holds each running run's token, so a compromised host can spend it; a host's report of a run's end and of a self-check's verdict is trusted as far as the host is; the owner's own credentials sit on the run account behind the denials; and the owner's unconfined sessions on the run account are inside the host's trust, and so is code a cordoned run plants for them, such as a shell startup file, which can spend a later run's token or forge a host's report. A host the owner does not hold would need `subscription_injected` (revision 95), which is held (revision 103), so no such host is enrolled (#3421). |
 | Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with a selection on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted or report its weekly reset, which the router reads to rank and pick a new task's pool and the quota park reads to time a parked task's next attempt; admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. Open question: whether Anthropic permits choosing among one owner's Claude subscriptions to spend each before its reset (the routing policy's drain-first by reset, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). The Consumer Terms (effective 2025-10-08) forbid "bypassing any of our systems or protective measures", and Claude Code's legal page says advertised Pro and Max limits "assume ordinary, individual usage". Current response (revisions 103 and 107): the router chooses a subscription only for new tasks, ranking by reset, and pins each task to it, nothing fails over mid-task, and proxy credential injection is held. Recommended: ask Anthropic; its answer reopens revisions 103 and 107. |
@@ -8561,7 +8689,7 @@ which GitHub doesn't allow.
 | Backup confidentiality | Require encryption policy and exclude credentials by default. |
 | Large Phase 1A scope | Order it into three internal exits. |
 | Reviewer monoculture | Require a fresh-context adversarial review at every implementation wave exit. |
-| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths by default, or surface them as advisories where the trust profile says so, and surface instruction-path edits; enforce egress floors; keep the specifier off the web, with allowlisted sources fetched by the daemon and web search done by a researcher that sees only the research questions (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); gate irreversible actions; use budgets and brakes. Residual: search results come from the open web, not an allowlist, so a research report can carry injected text to the specifier. The report is input and never authority, and the specifier's ward still connects only to its provider. An injected researcher can leak only what its ward holds, the questions and its credential. Also residual: an injected specifier can write task or repository text into its research questions, which leave as search queries; the daemon bounds and secret-scans the questions, which narrows that channel without closing it. Cordoned implementer and remediator launches offer search, and a daemon-run page fetch once it lands, so their search queries and fetched URLs are outward channels (revision 134; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). And `provider_only` does not withhold provider-side search from a warded writer's launch or the review launches (#1659). |
+| Prompt injection, the organizing threat | Keep write credentials out of workspaces; prove handoff; import through the out-of-process two-channel gauntlet; use trusted overlays; block automation paths by default, or surface them as advisories where the trust profile says so, and surface instruction-path edits; enforce egress floors; keep the specifier off the web, with allowlisted sources fetched by the daemon and web search done by a researcher that sees only the research questions (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); gate irreversible actions; use budgets and brakes. Residual: search results come from the open web, not an allowlist, so a research report can carry injected text to the specifier. The report is input and never authority, and the specifier's ward still connects only to its provider. An injected researcher can leak only what its ward holds, the questions and its credential. Also residual: an injected specifier can write task or repository text into its research questions, which leave as search queries; the daemon bounds and secret-scans the questions, which narrows that channel without closing it. Cordoned implementer and remediator launches offer search and, while the network rule is held, the host's open network, so their search queries and anything a tool sends are outward channels (revisions 134 and 137; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). And `provider_only` does not withhold provider-side search from a warded writer's launch or the review launches (#1659). |
 
 ## 15. Naming and References
 
@@ -8575,7 +8703,7 @@ which GitHub doesn't allow.
 | **control plane** | The daemon's architectural term: what decides what runs, where, with what, and what survives a crash. Never the category line. |
 | **the harness runs the agent; you hold the reins** | Tagline. |
 | **ward** | Runner, handoff, and safety boundary. |
-| **cordon** | Fixed denials around a writer run on the daemon's host. Not a ward: no VM, and it denies only what it names. |
+| **cordon** | Fixed denials around a writer run, or its candidate's self-check, on a host. Not a ward: no VM, and it denies only what it names. |
 | **signet** | Attention and approval service. |
 | **gauntlet** | Export, hostile import, clean verification, and evidence path. |
 | **freesided** | Daemon name. |

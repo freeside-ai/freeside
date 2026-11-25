@@ -4430,3 +4430,99 @@ which GitHub doesn't allow.
 
 (Owner decisions of 2026-11-24 on #3598, from #2382's routing rerun;
 [decision note](../../devlog/2026-11-24-2350-required-check-reaction.md).)
+
+## Revision 137 ("Cordoned Runs on Several Hosts"):
+
+1. **Cordoned runs execute on any eligible host, as its run account** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned Runs
+   and Execution Hosts). One daemon, on the daemon's host, starts them. The
+   run account is the owner's there and the standard account `agent` on an
+   extra host. Cordoned is the first runner class and the ward the second.
+   Writing, remediation, and their checks go first to the host that holds
+   the task's worktree, then to the least loaded; specification, research,
+   review, import, publication, and every warded launch stay on the daemon's
+   host.
+2. **An extra host holds no stored credential** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). The token travels with each launch to the run's supervisor on an
+   inherited pipe, never through a login shell. A host is trusted with each
+   run's token while it runs, the task's inputs, and its report of a run's
+   end and a verdict; the owner's unconfined sessions on the run account are
+   inside its trust, and no cordoned run is, though code a run plants for
+   those sessions runs with their reach. Nothing on the run account can
+   replace the program that starts runs. The operator names each host once;
+   the daemon authenticates a host before each launch; a host runs the
+   daemon's build, replacing revision 116's protocol-version rule. Revision
+   94's runner, pairing, and token volumes leave the plan body, and warded
+   launches stay on the daemon's host until a later revision. No execution
+   host runs a self-hosted Actions runner.
+3. **A cordoned candidate gets a self-check on a host** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
+   Verification). After import, on a fresh checkout of the imported commit,
+   under the writer's cordon with no credential and no agent. It proves the
+   recipe passed there for that commit, not a clean room; CI and the owner's
+   review are the independent check, and a project with no CI says so on its
+   pull request. Revision 135's class and its walls go. A failed required
+   command still blocks publication.
+4. **The Simulator and desktop control are standing project settings**
+   (Section [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes),
+   Cordoned Runs), honored only on a host whose run account isn't the daemon
+   owner's and recorded as uncordoned. Desktop control covers capture and
+   input, needs the console approvals, runs only while the run account holds
+   the console, one run at a time per host, and, until a host proves that
+   runs without it can't capture or type (#3602), an approved host runs only
+   projects with it. A Simulator run exports only after its devices are shut
+   down and deleted. Revision 134's per-run grants go.
+5. **Hosts are fleet-managed and show trouble as states** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). Freeside asks for no step per run and none of its own per host; the
+   console steps macOS requires are fleet setup. No desktop session, no
+   reach, a failed proof, or another build makes a host ineligible with one
+   `advisory` item that clears itself (Section [4](../plan.md#4-the-attention-model));
+   a lost host stays the owner's call.
+6. **One count per host and instance, with a default, and a pressure hold**
+   (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency),
+   Machine Capacity), covering writers and checks; the limits are five.
+7. **The open network stays on every host** (Section
+   [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency)); #3476 and
+   #3477 are held until extra hosts run.
+8. **A project may onboard with no project image** (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Golden Agent
+   and Project Images): its recipe is bound by its own digest, it runs
+   cordoned only, and every candidate of it gets the self-check.
+9. **Each project's files pick tool versions** through native managers, on
+   a fixed `PATH` list the same on every host; mise waits on #3599 and #3601.
+   What Freeside itself runs on a host comes from paths no run can write.
+10. **The operator can steer a running writer** (Section
+    [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
+    Outcome Authority), on a tracker started by fiat; ACP interactive
+    attachment stays in Phase 3.
+11. **The owner accepts the residuals** (Section [14](../plan.md#14-risks)): a run
+    reads what the account holds beyond the fixed denials and the
+    environments of the account's processes, and writes shared caches and
+    startup files that run later outside the cordon; a Simulator or desktop
+    run reaches everything `agent` can, and a desktop run can type into any
+    app in the session; a run's browser has its own sandbox off; two
+    Simulator services outlive a Simulator run; the owner's unconfined
+    sessions, and code a run plants for them, reach the program that starts
+    runs; and a host supplies the self-check verdict.
+
+Rejected: the plan's dial-out runner with pairing, more than a cordoned run
+needs and a host credential the owner's sessions could read; a command over
+SSH per launch, which passes the token through a login shell a run can
+rewrite; per-run grants for the Simulator and the desktop, recurring owner
+work; a broker for Simulator operations; a per-run Simulator device set as
+isolation, which nothing makes a run use; verification in the writer's
+worktree first, which needs new binding logic; ending a run lost
+automatically when its host is unreachable, which a network fault would turn
+into duplicate writers; killing a run under memory pressure; and capability
+labels and tool probes per host, since the fleet keeps hosts uniform.
+
+Nothing in this revision is built yet: tracker #3462 builds it, and the first
+cordoned run on an extra host waits on #3602; #3600 and #3603 have added the
+denials of the owner's files the spike found readable.
+
+(Owner decisions of 2026-11-24 on #3597, with that issue's recommended
+answers to its open decisions, measured by the #3596 spike
+([report](../spikes/cordoned-shared-host.md));
+[decision note](../../devlog/2026-11-25-0151-cordoned-runs-on-hosts.md).)
