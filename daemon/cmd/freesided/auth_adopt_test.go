@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
@@ -1522,5 +1524,92 @@ func TestAuthAdoptUnadoptableSecondWriterEmitsNoPatch(t *testing.T) {
 	if len(patch) != 0 || report.Patch != "" || len(report.Identities) != 3 ||
 		report.Identities[0].Status != authAdoptAdopted || report.Identities[2].Status != authAdoptUnadoptable {
 		t.Fatalf("report = %+v, patch %d bytes", report, len(patch))
+	}
+}
+
+// TestAuthAdoptRunsInADriverlessDaemon pins adoption on a running prod
+// (#2083). Through the control socket of a daemon that runs no driver it
+// adopts as on a stopped root and writes the patch where -patch says; the
+// same daemon running a driver refuses with one line and records nothing;
+// and the command refuses before forwarding what the daemon, which reads and
+// writes the files from its own working directory, cannot honor.
+func TestAuthAdoptRunsInADriverlessDaemon(t *testing.T) {
+	t.Parallel()
+	for _, state := range []daemoncompose.ExecutionState{
+		daemoncompose.ExecutionNotConfigured, daemoncompose.ExecutionConfigured,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+			f := newAuthAdoptFixture(t)
+			serveAdoptControl(t, f, state)
+			if _, _, err := f.run(t, f.args()); err == nil || !strings.Contains(err.Error(), "-patch <absolute file path>") {
+				t.Fatalf("patch on stdout = %v, want a refusal before forwarding", err)
+			}
+			path := filepath.Join(t.TempDir(), "adopt.patch")
+			if _, _, err := f.run(t, f.args("-patch", path, "-auth-store-root", "store")); err == nil ||
+				!strings.Contains(err.Error(), "-auth-store-root must be an absolute path") {
+				t.Fatalf("relative store root = %v, want a refusal before forwarding", err)
+			}
+
+			_, _, err := f.run(t, f.args("-patch", path))
+			if state.Runs() {
+				if err == nil || err.Error() != "auth adopt: this daemon runs a driver; run freesided execution pause, then rerun it" {
+					t.Fatalf("adoption beside a driver = %v, want the one-line refusal", err)
+				}
+				if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
+					t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("auth adopt through the daemon: %v", err)
+			}
+			patch, err := os.ReadFile(path) //nolint:gosec // G304: test-owned path
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(patch, []byte("diff --git")) || f.observed == 0 {
+				t.Fatalf("patch %q, %d volume observations; want the tree patch from an observed volume", patch, f.observed)
+			}
+			if snap := f.snapshot(t); len(snap.Enrollments) != 2 {
+				t.Fatalf("enrollments after adoption = %+v, want both identities'", snap.Enrollments)
+			}
+		})
+	}
+}
+
+// serveAdoptControl serves f's store on a control socket as a running prod
+// in state would, holding the database's daemon lock so commands forward to
+// it, with the fixture's volume observation in place of the container CLI.
+func serveAdoptControl(t *testing.T, f *authAdoptFixture, state daemoncompose.ExecutionState) {
+	t.Helper()
+	st, _, err := openStoreWithTopicKey(t.Context(), f.dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	lock, err := daemonlock.Acquire(f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+	control, err := newPairingControl(f.dbPath, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	control.adoptDeps = f.deps()
+	socket := pairingControlSocket{pairing: control, environment: environmentProd, execution: executionClaude}
+	socket.Configure("http://127.0.0.1:7331", nil)
+	socket.RegisterRoutes(daemoncompose.ControlRouteInputs{Store: st, Execution: state})
+	served := make(chan error, 1)
+	go func() { served <- socket.Serve() }()
+	t.Cleanup(func() {
+		_ = socket.Close()
+		if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	})
+	if err := socket.Publish(); err != nil {
+		t.Fatal(err)
 	}
 }
