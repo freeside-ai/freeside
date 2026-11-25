@@ -167,6 +167,9 @@
 //   - handoff_check.go a publication's sealed handoff tip and merge proof
 //   - required_check.go a ready item's reading of its pull request's
 //     required check and the class of a failure
+//   - required_check_failure.go the record of a published head's failed
+//     required check that a check_failure successor answers, and its
+//     screened log excerpts
 //   - publication_authoring.go, publication_continuation.go, publication_successor.go
 //     authored publication prose, publication re-evaluation, and successor
 //     re-entry shapes

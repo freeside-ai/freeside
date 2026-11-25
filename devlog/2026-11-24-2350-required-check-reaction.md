@@ -51,6 +51,23 @@ failed check must never grant it. The new authority is sealed only on the head
 Freeside published, from the failure record the daemon itself wrote, and
 every read re-proves both.
 
+The authority's base is the base the head's last review used, as an
+`external_review` cycle's is, so sealing it needs no forge read. Its gate
+refuses a head someone else pushed even when a later re-entry re-earned
+readiness on it, because the cycle replaces that head. One failure record
+starts one cycle, and a cycle that ended on a person blocks the next until
+that person's item closes, as for `hand_back`.
+
+## Chose Escalating the Cycle's Review Findings Over Remediating Them
+
+The plan let the cycle's review route findings to the same remediation that
+fixes the check. The implementation escalates them to a person, as every
+other in-place re-entry does, so the check's remediation always follows a
+clean review and names no finding. Routing both through one remediation
+would need an adjudication shape that answers a failure and findings at
+once; no case so far needs it, and a person seeing the findings first loses
+nothing.
+
 ## Classifier
 
 The class comes from the job facts GitHub reports, and infrastructure is

@@ -1,0 +1,23 @@
+{
+  "version": "freeside.required-check-failure/v1",
+  "run_id": "run-1",
+  "repo": "owner/repo",
+  "pr_number": 7,
+  "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "jobs": [
+    {
+      "name": "daemon / linux (test)",
+      "job_id": 11,
+      "workflow_run_id": 5,
+      "attempt": 1,
+      "excerpt_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "name": "app / test",
+      "job_id": 12,
+      "workflow_run_id": 6,
+      "attempt": 2,
+      "excerpt_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ]
+}

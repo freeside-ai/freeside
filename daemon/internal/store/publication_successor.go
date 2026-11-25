@@ -52,6 +52,9 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 		if err := tx.requireCurrentExternalReviewAdmission(ctx, successor); err != nil {
 			return err
 		}
+		if err := tx.requireCurrentCheckFailure(ctx, successor); err != nil {
+			return err
+		}
 		// A successor that replaces the publication's merge retires the
 		// replaced card here, once, at the seal; a cycle that publishes admits
 		// its own closure proposal.
@@ -85,6 +88,8 @@ func closureRetirementReason(origin domain.PublicationSuccessorOrigin) (string, 
 		return "Superseded because the pull request was handed back; Freeside reworks its current head on the target tip.", true
 	case domain.PublicationSuccessorHandoffConflict:
 		return "Superseded because the pull request's head conflicted with the target tip at handoff; a remediated head replaces it.", true
+	case domain.PublicationSuccessorCheckFailure:
+		return "Superseded because the pull request's required check failed; a remediated head replaces it.", true
 	}
 	return "Superseded because a successor cycle replaced the publication.", true
 }
@@ -163,6 +168,9 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 		return tx.validateReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorHandoffConflict:
 		return tx.validateHandoffConflictSuccessor(ctx, successor)
+	case domain.PublicationSuccessorCheckFailure:
+		_, err := tx.checkFailurePredecessorBinding(ctx, successor)
+		return err
 	case domain.PublicationSuccessorRemediation:
 		if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
 			return err
@@ -265,8 +273,7 @@ func (tx *ReadTx) requireCurrentHandBack(
 		return err
 	}
 	for _, item := range open {
-		if item.Type == domain.AttentionPublishBlocked || item.Type == domain.AttentionReviewDispute ||
-			item.Type == domain.AttentionReviewDiminishing {
+		if ReworkCycleEnding(item) {
 			return fmt.Errorf("seal hand-back while %s is open: %w", item.ID, domain.ErrParentKeyMismatch)
 		}
 	}
@@ -423,12 +430,12 @@ func (tx *ReadTx) validateHandoffConflictSuccessor(ctx context.Context, successo
 }
 
 // handoffCheckPublication names the handoff check a conflict on head under
-// parent resolved. A hand_back cycle hands its adopted head off under its own
-// key before it re-earns readiness (domain InPlaceHandoffID); a head a fix
-// remediation built hands off under the cycle's publication ID, as every
-// other cycle's does.
+// parent resolved. A hand_back or check_failure cycle hands its re-entered
+// head off under its own key before it goes on (domain InPlaceHandoffID); a
+// head a fix remediation built hands off under the cycle's publication ID,
+// as every other cycle's does.
 func handoffCheckPublication(parent domain.PublicationSuccessor, head string) domain.InvocationID {
-	if parent.HandsBack() && parent.Reentry.HeadSHA == head {
+	if parent.HandsOffInPlace() && parent.Reentry.HeadSHA == head {
 		return parent.InPlaceHandoffID()
 	}
 	return parent.PublicationID()
@@ -461,6 +468,13 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 	}
 	if successor.HandsBack() {
 		return tx.handBackPredecessorBinding(ctx, successor)
+	}
+	if successor.ReworksCheckFailure() {
+		// A check_failure cycle never re-earns readiness in place: a clean
+		// handoff of its head starts the remediation that answers the
+		// check, so no in-place binding may rest on it.
+		return none, fmt.Errorf("in-place binding under check_failure %s: %w",
+			successor.PublicationID(), domain.ErrParentKeyMismatch)
 	}
 	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
 	if err != nil {
@@ -533,6 +547,143 @@ func (tx *ReadTx) reentryPredecessorBinding(ctx context.Context, successor domai
 		return none, domain.ErrParentKeyMismatch
 	}
 	return ready, nil
+}
+
+// checkFailurePredecessorBinding is the every-read gate of a check_failure
+// authority (issue #3598). It returns the published binding the cycle
+// reworks. The authority is the permission to replace a head Freeside itself
+// published whose required check failed, so every read re-proves, from the
+// daemon's own records:
+//
+//   - The predecessor is the run's root ready item or a sealed successor's,
+//     a ready_for_final_review item of this run that is no longer open and
+//     was not invalidated, with its own published binding: the item the
+//     card that showed the failure was.
+//   - The head is that binding's, the item's required-check reading is a
+//     failure of class code on it, and the daemon recorded the pull request
+//     open and unmerged on it against the bound base branch.
+//   - The head is not foreign (publishedHeadIsForeign): this authority
+//     never adopts commits someone else pushed, so it never rests on a
+//     binding a head_changed re-entry left.
+//   - The prior review is the round before the cycle's, of that head, at
+//     the base the authority names.
+//   - The failure record the authority names is this run's, on that head
+//     and pull request.
+//
+// What holds only when the cycle starts is requireCurrentCheckFailure's.
+func (tx *ReadTx) checkFailurePredecessorBinding(
+	ctx context.Context, successor domain.PublicationSuccessor,
+) (domain.ReadyItemPRBinding, error) {
+	none := domain.ReadyItemPRBinding{}
+	if !successor.ReworksCheckFailure() {
+		return none, domain.ErrParentKeyMismatch
+	}
+	reentry := successor.Reentry
+	if successor.PredecessorItemID != domain.ProductionReadyItemID(successor.RunID) {
+		if _, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID); err != nil {
+			return none, errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
+	item, err := tx.GetAttentionItemRecord(ctx, successor.PredecessorItemID)
+	if err != nil || item.Type != domain.AttentionReadyForFinalReview || item.Status == domain.StatusOpen ||
+		item.ReadinessInvalidation != nil || !codeFailureOn(item.RequiredCheck, reentry.HeadSHA) {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, item.ID)
+	if err != nil || ready.RunID != successor.RunID || ready.HeadSHA != reentry.HeadSHA {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	foreign, err := tx.publishedHeadIsForeign(ctx, ready)
+	if err != nil || foreign {
+		return none, fmt.Errorf("check failure on a foreign head %s: %w", reentry.HeadSHA,
+			errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	facts, err := tx.ListPullMergeFacts(ctx, ready.RepositoryID, ready.PRNumber)
+	if err != nil {
+		return none, err
+	}
+	if !slices.ContainsFunc(facts, func(fact domain.PullMergeFact) bool {
+		return handBackPullFact(fact, ready, reentry.HeadSHA)
+	}) {
+		return none, fmt.Errorf("check failure head %s was never recorded open: %w", reentry.HeadSHA, domain.ErrParentKeyMismatch)
+	}
+	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound ||
+		prior.HeadSHA != reentry.HeadSHA || prior.BaseSHA != reentry.BaseSHA {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	failure, err := tx.GetRequiredCheckFailure(ctx, successor.RunID, successor.CheckFailureDigest)
+	if err != nil || failure.HeadSHA != reentry.HeadSHA || failure.Repo != ready.Repo ||
+		failure.PRNumber != ready.PRNumber {
+		return none, errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	return ready, nil
+}
+
+// codeFailureOn reports whether a ready item's required-check reading is a
+// failure of class code on head.
+func codeFailureOn(check *domain.RequiredCheck, head string) bool {
+	return check != nil && check.State == domain.RequiredCheckFailed && check.FailureClass != nil &&
+		*check.FailureClass == domain.CheckFailureCode && check.HeadSHA == head
+}
+
+// requireCurrentCheckFailure is the seal-time half of the check_failure gate:
+// what holds only at the moment a cycle starts. The predecessor is the run's
+// current chain item, so the chain does not branch; the pull request's
+// latest recorded fact is still open and unmerged on the head; no sealed
+// cycle of the run answered the same failure record; and when an earlier
+// check_failure cycle ended on a person, its item is no longer open.
+func (tx *ReadTx) requireCurrentCheckFailure(ctx context.Context, successor domain.PublicationSuccessor) error {
+	if !successor.ReworksCheckFailure() {
+		return nil
+	}
+	chain, err := tx.PublicationSuccessorChain(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	current := domain.ProductionReadyItemID(successor.RunID)
+	reworked := false
+	for _, sealed := range chain {
+		if sealed.CheckFailureDigest == successor.CheckFailureDigest {
+			return fmt.Errorf("check failure %s already started a cycle: %w",
+				successor.CheckFailureDigest, domain.ErrParentKeyMismatch)
+		}
+		reworked = reworked || sealed.ReworksCheckFailure()
+		current = sealed.ReadyItemID()
+	}
+	if current != successor.PredecessorItemID {
+		return domain.ErrParentKeyMismatch
+	}
+	ready, err := tx.GetReadyItemPRBinding(ctx, successor.PredecessorItemID)
+	if err != nil {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	latest, err := tx.LatestPullMergeFact(ctx, ready.RepositoryID, ready.PRNumber)
+	if err != nil || !handBackPullFact(latest, ready, successor.Reentry.HeadSHA) {
+		return fmt.Errorf("seal check failure on head %s: %w", successor.Reentry.HeadSHA,
+			errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if !reworked {
+		return nil
+	}
+	open, err := tx.ListOpenAttentionItemRecordsForRun(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	for _, item := range open {
+		if ReworkCycleEnding(item) {
+			return fmt.Errorf("seal check failure while %s is open: %w", item.ID, domain.ErrParentKeyMismatch)
+		}
+	}
+	return nil
+}
+
+// ReworkCycleEnding reports an open item a hand_back or check_failure cycle
+// ends on when it cannot re-earn readiness: a person's item, over which no
+// new cycle of the same origin starts.
+func ReworkCycleEnding(item domain.AttentionItem) bool {
+	return item.Type == domain.AttentionPublishBlocked || item.Type == domain.AttentionReviewDispute ||
+		item.Type == domain.AttentionReviewDiminishing
 }
 
 // requireAdmittedExternalFinding proves the finding and profile an
@@ -990,6 +1141,16 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	}
 	if review.BaseSHA != request.BaseSHA {
 		return domain.ErrParentKeyMismatch
+	}
+	if successor.AdmitsCheckFailureRemediation(request) {
+		// A check_failure cycle's first remediation answers the failed
+		// check, not a finding: its round's review of the cycle's head was
+		// clean, so it names no adjudication. The authority's gate above
+		// proved the head, base, and failure record.
+		if review.Outcome != domain.ReviewClean {
+			return domain.ErrParentKeyMismatch
+		}
+		return nil
 	}
 	adjudication, err := tx.GetFindingAdjudication(ctx, request.AdjudicationDigest)
 	if err != nil || adjudication.RunID != successor.RunID || adjudication.Round != request.Round || len(request.FindingIDs) == 0 {
