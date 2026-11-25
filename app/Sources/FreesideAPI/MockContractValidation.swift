@@ -952,6 +952,24 @@ enum MockContractValidation {
                 return "invalid elapsed_deadlines"
             }
         }
+        // domain.validateRequiredCheck: the reading only on the ready item,
+        // on its own head, with a failure class and failed jobs exactly when
+        // it failed, and the bounds the domain holds job names and reruns to.
+        if let check = item.required_check?.value1 {
+            guard item._type == .ready_for_final_review else {
+                return "required_check on a different item type"
+            }
+            let failed = check.state == .failed
+            let jobs = check.failed_jobs
+            if check.state == .unknown || check.failure_class?.value1 == .unknown
+                || failed != (check.failure_class != nil) || failed != (jobs != nil)
+                || check.head_sha != item.pr_head_sha || !(0...2).contains(check.reruns)
+                || jobs.map({ $0.isEmpty || $0.count > 10 }) == true
+                || jobs?.contains(where: { $0.isEmpty || $0.utf8.count > 200 }) == true
+            {
+                return "invalid required_check"
+            }
+        }
         if let block = item.publish_block?.value1 {
             if item._type != .publish_blocked {
                 return "publish_block facts on a different item type"

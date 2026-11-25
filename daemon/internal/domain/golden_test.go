@@ -2437,6 +2437,17 @@ func TestGolden(t *testing.T) {
 	if err := elapsedDeadlinesItem.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	requiredCheckItem := item
+	requiredCheckItem.ItemVersion = item.ItemVersion + 3
+	infrastructure := domain.CheckFailureInfrastructure
+	requiredCheckItem.RequiredCheck = &domain.RequiredCheck{
+		State: domain.RequiredCheckFailed, FailureClass: &infrastructure,
+		HeadSHA: item.PRHeadSHA, FailedJobs: []string{"daemon / macos (test, darwin 1/1)"},
+		Reruns: 1, ObservedAt: ts.Add(95 * time.Minute),
+	}
+	if err := requiredCheckItem.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	identityInvalidatedItem := item
 	identityInvalidatedItem.ItemVersion = item.ItemVersion + 1
 	identityInvalidatedItem.Status = domain.StatusSuperseded
@@ -2718,6 +2729,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},
 		{"attention_item_elapsed_deadlines", elapsedDeadlinesItem},
+		{"attention_item_required_check", requiredCheckItem},
 		{"schedule_deadline", deadlineSchedule},
 		{"schedule_installation_poll", pollSchedule},
 		{"schedule_janitor", janitorSchedule},

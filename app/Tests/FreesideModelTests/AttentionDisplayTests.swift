@@ -535,6 +535,44 @@ import Testing
         #expect(!AttentionDisplay.detailIdentifierRows(plain).contains { $0.label.hasSuffix("Deadline Elapsed") })
     }
 
+    /// The required check's reading (#3598) draws as one fact after the
+    /// Change row: its state, a failure's class, the reruns spent, and the
+    /// failed jobs. A ready item with no reading draws none.
+    @Test func requiredCheckRendersAsOneFact() throws {
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        var item = AttentionFixtures.readyWithFailedRequiredCheck().item
+        var facts = AttentionDisplay.cardFacts(item, now: now)
+        #expect(facts.map(\.label) == ["Diff", "Required check"])
+        #expect(
+            facts.last?.value
+                == "Failed · runner never started · rerun 2 of 2 · daemon / macos (test, darwin 1/1)")
+
+        var check = try #require(item.required_check?.value1)
+        check.state = .pending
+        check.failure_class = nil
+        check.failed_jobs = nil
+        check.reruns = 1
+        item.required_check = .init(value1: check)
+        facts = AttentionDisplay.cardFacts(item, now: now)
+        #expect(facts.last?.value == "Pending · rerun 1 of 2")
+
+        check.state = .passed
+        check.reruns = 0
+        item.required_check = .init(value1: check)
+        #expect(AttentionDisplay.cardFacts(item, now: now).last?.value == "Passed")
+
+        check.state = .failed
+        check.failure_class = .init(value1: .code)
+        check.failed_jobs = ["daemon / linux (test)", "app / test"]
+        item.required_check = .init(value1: check)
+        #expect(
+            AttentionDisplay.cardFacts(item, now: now).last?.value
+                == "Failed · a job failed · daemon / linux (test), app / test")
+
+        let plain = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(!AttentionDisplay.cardFacts(plain, now: now).contains { $0.label == "Required check" })
+    }
+
     @Test func typedLeadsRenderTheirDaemonValues() {
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         let failureFacts = AttentionDisplay.cardFacts(

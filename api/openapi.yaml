@@ -5399,6 +5399,71 @@ components:
         deadline_seconds: 1800
         elapsed_at: "2026-01-01T00:31:00Z"
 
+    RequiredCheck:
+      type: object
+      description: >
+        The daemon's latest reading of a ready_for_final_review item's
+        required check (mirrors domain.RequiredCheck, issue #3598): the
+        checks the pull request's base branch requires, read from the GitHub
+        Actions jobs on the item's head while the item is open. head_sha is
+        always the item's pr_head_sha; a head that moved is never read.
+        failure_class is set exactly when state is failed, and failed_jobs
+        then names the failed jobs, earliest first. reruns counts the
+        infrastructure failures the daemon has rerun on this head, at most
+        2. observed_at is the instant of the reading.
+      required: [state, failure_class, head_sha, failed_jobs, reruns, observed_at]
+      properties:
+        state:
+          $ref: "#/components/schemas/RequiredCheckState"
+        failure_class:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CheckFailureClass"
+        head_sha:
+          type: string
+        failed_jobs:
+          type: array
+          nullable: true
+          minItems: 1
+          maxItems: 10
+          items:
+            type: string
+            maxLength: 200
+        reruns:
+          type: integer
+          minimum: 0
+          maximum: 2
+        observed_at:
+          type: string
+          format: date-time
+      example:
+        state: "failed"
+        failure_class: "infrastructure"
+        head_sha: "cafebabe"
+        failed_jobs: ["daemon / macos (test, darwin 1/1)"]
+        reruns: 1
+        observed_at: "2026-01-01T00:20:00Z"
+
+    RequiredCheckState:
+      type: string
+      description: >
+        A required check reading's state (mirrors domain.RequiredCheckState):
+        pending (some required check has no completed job on the head, or
+        none GitHub Actions produces), passed (every required check
+        concluded success, skipped, or neutral), failed (any other
+        conclusion).
+      enum: [pending, passed, failed, unknown]
+
+    CheckFailureClass:
+      type: string
+      description: >
+        What the job facts say about a failed required check (mirrors
+        domain.CheckFailureClass): infrastructure (a failed job never got a
+        runner; the daemon reruns it), code (a job failed at a step; the
+        daemon reworks the head), other (anything else, such as a job
+        cancelled part-way or timed out; it waits on a person).
+      enum: [infrastructure, code, other, unknown]
+
     ScheduleStatus:
       type: string
       description: >
@@ -8815,6 +8880,7 @@ components:
         - execution_failure
         - alternate_agents
         - elapsed_deadlines
+        - required_check
         - interpretation_failure
         - publish_block
         - diff_stats
@@ -9051,9 +9117,21 @@ components:
             elapsed while the item stayed open, in firing order with no kind
             repeated (issue #2752). Present only on ready_for_final_review;
             null until a deadline elapses. Append-only: a later item version
-            keeps every earlier entry as its prefix. The daemon reads no
-            GitHub check or review state, so an entry records that the
-            deadline passed, not what the checks or reviewers did.
+            keeps every earlier entry as its prefix. A pr_checks_deadline
+            entry is recorded only while required_check is still pending
+            (issue #3598). The daemon reads no review state, so a
+            review_wait_threshold entry records that the deadline passed,
+            not what reviewers did.
+        required_check:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RequiredCheck"
+          description: >
+            The daemon's latest reading of the published pull request's
+            required check on the item's head (issue #3598). Present only on
+            ready_for_final_review; null until the daemon first reads it, and
+            when the repository requires no check. Changes only while the
+            item is open.
         interpretation_failure:
           nullable: true
           allOf:
@@ -9334,6 +9412,7 @@ components:
         execution_failure: null
         alternate_agents: null
         elapsed_deadlines: null
+        required_check: null
         interpretation_failure: null
         publish_block: null
         diff_stats:

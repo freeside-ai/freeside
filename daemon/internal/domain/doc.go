@@ -165,6 +165,8 @@
 //   - authorization.go candidate authorization and finding classes (§5.6, §5.8)
 //   - readiness.go    readiness requirements, check proofs, and waivers
 //   - handoff_check.go a publication's sealed handoff tip and merge proof
+//   - required_check.go a ready item's reading of its pull request's
+//     required check and the class of a failure
 //   - publication_authoring.go, publication_continuation.go, publication_successor.go
 //     authored publication prose, publication re-evaluation, and successor
 //     re-entry shapes

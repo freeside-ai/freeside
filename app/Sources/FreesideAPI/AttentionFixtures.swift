@@ -1253,6 +1253,24 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The open ready item after its required check failed on a runner that
+    /// never started and the daemon spent both reruns (issue #3598): the
+    /// card stays failed and names the job, so a person decides. The
+    /// default inbox keeps the ready item with no reading; tests and
+    /// screenshots opt into this one.
+    public static func readyWithFailedRequiredCheck() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = fixture(type: .ready_for_final_review)
+        snapshot.item.id = "item-ready_for_final_review-required-check"
+        snapshot.item.item_version = 4
+        snapshot.item.required_check = .init(
+            value1: .init(
+                state: .failed, failure_class: .init(value1: .infrastructure),
+                head_sha: snapshot.item.pr_head_sha,
+                failed_jobs: ["daemon / macos (test, darwin 1/1)"], reruns: 2,
+                observed_at: createdInstant.addingTimeInterval(17 * 3_600 + 50 * 60)))
+        return snapshot
+    }
+
     /// The implementation failure as a quota exhaustion, whose card offers
     /// the routing policy's second agent on another pool (issue #869) in
     /// place of capability profiles, which no quota failure offers. The

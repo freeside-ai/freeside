@@ -615,7 +615,11 @@ type AttentionItem struct {
 	// ready_for_final_review item stayed open, in firing order with no kind
 	// repeated; nil until one elapses and on every other type. Append-only
 	// (ValidateAttentionItemTransition).
-	ElapsedDeadlines  []ElapsedDeadline `json:"elapsed_deadlines"`
+	ElapsedDeadlines []ElapsedDeadline `json:"elapsed_deadlines"`
+	// RequiredCheck is the daemon's latest reading of the published pull
+	// request's required check on PRHeadSHA (issue #3598): nil until the
+	// reconciler first reads it, and on every other type.
+	RequiredCheck     *RequiredCheck    `json:"required_check"`
 	ItemVersion       int               `json:"item_version"`
 	InterruptionClass InterruptionClass `json:"interruption_class"`
 	ConversationID    *ConversationID   `json:"conversation_id"`
@@ -1312,6 +1316,9 @@ func (i AttentionItem) Validate() error {
 		}
 	}
 	if err := i.validateElapsedDeadlines(); err != nil {
+		return err
+	}
+	if err := i.validateRequiredCheck(); err != nil {
 		return err
 	}
 	if i.DecidedAt != nil {
