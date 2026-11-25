@@ -45,7 +45,8 @@ func proveHostVerification(
 // ComposeHostVerificationExecutor builds the executor's backend, or returns
 // nil when cfg.Root is empty. Under runConformance it runs the full pass
 // through prove (proveHostVerification outside tests), and a failed pass
-// fails startup, as the ward's does. Otherwise it restores
+// fails startup, as the ward's does, with a HostCheckError the installed
+// daemon names on its driverless card. Otherwise it restores
 // the latest durable record when it passed for this exact configuration. A
 // missing, failed, or stale record leaves the backend undeclared without
 // stopping startup: unattended admission then refuses each macos_host job by
@@ -82,7 +83,16 @@ func ComposeHostVerificationExecutor(
 	}
 	if runConformance {
 		if err := prove(ctx, backend, StoreConformanceRecorder{Store: st}); err != nil {
-			return nil, fmt.Errorf("run macOS verification executor conformance: %w", err)
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("run macOS verification executor conformance: %w", err)
+			}
+			return nil, &HostCheckError{
+				Check:    "host_verification_conformance",
+				Evidence: "the macOS verification executor failed its conformance pass: " + err.Error(),
+				Fix: "repair the executor with sudo freesided macverify install, as daemon/README.md's " +
+					"Install the macOS Verification Executor describes, or clear the macos_verification section",
+				Err: err,
+			}
 		}
 		return backend, nil
 	}

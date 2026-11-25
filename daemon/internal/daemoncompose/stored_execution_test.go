@@ -2,6 +2,7 @@ package daemoncompose
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -40,10 +41,11 @@ func TestStoredStoreOptionsCarryTheUnattendedPolicy(t *testing.T) {
 }
 
 // TestDecideStoredExecutionStopsAtTheFirstThatApplies pins the order of the
-// stored half of the start: a carried composition failure, then an
-// unreadable execution switch, then execution off, which wins over every
-// project-level problem, then an unreadable project switch. The cases after
-// it run through the start in cmd/freesided's stored-execution tests.
+// stored half of the start: a carried composition failure, named when a
+// start check or the agent selection caused it, then an unreadable
+// execution switch, then execution off, which wins over every project-level
+// problem, then an unreadable project switch. The cases after it run
+// through the start in cmd/freesided's stored-execution tests.
 func TestDecideStoredExecutionStopsAtTheFirstThatApplies(t *testing.T) {
 	t.Parallel()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
@@ -51,32 +53,59 @@ func TestDecideStoredExecutionStopsAtTheFirstThatApplies(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		switches storedSwitches
-		failure  string
+		failure  error
 		want     ExecutionState
+		detail   string
 	}{
-		{"carried failure", storedSwitches{executionRefused: refused}, "compose", ExecutionCompositionFailed},
+		{
+			"carried failure",
+			storedSwitches{executionRefused: refused},
+			errors.New("compose"),
+			ExecutionCompositionFailed, "compose",
+		},
+		{
+			"failed start check",
+			storedSwitches{},
+			fmt.Errorf("run macOS verification executor conformance: %w", &HostCheckError{
+				Check: "host_verification_conformance", Evidence: "slot reached the network", Fix: "repair it",
+			}),
+			ExecutionHostCheckFailed,
+			"host_verification_conformance: slot reached the network; repair it",
+		},
+		{
+			"unresolved agent line",
+			storedSwitches{},
+			fmt.Errorf("compose: %w", &RoleAdmissionError{Role: domain.RoleReviewer, Err: refused}),
+			ExecutionHostCheckFailed,
+			"agent_selection: role reviewer has no lineup line that resolves against the store; " +
+				"adopt the agent tree at the commit the agent_tree section names with freesided auth adopt, " +
+				"or set another commit with freesided settings set -section agent_tree",
+		},
 		{
 			"unreadable execution",
 			storedSwitches{executionRefused: refused, projectRefused: refused},
-			"",
+			nil,
 			ExecutionSettingsRefused,
+			"refused",
 		},
 		{
 			"execution off",
 			storedSwitches{projectRefused: refused, enabled: []domain.ProjectID{"a", "b"}},
-			"",
+			nil,
 			ExecutionNotConfigured,
+			"",
 		},
 		{
 			"unreadable project",
 			storedSwitches{executionOn: true, projectRefused: refused},
-			"",
+			nil,
 			ExecutionSettingsRefused,
+			"refused",
 		},
 	} {
 		got, detail, _, err := decideStoredExecution(t.Context(), st, tc.switches, tc.failure)
-		if err != nil || got != tc.want {
-			t.Errorf("%s: %q (%q), %v; want %q", tc.name, got, detail, err, tc.want)
+		if err != nil || got != tc.want || detail != tc.detail {
+			t.Errorf("%s: %q (%q), %v; want %q (%q)", tc.name, got, detail, err, tc.want, tc.detail)
 		}
 	}
 }

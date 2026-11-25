@@ -3,7 +3,6 @@ package daemoncompose
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"maps"
 	"strings"
@@ -27,8 +26,9 @@ type StoredExecution struct {
 	Launch RunLaunch
 	// CompositionFailure is why this process's earlier start could not
 	// compose the driver from the settings (StoredCompositionError). Set,
-	// the start composes none and raises the card that names it.
-	CompositionFailure string
+	// the start composes none and raises the card that names it: a
+	// HostCheckError's check and fix, or the error's text.
+	CompositionFailure error
 }
 
 // StoredCompositionError is a start that chose to compose the driver from
@@ -133,11 +133,14 @@ func storedStoreOptions(opts store.Options, recipes map[domain.Digest]bool) stor
 // driverless state with the detail its card names. It returns "" with the
 // loaded settings when the gated order may run.
 func decideStoredExecution(
-	ctx context.Context, st *store.Store, switches storedSwitches, failure string,
+	ctx context.Context, st *store.Store, switches storedSwitches, failure error,
 ) (ExecutionState, string, RunSettings, error) {
 	switch {
-	case failure != "":
-		return ExecutionCompositionFailed, failure, RunSettings{}, nil
+	case failure != nil:
+		if named := namedCompositionFailure(failure); named != nil {
+			return ExecutionHostCheckFailed, named.Error(), RunSettings{}, nil
+		}
+		return ExecutionCompositionFailed, failure.Error(), RunSettings{}, nil
 	case switches.executionRefused != nil:
 		return ExecutionSettingsRefused, switches.executionRefused.Error(), RunSettings{}, nil
 	case !switches.executionOn:
@@ -173,7 +176,12 @@ func storedDriverConfig(settings RunSettings, launch RunLaunch) (ClaudeDriverCon
 	}
 	_, digest, err := ComposeJudgments(cfg.Judgments)
 	if err != nil {
-		return ClaudeDriverConfig{}, fmt.Errorf("judgment configuration: %w", err)
+		return ClaudeDriverConfig{}, &HostCheckError{
+			Check: "judgment_configuration", Evidence: err.Error(),
+			Fix: "verify the exact native CLI pin and the publication-author prompt file, set with " +
+				"freesided settings set -section judgment",
+			Err: err,
+		}
 	}
 	cfg.Judgments.ExpectedDigest = digest
 	return cfg, nil

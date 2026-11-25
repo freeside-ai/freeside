@@ -60,6 +60,10 @@ const (
 	// ExecutionCompositionFailed: the installed daemon passed its start order
 	// and failed to compose the driver from the stored settings.
 	ExecutionCompositionFailed ExecutionState = "composition_failed"
+	// ExecutionHostCheckFailed: the installed daemon passed its start order,
+	// and a named start check failed (HostCheckError), before or while it
+	// composed the driver.
+	ExecutionHostCheckFailed ExecutionState = "host_check_failed"
 )
 
 // AllExecutionStates is the single registration point for ExecutionState.
@@ -73,13 +77,14 @@ var AllExecutionStates = []ExecutionState{
 	ExecutionNoEnabledProject,
 	ExecutionSeveralProjectsEnabled,
 	ExecutionCompositionFailed,
+	ExecutionHostCheckFailed,
 }
 
 func (s ExecutionState) valid() bool {
 	switch s {
 	case ExecutionConfigured, ExecutionNotConfigured, ExecutionAuthorityInUse, ExecutionRigLeasePresent,
 		ExecutionPaused, ExecutionSettingsRefused, ExecutionNoEnabledProject, ExecutionSeveralProjectsEnabled,
-		ExecutionCompositionFailed:
+		ExecutionCompositionFailed, ExecutionHostCheckFailed:
 		return true
 	default:
 		return false

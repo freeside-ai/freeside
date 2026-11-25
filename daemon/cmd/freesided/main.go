@@ -810,7 +810,7 @@ func runWithDriverlessRetry(newContext func() (context.Context, func()), cfg con
 		cfg.Logger.Error("starting again without execution", "error", err)
 	}
 	retry := *cfg.StoredExecution
-	retry.CompositionFailure = composition.Err.Error()
+	retry.CompositionFailure = composition.Err
 	cfg.StoredExecution = &retry
 	ctx, stop = newContext()
 	h, err = run(ctx, stop, cfg)

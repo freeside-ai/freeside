@@ -140,6 +140,10 @@ func executionStateDiagnostic(state ExecutionState, detail string) (code, reason
 		return string(state), "Agent execution is on, but the driver could not be composed from the stored " +
 			"settings: " + detail + ". " + executionDriverlessScope + " Fix the cause, then run freesided " +
 			"execution resume to restart this daemon with execution."
+	case ExecutionHostCheckFailed:
+		return string(state), "Agent execution is on, but a start check failed: " + detail + ". " +
+			executionDriverlessScope + " Once it is fixed, run freesided execution resume to restart this " +
+			"daemon with execution."
 	}
 	return "", ""
 }

@@ -168,10 +168,11 @@ func TestInstalledDaemonServesDriverlessWhenItsSettingsStopIt(t *testing.T) {
 
 // TestInstalledDaemonRunsTheGatedOrderOnItsSettings pins that settings which
 // choose a project reach #3204's order: a lost lock and a found lease each
-// serve driverless with that order's card (the pause has its own test), and
-// a start
-// the order lets through but whose composition fails serves driverless too,
-// naming the failure, with the lock released before it serves.
+// serve driverless with that order's card and run no start check (the pause
+// has its own test), and a start the order lets through runs the start
+// checks, where a missing container tool serves driverless with a card
+// naming the check, the path, and the fix, with the lock released before it
+// serves.
 func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -182,7 +183,7 @@ func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
 	}{
 		{name: "a deputy holds the lock", lockHeld: true, wantCode: "app_authority_in_use"},
 		{name: "a lease is present", lease: true, wantCode: "rig_lease_present"},
-		{name: "composition fails", wantCode: "composition_failed"},
+		{name: "the container tool is missing", wantCode: "host_check_failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -190,8 +191,9 @@ func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
 			f.importRunSettings(t)
 			f.set(t, "", "execution", `{"enabled":true}`)
 			f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
-			// No container tool exists here, so a composition the order lets
-			// through fails before it launches anything.
+			// No container tool exists here, so a start the order lets
+			// through fails its first start check before it launches
+			// anything; a declined start never reaches that check.
 			f.set(t, "", "host_tools", `{"container":"/nonexistent/freeside-test/container"}`)
 			if tc.lease {
 				_, f.leaseRoot, _ = acquireTestRig(t)
@@ -207,7 +209,14 @@ func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
 			if h.Workflow != nil {
 				t.Fatal("the installed daemon composed a driver")
 			}
-			executionCard(t, h, tc.wantCode)
+			reason := executionCard(t, h, tc.wantCode)
+			if checked := strings.Contains(reason, "host_tools.container"); checked != (tc.wantCode == "host_check_failed") {
+				t.Errorf("card %q: names the container check %t, want only when the order let the start through", reason, checked)
+			}
+			if tc.wantCode == "host_check_failed" && (!strings.Contains(reason, "/nonexistent/freeside-test/container") ||
+				!strings.Contains(reason, "freesided settings set -section host_tools")) {
+				t.Errorf("card %q does not name the path and the fix", reason)
+			}
 			if !tc.lockHeld {
 				requireLockFree(t, f.appState)
 			}
@@ -223,7 +232,7 @@ func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
 // installed daemon serves execution pause and resume like a prod started
 // with -driver claude, and that resume reruns the start order: a pause taken
 // beside a lease restarts it paused once the lease is gone, and resume
-// restarts it into the order, which here reaches a composition that fails.
+// restarts it into the order, which here reaches a start check that fails.
 func TestInstalledDaemonPausesAndResumesThroughItsControlSocket(t *testing.T) {
 	t.Parallel()
 	f := newStoredProdFixture(t)
@@ -253,11 +262,8 @@ func TestInstalledDaemonPausesAndResumesThroughItsControlSocket(t *testing.T) {
 	closeDaemon(t, h)
 
 	h = f.start(t)
-	// The card carries the composition's own error, whichever step it was.
-	reason := executionCard(t, h, "composition_failed")
-	_, detail, _ := strings.Cut(reason, "from the stored settings: ")
-	if detail, _, _ = strings.Cut(detail, ". This daemon"); detail == "" {
-		t.Errorf("composition card %q does not name the failure", reason)
+	if reason := executionCard(t, h, "host_check_failed"); !strings.Contains(reason, "host_tools.container") {
+		t.Errorf("card %q does not name the failed check", reason)
 	}
 	requireLockFree(t, f.appState)
 }

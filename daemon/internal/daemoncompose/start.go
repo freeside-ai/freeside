@@ -373,6 +373,11 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if claude, err = storedDriverConfig(stored, cfg.StoredExecution.Launch); err != nil {
 			return nil, composeErr(err)
 		}
+		// The host checks run once the gated order holds the lock and
+		// before anything composes, so a declined gate runs none.
+		if err := checkHost(parent, claude, productionHostProbes()); err != nil {
+			return nil, composeErr(err)
+		}
 		cfg.Claude = &claude
 	}
 	if cfg.Claude != nil {
