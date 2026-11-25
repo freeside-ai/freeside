@@ -69,6 +69,7 @@ var (
 	writeOnlyPaths = []string{
 		"/Library/LaunchAgents", "/Library/Preferences/.GlobalPreferences",
 		promptClone, skillClone,
+		"/Library/Preferences/com.apple.security.plist",
 	}
 )
 
@@ -80,14 +81,16 @@ const claudeConfigTemporaryPrefix = ".claude.json.tmp."
 // its directory.
 const loginKeychain = "/Library/Keychains/login.keychain-db"
 
-// deniedServices are the Mach services the rules deny: the keychain's
-// securityd, the Simulator, and the container runtime. securityd is always
-// registered, so its lookup outside the launch is the lookups' control.
+// deniedServices are the Mach services the rules deny: securityd's xpc
+// service, the Simulator, and the container runtime.
 var deniedServices = []string{
-	"com.apple.SecurityServer", "com.apple.securityd.xpc",
+	"com.apple.securityd.xpc",
 	"com.apple.CoreSimulator.CoreSimulatorService", "com.apple.container.apiserver",
 }
 
+// controlService is the lookups' control: securityd is always registered,
+// so the daemon's own lookup of it shows lookups work outside the launch.
+// The rules leave it open, because TLS trust evaluation needs it (#3599).
 const controlService = "com.apple.SecurityServer"
 
 // deniedOperations are the operations the probe asks the sandbox about.
@@ -446,10 +449,10 @@ func projectEnvFiles(projects string) ([]string, error) {
 
 // createTargets are new nonce-named paths in each place the rules deny
 // writing: every protected root, /Library/Freeside and the directories under
-// it, LaunchAgents, the global preferences, the verification jobs'
-// temporary and cache directories, the fleet's configuration, the agent
-// prompt clones, and a new ~/.claude-<nonce> directory, which proves the
-// rule file's .claude prefix on a home that holds no second Claude
+// it, LaunchAgents, the global and keychain preferences, the verification
+// jobs' temporary and cache directories, the fleet's configuration, the
+// agent prompt clones, and a new ~/.claude-<nonce> directory, which proves
+// the rule file's .claude prefix on a home that holds no second Claude
 // configuration directory. A target's control is that the account may write
 // its parent; a place the account can't write is already denied to every
 // process it runs and is left out. A protected root that doesn't exist yet
@@ -490,6 +493,7 @@ func (s *Suite) createTargets(nonce string) ([]probeCreate, error) {
 	}
 	prefs := cfg.Home + "/Library/Preferences"
 	creates = appendWritable(creates, prefs, probeCreate{Path: filepath.Join(prefs, ".GlobalPreferences."+name)})
+	creates = appendWritable(creates, prefs, probeCreate{Path: filepath.Join(prefs, "com.apple.security.plist."+name)})
 	creates = appendWritable(creates, cfg.Home, probeCreate{Path: cfg.Home + "/.claude-" + name, Dir: true})
 	for _, dir := range []string{cfg.UserTemp, cfg.UserCache} {
 		creates = appendWritable(creates, dir, probeCreate{Path: filepath.Join(dir, "freeside-verify-"+name), Dir: true})

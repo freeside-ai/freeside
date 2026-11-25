@@ -83,14 +83,23 @@
 
 ;; The login keychain. Under the rest of this file a tool reads any item
 ;; whose access list trusts /usr/bin/security, the owner's own Claude Code
-;; credential among them, with no prompt. Either rule alone closes that; both
-;; stay so a client that reaches securityd another way still meets the file
-;; rule.
+;; credential among them, with no prompt. The file rule closes that alone,
+;; and the live suite proves it with securityd reachable (#3599).
 (deny file-read* file-write*
   (subpath (string-append (param "HOME") "/Library/Keychains")))
+;; securityd's com.apple.SecurityServer lookup stays open: TLS clients that
+;; evaluate trust through Security.framework, mise among them, fail without
+;; it. Its xpc service isn't needed, so it stays denied.
 (deny mach-lookup
-  (global-name "com.apple.SecurityServer")
   (global-name "com.apple.securityd.xpc"))
+;; The account's default keychain and keychain search list. A launch that
+;; made its own keychain the default would receive the owner's next saved
+;; credential. Security.framework writes the file itself, and cfprefsd writes
+;; it for a launch's `defaults write com.apple.security`, so it takes both
+;; rules.
+(deny user-preference-write (preference-domain "com.apple.security"))
+(deny file-write*
+  (regex (string-append "^" (param "HOME_RE") "/Library/Preferences/com\\.apple\\.security\\.plist")))
 
 ;; The daemon and verification (#3526, docs/spikes/cordoned-writer-additions.sb).
 ;; A launch reaches neither the daemon, which runs uncordoned beside it, nor
