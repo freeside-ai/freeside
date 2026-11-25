@@ -302,11 +302,11 @@ func TestEvaluateProdExecution(t *testing.T) {
 		},
 		{
 			name: "fake driver", env: fakePreflightEnvironment{prodRunning: true, prodMode: executionFake},
-			wantEvidence: "prod runs with -driver fake", wantRemediation: "restart it without -driver",
+			wantEvidence: "prod runs with -driver fake", wantRemediation: "freesided execution pause",
 		},
 		{
 			name: "claude driver", env: fakePreflightEnvironment{prodRunning: true, prodMode: executionClaude},
-			wantEvidence: "prod runs with -driver claude", wantRemediation: "restart it without -driver",
+			wantEvidence: "prod runs with -driver claude", wantRemediation: "freesided execution pause",
 		},
 		{
 			name: "unanswering advertisement", env: fakePreflightEnvironment{prodError: errors.New("connection refused")},

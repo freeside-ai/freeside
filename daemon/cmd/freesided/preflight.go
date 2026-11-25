@@ -1188,7 +1188,7 @@ func evaluateProdExecution(
 		return true
 	case mode != executionDisabled:
 		failCheck(manifest, "prod_execution", "prod runs with -driver "+string(mode),
-			"stop that prod daemon or restart it without -driver; the installed LaunchAgent passes none")
+			"run freesided execution pause, which ends prod's execution once its running work finishes, or stop that prod daemon")
 		return false
 	default:
 		passCheck(manifest, "prod_execution", "prod runs without a driver")
