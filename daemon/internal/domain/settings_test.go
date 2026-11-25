@@ -476,3 +476,26 @@ func TestExecutionSwitchesReadAloneAndDefaultOff(t *testing.T) {
 		}
 	}
 }
+
+// TestApprovedRecipeReadsAlone pins the read the store's open-time policy
+// takes: the recipe answers from a record that holds no other section, and
+// an unset section answers not set rather than an error.
+func TestApprovedRecipeReadsAlone(t *testing.T) {
+	record, err := domain.NewProjectSettingsRecord("project-widgets", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := record.ApprovedRecipe(); ok || err != nil {
+		t.Fatalf("unset recipe: ok %t, error %v; want not set", ok, err)
+	}
+	recipe := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	record, err = domain.NewProjectSettingsRecord("project-widgets", []domain.ProjectSettingsRevision{
+		projectRevision(t, 1, domain.ProjectSectionApprovedRecipe, json.RawMessage(`"`+string(recipe)+`"`)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := record.ApprovedRecipe(); !ok || err != nil || got != recipe {
+		t.Fatalf("recipe: %q, ok %t, error %v; want %q", got, ok, err, recipe)
+	}
+}

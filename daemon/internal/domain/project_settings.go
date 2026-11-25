@@ -387,19 +387,34 @@ func (r ProjectSettingsRecord) Settings() (ProjectSettings, error) {
 // reads only that section, so it answers for a record the loader would
 // refuse; an unset section is not enabled.
 func (r ProjectSettingsRecord) Enabled() (bool, error) {
+	settings, set, err := r.sectionAlone(ProjectSectionEnabled)
+	return set && settings.Enabled.Enabled, err
+}
+
+// ApprovedRecipe returns the project's approved_recipe section, read alone
+// as Enabled reads its section; ok is false when the section is unset.
+func (r ProjectSettingsRecord) ApprovedRecipe() (_ Digest, ok bool, _ error) {
+	settings, set, err := r.sectionAlone(ProjectSectionApprovedRecipe)
+	return settings.ApprovedRecipe, set, err
+}
+
+// sectionAlone decodes and validates one section's current revision and no
+// other; set is false when the record holds no revision of it.
+func (r ProjectSettingsRecord) sectionAlone(section ProjectSettingsSection) (_ ProjectSettings, set bool, _ error) {
+	var settings ProjectSettings
 	for _, revision := range r.Sections {
-		if revision.Section != ProjectSectionEnabled {
+		if revision.Section != section {
 			continue
 		}
-		var settings ProjectSettings
 		if err := decodeSettingsValue(revision.Value, settings.field(revision.Section)); err != nil {
-			return false, fmt.Errorf("project %q settings revision %d: %s: %w",
+			return ProjectSettings{}, false, fmt.Errorf("project %q settings revision %d: %s: %w",
 				r.ProjectID, revision.Revision, revision.Section, err)
 		}
-		if err := settings.ValidateSection(ProjectSectionEnabled); err != nil {
-			return false, fmt.Errorf("project %q settings revision %d: %w", r.ProjectID, revision.Revision, err)
+		if err := settings.ValidateSection(section); err != nil {
+			return ProjectSettings{}, false, fmt.Errorf("project %q settings revision %d: %w",
+				r.ProjectID, revision.Revision, err)
 		}
-		return settings.Enabled.Enabled, nil
+		return settings, true, nil
 	}
-	return false, nil
+	return settings, false, nil
 }
