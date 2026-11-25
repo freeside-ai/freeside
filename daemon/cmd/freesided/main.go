@@ -489,6 +489,9 @@ func main() {
 	case executionDisabled:
 		if env == environmentProd {
 			daemonConfig.StoredExecution = storedExecution(supervisedRoots(home)[environmentProd], *stateDir, *listenAddr)
+			daemonConfig.ListenWait = &daemoncompose.ListenWait{
+				Wait: installedTailscaleWait, TailscaleIPs: daemonshell.ReadTailscaleIPs,
+			}
 		}
 	case executionFake:
 		daemonConfig.FakeDriverEnabled = true
@@ -678,6 +681,10 @@ type config struct {
 	// StoredExecution is set for the installed daemon: the start composes
 	// the driver from the stored settings (daemoncompose.StoredExecution).
 	StoredExecution *daemoncompose.StoredExecution
+	// ListenWait is set for the installed daemon, which waits a bounded time
+	// for its Tailscale address and then serves on loopback rather than exit
+	// (daemoncompose.ListenWait).
+	ListenWait *daemoncompose.ListenWait
 }
 
 // defaultLogLevel emits what an unattended daemon's operator needs and
@@ -778,6 +785,11 @@ const (
 // storedExecution is the launch the installed daemon composes its driver
 // from: prod with no -driver (#2083). The App authority's directories sit
 // under prod's supervised root (supervisedRoots), beside the database's.
+// installedTailscaleWait bounds how long the installed daemon waits at start
+// for Tailscale to report its listen address, which at login can trail the
+// LaunchAgent by some seconds.
+const installedTailscaleWait = time.Minute
+
 func storedExecution(root, stateDir, listenAddr string) *daemoncompose.StoredExecution {
 	return &daemoncompose.StoredExecution{Launch: daemoncompose.RunLaunch{
 		StateDir:    stateDir,
@@ -812,6 +824,13 @@ func runWithDriverlessRetry(newContext func() (context.Context, func()), cfg con
 	retry := *cfg.StoredExecution
 	retry.CompositionFailure = composition.Err
 	cfg.StoredExecution = &retry
+	// The failed start already waited for the Tailscale address, so this one
+	// tries it once.
+	if cfg.ListenWait != nil {
+		once := *cfg.ListenWait
+		once.Wait = 0
+		cfg.ListenWait = &once
+	}
 	ctx, stop = newContext()
 	h, err = run(ctx, stop, cfg)
 	return h, ctx, stop, err
@@ -902,9 +921,9 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 		ApprovedRecipes: cfg.ApprovedRecipes, SeedWalkingSkeleton: cfg.SeedWalkingSkeleton, SeedFixture: fixture,
 		IntakeInitiators: cfg.IntakeInitiators, MemoryBudgetMiB: cfg.MemoryBudgetMiB, Logger: cfg.Logger,
 		Claude: cfg.Claude, AppAuthority: daemoncompose.AppAuthority{Lock: cfg.AuthorityLock, Prod: cfg.ProdAuthority},
-		StoredExecution: cfg.StoredExecution,
-		Scenario:        cfg.Scenario,
-		ManualProjects:  manualProjects, ManualInitiator: manualInitiator, StoreOptions: storeOptions,
+		StoredExecution: cfg.StoredExecution, ListenWait: cfg.ListenWait,
+		Scenario:       cfg.Scenario,
+		ManualProjects: manualProjects, ManualInitiator: manualInitiator, StoreOptions: storeOptions,
 		ReadinessEnvironment: string(cfg.Environment), Version: buildVersion(),
 		IdentityLabel: credentialIdentityLabel,
 		WrapFakeDriver: func(driver *fake.StageDriver) exec.StageDriver {

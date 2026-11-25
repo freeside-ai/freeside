@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -377,6 +378,73 @@ func TestInstalledDaemonInspectsARunAsTheDeputyDoes(t *testing.T) {
 	if !bytes.Equal(comparableRecord(t, direct), comparableRecord(t, served)) || stderr.Len() != 0 {
 		t.Fatalf("stopped-root record differs from the served one, or stderr = %q\ndirect: %s\nserved: %s",
 			stderr.String(), comparableRecord(t, direct), comparableRecord(t, served))
+	}
+}
+
+// TestInstalledDaemonServesLoopbackWhenTailscaleIsLate: an installed daemon
+// whose -listen names a Tailscale address Tailscale does not report starts
+// anyway, on loopback at the same port, with the advisory card that says the
+// phone cannot reach it; a later start that binds its address concludes the
+// card. The wait itself is TestListenWaitingWaitsForTailscaleThenServesLoopback's.
+func TestInstalledDaemonServesLoopbackWhenTailscaleIsLate(t *testing.T) {
+	t.Parallel()
+	f := newStoredProdFixture(t)
+	start := func(listen string) *daemon {
+		t.Helper()
+		h, _, _, err := runWithDriverlessRetry(func() (context.Context, func()) { return t.Context(), func() {} }, config{
+			Environment: environmentProd, DBPath: f.dbPath, ListenAddr: listen,
+			ProdAuthority:   &daemoncompose.ProdAuthorityGate{LeaseRoot: f.leaseRoot},
+			StoredExecution: storedExecution(f.root, f.appState, listen),
+			ListenWait: &daemoncompose.ListenWait{TailscaleIPs: func() ([]netip.Addr, error) {
+				return nil, errors.New("tailscale ip: not connected")
+			}},
+		})
+		if err != nil {
+			t.Fatalf("the installed daemon did not start on %s: %v", listen, err)
+		}
+		return h
+	}
+	listenerCards := func(h *daemon) (open []string, concluded int) {
+		t.Helper()
+		items, err := h.Attention.ListAttentionItems(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, snapshot := range items {
+			d := snapshot.Item.HealthDiagnostic
+			if d == nil || d.Code != daemoncompose.ListenerFallbackCode {
+				continue
+			}
+			if snapshot.Item.Status == domain.StatusOpen {
+				open = append(open, snapshot.Item.Reason)
+			} else {
+				concluded++
+			}
+		}
+		return open, concluded
+	}
+
+	late := start("100.64.0.7:0")
+	bound := strings.TrimPrefix(late.Readiness().APIURL, "http://")
+	open, _ := listenerCards(late)
+	if err := late.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(bound, "127.0.0.1:") {
+		t.Fatalf("bound %s, want loopback", bound)
+	}
+	if len(open) != 1 || !strings.Contains(open[0], bound) || !strings.Contains(open[0], "100.64.0.7:0") ||
+		!strings.Contains(open[0], "launchctl kickstart") {
+		t.Fatalf("open listener cards = %q, want one naming the bound and configured addresses and the restart", open)
+	}
+
+	onTime := start("127.0.0.1:0")
+	open, concluded := listenerCards(onTime)
+	if err := onTime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 0 || concluded != 1 {
+		t.Fatalf("after a start on its address: open %q, concluded %d; want none open and one concluded", open, concluded)
 	}
 }
 

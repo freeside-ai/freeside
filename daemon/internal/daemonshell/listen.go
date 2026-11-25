@@ -21,13 +21,25 @@ var (
 
 const tailscaleIPTimeout = 5 * time.Second
 
+// ErrTailscaleAddressAbsent is a listen address in Tailscale's ranges that
+// Tailscale does not report as this host's, or that Tailscale could not be
+// asked about. At login it can mean Tailscale has not connected yet, so a
+// caller may wait for it; any other listen failure it does not wrap.
+var ErrTailscaleAddressAbsent = errors.New("the Tailscale address is not assigned to this host")
+
 func ListenPrivileged(addr string) (net.Listener, error) {
+	return ListenPrivilegedReading(addr, ReadTailscaleIPs)
+}
+
+// ListenPrivilegedReading is ListenPrivileged with the reader of this host's
+// Tailscale addresses supplied.
+func ListenPrivilegedReading(addr string, tailscaleIPs func() ([]netip.Addr, error)) (net.Listener, error) {
 	return listenPrivilegedWith(
 		addr,
 		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
 			return net.ListenTCP(network, resolved)
 		},
-		ReadTailscaleIPs,
+		tailscaleIPs,
 	)
 }
 
@@ -72,10 +84,11 @@ func ResolveListenAddress(addr string, tailscaleIPs func() ([]netip.Addr, error)
 		}
 		addrs, err := tailscaleIPs()
 		if err != nil {
-			return nil, fmt.Errorf("query Tailscale addresses for listener %q: %w", addr, err)
+			return nil, fmt.Errorf("query Tailscale addresses for listener %q: %w: %w", addr, ErrTailscaleAddressAbsent, err)
 		}
 		if !tailscaleOwnsIP(resolved.IP, addrs) {
-			return nil, fmt.Errorf("listen %q resolved to address %q not reported by Tailscale", addr, resolved)
+			return nil, fmt.Errorf("listen %q resolved to address %q not reported by Tailscale: %w",
+				addr, resolved, ErrTailscaleAddressAbsent)
 		}
 	}
 	return resolved, nil

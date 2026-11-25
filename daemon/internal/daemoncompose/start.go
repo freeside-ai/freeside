@@ -95,7 +95,11 @@ type StartOptions struct {
 	// installed daemon, prod with no -driver. It excludes Claude and needs
 	// AppAuthority.Prod, the gated order it runs.
 	StoredExecution *StoredExecution
-	Scenario        *Scenario
+	// ListenWait lets the installed daemon wait out a Tailscale address that
+	// is not assigned yet and then serve on loopback (ListenWait); nil fails
+	// the start on any listen failure.
+	ListenWait *ListenWait
+	Scenario   *Scenario
 	// ManualProjects are the projects the manual-submission file configures,
 	// and ManualInitiator resolves a client submission's policy from them.
 	ManualProjects  map[domain.ProjectID]engine.ManualInitiator
@@ -214,9 +218,13 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		}
 	}()
 	storeOptions := cfg.StoreOptions
-	listener, err := daemonshell.ListenPrivileged(cfg.ListenAddr)
+	listener, listenAbsent, err := listenWaiting(parent, cfg.ListenAddr, cfg.ListenWait)
 	if err != nil {
 		return nil, err
+	}
+	if listenAbsent != nil {
+		logger.Warn("serving on loopback: Tailscale did not report the listen address",
+			"listen", cfg.ListenAddr, "bound", listener.Addr().String(), "error", listenAbsent)
 	}
 	// A Tailscale-bound daemon also serves the identical API on 127.0.0.1 at the
 	// same port, so a same-host client always has a path a host VPN cannot drop
@@ -506,6 +514,11 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	}
 	if err := ConvergeStoredState(parent, st, execution, executionDetail, cfg.Now, logger); err != nil {
 		return nil, err
+	}
+	if cfg.ListenWait != nil {
+		if err := convergeListenerFallback(parent, st, cfg.ListenAddr, listener.Addr(), listenAbsent, cfg.Now); err != nil {
+			return nil, fmt.Errorf("report the listener: %w", err)
+		}
 	}
 	// The last stored step before anything that launches starts: model
 	// discovery, the engine loops, publications, and image upkeep all start
