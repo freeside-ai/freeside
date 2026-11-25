@@ -30,6 +30,7 @@ func BackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 		publish.ExternalReplyIntentKind:             publish.ExternalReplyBackupPayloadDigests,
 		publish.ExternalReplyOutcomeKind:            publish.ExternalReplyBackupPayloadDigests,
 		publish.HandBackLabelRemovalKind:            publish.HandBackLabelBackupPayloadDigests,
+		publish.CheckRerunKind:                      publish.CheckRerunBackupPayloadDigests,
 		publish.IntentKindReservation:               publish.ReservationBackupPayloadDigests,
 		publish.IntentKindPublication:               publish.PublicationBackupPayloadDigests,
 	}

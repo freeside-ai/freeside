@@ -2,6 +2,7 @@ package daemoncompose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -21,9 +22,15 @@ type requiredCheckObserver func(ctx context.Context, repo, baseRef, head string)
 // revision and stales a command prepared against the old version, so an
 // unchanged reading writes nothing. The transaction re-reads the item and
 // writes only while it is still open on the head the pass read.
+//
+// An infrastructure failure under MaxRequiredCheckReruns also enqueues one
+// rerun intent per failed run attempt, in the same transaction that raises
+// the card's rerun count, unless the pull request carries the hand-back
+// label (the lander owns it then) or an intent for one of those attempts
+// already exists (it was rerun, or the rerun is pending).
 func (r *ActiveResourceReconciler) convergeRequiredCheck(
 	ctx context.Context, itemID domain.ItemID, binding domain.ReadyItemPRBinding,
-	check publish.RequiredCheckObservation, observedAt time.Time,
+	check publish.RequiredCheckObservation, handBack bool, observedAt time.Time,
 ) error {
 	return r.Store.Write(ctx, func(tx *store.WriteTx) error {
 		item, err := tx.GetAttentionItem(ctx, itemID)
@@ -34,6 +41,15 @@ func (r *ActiveResourceReconciler) convergeRequiredCheck(
 			return nil
 		}
 		next := requiredCheckReading(check, binding.HeadSHA, item.RequiredCheck, observedAt)
+		if !handBack && rerunAllowed(next) {
+			enqueued, err := enqueueCheckReruns(ctx, tx, itemID, binding, check.FailedRuns)
+			if err != nil {
+				return err
+			}
+			if enqueued {
+				next.Reruns++
+			}
+		}
 		if sameRequiredCheckReading(item.RequiredCheck, next) {
 			return nil
 		}
@@ -44,6 +60,46 @@ func (r *ActiveResourceReconciler) convergeRequiredCheck(
 		}
 		return nil
 	})
+}
+
+func rerunAllowed(reading domain.RequiredCheck) bool {
+	return reading.State == domain.RequiredCheckFailed && reading.FailureClass != nil &&
+		*reading.FailureClass == domain.CheckFailureInfrastructure &&
+		reading.Reruns < domain.MaxRequiredCheckReruns
+}
+
+// enqueueCheckReruns enqueues a rerun intent for each failed run attempt and
+// reports whether it did. An existing intent for any of them means this
+// failure was already handled, so it enqueues none.
+func enqueueCheckReruns(
+	ctx context.Context, tx *store.WriteTx, itemID domain.ItemID, binding domain.ReadyItemPRBinding,
+	runs []publish.CheckRun,
+) (bool, error) {
+	type intent struct {
+		key     string
+		payload []byte
+	}
+	intents := make([]intent, 0, len(runs))
+	for _, run := range runs {
+		key, payload, err := publish.CheckRerunIntent(itemID, binding.Repo, binding.PRNumber, binding.HeadSHA, run)
+		if err != nil {
+			return false, err
+		}
+		_, err = tx.GetOutbox(ctx, key)
+		if err == nil {
+			return false, nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return false, err
+		}
+		intents = append(intents, intent{key: key, payload: payload})
+	}
+	for _, in := range intents {
+		if _, _, err := tx.EnqueueOutbox(ctx, in.key, publish.CheckRerunKind, in.payload); err != nil {
+			return false, err
+		}
+	}
+	return len(intents) > 0, nil
 }
 
 // requiredCheckReading is the card's reading of an observation on head. The

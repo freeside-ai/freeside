@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // checkReconciler is an active-resource reconciler over activeReadyItem whose
@@ -120,5 +121,102 @@ func TestActiveResourceReadsNoCheckOffTheBoundHead(t *testing.T) {
 	}
 	if got := readActiveItem(t, r.Store, item.ID); got.RequiredCheck != nil {
 		t.Fatalf("moved head wrote a reading %+v", got.RequiredCheck)
+	}
+}
+
+// pendingReruns lists the rerun intents' keys in insertion order.
+func pendingReruns(t *testing.T, st *store.Store) []string {
+	t.Helper()
+	var keys []string
+	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		entries, err := tx.ListPendingOutbox(context.Background(), publish.CheckRerunKind)
+		for _, entry := range entries {
+			keys = append(keys, entry.IdempotencyKey)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+func infrastructureFailure(attempt int) publish.RequiredCheckObservation {
+	infrastructure := domain.CheckFailureInfrastructure
+	return publish.RequiredCheckObservation{
+		State: domain.RequiredCheckFailed, FailureClass: &infrastructure,
+		FailedJobs: []publish.FailedCheckJob{{ID: int64(10 + attempt), RunID: 7, RunAttempt: attempt, Name: "daemon / macos (test, darwin 1/1)"}},
+		FailedRuns: []publish.CheckRun{{ID: 7, Attempt: attempt}},
+	}
+}
+
+// TestActiveResourceRerunsInfrastructureTwice: each infrastructure failure
+// on a new attempt enqueues one rerun and raises the card's count, a
+// repeated reading of the same attempt enqueues nothing, and a third failure
+// is left on the card.
+func TestActiveResourceRerunsInfrastructureTwice(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pull := exactPull("open", false)
+	check := infrastructureFailure(1)
+	var checkErr error
+	reads := 0
+	r, item := checkReconciler(t, &pull, &check, &checkErr, &reads)
+	key := func(attempt int) string { return publish.CheckRerunKey(item.ID, 7, attempt) }
+
+	for _, step := range []struct {
+		attempt     int
+		wantReruns  int
+		wantIntents []string
+	}{
+		{attempt: 1, wantReruns: 1, wantIntents: []string{key(1)}},
+		{attempt: 1, wantReruns: 1, wantIntents: []string{key(1)}},
+		{attempt: 2, wantReruns: 2, wantIntents: []string{key(1), key(2)}},
+		{attempt: 3, wantReruns: 2, wantIntents: []string{key(1), key(2)}},
+	} {
+		check = infrastructureFailure(step.attempt)
+		if failures, err := reconcileActiveResource(r, ctx); err != nil || len(failures) != 0 {
+			t.Fatalf("attempt %d: Reconcile = %v, %v", step.attempt, failures, err)
+		}
+		got := readActiveItem(t, r.Store, item.ID)
+		if got.RequiredCheck == nil || got.RequiredCheck.Reruns != step.wantReruns {
+			t.Fatalf("attempt %d: reading %+v, want %d reruns", step.attempt, got.RequiredCheck, step.wantReruns)
+		}
+		if intents := pendingReruns(t, r.Store); !reflect.DeepEqual(intents, step.wantIntents) {
+			t.Fatalf("attempt %d: intents %q, want %q", step.attempt, intents, step.wantIntents)
+		}
+	}
+}
+
+// TestActiveResourceRerunsNothingElse: a code failure, and an infrastructure
+// failure on a handed-back pull request, enqueue no rerun.
+func TestActiveResourceRerunsNothingElse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	code := domain.CheckFailureCode
+	codeFailure := infrastructureFailure(1)
+	codeFailure.FailureClass = &code
+
+	for _, tc := range []struct {
+		name     string
+		check    publish.RequiredCheckObservation
+		handBack bool
+	}{
+		{name: "code failure", check: codeFailure},
+		{name: "handed back", check: infrastructureFailure(1), handBack: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := schedTestStore(t)
+			item := activeReadyItem(t, st)
+			r := &ActiveResourceReconciler{Store: st}
+			binding := domain.ReadyItemPRBinding{Repo: "owner/repo", PRNumber: 450, BaseRef: "main", HeadSHA: item.PRHeadSHA}
+			if err := r.convergeRequiredCheck(ctx, item.ID, binding, tc.check, tc.handBack, activeResourceTestTime); err != nil {
+				t.Fatal(err)
+			}
+			got := readActiveItem(t, st, item.ID)
+			if got.RequiredCheck == nil || got.RequiredCheck.Reruns != 0 || len(pendingReruns(t, st)) != 0 {
+				t.Fatalf("reading %+v with intents %q, want a failed card and no rerun", got.RequiredCheck, pendingReruns(t, st))
+			}
+		})
 	}
 }

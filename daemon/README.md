@@ -1389,7 +1389,8 @@ conditions, and five-second sampling can miss brief competing test activity.
 The default publish identity is one public GitHub App owned by the operator's
 personal account. A fresh operator registers it through GitHub's manifest flow;
 Freeside generates the suggested name, requests the publish permission set
-plus `workflows: write` and `issues: write`, and writes the conversion key
+plus `workflows: write`, `issues: write`, and `actions: write`, and writes
+the conversion key
 directly to the protected credentials directory. A publication token asks for
 `workflows: write` only under a trust profile whose
 `candidate_automation_changes` is `advisory` (the
@@ -1408,6 +1409,15 @@ then, filing is refused before dispatch with a `follow_up_filing_refused`
 attention item naming the missing permission; publication can continue.
 The deployed App's managed installations accepted this change under #1416 on
 2026-09-20.
+
+Rerunning a required check that failed on infrastructure mints a separate
+token with only `actions: write` and `metadata: read` (#3598); publication
+keeps `actions: read`. An App registered before #3598 declares
+`actions: read`, so its owner must change the App's Actions permission to
+read and write on GitHub, and each installation must accept the change.
+Until then the mint is refused: the card shows the check `failed`, nothing
+is rerun, the daemon logs a `check rerun sweep` warning each minute, and
+publication and every other feature continue.
 
 The Claude driver sweeps approved filings at startup and every minute; an
 approval also wakes the filer immediately. The fake driver records approvals

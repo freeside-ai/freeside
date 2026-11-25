@@ -79,7 +79,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 				"id": 91, "name": "Freeside Example", "slug": "freeside-example",
 				"client_id": "Iv1.example",
 				"permissions": map[string]string{
-					"actions": "read", "administration": "read", "contents": "write",
+					"actions": "write", "administration": "read", "contents": "write",
 					"environments": "read", "pull_requests": "write", "metadata": "read", "issues": "write",
 					"workflows": "write",
 				},
@@ -441,7 +441,7 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 				"id": 91, "name": "Freeside Example", "slug": "freeside-example",
 				"client_id": "Iv1.example",
 				"permissions": map[string]string{
-					"actions": "read", "administration": "read", "contents": "write",
+					"actions": "write", "administration": "read", "contents": "write",
 					"environments": "read", "pull_requests": "write", "metadata": "read", "issues": "write",
 					"workflows": "write",
 				},

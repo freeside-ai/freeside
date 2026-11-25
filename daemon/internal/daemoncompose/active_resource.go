@@ -631,7 +631,7 @@ func (r *ActiveResourceReconciler) Reconcile(
 		// a pass that left the item open on its bound head.
 		if observation.check != nil && observation.invalidation == nil && !observation.conclude {
 			if err := r.convergeRequiredCheck(ctx, item.ID, observation.binding, *observation.check,
-				observation.pull.ObservedAt); err != nil {
+				observation.handBack, observation.pull.ObservedAt); err != nil {
 				result.Failures = append(result.Failures,
 					fmt.Errorf("record required check %s: %w", item.ID, err))
 			}

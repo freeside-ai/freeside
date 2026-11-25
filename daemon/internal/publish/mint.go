@@ -125,18 +125,32 @@ var handBackLabelPermissionScopes = map[string]string{
 	"metadata":      HandBackLabelPermissions.Metadata,
 }
 
+// CheckRerunPermissions grants only rerunning a workflow run's failed jobs
+// (#3598): GitHub's rerun endpoints need actions:write, and the rerunner's
+// read of the run before it sends needs nothing more. Publication keeps
+// actions:read.
+var CheckRerunPermissions = Permissions{Actions: "write", Metadata: "read"}
+
+var checkRerunPermissionScopes = map[string]string{
+	"actions":  CheckRerunPermissions.Actions,
+	"metadata": CheckRerunPermissions.Metadata,
+}
+
 // RegistrationPermissions declares all capabilities the App may need; each
 // token source narrows its mint to the effect it performs. workflows:write
-// serves only publication under an advisory profile (PublishWorkflowPermissions).
+// serves only publication under an advisory profile (PublishWorkflowPermissions),
+// and actions:write only the check rerun (CheckRerunPermissions).
 var RegistrationPermissions = func() Permissions {
 	permissions := PublishWorkflowPermissions
 	permissions.Issues = "write"
+	permissions.Actions = CheckRerunPermissions.Actions
 	return permissions
 }()
 
 var registrationPermissionScopes = func() map[string]string {
 	scopes := maps.Clone(publishWorkflowPermissionScopes)
 	scopes["issues"] = RegistrationPermissions.Issues
+	scopes["actions"] = RegistrationPermissions.Actions
 	return scopes
 }()
 

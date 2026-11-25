@@ -700,6 +700,7 @@ type ClaudeComposition struct {
 	ReviewReplier          *publish.ExternalReviewReplier
 	// HandBackLabels is nil when no hand-back label is configured.
 	HandBackLabels                  *publish.HandBackLabelRemover
+	CheckReruns                     *publish.CheckRerunner
 	reviewSource                    exec.ReviewSource
 	shadowReviewSource              exec.ReviewSource
 	reviewAdmission                 engine.ReviewAdmitter
@@ -942,7 +943,7 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, publisher, commitAuthors, posters, janitor, reconciler, reviewReplier, handBackLabels, issueReadTokens, err := claudeTransport(ctx, st, cfg, authority)
+	transport, publisher, commitAuthors, posters, janitor, reconciler, reviewReplier, sweepers, issueReadTokens, err := claudeTransport(ctx, st, cfg, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -1320,7 +1321,8 @@ func composeClaudeDriver(
 		FollowUpFiler:          posters.filer,
 		IssueCommentDispatcher: posters.comments,
 		ReviewReplier:          reviewReplier,
-		HandBackLabels:         handBackLabels,
+		HandBackLabels:         sweepers.handBackLabels,
+		CheckReruns:            sweepers.checkReruns,
 		issueReadTokens:        issueReadTokens,
 		openIssues: publish.NewOpenIssueLister(
 			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
@@ -2025,26 +2027,26 @@ func claudeTransport(
 	st *store.Store,
 	cfg ClaudeDriverConfig,
 	authority *publish.InstallationAuthorityStore,
-) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, followUpPosters, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, *publish.HandBackLabelRemover, publish.TokenSource, error) {
+) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, followUpPosters, *janitorSession, *publish.Reconciler, *publish.ExternalReviewReplier, forgeSweepers, publish.TokenSource, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.AuthorityLock, cfg.CredentialsDir)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, DefaultGitHubAPIBase, authority, authority, recorder, recorder, time.Now,
 		DefaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, DefaultGitHubAPIBase, recorder, trust, time.Now, janitor,
@@ -2054,59 +2056,66 @@ func claudeTransport(
 		tokens, keystore, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	reviewReplier, err := publish.NewExternalReviewReplier(st, tokens, client, DefaultGitHubAPIBase, commitAuthors, time.Now)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
-	var handBackLabels *publish.HandBackLabelRemover
+	var sweepers forgeSweepers
 	if cfg.HandBackLabel != "" {
 		// The remover's own token source mints only the label grant, so the
 		// publication token never reaches the label call.
-		handBackLabels, err = publish.NewHandBackLabelRemover(st, publish.NewHandBackLabelTokenSource(minter, time.Now),
+		sweepers.handBackLabels, err = publish.NewHandBackLabelRemover(st, publish.NewHandBackLabelTokenSource(minter, time.Now),
 			client, DefaultGitHubAPIBase, cfg.HandBackLabel)
 		if err != nil {
-			return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+			return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 		}
+	}
+	// The rerunner's token holds only actions:write, which publication
+	// never gets (#3598).
+	sweepers.checkReruns, err = publish.NewCheckRerunner(st, publish.NewCheckRerunTokenSource(minter, time.Now),
+		client, DefaultGitHubAPIBase)
+	if err != nil {
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	transport, err := publish.NewTransport(
 		tokens,
 		publish.TransportOptions{RemoteBase: DefaultGitHubRemoteBase, CredentialDir: GitCredentialDir(cfg.CredentialsDir)},
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	auditor, err := publish.NewGitHubWorkflowAuditor(
 		tokens, client, DefaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	posters, err := composeFollowUpFiler(st, minter, keystore, client, DefaultGitHubAPIBase, auditor)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	ledger, err := publish.NewStoreLedger(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	authorizations, err := publish.NewStoreAuthorizationSource(st)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	publisher := publish.NewPublisher(
 		tokens, client, DefaultGitHubAPIBase, auditor, ledger, trust, authorizations,
 	)
 	if err := transport.AuthorizePublisher(publisher); err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	if len(apps) == 0 {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, publish.ErrNoAppCredentials
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, publish.ErrNoAppCredentials
 	}
 	registrationIDs := make([]int64, 0, len(apps))
 	for _, app := range apps {
@@ -2114,13 +2123,21 @@ func claudeTransport(
 	}
 	session, err := startJanitorSession(ctx, janitor, registrationIDs)
 	if err != nil {
-		return nil, nil, nil, followUpPosters{}, nil, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
 	// Research reads the managed repository's issues on its own read-only
 	// grant, never on the publication token.
 	issueReadTokens := publish.NewIssueReadTokenSource(minter, time.Now)
 	return transport, publisher, commitAuthors, posters, session,
-		publish.NewReconciler(tokens, client, DefaultGitHubAPIBase), reviewReplier, handBackLabels, issueReadTokens, nil
+		publish.NewReconciler(tokens, client, DefaultGitHubAPIBase), reviewReplier, sweepers, issueReadTokens, nil
+}
+
+// forgeSweepers are the minute sweepers that each send one kind of GitHub
+// write on a token narrowed to it.
+type forgeSweepers struct {
+	// handBackLabels is nil when no hand-back label is configured.
+	handBackLabels *publish.HandBackLabelRemover
+	checkReruns    *publish.CheckRerunner
 }
 
 // followUpPosters are the dispatchers that post what a human approved from a

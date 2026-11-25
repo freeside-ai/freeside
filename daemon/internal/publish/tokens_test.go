@@ -480,6 +480,53 @@ func TestCachedTokenSourceValidation(t *testing.T) {
 	}
 }
 
+// TestCheckRerunTokenSourceMintsOnlyRerun: the rerunner's token carries
+// actions:write and metadata:read and nothing else (#3598); a narrower or
+// broader grant, such as the actions:read an App registered before #3598
+// holds, is refused before it is cached or audited.
+func TestCheckRerunTokenSourceMintsOnlyRerun(t *testing.T) {
+	t.Parallel()
+	want := publish.Permissions{Actions: "write", Metadata: "read"}
+	if publish.CheckRerunPermissions != want {
+		t.Fatalf("CheckRerunPermissions = %+v, want %+v", publish.CheckRerunPermissions, want)
+	}
+	for name, scopes := range map[string]map[string]string{
+		"exact":             {"actions": "write", "metadata": "read"},
+		"read only":         {"actions": "read", "metadata": "read"},
+		"publication scope": {"actions": "write", "metadata": "read", "contents": "write"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var requested map[string]string
+			srv := newMintServer(t, func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Permissions map[string]string `json:"permissions"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				requested = request.Permissions
+				writeFilingTokenResponse(t, w, scopes)
+			})
+			defer srv.Close()
+			recorder := &captureRecorder{}
+			m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, recorder, conformantTrust(t), fixedNow)
+			token, err := publish.NewCheckRerunTokenSource(m, fixedNow).Token(context.Background(), testTrustRepo)
+			if len(requested) != 2 || requested["actions"] != "write" || requested["metadata"] != "read" {
+				t.Errorf("mint request permissions = %v", requested)
+			}
+			if name == "exact" {
+				if err != nil || token.Permissions != want || len(recorder.records) != 1 {
+					t.Fatalf("exact grant: permissions %+v, audits %d, err %v", token.Permissions, len(recorder.records), err)
+				}
+				return
+			}
+			if !errors.Is(err, publish.ErrGrantMismatch) || token.Token.Reveal() != "" || len(recorder.records) != 0 {
+				t.Fatal("a different grant returned a token, lacked ErrGrantMismatch, or reached the audit")
+			}
+		})
+	}
+}
+
 // TestHandBackLabelTokenSourceMintsOnlyLabelRemoval: the label remover's
 // token carries pull_requests:write and metadata:read and nothing else; any
 // other grant is refused before it is cached or audited.

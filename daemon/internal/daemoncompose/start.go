@@ -1058,6 +1058,16 @@ func (d *Daemon) startClaudeLoops(
 			d.ComponentExited(parent, ctx, daemonshell.ComponentHandBackLabels, err)
 		})
 	}
+	if claudeWiring.CheckReruns != nil {
+		d.Go(func() {
+			err := claudeWiring.CheckReruns.Run(ctx, time.Minute, func(err error) {
+				if cfg.Logger != nil {
+					cfg.Logger.Warn("check rerun sweep", "error", err)
+				}
+			})
+			d.ComponentExited(parent, ctx, daemonshell.ComponentCheckReruns, err)
+		})
+	}
 
 	// The production publication lane gets its own loop: one task holds a
 	// clone, a containerized verification, and GitHub calls for minutes,
