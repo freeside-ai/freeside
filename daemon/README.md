@@ -5479,6 +5479,31 @@ that requires none shows nothing. A failed read is reported and retried on
 the next pass. The 30-minute `pr_checks_deadline` records an elapse only
 while the check is absent or `pending`.
 
+A failed check gets one of three classes from the GitHub Actions job facts,
+with infrastructure checked first: `infrastructure` (a failed job with no
+runner and no steps, so it never ran), `code` (a failed job with a failed
+step), or `other`. An infrastructure failure is rerun up to twice per head,
+by rerunning each failed workflow run attempt's failed jobs, unless the pull
+request carries the hand-back label, since the lander owns it then. An
+`other` failure, and one past the rerun limit, stay on the card for a
+person.
+
+A `code` failure starts a `check_failure` cycle on Freeside's own published
+head (#3598). The reconciler reads the tail of each of the first three
+failed jobs' logs, screens it with the export's credential rules, keeps the
+last 8 KiB, and records the failure; the cycle's authority names that
+record. A log GitHub no longer keeps, an empty one, and one too long to
+read are each recorded as such rather than retried. The cycle reviews
+the head again on the next round. Findings from that review go to a person,
+as on every in-place re-entry, and no fix starts. A clean review hands the
+head off in place, and a remediation then fixes the head with the failed
+jobs and their excerpts as input, which the remediator treats as data; the
+fix is verified, reviewed, and published like any remediation, and the new
+head's check is read from nothing. One failure record starts one cycle. A
+cycle that ended on a person blocks the next until that item closes. A
+round limit with no room left, or an input too large to deliver, ends the
+cycle with a `publish_blocked` item that names the failed jobs.
+
 The deputy fixes, rather than reads from settings, the Claude driver, unattended
 mode, run conformance, provider-only egress to `api.anthropic.com:443`, and
 an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
