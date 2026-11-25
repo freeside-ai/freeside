@@ -18,6 +18,11 @@
 		<string>-listen</string>
 		<string>127.0.0.1:7331</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:/Applications/Tailscale.app/Contents/MacOS</string>
+	</dict>
 	<key>KeepAlive</key>
 	<true/>
 	<key>ExitTimeOut</key>

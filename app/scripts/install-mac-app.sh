@@ -3,7 +3,8 @@
 # real client (plan §10, issue #444).
 #
 # Usage: install-mac-app.sh [dev|prod] [--prod] [--daemon-path <absolute-path>]
-#                           [--server-url <url>] [--launch] [--force]
+#                           [--server-url <url>] [--listen <address>]
+#                           [--launch] [--force]
 #
 # The target is an environment tier (plan "Environments: Prod, Dev, and
 # Ephemeral"; default prod). Each tier derives its own identity, so the two
@@ -31,6 +32,16 @@
 # preferences (`AppSession.fromEnvironment` reads `FreesideServerURL`
 # from UserDefaults), so the app reaches the operator's daemon when it
 # is launched from the Dock rather than with launch arguments.
+#
+# --listen sets the prod daemon's -listen address: 127.0.0.1:7331, or this
+# Mac's Tailscale IPv4 address at port 7331 (in 100.64.0.0/10) so a paired
+# iPhone reaches the daemon over the tailnet (#2083). Without it, an update
+# keeps the installed prod daemon's address, and a first install listens on
+# loopback. The daemon checks at start that Tailscale reports the address; if
+# Tailscale has not connected yet it waits up to a minute, then serves on
+# loopback with a card rather than exit. The dev tier always listens on
+# loopback. The LaunchAgent gives the daemon a PATH (daemon_path_env) that
+# finds git and the tailscale CLI, which launchd's default PATH lacks.
 #
 # The installer builds freesided from this checkout with
 # `go build -trimpath -buildvcs=false`, so the same sources give the same
@@ -105,6 +116,8 @@ daemon_path=""
 daemon_path_given=false
 launch_after_install=false
 force_drain=false
+listen_flag=""
+listen_given=false
 
 die() {
     echo "install-mac-app: $1" >&2
@@ -154,6 +167,22 @@ json_string() {
     printf '%s' "$out"
 }
 
+# The PATH the daemon's LaunchAgent sets: launchd's default holds /usr/bin
+# (git) but not the tailscale CLI, which the daemon runs by bare name to check
+# its listen address. These are where the Tailscale app, its standalone CLI
+# install, and Homebrew put it. The plist template carries it; the installer
+# verifies it.
+daemon_path_env="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:/Applications/Tailscale.app/Contents/MacOS"
+
+# A prod listen address the installer accepts: loopback, or a Tailscale IPv4
+# address (100.64.0.0/10), at prod's port. The iOS app permits cleartext HTTP
+# only to that range, so an IPv6 or MagicDNS address would not reach it.
+valid_prod_listen() {
+    [[ "$1" == 127.0.0.1:7331 ]] && return 0
+    [[ "$1" =~ ^100\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2}):7331$ ]] || return 1
+    ((BASH_REMATCH[1] >= 64 && BASH_REMATCH[1] <= 127 && BASH_REMATCH[2] <= 255 && BASH_REMATCH[3] <= 255))
+}
+
 [[ "$(uname)" == "Darwin" ]] || die "requires macOS"
 
 while [[ $# -gt 0 ]]; do
@@ -168,6 +197,12 @@ while [[ $# -gt 0 ]]; do
         [[ $# -ge 2 ]] || die "--server-url needs a URL"
         server_url="$2"
         server_url_given=true
+        shift 2
+        ;;
+    --listen)
+        [[ $# -ge 2 ]] || die "--listen needs an address"
+        listen_flag="$2"
+        listen_given=true
         shift 2
         ;;
     --launch)
@@ -226,6 +261,26 @@ state_root="${FREESIDE_MAC_STATE_ROOT:-$HOME/Library/Application Support/$displa
 [[ "$state_root" == /* ]] ||
     die "FREESIDE_MAC_STATE_ROOT must be absolute: $state_root"
 daemon_state_dir="$state_root/daemon"
+
+if [[ "$listen_given" == true ]]; then
+    [[ "$target" == prod ]] || die "--listen applies only to the prod target"
+    valid_prod_listen "$listen_flag" ||
+        die "--listen must be 127.0.0.1:7331 or this Mac's Tailscale IPv4 address at port 7331: $listen_flag"
+    listen_addr="$listen_flag"
+elif [[ "$target" == prod ]]; then
+    # An update keeps the address the installed daemon listens on, so
+    # re-running the installer never cuts a paired iPhone off.
+    installed_agent="$destination/Contents/Library/LaunchAgents/$daemon_label.plist"
+    if [[ -f "$installed_agent" ]] &&
+        [[ "$(plutil -extract ProgramArguments.7 raw -o - "$installed_agent" 2>/dev/null)" == -listen ]]; then
+        installed_listen=$(plutil -extract ProgramArguments.8 raw -o - "$installed_agent" 2>/dev/null || true)
+        if valid_prod_listen "$installed_listen"; then
+            listen_addr="$installed_listen"
+        else
+            echo "install-mac-app: the installed daemon's listen address is not one this installer sets; using $listen_addr" >&2
+        fi
+    fi
+fi
 
 if [[ "$daemon_path_given" == true ]]; then
     [[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
@@ -1119,6 +1174,10 @@ if plutil -extract "ProgramArguments.${#expected_args[@]}" raw -o - "$launch_age
     >/dev/null 2>&1; then
     die "the templated daemon program arguments have more entries than expected (see #762)"
 fi
+templated_path=$(plutil -extract EnvironmentVariables.PATH raw -o - "$launch_agent_plist") ||
+    die "could not read the daemon's PATH from the LaunchAgent"
+[[ "$templated_path" == "$daemon_path_env" ]] ||
+    die "the LaunchAgent's PATH does not match the one the daemon needs: $templated_path"
 templated_stderr=$(plutil -extract StandardErrorPath raw -o - "$launch_agent_plist") ||
     die "could not read the templated daemon stderr log path"
 [[ "$templated_stderr" == "$stderr_path" ]] ||
