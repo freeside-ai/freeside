@@ -42,9 +42,10 @@ func (tx *InternalTx) RegisterProject(ctx context.Context, project domain.Projec
 }
 
 // registerAdmittedProject binds a run's project to the repository its
-// execution admission names. It is the one production writer outside label
-// intake, and the store's backfill replays it for admissions recorded before
-// it existed. A new admission carries the daemon's current configured name, so
+// execution admission names. Label intake and daemon start (#3592), which
+// binds the configured project through RegisterProject, are the other
+// production writers, and the store's backfill replays this one for
+// admissions recorded before it existed. A new admission carries the daemon's current configured name, so
 // it follows a rename; a replayed one (rename false) may carry a name from
 // before the rename, so it verifies the repository id and never renames the
 // row back.

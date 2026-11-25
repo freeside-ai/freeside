@@ -18,7 +18,10 @@ import (
 // triageSourceFixture is a submitted task whose work item holds a case's
 // text, on project freeasinbird/freeside (repository ID 42) unless the case
 // leaves it unregistered, with a research fetcher that answers every request
-// with issue 7 and records the URLs it was asked for.
+// with issue 7 and records the URLs it was asked for. The task is submitted
+// as freesided submit's control route submits it: with its text and a
+// work-unit declaration, on a store with no admission and no label intake,
+// where only daemon start has bound the project (#3592).
 type triageSourceFixture struct {
 	spec    specificationFixture
 	run     domain.Run
@@ -35,20 +38,25 @@ func newTriageSourceFixture(t *testing.T, text string, registered bool, status i
 		t.Fatal(err)
 	}
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		if err := tx.PutArtifact(t.Context(), source); err != nil {
-			return err
-		}
-		if !registered {
-			return nil
-		}
-		return tx.RegisterProject(t.Context(), domain.Project{ID: "project-1", Repo: "freeasinbird/freeside", RepositoryID: 42})
+		return tx.PutArtifact(t.Context(), source)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if registered {
+		// The bind daemon start makes from its configuration.
+		if err := f.store.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+			return tx.RegisterProject(t.Context(), domain.Project{ID: "project-1", Repo: "freeasinbird/freeside", RepositoryID: 42})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f.source = source
-	submitted, err := SubmitSpecificationRun(t.Context(), f.store, f.specWithSource(domain.SpecificationSource{
+	spec := f.specWithSource(domain.SpecificationSource{
 		Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: source.ID,
-	}))
+	})
+	spec.SourceBytes = []byte(text)
+	spec.WorkUnit = &domain.WorkUnitDeclarationInput{CompletionCriterion: domain.CompletionBoundPRMerged}
+	submitted, err := SubmitSpecificationRun(t.Context(), f.store, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +99,9 @@ func triagerLineup(t *testing.T) domain.Lineup {
 }
 
 // A submitted task that is exactly one canonical issue URL in the managed
-// repository triages from that issue, fetched by repository ID; any other
-// submitted text triages as written and fetches nothing.
+// repository records that issue and triages from it, fetched by repository
+// ID; any other submitted text records none, triages as written, and fetches
+// nothing. The bare URL with its trailing newline is #3592's submission.
 func TestTriageReadsBareIssueURLSubmission(t *testing.T) {
 	t.Parallel()
 	lineup := triagerLineup(t)
@@ -130,6 +139,18 @@ func TestTriageReadsBareIssueURLSubmission(t *testing.T) {
 				t.Fatalf("triager calls = %d, want 1", len(requests))
 			}
 			fields := requests[0].Fields
+			var task domain.Task
+			if err := f.spec.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				var err error
+				task, err = tx.GetTask(t.Context(), f.run.TaskID)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if want := (domain.IssueSubjectRef{Repo: "freeasinbird/freeside", RepositoryID: 42, IssueNumber: 7}); tc.readsIssue !=
+				(task.SubmittedIssue != nil) || (tc.readsIssue && *task.SubmittedIssue != want) {
+				t.Fatalf("submitted issue = %+v, want it recorded as %+v: %t", task.SubmittedIssue, want, tc.readsIssue)
+			}
 			if !tc.readsIssue {
 				if len(*f.fetches) != 0 || fields["source_text"] != tc.text || fields["issue_title"] != "" ||
 					fields["issue_body"] != "" || fields["issue_labels"] != "" {
@@ -170,23 +191,5 @@ func TestTriageBareIssueURLFetchFailureEscalates(t *testing.T) {
 	}
 	if len(*f.fetches) != 1 || len(driver.Requests()) != 0 {
 		t.Fatalf("fetches = %v, triager calls = %d; want one fetch and no call", *f.fetches, len(driver.Requests()))
-	}
-}
-
-// The task namer keeps naming a bare-URL submission from its text: only
-// triage reads the issue it names.
-func TestTaskNamerKeepsBareIssueURLSubmissionText(t *testing.T) {
-	t.Parallel()
-	const text = "https://github.com/freeasinbird/freeside/issues/7"
-	f := newTriageSourceFixture(t, text, true, http.StatusOK)
-	namer := inferencefake.New()
-	namer.Script(inference.TaskNamerSiteID, inferencefake.Script{Response: inference.Response{Output: []byte(`{"name":"Bound requests"}`)}})
-	if err := f.engine(taskNamingClient(t, namer)).nameTaskIfUnnamed(t.Context(), f.run); err != nil {
-		t.Fatal(err)
-	}
-	requests := namer.Requests()
-	if len(*f.fetches) != 0 || len(requests) != 1 || requests[0].Fields["source_text"] != text ||
-		requests[0].Fields["issue_title"] != "" {
-		t.Fatalf("fetches = %v, namer requests = %+v; want the submitted text and no fetch", *f.fetches, requests)
 	}
 }

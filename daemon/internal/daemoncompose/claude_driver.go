@@ -1133,6 +1133,9 @@ func composeClaudeDriver(
 			return nil, fmt.Errorf("compose %s review source: %w", cfg.ReviewProvider.HarnessClient, err)
 		}
 	}
+	if err := bindStartupProject(ctx, st, cfg); err != nil {
+		return nil, err
+	}
 	// Every start refreshes the stored tip before anything reads it: start
 	// selection, the start's conformance pass, and the first admissions.
 	tip, err := startupRepositoryTip(ctx, st, cfg, refTipObserver(reconciler), utcNow(), logger)
@@ -1910,6 +1913,33 @@ func claudeAdmissionDerivation(st *store.Store, cfg ClaudeDriverConfig) engine.A
 		}
 		return claude.WorkspaceFor(id), tip, nil
 	}
+}
+
+// bindStartupProject binds the configured project to the configured
+// repository before the engine loop runs or the API serves a submission
+// (#3592). Submission and specifier triage find the issue a bare-URL task
+// names through that binding (engine managedSourceIssue), and both run before
+// the specifier's admission, the binding's other writer on a root label
+// intake has not seen. That admission writes the same binding from this same
+// configuration, so binding earlier grants no repository the first admission
+// would not. RegisterProject follows a rename, as a new admission does, and
+// fails the start with store.ErrImmutableConflict when the row is bound to
+// another repository ID, which the first admission would have refused. A
+// configuration composed from flags names no project and binds nothing.
+func bindStartupProject(ctx context.Context, st *store.Store, cfg ClaudeDriverConfig) error {
+	if cfg.ProjectID == "" {
+		return nil
+	}
+	project, err := domain.NewProject(cfg.ProjectID, cfg.Repo, cfg.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("bind project %q to %s: %w", cfg.ProjectID, cfg.Repo, err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RegisterProject(ctx, project)
+	}); err != nil {
+		return fmt.Errorf("bind project %q to %s (repository %d): %w", cfg.ProjectID, cfg.Repo, cfg.RepositoryID, err)
+	}
+	return nil
 }
 
 // startupRepositoryTip reads the tip through observe and stores it through

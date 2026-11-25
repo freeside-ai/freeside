@@ -205,9 +205,10 @@ func (e *Engine) callTriager(ctx context.Context, run domain.Run, lineup domain.
 		if task, err = tx.GetTask(ctx, run.TaskID); err != nil {
 			return err
 		}
-		// A task submitted for a repository label intake never saw has no
-		// project row; the call then names no project, as research
-		// scoping treats the same run (researchScope).
+		// A task whose project has no row (submitted to a daemon composed
+		// from flags, before its first admission, for a repository label
+		// intake never saw) names no project, as research scoping treats
+		// the same run (researchScope).
 		project, err = tx.GetProject(ctx, run.ProjectID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
@@ -258,6 +259,9 @@ func (e *Engine) callTriager(ctx context.Context, run domain.Run, lineup domain.
 // never by the submitted URL, and the owner/name comparison ignores case as
 // the research fetcher's scope check does. Any other text, a URL for another
 // repository, or a project with no registered repository reads as submitted.
+// Daemon start binds a configured project before triage can run (#3592), so
+// the unregistered case is a daemon composed from flags before its first
+// admission, or a project neither it nor label intake has bound.
 func (e *Engine) readTriageSource(
 	ctx context.Context, run domain.Run, task domain.Task, invocation domain.InvocationID, purpose string,
 ) (taskSource, error) {
