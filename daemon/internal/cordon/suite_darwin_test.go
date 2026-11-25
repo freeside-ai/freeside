@@ -80,8 +80,9 @@ func (o *fakeOutside) simDevices(context.Context, string) (int, error) { return 
 func (*fakeOutside) simDelete(context.Context, string) error { return nil }
 
 // suiteFixture is a host fixture whose fake home holds a stand-in at a few
-// secret paths and a project .env file, pinned to the test binary as the
-// agent CLI, with reserved ports nothing holds.
+// secret paths, a second Claude configuration directory, and a project
+// .env file, pinned to the test binary as the agent CLI, with reserved
+// ports nothing holds.
 func suiteFixture(t *testing.T) Config {
 	t.Helper()
 	cfg := newHostFixture(t).cfg
@@ -124,7 +125,9 @@ func suiteFixture(t *testing.T) Config {
 			t.Fatal(err)
 		}
 	}
-	for _, dir := range []string{cfg.UserTemp, cfg.UserCache, cfg.OwnerClaudeConfig} {
+	// A second Claude configuration directory, which the rule file's
+	// .claude prefix denies (#3600).
+	for _, dir := range []string{cfg.UserTemp, cfg.UserCache, cfg.OwnerClaudeConfig, cfg.Home + "/.claude-bnw"} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}

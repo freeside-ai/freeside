@@ -272,6 +272,11 @@ func TestHostLaunchDeniesSecretsAndLaunches(t *testing.T) {
 		".codex/auth.json", "Library/Application Support/Google/Chrome/Default/Cookies",
 		"Library/Application Support/Firefox/profiles.ini", "Library/Safari/History.db",
 		"Library/Cookies/Cookies.binarycookies", ".claude/.credentials.json", ".claude.json",
+		// Every home entry named .claude*: a second configuration directory
+		// the owner's sessions use on a shared account (#3600), a backup,
+		// and an atomic-write temporary, which the suite doesn't probe.
+		".claude-bnw/sessions/s.jsonl", ".claude-bnw/.claude.json", ".claude.json.backup",
+		claudeConfigTemporaryPrefix + "1.ab",
 		"Library/Application Support/com.apple.container/volumes/token", ".freeside/roots/state",
 		"Library/Application Support/Freeside/freeside.db", "Library/Application Support/Freeside Dev/freeside.db",
 		"Library/Keychains/login.keychain-db", "first.last/Code/other/.env", "first.last/Code/other/.envrc",
@@ -291,6 +296,11 @@ func TestHostLaunchDeniesSecretsAndLaunches(t *testing.T) {
 		probeLine("allow", "read", standIn(t, filepath.Join(home, "firstXlast/Code/other/.env"))),
 		probeLine("allow", "read", standIn(t, filepath.Join(home, "first.last/Code/other/README"))),
 		probeLine("allow", "write", filepath.Join(home, "first.last/Code/other/notes")),
+		// The .claude prefix is denied to new entries too, and its dot is
+		// literal.
+		probeLine("deny", "write", filepath.Join(home, ".claude-bnw/settings.json")),
+		probeLine("deny", "write", filepath.Join(home, ".claude-new")),
+		probeLine("allow", "read", standIn(t, filepath.Join(home, "Xclaude-x/notes"))),
 		// Renaming a denied path's parent would bring the path out under
 		// another name; the directories stay open to new entries.
 		probeLine("deny", "rename", home, home+"-moved"),
@@ -305,7 +315,8 @@ func TestHostLaunchDeniesSecretsAndLaunches(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := f.backend(t)
-	worktree := layoutFor(f.cfg.RunsRoot, "secrets").worktree
+	l := layoutFor(f.cfg.RunsRoot, "secrets")
+	worktree := l.worktree
 	gocache, err := exec.Command("go", "env", "GOCACHE").Output()
 	if err != nil {
 		t.Fatalf("go env GOCACHE: %v", err)
@@ -315,6 +326,10 @@ func TestHostLaunchDeniesSecretsAndLaunches(t *testing.T) {
 		probeLine("allow", "write", filepath.Join(worktree, "written")),
 		probeLine("allow", "rename", filepath.Join(worktree, "written"), filepath.Join(worktree, "renamed")),
 		probeLine("allow", "gobuild", worktree, strings.TrimSpace(string(gocache))),
+		// The launch's own CLAUDE_CONFIG_DIR stays open under the .claude
+		// denials.
+		probeLine("allow", "write", filepath.Join(l.config, "settings.json")),
+		probeLine("allow", "read", filepath.Join(l.config, "settings.json")),
 	)
 	label := fmt.Sprintf("dev.freeside.cordon-test.%d", os.Getpid())
 	if unconfinedLaunchdSubmits(t, label) {

@@ -282,7 +282,8 @@ func TestSecretPathsAreTheRuleFilesHomePaths(t *testing.T) {
 			inRules = append(inRules, m[1])
 		}
 	}
-	// The global preferences rule is a regex, escaped in the rule file.
+	// The global preferences and .claude rules are regexes, escaped in the
+	// rule file.
 	for i, p := range inRules {
 		inRules[i] = strings.ReplaceAll(p, `\\`, "")
 	}
@@ -391,13 +392,25 @@ func TestProbeLaunchRemovesOnlyWhatItClaimed(t *testing.T) {
 
 // TestReadTargetsProveTheOwnersClaudeConfigurationOnce covers the
 // daemon's own configuration, whose owner Claude configuration is also one
-// of the rule file's home paths: the report proves each check once.
+// of the rule file's home paths and one of the home's .claude entries: the
+// report proves each check once, and every .claude entry the home holds is
+// probed but the CLI's atomic-write temporaries.
 func TestReadTargetsProveTheOwnersClaudeConfigurationOnce(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
 	cfg.OwnerClaudeConfig = cfg.Home + "/.claude"
 	if !slices.Contains(secretReadPaths, "/.claude") {
 		t.Fatal("the rule file no longer denies ~/.claude; this test needs another shared path")
+	}
+	for _, dir := range []string{"/.claude", "/.claude-bnw", "/Xclaude-x"} {
+		if err := os.Mkdir(cfg.Home+dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{"/.claude.json", "/" + claudeConfigTemporaryPrefix + "1.ab"} {
+		if err := os.WriteFile(cfg.Home+file, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	b, err := New(cfg, &fakeSeeder{})
 	if err != nil {
@@ -411,7 +424,36 @@ func TestReadTargetsProveTheOwnersClaudeConfigurationOnce(t *testing.T) {
 	if n := len(slices.Compact(slices.Sorted(slices.Values(checks)))); n != len(checks) {
 		t.Fatalf("read checks repeat: %q", checks)
 	}
-	if !slices.Contains(checks, checkRead(cfg.OwnerClaudeConfig)) {
-		t.Fatalf("read checks %q leave out the owner's Claude configuration", checks)
+	for _, path := range []string{cfg.OwnerClaudeConfig, cfg.Home + "/.claude-bnw", cfg.Home + "/.claude.json"} {
+		if !slices.Contains(checks, checkRead(path)) {
+			t.Fatalf("read checks %q leave out %s", checks, path)
+		}
+	}
+	if slices.Contains(checks, checkRead(cfg.Home+"/Xclaude-x")) {
+		t.Fatalf("read checks %q probe a home entry the rule file doesn't deny", checks)
+	}
+	// A temporary the owner's CLI may rename away before the launch opens it.
+	if slices.Contains(checks, checkRead(cfg.Home+"/"+claudeConfigTemporaryPrefix+"1.ab")) {
+		t.Fatalf("read checks %q probe the CLI's atomic-write temporary", checks)
+	}
+}
+
+// TestCreateTargetsProveTheClaudePrefixOnAnyHome shows the create probe
+// tries a new ~/.claude-<nonce> directory, so the rule file's .claude
+// prefix is proved on a home that holds no second Claude configuration.
+func TestCreateTargetsProveTheClaudePrefixOnAnyHome(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	b, err := New(cfg, &fakeSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creates, err := testSuite(t, b).createTargets("n0nce")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := probeCreate{Path: cfg.Home + "/.claude-freeside-probe-n0nce", Dir: true}
+	if !slices.Contains(creates, want) {
+		t.Fatalf("creates %v leave out %v", creates, want)
 	}
 }

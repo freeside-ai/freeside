@@ -53,13 +53,17 @@ var (
 		"/.kube", "/.docker/config.json", "/.codex",
 		"/Library/Application Support/Google/Chrome", "/Library/Application Support/Firefox",
 		"/Library/Safari", "/Library/Cookies",
-		"/.claude", "/.claude.json",
+		"/.claude",
 		"/Library/Application Support/com.apple.container", "/.freeside",
 		"/Library/Application Support/Freeside", "/Library/Application Support/Freeside Dev",
 		"/Library/Keychains",
 	}
 	writeOnlyPaths = []string{"/Library/LaunchAgents", "/Library/Preferences/.GlobalPreferences"}
 )
+
+// claudeConfigTemporaryPrefix names the Claude CLI's atomic-write
+// temporaries of ~/.claude.json, which live only until the CLI renames them.
+const claudeConfigTemporaryPrefix = ".claude.json.tmp."
 
 // loginKeychain is the login keychain's file, which the probe opens beside
 // its directory.
@@ -355,23 +359,41 @@ func (s *Suite) commonTargets(nonce string) (*targets, error) {
 }
 
 // readTargets are the secret paths, the login keychain's file, the owner's
-// Claude configuration, and a few of the other projects' .env files. A
-// present path's control is opening it outside the launch; a path the
-// account can't open either is already denied to every process the account
-// runs and is left out.
+// Claude configuration, every entry in the home whose name starts with
+// .claude (the rule file denies that prefix, so a second configuration
+// directory such as ~/.claude-<name> is proved wherever one exists), and a
+// few of the other projects' .env files. A present path's control is
+// opening it outside the launch; a path the account can't open either is
+// already denied to every process the account runs and is left out.
 func (s *Suite) readTargets() ([]probeRead, error) {
+	home := s.b.cfg.Home
 	paths := make([]string, 0, len(secretReadPaths)+3+maxProjectEnvFiles)
 	for _, rel := range secretReadPaths {
-		paths = append(paths, s.b.cfg.Home+rel)
+		paths = append(paths, home+rel)
 	}
-	paths = append(paths, s.b.cfg.Home+loginKeychain, s.b.cfg.OwnerClaudeConfig)
+	paths = append(paths, home+loginKeychain, s.b.cfg.OwnerClaudeConfig)
+	// ReadDir and a prefix test, not a glob, so a glob character in the
+	// home's own path can't change what matches. The CLI's atomic-write
+	// temporaries are left out: one the owner's session renames away before
+	// the launch opens it reads as missing, not refused, and would fail the
+	// pass. The same rule denies them, and the other entries prove it.
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return nil, failure(checkRead(home+"/.claude"), "control: %v", err)
+	}
+	for _, e := range entries {
+		if name := e.Name(); strings.HasPrefix(name, ".claude") && !strings.HasPrefix(name, claudeConfigTemporaryPrefix) {
+			paths = append(paths, home+"/"+name)
+		}
+	}
 	envs, err := projectEnvFiles(s.b.cfg.Projects)
 	if err != nil {
 		return nil, err
 	}
 	paths = append(paths, envs...)
 	// The owner's Claude configuration is usually one of the rule file's
-	// home paths too, and the report proves each check once.
+	// home paths or the home's .claude entries too, and the report proves
+	// each check once.
 	slices.Sort(paths)
 	paths = slices.Compact(paths)
 	reads := make([]probeRead, 0, len(paths))
@@ -413,11 +435,13 @@ func projectEnvFiles(projects string) ([]string, error) {
 
 // createTargets are new nonce-named paths in each place the rules deny
 // writing: every protected root, /Library/Freeside and the directories under
-// it, LaunchAgents, the global preferences, and the verification jobs'
-// temporary and cache directories. A target's control is that the account
-// may write its parent; a place the account can't write is already denied
-// to every process it runs and is left out. A protected root that doesn't
-// exist yet is probed by creating the root itself.
+// it, LaunchAgents, the global preferences, the verification jobs'
+// temporary and cache directories, and a new ~/.claude-<nonce> directory,
+// which proves the rule file's .claude prefix on a home that holds no
+// second Claude configuration directory. A target's control is that the
+// account may write its parent; a place the account can't write is already
+// denied to every process it runs and is left out. A protected root that
+// doesn't exist yet is probed by creating the root itself.
 func (s *Suite) createTargets(nonce string) ([]probeCreate, error) {
 	cfg := s.b.cfg
 	name := "freeside-probe-" + nonce
@@ -453,6 +477,7 @@ func (s *Suite) createTargets(nonce string) ([]probeCreate, error) {
 	}
 	prefs := cfg.Home + "/Library/Preferences"
 	creates = appendWritable(creates, prefs, probeCreate{Path: filepath.Join(prefs, ".GlobalPreferences."+name)})
+	creates = appendWritable(creates, cfg.Home, probeCreate{Path: cfg.Home + "/.claude-" + name, Dir: true})
 	for _, dir := range []string{cfg.UserTemp, cfg.UserCache} {
 		creates = appendWritable(creates, dir, probeCreate{Path: filepath.Join(dir, "freeside-verify-"+name), Dir: true})
 	}
