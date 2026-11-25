@@ -203,6 +203,10 @@ func assertHeldAfterRestart(t *testing.T, h *holdFixture) {
 		if len(faults) != 1 || faults[0].RegistrationID != 501 || !errors.Is(faults[0].Err, publish.ErrJanitorMintHeld) {
 			t.Fatalf("faults at %s = %v, want only held registration 501", at, faults)
 		}
+		var held *publish.JanitorMintHeldError
+		if !errors.As(faults[0].Err, &held) || held.InstallationID != 701 || !held.HeldUntil.Equal(deadline) {
+			t.Fatalf("held fault at %s = %#v, want installation 701 held until %s", at, held, deadline)
+		}
 		if got := h.forge.takeEffects(); got != "mint-801,revoke-801" {
 			t.Fatalf("held pass effects at %s = %s", at, got)
 		}
