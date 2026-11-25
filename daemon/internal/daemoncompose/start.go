@@ -443,7 +443,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		execution = gated
 		logger.Warn("serving without execution", "reason", string(gated))
 	}
-	if err := ConvergeStoredState(parent, st, execution, cfg.Now, logger); err != nil {
+	if err := ConvergeStoredState(parent, st, execution, "", cfg.Now, logger); err != nil {
 		return nil, err
 	}
 	// The last stored step before anything that launches starts: model

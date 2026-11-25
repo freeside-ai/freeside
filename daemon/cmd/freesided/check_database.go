@@ -186,7 +186,7 @@ func runCheckDatabaseCommand(
 	}
 
 	discard := slog.New(slog.DiscardHandler)
-	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionNotConfigured, time.Now, discard); err != nil {
+	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionNotConfigured, "", time.Now, discard); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}

@@ -20,9 +20,11 @@ const ExecutionNotConfiguredCode = "execution_not_configured"
 // The installed daemon remains useful for pairing and state without pretending
 // to execute work. Keep that limitation, and why it holds, visible until a
 // driver runs: a card whose reason no longer matches the state is concluded
-// and the current one raised, so a restart that changes the reason updates
-// the card.
-func convergeExecutionConfiguration(ctx context.Context, st *store.Store, state ExecutionState, now func() time.Time) error {
+// and the current one raised, so a restart that changes the reason, or the
+// detail a reason names (the section, project, or error), updates the card.
+func convergeExecutionConfiguration(
+	ctx context.Context, st *store.Store, state ExecutionState, detail string, now func() time.Time,
+) error {
 	if !state.valid() {
 		return fmt.Errorf("invalid execution state %q", state)
 	}
@@ -30,7 +32,7 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, state 
 	if now != nil {
 		at = now().UTC()
 	}
-	code, reason := executionStateDiagnostic(state)
+	code, reason := executionStateDiagnostic(state, detail)
 	return st.Write(ctx, func(tx *store.WriteTx) error {
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
@@ -41,7 +43,8 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, state 
 			if !strings.HasPrefix(string(item.ID), executionConfigurationItemPrefix) {
 				continue
 			}
-			if !state.Runs() && item.HealthDiagnostic != nil && item.HealthDiagnostic.Code == code {
+			if !state.Runs() && item.HealthDiagnostic != nil && item.HealthDiagnostic.Code == code &&
+				item.Reason == reason {
 				found = true
 				continue
 			}
@@ -95,8 +98,10 @@ const executionDriverlessScope = "This daemon provides pairing, stored state, an
 	"but does not run agents or simulate work."
 
 // executionStateDiagnostic is the card a driverless state raises: its code
-// and a reason that tells the operator what restarts execution.
-func executionStateDiagnostic(state ExecutionState) (code, reason string) {
+// and a reason that tells the operator what restarts execution. detail is
+// what the installed daemon's stored states name: the refusal, the enabled
+// projects, or the composition failure; the other states ignore it.
+func executionStateDiagnostic(state ExecutionState, detail string) (code, reason string) {
 	switch state {
 	case ExecutionConfigured:
 		return "", ""
@@ -118,6 +123,23 @@ func executionStateDiagnostic(state ExecutionState) (code, reason string) {
 			"and this daemon finished its running work and restarted without execution, so a deputy run " +
 			"can use the App authority. " + executionDriverlessScope +
 			" Once the deputy run ends, run freesided execution resume to restart this daemon with execution."
+	case ExecutionSettingsRefused:
+		return string(state), "Agent execution is on, but the stored settings cannot run: " + detail + ". " +
+			executionDriverlessScope + " Fix the section with freesided settings set, then run freesided " +
+			"execution resume to restart this daemon with execution."
+	case ExecutionNoEnabledProject:
+		return string(state), "Agent execution is on, but no project is enabled. " + executionDriverlessScope +
+			" Enable one with freesided settings set -project <project> -section enabled " +
+			"-value '{\"enabled\":true}', then run " +
+			"freesided execution resume to restart this daemon with execution."
+	case ExecutionSeveralProjectsEnabled:
+		return string(state), "Agent execution is on, but more than one project is enabled (" + detail +
+			"), and this daemon runs one. " + executionDriverlessScope + " Turn all but one off with freesided " +
+			"settings set, then run freesided execution resume to restart this daemon with execution."
+	case ExecutionCompositionFailed:
+		return string(state), "Agent execution is on, but the driver could not be composed from the stored " +
+			"settings: " + detail + ". " + executionDriverlessScope + " Fix the cause, then run freesided " +
+			"execution resume to restart this daemon with execution."
 	}
 	return "", ""
 }

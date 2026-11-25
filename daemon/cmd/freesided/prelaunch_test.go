@@ -346,7 +346,7 @@ func TestPrelaunchSaysWhichHealthItemsADeputyStartCloses(t *testing.T) {
 		}
 	}
 
-	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionNotConfigured, deputyTestNow, logger); err != nil {
+	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionNotConfigured, "", deputyTestNow, logger); err != nil {
 		t.Fatal(err)
 	}
 	check("every item deputy-owned", "start `freesided deputy -root` once on this root", map[string]bool{
@@ -355,7 +355,7 @@ func TestPrelaunchSaysWhichHealthItemsADeputyStartCloses(t *testing.T) {
 	})
 
 	// The same id prefix carries cards a deputy start leaves open.
-	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionAuthorityInUse, deputyTestNow, logger); err != nil {
+	if err := daemoncompose.ConvergeStoredState(ctx, st, daemoncompose.ExecutionAuthorityInUse, "", deputyTestNow, logger); err != nil {
 		t.Fatal(err)
 	}
 	check("one item client-resolved", "resolve it in a paired client", map[string]bool{
