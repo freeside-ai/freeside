@@ -42,6 +42,9 @@ type Reconciler struct {
 	reviewActivity map[string]reviewActivityCacheEntry
 	labelIssues    map[string]labelIssuesCacheEntry
 	checkReads     map[string]checkReadCacheEntry
+	// logHostAllowed replaces publicLogHost when set, so a test can serve
+	// a job log from a loopback server. Production never sets it.
+	logHostAllowed func(host string) bool
 }
 
 type refCacheEntry struct {

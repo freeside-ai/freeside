@@ -89,3 +89,16 @@ func (p *Publisher) ConvergePRForTest(
 // external test can assert that a failed hold write is the daemon's own
 // safety failure rather than one registration's fault.
 var ErrJanitorUnsafeForTest = errJanitorUnsafe
+
+// AllowJobLogHost lets a job log download reach a test server's host, which
+// is a loopback address publicLogHost refuses.
+func (r *Reconciler) AllowJobLogHost(host string) {
+	r.logHostAllowed = func(h string) bool { return h == host }
+}
+
+// PublicLogHost and ReadTail expose the job log read's host rule and tail
+// reader for their own tests.
+var (
+	PublicLogHost = publicLogHost
+	ReadTail      = readTail
+)
