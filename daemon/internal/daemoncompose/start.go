@@ -91,7 +91,11 @@ type StartOptions struct {
 	// AppAuthority is how a Claude-mode daemon holds the App authority
 	// writer lock (AppAuthority).
 	AppAuthority AppAuthority
-	Scenario     *Scenario
+	// StoredExecution composes the driver from the stored settings: the
+	// installed daemon, prod with no -driver. It excludes Claude and needs
+	// AppAuthority.Prod, the gated order it runs.
+	StoredExecution *StoredExecution
+	Scenario        *Scenario
 	// ManualProjects are the projects the manual-submission file configures,
 	// and ManualInitiator resolves a client submission's policy from them.
 	ManualProjects  map[domain.ProjectID]engine.ManualInitiator
@@ -156,8 +160,12 @@ type ControlRouteInputs struct {
 	// does, why: GET /execution reports it, not the configured driver.
 	Execution ExecutionState
 	// ExecutionPause serves freesided execution in a prod started with a
-	// driver, executing or not; nil in any other daemon.
+	// driver or with StoredExecution, executing or not; nil in any other
+	// daemon.
 	ExecutionPause *ExecutionPauseControl
+	// RepositoryID is the repository of the project a store-composed driver
+	// runs; zero leaves the one the control socket was opened with.
+	RepositoryID int64
 	// ProjectReadinessGate refuses an operator submission of new work for
 	// a project that is not ready (#3205). It checks nothing when the
 	// daemon evaluates no project's readiness.
@@ -179,6 +187,13 @@ type Daemon struct {
 // start that fails releases everything it acquired, in reverse order.
 func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, err error) {
 	startedAt := time.Now().UTC()
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	if cfg.StoredExecution != nil && (cfg.Claude != nil || cfg.AppAuthority.Prod == nil) {
+		return nil, errors.New("stored execution: needs prod's gated order and excludes a configured driver")
+	}
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
@@ -262,6 +277,17 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if err != nil {
 		return nil, err
 	}
+	// The installed daemon's store policy comes from its settings, which it
+	// reads under no policy first; the daemon lock keeps both opens its own.
+	var switches storedSwitches
+	if cfg.StoredExecution != nil {
+		switches, err = readStoredSwitches(parent, cfg.DBPath, storeOptions, logger)
+		if err != nil {
+			return nil, fmt.Errorf("read the execution settings: %w", err)
+		}
+		storeOptions = storedStoreOptions(storeOptions, switches.recipes)
+		cfg.ApprovedRecipes = maps.Clone(storeOptions.ApprovedRecipes)
+	}
 	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
 		blobs, storeOptions.ApprovedRecipes,
 		engine.BackupPayloadExtractors())
@@ -293,9 +319,25 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	// anything composes the driver; a decline leaves it driverless with the
 	// reason, holding no lock. A released execution pause declines before
 	// the lock, which the deputy the pause was for is to take.
-	var gated ExecutionState
-	pausable := cfg.AppAuthority.Prod != nil && cfg.Claude != nil
-	if pausable {
+	var (
+		gated ExecutionState
+		// gatedDetail is what the card for gated names, for the stored states.
+		gatedDetail string
+		stored      RunSettings
+	)
+	if cfg.StoredExecution != nil {
+		gated, gatedDetail, stored, err = decideStoredExecution(parent, st, switches,
+			cfg.StoredExecution.CompositionFailure)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Every store-composed prod serves the pause, so execution resume
+	// restarts one whose settings stopped it; only one whose settings chose a
+	// project runs the gated order.
+	storedProceeds := cfg.StoredExecution != nil && gated == ""
+	pausable := cfg.AppAuthority.Prod != nil && (cfg.Claude != nil || cfg.StoredExecution != nil)
+	if cfg.AppAuthority.Prod != nil && (cfg.Claude != nil || storedProceeds) {
 		if authorityLock != nil {
 			return nil, errors.New("app authority: a held lock and prod's gated order are exclusive")
 		}
@@ -306,7 +348,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if pause != nil && pause.State == domain.ExecutionPauseReleased {
 			gated = ExecutionPaused
 		} else {
-			gated, authorityLock, err = gateProdAppAuthority(cfg.Claude.StateRoot, cfg.AppAuthority.Prod.LeaseRoot)
+			gated, authorityLock, err = gateProdAppAuthority(appStateRoot(cfg), cfg.AppAuthority.Prod.LeaseRoot)
 			if err != nil {
 				return nil, err
 			}
@@ -314,6 +356,24 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if !gated.Runs() {
 			cfg.Claude = nil
 		}
+	}
+	// composeErr marks a failure of composing the driver from the stored
+	// settings, which the caller turns into a driverless start. A start
+	// whose context ended is shutting down, so its failure stays an error:
+	// serving again would outlive the signal that stopped it.
+	composeErr := func(err error) error { return err }
+	if storedProceeds && gated.Runs() {
+		composeErr = func(err error) error {
+			if parent.Err() != nil {
+				return err
+			}
+			return &StoredCompositionError{Err: err}
+		}
+		var claude ClaudeDriverConfig
+		if claude, err = storedDriverConfig(stored, cfg.StoredExecution.Launch); err != nil {
+			return nil, composeErr(err)
+		}
+		cfg.Claude = &claude
 	}
 	if cfg.Claude != nil {
 		claude := *cfg.Claude
@@ -325,7 +385,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	// wins over the declared one.
 	bound, err := cfg.startupLaunchBound(parent, st, cfg.ManualProjects)
 	if err != nil {
-		return nil, err
+		return nil, composeErr(err)
 	}
 	logLaunchBound(cfg.Logger, bound)
 	var startupSessionCloser SessionCloser
@@ -393,7 +453,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		claude, err = ComposeClaudeWorkflow(ctx, st, attention, blobs, lock, bound, claudeStartup, cfg.ManualProjects,
 			claudeUsageCaptures, &doctorConvergenceLock, &startupSessionCloser, late, running)
 		if err != nil {
-			return nil, err
+			return nil, composeErr(err)
 		}
 		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
 	} else if cfg.Scenario != nil {
@@ -428,22 +488,18 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	// The startup pass reports recorded marks only, so starting the daemon
 	// starts no observer container. Scheduled passes run the live probe.
 	if err := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, running, nil)(parent); err != nil {
-		return nil, fmt.Errorf("initial doctor pass: %w", err)
+		return nil, composeErr(fmt.Errorf("initial doctor pass: %w", err))
 	}
 	runDoctor := newDoctorPass(cfg, st, attention, claudeWiring, &doctorConvergenceLock, running, integrityProbe)
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	execution := ExecutionNotConfigured
+	execution, executionDetail := ExecutionNotConfigured, ""
 	switch {
 	case workflow != nil:
 		execution = ExecutionConfigured
 	case gated != "":
-		execution = gated
-		logger.Warn("serving without execution", "reason", string(gated))
+		execution, executionDetail = gated, gatedDetail
+		logger.Warn("serving without execution", "reason", string(gated), "detail", gatedDetail)
 	}
-	if err := ConvergeStoredState(parent, st, execution, "", cfg.Now, logger); err != nil {
+	if err := ConvergeStoredState(parent, st, execution, executionDetail, cfg.Now, logger); err != nil {
 		return nil, err
 	}
 	// The last stored step before anything that launches starts: model
@@ -483,7 +539,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		Store: st, Blobs: blobs, LocalBackupFiles: localBackupFiles, ApprovedRecipes: storeOptions.ApprovedRecipes,
 		IntegrityProbe: integrityProbe, Usage: d.Usage, Attention: attention,
 		UpdateDrain: updateDrain, Running: running, Execution: execution,
-		ProjectReadinessGate: late.ProjectReadinessGate,
+		ProjectReadinessGate: late.ProjectReadinessGate, RepositoryID: stored.Project.Repository.RepositoryID,
 		CommitWorkflowClosure: func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -527,12 +583,12 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		loops, err = ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
 			runDoctor, d.Usage.CollectAll, late)
 		if err != nil {
-			return nil, err
+			return nil, composeErr(err)
 		}
 	}
 	if workflow != nil {
 		if err := d.EnableDurableStopRecovery(parent); err != nil {
-			return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
+			return nil, composeErr(fmt.Errorf("enable durable-stop recovery: %w", err))
 		}
 	}
 
@@ -586,6 +642,15 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	success = true
 	lockTransferred = true
 	return d, nil
+}
+
+// appStateRoot is the App authority's state directory prod's gated order
+// locks: the configured driver's, or the stored launch's.
+func appStateRoot(cfg StartOptions) string {
+	if cfg.Claude != nil {
+		return cfg.Claude.StateRoot
+	}
+	return cfg.StoredExecution.Launch.AppStateDir
 }
 
 func closeStartupSessions(success bool, closer SessionCloser, stop func()) error {

@@ -39,8 +39,6 @@ const (
 	deputyEnvironment           = environmentEphemeral
 	deputyOwnerNote             = "freesided deputy"
 	deputyContainerBin          = "container"
-	deputyProviderEndpoints     = "api.anthropic.com:443"
-	deputyReviewWorkspaceSizeMB = 8192
 	deputyPreflightItemPrefix   = "system-health-deputy-preflight-"
 	deputyInterruptedItemPrefix = "system-health-deputy-interrupted-"
 	// deputyPreflightFailedCode is the preflight card's diagnostic code;
@@ -811,7 +809,7 @@ func deputyPreflightConfig(
 		ReviewAuthSnapshot: settings.Review.AuthSnapshot, ReviewInstructions: settings.Review.Instructions,
 		PublicationStateDir:       settings.Prod.AppStateDir,
 		PublicationCredentialsDir: settings.Prod.AppCredentialsDir,
-		ReviewWorkspaceSizeMB:     deputyReviewWorkspaceSizeMB,
+		ReviewWorkspaceSizeMB:     unattendedReviewWorkspaceSizeMB,
 		ProjectID:                 settings.Repository.Project,
 		BuildProxy:                settings.Build.Proxy,
 		AllowedPaths:              settings.Repository.AllowedPaths,
@@ -896,8 +894,8 @@ func deputyClaudeDriverConfig(
 		StateDir: paths.StateRoot, RigTokenFile: paths.Acquisition,
 		AppStateDir: settings.Prod.AppStateDir, AppCredentialsDir: settings.Prod.AppCredentialsDir,
 		ListenPort: listenPort(settings.Listen), JudgmentDigest: judgmentDigest,
-		ProviderEndpoints:     []string{deputyProviderEndpoints},
-		ReviewWorkspaceSizeMB: deputyReviewWorkspaceSizeMB,
+		ProviderEndpoints:     []string{unattendedProviderEndpoints},
+		ReviewWorkspaceSizeMB: unattendedReviewWorkspaceSizeMB,
 		RunConformance:        true,
 		OperatingMode:         domain.ModeUnattended,
 	})

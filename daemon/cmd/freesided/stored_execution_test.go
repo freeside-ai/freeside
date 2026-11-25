@@ -1,0 +1,375 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+)
+
+// storedProdFixture is an installed daemon's root: prod's database and the
+// App authority's directories under one supervised root, laid out as main
+// lays them out, and a lease root no deputy has used.
+type storedProdFixture struct {
+	root, dbPath, appState, leaseRoot string
+}
+
+func newStoredProdFixture(t *testing.T) storedProdFixture {
+	t.Helper()
+	root := t.TempDir()
+	f := storedProdFixture{
+		root: root, dbPath: filepath.Join(root, "daemon", "freeside.db"), appState: filepath.Join(root, "daemon"),
+		leaseRoot: t.TempDir(),
+	}
+	for _, dir := range []string{f.appState, filepath.Join(root, "credentials")} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedTemplateStore(t, f.dbPath)
+	return f
+}
+
+// importRunSettings records a complete deputy settings file for
+// project-widgets through settings import, as an operator would.
+func (f storedProdFixture) importRunSettings(t *testing.T) {
+	t.Helper()
+	settingsPath, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	if _, err := runSettings(t, t.Context(), "import", "-db", f.dbPath, "-settings", settingsPath,
+		"-container-bin", settingsTestContainer); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// set records one section through settings set; an empty project sets the
+// instance's.
+func (f storedProdFixture) set(t *testing.T, project domain.ProjectID, section, value string) {
+	t.Helper()
+	args := []string{"set", "-db", f.dbPath, "-section", section, "-value", value}
+	if project != "" {
+		args = append(args, "-project", string(project))
+	}
+	if _, err := runSettings(t, t.Context(), args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// start runs the installed daemon's start through the retry main runs, so a
+// failed composition serves driverless as it does under launchd.
+func (f storedProdFixture) start(t *testing.T) *daemon {
+	t.Helper()
+	h, _, _, err := runWithDriverlessRetry(func() (context.Context, func()) { return t.Context(), func() {} }, config{
+		Environment: environmentProd, DBPath: f.dbPath, ListenAddr: "127.0.0.1:0",
+		ProdAuthority:   &daemoncompose.ProdAuthorityGate{LeaseRoot: f.leaseRoot},
+		StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0"),
+	})
+	if err != nil {
+		t.Fatalf("the installed daemon did not start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return h
+}
+
+// executionCard is the open execution card's reason under want, failing on
+// any other open execution card.
+func executionCard(t *testing.T, h *daemon, want string) string {
+	t.Helper()
+	items, err := h.Attention.ListAttentionItems(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	for _, snapshot := range items {
+		d := snapshot.Item.HealthDiagnostic
+		if d == nil || snapshot.Item.Status != domain.StatusOpen ||
+			!strings.HasPrefix(string(snapshot.Item.ID), "system-health-execution-configuration-") {
+			continue
+		}
+		if d.Code != want {
+			t.Errorf("open execution card %s, want %s", d.Code, want)
+			continue
+		}
+		reason = snapshot.Item.Reason
+	}
+	if reason == "" {
+		t.Fatalf("no open %s card", want)
+	}
+	return reason
+}
+
+// TestInstalledDaemonServesDriverlessWhenItsSettingsStopIt pins the stored
+// half of the start order: each way the settings stop execution starts the
+// daemon anyway, composes no driver, raises the card that names what to
+// fix, takes and keeps no App authority writer lock, and reports execution
+// disabled to a deputy.
+func TestInstalledDaemonServesDriverlessWhenItsSettingsStopIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		seed     func(*testing.T, storedProdFixture)
+		wantCode string
+		wantText []string
+	}{
+		{name: "no settings", seed: func(*testing.T, storedProdFixture) {}, wantCode: "execution_not_configured"},
+		{name: "execution off", seed: func(t *testing.T, f storedProdFixture) {
+			f.importRunSettings(t)
+			f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
+			f.set(t, "", "execution", `{"enabled":false}`)
+		}, wantCode: "execution_not_configured"},
+		{name: "no project enabled", seed: func(t *testing.T, f storedProdFixture) {
+			f.importRunSettings(t)
+			f.set(t, "", "execution", `{"enabled":true}`)
+		}, wantCode: "no_enabled_project", wantText: []string{"-section enabled"}},
+		{name: "two projects enabled", seed: func(t *testing.T, f storedProdFixture) {
+			f.importRunSettings(t)
+			f.set(t, "", "execution", `{"enabled":true}`)
+			f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
+			f.set(t, "project-gadgets", "enabled", `{"enabled":true}`)
+		}, wantCode: "several_projects_enabled", wantText: []string{"project-gadgets, project-widgets"}},
+		{name: "settings the loader refuses", seed: func(t *testing.T, f storedProdFixture) {
+			f.set(t, "", "execution", `{"enabled":true}`)
+			f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
+		}, wantCode: "settings_refused", wantText: []string{"host_tools"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newStoredProdFixture(t)
+			tc.seed(t, f)
+			h := f.start(t)
+			if h.Workflow != nil {
+				t.Fatal("the installed daemon composed a driver")
+			}
+			reason := executionCard(t, h, tc.wantCode)
+			for _, want := range tc.wantText {
+				if !strings.Contains(reason, want) {
+					t.Errorf("card %q lacks %q", reason, want)
+				}
+			}
+			requireLockFree(t, f.appState)
+			mode, running, err := newProductionRigHost().ProdExecution(t.Context(), f.dbPath)
+			if err != nil || !running || mode != executionDisabled {
+				t.Fatalf("probe = %q, running %t, %v; want disabled, running", mode, running, err)
+			}
+		})
+	}
+}
+
+// TestInstalledDaemonRunsTheGatedOrderOnItsSettings pins that settings which
+// choose a project reach #3204's order: a lost lock and a found lease each
+// serve driverless with that order's card (the pause has its own test), and
+// a start
+// the order lets through but whose composition fails serves driverless too,
+// naming the failure, with the lock released before it serves.
+func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		lockHeld bool
+		lease    bool
+		wantCode string
+	}{
+		{name: "a deputy holds the lock", lockHeld: true, wantCode: "app_authority_in_use"},
+		{name: "a lease is present", lease: true, wantCode: "rig_lease_present"},
+		{name: "composition fails", wantCode: "composition_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newStoredProdFixture(t)
+			f.importRunSettings(t)
+			f.set(t, "", "execution", `{"enabled":true}`)
+			f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
+			// No container tool exists here, so a composition the order lets
+			// through fails before it launches anything.
+			f.set(t, "", "host_tools", `{"container":"/nonexistent/freeside-test/container"}`)
+			if tc.lease {
+				_, f.leaseRoot, _ = acquireTestRig(t)
+			}
+			if tc.lockHeld {
+				lock, err := publish.AcquireAuthorityWriterLock(f.appState)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = lock.Close() })
+			}
+			h := f.start(t)
+			if h.Workflow != nil {
+				t.Fatal("the installed daemon composed a driver")
+			}
+			executionCard(t, h, tc.wantCode)
+			if !tc.lockHeld {
+				requireLockFree(t, f.appState)
+			}
+			mode, running, err := newProductionRigHost().ProdExecution(t.Context(), f.dbPath)
+			if err != nil || !running || mode != executionDisabled {
+				t.Fatalf("probe = %q, running %t, %v; want disabled, running", mode, running, err)
+			}
+		})
+	}
+}
+
+// TestInstalledDaemonPausesAndResumesThroughItsControlSocket pins that the
+// installed daemon serves execution pause and resume like a prod started
+// with -driver claude, and that resume reruns the start order: a pause taken
+// beside a lease restarts it paused once the lease is gone, and resume
+// restarts it into the order, which here reaches a composition that fails.
+func TestInstalledDaemonPausesAndResumesThroughItsControlSocket(t *testing.T) {
+	t.Parallel()
+	f := newStoredProdFixture(t)
+	f.importRunSettings(t)
+	f.set(t, "", "execution", `{"enabled":true}`)
+	f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
+	f.set(t, "", "host_tools", `{"container":"/nonexistent/freeside-test/container"}`)
+	lease, leaseRoot, _ := acquireTestRig(t)
+	f.leaseRoot = leaseRoot
+
+	h := f.start(t)
+	executionCard(t, h, "rig_lease_present")
+	if stdout, _ := execution(t, f.dbPath, executionPauseRequest); !strings.Contains(stdout, `"state":"released"`) {
+		t.Fatalf("pause output %q never reported the release", stdout)
+	}
+	requireRestartRequested(t, h)
+	closeDaemon(t, h)
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	h = f.start(t)
+	executionCard(t, h, "execution_paused")
+	requireLockFree(t, f.appState)
+	execution(t, f.dbPath, executionPauseResume)
+	requireRestartRequested(t, h)
+	closeDaemon(t, h)
+
+	h = f.start(t)
+	// The card carries the composition's own error, whichever step it was.
+	reason := executionCard(t, h, "composition_failed")
+	_, detail, _ := strings.Cut(reason, "from the stored settings: ")
+	if detail, _, _ = strings.Cut(detail, ". This daemon"); detail == "" {
+		t.Errorf("composition card %q does not name the failure", reason)
+	}
+	requireLockFree(t, f.appState)
+}
+
+// TestInstalledDaemonReadsItsEvidenceWithoutADriver pins the store's
+// open-time policy: evidence a run recorded under a project's approved
+// recipe stays readable on a start that runs no driver, even with the
+// project turned off, because the recipe comes from the settings and not
+// from a driver.
+func TestInstalledDaemonReadsItsEvidenceWithoutADriver(t *testing.T) {
+	t.Parallel()
+	f := newStoredProdFixture(t)
+	f.importRunSettings(t)
+	recipe := domain.Digest("sha256:" + strings.Repeat("b", 64)) // deputySettingsFixture's approved_recipe
+	approved := map[domain.Digest]bool{recipe: true}
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "artifact-stored-recipe", Type: domain.ArtifactKindVerifyLog,
+		Digest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "inv-stored-recipe",
+			HeadBinding: domain.HeadIndependent, VerificationRecipeDigest: &recipe,
+			SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: testRunEvidenceMetadata(1),
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !artifact.PublishEligible {
+		t.Fatal("fixture artifact is not publish-eligible, so it proves nothing about the recipe")
+	}
+	seed, _, err := openStoreWithTopicKey(t.Context(), f.dbPath, store.Options{ApprovedRecipes: approved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := seed.Write(t.Context(), func(tx *store.WriteTx) error { return tx.PutArtifact(t.Context(), artifact) })
+	if err := errors.Join(writeErr, seed.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	h := f.start(t)
+	executionCard(t, h, "execution_not_configured")
+	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetArtifact(t.Context(), artifact.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("a driverless start cannot read evidence under the project's recipe: %v", err)
+	}
+}
+
+// TestInstalledDaemonAdvertisesExecutionOnlyWhileItsDriverRuns pins what a
+// deputy reads from the installed daemon: GET /execution answers claude
+// while a driver composed from the settings runs, which checkProdDriverless
+// and the preflight's prod_execution check both refuse, and disabled when
+// the start ran none. A test cannot compose a real driver, so this serves the
+// installed daemon's control routes over each state directly.
+func TestInstalledDaemonAdvertisesExecutionOnlyWhileItsDriverRuns(t *testing.T) {
+	t.Parallel()
+	for _, state := range []daemoncompose.ExecutionState{
+		daemoncompose.ExecutionConfigured, daemoncompose.ExecutionCompositionFailed,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+			f := newStoredProdFixture(t)
+			st, _, err := openStoreWithTopicKey(t.Context(), f.dbPath, store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			control, err := newPairingControl(f.dbPath, f.appState)
+			if err != nil {
+				t.Fatal(err)
+			}
+			installed := config{StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0")}
+			socket := pairingControlSocket{pairing: control, environment: environmentProd, execution: installed.execution()}
+			socket.Configure("http://127.0.0.1:7331", nil)
+			socket.RegisterRoutes(daemoncompose.ControlRouteInputs{Store: st, Execution: state})
+			served := make(chan error, 1)
+			go func() { served <- socket.Serve() }()
+			t.Cleanup(func() {
+				_ = socket.Close()
+				if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+					t.Error(err)
+				}
+			})
+			if err := socket.Publish(); err != nil {
+				t.Fatal(err)
+			}
+
+			probe := newProductionRigHost().ProdExecution
+			want := executionDisabled
+			if state.Runs() {
+				want = executionClaude
+			}
+			if mode, running, err := probe(t.Context(), f.dbPath); err != nil || !running || mode != want {
+				t.Fatalf("probe = %q, running %t, %v; want %q, running", mode, running, err, want)
+			}
+			err = checkProdDriverless(t.Context(), probe, f.appState)
+			manifest := compositionManifest{Checks: []compositionCheck{{Name: "prod_execution", Status: compositionNotRun}}}
+			passed := evaluateProdExecution(t.Context(), &manifest, preflightConfig{PublicationStateDir: f.appState},
+				newProductionPreflightEnvironment())
+			if state.Runs() {
+				if err == nil || !strings.Contains(err.Error(), "-driver claude") || passed {
+					t.Fatalf("beside an executing installed daemon: checkProdDriverless %v, prod_execution passed %t",
+						err, passed)
+				}
+				return
+			}
+			if err != nil || !passed {
+				t.Fatalf("beside a driverless installed daemon: checkProdDriverless %v, prod_execution passed %t",
+					err, passed)
+			}
+		})
+	}
+}
