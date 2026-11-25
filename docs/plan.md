@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 135
+revision: 136
 status: active
 updated: 2026-11-21
 ---
@@ -6318,13 +6318,38 @@ the current tip as any head is. Freeside removes the label when the pull
 request is ready again and leaves it when the cycle ends on a person; the
 owner's earlier approval does not carry over to the reworked head.
 
-**Between handoff and merge, nothing in Freeside checks the PR against the
-latest target branch.** Only the merge-time checks the target repository
-enforces, such as required checks on an up-to-date branch, cover that interval,
-and Freeside neither requires nor verifies them. This is a named gap until
-Freeside has a landing step, not a commitment to close it. A ready card claims
-only the tip its handoff checked, so a later advance makes none of its facts
-stale or false (Section [12](#12-exit-criteria-definitions)).
+**While the ready card is open, Freeside reads the required check on the head
+it handed off** (revision 136). The required check is every check the target
+branch requires, by branch protection or a ruleset, read from the GitHub
+Actions jobs on that exact head, and only while the pull request is open,
+unmerged, and on the bound head and base. The card shows whether the check is
+pending, passed, or failed, and names the failed jobs. Freeside reacts to a
+failure by what the jobs report:
+
+- **A failed job that never got a runner is rerun,** at most twice per head,
+  on a token that can do nothing but rerun. Rerunning needs the App's
+  `actions: write`, which the owner accepts on GitHub; until then the card
+  shows the failure and nothing reruns.
+- **A job that failed at a step starts a check-failure cycle.** Freeside
+  reworks the head it published as it reworks a handed-back one, with the
+  failed jobs' names and log tails as untrusted input. The cycle ends ready
+  on a new head or on a person, and its rounds count toward
+  `hard_round_limit`.
+- **Any other failure waits on a person.**
+
+The check-failure cycle never adopts a head Freeside did not push, and no CI
+text reaches GitHub. While the pull request carries the hand-back label, the
+hand-back cycle owns the check. A required check that GitHub Actions doesn't
+produce stays pending, because the App reads no other check or status.
+
+**After the ready card closes, and against a target branch that advanced
+after handoff, nothing in Freeside checks the PR.** Only the merge-time checks
+the target repository enforces, such as required checks on an up-to-date
+branch, cover that interval, and the lander's hand-back returns a failure
+there. This is a named gap until Freeside has a landing step, not a commitment
+to close it. A ready card claims only the tip its handoff checked, so a later
+advance makes none of its facts stale or false (Section
+[12](#12-exit-criteria-definitions)).
 
 The pass runs with fresh context independent of the implementing invocation, in
 a read-only workspace, with no publication credentials. It receives repository
@@ -8476,60 +8501,31 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 135 ("A Cordoned Candidate Is Verified Cordoned"):
+Revision 136 ("React to a Published Pull Request's Required Check"):
 
-1. **A cordoned candidate's macOS-host checks run cordoned** (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-   Verification). They run on the daemon's host as the daemon's own account,
-   under a verifier rule file, in every instance tier, and the verdict is
-   recorded as cordoned. The job holds no credential and runs no agent, and
-   it captures in-process renders only, never a Simulator, a window, or the
-   screen. The recipe's Linux commands stay in the ward.
-2. **The candidate's writers pick the class** (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-   Verification). A candidate is verified cordoned only when Freeside runs
-   wrote every change in it and each ran cordoned, in every verification of
-   it. A warded candidate, one a warded or uncordoned run helped write, and a
-   head with any change no Freeside run wrote keep the slot executor, which stays for them. A cordoned job whose
-   class has no current proof is refused, never moved; the operator may send
-   a project's or a task's cordoned candidates to the slot executor by an
-   explicit setting, and the verdict is then the slot executor's.
-3. **The class is `cordoned_host_verification`, with four capabilities of its
-   own** (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)):
-   read denial, confinement, host protection, and a proven job end.
-   `unattended` admits it on its own conformance, on the daemon's host only,
-   and not before #3550 keeps secrets out of every process the daemon starts.
-   It proves no teardown by uid, no packet filter, and no login session of
-   its own.
-4. **The writer cordon widens to keep writers out of a job** (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Cordoned
-   Runs): no read or write of a job's own directories, no write to the cordoned
-   verifier's own toolchain and caches or to the preferences a job reads, and
-   no bind of a job's ports. The owner's temporary directory and Clang module
-   cache stay shared. `supports_cordoned_daemon_protection` proves it,
-   without a new name.
-5. **A count bounds cordoned verification jobs** (Section
-   [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine
-   Capacity): an operator-set cap per instance, separate from the cordoned
-   writers' cap, with a visible hold over it.
-6. **The owner accepts the residual for cordoned candidates** (Section
-   [14](#14-risks)): the shared temporary directory and Clang module cache,
-   readable environments, the pasteboard and possibly the screen, helpers
-   launchd starts, teardown by sandbox membership, and one network layer.
+1. **Freeside reads the required check while the ready card is open**
+   (Section [7](#7-review-policy)): every check the target branch requires,
+   from the GitHub Actions jobs on the head it handed off, shown on the card
+   as pending, passed, or failed. The card is shown with the check's state,
+   not held until it settles. This replaces the named gap of "Freeside neither
+   requires nor verifies them" for that interval; the gap stays for later
+   tips and after the card closes.
+2. **A failed job that never got a runner is rerun,** at most twice per head,
+   on a token narrowed to rerunning. The App gains `actions: write`, which the
+   owner accepts on GitHub; until then nothing reruns.
+3. **A job that failed at a step starts a check-failure cycle** on the head
+   Freeside published, run as a hand-back cycle is, under its own authority:
+   it never adopts a head someone else pushed.
 
-Rejected: keeping all verification on the slot executor, the cordoned-verifier
-spike's recommendation, because it runs two jobs at once and needs hidden
-accounts, a root helper, and a reinstall to change either, while a cordoned
-candidate has already run as the owner and the daemon and App key already
-rest on the cordon; a macOS VM per job on the reference host (#3136), not yet
-measured and held to two guests per host by the kernel quota, which the owner
-revisits with the slot executor; and verification on the Mac mini, which the
-owner decided is not its first job.
+Rejected: holding the ready card until the check settles, because the card is
+what the reconciler observes a published pull request through; a project
+setting that names the check, because the base branch already says which
+checks it requires; reusing the hand-back authority, because that authority
+adopts a head Freeside did not push; and rerunning without a new permission,
+which GitHub doesn't allow.
 
-Nothing in this revision is built yet: tracker #3462 builds it.
-
-(Owner decisions of 2026-11-20 on #3464, from the #3526 spike; #3548;
-[decision note](../devlog/2026-11-21-0854-cordoned-verification.md).)
+(Owner decisions of 2026-11-24 on #3598, from #2382's routing rerun;
+[decision note](../devlog/2026-11-24-2350-required-check-reaction.md).)
 
 ## 14. Risks
 
