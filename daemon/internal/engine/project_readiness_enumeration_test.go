@@ -48,6 +48,8 @@ var readinessExemptions = map[string]string{
 	"remediation.go:preparedRemediationIntent.persist": existingTask,
 	"production_handoff.go:preparedRemediationIntent.persistHandoffConflict": "remediates a handoff " +
 		"conflict on an existing run",
+	"production_handoff.go:preparedRemediationIntent.commitFirstRound": "starts a handoff conflict's " +
+		"or a check failure's remediation on an existing run",
 	"production_export_record.go:RecordProductionExecutionExport": "records an existing run's export " +
 		"and the publication task that replays it",
 	"publication_continuation.go:persistContinuationAuthority": "continues an existing run's publication",

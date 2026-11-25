@@ -130,7 +130,7 @@ func planHandBackReentry(
 		if err != nil {
 			return nil, err
 		}
-		if slices.ContainsFunc(items, handBackEnding) {
+		if slices.ContainsFunc(items, store.ReworkCycleEnding) {
 			return nil, nil
 		}
 	}
@@ -193,13 +193,6 @@ func planHandBackReentry(
 		return nil, err
 	}
 	return &handBackReentryPlan{item: open, successor: successor, projectID: run.ProjectID}, nil
-}
-
-// handBackEnding reports an open item a hand-back cycle ends on when it
-// cannot re-earn readiness.
-func handBackEnding(item domain.AttentionItem) bool {
-	return item.Type == domain.AttentionPublishBlocked || item.Type == domain.AttentionReviewDispute ||
-		item.Type == domain.AttentionReviewDiminishing
 }
 
 // HandBackReentryDue reports whether StartHandBackReentry would start a
