@@ -1,0 +1,558 @@
+//go:build darwin && cgo
+
+// Throwaway measurement test for the shared-host spike (#3596,
+// docs/spikes/cordoned-shared-host.md). It is never committed under
+// daemon/: cordoned-shared-host.zsh copies it into daemon/internal/cordon/
+// as shared_host_spike_test.go for a run and removes it afterward, because
+// only that package can reach the run-end proof's internals. The .txt
+// suffix keeps tools from reading it as Go source in docs/spikes/.
+//
+// Every test is gated on FREESIDE_CORDON_SHARED_LIVE_TEST=1, a
+// FREESIDE_*_LIVE* name, so scripts/check.sh keeps the real HOME and drops
+// its own test sandbox. SPIKE_OUT names the directory each test writes its
+// records to. Nothing here reads a provider token: launches carry the
+// package's fixture token and the stand-in agent or a plain shell.
+
+package cordon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+func requireSharedLive(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("FREESIDE_CORDON_SHARED_LIVE_TEST") != "1" {
+		t.Skip("set FREESIDE_CORDON_SHARED_LIVE_TEST=1 for the shared-host spike")
+	}
+	out := os.Getenv("SPIKE_OUT")
+	if out == "" {
+		t.Fatal("SPIKE_OUT must name the spike's output directory")
+	}
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func getconfDir(t *testing.T, name string) string {
+	t.Helper()
+	out, err := exec.Command("/usr/bin/getconf", name).Output() //nolint:gosec // G204: a fixed getconf name
+	if err != nil {
+		t.Fatalf("getconf %s: %v", name, err)
+	}
+	dir, err := filepath.EvalSymlinks(strings.TrimSuffix(strings.TrimSpace(string(out)), "/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// sharedConfig is the configuration the daemon would build for the account
+// running the test: the real home, ~/.claude, ~/proj as the projects
+// directory, and the per-user temporary and cache directories from getconf,
+// as daemoncompose.LookupCordonAccount reads them. The runs root sits under
+// a short protected root of its own, as the live suite's does.
+func sharedConfig(t *testing.T) Config {
+	t.Helper()
+	f := liveFixture(t)
+	cfg := f.cfg
+	cfg.OwnerClaudeConfig = filepath.Join(cfg.Home, ".claude")
+	projects := os.Getenv("SPIKE_PROJECTS")
+	if projects == "" {
+		projects = filepath.Join(cfg.Home, "proj")
+	}
+	cfg.Projects = projects
+	cfg.UserTemp = getconfDir(t, "DARWIN_USER_TEMP_DIR")
+	cfg.UserCache = getconfDir(t, "DARWIN_USER_CACHE_DIR")
+	created, err := os.MkdirTemp("/private/tmp", "cdn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(created) })
+	cfg.ProtectedRoots = []string{created}
+	cfg.RunsRoot = filepath.Join(created, "r")
+	ports := []int{freePort(t), freePort(t)}
+	slices.Sort(ports)
+	cfg.ReservedPorts = slices.Compact(ports)
+	if cfg.AgentCLISHA256, err = fileSHA256(cfg.AgentCLI); err != nil {
+		t.Fatal(err)
+	}
+	cfg.EndProofTimeout = time.Minute // daemon/cmd/freesided/cordon.go
+	return cfg
+}
+
+// TestSharedRealConfig runs the full conformance suite under the
+// configuration the daemon would build for this account (item 2).
+func TestSharedRealConfig(t *testing.T) {
+	requireSharedLive(t)
+	cfg := sharedConfig(t)
+	t.Logf("config: home=%s projects=%s usertemp=%s usercache=%s", cfg.Home, cfg.Projects, cfg.UserTemp, cfg.UserCache)
+	b, err := New(cfg, moduleSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	suite, err := NewSuite(b, WithConformanceRecorder(&fakeRecorder{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := suite.Full(t.Context()); err != nil {
+		t.Fatalf("Full under the account's real configuration: %v", err)
+	}
+	if err := suite.ProbeBeforeJob(t.Context()); err != nil {
+		t.Fatalf("the pre-job probe after a pass: %v", err)
+	}
+}
+
+// passStats is one pass of the proof as a countingHost saw it.
+type passStats struct {
+	Listed     int `json:"listed"`
+	Unsettled  int `json:"unsettled"`
+	Replaced   int `json:"replaced"`
+	Killed     int `json:"killed"`
+	QueryError int `json:"query_errors"`
+}
+
+// countingHost wraps the real host and records every pass, not only the
+// last one endLaunch's error describes.
+type countingHost struct {
+	hostProcesses
+	mu     sync.Mutex
+	passes []passStats
+}
+
+func (c *countingHost) cur() *passStats { return &c.passes[len(c.passes)-1] }
+
+func (c *countingHost) live() ([]hostProcess, error) {
+	procs, err := c.hostProcesses.live()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := passStats{Listed: len(procs)}
+	for _, p := range procs {
+		if !p.settled {
+			s.Unsettled++
+		}
+	}
+	c.passes = append(c.passes, s)
+	return procs, err
+}
+
+func (c *countingHost) member(pid int, target proofTarget) (bool, error) {
+	ok, err := c.hostProcesses.member(pid, target)
+	if err != nil && len(c.passes) > 0 {
+		c.mu.Lock()
+		c.cur().QueryError++
+		c.mu.Unlock()
+	}
+	return ok, err
+}
+
+func (c *countingHost) same(p hostProcess) (bool, error) {
+	ok, err := c.hostProcesses.same(p)
+	if err == nil && !ok && len(c.passes) > 0 {
+		c.mu.Lock()
+		c.cur().Replaced++
+		c.mu.Unlock()
+	}
+	return ok, err
+}
+
+func (c *countingHost) kill(pid int) error {
+	if len(c.passes) > 0 {
+		c.mu.Lock()
+		c.cur().Killed++
+		c.mu.Unlock()
+	}
+	return c.hostProcesses.kill(pid)
+}
+
+type endSample struct {
+	Path     string      `json:"path"`
+	Label    string      `json:"label"`
+	N        int         `json:"n"`
+	Proved   bool        `json:"proved"`
+	Error    string      `json:"error,omitempty"`
+	Millis   float64     `json:"end_ms"`
+	Passes   []passStats `json:"passes,omitempty"`
+	Survived int         `json:"survivors_alive_after"`
+}
+
+// TestSharedEnds ends SPIKE_N launches two ways (item 3): through the
+// backend, as production does, and by hand under the package's own proof
+// with a counting host, which times the proof alone and records each pass.
+// SPIKE_LABEL names the condition (idle, load) in the records.
+func TestSharedEnds(t *testing.T) {
+	out := requireSharedLive(t)
+	n, _ := strconv.Atoi(os.Getenv("SPIKE_N"))
+	if n <= 0 {
+		n = 50
+	}
+	label := os.Getenv("SPIKE_LABEL")
+	if label == "" {
+		label = "idle"
+	}
+	cfg := sharedConfig(t)
+	b, err := New(cfg, moduleSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := os.Create(filepath.Join(out, "item3-ends-"+label+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	enc := json.NewEncoder(records)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		// The production path: a launch whose agent leaves three detached
+		// survivors and exits.
+		id := fmt.Sprintf("%s-backend-%d", label, i)
+		start := time.Now()
+		_, lerr := b.Launch(t.Context(), hostRequest(id, "", "spawn", "exit"))
+		s := endSample{Path: "backend", Label: label, N: i, Proved: lerr == nil, Millis: ms(time.Since(start))}
+		if lerr != nil {
+			s.Error = lerr.Error()
+		}
+		s.Survived = aliveOf(t, filepath.Join(layoutFor(cfg.RunsRoot, id).worktree, "pids"))
+		if err := enc.Encode(s); err != nil {
+			t.Fatal(err)
+		}
+		// The proof alone, instrumented.
+		s = manualEnd(t, cfg, b.rules, self, fmt.Sprintf("%s-manual-%d", label, i))
+		s.Label, s.N = label, i
+		if err := enc.Encode(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recordForeignQueries(t, out, label)
+}
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
+// aliveOf counts the pids in path that are still alive.
+func aliveOf(t *testing.T, path string) int {
+	t.Helper()
+	body, err := os.ReadFile(path) //nolint:gosec // G304: the stand-in agent's pids file
+	if err != nil {
+		return -1
+	}
+	alive := 0
+	for _, field := range strings.Fields(string(body)) {
+		if pid, err := strconv.Atoi(field); err == nil && processLive(t, pid) {
+			alive++
+		}
+	}
+	return alive
+}
+
+// manualEnd prepares a launch directory as Backend.prepare does, starts the
+// canary and the stand-in agent under the rule file as the supervisor does,
+// waits for the agent to exit, and times endLaunch with a counting host.
+func manualEnd(t *testing.T, cfg Config, rules []byte, self, id string) endSample {
+	t.Helper()
+	l := layoutFor(cfg.RunsRoot, id)
+	if err := os.MkdirAll(filepath.Dir(l.runRoot), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{l.runRoot, l.config, l.tmp, l.ctl, l.worktree} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string][]byte{l.rules: rules, l.tag: nil, l.control: nil} {
+		if err := writeExclusive(path, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := proofTarget{tag: l.tag, control: l.control}
+	canaryArgv := confinedArgv(cfg, l, canaryProgram)
+	canary := exec.Command(canaryArgv[0], canaryArgv[1:]...) //nolint:gosec // G204: the package's own confined argv
+	canary.Dir, canary.Env = l.runRoot, launchEnv(cfg, l)
+	hold, err := canary.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := canary.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Close(); _ = canary.Wait() }()
+	target.canary = canary.Process.Pid
+	if err := awaitMember(t.Context(), darwinHost{}, target, 20*time.Second); err != nil {
+		return endSample{Path: "manual", Error: "canary: " + err.Error()}
+	}
+	agentArgv := confinedArgv(cfg, l, self, fakeAgentArg, "spawn", "exit")
+	agent := exec.Command(agentArgv[0], agentArgv[1:]...) //nolint:gosec // G204: the package's own confined argv
+	agent.Dir, agent.Env = l.worktree, launchEnv(cfg, l)
+	if out, err := agent.CombinedOutput(); err != nil {
+		return endSample{Path: "manual", Error: fmt.Sprintf("agent: %v: %s", err, out)}
+	}
+	host := &countingHost{hostProcesses: darwinHost{}}
+	start := time.Now()
+	err = endLaunch(t.Context(), host, target, cfg.EndProofTimeout)
+	s := endSample{Path: "manual", Proved: err == nil, Millis: ms(time.Since(start)), Passes: host.passes}
+	if err != nil {
+		s.Error = err.Error()
+	}
+	s.Survived = aliveOf(t, filepath.Join(l.worktree, "pids"))
+	return s
+}
+
+// recordForeignQueries asks the proof's membership query about every live
+// process once, with a tag no rule names, and counts answers and errors by
+// owner: this account, root, and every other account. The proof fails on
+// any query error, so an account that can't query another's processes
+// could never prove an end on a shared host.
+func recordForeignQueries(t *testing.T, out, label string) {
+	t.Helper()
+	dir := t.TempDir()
+	target := proofTarget{tag: filepath.Join(dir, "tag"), control: filepath.Join(dir, "control")}
+	for _, p := range []string{target.tag, target.control} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type tally struct{ Queried, Members, Errors int }
+	counts := map[string]*tally{}
+	me := uint32(os.Getuid())
+	for i := range procs {
+		p := &procs[i]
+		if p.Proc.P_stat == stateZombie {
+			continue
+		}
+		owner := "other"
+		switch p.Eproc.Ucred.Uid {
+		case me:
+			owner = "self"
+		case 0:
+			owner = "root"
+		}
+		c := counts[owner]
+		if c == nil {
+			c = &tally{}
+			counts[owner] = c
+		}
+		c.Queried++
+		r, qerr := darwinHost{}.member(int(p.Proc.P_pid), target)
+		switch {
+		case qerr != nil:
+			c.Errors++
+		case r:
+			c.Members++
+		}
+	}
+	body, _ := json.MarshalIndent(counts, "", "  ")
+	t.Logf("membership queries by owner: %s", body)
+	if err := os.WriteFile(filepath.Join(out, "item3-foreign-"+label+".json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ruleVariant returns rules.sb with one denial dropped, for items 5 and 6.
+func ruleVariant(t *testing.T, variant string) string {
+	t.Helper()
+	drop := map[string]string{
+		"default":  "",
+		"nolsopen": "(deny lsopen)\n",
+		"nosim":    "  (global-name-prefix \"com.apple.CoreSimulator.\")\n",
+	}
+	cut, ok := drop[variant]
+	if !ok {
+		t.Fatalf("unknown rule variant %q", variant)
+	}
+	if cut == "" {
+		return ruleTemplate
+	}
+	if strings.Count(ruleTemplate, cut) != 1 {
+		t.Fatalf("rules.sb holds %q %d times, want once", cut, strings.Count(ruleTemplate, cut))
+	}
+	return strings.Replace(ruleTemplate, cut, "", 1)
+}
+
+// withRules swaps the package's rule template for the test's duration.
+// Backend.New renders it, so the swap must precede New. The spike's tests
+// don't run in parallel.
+func withRules(t *testing.T, variant string) {
+	t.Helper()
+	orig := ruleTemplate
+	ruleTemplate = ruleVariant(t, variant)
+	t.Cleanup(func() { ruleTemplate = orig })
+}
+
+// TestSharedRender writes each variant's rendered rule file and its -D
+// parameters for a run root under SPIKE_OUT, for items 4 and 5, where the
+// spike's helper starts sandbox-exec itself from a LaunchAgent.
+func TestSharedRender(t *testing.T) {
+	out := requireSharedLive(t)
+	cfg := sharedConfig(t)
+	orig := ruleTemplate
+	t.Cleanup(func() { ruleTemplate = orig })
+	for _, variant := range []string{"default", "nolsopen", "nosim"} {
+		ruleTemplate = ruleVariant(t, variant)
+		runRoot := filepath.Join(out, "helper-run-"+variant)
+		tag := filepath.Join(out, "helper-ctl-"+variant, "tag")
+		for _, dir := range []string{runRoot, filepath.Dir(tag)} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(tag, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(out, "rules-"+variant+".sb"), RenderRules(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		params := strings.Join(sandboxParams(cfg, runRoot, tag), "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(out, "params-"+variant+".txt"), []byte(params), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ruleTemplate = orig
+	}
+}
+
+// TestSharedScript runs SPIKE_SCRIPT as one launch's agent under the
+// SPIKE_VARIANT rule file, with SPIKE_PATH (colon-separated) ahead of the
+// fixture's PATH (items 6, 7, and 8). The agent is a zsh wrapper that
+// drops the CLI settings argument and runs the script from stdin. Once the
+// script's body is done it writes ./ready and waits for ./release; between
+// the two the test lists every process the proof would count a member,
+// with its name, so the record shows what the run left behind before the
+// proof ends it. The transcript, stderr, and member list go to
+// SPIKE_OUT/<SPIKE_NAME>.*.
+func TestSharedScript(t *testing.T) {
+	out := requireSharedLive(t)
+	name := os.Getenv("SPIKE_NAME")
+	script, err := os.ReadFile(os.Getenv("SPIKE_SCRIPT"))
+	if err != nil {
+		t.Fatalf("read SPIKE_SCRIPT: %v", err)
+	}
+	variant := os.Getenv("SPIKE_VARIANT")
+	if variant == "" {
+		variant = "default"
+	}
+	withRules(t, variant)
+	cfg := sharedConfig(t)
+	if extra := os.Getenv("SPIKE_PATH"); extra != "" {
+		cfg.Path = append(strings.Split(extra, ":"), cfg.Path...)
+	}
+	wrapper := filepath.Join(out, "agent-wrapper.zsh")
+	body := "#!/bin/zsh -f\nshift 2\nexec /bin/zsh -f -s \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentCLI = wrapper
+	if cfg.AgentCLISHA256, err = fileSHA256(wrapper); err != nil {
+		t.Fatal(err)
+	}
+	cfg.StallLimit = 20 * time.Minute
+	b, err := New(cfg, moduleSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := name
+	l := layoutFor(cfg.RunsRoot, id)
+	prompt := string(script) + "\nprint -r -- spike-script-status=$?\n: > ready\nwhile [[ ! -e release ]]; do sleep 0.2; done\n"
+	req := request(id)
+	req.Prompt, req.Args = []byte(prompt), nil
+	type result struct {
+		res LaunchResult
+		err error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		r, err := b.Launch(context.WithoutCancel(t.Context()), req)
+		done <- result{r, err}
+	}()
+	ready := filepath.Join(l.worktree, "ready")
+	var res result
+	listed := false
+	for !listed {
+		select {
+		case res = <-done:
+			listed = true
+			t.Log("the launch ended before its script was ready")
+		case <-time.After(200 * time.Millisecond):
+			if _, err := os.Stat(ready); err == nil {
+				members := listMembers(t, l)
+				if err := os.WriteFile(filepath.Join(out, name+".members"), []byte(members), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("members before the end:\n%s", members)
+				if err := os.WriteFile(filepath.Join(l.worktree, "release"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				res = <-done
+				listed = true
+			}
+		}
+	}
+	t.Logf("launch %s under %s ended after %s: %+v err=%v", name, variant, time.Since(start).Round(time.Millisecond), res.res, res.err)
+	for src, dst := range map[string]string{l.transcript: name + ".transcript", l.stderr: name + ".stderr"} {
+		if body, err := os.ReadFile(src); err == nil { //nolint:gosec // G304: the launch's own output
+			_ = os.WriteFile(filepath.Join(out, dst), body, 0o600)
+		}
+	}
+	status := "proved"
+	var blocked *BlockedError
+	if errors.As(res.err, &blocked) {
+		status = "blocked: " + blocked.Error()
+	} else if res.err != nil {
+		status = "error: " + res.err.Error()
+	}
+	_ = os.WriteFile(filepath.Join(out, name+".end"), []byte(fmt.Sprintf("%s\nended_by=%s exit=%d\n", status, res.res.EndedBy, res.res.ExitCode)), 0o600)
+	// The runs root goes with the test's cleanup; SPIKE_KEEP copies the
+	// worktree out first.
+	_ = os.WriteFile(filepath.Join(out, name+".worktree"), []byte(l.worktree+"\n"), 0o600)
+	if keep := os.Getenv("SPIKE_KEEP"); keep != "" {
+		_ = exec.Command("/bin/cp", "-R", l.worktree, keep).Run() //nolint:gosec // G204: the spike's own copy
+	}
+}
+
+// listMembers lists every host process the proof would count a member of
+// l's launch, with its pid, parent, and name.
+func listMembers(t *testing.T, l layout) string {
+	t.Helper()
+	target := proofTarget{tag: l.tag, control: l.control}
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for i := range procs {
+		p := &procs[i]
+		if p.Proc.P_stat == stateZombie {
+			continue
+		}
+		ok, err := darwinHost{}.member(int(p.Proc.P_pid), target)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("ERR %d %v", p.Proc.P_pid, err))
+			continue
+		}
+		if ok {
+			lines = append(lines, fmt.Sprintf("%d ppid=%d uid=%d %s", p.Proc.P_pid, p.Eproc.Ppid, p.Eproc.Ucred.Uid, unix.ByteSliceToString(p.Proc.P_comm[:])))
+		}
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n") + "\n"
+}
