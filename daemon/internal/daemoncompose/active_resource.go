@@ -63,6 +63,11 @@ type ActiveResourceReconciler struct {
 	// observeCheck reads the required check on a bound, open pull request's
 	// head (#3598). Optional: nil reads nothing and the card shows no check.
 	observeCheck requiredCheckObserver
+	// readJobLog and excerpts read a failed required check's job logs and
+	// keep their screened excerpts, for the check_failure cycle (#3598).
+	// Optional: nil turns the cycle's trigger off.
+	readJobLog jobLogReader
+	excerpts   engine.ArtifactStore
 	// evictConcluded drops every conditional-request cache entry owned by a
 	// ready resource after the item leaves the open state. evictedConcluded
 	// records whether the final, post-completion eviction has happened; both
@@ -629,11 +634,14 @@ func (r *ActiveResourceReconciler) Reconcile(
 		}
 		// The required check commits in its own transaction too, and only on
 		// a pass that left the item open on its bound head.
+		checkRecorded := false
 		if observation.check != nil && observation.invalidation == nil && !observation.conclude {
 			if err := r.convergeRequiredCheck(ctx, item.ID, observation.binding, *observation.check,
 				observation.handBack, observation.pull.ObservedAt); err != nil {
 				result.Failures = append(result.Failures,
 					fmt.Errorf("record required check %s: %w", item.ID, err))
+			} else {
+				checkRecorded = true
 			}
 		}
 		// External findings ride the same fetch and are isolated the same way:
@@ -667,6 +675,18 @@ func (r *ActiveResourceReconciler) Reconcile(
 			if err := r.startExternalReview(ctx, item.ID, observation.pull.ObservedAt); err != nil {
 				result.Failures = append(result.Failures,
 					fmt.Errorf("start external review %s: %w", item.ID, err))
+			}
+			// A code failure of the required check starts a check_failure
+			// cycle (#3598), from the reading this pass just recorded: the
+			// engine matches the record's jobs to the ones the card names.
+			// An external review that started first superseded the item, so
+			// the probe finds nothing due.
+			if checkRecorded {
+				if err := r.startCheckFailure(ctx, item.ID, observation.binding, *observation.check,
+					observation.pull.ObservedAt); err != nil {
+					result.Failures = append(result.Failures,
+						fmt.Errorf("start check failure %s: %w", item.ID, err))
+				}
 			}
 		}
 		if known {

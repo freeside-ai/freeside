@@ -763,6 +763,8 @@ type ClaudeComposition struct {
 	reviewInvalidate func(repo string, number int)
 	// observeCheck reads a ready pull request's required check (#3598).
 	observeCheck requiredCheckObserver
+	// readJobLog reads a failed required-check job's log tail (#3598).
+	readJobLog jobLogReader
 	// appBotIdentity resolves the App bot the replier posts as, so the
 	// reconciler can skip the bot's own conversation comments (#3127).
 	appBotIdentity appBotIdentitySource
@@ -1350,6 +1352,7 @@ func composeClaudeDriver(
 		},
 		reviewInvalidate: reconciler.EvictPullReviewActivity,
 		observeCheck:     reconciler.ReconcileRequiredCheck,
+		readJobLog:       reconciler.ReadJobLogTail,
 		appBotIdentity:   commitAuthors,
 		evictConcluded: func(binding domain.ReadyItemPRBinding, boundIssue *int) {
 			reconciler.EvictRef(binding.Repo, binding.BaseRef)
