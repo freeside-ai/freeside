@@ -6808,13 +6808,17 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   write a LaunchAgent, or open an app; reach the Simulator or container
   services; read, write, or connect to a Unix socket under a protected
   root; write `/Library/Freeside`, a verification job's `freeside-verify-`
-  directories, or the global preference domain; bind a reserved port; or
+  directories, the global preference domain, or the keychain preferences
+  that name the default keychain and search list; bind a reserved port; or
   signal or attach to a process outside its own sandbox. Nor can it rename
   any directory above a denied path, or remove or rename anything in
   another project, since a rename moves a denied path out from under its
   rule. It can still read
   another process's environment and write the owner's temporary and module
-  cache directories (`docs/spikes/cordoned-verifier.md`, Residuals).
+  cache directories (`docs/spikes/cordoned-verifier.md`, Residuals). It
+  reaches securityd, because TLS clients that check trust through
+  Security.framework, mise among them, need it; the keychain's file rule
+  keeps the login keychain closed, but a launch can lock it (#3599).
 - **Configuration.** `Config.Home` must be the account's own home: cfprefsd
   writes the global preferences there for the launch, and on macOS 27 only
   the preference rule and the file rule together refuse that write. Every
@@ -7024,7 +7028,12 @@ afterward, and probes the owner's session services, each first run outside
 a launch as its control: it opens and quits Calculator, may create a
 Simulator device (deleted after), runs `container list` and
 `security show-keychain-info`, and bootstraps a launchd job that it boots
-out at the end. It also runs the whole suite (`Suite.Full`, then the
+out at the end. It plants a throwaway item in the login keychain, deleted
+after, and reads it from inside a launch. It makes a keychain inside a
+launch and tries to make it the account's default and put it on the search
+list, then checks both settings are unchanged, restoring them if not. When
+mise is installed, it installs jq with mise inside a launch, into the run's
+own directories. It also runs the whole suite (`Suite.Full`, then the
 pre-job probe) against the real home with the real launchd and Simulator
 host; that writes nothing to the home. The suite's environment check
 fails a pass when the test's environment holds a credential-named

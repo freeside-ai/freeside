@@ -280,8 +280,53 @@ func fakeProbe(kind string, args []string) error {
 			return fmt.Errorf("go build: %w: %s", err, out)
 		}
 		return nil
+	case "mise":
+		return miseInstall(args[0], filepath.Join(os.Getenv("TMPDIR"), "mise"), os.Environ())
 	}
 	return fmt.Errorf("unknown probe %q", kind)
+}
+
+// miseTool is the tool the mise probe installs, the one the shared-host
+// spike installed (#3596).
+const miseTool, miseToolVersion = "jq", "1.7.1"
+
+// miseInstall installs miseTool with mise into fresh data, cache, state, and
+// config directories under root and runs it. Trust in the project's
+// mise.toml comes from the environment alone, so neither the install nor
+// the trust leaves anything in the real home (#3601).
+func miseInstall(mise, root string, env []string) error {
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o700); err != nil { //nolint:gosec // G703: the launch's TMPDIR or the test's temporary directory
+		return err
+	}
+	config := fmt.Sprintf("[tools]\n%s = %q\n", miseTool, miseToolVersion)
+	if err := os.WriteFile(filepath.Join(project, "mise.toml"), []byte(config), 0o600); err != nil { //nolint:gosec // G703: the launch's TMPDIR or the test's temporary directory
+		return err
+	}
+	env = append(slices.Clone(env),
+		"MISE_DATA_DIR="+filepath.Join(root, "data"), "MISE_CACHE_DIR="+filepath.Join(root, "cache"),
+		"MISE_STATE_DIR="+filepath.Join(root, "state"), "MISE_CONFIG_DIR="+filepath.Join(root, "config"),
+		"MISE_TRUSTED_CONFIG_PATHS="+project)
+	run := func(args ...string) ([]byte, error) {
+		cmd := exec.Command(mise, args...) //nolint:gosec // G204: the mise the test found, with fixed arguments
+		cmd.Dir, cmd.Env = project, env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("mise %s: %w: %s", strings.Join(args, " "), err, out)
+		}
+		return out, nil
+	}
+	if _, err := run("install"); err != nil {
+		return err
+	}
+	out, err := run("exec", "--", miseTool, "--version")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(out), miseToolVersion) {
+		return fmt.Errorf("%s --version printed %q, want %s", miseTool, out, miseToolVersion)
+	}
+	return nil
 }
 
 func denial(err error) error {

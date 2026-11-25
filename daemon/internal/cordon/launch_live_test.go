@@ -3,6 +3,7 @@
 package cordon
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -82,10 +84,116 @@ func TestLiveLaunchRefusesSessionServices(t *testing.T) {
 	if unconfined(t, "/usr/bin/security", "show-keychain-info", keychain) {
 		probes = append(probes, probeLine("deny", "run", "/usr/bin/security", "show-keychain-info", keychain))
 	}
+	// The launch reaches securityd (#3599), so the file rule alone keeps the
+	// login keychain closed. A planted item that trusts /usr/bin/security
+	// reads outside a launch and not inside. Its secret is a throwaway, and a
+	// probe that wrongly succeeds prints nothing it read. Adding an item
+	// isn't probed: inside a launch the add asks authd for a login prompt and
+	// waits on it, under these rules and the ones before (#3599's note).
+	item := fmt.Sprintf("freeside-cordon-probe-%d", os.Getpid())
+	if unconfined(t, "/usr/bin/security", "add-generic-password", "-s", item, "-a", "probe", "-w", rand.Text(), "-T", "/usr/bin/security", keychain) {
+		t.Cleanup(func() {
+			_ = exec.Command("/usr/bin/security", "delete-generic-password", "-s", item, keychain).Run() //nolint:gosec // G204: the test's own item
+		})
+		if unconfined(t, "/usr/bin/security", "find-generic-password", "-s", item, "-w", keychain) {
+			probes = append(probes, probeLine("deny", "run", "/usr/bin/security", "find-generic-password", "-s", item, "-w", keychain))
+		}
+	}
 	if len(probes) == 0 {
 		t.Skip("no session service answers outside a launch on this host")
 	}
 	runProbeLaunch(t, f.backend(t), "services", probes)
+}
+
+// TestLiveLaunchCantChangeTheDefaultKeychain makes a keychain inside a
+// launch and tries to make it the account's default and put it on the
+// search list, through Security.framework and through cfprefsd. Either would
+// send the owner's next saved credential, or the next lookup, to a keychain
+// the launch holds the password to (#3599). The account's settings must read
+// the same after the launch, and the test-only key must not be written.
+func TestLiveLaunchCantChangeTheDefaultKeychain(t *testing.T) {
+	t.Parallel()
+	requireLive(t)
+	f := liveFixture(t)
+	// The settings compare as security prints them, errors included: a
+	// default that names a keychain the launch's directory held reads as
+	// missing once the run is gone.
+	settings := func() (string, string) {
+		def, _ := exec.Command("/usr/bin/security", "default-keychain", "-d", "user").CombinedOutput()
+		list, _ := exec.Command("/usr/bin/security", "list-keychains", "-d", "user").CombinedOutput()
+		return string(def), string(list)
+	}
+	def, list := settings()
+	if len(keychainPaths(def)) != 1 || len(keychainPaths(list)) == 0 {
+		t.Skipf("the account's keychain settings don't read as a default and a search list: %q, %q", def, list)
+	}
+	t.Cleanup(func() {
+		if d, l := settings(); d != def || l != list {
+			restoreKeychainSettings(t, def, list)
+		}
+	})
+	key := fmt.Sprintf("FreesideCordonTest%d", os.Getpid())
+	t.Cleanup(func() { _ = exec.Command("/usr/bin/defaults", "delete", "com.apple.security", key).Run() }) //nolint:gosec // G204: the test's own preference key
+	login := filepath.Join(f.cfg.Home, "Library/Keychains/login.keychain-db")
+	// The launch creating its own keychain is the control: it shows the
+	// launch reaches securityd and has a keychain to name.
+	const own = `"$TMPDIR/probe.keychain"`
+	runProbeLaunch(t, f.backend(t), "default-keychain", []string{
+		probeLine("allow", "run", "/bin/sh", "-c", "/usr/bin/security create-keychain -p probe "+own),
+		probeLine("any", "run", "/bin/sh", "-c", "/usr/bin/security default-keychain -d user -s "+own),
+		probeLine("any", "run", "/bin/sh", "-c", "/usr/bin/security list-keychains -d user -s "+login+" "+own),
+		probeLine("deny", "run", "/usr/bin/defaults", "write", "com.apple.security", key, "-string", "planted"),
+	})
+	if out, err := exec.Command("/usr/bin/defaults", "read", "com.apple.security", key).CombinedOutput(); err == nil { //nolint:gosec // G204: the test's own preference key
+		t.Errorf("a launch wrote the keychain preference domain: %s", out)
+	}
+	if d, l := settings(); d != def || l != list {
+		t.Errorf("a launch changed the keychain settings: default %q to %q, search list %q to %q", def, d, list, l)
+	}
+}
+
+// keychainPaths reads the keychain paths security prints, one quoted path
+// a line.
+func keychainPaths(out string) []string {
+	var paths []string
+	for line := range strings.Lines(out) {
+		if p := strings.Trim(strings.TrimSpace(line), `"`); strings.HasPrefix(p, "/") {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// restoreKeychainSettings puts back the default keychain and search list
+// that security printed before a launch changed them.
+func restoreKeychainSettings(t *testing.T, def, list string) {
+	t.Helper()
+	for _, args := range [][]string{
+		append([]string{"default-keychain", "-d", "user", "-s"}, keychainPaths(def)...),
+		append([]string{"list-keychains", "-d", "user", "-s"}, keychainPaths(list)...),
+	} {
+		if out, err := exec.Command("/usr/bin/security", args...).CombinedOutput(); err != nil { //nolint:gosec // G204: the settings security printed
+			t.Errorf("restoring the keychain settings: security %v: %v: %s", args, err, out)
+		}
+	}
+}
+
+// TestLiveLaunchInstallsAMiseTool installs a tool with mise from inside a
+// launch. mise verifies TLS through Security.framework, which needs
+// securityd's lookup (#3599).
+func TestLiveLaunchInstallsAMiseTool(t *testing.T) {
+	t.Parallel()
+	requireLive(t)
+	f := liveFixture(t)
+	mise, err := exec.LookPath("mise")
+	if err != nil {
+		t.Skipf("mise probe skipped: %v", err)
+	}
+	env := []string{"HOME=" + f.cfg.Home, "PATH=" + strings.Join(f.cfg.Path, ":"), "TMPDIR=" + t.TempDir()}
+	if err := miseInstall(mise, t.TempDir(), env); err != nil {
+		t.Skipf("mise probe skipped: it fails outside a launch too: %.500v", err)
+	}
+	runProbeLaunch(t, f.backend(t), "mise", []string{probeLine("allow", "mise", mise)})
 }
 
 // TestLiveLaunchCantWriteTheGlobalPreferences writes a test-only key to the
