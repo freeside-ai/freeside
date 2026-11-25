@@ -122,6 +122,41 @@ func exerciseSettingsSetAndShow(t *testing.T, ctx context.Context, dbPath string
 	if _, err := runSettings(t, ctx, "set", "-db", dbPath, "-section", "manual_submission_config", "-clear"); err != nil {
 		t.Fatalf("clearing an optional section: %v", err)
 	}
+
+	// The two execution switches set and show like any section, and apply
+	// at the daemon's next start.
+	out, err = runSettings(t, ctx, "set", "-db", dbPath, "-section", "execution", "-value", `{"enabled":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var switchSet settingsSetResult
+	if err := json.Unmarshal([]byte(out), &switchSet); err != nil || switchSet.TakesEffect != settingsTakeEffect {
+		t.Fatalf("execution set result %q (%v), want it to apply %s", out, err, settingsTakeEffect)
+	}
+	if _, err := runSettings(t, ctx, "set", "-db", dbPath, "-project", "project-widgets",
+		"-section", "enabled", "-value", `{"enabled":true}`); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = runSettings(t, ctx, "show", "-db", dbPath); err != nil {
+		t.Fatal(err)
+	}
+	instance = domain.InstanceSettingsRecord{}
+	if err := json.Unmarshal([]byte(out), &instance); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := instance.ExecutionEnabled(); err != nil || !on {
+		t.Fatalf("instance record %+v: execution on %t (%v), want on", instance, on, err)
+	}
+	if out, err = runSettings(t, ctx, "show", "-db", dbPath, "-project", "project-widgets"); err != nil {
+		t.Fatal(err)
+	}
+	project = domain.ProjectSettingsRecord{}
+	if err := json.Unmarshal([]byte(out), &project); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := project.Enabled(); err != nil || !on {
+		t.Fatalf("project record %+v: enabled %t (%v), want enabled", project, on, err)
+	}
 }
 
 // TestSettingsSetCordonedLaunchesAppliesAtTheNextAdmission: a set of the
@@ -178,8 +213,8 @@ func TestSettingsSetAndShowUseTheRunningDaemonStore(t *testing.T) {
 	exerciseSettingsSetAndShow(t, ctx, dbPath)
 	if err := h.Store.Read(t.Context(), func(tx *store.ReadTx) error {
 		record, err := tx.InstanceSettingsRecord(t.Context())
-		if err == nil && record.Revision != 3 {
-			t.Errorf("running daemon store instance revision = %d, want 3", record.Revision)
+		if err == nil && record.Revision != 4 {
+			t.Errorf("running daemon store instance revision = %d, want 4", record.Revision)
 		}
 		return err
 	}); err != nil {
@@ -234,6 +269,9 @@ func TestSettingsImportYieldsTheFileSettings(t *testing.T) {
 				t.Fatalf("loaded revisions %d and %d, import wrote %d and %d",
 					got.InstanceRevision, got.ProjectRevision, result.InstanceRevision, result.ProjectRevision)
 			}
+			if got.Instance.Execution != nil || got.Project.Enabled != nil {
+				t.Fatalf("import set a switch: execution %+v, enabled %+v", got.Instance.Execution, got.Project.Enabled)
+			}
 			got.InstanceRevision, got.ProjectRevision = 0, 0
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("loaded settings\n%+v\nfile settings\n%+v", got, want)
@@ -281,13 +319,12 @@ func TestSettingsImportRefusesAProjectAlreadySet(t *testing.T) {
 	}
 }
 
-// TestSettingsImportAcceptsAStoreOnlyEverPaused pins that an execution pause
-// is not run configuration: a store whose instance revisions only paused and
-// resumed prod still takes an import.
-// TestSettingsImportAcceptsAStoreOnlyEverPausedOrCapped: an execution
-// pause and a cordoned launch cap aren't configuration the deputy's file
-// carries, so a store that only ever held them still takes an import.
-func TestSettingsImportAcceptsAStoreOnlyEverPausedOrCapped(t *testing.T) {
+// TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched: an
+// execution pause, a cordoned launch cap, and the two execution switches
+// aren't configuration the deputy's file carries, so a store that only ever
+// held them still takes an import, and the import leaves the switches as
+// the operator set them.
+func TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	seedTemplateStore(t, dbPath)
@@ -300,13 +337,18 @@ func TestSettingsImportAcceptsAStoreOnlyEverPausedOrCapped(t *testing.T) {
 			{Section: domain.InstanceSectionExecutionPause, Value: json.RawMessage(`{"state":"requested"}`)},
 			{Section: domain.InstanceSectionExecutionPause},
 			{Section: domain.InstanceSectionCordonedLaunches, Value: json.RawMessage(`{"max_concurrent":2}`)},
+			{Section: domain.InstanceSectionExecution, Value: json.RawMessage(`{"enabled":false}`)},
 		} {
 			input.SetBy = "cli:operator"
 			if _, err := tx.AppendInstanceSettingsRevision(t.Context(), input, time.Now().UTC()); err != nil {
 				return err
 			}
 		}
-		return nil
+		_, err := tx.AppendProjectSettingsRevision(t.Context(), domain.ProjectSettingsInput{
+			ProjectID: "project-widgets", Section: domain.ProjectSectionEnabled,
+			Value: json.RawMessage(`{"enabled":true}`), SetBy: "cli:operator",
+		}, time.Now().UTC())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -317,14 +359,28 @@ func TestSettingsImportAcceptsAStoreOnlyEverPausedOrCapped(t *testing.T) {
 	out, err := runSettings(t, t.Context(), "import", "-db", dbPath, "-settings", settingsPath,
 		"-container-bin", settingsTestContainer)
 	if err != nil {
-		t.Fatalf("import into a store only ever paused or capped: %v", err)
+		t.Fatalf("import into a store only ever paused, capped, or switched: %v", err)
 	}
 	var result settingsImportResult
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.InstanceRevision <= 3 {
-		t.Fatalf("import result %+v, want revisions after the pause's two and the cap's one", result)
+	if result.InstanceRevision <= 4 || result.ProjectRevision <= 1 {
+		t.Fatalf("import result %+v, want revisions after the four instance and one project revision", result)
+	}
+	st, err = store.Open(t.Context(), dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	loaded, err := daemoncompose.LoadRunSettings(t.Context(), st, "project-widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Instance.Execution == nil || loaded.Instance.Execution.Enabled ||
+		loaded.Project.Enabled == nil || !loaded.Project.Enabled.Enabled {
+		t.Fatalf("switches after import: execution %+v, enabled %+v; want them as set before it",
+			loaded.Instance.Execution, loaded.Project.Enabled)
 	}
 }
 

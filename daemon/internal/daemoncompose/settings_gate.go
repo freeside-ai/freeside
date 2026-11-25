@@ -36,7 +36,7 @@ func CheckInstanceSettingsSection(settings domain.InstanceSettings, section doma
 		domain.InstanceSectionPrompts, domain.InstanceSectionAgentTree, domain.InstanceSectionJudgment,
 		domain.InstanceSectionTimeouts, domain.InstanceSectionManualSubmissionConfig,
 		domain.InstanceSectionMacosVerification, domain.InstanceSectionExecutionPause,
-		domain.InstanceSectionCordonedLaunches:
+		domain.InstanceSectionCordonedLaunches, domain.InstanceSectionExecution:
 	}
 	return nil
 }
@@ -102,7 +102,7 @@ func CheckProjectSettingsSection(settings domain.ProjectSettings, section domain
 		if publish.ValidateLabelName(*settings.HandBackLabel) != nil {
 			return errors.New("hand_back_label is not a label name")
 		}
-	case domain.ProjectSectionAgentImage, domain.ProjectSectionWriterClass:
+	case domain.ProjectSectionAgentImage, domain.ProjectSectionWriterClass, domain.ProjectSectionEnabled:
 	}
 	return nil
 }

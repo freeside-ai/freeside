@@ -52,5 +52,8 @@
   },
   "cordoned_launches": {
     "max_concurrent": 2
+  },
+  "execution": {
+    "enabled": true
   }
 }

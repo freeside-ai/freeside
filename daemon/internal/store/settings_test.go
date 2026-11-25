@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -110,6 +111,38 @@ func TestSettingsAppendRefusesABrokenValue(t *testing.T) {
 	}
 }
 
+// TestSettingsProjectsListsEachProjectOnce: the start's read of which
+// projects hold settings names each project once, in id order, however many
+// revisions it has, and is empty on a store that holds none.
+func TestSettingsProjectsListsEachProjectOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openSettingsStore(t)
+	read := func() []domain.ProjectID {
+		t.Helper()
+		var projects []domain.ProjectID
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			projects, err = tx.SettingsProjects(ctx)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return projects
+	}
+	if projects := read(); len(projects) != 0 {
+		t.Fatalf("empty store lists %v, want none", projects)
+	}
+	for _, project := range []domain.ProjectID{"project-b", "project-a", "project-b"} {
+		if _, err := appendProjectSettings(t, s, project, domain.ProjectSectionEnabled, `{"enabled":true}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if projects := read(); !slices.Equal(projects, []domain.ProjectID{"project-a", "project-b"}) {
+		t.Fatalf("settings projects %v, want [project-a project-b]", projects)
+	}
+}
+
 // TestProjectSettingsNumberPerProjectAndHoldTheBinding numbers each
 // project's revisions from 1 and refuses a repository the project's
 // projects row does not bind it to.
@@ -191,6 +224,7 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 		domain.InstanceSectionBuild:                  `{"proxy":"","base_build_ref":"","dns":[]}`,
 		domain.InstanceSectionMacosVerification:      `{"root":"/m","slots":["a"],"xcode_build":"1","swift":"s"}`,
 		domain.InstanceSectionCordonedLaunches:       `{"max_concurrent":2}`,
+		domain.InstanceSectionExecution:              `{"enabled":true}`,
 	}
 	for _, section := range domain.AllInstanceSettingsSections {
 		if _, err := appendInstanceSettings(t, s, section, instance[section]); err != nil {
@@ -204,6 +238,7 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 		domain.ProjectSectionAgentImage:     `"r/a@sha256:` + hex64 + `"`,
 		domain.ProjectSectionHandBackLabel:  `"needs-rework"`,
 		domain.ProjectSectionWriterClass:    `"cordoned_host_process"`,
+		domain.ProjectSectionEnabled:        `{"enabled":true}`,
 	}
 	for _, section := range domain.AllProjectSettingsSections {
 		if _, err := appendProjectSettings(t, s, "project-a", section, project[section]); err != nil {

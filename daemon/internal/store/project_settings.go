@@ -95,6 +95,21 @@ func (tx *ReadTx) ProjectSettingsRevisions(ctx context.Context, project domain.P
 	return revisions, nil
 }
 
+// SettingsProjects returns every project that holds at least one settings
+// revision, in project id order. The installed daemon reads it at start to
+// find the enabled project (#2083).
+func (tx *ReadTx) SettingsProjects(ctx context.Context) ([]domain.ProjectID, error) {
+	projects, err := queryAll(ctx, tx.tx, func(row scanner) (domain.ProjectID, error) {
+		var project string
+		err := row.Scan(&project)
+		return domain.ProjectID(project), err
+	}, `SELECT DISTINCT project_id FROM project_settings_revisions ORDER BY project_id`)
+	if err != nil {
+		return nil, fmt.Errorf("settings projects: %w", err)
+	}
+	return projects, nil
+}
+
 // ProjectSettingsRecord folds one project's settings revisions into the
 // current value of each section; none set is an empty record at revision 0.
 // Like ProjectSettingsRevisions, it is not a grant.

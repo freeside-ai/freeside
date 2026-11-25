@@ -45,6 +45,7 @@ func instanceSettingsFixture() domain.InstanceSettings {
 		},
 		ExecutionPause:   &domain.ExecutionPauseSettings{State: domain.ExecutionPauseRequested},
 		CordonedLaunches: &domain.CordonedLaunchSettings{MaxConcurrent: 2},
+		Execution:        &domain.EnabledSettings{Enabled: true},
 	}
 }
 
@@ -56,6 +57,7 @@ func projectSettingsFixture() domain.ProjectSettings {
 		AgentImage:     settingsImage("agent"),
 		HandBackLabel:  new("needs-rework"),
 		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Enabled:        &domain.EnabledSettings{Enabled: true},
 	}
 }
 
@@ -242,6 +244,8 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.InstanceSectionCordonedLaunches, `{"max_concurrent":0}`, "cordoned_launches.max_concurrent 0 must be at least 1"},
 		{domain.InstanceSectionCordonedLaunches, `{"max_concurrent":-1}`, "cordoned_launches.max_concurrent -1 must be at least 1"},
 		{domain.InstanceSectionCordonedLaunches, `{}`, "cordoned_launches: max_concurrent: required settings key is absent"},
+		{domain.InstanceSectionExecution, `{}`, "execution: enabled: required settings key is absent"},
+		{domain.InstanceSectionExecution, `true`, "execution: "},
 		{domain.InstanceSectionHostTools, `{"container":"/c","extra":1}`, "unknown"},
 		{domain.InstanceSectionHostTools, `{"container":"/c","container":"/d"}`, "duplicate"},
 	} {
@@ -269,6 +273,8 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.ProjectSectionWriterClass, `"credential_free_host_verification"`, `writer_class "credential_free_host_verification" is not`},
 		{domain.ProjectSectionWriterClass, `"warded"`, `writer_class "warded" is not`},
 		{domain.ProjectSectionWriterClass, `""`, `writer_class "" is not`},
+		{domain.ProjectSectionEnabled, `{}`, "enabled: enabled: required settings key is absent"},
+		{domain.ProjectSectionEnabled, `{"enabled":"yes"}`, "enabled: "},
 	} {
 		_, err := domain.NewProjectSettingsRevision(domain.ProjectSettingsInput{
 			ProjectID: "project-widgets", Section: tc.section, Value: json.RawMessage(tc.value), SetBy: "cli:operator",
@@ -416,6 +422,57 @@ func TestCordonedLaunchesReadsAloneAndFollowsTheFold(t *testing.T) {
 		}
 		if launches == nil || launches.MaxConcurrent != want {
 			t.Fatalf("revision %d: cap = %+v, want %d", i+1, launches, want)
+		}
+	}
+}
+
+// TestExecutionSwitchesReadAloneAndDefaultOff pins the start's reads of the
+// two switches: each answers from a record that holds no run section, an
+// unset section and an explicit false read as off, and a clear turns a set
+// switch back off.
+func TestExecutionSwitchesReadAloneAndDefaultOff(t *testing.T) {
+	values := []string{`{"enabled":true}`, `{"enabled":false}`, `{"enabled":true}`, ``}
+	want := []bool{true, false, true, false}
+	var instanceRevisions []domain.InstanceSettingsRevision
+	var projectRevisions []domain.ProjectSettingsRevision
+	for _, check := range []func() (bool, error){
+		func() (bool, error) {
+			record, err := domain.NewInstanceSettingsRecord(nil)
+			if err != nil {
+				return false, err
+			}
+			return record.ExecutionEnabled()
+		},
+		func() (bool, error) {
+			record, err := domain.NewProjectSettingsRecord("project-widgets", nil)
+			if err != nil {
+				return false, err
+			}
+			return record.Enabled()
+		},
+	} {
+		if on, err := check(); err != nil || on {
+			t.Fatalf("unset switch: on %t, error %v; want off", on, err)
+		}
+	}
+	for i, value := range values {
+		instanceRevisions = append(instanceRevisions,
+			instanceRevision(t, i+1, domain.InstanceSectionExecution, json.RawMessage(value)))
+		instanceRecord, err := domain.NewInstanceSettingsRecord(instanceRevisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if on, err := instanceRecord.ExecutionEnabled(); err != nil || on != want[i] {
+			t.Fatalf("execution after revision %d: on %t, error %v; want %t", i+1, on, err, want[i])
+		}
+		projectRevisions = append(projectRevisions,
+			projectRevision(t, i+1, domain.ProjectSectionEnabled, json.RawMessage(value)))
+		projectRecord, err := domain.NewProjectSettingsRecord("project-widgets", projectRevisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if on, err := projectRecord.Enabled(); err != nil || on != want[i] {
+			t.Fatalf("enabled after revision %d: on %t, error %v; want %t", i+1, on, err, want[i])
 		}
 	}
 }
