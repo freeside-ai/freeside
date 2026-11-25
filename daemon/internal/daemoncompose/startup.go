@@ -558,6 +558,7 @@ func ComposeClaudeLoops(
 		// (plan §5.16, §7; AGENTS.md, Automated reviewer).
 		Reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
 		reviewInvalidate: claudeWiring.reviewInvalidate,
+		observeCheck:     claudeWiring.observeCheck,
 		appBotIdentity:   claudeWiring.appBotIdentity,
 		handBackLabel:    cfg.Claude.HandBackLabel,
 		mergeBase:        claudeWiring.mergeBase,

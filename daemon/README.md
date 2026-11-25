@@ -5457,6 +5457,18 @@ to remove after its own successful cycle raises none. Without the setting, a
 moved head re-enters as before. The label is at most 50
 characters, with no surrounding spaces or control characters.
 
+The ready card shows the pull request's required check (#3598). On each
+reconciler pass that sees the pull request open on its bound head, the
+reconciler reads which checks the base branch requires, from classic branch
+protection and rulesets, and the GitHub Actions jobs on that head, and
+writes the card's `required_check` at its next version when the reading
+changed: `pending`, `passed`, or `failed` with a class and the failed jobs'
+names. A required check that Actions doesn't produce stays `pending`, since
+reading another app's status needs a permission the App doesn't hold; a base
+that requires none shows nothing. A failed read is reported and retried on
+the next pass. The 30-minute `pr_checks_deadline` records an elapse only
+while the check is absent or `pending`.
+
 The deputy fixes, rather than reads from settings, the Claude driver, unattended
 mode, run conformance, provider-only egress to `api.anthropic.com:443`, and
 an 8 GiB review workspace. The supervision deadline stays a `submit` flag.

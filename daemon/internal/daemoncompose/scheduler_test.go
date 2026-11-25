@@ -58,6 +58,7 @@ func schedTestItem(t *testing.T, st *store.Store) domain.AttentionItem {
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
 		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		PRHeadSHA:         "cafed00d",
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -395,6 +396,57 @@ func TestDeadlineRecordsElapseOnOpenItem(t *testing.T) {
 			if sched.Status != domain.ScheduleFired ||
 				sched.Resolution.Reason != domain.ResolutionDeadlineElapsed {
 				t.Fatalf("deadline schedule = %+v", sched)
+			}
+		})
+	}
+}
+
+// TestChecksDeadlineFollowsTheRequiredCheck: the checks deadline records its
+// elapse while the card's required check is pending, and resolves without
+// touching the item once the check has concluded (#3598).
+func TestChecksDeadlineFollowsTheRequiredCheck(t *testing.T) {
+	t.Parallel()
+	infrastructure := domain.CheckFailureInfrastructure
+	for _, tc := range []struct {
+		name    string
+		check   domain.RequiredCheck
+		elapses bool
+	}{
+		{name: "pending", check: domain.RequiredCheck{State: domain.RequiredCheckPending}, elapses: true},
+		{name: "failed", check: domain.RequiredCheck{
+			State: domain.RequiredCheckFailed, FailureClass: &infrastructure,
+			FailedJobs: []string{"daemon / macos (test, darwin 1/1)"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newDeadlineFixture(t)
+			start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
+			check := tc.check
+			check.HeadSHA, check.ObservedAt = f.item.PRHeadSHA, start
+			f.item.RequiredCheck = &check
+			f.item.ItemVersion++
+			if err := f.st.Write(context.Background(), func(tx *store.WriteTx) error {
+				return tx.PutAttentionItem(context.Background(), f.item)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			id := f.arm(t, domain.SchedulePRChecksDeadline, start)
+			f.runAt(t, start.Add(31*time.Minute))
+
+			got := f.readItem(t)
+			sched := readScheduleRow(t, f.st, id)
+			if tc.elapses {
+				if len(got.ElapsedDeadlines) != 1 || sched.Status != domain.ScheduleFired {
+					t.Fatalf("pending check: elapsed %+v, schedule %+v; want one elapse, fired", got.ElapsedDeadlines, sched)
+				}
+				return
+			}
+			if got.ElapsedDeadlines != nil || got.ItemVersion != f.item.ItemVersion {
+				t.Fatalf("concluded check: item %+v changed, want it untouched", got)
+			}
+			if sched.Status != domain.ScheduleResolved || sched.Resolution.Reason != domain.ResolutionConditionSatisfied {
+				t.Fatalf("concluded check: schedule %+v, want resolved condition_satisfied", sched)
 			}
 		})
 	}

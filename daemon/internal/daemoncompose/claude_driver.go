@@ -760,6 +760,8 @@ type ClaudeComposition struct {
 	// failed durable append, so the next tick re-fetches unconditionally rather
 	// than riding a 304 and stranding the un-persisted rows (issue #497).
 	reviewInvalidate func(repo string, number int)
+	// observeCheck reads a ready pull request's required check (#3598).
+	observeCheck requiredCheckObserver
 	// appBotIdentity resolves the App bot the replier posts as, so the
 	// reconciler can skip the bot's own conversation comments (#3127).
 	appBotIdentity appBotIdentitySource
@@ -1345,11 +1347,13 @@ func composeClaudeDriver(
 			return reconciler.ReconcilePullReviewActivity(obsCtx, repo, number)
 		},
 		reviewInvalidate: reconciler.EvictPullReviewActivity,
+		observeCheck:     reconciler.ReconcileRequiredCheck,
 		appBotIdentity:   commitAuthors,
 		evictConcluded: func(binding domain.ReadyItemPRBinding, boundIssue *int) {
 			reconciler.EvictRef(binding.Repo, binding.BaseRef)
 			reconciler.EvictPull(binding.Repo, binding.PRNumber)
 			reconciler.EvictPullReviewActivity(binding.Repo, binding.PRNumber)
+			reconciler.EvictRequiredCheck(binding.Repo)
 			if boundIssue != nil {
 				reconciler.EvictIssue(binding.Repo, *boundIssue)
 			}

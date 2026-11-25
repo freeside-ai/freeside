@@ -394,8 +394,9 @@ type ReadinessInvalidation struct {
 // The scheduler's deadline handler appends it in the transaction that
 // consumes the fire; it is never client-supplied (AttentionItemInput carries
 // no path to it), and ValidateAttentionItemTransition keeps the list
-// append-only. Freeside reads no GitHub check or review state, so the fact
-// says only that the deadline passed.
+// append-only. The fact says only that the deadline passed; a
+// pr_checks_deadline elapses only while the item's RequiredCheck is absent or
+// pending (#3598).
 type ElapsedDeadline struct {
 	Kind ScheduleKind `json:"kind"`
 	// ArmedAt is the nominal deadline minus DeadlineSeconds: a re-armed

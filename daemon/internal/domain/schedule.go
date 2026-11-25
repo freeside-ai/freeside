@@ -186,7 +186,8 @@ const (
 	// transition still outstanding, and the handler recorded that outcome.
 	ResolutionDeadlineElapsed ScheduleResolutionReason = "deadline_elapsed"
 	// ResolutionConditionSatisfied: the awaited condition arrived (an
-	// installation grant observed ready) before expiry.
+	// installation grant observed ready, or a ready item's required check
+	// concluded) before expiry.
 	ResolutionConditionSatisfied ScheduleResolutionReason = "condition_satisfied"
 	// ResolutionSubjectConcluded: the subject the schedule watched is no
 	// longer live (the item was decided, dismissed, or superseded); the
