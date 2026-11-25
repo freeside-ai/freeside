@@ -143,11 +143,38 @@ type authAdoptReport struct {
 	LineupRevision domain.Digest       `json:"lineup_revision,omitempty"`
 }
 
+// authAdoptRoute is the control-socket route a running daemon serves auth
+// adopt on, while it runs no driver.
+const authAdoptRoute = "/auth/adopt"
+
+// serveAuthAdopt is authAdoptRoute's handler. Adoption changes which
+// credential the tree selects, so it runs only on a daemon whose driver
+// cannot be admitting work under the old tree: execution is the mode the
+// daemon reports, disabled whenever no driver runs. The operator pauses
+// execution, adopts, commits the patch, sets agent_tree.commit, and resumes
+// (#2083). The zero deps are production's.
+func serveAuthAdopt(
+	execution executionMode, deps authAdoptDeps,
+) func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+		if execution != executionDisabled {
+			return errors.New("auth adopt: this daemon runs a driver; run freesided execution pause, then rerun it")
+		}
+		if deps.now == nil {
+			deps = productionAuthAdoptDeps()
+		}
+		return runAuthAdoptCommand(ctx, args, stdout, stderr, deps)
+	}
+}
+
 // runAuthAdoptCommand enrolls the flag-selected identities over the stores
 // they already hold and emits the admitted-agent tree patch that selects
 // them (plan §5.4). It writes no credential and changes no tree: a human
-// reviews and commits the patch. It refuses a running daemon like auth add,
-// because it takes each identity's mutation lease.
+// reviews and commits the patch. With the daemon stopped it opens the store
+// itself; with one running it runs in that daemon through authAdoptRoute,
+// which refuses while a driver runs (#2083). Either way it takes each
+// identity's fenced mutation lease in a store transaction, so a holder
+// beside it, such as a credential refresh, makes it refuse rather than race.
 func runAuthAdoptCommand(
 	ctx context.Context, args []string, stdout, stderr io.Writer, deps authAdoptDeps,
 ) (err error) {
@@ -159,16 +186,20 @@ func runAuthAdoptCommand(
 	if err != nil {
 		return err
 	}
-	lock, err := requireNoDaemon("auth adopt", cfg.DBPath)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, lock.Close()) }()
-	st, _, err := openStoreWithTopicKey(ctx, cfg.DBPath, store.Options{ApprovedRecipes: cfg.ApprovedRecipes})
+	handle, client, err := openCommandStore(ctx, cfg.DBPath,
+		store.Options{ApprovedRecipes: cfg.ApprovedRecipes}, storeMigrating)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
+	if client != nil {
+		if err := requireDaemonAdoptPaths(cfg); err != nil {
+			client.Close()
+			return err
+		}
+		return callCommand(ctx, client, authAdoptRoute, args, stdout)
+	}
+	defer func() { err = errors.Join(err, handle.Close()) }()
+	st := handle.store
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		return err
@@ -361,6 +392,29 @@ func runAuthAdoptCommand(
 	}
 	report.Patch = cfg.PatchPath
 	return writeAdoptReport(reportOut, report)
+}
+
+// requireDaemonAdoptPaths refuses what a running daemon cannot honor: it
+// reads and writes the named files itself, from its own working directory,
+// and returns only the command's stdout, so each file flag must be absolute
+// and the patch must go to a file, or the report beside it would be lost.
+func requireDaemonAdoptPaths(cfg authAdoptConfig) error {
+	if cfg.PatchPath == "-" {
+		return errors.New("auth adopt through the running daemon: pass -patch <absolute file path>")
+	}
+	for _, path := range []struct{ flag, value string }{
+		{"patch", cfg.PatchPath},
+		{"prompt-package", cfg.PromptPackage},
+		{"specification-prompt-package", cfg.SpecificationPromptPackage},
+		{"remediation-prompt-package", cfg.RemediationPromptPackage},
+		{"judgment-publication-author-prompt", cfg.JudgmentPublicationAuthorPrompt},
+		{"auth-store-root", cfg.AuthStoreRoot},
+	} {
+		if path.value != "" && !filepath.IsAbs(path.value) {
+			return fmt.Errorf("auth adopt through the running daemon: -%s must be an absolute path", path.flag)
+		}
+	}
+	return nil
 }
 
 func writeAdoptReport(out io.Writer, report authAdoptReport) error {

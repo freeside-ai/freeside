@@ -796,8 +796,14 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/daemoncompose/settings_gate.go` and
   `internal/daemoncompose/run_settings.go` (the settings gate and the
   loader that re-checks stored settings against current policy before a
-  run composes from them), and `cmd/freesided/settings.go` (the operator
-  commands that write the records, each set through that gate).
+  run composes from them), `cmd/freesided/settings.go` (the operator
+  commands that write the records, each set through that gate),
+  `internal/daemoncompose/stored_execution.go` (decides from the stored
+  switches whether the installed daemon composes a driver, and which
+  recipes and admission floor its store opens under), and
+  `internal/daemoncompose/host_checks.go` (the start checks that stop that
+  composition, including the review instructions kept apart from the
+  credential snapshots).
 - **Client authority:** `internal/signet/device.go` (the paired-device
   bearer check), `internal/signet/http.go` (where requests meet it),
   `internal/signet/pairing.go`, `internal/signet/secret.go`,

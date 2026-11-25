@@ -12,12 +12,14 @@ import (
 // ConvergeStoredState runs the startup steps that read and write only the
 // store, in the order Start runs them. Start and freesided check-database
 // both call it, so the check runs the code a start runs rather than a copy
-// of it. execution says whether a driver runs and, when none does, why; the
-// LaunchAgent daemon runs without one. A failure names its step.
+// of it. execution says whether a driver runs and, when none does, why, and
+// detail is what that reason's card names (executionStateDiagnostic). A
+// failure names its step.
 func ConvergeStoredState(
-	ctx context.Context, st *store.Store, execution ExecutionState, now func() time.Time, logger *slog.Logger,
+	ctx context.Context, st *store.Store, execution ExecutionState, detail string, now func() time.Time,
+	logger *slog.Logger,
 ) error {
-	if err := convergeExecutionConfiguration(ctx, st, execution, now); err != nil {
+	if err := convergeExecutionConfiguration(ctx, st, execution, detail, now); err != nil {
 		return &StoredStateError{Step: "report execution configuration", Err: err}
 	}
 	if err := concludeInvocationStallNotices(ctx, st); err != nil {

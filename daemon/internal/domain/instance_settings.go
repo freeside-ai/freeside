@@ -39,6 +39,11 @@ const (
 	// at once (#3471). The admitting transaction reads it on each
 	// admission, so a change applies to the next one without a restart.
 	InstanceSectionCordonedLaunches InstanceSettingsSection = "cordoned_launches"
+	// InstanceSectionExecution is the operator's switch that lets the
+	// installed daemon compose its driver from the stored settings (#2083).
+	// Unset reads as off, and settings import never writes it, so an import
+	// alone starts no work. prod reads it only at start.
+	InstanceSectionExecution InstanceSettingsSection = "execution"
 )
 
 // AllInstanceSettingsSections lists every InstanceSettingsSection in the
@@ -47,7 +52,7 @@ var AllInstanceSettingsSections = []InstanceSettingsSection{
 	InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 	InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 	InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
-	InstanceSectionExecutionPause, InstanceSectionCordonedLaunches,
+	InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
 }
 
 func (s InstanceSettingsSection) valid() bool {
@@ -55,7 +60,7 @@ func (s InstanceSettingsSection) valid() bool {
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 		InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
-		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches:
+		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution:
 		return true
 	default:
 		return false
@@ -75,7 +80,7 @@ func ParseInstanceSettingsSection(name string) (InstanceSettingsSection, error) 
 func (s InstanceSettingsSection) Optional() bool {
 	switch s {
 	case InstanceSectionJudgment, InstanceSectionManualSubmissionConfig, InstanceSectionMacosVerification,
-		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches:
+		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution:
 		return true
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
@@ -250,6 +255,14 @@ type CordonedLaunchSettings struct {
 	MaxConcurrent int `json:"max_concurrent"`
 }
 
+// EnabledSettings is the value of a switch section: the instance's
+// execution section and a project's enabled section. The key is required,
+// so a value always says which way the switch is set; an unset section
+// reads as off.
+type EnabledSettings struct {
+	Enabled bool `json:"enabled"`
+}
+
 // InstanceSettings is every instance section's value. An optional section is
 // a pointer, nil when unset. The rules here are shape rules only; the rules
 // of the packages that use a value (the allowed review auth modes, the build
@@ -268,6 +281,7 @@ type InstanceSettings struct {
 	MacosVerification      *MacosVerificationSettings `json:"macos_verification"`
 	ExecutionPause         *ExecutionPauseSettings    `json:"execution_pause"`
 	CordonedLaunches       *CordonedLaunchSettings    `json:"cordoned_launches"`
+	Execution              *EnabledSettings           `json:"execution"`
 }
 
 // Validate checks every section that is set and that every required one
@@ -297,6 +311,8 @@ func (s InstanceSettings) unset(section InstanceSettingsSection) bool {
 		return s.ExecutionPause == nil
 	case InstanceSectionCordonedLaunches:
 		return s.CordonedLaunches == nil
+	case InstanceSectionExecution:
+		return s.Execution == nil
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
 		return false
@@ -368,6 +384,11 @@ func (s InstanceSettings) ValidateSection(section InstanceSettingsSection) error
 		}
 		if s.CordonedLaunches.MaxConcurrent < 1 {
 			return fmt.Errorf("cordoned_launches.max_concurrent %d must be at least 1", s.CordonedLaunches.MaxConcurrent)
+		}
+		return nil
+	case InstanceSectionExecution:
+		if s.Execution == nil {
+			return errors.New("execution is required")
 		}
 		return nil
 	}
@@ -452,6 +473,8 @@ func (s *InstanceSettings) field(section InstanceSettingsSection) any {
 		return &s.ExecutionPause
 	case InstanceSectionCordonedLaunches:
 		return &s.CordonedLaunches
+	case InstanceSectionExecution:
+		return &s.Execution
 	}
 	return nil
 }
@@ -628,6 +651,14 @@ func (r InstanceSettingsRecord) ExecutionPause() (*ExecutionPauseSettings, error
 func (r InstanceSettingsRecord) CordonedLaunches() (*CordonedLaunchSettings, error) {
 	settings, err := r.sectionAlone(InstanceSectionCordonedLaunches)
 	return settings.CordonedLaunches, err
+}
+
+// ExecutionEnabled reports whether the operator turned execution on. It
+// reads only that section, so it answers for a record that lacks the
+// sections a run needs; an unset section is off.
+func (r InstanceSettingsRecord) ExecutionEnabled() (bool, error) {
+	settings, err := r.sectionAlone(InstanceSectionExecution)
+	return settings.Execution != nil && settings.Execution.Enabled, err
 }
 
 // sectionAlone decodes and validates one section of the record into an

@@ -47,6 +47,23 @@ const (
 	// ExecutionPaused: prod was started with a driver while an execution
 	// pause it had released was in force, so it took no lock.
 	ExecutionPaused ExecutionState = "execution_paused"
+	// ExecutionSettingsRefused: the installed daemon's execution switch was
+	// on, but a switch did not read or the enabled project's settings failed
+	// the loader (StoredExecution).
+	ExecutionSettingsRefused ExecutionState = "settings_refused"
+	// ExecutionNoEnabledProject: the installed daemon's execution switch was
+	// on and no project was enabled.
+	ExecutionNoEnabledProject ExecutionState = "no_enabled_project"
+	// ExecutionSeveralProjectsEnabled: the installed daemon's execution
+	// switch was on and more than one project was enabled; it runs one.
+	ExecutionSeveralProjectsEnabled ExecutionState = "several_projects_enabled"
+	// ExecutionCompositionFailed: the installed daemon passed its start order
+	// and failed to compose the driver from the stored settings.
+	ExecutionCompositionFailed ExecutionState = "composition_failed"
+	// ExecutionHostCheckFailed: the installed daemon passed its start order,
+	// and a named start check failed (HostCheckError), before or while it
+	// composed the driver.
+	ExecutionHostCheckFailed ExecutionState = "host_check_failed"
 )
 
 // AllExecutionStates is the single registration point for ExecutionState.
@@ -56,12 +73,18 @@ var AllExecutionStates = []ExecutionState{
 	ExecutionAuthorityInUse,
 	ExecutionRigLeasePresent,
 	ExecutionPaused,
+	ExecutionSettingsRefused,
+	ExecutionNoEnabledProject,
+	ExecutionSeveralProjectsEnabled,
+	ExecutionCompositionFailed,
+	ExecutionHostCheckFailed,
 }
 
 func (s ExecutionState) valid() bool {
 	switch s {
 	case ExecutionConfigured, ExecutionNotConfigured, ExecutionAuthorityInUse, ExecutionRigLeasePresent,
-		ExecutionPaused:
+		ExecutionPaused, ExecutionSettingsRefused, ExecutionNoEnabledProject, ExecutionSeveralProjectsEnabled,
+		ExecutionCompositionFailed, ExecutionHostCheckFailed:
 		return true
 	default:
 		return false

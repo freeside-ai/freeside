@@ -201,12 +201,18 @@ func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
 		addr      string
 		tailscale []netip.Addr
 		queryErr  error
+		// absent is whether the refusal is ErrTailscaleAddressAbsent, the
+		// failure a caller may wait out.
+		absent bool
 	}{
-		{name: "unreported Tailscale", addr: "100.64.0.7:8443"},
+		{name: "unreported Tailscale", addr: "100.64.0.7:8443", absent: true},
 		{name: "different reported Tailscale", addr: "100.64.0.7:8443", tailscale: []netip.Addr{
 			netip.MustParseAddr("100.64.0.8"),
-		}},
-		{name: "Tailscale query failure", addr: "100.64.0.7:8443", queryErr: errors.New("tailscaled unavailable")},
+		}, absent: true},
+		{
+			name: "Tailscale query failure", addr: "100.64.0.7:8443", queryErr: errors.New("tailscaled unavailable"),
+			absent: true,
+		},
 		{name: "arbitrary non-loopback", addr: "192.0.2.7:8443"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -221,6 +227,9 @@ func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
 			)
 			if err == nil {
 				t.Fatalf("listenPrivilegedWith(%q) accepted unsupported address", tc.addr)
+			}
+			if errors.Is(err, ErrTailscaleAddressAbsent) != tc.absent {
+				t.Fatalf("listenPrivilegedWith(%q) = %v, want absent %t", tc.addr, err, tc.absent)
 			}
 			if bindCalled {
 				t.Fatalf("listenPrivilegedWith(%q) attempted a bind", tc.addr)

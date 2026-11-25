@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -428,9 +429,11 @@ func main() {
 	// probes prod, so a prod that holds it is refused here. prod takes it in
 	// its gated order instead, once its own database is open, and serves
 	// driverless rather than exit when it cannot (daemoncompose.AppAuthority).
+	// The installed daemon, prod with no -driver, runs that order when its
+	// stored settings turn execution on.
 	var authorityLock *publish.AuthorityWriterLock
 	var prodAuthority *daemoncompose.ProdAuthorityGate
-	if execution == executionClaude && env == environmentProd {
+	if env == environmentProd && (execution == executionClaude || execution == executionDisabled) {
 		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -454,8 +457,6 @@ func main() {
 	}
 	logger.Info("environment", "tier", env)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	daemonConfig := config{
 		Environment:                env,
 		ManualSubmissionConfigPath: *manualSubmissionConfigPath,
@@ -486,6 +487,17 @@ func main() {
 	daemonConfig.Scenario = played
 	switch execution {
 	case executionDisabled:
+		if env == environmentProd {
+			if *manualSubmissionConfigPath != "" {
+				fmt.Fprintln(os.Stderr, "freesided: the installed daemon reads -manual-submission-config from "+
+					"its settings; set it with freesided settings set -section manual_submission_config")
+				os.Exit(2)
+			}
+			daemonConfig.StoredExecution = storedExecution(supervisedRoots(home)[environmentProd], *stateDir, *listenAddr, logger)
+			daemonConfig.ListenWait = &daemoncompose.ListenWait{
+				Wait: installedTailscaleWait, TailscaleIPs: daemonshell.ReadTailscaleIPs,
+			}
+		}
 	case executionFake:
 		daemonConfig.FakeDriverEnabled = true
 	case executionScenario:
@@ -536,7 +548,10 @@ func main() {
 			Cordon:                      cordonBackend(),
 		}
 	}
-	h, err := run(ctx, stop, daemonConfig)
+	h, ctx, stop, err := runWithDriverlessRetry(func() (context.Context, func()) {
+		return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	}, daemonConfig)
+	defer stop()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
@@ -665,8 +680,16 @@ type config struct {
 	AuthorityLock *publish.AuthorityWriterLock
 	// ProdAuthority is prod's gated order, set in place of AuthorityLock for
 	// a Claude-mode prod: the start takes the lock itself and serves
-	// driverless when it cannot.
+	// driverless when it cannot. The installed daemon, prod with no
+	// -driver, runs it too, with StoredExecution.
 	ProdAuthority *daemoncompose.ProdAuthorityGate
+	// StoredExecution is set for the installed daemon: the start composes
+	// the driver from the stored settings (daemoncompose.StoredExecution).
+	StoredExecution *daemoncompose.StoredExecution
+	// ListenWait is set for the installed daemon, which waits a bounded time
+	// for its Tailscale address and then serves on loopback rather than exit
+	// (daemoncompose.ListenWait).
+	ListenWait *daemoncompose.ListenWait
 }
 
 // defaultLogLevel emits what an unattended daemon's operator needs and
@@ -691,11 +714,12 @@ func newLogger(w io.Writer, level string) (*slog.Logger, error) {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: parsed})), nil
 }
 
-// execution is the mode this configuration runs: a Claude driver, the fake
-// driver, or neither.
+// execution is the mode this configuration runs: a Claude driver, configured
+// or composed from the stored settings, the fake driver, or neither. GET
+// /execution reports it only while a driver runs (effectiveExecution).
 func (cfg config) execution() executionMode {
 	switch {
-	case cfg.Claude != nil:
+	case cfg.Claude != nil, cfg.StoredExecution != nil:
 		return executionClaude
 	case cfg.FakeDriverEnabled:
 		return executionFake
@@ -755,6 +779,70 @@ func (cfg config) storeOptions() (store.Options, error) {
 	return opts, nil
 }
 
+// The launch bindings of an unattended run that no setting holds: the
+// provider endpoint its egress allows and the review workspace's size. The
+// deputy and the installed daemon both compose their drivers with them.
+const (
+	unattendedProviderEndpoints     = "api.anthropic.com:443"
+	unattendedReviewWorkspaceSizeMB = 8192
+)
+
+// storedExecution is the launch the installed daemon composes its driver
+// from: prod with no -driver (#2083). The App authority's directories sit
+// under prod's supervised root (supervisedRoots), beside the database's.
+// installedTailscaleWait bounds how long the installed daemon waits at start
+// for Tailscale to report its listen address, which at login can trail the
+// LaunchAgent by some seconds.
+const installedTailscaleWait = time.Minute
+
+func storedExecution(root, stateDir, listenAddr string, logger *slog.Logger) *daemoncompose.StoredExecution {
+	return &daemoncompose.StoredExecution{ReadManualSubmission: func(path string) (map[domain.ProjectID]engine.ManualInitiator, error) {
+		return readManualSubmissionProjects(path, logger)
+	}, Launch: daemoncompose.RunLaunch{
+		StateDir:    stateDir,
+		AppStateDir: filepath.Join(root, "daemon"), AppCredentialsDir: filepath.Join(root, "credentials"),
+		ListenPort:            listenPort(listenAddr),
+		ProviderEndpoints:     []string{unattendedProviderEndpoints},
+		ReviewWorkspaceSizeMB: unattendedReviewWorkspaceSizeMB,
+		RunConformance:        true,
+		OperatingMode:         domain.ModeUnattended,
+	}}
+}
+
+// runWithDriverlessRetry runs the start on a context from newContext. When the
+// installed daemon chose to compose its driver from the stored settings and
+// could not, it starts again with the failure carried in, so the daemon
+// serves driverless with a card naming it instead of exiting, which
+// KeepAlive would loop on. The failed start released everything it took,
+// the App authority writer lock included, and may have stopped its signal
+// context, so the second start runs on a new one. It returns the context
+// and stop of the start it returns.
+func runWithDriverlessRetry(newContext func() (context.Context, func()), cfg config) (*daemon, context.Context, func(), error) {
+	ctx, stop := newContext()
+	h, err := run(ctx, stop, cfg)
+	var composition *daemoncompose.StoredCompositionError
+	if !errors.As(err, &composition) || cfg.StoredExecution == nil {
+		return h, ctx, stop, err
+	}
+	stop()
+	if cfg.Logger != nil {
+		cfg.Logger.Error("starting again without execution", "error", err)
+	}
+	retry := *cfg.StoredExecution
+	retry.CompositionFailure = composition.Err
+	cfg.StoredExecution = &retry
+	// The failed start already waited for the Tailscale address, so this one
+	// tries it once.
+	if cfg.ListenWait != nil {
+		once := *cfg.ListenWait
+		once.Wait = 0
+		cfg.ListenWait = &once
+	}
+	ctx, stop = newContext()
+	h, err = run(ctx, stop, cfg)
+	return h, ctx, stop, err
+}
+
 // daemon is what run() starts: the started daemon, and the pairing control
 // its control socket serves, which a test reads.
 type daemon struct {
@@ -782,7 +870,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	manualInitiator := cfg.DeputyLaunch.gateManualInitiator(manualInitiatorLookup(manualProjects), cfg.Logger)
+	manualInitiator := cfg.DeputyLaunch.gateManualInitiator(daemoncompose.ManualInitiatorLookup(manualProjects), cfg.Logger)
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
 	}
@@ -840,6 +928,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 		ApprovedRecipes: cfg.ApprovedRecipes, SeedWalkingSkeleton: cfg.SeedWalkingSkeleton, SeedFixture: fixture,
 		IntakeInitiators: cfg.IntakeInitiators, MemoryBudgetMiB: cfg.MemoryBudgetMiB, Logger: cfg.Logger,
 		Claude: cfg.Claude, AppAuthority: daemoncompose.AppAuthority{Lock: cfg.AuthorityLock, Prod: cfg.ProdAuthority},
+		StoredExecution: cfg.StoredExecution, ListenWait: cfg.ListenWait,
 		Scenario:       cfg.Scenario,
 		ManualProjects: manualProjects, ManualInitiator: manualInitiator, StoreOptions: storeOptions,
 		ReadinessEnvironment: string(cfg.Environment), Version: buildVersion(),

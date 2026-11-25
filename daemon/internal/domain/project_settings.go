@@ -24,19 +24,23 @@ const (
 	ProjectSectionAgentImage     ProjectSettingsSection = "agent_image"
 	ProjectSectionHandBackLabel  ProjectSettingsSection = "hand_back_label"
 	ProjectSectionWriterClass    ProjectSettingsSection = "writer_class"
+	// ProjectSectionEnabled marks the project whose runs the installed
+	// daemon composes its driver for (#2083). Unset reads as not enabled,
+	// and settings import never writes it.
+	ProjectSectionEnabled ProjectSettingsSection = "enabled"
 )
 
 // AllProjectSettingsSections lists every ProjectSettingsSection in the order
 // a record shows them; it is the single registration point.
 var AllProjectSettingsSections = []ProjectSettingsSection{
 	ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-	ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass,
+	ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass, ProjectSectionEnabled,
 }
 
 func (s ProjectSettingsSection) valid() bool {
 	switch s {
 	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-		ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass:
+		ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass, ProjectSectionEnabled:
 		return true
 	default:
 		return false
@@ -55,7 +59,7 @@ func ParseProjectSettingsSection(name string) (ProjectSettingsSection, error) {
 // section, so a revision may clear it.
 func (s ProjectSettingsSection) Optional() bool {
 	switch s {
-	case ProjectSectionHandBackLabel, ProjectSectionWriterClass:
+	case ProjectSectionHandBackLabel, ProjectSectionWriterClass, ProjectSectionEnabled:
 		return true
 	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
 		ProjectSectionAgentImage:
@@ -91,6 +95,8 @@ type ProjectSettings struct {
 	// the two writer classes ValidateWriterClass accepts. Unset means the
 	// default, cordoned; ResolveWriterClass reads it.
 	WriterClass *RunnerBackendClass `json:"writer_class"`
+	// Enabled is the project's switch; unset reads as not enabled.
+	Enabled *EnabledSettings `json:"enabled"`
 }
 
 // Validate checks every section that is set and that every required one
@@ -147,6 +153,11 @@ func (s ProjectSettings) ValidateSection(section ProjectSettingsSection) error {
 				*s.WriterClass, BackendCordonedHostProcess, BackendFreshVMReadOnlyVolumeHandoff)
 		}
 		return nil
+	case ProjectSectionEnabled:
+		if s.Enabled == nil {
+			return errors.New("enabled is required")
+		}
+		return nil
 	}
 	return fmt.Errorf("project settings section %q: %w", section, ErrUnknownSettingsSection)
 }
@@ -180,6 +191,8 @@ func (s *ProjectSettings) field(section ProjectSettingsSection) any {
 		return &s.HandBackLabel
 	case ProjectSectionWriterClass:
 		return &s.WriterClass
+	case ProjectSectionEnabled:
+		return &s.Enabled
 	}
 	return nil
 }
@@ -203,6 +216,8 @@ func (s ProjectSettings) unset(section ProjectSettingsSection) bool {
 		return s.HandBackLabel == nil
 	case ProjectSectionWriterClass:
 		return s.WriterClass == nil
+	case ProjectSectionEnabled:
+		return s.Enabled == nil
 	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
 		ProjectSectionAgentImage:
 	}
@@ -366,4 +381,40 @@ func (r ProjectSettingsRecord) Settings() (ProjectSettings, error) {
 		return ProjectSettings{}, fmt.Errorf("project %q settings: %w", r.ProjectID, err)
 	}
 	return settings, nil
+}
+
+// Enabled reports whether the project's enabled section is set on. It
+// reads only that section, so it answers for a record the loader would
+// refuse; an unset section is not enabled.
+func (r ProjectSettingsRecord) Enabled() (bool, error) {
+	settings, set, err := r.sectionAlone(ProjectSectionEnabled)
+	return set && settings.Enabled.Enabled, err
+}
+
+// ApprovedRecipe returns the project's approved_recipe section, read alone
+// as Enabled reads its section; ok is false when the section is unset.
+func (r ProjectSettingsRecord) ApprovedRecipe() (_ Digest, ok bool, _ error) {
+	settings, set, err := r.sectionAlone(ProjectSectionApprovedRecipe)
+	return settings.ApprovedRecipe, set, err
+}
+
+// sectionAlone decodes and validates one section's current revision and no
+// other; set is false when the record holds no revision of it.
+func (r ProjectSettingsRecord) sectionAlone(section ProjectSettingsSection) (_ ProjectSettings, set bool, _ error) {
+	var settings ProjectSettings
+	for _, revision := range r.Sections {
+		if revision.Section != section {
+			continue
+		}
+		if err := decodeSettingsValue(revision.Value, settings.field(revision.Section)); err != nil {
+			return ProjectSettings{}, false, fmt.Errorf("project %q settings revision %d: %s: %w",
+				r.ProjectID, revision.Revision, revision.Section, err)
+		}
+		if err := settings.ValidateSection(section); err != nil {
+			return ProjectSettings{}, false, fmt.Errorf("project %q settings revision %d: %w",
+				r.ProjectID, revision.Revision, err)
+		}
+		return settings, true, nil
+	}
+	return settings, false, nil
 }

@@ -1,4 +1,4 @@
-package main
+package daemoncompose
 
 import (
 	"errors"
@@ -55,7 +55,7 @@ func TestImageStoreFailureNamesTheFix(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			evidence, fix := imageStoreFailure(tt.ref, tt.err)
+			evidence, fix := ImageStoreFailure(tt.ref, tt.err)
 			if evidence != tt.evidence || fix != tt.fix {
 				t.Fatalf("got (%q, %q), want (%q, %q)", evidence, fix, tt.evidence, tt.fix)
 			}

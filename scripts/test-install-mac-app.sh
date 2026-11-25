@@ -113,6 +113,18 @@ case "${1:-}" in
         fi
         exit 1
         ;;
+    EnvironmentVariables.PATH)
+        awk '
+            /<key>PATH<\/key>/ {
+                getline
+                sub(/^[[:space:]]*<string>/, "")
+                sub(/<\/string>[[:space:]]*$/, "")
+                print
+                found = 1
+                exit
+            }
+            END { exit(found ? 0 : 1) }
+        ' "$target" || exit 1 ;;
     StandardErrorPath | Label)
         awk -v key="<key>$2</key>" '
             index($0, key) {
@@ -600,6 +612,11 @@ cat >"$STUB_AGENT_TEMPLATE" <<'PLIST'
 		<string>-listen</string>
 		<string>127.0.0.1:7331</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:/Applications/Tailscale.app/Contents/MacOS</string>
+	</dict>
 	<key>KeepAlive</key>
 	<true/>
 	<key>ExitTimeOut</key>
@@ -1774,6 +1791,8 @@ assert_program_arguments "$agent" \
     -db "$daemon_dir/freeside.db" \
     -state-dir "$daemon_dir" \
     -listen 127.0.0.1:7331
+# The daemon's PATH reaches git and the tailscale CLI under launchd (#2083).
+assert_file_contains "$agent" "<string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:/Applications/Tailscale.app/Contents/MacOS</string>"
 assert_file_contains "$agent" "<string>ai.freeside.daemon</string>"
 assert_file_contains "$destination/Contents/Info.plist" "CFBundleIdentifier=ai.freeside.app.macos"
 assert_file_contains "$destination/Contents/Info.plist" "FreesideEnvironment=prod"
@@ -1929,6 +1948,30 @@ if cmp -s "$CASE_DIR/installed-freesided" "$destination/Contents/Resources/frees
 else
     report_failure "the new bundle's freesided is not the installed one"
 fi
+
+# --listen binds prod's Tailscale address, an update without it keeps the
+# installed address so the paired iPhone stays reachable, and --listen moves
+# it back to loopback (#2083).
+begin_case "prod --listen binds a Tailscale address that updates keep" listen-tailscale
+destination=$CASE_DIR/Applications/Freeside.app
+agent=$destination/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+daemon_dir=$CASE_DIR/home/Library/Application\ Support/Freeside/daemon
+export STUB_BUILD_SUCCEEDS=true
+for listen in 100.101.102.103:7331 "" 127.0.0.1:7331; do
+    if [[ -n "$listen" ]]; then
+        run_built_installer --listen "$listen"
+    else
+        run_built_installer
+    fi
+    assert_rc 0
+    assert_program_arguments "$agent" \
+        freesided \
+        -environment prod \
+        -db "$daemon_dir/freeside.db" \
+        -state-dir "$daemon_dir" \
+        -listen "${listen:-100.101.102.103:7331}"
+    reset_case_records
+done
 
 # Each condition alone makes the daemon changed, and so does an install
 # that predates the digest key. A changed daemon ships the fresh copy and
@@ -2632,6 +2675,14 @@ run_rejected_target_case "--prod does not confirm the dev target" target-prod-de
     "--prod confirms only the prod target, not dev" dev --prod
 run_rejected_target_case "a second target is refused" target-twice \
     "the target was given twice: dev and prod" dev prod
+for listen in 100.63.0.1:7331 100.128.0.1:7331 100.64.0.256:7331 100.64.0.1:7332 \
+    10.0.0.1:7331 0.0.0.0:7331 '[fd7a:115c:a1e0::1]:7331' 100.064.0.1:7331; do
+    run_rejected_target_case "--listen refuses $listen" "listen-reject-${listen//[^0-9a-z]/-}" \
+        "--listen must be 127.0.0.1:7331 or this Mac's Tailscale IPv4 address at port 7331: $listen" \
+        --prod --listen "$listen"
+done
+run_rejected_target_case "--listen applies only to prod" listen-dev \
+    "--listen applies only to the prod target" dev --listen 127.0.0.1:7332
 REJECTED_STATE_ROOT=relative/root run_rejected_target_case \
     "a relative state root is refused" state-root-relative \
     "FREESIDE_MAC_STATE_ROOT must be absolute: relative/root" dev

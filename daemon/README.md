@@ -1638,8 +1638,9 @@ manifest exists under `~/.freeside/rig-locks` (the account's passwd home),
 live or stale: an attended real-work run may be using `prod`'s App authority,
 and only a driver would open it. With `-driver disabled`, the installed
 LaunchAgent's default, `prod` starts and serves pairing, state, and backups as
-usual (#2080). A stale manifest keeps that refusal until `freesided rig
-recover` clears it.
+usual (#2080), and composes its driver from the stored settings when they
+turn execution on (Run The Installed Daemon From Its Settings). A stale
+manifest keeps that refusal until `freesided rig recover` clears it.
 
 `-prod-app-authority` is that run's one exception to the ephemeral guard
 (#1583). It lets `-publication-state-dir` and `-publication-credentials-dir`
@@ -1931,8 +1932,12 @@ Reading the record:
   the record reports that item or section as `unapproved_recipe`, and the
   message names the recipe. A stopped root therefore needs the digests its
   daemon ran with: `approved_recipe` and each `retained_recipes` digest in
-  `<root>/daemon/settings.json` for a deputy root. A direct read that meets
-  `unapproved_recipe` says so on stderr; stdout stays one JSON line.
+  `<root>/daemon/settings.json` for a deputy root, and each project's
+  `approved_recipe` section (`freesided settings show -project <project>`)
+  for the installed daemon's root, whose running daemon approves those
+  sections' recipes whether or not the project is enabled. A direct read
+  that meets `unapproved_recipe` says so on stderr; stdout stays one JSON
+  line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
   `freeside-task-record-v23`.
@@ -3058,7 +3063,8 @@ until the setting is restored or the task is stopped.
 `freesided settings` stores the settings a run takes from configuration
 (#2082): the instance settings every project shares, and each project's
 own. A deputy root still runs from its `settings.json`; these records are
-what the installed daemon will run every project from (#2083). Every
+what the installed daemon runs from (Run The Installed Daemon From Its
+Settings). Every
 command works with the daemon running or stopped: on a running daemon it
 goes through that daemon, which holds the store. Every command prints
 JSON.
@@ -3111,8 +3117,9 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   cleared, no cordoned launch starts (Bound Container Memory). The
   deputy's `settings.json` has no key for it, so set it with `set`.
 - **A change takes effect at the next start.** Every `set` prints
-  `takes_effect`. Runs will load the records when the daemon starts, until
-  the project gates read them while it runs (#3209). The exception is
+  `takes_effect`. The installed daemon loads the records when it starts,
+  so `freesided execution resume` restarts it on them, until the project
+  gates read them while it runs (#3209). The exception is
   `cordoned_launches`, which each admission reads from the store, so a
   set applies from the next admission.
 - **A run re-checks what's stored.** The loader a run composes from folds
@@ -3138,6 +3145,57 @@ which only preflight reads (`version`, `listen`,
 `repository.base_sha`, `repository.checkout`, the `agent_tree` adoption
 inputs, `writers`, the review and judgment models and efforts, `prod`, and
 `memory_budget_mib`).
+
+### Run The Installed Daemon From Its Settings
+
+The installed `prod` daemon, which launchd starts with no `-driver`, runs
+real work from the settings records (#2083). It composes its Claude driver
+from them at start when all of these hold, in this order, and otherwise
+serves pairing, state, and backups without a driver under one blocking
+`system_health` card that names why and the fix:
+
+| Order | Condition | Card when it fails |
+| --- | --- | --- |
+| 1 | The instance's `execution` section turns execution on. | `execution_not_configured` (unset or off), or `settings_refused` |
+| 2 | Exactly one project's `enabled` section is on. | `no_enabled_project`, `several_projects_enabled`, or `settings_refused` |
+| 3 | That project's settings and the instance's load and pass the run's checks. | `settings_refused` |
+| 4 | Prod's gated order lets it: no pause, a free writer lock, no rig lease (Pause Execution For A Deputy Run). | `execution_paused`, `app_authority_in_use`, or `rig_lease_present` |
+| 5 | The host checks below pass. | `host_check_failed` |
+| 6 | The driver composes. | `host_check_failed` when the failure has a named fix, otherwise `composition_failed` |
+
+None of these makes the daemon exit, so launchd's `KeepAlive` has nothing to
+loop on: a failure that arises while composing releases what the start
+acquired, and the daemon starts again without execution. Failures that stop
+a driverless `prod` too, such as a database that won't open or a taken
+listen port, still exit. Fix the cause, then run `freesided execution
+resume` to restart the daemon on the records.
+
+The host checks run before composition and stop at the first failure, which
+the card names with what it found and its fix. They use the preflight's
+names: `host_tools.container` (an executable file at the stored path),
+`host_tools.git` (`git` resolves on the daemon's `PATH`), `exporter_image`,
+`reviewer_image`, and `shadow_reviewer_image` when configured (each in the
+local image store), `seed_root` (a clean seed checkout), `prompt_packages`,
+and `review_instructions`. Composition names `judgment_configuration`,
+`agent_selection` (a role whose lineup line does not resolve, or a reviewer
+whose auth mode the review section does not accept),
+`host_verification_conformance` (the macOS verification executor's
+conformance pass), and `manual_submission_config` (the client-task policy
+file the instance section names, which the daemon reads in place of
+`-manual-submission-config`) the same way. The preflight's rig checks have no rig to
+check here, and the per-project checks are the readiness record's
+(`project_readiness`).
+
+The store opens under the unattended admission floor and approves the
+`approved_recipe` of every project that has settings, enabled or not, so
+evidence a project recorded stays readable after it is turned off. A run's
+record reads through `freesided inspect task` as a deputy run's does.
+
+The installer can set the daemon's listen address to the Mac's Tailscale
+address so a paired iPhone reaches it (app/README.md, Daemon reachability).
+If Tailscale has not reported that address when the daemon starts, it waits
+up to a minute, then serves on loopback at the same port with an advisory
+`listener_tailscale_absent` card; any other listen failure still exits.
 
 ### Set The Routing Policy
 
@@ -3634,6 +3692,13 @@ commit. The report lists each identity as `adopted`, `reused`, or
 `unadoptable`; running the command again changes nothing. The review and
 shadow review configuration digests are the ones the flags produced, so
 existing approvals stand.
+
+**On a running daemon.** With a daemon holding the database, `auth adopt`
+goes through its control socket, as `freesided settings` does, so the
+installed `prod` need not stop. The daemon must run no driver: an executing
+one refuses with `auth adopt: this daemon runs a driver; run freesided
+execution pause, then rerun it`. The daemon reads the files, so `-patch`
+names an absolute file rather than `-`, and every path flag is absolute.
 
 Each line names the model and the effort its launch passes:
 

@@ -189,7 +189,7 @@ func TestHostVerificationExecutorRestoresOnlyItsOwnPass(t *testing.T) {
 
 // TestHostVerificationExecutorRunsTheFullPass: -run-conformance hands the
 // backend and the store's recorder to the pass, and a failed pass fails
-// startup.
+// startup with the named check.
 func TestHostVerificationExecutorRunsTheFullPass(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -223,10 +223,14 @@ func TestHostVerificationExecutorRunsTheFullPass(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A failed pass fails startup under the check's name, which the
+	// installed daemon's driverless card carries with the fix.
 	failed := errors.New("slot reached the network")
-	if _, err := daemoncompose.ComposeHostVerificationExecutor(ctx, st, cfg, true, nil,
+	_, err = daemoncompose.ComposeHostVerificationExecutor(ctx, st, cfg, true, nil,
 		func(context.Context, *macverify.Backend, macverify.ConformanceRecorder) error { return failed },
-	); !errors.Is(err, failed) {
-		t.Fatalf("failed pass = %v, want startup to fail with it", err)
+	)
+	var named *daemoncompose.HostCheckError
+	if !errors.Is(err, failed) || !errors.As(err, &named) || named.Check != "host_verification_conformance" {
+		t.Fatalf("failed pass = %v, want startup to fail with it as host_verification_conformance", err)
 	}
 }

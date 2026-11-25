@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
@@ -33,7 +33,7 @@ func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.Man
 	if err != nil {
 		return nil, err
 	}
-	return manualInitiatorLookup(projects), nil
+	return daemoncompose.ManualInitiatorLookup(projects), nil
 }
 
 // readManualSubmissionProjects reads and validates the config's projects. No
@@ -108,15 +108,4 @@ func readManualSubmissionProjects(
 		}
 	}
 	return projects, nil
-}
-
-func manualInitiatorLookup(
-	projects map[domain.ProjectID]engine.ManualInitiator,
-) func(domain.ProjectID) (engine.ManualInitiator, bool) {
-	return func(projectID domain.ProjectID) (engine.ManualInitiator, bool) {
-		project, ok := projects[projectID]
-		// Callers receive their own slice, never the startup snapshot's storage.
-		project.PolicyKeys = slices.Clone(project.PolicyKeys)
-		return project, ok
-	}
 }

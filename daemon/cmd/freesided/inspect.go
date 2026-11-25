@@ -217,7 +217,8 @@ type errorKindReporter interface {
 const unapprovedRecipeNote = "freesided inspect: this read approved %d verification recipes, so it " +
 	"could not read evidence it reports as unapproved_recipe. Pass -approved-recipe " +
 	"once per digest the daemon was launched with: approved_recipe in <root>/daemon/settings.json " +
-	"for a deputy root.\n"
+	"for a deputy root, or each project's approved_recipe section, which freesided settings show " +
+	"-project <project> prints, for the installed daemon's root.\n"
 
 func readTaskRecordFrom(ctx context.Context, st *store.Store, id domain.TaskID) (taskRecord, error) {
 	var record taskRecord

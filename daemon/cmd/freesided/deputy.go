@@ -39,8 +39,6 @@ const (
 	deputyEnvironment           = environmentEphemeral
 	deputyOwnerNote             = "freesided deputy"
 	deputyContainerBin          = "container"
-	deputyProviderEndpoints     = "api.anthropic.com:443"
-	deputyReviewWorkspaceSizeMB = 8192
 	deputyPreflightItemPrefix   = "system-health-deputy-preflight-"
 	deputyInterruptedItemPrefix = "system-health-deputy-interrupted-"
 	// deputyPreflightFailedCode is the preflight card's diagnostic code;
@@ -107,7 +105,7 @@ func productionDeputyHost() deputyHost {
 		now:          func() time.Time { return time.Now().UTC() },
 		tailscaleIPs: daemonshell.ReadTailscaleIPs,
 		inspectImage: func(ctx context.Context, ref string) error {
-			return checkImageInStore(ctx, deputyContainerBin, ref)
+			return daemoncompose.CheckImageInStore(ctx, deputyContainerBin, ref)
 		},
 	}
 }
@@ -655,7 +653,7 @@ func adoptDeputyAgentTree(
 	// The remediation reaches the attention card, so it carries the
 	// classified evidence, not the CLI's output.
 	if err := host.inspectImage(ctx, settings.Images.Exporter); err != nil {
-		evidence, fix := imageStoreFailure(settings.Images.Exporter, err)
+		evidence, fix := daemoncompose.ImageStoreFailure(settings.Images.Exporter, err)
 		return deputySelfCheckResult{
 			Failed: []string{"exporter_image"}, Remediation: "images.exporter " + evidence + "; " + fix,
 		}, false
@@ -811,7 +809,7 @@ func deputyPreflightConfig(
 		ReviewAuthSnapshot: settings.Review.AuthSnapshot, ReviewInstructions: settings.Review.Instructions,
 		PublicationStateDir:       settings.Prod.AppStateDir,
 		PublicationCredentialsDir: settings.Prod.AppCredentialsDir,
-		ReviewWorkspaceSizeMB:     deputyReviewWorkspaceSizeMB,
+		ReviewWorkspaceSizeMB:     unattendedReviewWorkspaceSizeMB,
 		ProjectID:                 settings.Repository.Project,
 		BuildProxy:                settings.Build.Proxy,
 		AllowedPaths:              settings.Repository.AllowedPaths,
@@ -896,8 +894,8 @@ func deputyClaudeDriverConfig(
 		StateDir: paths.StateRoot, RigTokenFile: paths.Acquisition,
 		AppStateDir: settings.Prod.AppStateDir, AppCredentialsDir: settings.Prod.AppCredentialsDir,
 		ListenPort: listenPort(settings.Listen), JudgmentDigest: judgmentDigest,
-		ProviderEndpoints:     []string{deputyProviderEndpoints},
-		ReviewWorkspaceSizeMB: deputyReviewWorkspaceSizeMB,
+		ProviderEndpoints:     []string{unattendedProviderEndpoints},
+		ReviewWorkspaceSizeMB: unattendedReviewWorkspaceSizeMB,
 		RunConformance:        true,
 		OperatingMode:         domain.ModeUnattended,
 	})

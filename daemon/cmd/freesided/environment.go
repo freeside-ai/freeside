@@ -431,7 +431,7 @@ func checkProdAppAuthority(ctx context.Context, env environment, home, accountHo
 
 // checkProdDriverless refuses -prod-app-authority unless the prod daemon that
 // owns the App authority is stopped or reports -driver disabled on its control
-// socket, so the run stays the authority's only writer (#2080). The deputy's
+// socket, which the installed daemon does whenever no driver runs, so the run stays the authority's only writer (#2080). The deputy's
 // preflight records the same probe as prod_execution; this keeps a daemon
 // started by hand, without that preflight, under the same rule. main runs it
 // after the lease is authenticated, so a prod that starts later finds the
@@ -446,7 +446,8 @@ func checkProdDriverless(
 	case err != nil:
 		return fmt.Errorf("-prod-app-authority cannot prove prod runs without a driver: %w", err)
 	case running && mode != executionDisabled:
-		return fmt.Errorf("-prod-app-authority refuses while prod runs with -driver %s; stop it or restart it without -driver", mode)
+		return fmt.Errorf("-prod-app-authority refuses while prod runs with -driver %s; "+
+			"run freesided execution pause, or stop it", mode)
 	}
 	return nil
 }

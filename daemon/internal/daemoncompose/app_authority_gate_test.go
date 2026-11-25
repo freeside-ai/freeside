@@ -261,7 +261,7 @@ func TestExecutionStatesRegistered(t *testing.T) {
 		if !state.valid() {
 			t.Fatalf("%s is not valid", state)
 		}
-		code, reason := executionStateDiagnostic(state)
+		code, reason := executionStateDiagnostic(state, "detail")
 		if state.Runs() != (code == "") || (code == "") != (reason == "") {
 			t.Fatalf("%s: code %q, reason %q", state, code, reason)
 		}

@@ -48,6 +48,9 @@ type pairingControl struct {
 	owned      []pairingControlFile
 	closeOnce  sync.Once
 	closeError error
+	// adoptDeps is what auth adopt runs on through the control socket; the
+	// zero value is production's. A test replaces the volume observation.
+	adoptDeps authAdoptDeps
 }
 
 type pairingControlFile struct {

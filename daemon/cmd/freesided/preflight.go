@@ -942,7 +942,7 @@ func evaluateComposition(
 		// the store has no entry under the pin, which a reseed fixes and a
 		// rebuild would not. The CLI's output stays out of the manifest.
 		if inspection.Digest == "" && inspection.Error != nil {
-			evidence, fix := imageStoreFailure(image.ref, inspection.Error)
+			evidence, fix := daemoncompose.ImageStoreFailure(image.ref, inspection.Error)
 			failCheck(manifest, image.check, image.role+" image "+evidence, fix)
 			continue
 		}
@@ -1188,7 +1188,7 @@ func evaluateProdExecution(
 		return true
 	case mode != executionDisabled:
 		failCheck(manifest, "prod_execution", "prod runs with -driver "+string(mode),
-			"stop that prod daemon or restart it without -driver; the installed LaunchAgent passes none")
+			"run freesided execution pause, which ends prod's execution once its running work finishes, or stop that prod daemon")
 		return false
 	default:
 		passCheck(manifest, "prod_execution", "prod runs without a driver")
