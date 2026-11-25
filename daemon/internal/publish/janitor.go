@@ -1227,7 +1227,7 @@ func (j *InstallationJanitor) checkMintHold(ctx context.Context, installationID 
 	}
 	if j.now().Before(hold.HeldUntil) {
 		if token.Reveal() == "" {
-			return fmt.Errorf("%w until %s", ErrJanitorMintHeld, hold.HeldUntil.UTC().Format(time.RFC3339))
+			return &JanitorMintHeldError{InstallationID: installationID, HeldUntil: hold.HeldUntil}
 		}
 		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()

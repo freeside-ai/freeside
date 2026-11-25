@@ -3,6 +3,7 @@ package publish
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -141,6 +142,24 @@ var ErrJanitorInactive = errors.New("GitHub App installation janitor is not acti
 // The hold is durable, so a restarted daemon reports it until the same
 // deadline (#2004).
 var ErrJanitorMintHeld = errors.New("installation janitor mint is held")
+
+// JanitorMintHeldError is the janitor's refusal while an installation's mint
+// hold is in force. It matches ErrJanitorMintHeld under errors.Is, and
+// errors.As recovers the held installation and the hold's end, so a caller
+// waiting on coverage can say when the hold lets a pass try again. It is a
+// diagnostic only: nothing that grants coverage or a mint reads its fields.
+type JanitorMintHeldError struct {
+	InstallationID int64
+	HeldUntil      time.Time
+}
+
+func (e *JanitorMintHeldError) Error() string {
+	return fmt.Sprintf("%v until %s", ErrJanitorMintHeld, e.HeldUntil.UTC().Format(time.RFC3339))
+}
+
+// Is lets errors.Is(err, ErrJanitorMintHeld) match the refusal while
+// errors.As recovers the installation and the hold's end.
+func (e *JanitorMintHeldError) Is(target error) bool { return target == ErrJanitorMintHeld }
 
 // ErrInstallationGrantUntrusted reports that current janitor coverage does not
 // authorize the exact trusted installation-to-repository binding. An exact
