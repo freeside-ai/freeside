@@ -488,7 +488,12 @@ func main() {
 	switch execution {
 	case executionDisabled:
 		if env == environmentProd {
-			daemonConfig.StoredExecution = storedExecution(supervisedRoots(home)[environmentProd], *stateDir, *listenAddr)
+			if *manualSubmissionConfigPath != "" {
+				fmt.Fprintln(os.Stderr, "freesided: the installed daemon reads -manual-submission-config from "+
+					"its settings; set it with freesided settings set -section manual_submission_config")
+				os.Exit(2)
+			}
+			daemonConfig.StoredExecution = storedExecution(supervisedRoots(home)[environmentProd], *stateDir, *listenAddr, logger)
 			daemonConfig.ListenWait = &daemoncompose.ListenWait{
 				Wait: installedTailscaleWait, TailscaleIPs: daemonshell.ReadTailscaleIPs,
 			}
@@ -790,8 +795,10 @@ const (
 // LaunchAgent by some seconds.
 const installedTailscaleWait = time.Minute
 
-func storedExecution(root, stateDir, listenAddr string) *daemoncompose.StoredExecution {
-	return &daemoncompose.StoredExecution{Launch: daemoncompose.RunLaunch{
+func storedExecution(root, stateDir, listenAddr string, logger *slog.Logger) *daemoncompose.StoredExecution {
+	return &daemoncompose.StoredExecution{ReadManualSubmission: func(path string) (map[domain.ProjectID]engine.ManualInitiator, error) {
+		return readManualSubmissionProjects(path, logger)
+	}, Launch: daemoncompose.RunLaunch{
 		StateDir:    stateDir,
 		AppStateDir: filepath.Join(root, "daemon"), AppCredentialsDir: filepath.Join(root, "credentials"),
 		ListenPort:            listenPort(listenAddr),
@@ -863,7 +870,7 @@ func run(parent context.Context, stop func(), cfg config) (*daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	manualInitiator := cfg.DeputyLaunch.gateManualInitiator(manualInitiatorLookup(manualProjects), cfg.Logger)
+	manualInitiator := cfg.DeputyLaunch.gateManualInitiator(daemoncompose.ManualInitiatorLookup(manualProjects), cfg.Logger)
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
 	}

@@ -195,8 +195,9 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	if cfg.StoredExecution != nil && (cfg.Claude != nil || cfg.AppAuthority.Prod == nil) {
-		return nil, errors.New("stored execution: needs prod's gated order and excludes a configured driver")
+	if cfg.StoredExecution != nil && (cfg.Claude != nil || cfg.AppAuthority.Prod == nil || len(cfg.ManualProjects) > 0) {
+		return nil, errors.New("stored execution: needs prod's gated order and excludes a configured driver " +
+			"and a manual-submission file, which it reads from the settings")
 	}
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
@@ -381,6 +382,11 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if claude, err = storedDriverConfig(stored, cfg.StoredExecution.Launch); err != nil {
 			return nil, composeErr(err)
 		}
+		projects, err := storedManualProjects(stored, cfg.StoredExecution.ReadManualSubmission)
+		if err != nil {
+			return nil, composeErr(err)
+		}
+		cfg.ManualProjects, cfg.ManualInitiator = projects, ManualInitiatorLookup(projects)
 		// The host checks run once the gated order holds the lock and
 		// before anything composes, so a declined gate runs none.
 		if err := checkHost(parent, claude, productionHostProbes()); err != nil {

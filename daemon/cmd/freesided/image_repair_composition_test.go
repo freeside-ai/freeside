@@ -81,7 +81,7 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
 	}}
 	service := signet.NewService(st, signet.WithBlobStore(blobs),
-		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(projects), nil)))
+		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, daemoncompose.ManualInitiatorLookup(projects), nil)))
 
 	if _, _, pending, err := daemoncompose.PendingImageRepairTask(ctx, st, refusal); err != nil || pending {
 		t.Fatalf("before any submit: pending = %v err=%v, want none", pending, err)

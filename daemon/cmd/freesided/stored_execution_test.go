@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -72,7 +73,7 @@ func (f storedProdFixture) start(t *testing.T) *daemon {
 	h, _, _, err := runWithDriverlessRetry(func() (context.Context, func()) { return t.Context(), func() {} }, config{
 		Environment: environmentProd, DBPath: f.dbPath, ListenAddr: "127.0.0.1:0",
 		ProdAuthority:   &daemoncompose.ProdAuthorityGate{LeaseRoot: f.leaseRoot},
-		StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0"),
+		StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0", nil),
 	})
 	if err != nil {
 		t.Fatalf("the installed daemon did not start: %v", err)
@@ -231,6 +232,50 @@ func TestInstalledDaemonRunsTheGatedOrderOnItsSettings(t *testing.T) {
 	}
 }
 
+// TestInstalledDaemonReadsItsClientPolicyFromItsSettings pins that the
+// installed daemon reads the client-task policy file its
+// manual_submission_config section names, as the deputy reads its settings
+// file's: a file that does not read serves driverless with a card naming the
+// section and its fix, before any host check runs, and one that reads lets the
+// start go on to the host checks.
+func TestInstalledDaemonReadsItsClientPolicyFromItsSettings(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body, wantCheck string
+	}{
+		{name: "the file is missing", wantCheck: "manual_submission_config"},
+		{name: "the file reads", body: `{"version":1,"projects":[]}`, wantCheck: "host_tools.container"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newStoredProdFixture(t)
+			f.importRunSettings(t)
+			f.set(t, "", "execution", `{"enabled":true}`)
+			f.set(t, "project-widgets", "enabled", `{"enabled":true}`)
+			f.set(t, "", "host_tools", `{"container":"/nonexistent/freeside-test/container"}`)
+			path := filepath.Join(t.TempDir(), "manual.json")
+			if tc.body != "" {
+				if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.set(t, "", "manual_submission_config", strconv.Quote(path))
+			h := f.start(t)
+			if h.Workflow != nil {
+				t.Fatal("the installed daemon composed a driver")
+			}
+			reason := executionCard(t, h, "host_check_failed")
+			if !strings.Contains(reason, tc.wantCheck) {
+				t.Errorf("card %q does not name %s", reason, tc.wantCheck)
+			}
+			if tc.body == "" && (!strings.Contains(reason, path) ||
+				!strings.Contains(reason, "freesided settings set -section manual_submission_config")) {
+				t.Errorf("card %q does not name the file and the fix", reason)
+			}
+		})
+	}
+}
+
 // TestInstalledDaemonPausesAndResumesThroughItsControlSocket pins that the
 // installed daemon serves execution pause and resume like a prod started
 // with -driver claude, and that resume reruns the start order: a pause taken
@@ -345,7 +390,7 @@ func TestInstalledDaemonInspectsARunAsTheDeputyDoes(t *testing.T) {
 	h, _, _, err := runWithDriverlessRetry(func() (context.Context, func()) { return ctx, func() {} }, config{
 		Environment: environmentProd, DBPath: f.dbPath, ListenAddr: "127.0.0.1:0",
 		ProdAuthority:   &daemoncompose.ProdAuthorityGate{LeaseRoot: f.leaseRoot},
-		StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0"),
+		StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0", nil),
 	})
 	if err != nil {
 		t.Fatalf("the installed daemon did not start: %v", err)
@@ -394,7 +439,7 @@ func TestInstalledDaemonServesLoopbackWhenTailscaleIsLate(t *testing.T) {
 		h, _, _, err := runWithDriverlessRetry(func() (context.Context, func()) { return t.Context(), func() {} }, config{
 			Environment: environmentProd, DBPath: f.dbPath, ListenAddr: listen,
 			ProdAuthority:   &daemoncompose.ProdAuthorityGate{LeaseRoot: f.leaseRoot},
-			StoredExecution: storedExecution(f.root, f.appState, listen),
+			StoredExecution: storedExecution(f.root, f.appState, listen, nil),
 			ListenWait: &daemoncompose.ListenWait{TailscaleIPs: func() ([]netip.Addr, error) {
 				return nil, errors.New("tailscale ip: not connected")
 			}},
@@ -471,7 +516,7 @@ func TestInstalledDaemonAdvertisesExecutionOnlyWhileItsDriverRuns(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			installed := config{StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0")}
+			installed := config{StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0", nil)}
 			socket := pairingControlSocket{pairing: control, environment: environmentProd, execution: installed.execution()}
 			socket.Configure("http://127.0.0.1:7331", nil)
 			socket.RegisterRoutes(daemoncompose.ControlRouteInputs{Store: st, Execution: state})

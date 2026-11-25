@@ -5,9 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/topicstore"
 )
@@ -29,6 +31,11 @@ type StoredExecution struct {
 	// the start composes none and raises the card that names it: a
 	// HostCheckError's check and fix, or the error's text.
 	CompositionFailure error
+	// ReadManualSubmission reads and validates the client-task policy file
+	// the stored manual_submission_config section names, as the deputy reads
+	// the one its settings file names. The installed daemon takes no
+	// -manual-submission-config, so this is its only client policy.
+	ReadManualSubmission func(path string) (map[domain.ProjectID]engine.ManualInitiator, error)
 }
 
 // StoredCompositionError is a start that chose to compose the driver from
@@ -164,6 +171,41 @@ func decideStoredExecution(
 		return ExecutionSettingsRefused, err.Error(), RunSettings{}, nil
 	}
 	return "", "", settings, nil
+}
+
+// storedManualProjects reads the client-task policy file the loaded settings
+// name, or none when the section is unset. A file that does not read is a
+// named composition failure, so the daemon serves driverless with a card
+// rather than composing a driver whose clients it would refuse.
+func storedManualProjects(
+	settings RunSettings, read func(string) (map[domain.ProjectID]engine.ManualInitiator, error),
+) (map[domain.ProjectID]engine.ManualInitiator, error) {
+	path := settings.Instance.ManualSubmissionConfig
+	if path == nil {
+		return nil, nil
+	}
+	projects, err := read(*path)
+	if err != nil {
+		return nil, &HostCheckError{
+			Check: "manual_submission_config", Evidence: err.Error(),
+			Fix: "fix the file, or name another with freesided settings set -section manual_submission_config",
+			Err: err,
+		}
+	}
+	return projects, nil
+}
+
+// ManualInitiatorLookup resolves a client submission's policy from the
+// projects a manual-submission file configures.
+func ManualInitiatorLookup(
+	projects map[domain.ProjectID]engine.ManualInitiator,
+) func(domain.ProjectID) (engine.ManualInitiator, bool) {
+	return func(projectID domain.ProjectID) (engine.ManualInitiator, bool) {
+		project, ok := projects[projectID]
+		// Callers receive their own slice, never the startup snapshot's storage.
+		project.PolicyKeys = slices.Clone(project.PolicyKeys)
+		return project, ok
+	}
 }
 
 // storedDriverConfig composes the driver configuration from the loaded
