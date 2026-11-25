@@ -7314,8 +7314,8 @@ URL); otherwise the submitted text. The managed repository is the one the
 project's row binds, which daemon start writes from its configuration, so
 the first submission to a fresh root reads its issue too (#3592); a daemon
 composed from flags names no project and binds it only at the first
-admission. The task namer still reads such a submission as its text. Its
-default criteria are code-owned
+admission. Such a submission records its issue on the task, which then takes
+the issue's title as its name. Its default criteria are code-owned
 (`internal/inference/triager_prompt.md`).
 The task's timeline shows every outcome. A failed call, an unreadable
 source, a refused answer, a spent budget, and a lineup with no triager line
