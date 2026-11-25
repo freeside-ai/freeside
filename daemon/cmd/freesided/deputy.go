@@ -105,7 +105,7 @@ func productionDeputyHost() deputyHost {
 		now:          func() time.Time { return time.Now().UTC() },
 		tailscaleIPs: daemonshell.ReadTailscaleIPs,
 		inspectImage: func(ctx context.Context, ref string) error {
-			return checkImageInStore(ctx, deputyContainerBin, ref)
+			return daemoncompose.CheckImageInStore(ctx, deputyContainerBin, ref)
 		},
 	}
 }
@@ -653,7 +653,7 @@ func adoptDeputyAgentTree(
 	// The remediation reaches the attention card, so it carries the
 	// classified evidence, not the CLI's output.
 	if err := host.inspectImage(ctx, settings.Images.Exporter); err != nil {
-		evidence, fix := imageStoreFailure(settings.Images.Exporter, err)
+		evidence, fix := daemoncompose.ImageStoreFailure(settings.Images.Exporter, err)
 		return deputySelfCheckResult{
 			Failed: []string{"exporter_image"}, Remediation: "images.exporter " + evidence + "; " + fix,
 		}, false

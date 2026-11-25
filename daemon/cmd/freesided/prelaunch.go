@@ -281,7 +281,7 @@ func productionPrelaunchHost() prelaunchHost {
 			return newProductionLineupProber(settings, stateRoot, tokenFile, deputyContainerBin)
 		},
 		inspectImage: func(ctx context.Context, ref string) error {
-			return checkImageInStore(ctx, deputyContainerBin, ref)
+			return daemoncompose.CheckImageInStore(ctx, deputyContainerBin, ref)
 		},
 		readIssue: readPrelaunchIssue,
 	}
@@ -459,7 +459,7 @@ func prelaunchImages(settings loadedDeputySettings) []prelaunchImage {
 func checkPrelaunchImages(ctx context.Context, record *prelaunchRecord, settings loadedDeputySettings, host prelaunchHost) {
 	for _, image := range prelaunchImages(settings) {
 		if err := host.inspectImage(ctx, image.ref); err != nil {
-			evidence, fix := imageStoreFailure(image.ref, err)
+			evidence, fix := daemoncompose.ImageStoreFailure(image.ref, err)
 			record.fail(prelaunchGroupImages, image.check, image.key+" "+evidence+": "+err.Error(), fix)
 			continue
 		}
