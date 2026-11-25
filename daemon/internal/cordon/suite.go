@@ -43,13 +43,21 @@ const managedSettingsPath = "/Library/Application Support/ClaudeCode/managed-set
 // maxProjectEnvFiles bounds the other projects' .env files a pass opens.
 const maxProjectEnvFiles = 4
 
+// The fleet's configuration and the agent prompt clones, which createTargets
+// probes a write in when the owner has them.
+const (
+	fleetConfig = "/.config/fleet"
+	promptClone = "/proj/freeasinbird/free-prompts"
+	skillClone  = "/proj/freeasinbird/free-skills"
+)
+
 // The HOME-relative paths rules.sb denies. secretReadPaths are denied
 // reading, so the probe opens each that exists; writeOnlyPaths are denied
 // writing only. Together they are every HOME path the rule file names,
 // which a test pins against rules.sb.
 var (
 	secretReadPaths = []string{
-		"/.ssh", "/.config/gh", "/.git-credentials", "/.netrc", "/.aws", "/.config/gcloud", "/.azure",
+		"/.ssh", "/.config/gh", "/.git-credentials", "/.netrc", "/.aws", "/.config/gcloud", fleetConfig, "/.azure",
 		"/.kube", "/.docker/config.json", "/.codex",
 		"/Library/Application Support/Google/Chrome", "/Library/Application Support/Firefox",
 		"/Library/Safari", "/Library/Cookies",
@@ -58,7 +66,10 @@ var (
 		"/Library/Application Support/Freeside", "/Library/Application Support/Freeside Dev",
 		"/Library/Keychains",
 	}
-	writeOnlyPaths = []string{"/Library/LaunchAgents", "/Library/Preferences/.GlobalPreferences"}
+	writeOnlyPaths = []string{
+		"/Library/LaunchAgents", "/Library/Preferences/.GlobalPreferences",
+		promptClone, skillClone,
+	}
 )
 
 // claudeConfigTemporaryPrefix names the Claude CLI's atomic-write
@@ -436,12 +447,14 @@ func projectEnvFiles(projects string) ([]string, error) {
 // createTargets are new nonce-named paths in each place the rules deny
 // writing: every protected root, /Library/Freeside and the directories under
 // it, LaunchAgents, the global preferences, the verification jobs'
-// temporary and cache directories, and a new ~/.claude-<nonce> directory,
-// which proves the rule file's .claude prefix on a home that holds no
-// second Claude configuration directory. A target's control is that the
-// account may write its parent; a place the account can't write is already
-// denied to every process it runs and is left out. A protected root that
-// doesn't exist yet is probed by creating the root itself.
+// temporary and cache directories, the fleet's configuration, the agent
+// prompt clones, and a new ~/.claude-<nonce> directory, which proves the
+// rule file's .claude prefix on a home that holds no second Claude
+// configuration directory. A target's control is that the account may write
+// its parent; a place the account can't write is already denied to every
+// process it runs and is left out. A protected root that doesn't exist yet
+// is probed by creating the root itself; an absent fleet directory or clone
+// is left out, since making the owner's is not the suite's business.
 func (s *Suite) createTargets(nonce string) ([]probeCreate, error) {
 	cfg := s.b.cfg
 	name := "freeside-probe-" + nonce
@@ -480,6 +493,15 @@ func (s *Suite) createTargets(nonce string) ([]probeCreate, error) {
 	creates = appendWritable(creates, cfg.Home, probeCreate{Path: cfg.Home + "/.claude-" + name, Dir: true})
 	for _, dir := range []string{cfg.UserTemp, cfg.UserCache} {
 		creates = appendWritable(creates, dir, probeCreate{Path: filepath.Join(dir, "freeside-verify-"+name), Dir: true})
+	}
+	// Stat follows a symbolic link: Seatbelt matches the resolved path, so a
+	// clone that links elsewhere escapes its rule, and probing through the
+	// link fails the pass rather than leaving it unprobed.
+	for _, rel := range []string{fleetConfig, promptClone, skillClone} {
+		dir := cfg.Home + rel
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			creates = appendWritable(creates, dir, probeCreate{Path: filepath.Join(dir, name)})
+		}
 	}
 	if len(creates) == 0 {
 		return nil, failure("protected writes", "control: the account can write none of the protected places")
