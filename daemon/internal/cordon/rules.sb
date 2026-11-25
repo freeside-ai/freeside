@@ -33,7 +33,10 @@
   (global-name-prefix "com.apple.CoreSimulator.")
   (global-name-prefix "com.apple.container."))
 
-;; Credentials the owner's tools keep in their home directory.
+;; Credentials the owner's tools keep in their home directory. ~/.config/fleet
+;; holds the fleet's code-signing key, its keychain and the keychain's
+;; password, and the sign script: with them a run could sign a program as
+;; the identity the host's privacy approvals trust.
 (deny file-read* file-write*
   (subpath (string-append (param "HOME") "/.ssh"))
   (subpath (string-append (param "HOME") "/.config/gh"))
@@ -41,6 +44,7 @@
   (literal (string-append (param "HOME") "/.netrc"))
   (subpath (string-append (param "HOME") "/.aws"))
   (subpath (string-append (param "HOME") "/.config/gcloud"))
+  (subpath (string-append (param "HOME") "/.config/fleet"))
   (subpath (string-append (param "HOME") "/.azure"))
   (subpath (string-append (param "HOME") "/.kube"))
   (literal (string-append (param "HOME") "/.docker/config.json"))
@@ -127,6 +131,13 @@
 ;; in place stay open.
 (deny file-write-unlink
   (regex (string-append "^" (param "PROJECTS_RE") "/")))
+;; The prompt and skill clones ~/.claude and ~/.codex link into: a write
+;; there steers every unconfined agent session on the account. They are
+;; denied by their home path, whatever the projects directory is. Reads stay
+;; open; the clones are public and hold no secret.
+(deny file-write*
+  (subpath (string-append (param "HOME") "/proj/freeasinbird/free-prompts"))
+  (subpath (string-append (param "HOME") "/proj/freeasinbird/free-skills")))
 
 ;; @rendered
 

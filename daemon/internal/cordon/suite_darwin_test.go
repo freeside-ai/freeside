@@ -109,6 +109,7 @@ func suiteFixture(t *testing.T) Config {
 	cfg.AgentCLISHA256 = digest
 	for _, dir := range []string{
 		"/.ssh", "/Library/Keychains", "/Library/Preferences", "/Library/Application Support/Freeside",
+		promptClone, skillClone,
 	} {
 		if err := os.MkdirAll(cfg.Home+dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -116,6 +117,7 @@ func suiteFixture(t *testing.T) Config {
 	}
 	for _, path := range []string{
 		cfg.Home + "/.ssh/id_stand_in", cfg.Home + "/.netrc", cfg.Home + loginKeychain,
+		cfg.Home + fleetConfig + "/signing/key.pem",
 		filepath.Join(cfg.Projects, "app", ".env"),
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
