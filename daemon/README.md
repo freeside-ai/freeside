@@ -7310,8 +7310,12 @@ It sends the project's repository name and the task's source: the issue's
 title, body, and label names for an issue-subject task, or for a submitted
 task whose text is exactly one canonical issue URL in the managed
 repository (fetched by the project's repository ID, never the submitted
-URL); otherwise the submitted text. The task namer still reads such a
-submission as its text. Its default criteria are code-owned
+URL); otherwise the submitted text. The managed repository is the one the
+project's row binds, which daemon start writes from its configuration, so
+the first submission to a fresh root reads its issue too (#3592); a daemon
+composed from flags names no project and binds it only at the first
+admission. The task namer still reads such a submission as its text. Its
+default criteria are code-owned
 (`internal/inference/triager_prompt.md`).
 The task's timeline shows every outcome. A failed call, an unreadable
 source, a refused answer, a spent budget, and a lineup with no triager line

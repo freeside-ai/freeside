@@ -149,3 +149,36 @@ func TestStartupRepositoryTip(t *testing.T) {
 		}
 	})
 }
+
+// A start whose configuration names a project binds it to the configured
+// repository, so submission and triage find it before any admission; a
+// configuration composed from flags names no project and binds none.
+func TestBindStartupProject(t *testing.T) {
+	t.Parallel()
+	for name, project := range map[string]domain.ProjectID{"named project": "project-1", "no project": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := storetest.Open(t, t.TempDir()+"/freesided.db", store.Options{})
+			t.Cleanup(func() { _ = st.Close() })
+			cfg := ClaudeDriverConfig{Repo: "owner/repo", RepositoryID: 7, BaseRef: "main", ProjectID: project}
+			if err := bindStartupProject(t.Context(), st, cfg); err != nil {
+				t.Fatal(err)
+			}
+			var got domain.Project
+			err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+				var err error
+				got, err = tx.GetProject(t.Context(), "project-1")
+				return err
+			})
+			if project == "" {
+				if !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("no configured project: read = (%+v, %v), want no row", got, err)
+				}
+				return
+			}
+			if want := (domain.Project{ID: "project-1", Repo: "owner/repo", RepositoryID: 7}); err != nil || got != want {
+				t.Fatalf("bound project = (%+v, %v), want %+v", got, err, want)
+			}
+		})
+	}
+}

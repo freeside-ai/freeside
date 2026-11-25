@@ -14,9 +14,14 @@ import (
 // The reference carries the project's repository name and ID, never the
 // submitted spelling, and the owner/name comparison ignores case as the
 // research fetcher's scope check does. A URL for another repository, or a
-// project with no registered repository, names no issue. Submission and
-// triage both call it, so they cannot disagree about which tasks are
-// issue-backed.
+// project with no registered repository, names no issue. Both callers run
+// before the specifier's admission, so they rely on daemon start binding the
+// configured project (#3592); a daemon composed from flags binds none until
+// its first admission. Submission and triage both call it, so they agree
+// about which tasks are issue-backed while the row stands as it did at
+// submission. A task submitted before any start bound its project (with no
+// daemon running, or to a daemon started without a driver) records no
+// issue, yet triage after a later start reads the issue it names.
 func managedSourceIssue(ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID, text []byte) (*domain.IssueSubjectRef, error) {
 	ownerRepo, number, ok := parseSourceIssueURL(TaskSourceIssue(text))
 	if !ok {
