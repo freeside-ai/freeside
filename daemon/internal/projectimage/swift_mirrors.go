@@ -110,14 +110,29 @@ fi
 // dependency whose URL merely begins with another's still reaches its own
 // mirror, and one with no mirror is rewritten to a path that does not exist
 // and fails offline.
+//
+// A clone that receives under low_speed_limit bytes a second for
+// low_speed_time seconds aborts, and each URL gets one more try after a
+// failure of any kind; a second failure fails the bake with a message naming
+// the URL. A stalled GitHub transfer once hung an onboarding approval for over
+// 13 minutes, and a transient build-proxy 502 once cost a whole attempt. The
+// retry relies on git removing a failed clone's directory: a leftover one
+// fails the second clone loudly.
 const swiftMirrorBake = `#!/usr/bin/busybox sh
 set -eu
 list=$1
 mirrors=/opt/freeside/swiftpm-mirrors
+low_speed_limit=1000
+low_speed_time=60
+retry_pause=5
 if [ ! -f "$list" ] || [ -L "$list" ]; then
 	echo "the Swift mirror URL list is not a regular file" >&2
 	exit 1
 fi
+mirror_clone() {
+	git -c http.lowSpeedLimit="$low_speed_limit" -c http.lowSpeedTime="$low_speed_time" \
+		clone --quiet --mirror -- "$1" "$2"
+}
 /usr/bin/busybox mkdir "$mirrors"
 git config --file "$mirrors/gitconfig" protocol.file.allow always
 while IFS= read -r url; do
@@ -137,7 +152,14 @@ while IFS= read -r url; do
 	name=$(printf '%s' "$key" | /usr/bin/busybox sha256sum | /usr/bin/busybox cut -c1-64).git
 	if [ ! -d "$mirrors/$name" ]; then
 		echo "mirroring $url"
-		git clone --quiet --mirror -- "$url" "$mirrors/$name"
+		mirror_clone "$url" "$mirrors/$name" || {
+			/usr/bin/busybox sleep "$retry_pause"
+			echo "retrying $url"
+			mirror_clone "$url" "$mirrors/$name"
+		} || {
+			echo "Swift dependency mirror $url failed after 2 attempts" >&2
+			exit 1
+		}
 		git config --file "$mirrors/gitconfig" --add "url.file://$mirrors/$name.insteadOf" "$key"
 		git config --file "$mirrors/gitconfig" --add "url.file://$mirrors/$name.insteadOf" "$key.git"
 	fi
