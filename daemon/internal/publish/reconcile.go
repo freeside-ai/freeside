@@ -41,6 +41,7 @@ type Reconciler struct {
 	issues         map[string]issueCacheEntry
 	reviewActivity map[string]reviewActivityCacheEntry
 	labelIssues    map[string]labelIssuesCacheEntry
+	checkReads     map[string]checkReadCacheEntry
 }
 
 type refCacheEntry struct {
@@ -208,6 +209,7 @@ func NewReconciler(ts TokenSource, client *http.Client, baseURL string) *Reconci
 		issues:         map[string]issueCacheEntry{},
 		reviewActivity: map[string]reviewActivityCacheEntry{},
 		labelIssues:    map[string]labelIssuesCacheEntry{},
+		checkReads:     map[string]checkReadCacheEntry{},
 	}
 }
 
