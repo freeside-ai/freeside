@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // storedProdFixture is an installed daemon's root: prod's database and the
@@ -311,6 +313,70 @@ func TestInstalledDaemonReadsItsEvidenceWithoutADriver(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatalf("a driverless start cannot read evidence under the project's recipe: %v", err)
+	}
+}
+
+// TestInstalledDaemonInspectsARunAsTheDeputyDoes: a run's record on the
+// installed daemon's root reads as it does on a deputy's (#2083). The record
+// names no composition input, so what could differ is the store's recipe
+// policy. Served, the daemon approves the recipe the project's settings
+// record, as a deputy approves its settings file's; stopped, the direct read
+// approves what -approved-recipe names, as on a deputy root, and its note
+// says where the installed root keeps the recipe. A test cannot compose a
+// real driver, so the run and its evidence are written directly.
+func TestInstalledDaemonInspectsARunAsTheDeputyDoes(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	f := newStoredProdFixture(t)
+	recipe := domain.Digest("sha256:" + strings.Repeat("b", 64)) // deputySettingsFixture's approved_recipe
+	seed, _, err := openStoreWithTopicKey(ctx, f.dbPath, store.Options{ApprovedRecipes: map[domain.Digest]bool{recipe: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const own, runID = domain.ItemID("execution-failure-evidence-installed"), domain.RunID("run-installed-evidence")
+	putRecipeEvidenceItem(t, seed, recipe, runID, own)
+	id := taskOfRun(t, seed, runID)
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.importRunSettings(t)
+
+	h, _, _, err := runWithDriverlessRetry(func() (context.Context, func()) { return ctx, func() {} }, config{
+		Environment: environmentProd, DBPath: f.dbPath, ListenAddr: "127.0.0.1:0",
+		ProdAuthority:   &daemoncompose.ProdAuthorityGate{LeaseRoot: f.leaseRoot},
+		StoredExecution: storedExecution(f.root, f.appState, "127.0.0.1:0"),
+	})
+	if err != nil {
+		t.Fatalf("the installed daemon did not start: %v", err)
+	}
+	args := []string{"task", "-db", f.dbPath, "-task", string(id)}
+	served := inspect[taskRecord](t, ctx, args...)
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if item := recordItem(served, own); item == nil || item.Error != nil {
+		t.Fatalf("served item = %+v, want the evidence read under the settings' recipe", item)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runInspectCommand(ctx, args, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if note := stderr.String(); !strings.Contains(note, "freesided settings show -project") {
+		t.Fatalf("stopped-root stderr = %q, want the note to name the installed root's recipe", note)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := runInspectCommand(ctx, append(args, "-approved-recipe", string(recipe)), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var direct taskRecord
+	if err := strictjson.Decode(stdout.Bytes(), &direct, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(comparableRecord(t, direct), comparableRecord(t, served)) || stderr.Len() != 0 {
+		t.Fatalf("stopped-root record differs from the served one, or stderr = %q\ndirect: %s\nserved: %s",
+			stderr.String(), comparableRecord(t, direct), comparableRecord(t, served))
 	}
 }
 

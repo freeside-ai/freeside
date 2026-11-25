@@ -1931,7 +1931,10 @@ Reading the record:
   the record reports that item or section as `unapproved_recipe`, and the
   message names the recipe. A stopped root therefore needs the digests its
   daemon ran with: `approved_recipe` and each `retained_recipes` digest in
-  `<root>/daemon/settings.json` for a deputy root. A direct read that meets
+  `<root>/daemon/settings.json` for a deputy root, and each project's
+  `approved_recipe` section (`freesided settings show -project <project>`)
+  for the installed daemon's root, whose running daemon approves those
+  sections' recipes whether or not the project is enabled. A direct read that meets
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
