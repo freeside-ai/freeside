@@ -32,6 +32,7 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		{"publication-successor-v4", externalReviewSuccessor()},
 		{"publication-successor-v7", handoffConflictSuccessor()},
 		{"publication-successor-v8", handBackSuccessor()},
+		{"publication-successor-v9", checkFailureSuccessor()},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			if err := fixture.value.Validate(); err != nil {
@@ -72,6 +73,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value = handoffConflictSuccessor()
 		case domain.PublicationSuccessorHandBack:
 			value = handBackSuccessor()
+		case domain.PublicationSuccessorCheckFailure:
+			value = checkFailureSuccessor()
 		case domain.PublicationSuccessorRemediation:
 		}
 		if err := value.Validate(); err != nil {
@@ -149,6 +152,106 @@ func handBackSuccessor() domain.PublicationSuccessor {
 		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
 		Reentry:           &domain.PublicationSuccessorReentry{BaseSHA: "base-1", HeadSHA: "handed-back-head"},
 		ExternalFindingID: "external-0123456789abcdef0123456789abcdef", AdmittingProfileDigest: "sha256:profile",
+	}
+}
+
+func checkFailureSuccessor() domain.PublicationSuccessor {
+	return domain.PublicationSuccessor{
+		Version: domain.PublicationCheckFailureVersion, Origin: domain.PublicationSuccessorCheckFailure,
+		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
+		Reentry:            &domain.PublicationSuccessorReentry{BaseSHA: "base-1", HeadSHA: "head-1"},
+		CheckFailureDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+	}
+}
+
+// A check_failure record (issue #3598) has the v3 shape with no reason plus
+// the failure record's digest, and no field of another origin. It hands its
+// head off in place, as hand_back does, without the hand-back's permission
+// to adopt a foreign head or its external findings.
+func TestPublicationSuccessorCheckFailureValidation(t *testing.T) {
+	valid := checkFailureSuccessor()
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !valid.ReworksCheckFailure() || !valid.HandsOffInPlace() || valid.HandsBack() ||
+		valid.AnswersExternalFindings() || valid.CarriesForeignHead() || valid.RemediatesHandoffConflict() {
+		t.Fatal("check_failure predicates")
+	}
+	if hand := handBackSuccessor(); !hand.HandsOffInPlace() || hand.ReworksCheckFailure() {
+		t.Fatal("hand_back predicates")
+	}
+	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
+		"no digest":            func(s *domain.PublicationSuccessor) { s.CheckFailureDigest = "" },
+		"malformed digest":     func(s *domain.PublicationSuccessor) { s.CheckFailureDigest = "sha256:failure" },
+		"invalidation reason":  func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationHeadChanged },
+		"no base":              func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
+		"no head":              func(s *domain.PublicationSuccessor) { s.Reentry.HeadSHA = "" },
+		"no reentry":           func(s *domain.PublicationSuccessor) { s.Reentry = nil },
+		"command":              func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
+		"feedback invocation":  func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
+		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
+		"finding":              func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
+		"profile":              func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
+		"conflict cause":       func(s *domain.PublicationSuccessor) { s.HandoffConflictCause = domain.HandoffConflictTextual },
+		"first publication":    func(s *domain.PublicationSuccessor) { s.FirstPublication = true },
+		"hand_back origin":     func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorHandBack },
+		"hand_back version":    func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationHandBackVersion },
+		"first round":          func(s *domain.PublicationSuccessor) { s.ReviewRound = 1 },
+	} {
+		invalid := checkFailureSuccessor()
+		reentry := *invalid.Reentry
+		invalid.Reentry = &reentry
+		mutate(&invalid)
+		if invalid.Validate() == nil {
+			t.Errorf("%s: invalid check_failure successor accepted", name)
+		}
+	}
+	// No other version carries the failure digest.
+	for _, other := range []domain.PublicationSuccessor{
+		reentrySuccessor(), externalReviewSuccessor(), handoffConflictSuccessor(), handBackSuccessor(),
+	} {
+		other.CheckFailureDigest = checkFailureSuccessor().CheckFailureDigest
+		if other.Validate() == nil {
+			t.Errorf("%s carried a check failure digest", other.Version)
+		}
+	}
+}
+
+// A check_failure cycle's first remediation answers the failed check on the
+// cycle's own round, head, and base, with no adjudication or findings; later
+// rounds are ordinary.
+func TestPublicationSuccessorCheckFailureRemediation(t *testing.T) {
+	successor := checkFailureSuccessor()
+	first := domain.RemediationInvocationIntent{
+		RunID: successor.RunID, SuccessorPublicationID: successor.PublicationID(),
+		Round: successor.ReviewRound, ReviewInvocationID: "review-2",
+		BaseSHA: successor.Reentry.BaseSHA, HeadSHA: successor.Reentry.HeadSHA,
+	}
+	if !successor.AllowsRemediation(first) || !successor.AdmitsCheckFailureRemediation(first) {
+		t.Fatal("check_failure refused its first remediation")
+	}
+	for name, mutate := range map[string]func(*domain.RemediationInvocationIntent){
+		"other base":   func(r *domain.RemediationInvocationIntent) { r.BaseSHA = "base-2" },
+		"other head":   func(r *domain.RemediationInvocationIntent) { r.HeadSHA = "head-2" },
+		"prior round":  func(r *domain.RemediationInvocationIntent) { r.Round = successor.ReviewRound - 1 },
+		"other run":    func(r *domain.RemediationInvocationIntent) { r.RunID = "run-2" },
+		"adjudication": func(r *domain.RemediationInvocationIntent) { r.AdjudicationDigest = "sha256:adjudication" },
+		"findings":     func(r *domain.RemediationInvocationIntent) { r.FindingIDs = []domain.FindingID{"finding-1"} },
+	} {
+		invalid := first
+		mutate(&invalid)
+		if successor.AdmitsCheckFailureRemediation(invalid) {
+			t.Errorf("%s: admitted as the check's remediation", name)
+		}
+	}
+	later := first
+	later.Round, later.HeadSHA = successor.ReviewRound+1, "head-2"
+	later.AdjudicationDigest, later.FindingIDs = "sha256:adjudication", []domain.FindingID{"finding-1"}
+	if !successor.AllowsRemediation(later) || successor.AdmitsCheckFailureRemediation(later) {
+		t.Fatal("later check_failure round")
+	}
+	if handBackSuccessor().AdmitsCheckFailureRemediation(first) {
+		t.Fatal("hand_back admitted a check's remediation")
 	}
 }
 

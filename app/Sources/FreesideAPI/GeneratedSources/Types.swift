@@ -8318,6 +8318,94 @@ public enum Components {
                 case elapsed_at
             }
         }
+        /// The daemon's latest reading of a ready_for_final_review item's required check (mirrors domain.RequiredCheck, issue #3598): the checks the pull request's base branch requires, read from the GitHub Actions jobs on the item's head while the item is open. head_sha is always the item's pr_head_sha; a head that moved is never read. failure_class is set exactly when state is failed, and failed_jobs then names the failed jobs, earliest first. reruns counts the infrastructure failures the daemon has rerun on this head, at most 2. observed_at is the instant of the reading.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RequiredCheck`.
+        public struct RequiredCheck: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/state`.
+            public var state: Components.Schemas.RequiredCheckState
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/failure_class`.
+            public struct failure_classPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RequiredCheck/failure_class/value1`.
+                public var value1: Components.Schemas.CheckFailureClass
+                /// Creates a new `failure_classPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.CheckFailureClass) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/failure_class`.
+            public var failure_class: Components.Schemas.RequiredCheck.failure_classPayload?
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/head_sha`.
+            public var head_sha: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/failed_jobs`.
+            public var failed_jobs: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/reruns`.
+            public var reruns: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/RequiredCheck/observed_at`.
+            public var observed_at: Foundation.Date
+            /// Creates a new `RequiredCheck`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            ///   - failure_class:
+            ///   - head_sha:
+            ///   - failed_jobs:
+            ///   - reruns:
+            ///   - observed_at:
+            public init(
+                state: Components.Schemas.RequiredCheckState,
+                failure_class: Components.Schemas.RequiredCheck.failure_classPayload? = nil,
+                head_sha: Swift.String,
+                failed_jobs: [Swift.String]? = nil,
+                reruns: Swift.Int,
+                observed_at: Foundation.Date
+            ) {
+                self.state = state
+                self.failure_class = failure_class
+                self.head_sha = head_sha
+                self.failed_jobs = failed_jobs
+                self.reruns = reruns
+                self.observed_at = observed_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case state
+                case failure_class
+                case head_sha
+                case failed_jobs
+                case reruns
+                case observed_at
+            }
+        }
+        /// A required check reading's state (mirrors domain.RequiredCheckState): pending (some required check has no completed job on the head, or none GitHub Actions produces), passed (every required check concluded success, skipped, or neutral), failed (any other conclusion).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RequiredCheckState`.
+        @frozen public enum RequiredCheckState: String, Codable, Hashable, Sendable, CaseIterable {
+            case pending = "pending"
+            case passed = "passed"
+            case failed = "failed"
+            case unknown = "unknown"
+        }
+        /// What the job facts say about a failed required check (mirrors domain.CheckFailureClass): infrastructure (a failed job never got a runner; the daemon reruns it), code (a job failed at a step; the daemon reworks the head), other (anything else, such as a job cancelled part-way or timed out; it waits on a person).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/CheckFailureClass`.
+        @frozen public enum CheckFailureClass: String, Codable, Hashable, Sendable, CaseIterable {
+            case infrastructure = "infrastructure"
+            case code = "code"
+            case other = "other"
+            case unknown = "unknown"
+        }
         /// A schedule's lifecycle state (mirrors domain.ScheduleStatus): armed is live; fired is a one-shot deadline that terminated fired-and-handled; resolved was explicitly resolved (the awaited condition arrived, or the subject concluded); expired ended with its validity window.
         ///
         ///
@@ -14882,11 +14970,37 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/alternate_agents`.
             public var alternate_agents: [Components.Schemas.AlternateAgentOffer]?
-            /// Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. The daemon reads no GitHub check or review state, so an entry records that the deadline passed, not what the checks or reviewers did.
+            /// Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. A pr_checks_deadline entry is recorded only while required_check is still pending (issue #3598). The daemon reads no review state, so a review_wait_threshold entry records that the deadline passed, not what reviewers did.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/elapsed_deadlines`.
             public var elapsed_deadlines: [Components.Schemas.ElapsedDeadline]?
+            /// The daemon's latest reading of the published pull request's required check on the item's head (issue #3598). Present only on ready_for_final_review; null until the daemon first reads it, and when the repository requires no check. Changes only while the item is open.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/required_check`.
+            public struct required_checkPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/required_check/value1`.
+                public var value1: Components.Schemas.RequiredCheck
+                /// Creates a new `required_checkPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RequiredCheck) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The daemon's latest reading of the published pull request's required check on the item's head (issue #3598). Present only on ready_for_final_review; null until the daemon first reads it, and when the repository requires no check. Changes only while the item is open.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/required_check`.
+            public var required_check: Components.Schemas.AttentionItem.required_checkPayload?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure`.
             public struct interpretation_failurePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure/value1`.
@@ -15283,7 +15397,8 @@ public enum Components {
             ///   - billable_cost_so_far: Billable cost observed so far on review_diminishing_returns items.
             ///   - execution_failure:
             ///   - alternate_agents: The enrollments an execution_failure item offers to retry the implementer under, sorted by enrollment, after a quota, credential, or capacity failure (issue #869). Present exactly when the item offers retry_with_alternate_agent; null on every other item.
-            ///   - elapsed_deadlines: Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. The daemon reads no GitHub check or review state, so an entry records that the deadline passed, not what the checks or reviewers did.
+            ///   - elapsed_deadlines: Daemon facts about a publication deadline the item's publication watch armed (pr_checks_deadline, review_wait_threshold) that elapsed while the item stayed open, in firing order with no kind repeated (issue #2752). Present only on ready_for_final_review; null until a deadline elapses. Append-only: a later item version keeps every earlier entry as its prefix. A pr_checks_deadline entry is recorded only while required_check is still pending (issue #3598). The daemon reads no review state, so a review_wait_threshold entry records that the deadline passed, not what reviewers did.
+            ///   - required_check: The daemon's latest reading of the published pull request's required check on the item's head (issue #3598). Present only on ready_for_final_review; null until the daemon first reads it, and when the repository requires no check. Changes only while the item is open.
             ///   - interpretation_failure:
             ///   - publish_block:
             ///   - diff_stats:
@@ -15337,6 +15452,7 @@ public enum Components {
                 execution_failure: Components.Schemas.AttentionItem.execution_failurePayload? = nil,
                 alternate_agents: [Components.Schemas.AlternateAgentOffer]? = nil,
                 elapsed_deadlines: [Components.Schemas.ElapsedDeadline]? = nil,
+                required_check: Components.Schemas.AttentionItem.required_checkPayload? = nil,
                 interpretation_failure: Components.Schemas.AttentionItem.interpretation_failurePayload? = nil,
                 publish_block: Components.Schemas.AttentionItem.publish_blockPayload? = nil,
                 diff_stats: Components.Schemas.AttentionItem.diff_statsPayload? = nil,
@@ -15390,6 +15506,7 @@ public enum Components {
                 self.execution_failure = execution_failure
                 self.alternate_agents = alternate_agents
                 self.elapsed_deadlines = elapsed_deadlines
+                self.required_check = required_check
                 self.interpretation_failure = interpretation_failure
                 self.publish_block = publish_block
                 self.diff_stats = diff_stats
@@ -15444,6 +15561,7 @@ public enum Components {
                 case execution_failure
                 case alternate_agents
                 case elapsed_deadlines
+                case required_check
                 case interpretation_failure
                 case publish_block
                 case diff_stats

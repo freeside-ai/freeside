@@ -855,25 +855,50 @@ func (w *productionPublicationWorkflow) prepareHandoffConflictRemediation(
 		Findings:             []domain.Finding{},
 		HandoffConflict:      &account,
 	}
+	intent, err := w.prepareUnadjudicatedRemediation(task, initial, prior, input, successor, "handoff")
+	if err != nil {
+		return nil, err
+	}
+	if !successor.AdmitsHandoffConflictRemediation(domain.RemediationInvocationIntent(intent.request)) {
+		return nil, fmt.Errorf("handoff remediation request outside its authority: %w", domain.ErrParentKeyMismatch)
+	}
+	return intent, nil
+}
+
+// prepareUnadjudicatedRemediation stores input and builds the intent of a
+// remediation that answers no adjudication: a handoff conflict's first round
+// or a check_failure cycle's fix (label names which, for errors). The
+// remediation is on input's round, base, and head, answers review under
+// successor, and is seeded like every remediation with the run's
+// specification (initial's input) and its own input. The caller checks the
+// request against the authority it claims.
+func (w *productionPublicationWorkflow) prepareUnadjudicatedRemediation(
+	task productionPublicationTask,
+	initial domain.AgentInvocation,
+	review domain.ReviewRecord,
+	input remediationInput,
+	successor domain.PublicationSuccessor,
+	label string,
+) (*preparedRemediationIntent, error) {
 	body, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(body)) > exec.ProductionMaxInputBytes {
 		return nil, errors.Join(ErrRemediationInputUndeliverable, fmt.Errorf(
-			"handoff remediation input is %d bytes, limit %d: %w",
-			len(body), exec.ProductionMaxInputBytes, strictjson.ErrLimitExceeded))
+			"%s remediation input is %d bytes, limit %d: %w",
+			label, len(body), exec.ProductionMaxInputBytes, strictjson.ErrLimitExceeded))
 	}
 	digest := domain.Digest(contentaddr.Sum(body))
 	if _, err := w.artifacts.Put(digest, bytes.NewReader(body)); err != nil {
-		return nil, fmt.Errorf("store handoff remediation input: %w", err)
+		return nil, fmt.Errorf("store %s remediation input: %w", label, err)
 	}
-	artifactID := remediationInputArtifactID(task.RunID, prior.Round)
+	artifactID := remediationInputArtifactID(task.RunID, input.Round)
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: artifactID, Type: domain.ArtifactKindEvidence, Digest: digest,
 		Provenance: domain.Provenance{
-			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: prior.InvocationID,
-			HeadBinding: domain.HeadBound, SourceHeadSHA: task.HeadSHA,
+			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: review.InvocationID,
+			HeadBinding: domain.HeadBound, SourceHeadSHA: input.HeadSHA,
 			SensitivityClass: domain.SensitivityNormal,
 		},
 		Metadata: domain.EvidenceMetadata{
@@ -885,7 +910,7 @@ func (w *productionPublicationWorkflow) prepareHandoffConflictRemediation(
 	if err != nil {
 		return nil, err
 	}
-	invocationID := remediationInvocationID(task.RunID, prior.Round)
+	invocationID := remediationInvocationID(task.RunID, input.Round)
 	invocation, err := domain.NewAgentInvocation(
 		invocationID, []domain.ArtifactID{initial.InputIDs[0], artifactID}, nil, 0)
 	if err != nil {
@@ -893,14 +918,11 @@ func (w *productionPublicationWorkflow) prepareHandoffConflictRemediation(
 	}
 	request := remediationInvocationRequest{
 		Version: remediationRequestVersion, InvocationID: invocationID,
-		RunID: task.RunID, StageID: remediationStageID(task.RunID, prior.Round),
-		Round: prior.Round, ReviewInvocationID: prior.InvocationID,
+		RunID: task.RunID, StageID: remediationStageID(task.RunID, input.Round),
+		Round: input.Round, ReviewInvocationID: review.InvocationID,
 		InputArtifactID: artifactID, InputArtifactDigest: digest,
-		BaseSHA: check.TipSHA, HeadSHA: task.HeadSHA,
+		BaseSHA: input.BaseSHA, HeadSHA: input.HeadSHA,
 		SuccessorPublicationID: successor.PublicationID(),
-	}
-	if !successor.AdmitsHandoffConflictRemediation(domain.RemediationInvocationIntent(request)) {
-		return nil, fmt.Errorf("handoff remediation request outside its authority: %w", domain.ErrParentKeyMismatch)
 	}
 	payload, err := encodeRemediationRequest(request)
 	if err != nil {
@@ -910,7 +932,7 @@ func (w *productionPublicationWorkflow) prepareHandoffConflictRemediation(
 		request: request, payload: payload, artifact: artifact, invocation: invocation,
 		stage:        domain.Stage{ID: request.StageID, RunID: request.RunID, Name: productionStageName},
 		publication:  task,
-		reviewRecord: prior,
+		reviewRecord: review,
 	}, nil
 }
 
@@ -1007,6 +1029,12 @@ func (intent *preparedRemediationIntent) persistHandoffConflict(
 	if err := tx.MarkOutboxDispatched(ctx, task.intentKey()); err != nil {
 		return err
 	}
+	return intent.commitFirstRound(ctx, tx)
+}
+
+// commitFirstRound writes a remediation's stage, input, invocation, and
+// intent, refusing a round whose stage or intent already exists.
+func (intent *preparedRemediationIntent) commitFirstRound(ctx context.Context, tx *store.WriteTx) error {
 	run, err := tx.GetRun(ctx, intent.request.RunID)
 	if err != nil {
 		return err

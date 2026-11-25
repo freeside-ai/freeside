@@ -25,6 +25,14 @@ type remediationInputForTest struct {
 	CandidatePatchBase64 []byte            `json:"candidate_patch_base64"`
 	Findings             []domain.Finding  `json:"findings"`
 	ExternalFindings     []json.RawMessage `json:"external_findings"`
+	CheckFailure         *struct {
+		RecordDigest domain.Digest `json:"record_digest"`
+		Jobs         []struct {
+			Name          string        `json:"name"`
+			ExcerptDigest domain.Digest `json:"excerpt_digest"`
+			Excerpt       string        `json:"excerpt"`
+		} `json:"jobs"`
+	} `json:"check_failure"`
 }
 
 // remediateExternalCycle drives the remediation an external review cycle's

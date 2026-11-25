@@ -53,6 +53,7 @@ var holdlessPauseExits = map[string]string{
 	// is ending, and the cancellation owns what the operator sees.
 	"external_review_reentry.go:planExternalReviewReentry":              cancellationInProgress,
 	"failure_retry.go:Engine.reconcileFailureRetries":                   cancellationInProgress,
+	"check_failure_reentry.go:planCheckFailureReentry":                  cancellationInProgress,
 	"hand_back_reentry.go:planHandBackReentry":                          cancellationInProgress,
 	"operator_feedback.go:Engine.enqueueSpecificationAnswer":            cancellationInProgress,
 	"operator_feedback.go:Engine.persistImplementationFeedback":         cancellationInProgress,

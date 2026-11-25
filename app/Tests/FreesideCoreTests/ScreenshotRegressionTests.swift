@@ -2536,6 +2536,19 @@
                                     detail.screenshotCard(
                                         deadline, at: dynamicTypeSize, compactLayout: width != nil))))
                     }
+                    // A required check that failed on a runner that never
+                    // started, after both reruns (#3598): one fact after the
+                    // Change row, on the Mac and on the phone.
+                    let requiredCheck = AttentionFixtures.readyWithFailedRequiredCheck().item
+                    for (suffix, width) in [("", CGFloat?.none), ("-phone", CGFloat(390))] {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-ready_for_final_review-required-check\(suffix)",
+                                width: width,
+                                view: AnyView(
+                                    detail.screenshotCard(
+                                        requiredCheck, at: dynamicTypeSize, compactLayout: width != nil))))
+                    }
                     // A review guide (#2751): the agent's stops, after the
                     // summary and ahead of the facts, with a resolved head
                     // excerpt that opens at its line and an unresolved base

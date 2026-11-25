@@ -62,8 +62,12 @@ type NativeReviewObserver func(ctx context.Context, repo string, number int) (pu
 // terminates fired-and-handled with deadline_elapsed on the synced
 // aggregate, and the consuming transaction appends the elapse to the item
 // itself (ElapsedDeadlines, #2752) at its next version, so the ready card and
-// the sync projection carry it. Freeside reads no GitHub check or review
-// state; the record says only that the deadline passed.
+// the sync projection carry it. The record says only that the deadline
+// passed. A pr_checks_deadline whose item's required check has already
+// concluded, passed or failed, resolves instead and records nothing: the
+// card already shows the outcome (#3598). An item with no reading, because
+// the base requires no check or no read has succeeded yet, still records
+// the elapse.
 func deadlineRegistration(st *store.Store) scheduler.Registration {
 	return scheduler.Registration{Handle: func(
 		ctx context.Context, ev domain.ScheduleEvent, sc domain.Schedule,
@@ -80,6 +84,16 @@ func deadlineRegistration(st *store.Store) scheduler.Registration {
 			// the proof rather than a deadline that no longer applies.
 			resolved, err := sc.Concluded(
 				domain.ScheduleResolved, domain.ResolutionSubjectConcluded, ev.FiredAt)
+			if err != nil {
+				return scheduler.Consumption{}, err
+			}
+			return scheduler.Consumption{
+				Outcome: domain.OutcomeConditionNoLongerApplies, Schedule: &resolved,
+			}, nil
+		}
+		if requiredCheckConcluded(sc.Kind, current) {
+			resolved, err := sc.Concluded(
+				domain.ScheduleResolved, domain.ResolutionConditionSatisfied, ev.FiredAt)
 			if err != nil {
 				return scheduler.Consumption{}, err
 			}
@@ -142,6 +156,14 @@ func deadlineRegistration(st *store.Store) scheduler.Registration {
 			},
 		}, nil
 	}}
+}
+
+// requiredCheckConcluded reports whether a pr_checks_deadline's item already
+// shows its required check passed or failed, so the deadline no longer
+// applies.
+func requiredCheckConcluded(kind domain.ScheduleKind, item domain.AttentionItem) bool {
+	return kind == domain.SchedulePRChecksDeadline && item.RequiredCheck != nil &&
+		item.RequiredCheck.State != domain.RequiredCheckPending
 }
 
 // recheckItemSubject is the consuming handler's §5.16 expectation recheck

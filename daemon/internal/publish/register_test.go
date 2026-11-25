@@ -774,8 +774,14 @@ func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
 		// A conversion that withheld workflows:write could never publish
 		// under an advisory profile (plan §5.5), so it is refused too.
 		"no workflows": {
-			"actions": "read", "administration": "read", "contents": "write", "environments": "read",
+			"actions": "write", "administration": "read", "contents": "write", "environments": "read",
 			"pull_requests": "write", "metadata": "read", "issues": "write",
+		},
+		// The set an App registered before #3598 holds: without
+		// actions:write it could never rerun a required check.
+		"actions read": {
+			"actions": "read", "administration": "read", "contents": "write", "environments": "read",
+			"pull_requests": "write", "metadata": "read", "issues": "write", "workflows": "write",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

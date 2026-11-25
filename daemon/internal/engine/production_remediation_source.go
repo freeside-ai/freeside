@@ -36,7 +36,8 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 	if !ok || request.Round != round {
 		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
 	}
-	if task.Successor != nil && remediatesExternalFindings(*task.Successor, request.Round) {
+	if task.Successor != nil && (remediatesExternalFindings(*task.Successor, request.Round) ||
+		task.Successor.AdmitsCheckFailureRemediation(domain.RemediationInvocationIntent(request))) {
 		return w.loadReentryRemediationSourceTree(ctx, task, binding, request, checkoutDir)
 	}
 	if task.Successor != nil && task.Successor.AdmitsHandoffConflictRemediation(domain.RemediationInvocationIntent(request)) {

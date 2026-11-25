@@ -657,6 +657,9 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/engine/production_reentry*.go` (re-earn readiness against a
   new base), `internal/engine/hand_back_reentry.go` (seals the authority
   that adopts a handed-back head Freeside did not push),
+  `internal/engine/check_failure_reentry.go` (seals the authority a failed
+  required check starts on Freeside's own head, and starts the remediation
+  that hands the failed jobs' log excerpts to a remediator),
   `internal/engine/production_handoff.go` (verifies
   the merge into a moved tip and decides whether the handoff may publish),
   `internal/engine/production_rebuild.go` (binds the image that verifies a
@@ -731,7 +734,13 @@ directory named before it in the same bullet. All under `daemon/`:
   `internal/domain/publication_successor.go` and
   `internal/store/publication_successor.go` (the successor authorities
   that decide which head a cycle publishes and the base its writer starts
-  at, sealed and re-gated on read), `internal/store/handoff_check.go`
+  at, sealed and re-gated on read), `internal/domain/required_check_failure.go`
+  and `internal/store/required_check_failure.go` (the failure record a
+  `check_failure` authority names, and the screening of the untrusted log
+  excerpts it carries), `internal/daemoncompose/check_failure.go` (reads
+  and screens the failed jobs' logs and starts the cycle),
+  `internal/daemoncompose/required_check.go` (decides when a failed check
+  is rerun on GitHub), `internal/store/handoff_check.go`
   (binds a sealed handoff tip to the audit that observed it, re-checked
   before a remediation starts at that tip),
   `internal/store/shadow_review_configuration.go`,

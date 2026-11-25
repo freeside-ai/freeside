@@ -2028,4 +2028,47 @@ import Testing
             #expect(MockContractValidation.itemValidityBreach(item) == "invalid elapsed_deadlines")
         }
     }
+
+    /// The required check mirrors domain.validateRequiredCheck (#3598):
+    /// only on the ready item, on its head, with a failure class and failed
+    /// jobs exactly when it failed, within the domain's bounds.
+    @Test func requiredCheckMirrorsTheDomainRules() {
+        let ready = AttentionFixtures.readyWithFailedRequiredCheck().item
+        #expect(MockContractValidation.itemValidityBreach(ready) == nil)
+        let check = ready.required_check!.value1
+
+        var pending = check
+        pending.state = .pending
+        pending.failure_class = nil
+        pending.failed_jobs = nil
+        var passingItem = ready
+        passingItem.required_check = .init(value1: pending)
+        #expect(MockContractValidation.itemValidityBreach(passingItem) == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.required_check = .init(value1: check)
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "required_check on a different item type")
+
+        var noClass = check
+        noClass.failure_class = nil
+        var pendingWithJobs = pending
+        pendingWithJobs.failed_jobs = ["a"]
+        var noJobs = check
+        noJobs.failed_jobs = []
+        var tooMany = check
+        tooMany.failed_jobs = Array(repeating: "a", count: 11)
+        var longName = check
+        longName.failed_jobs = [String(repeating: "é", count: 101)]
+        var otherHead = check
+        otherHead.head_sha = "0000000000000000000000000000000000000000"
+        var overReruns = check
+        overReruns.reruns = 3
+        for bad in [noClass, pendingWithJobs, noJobs, tooMany, longName, otherHead, overReruns] {
+            var item = ready
+            item.required_check = .init(value1: bad)
+            #expect(MockContractValidation.itemValidityBreach(item) == "invalid required_check")
+        }
+    }
 }

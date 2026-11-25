@@ -293,9 +293,11 @@ func RecordProductionExecutionExport(
 			if current.reentersInPlace() {
 				// A re-entered cycle has no publication of its own and no
 				// producer. The one remediation it starts is its external
-				// review first round's; the new row inherits the producer's
-				// publication the request already proved.
-				if !remediatesExternalFindings(*current.Successor, round) {
+				// review first round's, or its check_failure fix on its own
+				// round; the new row inherits the producer's publication the
+				// request already proved.
+				if !remediatesExternalFindings(*current.Successor, round) &&
+					!current.Successor.AdmitsCheckFailureRemediation(domain.RemediationInvocationIntent(request)) {
 					return domain.ErrImmutableTransition
 				}
 				publication, successor = verified.publication, current.Successor

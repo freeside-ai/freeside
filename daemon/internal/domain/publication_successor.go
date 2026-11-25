@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/url"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
@@ -26,6 +27,10 @@ const (
 	// hand-back comment and the trust profile that admitted its author
 	// (issue #3160).
 	PublicationHandBackVersion = "freeside.publication-successor/v8"
+	// PublicationCheckFailureVersion is the v3 shape, with no reason, plus
+	// the digest of the required-check failure record a check_failure
+	// re-entry answers (issue #3598).
+	PublicationCheckFailureVersion = "freeside.publication-successor/v9"
 )
 
 type PublicationSuccessorOrigin string
@@ -60,17 +65,28 @@ const (
 	// record. No operator command starts it, so its identities key on its
 	// predecessor.
 	PublicationSuccessorHandBack PublicationSuccessorOrigin = "hand_back"
+	// PublicationSuccessorCheckFailure reworks a published pull request whose
+	// required check failed on a test or build (plan §7; issue #3598). It
+	// runs as a hand_back cycle does, on the head Freeside itself published:
+	// it reviews that head, hands it off onto the target's tip, and then
+	// starts a remediation that answers the failed check. The failure record
+	// the daemon wrote from the check's jobs is named on the authority. It
+	// never adopts a head someone else pushed. No operator command starts
+	// it, so its identities key on its predecessor.
+	PublicationSuccessorCheckFailure PublicationSuccessorOrigin = "check_failure"
 )
 
 var AllPublicationSuccessorOrigins = []PublicationSuccessorOrigin{
 	PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
 	PublicationSuccessorExternalReview, PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack,
+	PublicationSuccessorCheckFailure,
 }
 
 func (o PublicationSuccessorOrigin) valid() bool {
 	switch o {
 	case PublicationSuccessorFeedback, PublicationSuccessorRemediation, PublicationSuccessorReadinessInvalidation,
-		PublicationSuccessorExternalReview, PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
+		PublicationSuccessorExternalReview, PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack,
+		PublicationSuccessorCheckFailure:
 		return true
 	default:
 		return false
@@ -156,6 +172,11 @@ type PublicationSuccessor struct {
 	// the run's ready bindings on every read.
 	HandoffConflictCause HandoffConflictCause `json:"handoff_conflict_cause,omitempty"`
 	FirstPublication     bool                 `json:"first_publication,omitempty"`
+	// CheckFailureDigest is set on a check_failure record only: the content
+	// address of the RequiredCheckFailure record the cycle answers.
+	// Reentry.BaseSHA is the base the prior review used and Reentry.HeadSHA
+	// the published head whose check failed.
+	CheckFailureDigest Digest `json:"check_failure_digest,omitempty"`
 }
 
 // EffectiveOrigin preserves the byte-identical v1 feedback representation.
@@ -231,6 +252,20 @@ func (s PublicationSuccessor) Validate() error {
 		s.PriorReviewInvocationID == "" || s.ReviewRound < 2 {
 		return ErrParentKeyMismatch
 	}
+	if s.Version == PublicationCheckFailureVersion {
+		if s.Origin != PublicationSuccessorCheckFailure || s.CommandID != "" ||
+			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
+			s.ExternalFindingID != "" || s.AdmittingProfileDigest != "" ||
+			s.HandoffConflictCause != "" || s.FirstPublication ||
+			s.Reentry == nil || s.Reentry.Reason != "" || s.Reentry.BaseSHA == "" || s.Reentry.HeadSHA == "" ||
+			!contentaddr.Valid(string(s.CheckFailureDigest)) {
+			return ErrParentKeyMismatch
+		}
+		return nil
+	}
+	if s.CheckFailureDigest != "" {
+		return ErrParentKeyMismatch
+	}
 	if s.Version == PublicationHandoffConflictVersion {
 		if s.Origin != PublicationSuccessorHandoffConflict || s.CommandID != "" ||
 			s.FeedbackInvocationID != "" || s.ReevaluationCommandID != "" ||
@@ -290,7 +325,7 @@ func (s PublicationSuccessor) Validate() error {
 			return ErrParentKeyMismatch
 		}
 	case PublicationSuccessorReadinessInvalidation, PublicationSuccessorExternalReview,
-		PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack:
+		PublicationSuccessorHandoffConflict, PublicationSuccessorHandBack, PublicationSuccessorCheckFailure:
 		return ErrParentKeyMismatch
 	}
 	return nil
@@ -320,6 +355,20 @@ func (s PublicationSuccessor) HandsBack() bool {
 	return s.EffectiveOrigin() == PublicationSuccessorHandBack
 }
 
+// ReworksCheckFailure reports whether the authority reworks a published head
+// whose required check failed on a test or build (v9).
+func (s PublicationSuccessor) ReworksCheckFailure() bool {
+	return s.Version == PublicationCheckFailureVersion && s.Origin == PublicationSuccessorCheckFailure
+}
+
+// HandsOffInPlace reports whether the cycle hands its re-entered head off
+// onto the target's tip before it goes on: a hand_back cycle, whose head no
+// Freeside handoff checked, and a check_failure cycle, whose remediation is
+// admitted only once that head merges cleanly.
+func (s PublicationSuccessor) HandsOffInPlace() bool {
+	return s.HandsBack() || s.ReworksCheckFailure()
+}
+
 // AnswersExternalFindings reports whether the cycle answers admitted
 // external findings in its first round: an external_review re-entry (v4), or
 // a hand_back one (v8), whose findings are the hand-back comment and any other
@@ -340,8 +389,8 @@ func (s PublicationSuccessor) HandBackComment(finding Finding) bool {
 	return s.HandsBack() && finding.ID == s.ExternalFindingID && finding.Location == nil
 }
 
-// InPlaceHandoffID names the handoff check a hand_back cycle runs on its
-// adopted head before it re-earns readiness. It is not the cycle's
+// InPlaceHandoffID names the handoff check a hand_back or check_failure
+// cycle runs on its re-entered head (HandsOffInPlace). It is not the cycle's
 // publication ID: a fix the cycle starts publishes under that ID and hands
 // its own head off there, and a publication has one handoff check.
 func (s PublicationSuccessor) InPlaceHandoffID() InvocationID {
@@ -369,6 +418,10 @@ func (s PublicationSuccessor) RemediatesHandoffConflict() bool {
 // and admits remediation on it all the same: its authority is the permission
 // to replace that head, and its cycle verified and reviewed it first.
 //
+// A check_failure re-entry (v9) admits remediation on its own head at the
+// base it names, as external_review does. Its first remediation answers the
+// failed check and no review finding (AdmitsCheckFailureRemediation).
+//
 // A handoff conflict (v7) is the one authority whose remediations are
 // admitted at a base other than the run's: every one is at the tip it
 // sealed. Its first answers the conflict on the prior review's round, on the
@@ -388,7 +441,7 @@ func (s PublicationSuccessor) AllowsRemediation(r RemediationInvocationIntent) b
 	}
 	if s.Reentry != nil {
 		ownHead := s.Reentry.Reason == ReadinessInvalidationBaseAdvanced ||
-			s.AnswersExternalFindings()
+			s.AnswersExternalFindings() || s.ReworksCheckFailure()
 		if !ownHead || r.BaseSHA != s.Reentry.BaseSHA ||
 			(r.Round == s.ReviewRound && r.HeadSHA != s.Reentry.HeadSHA) {
 			return false
@@ -408,6 +461,18 @@ func (s PublicationSuccessor) AdmitsHandoffConflictRemediation(r RemediationInvo
 	return s.RemediatesHandoffConflict() && r.RunID == s.RunID &&
 		r.SuccessorPublicationID == s.PublicationID() &&
 		r.Round == s.ReviewRound-1 && r.ReviewInvocationID == s.PriorReviewInvocationID &&
+		r.BaseSHA == s.Reentry.BaseSHA && r.HeadSHA == s.Reentry.HeadSHA &&
+		r.AdjudicationDigest == "" && len(r.FindingIDs) == 0
+}
+
+// AdmitsCheckFailureRemediation reports whether r is a check_failure cycle's
+// first remediation: the one that answers the failed check. Its round's
+// review of the cycle's head was clean, so it names no adjudication and no
+// findings; it is on the cycle's own round, on the head whose check failed,
+// at the base the authority names. The store proves the review clean.
+func (s PublicationSuccessor) AdmitsCheckFailureRemediation(r RemediationInvocationIntent) bool {
+	return s.ReworksCheckFailure() && r.RunID == s.RunID &&
+		r.SuccessorPublicationID == s.PublicationID() && r.Round == s.ReviewRound &&
 		r.BaseSHA == s.Reentry.BaseSHA && r.HeadSHA == s.Reentry.HeadSHA &&
 		r.AdjudicationDigest == "" && len(r.FindingIDs) == 0
 }

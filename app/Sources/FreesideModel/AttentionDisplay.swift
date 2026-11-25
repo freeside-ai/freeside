@@ -546,10 +546,14 @@ package enum AttentionDisplay {
             // readiness candidate's head and base, and Identifiers keep this
             // diff's own base and head as Diff base and Diff head, so
             // repeating them here made one datum render in three card modules
-            // (#1107). An elapsed publication deadline follows it (#2752).
+            // (#1107). The required check's reading follows it (#3598), then
+            // an elapsed publication deadline (#2752).
             var rows: [FactRow] = []
             if let diff = item.diff_stats?.value1 {
                 rows.append(.init(diffFactLabel, diffStats(diff)))
+            }
+            if let check = item.required_check?.value1 {
+                rows.append(requiredCheckFact(check))
             }
             rows.append(contentsOf: (item.elapsed_deadlines ?? []).compactMap { elapsedDeadlineFact($0, now: now) })
             return rows
@@ -1691,11 +1695,42 @@ package enum AttentionDisplay {
         return value
     }
 
+    /// The required check's reading as a Facts row: its state, the failure's
+    /// class and failed jobs when it failed, and how many times the daemon
+    /// reran it on this head. Job names come from the repository's workflow
+    /// files, so the row shows them as the daemon screened them.
+    private static func requiredCheckFact(_ check: Components.Schemas.RequiredCheck) -> FactRow {
+        var parts: [String]
+        switch check.state {
+        case .pending: parts = ["Pending"]
+        case .passed: parts = ["Passed"]
+        case .failed:
+            parts = ["Failed"]
+            if let failureClass = check.failure_class?.value1 {
+                switch failureClass {
+                case .infrastructure: parts.append("runner never started")
+                case .code: parts.append("a job failed")
+                case .other: parts.append("needs a look")
+                case .unknown: break
+                }
+            }
+        case .unknown: parts = ["Unknown"]
+        }
+        if check.reruns > 0 {
+            parts.append("rerun \(check.reruns) of 2")
+        }
+        if let jobs = check.failed_jobs, !jobs.isEmpty {
+            parts.append(jobs.joined(separator: ", "))
+        }
+        return .init("Required check", parts.joined(separator: " · "))
+    }
+
     /// One elapsed publication deadline as a Facts row: what the deadline
-    /// waited for, how long, and how long ago it passed. Freeside reads no
-    /// GitHub check or review state, so the row says the wait ran out, not
-    /// what the checks or reviewers did. Only the two publication deadline
-    /// kinds reach an item; any other kind draws nothing.
+    /// waited for, how long, and how long ago it passed. The daemon records
+    /// the checks deadline only while the required check is still pending,
+    /// and reads no review state, so the row says the wait ran out. Only the
+    /// two publication deadline kinds reach an item; any other kind draws
+    /// nothing.
     private static func elapsedDeadlineFact(
         _ elapsed: Components.Schemas.ElapsedDeadline,
         now: Date

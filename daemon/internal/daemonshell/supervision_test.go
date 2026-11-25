@@ -23,6 +23,7 @@ func TestExitClassificationIsComplete(t *testing.T) {
 		ComponentFollowUpFiling:        exitDurableStop,
 		ComponentReviewReplies:         exitDurableStop,
 		ComponentHandBackLabels:        exitDurableStop,
+		ComponentCheckReruns:           exitDurableStop,
 		ComponentAttentionDeliveries:   exitDurableStop,
 		ComponentExecutionPause:        exitDurableStop,
 		ComponentPanic:                 exitInvoluntary,

@@ -163,7 +163,7 @@ func (t productionPublicationTask) reentersInPlace() bool {
 // publishes under the cycle's publication ID and needs its own handoff check
 // there (issue #3160).
 func (t productionPublicationTask) handoffID() domain.InvocationID {
-	if t.reentersInPlace() && t.Successor.HandsBack() {
+	if t.reentersInPlace() && t.Successor.HandsOffInPlace() {
 		return t.Successor.InPlaceHandoffID()
 	}
 	return t.PublicationID
@@ -1517,10 +1517,12 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 		}
 		return productionTaskOutcome{}, err
 	}
-	if task.Successor.HandsBack() {
+	if task.Successor.HandsOffInPlace() {
 		// A hand-back cycle adopted a head no Freeside handoff checked, so
 		// it hands that head off onto the target's tip before it is ready
-		// (issue #3160). A conflict there starts the conflict's remediation,
+		// (issue #3160). A check_failure cycle hands its head off before it
+		// fixes it, so the fix is never asked to answer a conflict as well
+		// (issue #3598). A conflict there starts the conflict's remediation,
 		// and a failed merge stops the cycle.
 		if _, outcome, err := w.reconcileHandoff(
 			ctx, task, binding, checkout, checkoutDir, checkpoint); err != nil || outcome != nil {
@@ -1528,6 +1530,9 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 				return productionTaskOutcome{}, err
 			}
 			return *outcome, err
+		}
+		if task.Successor.ReworksCheckFailure() {
+			return w.remediateCheckFailure(ctx, task, checkoutDir)
 		}
 		readiness, _, err = w.withPublishedHandoff(ctx, task, binding, readiness)
 	} else {

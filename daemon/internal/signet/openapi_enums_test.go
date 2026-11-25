@@ -46,6 +46,8 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"EffectKind":                 enumStrings(domain.AllEffectKinds),
 		"ClosureProvenance":          enumStrings(domain.AllClosureProvenances),
 		"ClosureFlagOrigin":          enumStrings(domain.AllClosureFlagOrigins),
+		"RequiredCheckState":         enumStrings(domain.AllRequiredCheckStates),
+		"CheckFailureClass":          enumStrings(domain.AllCheckFailureClasses),
 		"IssueTextRuleset":           enumStrings(domain.AllIssueTextRulesets),
 		"ScreeningVerdict":           enumStrings(domain.AllScreeningVerdicts),
 		"FollowUpSourceKind":         enumStrings(domain.AllFollowUpSourceKinds),

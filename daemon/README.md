@@ -1389,7 +1389,8 @@ conditions, and five-second sampling can miss brief competing test activity.
 The default publish identity is one public GitHub App owned by the operator's
 personal account. A fresh operator registers it through GitHub's manifest flow;
 Freeside generates the suggested name, requests the publish permission set
-plus `workflows: write` and `issues: write`, and writes the conversion key
+plus `workflows: write`, `issues: write`, and `actions: write`, and writes
+the conversion key
 directly to the protected credentials directory. A publication token asks for
 `workflows: write` only under a trust profile whose
 `candidate_automation_changes` is `advisory` (the
@@ -1408,6 +1409,15 @@ then, filing is refused before dispatch with a `follow_up_filing_refused`
 attention item naming the missing permission; publication can continue.
 The deployed App's managed installations accepted this change under #1416 on
 2026-09-20.
+
+Rerunning a required check that failed on infrastructure mints a separate
+token with only `actions: write` and `metadata: read` (#3598); publication
+keeps `actions: read`. An App registered before #3598 declares
+`actions: read`, so its owner must change the App's Actions permission to
+read and write on GitHub, and each installation must accept the change.
+Until then the mint is refused: the card shows the check `failed`, nothing
+is rerun, the daemon logs a `check rerun sweep` warning each minute, and
+publication and every other feature continue.
 
 The Claude driver sweeps approved filings at startup and every minute; an
 approval also wakes the filer immediately. The fake driver records approvals
@@ -5456,6 +5466,43 @@ off, the head moves, or the pull request closes. The label Freeside has yet
 to remove after its own successful cycle raises none. Without the setting, a
 moved head re-enters as before. The label is at most 50
 characters, with no surrounding spaces or control characters.
+
+The ready card shows the pull request's required check (#3598). On each
+reconciler pass that sees the pull request open on its bound head, the
+reconciler reads which checks the base branch requires, from classic branch
+protection and rulesets, and the GitHub Actions jobs on that head, and
+writes the card's `required_check` at its next version when the reading
+changed: `pending`, `passed`, or `failed` with a class and the failed jobs'
+names. A required check that Actions doesn't produce stays `pending`, since
+reading another app's status needs a permission the App doesn't hold; a base
+that requires none shows nothing. A failed read is reported and retried on
+the next pass. The 30-minute `pr_checks_deadline` records an elapse only
+while the check is absent or `pending`.
+
+A failed check gets one of three classes from the GitHub Actions job facts,
+with infrastructure checked first: `infrastructure` (a failed job with no
+runner and no steps, so it never ran), `code` (a failed job with a failed
+step), or `other`. An infrastructure failure is rerun up to twice per head,
+by rerunning each failed workflow run attempt's failed jobs, unless the pull
+request carries the hand-back label, since the lander owns it then. An
+`other` failure, and one past the rerun limit, stay on the card for a
+person.
+
+A `code` failure starts a `check_failure` cycle on Freeside's own published
+head (#3598). The reconciler reads the tail of each of the first three
+failed jobs' logs, screens it with the export's credential rules, keeps the
+last 8 KiB, and records the failure; the cycle's authority names that
+record. A log GitHub no longer keeps, an empty one, and one too long to
+read are each recorded as such rather than retried. The cycle reviews
+the head again on the next round. Findings from that review go to a person,
+as on every in-place re-entry, and no fix starts. A clean review hands the
+head off in place, and a remediation then fixes the head with the failed
+jobs and their excerpts as input, which the remediator treats as data; the
+fix is verified, reviewed, and published like any remediation, and the new
+head's check is read from nothing. One failure record starts one cycle. A
+cycle that ended on a person blocks the next until that item closes. A
+round limit with no room left, or an input too large to deliver, ends the
+cycle with a `publish_blocked` item that names the failed jobs.
 
 The deputy fixes, rather than reads from settings, the Claude driver, unattended
 mode, run conformance, provider-only egress to `api.anthropic.com:443`, and

@@ -681,6 +681,17 @@ func TestRunReviewRemediationLineageFailsClosed(t *testing.T) {
 			t.Fatalf("unreadable successor accepted: %v", err)
 		}
 	})
+	t.Run("remediation names no finding and no check failure authority", func(t *testing.T) {
+		// Only a check_failure cycle's remediation may name no finding
+		// (issue #3598); one with no authority to admit it proves nothing.
+		f := newReviewSubjectFixture(t)
+		f.decideRemediation(t, func(intent *domain.RemediationInvocationIntent) {
+			intent.FindingIDs, intent.AdjudicationDigest = nil, ""
+		})
+		if _, err := f.service.GetRunTimeline(context.Background(), f.run.ID); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("remediation with no finding accepted: %v", err)
+		}
+	})
 	t.Run("remediation names another adjudication", func(t *testing.T) {
 		f := newReviewSubjectFixture(t)
 		f.decideRemediation(t, func(intent *domain.RemediationInvocationIntent) { intent.AdjudicationDigest = subjectDigest("e") })

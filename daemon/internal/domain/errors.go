@@ -213,6 +213,7 @@ var (
 	ErrInvalidElapsedDeadlineKind         = errors.New("elapsed deadline kind is not a publication deadline")
 	ErrElapsedDeadlineRepeated            = errors.New("elapsed deadline kind repeats on one item")
 	ErrElapsedDeadlineEarly               = errors.New("elapsed deadline elapsed before its deadline")
+	ErrInvalidRequiredCheck               = errors.New("required check reading is malformed")
 	ErrWorkUnitInconsistent               = errors.New("work-unit declaration fields do not match the criterion's contract")
 	ErrCompletionInconsistent             = errors.New("work-unit completion fields do not match the criterion's contract")
 	ErrRebaseProofInconsistent            = errors.New("work-unit rebase proof fields are internally inconsistent")

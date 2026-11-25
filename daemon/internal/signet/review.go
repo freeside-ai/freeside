@@ -346,9 +346,11 @@ func reviewRoundRemediation(ctx context.Context, tx *store.ReadTx, runID domain.
 	if err != nil {
 		return nil, err
 	}
-	decidedAt, err := findingAdjudicationDecidedAt(ctx, tx, adjudication)
-	if err != nil {
-		return nil, err
+	var decidedAt *time.Time
+	if adjudication != nil {
+		if decidedAt, err = findingAdjudicationDecidedAt(ctx, tx, *adjudication); err != nil {
+			return nil, err
+		}
 	}
 	return &ReviewRoundRemediation{InvocationID: id, FindingIDs: slices.Clone(intent.FindingIDs), DecidedAt: decidedAt}, nil
 }
@@ -356,19 +358,24 @@ func reviewRoundRemediation(ctx context.Context, tx *store.ReadTx, runID domain.
 // authenticateRemediationLineage re-gates a decoded remediation intent against
 // the review record and adjudication it names, as the successor-producer gate
 // does. Dispatch authentication binds only the intent's own identity, so its
-// round lineage and finding IDs are decoded claims until proven here.
-func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID domain.RunID, intent domain.RemediationInvocationIntent) (domain.FindingAdjudication, error) {
+// round lineage and finding IDs are decoded claims until proven here. A
+// check_failure cycle's remediation answers a failed required check, not
+// findings, so it names no adjudication and yields none (issue #3598).
+func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID domain.RunID, intent domain.RemediationInvocationIntent) (*domain.FindingAdjudication, error) {
 	mismatch := fmt.Errorf("remediation intent %q lineage: %w", intent.InvocationID, domain.ErrParentKeyMismatch)
 	review, err := tx.GetReviewRecord(ctx, intent.ReviewInvocationID)
 	if errors.Is(err, store.ErrNotFound) {
-		return domain.FindingAdjudication{}, mismatch
+		return nil, mismatch
 	}
 	if err != nil {
-		return domain.FindingAdjudication{}, err
+		return nil, err
 	}
 	if review.RunID != runID || review.Round != intent.Round || review.BaseSHA != intent.BaseSHA ||
-		review.HeadSHA != intent.HeadSHA || len(intent.FindingIDs) == 0 {
-		return domain.FindingAdjudication{}, mismatch
+		review.HeadSHA != intent.HeadSHA {
+		return nil, mismatch
+	}
+	if len(intent.FindingIDs) == 0 {
+		return nil, authenticateCheckFailureLineage(ctx, tx, runID, intent, review, mismatch)
 	}
 	// An external review cycle's first round may fix the cycle's admitted
 	// external findings, which no review record lists, and may answer a clean
@@ -381,15 +388,15 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 	if intent.SuccessorPublicationID != "" {
 		successor, err := tx.GetPublicationSuccessor(ctx, runID, intent.SuccessorPublicationID)
 		if errors.Is(err, store.ErrNotFound) {
-			return domain.FindingAdjudication{}, mismatch
+			return nil, mismatch
 		}
 		if err != nil {
-			return domain.FindingAdjudication{}, err
+			return nil, err
 		}
 		if successor.AnswersExternalFindings() && successor.Reentry != nil && intent.Round == successor.ReviewRound {
 			externalRound = true
 			if external, err = tx.ExternalReviewCycleFindings(ctx, runID, intent.SuccessorPublicationID); err != nil {
-				return domain.FindingAdjudication{}, err
+				return nil, err
 			}
 		}
 	}
@@ -400,22 +407,22 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 			continue
 		}
 		if !slices.ContainsFunc(external, func(admitted domain.Finding) bool { return admitted.ID == finding }) {
-			return domain.FindingAdjudication{}, mismatch
+			return nil, mismatch
 		}
 	}
 	if review.Outcome != domain.ReviewFindings &&
 		(review.Outcome != domain.ReviewClean || !externalRound || reviewed != 0) {
-		return domain.FindingAdjudication{}, mismatch
+		return nil, mismatch
 	}
 	adjudication, err := tx.GetFindingAdjudication(ctx, intent.AdjudicationDigest)
 	if errors.Is(err, store.ErrNotFound) {
-		return domain.FindingAdjudication{}, mismatch
+		return nil, mismatch
 	}
 	if err != nil {
-		return domain.FindingAdjudication{}, err
+		return nil, err
 	}
 	if adjudication.Digest != intent.AdjudicationDigest || adjudication.RunID != runID || adjudication.Round != intent.Round {
-		return domain.FindingAdjudication{}, mismatch
+		return nil, mismatch
 	}
 	// The cycle answers an external finding whether or not this adjudication
 	// sent it to a fix, so one outside the record must be an entry the
@@ -425,10 +432,34 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 			!slices.ContainsFunc(adjudication.Entries, func(entry domain.FindingAdjudicationEntry) bool {
 				return entry.FindingID == finding && entry.Route == domain.RouteRemediate
 			}) {
-			return domain.FindingAdjudication{}, mismatch
+			return nil, mismatch
 		}
 	}
-	return adjudication, nil
+	return &adjudication, nil
+}
+
+// authenticateCheckFailureLineage proves an intent that names no finding is
+// its check_failure cycle's remediation: the authority it names admits it,
+// and the review of its round, already matched to its base and head, was
+// clean, as the store requires before it commits one.
+func authenticateCheckFailureLineage(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, intent domain.RemediationInvocationIntent,
+	review domain.ReviewRecord, mismatch error,
+) error {
+	if intent.SuccessorPublicationID == "" || review.Outcome != domain.ReviewClean {
+		return mismatch
+	}
+	successor, err := tx.GetPublicationSuccessor(ctx, runID, intent.SuccessorPublicationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return mismatch
+	}
+	if err != nil {
+		return err
+	}
+	if !successor.AdmitsCheckFailureRemediation(intent) {
+		return mismatch
+	}
+	return nil
 }
 
 // findingAdjudicationDecidedAt returns when the adjudication's item was

@@ -9,7 +9,7 @@
     "type": "Organization"
   },
   "permissions": {
-    "actions": "read",
+    "actions": "write",
     "administration": "read",
     "contents": "write",
     "environments": "read",

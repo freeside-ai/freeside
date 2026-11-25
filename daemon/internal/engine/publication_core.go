@@ -412,6 +412,10 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	// list, so the transition check below admits any stored one; the list's
 	// own rules hold because the stored row passed Validate on decode.
 	normalized.ElapsedDeadlines = expected.ElapsedDeadlines
+	// The required check is written after creation by the active-resource
+	// reconciler (#3598), under the same crash seam, so it is normalized the
+	// same way; the transition check below admits a stored reading.
+	normalized.RequiredCheck = expected.RequiredCheck
 	// These two fields are daemon projections added at the item persistence
 	// boundary. Recovery reconstructs the source shape, so neither may make an
 	// otherwise identical terminal item look foreign or stale.

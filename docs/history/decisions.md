@@ -4404,3 +4404,29 @@ Nothing in this revision is built yet: tracker #3462 builds it.
 
 (Owner decisions of 2026-11-20 on #3464, from the #3526 spike; #3548;
 [decision note](../../devlog/2026-11-21-0854-cordoned-verification.md).)
+
+## Revision 136 ("React to a Published Pull Request's Required Check"):
+
+1. **Freeside reads the required check while the ready card is open**
+   (Section [7](../plan.md#7-review-policy)): every check the target branch requires,
+   from the GitHub Actions jobs on the head it handed off, shown on the card
+   as pending, passed, or failed. The card is shown with the check's state,
+   not held until it settles. This replaces the named gap of "Freeside neither
+   requires nor verifies them" for that interval; the gap stays for later
+   tips and after the card closes.
+2. **A failed job that never got a runner is rerun,** at most twice per head,
+   on a token narrowed to rerunning. The App gains `actions: write`, which the
+   owner accepts on GitHub; until then nothing reruns.
+3. **A job that failed at a step starts a check-failure cycle** on the head
+   Freeside published, run as a hand-back cycle is, under its own authority:
+   it never adopts a head someone else pushed.
+
+Rejected: holding the ready card until the check settles, because the card is
+what the reconciler observes a published pull request through; a project
+setting that names the check, because the base branch already says which
+checks it requires; reusing the hand-back authority, because that authority
+adopts a head Freeside did not push; and rerunning without a new permission,
+which GitHub doesn't allow.
+
+(Owner decisions of 2026-11-24 on #3598, from #2382's routing rerun;
+[decision note](../../devlog/2026-11-24-2350-required-check-reaction.md).)

@@ -285,6 +285,23 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 				updated.ID, ErrImmutableTransition)
 		}
 	}
+	// The required check is a live reading (#3598): it may change only while
+	// the item stays open, and a rerun once spent is never given back.
+	sameCheck, err := jsonEqual(old.RequiredCheck, updated.RequiredCheck)
+	if err != nil {
+		return fmt.Errorf("attention item %s required_check: %w", updated.ID, err)
+	}
+	if !sameCheck {
+		if old.Status != StatusOpen {
+			return fmt.Errorf("attention item %s: required check would change on a closed item: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+		if old.RequiredCheck != nil && (updated.RequiredCheck == nil ||
+			updated.RequiredCheck.Reruns < old.RequiredCheck.Reruns) {
+			return fmt.Errorf("attention item %s: required check reruns would decrease: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+	}
 	// Publication holds may move between canonical causes while their
 	// deterministic publish-blocked item remains open. Keep the fact present,
 	// but let the successor state describe the current hold rather than stale
