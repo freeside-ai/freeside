@@ -32,7 +32,10 @@ type Config struct {
 	// because cfprefsd writes the global preferences there for the launch.
 	Home string
 	// OwnerClaudeConfig is the owner's own Claude configuration directory,
-	// denied to the launch, which runs with a Freeside-owned one.
+	// denied to the launch, which runs with a Freeside-owned one. The rule
+	// file also denies every home entry whose name starts with .claude,
+	// whether or not it is this directory, so this matters for a directory
+	// outside the home.
 	OwnerClaudeConfig string
 	// Projects is the directory holding the owner's other projects, whose
 	// .env files are denied.

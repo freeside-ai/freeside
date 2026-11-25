@@ -54,10 +54,14 @@
   (subpath (string-append (param "HOME") "/Library/Cookies")))
 
 ;; The owner's own Claude configuration. The launch's CLAUDE_CONFIG_DIR is
-;; Freeside's, under RUN_ROOT, so the CLI never needs these.
+;; Freeside's, under RUN_ROOT, so the CLI never needs these. The regex
+;; denies every home entry whose name starts with .claude and everything
+;; under it: ~/.claude, ~/.claude.json and its backups, and any second
+;; configuration directory such as ~/.claude-<name> that the owner's own
+;; sessions use on a shared account (#3600), including one made after the
+;; daemon starts. OWNER_CLAUDE_CONFIG stays, since it may sit outside HOME.
 (deny file-read* file-write*
-  (subpath (string-append (param "HOME") "/.claude"))
-  (literal (string-append (param "HOME") "/.claude.json"))
+  (regex (string-append "^" (param "HOME_RE") "/\\.claude"))
   (subpath (param "OWNER_CLAUDE_CONFIG")))
 
 ;; Freeside's own state in its default places: the operator's run roots and
