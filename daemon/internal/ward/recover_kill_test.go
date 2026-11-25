@@ -289,8 +289,13 @@ func TestRecoverKillBoundaries(t *testing.T) {
 }
 
 // TestRecoverKillBoundaryForeignSurvivors: the replayed world also carries
-// foreign same-name objects (another operator's run, no token); recovery
-// commits its loss around them and leaves them standing.
+// foreign same-name objects (another operator's run, no token) and a
+// container another invocation started under an open launch reservation;
+// recovery commits its loss around them and leaves them standing, and what
+// it leaves is accounted for (assertAccountedFor). Nothing here reads the
+// rig's name registry: ownership comes from the journal and the labels, so
+// the installed daemon, which holds no rig lease, recovers the same way
+// (#2083).
 func TestRecoverKillBoundaryForeignSurvivors(t *testing.T) {
 	t.Parallel()
 	fx := newHandoffFixture(t)
@@ -342,6 +347,15 @@ func TestRecoverKillBoundaryForeignSurvivors(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	const reservation = "invocation-verification-1"
+	if err := fx2.rt.CreateContainer(context.Background(), ContainerSpec{
+		Size: testContainerSize,
+		Name: "freeside-verify-room", Image: "verify.test/img@sha256:" + strings.Repeat("8", 64),
+		Command: []string{"sh"}, Labels: []Label{{Key: ReservationLabel, Value: reservation}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	res, err := fx2.backend(t).Recover(context.Background(), hs.RunID, hs)
 	if err != nil {
 		t.Fatalf("Recover = %v, want committed loss", err)
@@ -351,8 +365,54 @@ func TestRecoverKillBoundaryForeignSurvivors(t *testing.T) {
 	}
 	fx2.rt.mu.Lock()
 	_, survives := fx2.rt.ctrs[names.Exporter]
+	_, reserved := fx2.rt.ctrs["freeside-verify-room"]
 	fx2.rt.mu.Unlock()
-	if !survives {
-		t.Fatal("recovery deleted a foreign object")
+	if !survives || !reserved {
+		t.Fatalf("recovery deleted a foreign object (exporter kept %t, reserved room kept %t)", survives, reserved)
+	}
+	assertAccountedFor(t, fx2.rt, j2, map[string]bool{reservation: true})
+}
+
+// assertAccountedFor is what "accounted for" means after a restart's
+// recovery: each container and volume the runtime lists carries the
+// ownership token of a run the journal still holds open, carries the
+// reservation label of a launch reservation still open, or carries no token
+// any journal record issued, so it is not Freeside's run to reap. An object
+// carrying a closed run's token is a leak, and fails. Everything else a
+// recovered run owned is gone.
+func assertAccountedFor(t *testing.T, rt *fakeRuntime, j *fakeJournal, openReservations map[string]bool) {
+	t.Helper()
+	openTokens, issued := map[string]bool{}, map[string]bool{}
+	for _, record := range j.records {
+		issued[record.OwnershipToken] = true
+		if record.Outcome == nil {
+			openTokens[record.OwnershipToken] = true
+		}
+	}
+	accounted := func(labels []Label) bool {
+		token, owned := "", false
+		for _, label := range labels {
+			switch label.Key {
+			case ownershipLabelKey:
+				token, owned = label.Value, true
+			case ReservationLabel:
+				if openReservations[label.Value] {
+					return true
+				}
+			}
+		}
+		return !owned || openTokens[token] || !issued[token]
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	for name, ctr := range rt.ctrs {
+		if !accounted(ctr.spec.Labels) {
+			t.Errorf("container %q belongs to no open run or reservation and survived recovery", name)
+		}
+	}
+	for name, vol := range rt.vols {
+		if !accounted(vol.labels) {
+			t.Errorf("volume %q belongs to no open run or reservation and survived recovery", name)
+		}
 	}
 }
