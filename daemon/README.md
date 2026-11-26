@@ -5028,12 +5028,17 @@ doctor does not check it. The cordoned host process
 denial, daemon protection, and run-end proof) and none under
 `attended_dev`, and it can claim no other class's capability. A daemon
 with `-cordon-agent-cli` writes its conformance record at every start and
-on every scheduled doctor pass (Cordoned Launches), and doctor reports the
-newest one as `cordoned_conformance`, which names the class, the
-configuration digest, and the record's outcome, generation, and time. The
-finding is report-only: it files no `system_health` item, because a failed
-cordon holds only its own class, never the ward's writers. The daemon's
-pass supplies the digest; a one-shot doctor takes it as
+on every scheduled doctor pass (Cordoned Launches). Every conformance record
+names the execution host it proved, and doctor reports one
+`cordoned_conformance` finding per host in `execution_hosts`, each naming
+the class, the host, its newest cordoned record's outcome, generation,
+configuration digest, and time, and the host's conditions. A host is
+healthy when that record passed and the host isn't in `proof_not_current`.
+The daemon's own host must also hold its pass for the configuration it
+runs now, and is left out when the daemon runs no cordon. The findings are
+report-only: they file no `system_health` item, because a failed cordon
+holds only its own class on its own host, never the ward's writers. The
+daemon's pass supplies the digest; a one-shot doctor takes it as
 `-cordon-configuration-digest`, from the `configuration_digest` field of
 the daemon's log record for its latest pass. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
