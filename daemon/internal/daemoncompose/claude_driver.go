@@ -1152,7 +1152,7 @@ func composeClaudeDriver(
 	proveImage := func(runCtx context.Context, image domain.ImageRef, wait bool) error {
 		return runClaudeConformance(runCtx, st, transport, backend, cfg, conformanceLeaser, work, image, wait)
 	}
-	startImage, err := startClaudeConformance(ctx, st, backend, cfg, tip.BaseSHA, baseInputs, image.ImageRef,
+	startImage, startOverran, err := startClaudeConformance(ctx, st, backend, cfg, tip.BaseSHA, baseInputs, image.ImageRef,
 		func(runCtx context.Context, image domain.ImageRef) error {
 			// The start never waits for memory: nothing frees any until the
 			// engine runs. A refusal fails the start, which the operator
@@ -1299,10 +1299,16 @@ func composeClaudeDriver(
 		Retire: func(runCtx context.Context, image domain.ImageRef) error {
 			return backend.RetireConformance(runCtx, string(image), StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID})
 		},
+		ProveAdapter: func(runCtx context.Context, image domain.ImageRef) error {
+			return runAdapterProofRetry(runCtx, st, backend, cfg, conformanceLeaser, work, image)
+		},
 		Start:  startImage,
 		Now:    time.Now,
 		Logger: logger.With("subsystem", "writer_image_conformance"),
 	})
+	if startOverran {
+		follower.retryAdapterProof(startImage)
+	}
 	var (
 		selectImage     engine.ImageSelection
 		bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
@@ -1452,12 +1458,16 @@ type startupProofs interface {
 // reading it always has; a base no image serves does not. An unattended
 // start that neither proves nor restores any proof fails with
 // errBackendConformanceUnavailable.
+//
+// A proof whose suite passed but whose adapter proof ran out its budget
+// (adapterProofOverran) does not fail the start: overran reports it, and
+// the caller has the follower retry the adapter proof after the start.
 func startClaudeConformance(
 	ctx context.Context, st *store.Store, backend startupProofs, cfg ClaudeDriverConfig,
 	tipSHA string, base *baseInputsMemo, seed domain.ImageRef,
 	prove func(context.Context, domain.ImageRef) error, logger *slog.Logger,
-) (domain.ImageRef, error) {
-	startImage := cfg.AgentImage
+) (startImage domain.ImageRef, overran bool, err error) {
+	startImage = cfg.AgentImage
 	if cfg.OperatingMode == domain.ModeUnattended {
 		var (
 			pointed     domain.ProjectImage
@@ -1473,7 +1483,7 @@ func startClaudeConformance(
 			images, err = tx.ListProjectImages(ctx, cfg.RepositoryID)
 			return err
 		}); err != nil {
-			return "", fmt.Errorf("read admitted images: %w", err)
+			return "", false, fmt.Errorf("read admitted images: %w", err)
 		}
 		candidates := make([]domain.ImageRef, 0, len(images)+1)
 		if havePointer {
@@ -1484,7 +1494,7 @@ func startClaudeConformance(
 		}
 		restored, err := restoreRecordedProofs(ctx, st, backend, candidates)
 		if err != nil {
-			return "", fmt.Errorf("restore ward backend conformance: %w", err)
+			return "", false, fmt.Errorf("restore ward backend conformance: %w", err)
 		}
 		startImage = seed
 		if havePointer {
@@ -1494,7 +1504,7 @@ func startClaudeConformance(
 					return base.read(ctx, tipSHA, layout)
 				})
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			if found {
 				startImage = selected.ImageRef
@@ -1506,16 +1516,22 @@ func startClaudeConformance(
 		}
 		logger.Info("ward writer start image", "image", startImage, "restored", restored)
 	} else if _, err := restoreRecordedProofs(ctx, st, backend, []domain.ImageRef{startImage}); err != nil {
-		return "", fmt.Errorf("restore ward backend conformance: %w", err)
+		return "", false, fmt.Errorf("restore ward backend conformance: %w", err)
 	}
 	if cfg.RunConformance {
-		if err := prove(ctx, startImage); err != nil {
-			return "", fmt.Errorf("run ward conformance: %w", err)
+		proveErr := prove(ctx, startImage)
+		switch {
+		case adapterProofOverran(proveErr):
+			logger.Warn("the start's adapter proof ran out its budget; the daemon starts and retries it after a backoff",
+				"image", startImage, "error", proveErr)
+			overran = true
+		case proveErr != nil:
+			return "", false, fmt.Errorf("run ward conformance: %w", proveErr)
 		}
 	} else if cfg.OperatingMode == domain.ModeUnattended && len(backend.ProvenImages()) == 0 {
-		return "", fmt.Errorf("restore production backend conformance: %w", errBackendConformanceUnavailable)
+		return "", false, fmt.Errorf("restore production backend conformance: %w", errBackendConformanceUnavailable)
 	}
-	return startImage, nil
+	return startImage, overran, nil
 }
 
 // newRoutedReviewSource builds the routed review source on the provider the
@@ -1855,6 +1871,35 @@ func runClaudeConformance(
 		Kind: domain.ReservationProofPass, ID: id, Size: proofPassSize, VMs: proofPassVMs,
 	}, wait, func(ctx context.Context) error {
 		return runReservedConformance(ctx, st, backend, cfg, leaser, image, base, runID, registryRunID, nonce, seedDir)
+	})
+}
+
+// runAdapterProofRetry reruns the adapter proof alone in image, whose ward
+// suite proof stands, at the tip the tip watch last stored. It skips the
+// suite: the image's suite proof already passed and stays published, and
+// rerunning it would add the load that ran the adapter proof out of time.
+// Like a follower pass it runs as a restart blocker under its own proof-pass
+// reservation and waits for memory, so it waits out the load like any other
+// proof pass; a drain or a pause refuses it.
+func runAdapterProofRetry(
+	ctx context.Context, st *store.Store, backend *ward.Backend, cfg ClaudeDriverConfig,
+	leaser *AdapterConformanceLeaser, work daemonWorkRunner, image domain.ImageRef,
+) error {
+	if err := recoverAdapterConformance(ctx, st, backend, cfg, leaser); err != nil {
+		return err
+	}
+	base, err := storedRepositoryTip(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef)
+	if err != nil {
+		return fmt.Errorf("adapter proof base: %w", err)
+	}
+	id, err := engine.NewDaemonWorkID("proof-pass")
+	if err != nil {
+		return err
+	}
+	return work.run(ctx, domain.RestartBlockerProofPass, engine.DaemonWork{
+		Kind: domain.ReservationProofPass, ID: id, Size: proofPassSize, VMs: proofPassVMs,
+	}, true, func(ctx context.Context) error {
+		return proveClaudeAdapter(ctx, st, backend, cfg, image, base, leaser)
 	})
 }
 

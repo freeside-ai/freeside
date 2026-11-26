@@ -152,9 +152,48 @@ func adapterProofBudgetError(ctx context.Context, started time.Time, err error) 
 	if !errors.Is(context.Cause(ctx), errAdapterProofBudget) {
 		return err
 	}
-	return fmt.Errorf("adapter proof ran %s and passed its %s budget; "+
-		"if the machine was loaded, restart the daemon once load drops to rerun the proof: %w",
-		time.Since(started).Round(100*time.Millisecond), adapterProofBudget, err)
+	return &adapterProofOverranError{elapsed: time.Since(started).Round(100 * time.Millisecond), err: err}
+}
+
+// adapterProofOverranError is a proof that failed only because
+// adapterProofBudget ended it, which the daemon retries (#3574). The
+// deadline stays in its text, never its chain (#3337): Unwrap returns the
+// runtime's error alone.
+type adapterProofOverranError struct {
+	elapsed time.Duration
+	err     error
+}
+
+func (e *adapterProofOverranError) Error() string {
+	return fmt.Sprintf("adapter proof ran %s and passed its %s budget; "+
+		"if the machine was loaded, the daemon retries the proof after a backoff: %v",
+		e.elapsed, adapterProofBudget, e.err)
+}
+
+func (e *adapterProofOverranError) Unwrap() error { return e.err }
+
+// adapterProofOverran reports whether err is, or wraps, a proof that ran out
+// its budget and nothing else: a join is one only when every member is, so
+// an overrun joined with another failure, such as a reservation release
+// that did not land (daemonWorkRunner.reserved), fails as that failure.
+func adapterProofOverran(err error) bool {
+	switch e := err.(type) { //nolint:errorlint // walks the chain itself: errors.As would take one overran member of a join for the whole
+	case nil:
+		return false
+	case *adapterProofOverranError:
+		return true
+	case interface{ Unwrap() []error }:
+		members := e.Unwrap()
+		for _, member := range members {
+			if !adapterProofOverran(member) {
+				return false
+			}
+		}
+		return len(members) > 0
+	case interface{ Unwrap() error }:
+		return adapterProofOverran(e.Unwrap())
+	}
+	return false
 }
 
 // proveClaudeAdapter proves the Claude ward adapter in image, the image the
@@ -191,6 +230,9 @@ func proveClaudeAdapter(
 // the implementer or select its launch records failed and tries no
 // substitute: startup already holds the whole lineup for those, so the
 // record holds nothing wider.
+//
+// A proof that ran out its budget on every subscription it ran on returns
+// the error proveAdapterOnCandidates does, for the daemon to retry.
 func ProveSelectedClaudeAdapter(ctx context.Context, st *store.Store, selection engine.AgentSelection, observe func(engine.RoleAgent) (domain.LaunchCapabilitySet, error)) error {
 	var candidates []engine.RoleAgent
 	implementer, err := engine.ResolveRole(ctx, st, selection.Tree, domain.RoleImplementer)
@@ -295,9 +337,13 @@ func selectForLaunch(selection engine.AgentSelection, role domain.RoleName, agen
 //
 // When no proof passes, it records the first proof that ran, so an adapter
 // that fails everywhere still revokes an older pass and a lone subscription
-// records what it records today. When none ran, it records nothing, returns
-// nil, and the adapter's last record stands. An adapterRecoveryPending error
-// records its proof and returns at once, launching no further candidate.
+// records what it records today. It then returns an error that
+// adapterProofOverran reports true for when every proof that ran failed only
+// by running out its budget, which the daemon retries after a backoff, and
+// nil when any failed on its merits, which no retry would change. When none
+// ran, it records nothing, returns nil, and the adapter's last record
+// stands. An adapterRecoveryPending error records its proof and returns at
+// once, launching no further candidate.
 //
 // Substitutes copy the implementer's line, so they bind its client unless a
 // recorded catalog serves another client's model; an implementer on another
@@ -312,6 +358,7 @@ func proveAdapterOnCandidates(
 	}
 	var (
 		ran        bool
+		allOverran = true
 		firstSeen  domain.LaunchCapabilitySet
 		firstErr   error
 		firstAgent domain.ClientEnrollmentID
@@ -354,6 +401,9 @@ func proveAdapterOnCandidates(
 		}
 		slog.Warn("Claude adapter conformance fell short on one subscription",
 			"enrollment", candidate.Enrollment.ID, "missing", missing, "error", runErr)
+		// A proof that saw too little without an error, or failed any other
+		// way, failed on its merits.
+		allOverran = allOverran && adapterProofOverran(runErr)
 		if !ran {
 			ran, firstSeen, firstErr, firstAgent = true, observed, runErr, candidate.Enrollment.ID
 		}
@@ -364,6 +414,11 @@ func proveAdapterOnCandidates(
 	}
 	if err := RecordObservedAdapterConformance(ctx, st, firstSeen, firstErr, time.Now().UTC()); err != nil {
 		return err
+	}
+	if allOverran {
+		slog.Warn("Claude adapter conformance ran out its budget on every subscription; writer admission held "+
+			"while the daemon retries the proof", "enrollment", firstAgent, "error", firstErr)
+		return fmt.Errorf("adapter proof ran out its budget on every subscription it ran on: %w", firstErr)
 	}
 	slog.Warn("Claude adapter conformance failed on every subscription; writer admission held",
 		"enrollment", firstAgent, "error", firstErr)

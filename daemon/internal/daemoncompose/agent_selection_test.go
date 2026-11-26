@@ -68,8 +68,15 @@ func TestAdapterProofPastItsBudgetSaysSo(t *testing.T) {
 				t.Fatalf("error %v lost the gate's error", err)
 			}
 			if !strings.HasPrefix(fmt.Sprint(err), "adapter proof ran 3m0s and passed its 3m0s budget; ") ||
-				!strings.Contains(fmt.Sprint(err), "once load drops") {
+				!strings.Contains(fmt.Sprint(err), "the daemon retries the proof after a backoff") {
 				t.Fatalf("error %q does not say the proof ran past its budget", err)
+			}
+			if !adapterProofOverran(err) || errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error %v is not an overrun with the deadline kept out of its chain", err)
+			}
+			// A release that did not land fails the pass as itself.
+			if joined := errors.Join(err, errors.New("release the reservation")); adapterProofOverran(joined) {
+				t.Fatalf("error %v reads as an overrun alone", joined)
 			}
 		})
 	})
@@ -79,7 +86,7 @@ func TestAdapterProofPastItsBudgetSaysSo(t *testing.T) {
 			return nil, errKilled
 		})
 		_, err := runAdapterConformance(t.Context(), gate, input, nil)
-		if !errors.Is(err, errKilled) || err.Error() != errKilled.Error() {
+		if !errors.Is(err, errKilled) || err.Error() != errKilled.Error() || adapterProofOverran(err) {
 			t.Fatalf("error %v, want the gate's error unchanged", err)
 		}
 	})
@@ -124,8 +131,10 @@ func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
 			if runErr == nil {
 				t.Fatal("incomplete run passed")
 			}
-			if err := proveAdapterOnCandidates(t.Context(), st, []engine.RoleAgent{{Adapter: adapter}}, noRecheck, func(engine.RoleAgent) (domain.LaunchCapabilitySet, error) { return observed, runErr }); err != nil {
-				t.Fatal(err)
+			// Only the timeout is an overrun the daemon retries.
+			err := proveAdapterOnCandidates(t.Context(), st, []engine.RoleAgent{{Adapter: adapter}}, noRecheck, func(engine.RoleAgent) (domain.LaunchCapabilitySet, error) { return observed, runErr })
+			if overran := kind == "timeout"; adapterProofOverran(err) != overran || (!overran && err != nil) {
+				t.Fatalf("proof = %v, want an overrun only for a timeout", err)
 			}
 			if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
 				record, _, err := tx.LatestAdapterConformance(t.Context(), adapter.Digest)
@@ -156,6 +165,64 @@ func TestAdapterConformanceRunFailuresAndOtherAdapters(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAdapterProofRetriesOnlyAnOverrunEverywhere pins #3574: a proof that
+// ran out its budget on every subscription records its failure and returns
+// an overrun for the daemon to retry; one that also failed on its merits on
+// any subscription records its failure and returns nil, since no retry would
+// change it.
+func TestAdapterProofRetriesOnlyAnOverrunEverywhere(t *testing.T) {
+	t.Parallel()
+	adapter, err := agentbaseline.ClaudeWardAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	overran := &adapterProofOverranError{elapsed: adapterProofBudget, err: errors.New("signal: killed")}
+	type result struct {
+		seen domain.LaunchCapabilitySet
+		err  error
+	}
+	for name, tc := range map[string]struct {
+		results     []result
+		wantOverran bool
+	}{
+		"every subscription overran": {results: []result{{err: overran}, {err: overran}}, wantOverran: true},
+		"one overran, one saw too little": {
+			results: []result{{err: overran}, {seen: domain.NewLaunchCapabilitySet(domain.LaunchCapReadTools)}},
+		},
+		"one failed, one overran": {results: []result{{err: errors.New("handoff failed")}, {err: overran}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			if err := recordTestClaudeAdapterConformance(t.Context(), st, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			candidates := make([]engine.RoleAgent, len(tc.results))
+			for i := range candidates {
+				candidates[i] = engine.RoleAgent{Adapter: adapter}
+			}
+			next := 0
+			err := proveAdapterOnCandidates(t.Context(), st, candidates, noRecheck, func(engine.RoleAgent) (domain.LaunchCapabilitySet, error) {
+				r := tc.results[next]
+				next++
+				return r.seen, r.err
+			})
+			if adapterProofOverran(err) != tc.wantOverran || (!tc.wantOverran && err != nil) {
+				t.Fatalf("proof = %v, want overran %t", err, tc.wantOverran)
+			}
+			if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+				record, _, err := tx.LatestAdapterConformance(t.Context(), adapter.Digest)
+				if err == nil && record.Outcome != domain.ConformanceFailed {
+					t.Fatalf("record = %+v, want the failure to revoke the earlier pass", record)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
