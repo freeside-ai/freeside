@@ -439,14 +439,16 @@ func importRunSettings(
 	if err != nil {
 		return 0, 0, err
 	}
-	// An execution pause, a cordoned launch cap, or the execution switch,
-	// set or cleared, is not configuration the deputy's file carries, so a
-	// store that only ever held them still takes an import. The file
-	// carries no switch either, so an import never turns execution on.
+	// An execution pause, a cordoned launch cap, the execution switch, or
+	// an image build limit, set or cleared, is not configuration the
+	// deputy's file carries, so a store that only ever held them still
+	// takes an import. The file carries no switch either, so an import
+	// never turns execution on.
 	for _, revision := range instanceRevisions {
 		if revision.Section != domain.InstanceSectionExecutionPause &&
 			revision.Section != domain.InstanceSectionCordonedLaunches &&
-			revision.Section != domain.InstanceSectionExecution {
+			revision.Section != domain.InstanceSectionExecution &&
+			revision.Section != domain.InstanceSectionImageBuilds {
 			return 0, 0, fmt.Errorf("instance settings already have revision %d; set sections with settings set",
 				instanceRevisions[len(instanceRevisions)-1].Revision)
 		}

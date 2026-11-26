@@ -36,7 +36,8 @@ func CheckInstanceSettingsSection(settings domain.InstanceSettings, section doma
 		domain.InstanceSectionPrompts, domain.InstanceSectionAgentTree, domain.InstanceSectionJudgment,
 		domain.InstanceSectionTimeouts, domain.InstanceSectionManualSubmissionConfig,
 		domain.InstanceSectionMacosVerification, domain.InstanceSectionExecutionPause,
-		domain.InstanceSectionCordonedLaunches, domain.InstanceSectionExecution:
+		domain.InstanceSectionCordonedLaunches, domain.InstanceSectionExecution,
+		domain.InstanceSectionImageBuilds:
 	}
 	return nil
 }

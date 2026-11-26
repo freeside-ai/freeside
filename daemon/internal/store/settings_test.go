@@ -224,6 +224,7 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 		domain.InstanceSectionBuild:                  `{"proxy":"","base_build_ref":"","dns":[]}`,
 		domain.InstanceSectionMacosVerification:      `{"root":"/m","slots":["a"],"xcode_build":"1","swift":"s"}`,
 		domain.InstanceSectionCordonedLaunches:       `{"max_concurrent":2}`,
+		domain.InstanceSectionImageBuilds:            `{"max_concurrent":2}`,
 		domain.InstanceSectionExecution:              `{"enabled":true}`,
 	}
 	for _, section := range domain.AllInstanceSettingsSections {

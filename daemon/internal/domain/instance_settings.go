@@ -44,6 +44,10 @@ const (
 	// Unset reads as off, and settings import never writes it, so an import
 	// alone starts no work. prod reads it only at start.
 	InstanceSectionExecution InstanceSettingsSection = "execution"
+	// InstanceSectionImageBuilds bounds how many project image builds run
+	// at once (#3210). Unset reads as one. The daemon reads it only at
+	// start.
+	InstanceSectionImageBuilds InstanceSettingsSection = "image_builds"
 )
 
 // AllInstanceSettingsSections lists every InstanceSettingsSection in the
@@ -53,6 +57,7 @@ var AllInstanceSettingsSections = []InstanceSettingsSection{
 	InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 	InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
 	InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
+	InstanceSectionImageBuilds,
 }
 
 func (s InstanceSettingsSection) valid() bool {
@@ -60,7 +65,8 @@ func (s InstanceSettingsSection) valid() bool {
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 		InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
-		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution:
+		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
+		InstanceSectionImageBuilds:
 		return true
 	default:
 		return false
@@ -80,7 +86,8 @@ func ParseInstanceSettingsSection(name string) (InstanceSettingsSection, error) 
 func (s InstanceSettingsSection) Optional() bool {
 	switch s {
 	case InstanceSectionJudgment, InstanceSectionManualSubmissionConfig, InstanceSectionMacosVerification,
-		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution:
+		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
+		InstanceSectionImageBuilds:
 		return true
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
@@ -255,6 +262,23 @@ type CordonedLaunchSettings struct {
 	MaxConcurrent int `json:"max_concurrent"`
 }
 
+// ImageBuildSettings is the image_builds section's value: the most project
+// image builds that may run at once. Builds still take turns on the host's
+// one builder VM and on one repository's image pointer; the limit bounds
+// the rest of a build (the recipe read, the probes, the publish).
+type ImageBuildSettings struct {
+	MaxConcurrent int `json:"max_concurrent"`
+}
+
+// ImageBuildLimit is the most project image builds that may run at once:
+// the image_builds section's value, or one when the section is unset.
+func (s InstanceSettings) ImageBuildLimit() int {
+	if s.ImageBuilds == nil {
+		return 1
+	}
+	return s.ImageBuilds.MaxConcurrent
+}
+
 // EnabledSettings is the value of a switch section: the instance's
 // execution section and a project's enabled section. The key is required,
 // so a value always says which way the switch is set; an unset section
@@ -282,6 +306,7 @@ type InstanceSettings struct {
 	ExecutionPause         *ExecutionPauseSettings    `json:"execution_pause"`
 	CordonedLaunches       *CordonedLaunchSettings    `json:"cordoned_launches"`
 	Execution              *EnabledSettings           `json:"execution"`
+	ImageBuilds            *ImageBuildSettings        `json:"image_builds"`
 }
 
 // Validate checks every section that is set and that every required one
@@ -313,6 +338,8 @@ func (s InstanceSettings) unset(section InstanceSettingsSection) bool {
 		return s.CordonedLaunches == nil
 	case InstanceSectionExecution:
 		return s.Execution == nil
+	case InstanceSectionImageBuilds:
+		return s.ImageBuilds == nil
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
 		return false
@@ -389,6 +416,14 @@ func (s InstanceSettings) ValidateSection(section InstanceSettingsSection) error
 	case InstanceSectionExecution:
 		if s.Execution == nil {
 			return errors.New("execution is required")
+		}
+		return nil
+	case InstanceSectionImageBuilds:
+		if s.ImageBuilds == nil {
+			return errors.New("image_builds is required")
+		}
+		if s.ImageBuilds.MaxConcurrent < 1 {
+			return fmt.Errorf("image_builds.max_concurrent %d must be at least 1", s.ImageBuilds.MaxConcurrent)
 		}
 		return nil
 	}
@@ -475,6 +510,8 @@ func (s *InstanceSettings) field(section InstanceSettingsSection) any {
 		return &s.CordonedLaunches
 	case InstanceSectionExecution:
 		return &s.Execution
+	case InstanceSectionImageBuilds:
+		return &s.ImageBuilds
 	}
 	return nil
 }
