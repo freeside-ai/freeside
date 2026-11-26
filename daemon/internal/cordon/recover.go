@@ -176,8 +176,11 @@ func (b *Backend) RequestCancellation(ctx context.Context, runID string) error {
 // An error commits nothing and Recover may be called again. Export's
 // refusals pass through unchanged, so the caller can tell one that will
 // repeat (a *ScanRefusalError, ErrWorktreeReplaced, ErrNotExportable) from
-// a transient failure. Canceling ctx stops the wait and leaves the run
-// running; RequestCancellation is what cancels a run.
+// a transient failure. ErrCanceled can pass through too, when a
+// cancellation is requested between the end record's read and the export:
+// it means the run ended canceled, not that its export was refused.
+// Canceling ctx stops the wait and leaves the run running;
+// RequestCancellation is what cancels a run.
 func (b *Backend) Recover(ctx context.Context, req RecoverRequest) (RecoveryResult, error) {
 	if err := b.attached(); err != nil {
 		return RecoveryResult{}, err

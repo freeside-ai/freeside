@@ -131,6 +131,8 @@ func TestExportRefusesALaunchWithoutACleanProvenEnd(t *testing.T) {
 		name   string
 		launch func(t *testing.T, cfg Config) *Backend
 		want   error
+		// canceled is whether the refusal also says the run ended canceled.
+		canceled bool
 	}{
 		{"blocked", func(t *testing.T, cfg Config) *Backend {
 			host := newFakeHost()
@@ -141,7 +143,7 @@ func TestExportRefusesALaunchWithoutACleanProvenEnd(t *testing.T) {
 				t.Fatalf("Launch = %v, want blocked", err)
 			}
 			return b
-		}, ErrNoEndRecord},
+		}, ErrNoEndRecord, false},
 		{"canceled", func(t *testing.T, cfg Config) *Backend {
 			ctx, cancel := context.WithCancel(t.Context())
 			b := fakeBackend(t, cfg, &fakeLauncher{host: newFakeHost(), script: func(processSpec, *fakeProcess) { cancel() }})
@@ -149,17 +151,26 @@ func TestExportRefusesALaunchWithoutACleanProvenEnd(t *testing.T) {
 				t.Fatalf("Launch = %+v, %v", got, err)
 			}
 			return b
-		}, ErrNotExportable},
+		}, ErrNotExportable, true},
+		// A stop that raced the agent's clean exit: Launch returned exited 0,
+		// and the marker landed before Export.
+		{"canceled after a clean exit", func(t *testing.T, cfg Config) *Backend {
+			b := launched(t, cfg, "run", agentWriting(0, func(string) {}))
+			if err := b.RequestCancellation(t.Context(), "run"); err != nil {
+				t.Fatalf("RequestCancellation: %v", err)
+			}
+			return b
+		}, ErrNotExportable, true},
 		{"stalled", func(t *testing.T, cfg Config) *Backend {
 			b := fakeBackend(t, cfg, &fakeLauncher{host: newFakeHost(), obeyTerm: true, script: func(processSpec, *fakeProcess) {}})
 			if got, err := b.Launch(t.Context(), request("run")); err != nil || got.EndedBy != EndedByStalled {
 				t.Fatalf("Launch = %+v, %v", got, err)
 			}
 			return b
-		}, ErrNotExportable},
+		}, ErrNotExportable, false},
 		{"nonzero exit", func(t *testing.T, cfg Config) *Backend {
 			return launched(t, cfg, "run", agentWriting(1, func(string) {}))
-		}, ErrNotExportable},
+		}, ErrNotExportable, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,8 +178,9 @@ func TestExportRefusesALaunchWithoutACleanProvenEnd(t *testing.T) {
 			cfg := testConfig(t)
 			synctest.Test(t, func(t *testing.T) {
 				b := tc.launch(t, cfg)
-				if _, err := b.Export(t.Context(), exportRequest("run")); !errors.Is(err, tc.want) {
-					t.Fatalf("Export = %v, want %v", err, tc.want)
+				_, err := b.Export(t.Context(), exportRequest("run"))
+				if !errors.Is(err, tc.want) || errors.Is(err, ErrCanceled) != tc.canceled {
+					t.Fatalf("Export = %v, want %v, canceled %v", err, tc.want, tc.canceled)
 				}
 				l := layoutFor(cfg.RunsRoot, "run")
 				for _, p := range []string{l.export, l.exportRecord, filepath.Join(l.worktree, export.EvidenceDescriptorPath)} {
