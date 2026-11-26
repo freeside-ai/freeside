@@ -7,41 +7,51 @@ import (
 	"sync"
 )
 
-// errProjectImageBuilderBusy is a publication rebuild that found the builder
-// held. The lane does not wait: the task stays queued, and its next pass
-// finds the image the holder built if that one serves its commit.
-var errProjectImageBuilderBusy = errors.New("the project-image builder is busy with another build")
+// errProjectImageBuilderBusy is a publication rebuild that found every build
+// slot held. The lane does not wait: the task stays queued, and its next
+// pass finds the image a holder built if that one serves its commit.
+var errProjectImageBuilderBusy = errors.New("the project-image builder is busy with other builds")
 
-// projectImageBuildGate lets one project-image build run at a time per
-// daemon (plan §5.7, Project-image upkeep). Upkeep and the publication lane
-// share it through their one ProjectImageRebuild. A waiter takes the gate in
-// the order it asked, oldest first; a publication rebuild never waits, so a
-// build in progress never holds the lane. The zero value is an open gate.
+// projectImageBuildGate lets at most a limit of project-image builds run at
+// once per daemon (plan §5.7, Project-image upkeep); a limit below one means
+// one. Upkeep and the publication lane share it through their one
+// ProjectImageRebuild. A slot bounds a build's whole run; the host's one
+// builder VM is a separate turn the builder takes (projectimage), and one
+// repository's builds still take turns on its pointer. A waiter takes a
+// slot in the order it asked, oldest first; a publication rebuild never
+// waits, so a build in progress never holds the lane. The zero value is an
+// open gate.
 type projectImageBuildGate struct {
 	mu   sync.Mutex
-	held bool
+	held int
 	// waiters are the turns of blocked acquirers, oldest first. Release
-	// hands the gate to the head by closing its channel, so a waiter never
+	// hands a slot to the head by closing its channel, so a waiter never
 	// races a newcomer for it.
 	waiters []chan struct{}
 }
 
-// tryAcquire takes the gate only when nobody holds it or waits for it.
-func (g *projectImageBuildGate) tryAcquire() bool {
+// free reports whether a slot is free for a newcomer under limit: one is
+// unheld and nobody waits for one. The caller holds g.mu.
+func (g *projectImageBuildGate) free(limit int) bool {
+	return g.held < max(limit, 1) && len(g.waiters) == 0
+}
+
+// tryAcquire takes a slot only when one is free and nobody waits for one.
+func (g *projectImageBuildGate) tryAcquire(limit int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.held || len(g.waiters) > 0 {
+	if !g.free(limit) {
 		return false
 	}
-	g.held = true
+	g.held++
 	return true
 }
 
-// acquire waits for the gate behind every earlier waiter, or until ctx ends.
-func (g *projectImageBuildGate) acquire(ctx context.Context) error {
+// acquire waits for a slot behind every earlier waiter, or until ctx ends.
+func (g *projectImageBuildGate) acquire(ctx context.Context, limit int) error {
 	g.mu.Lock()
-	if !g.held && len(g.waiters) == 0 {
-		g.held = true
+	if g.free(limit) {
+		g.held++
 		g.mu.Unlock()
 		return nil
 	}
@@ -60,17 +70,17 @@ func (g *projectImageBuildGate) acquire(ctx context.Context) error {
 		return context.Cause(ctx)
 	}
 	g.mu.Unlock()
-	// The gate was handed over as ctx ended; pass it on.
+	// A slot was handed over as ctx ended; pass it on.
 	g.release()
 	return context.Cause(ctx)
 }
 
-// release hands the gate to the oldest waiter, or opens it.
+// release hands the caller's slot to the oldest waiter, or frees it.
 func (g *projectImageBuildGate) release() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.waiters) == 0 {
-		g.held = false
+		g.held--
 		return
 	}
 	next := g.waiters[0]

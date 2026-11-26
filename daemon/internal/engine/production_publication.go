@@ -160,11 +160,12 @@ type ProductionPublicationConfig struct {
 	// candidate whose dependency change stays within policy (plan §5.7). Nil
 	// leaves every such candidate refused as rebuild_not_configured.
 	RebuildProjectImage *ProjectImageRebuild
-	// ImageUpkeepPending is image upkeep's pending-resolution lookup
-	// (ImageUpkeep.PendingResolution). A re-entry whose base no recorded
-	// image serves holds while it reports a resolution and stops as before
-	// when it reports none. Nil reports none.
-	ImageUpkeepPending func(context.Context) (*domain.ImageUpkeepHold, error)
+	// ImageUpkeepPending is the pending-resolution lookup
+	// (ImageUpkeep.PendingResolution) of the upkeep serving the named
+	// repository, which the lane passes as the run's admitted one. A
+	// re-entry whose base no recorded image serves holds while it reports a
+	// resolution and stops as before when it reports none. Nil reports none.
+	ImageUpkeepPending func(ctx context.Context, repositoryID int64) (*domain.ImageUpkeepHold, error)
 	// OpenIssues lists the filing target's open issues for the duplicate
 	// search a follow-up filing waits on (plan §7 Finding Adjudication). Nil
 	// leaves every filing unproposed, with the run's refusal notice.
@@ -380,7 +381,7 @@ type productionPublicationWorkflow struct {
 	// never authority.
 	holdPace             observationPace
 	preparationDigest    domain.Digest
-	imageUpkeepPending   func(context.Context) (*domain.ImageUpkeepHold, error)
+	imageUpkeepPending   func(context.Context, int64) (*domain.ImageUpkeepHold, error)
 	afterVerification    func() error
 	afterPublication     func() error
 	afterReady           func() error

@@ -44,7 +44,7 @@ func (h *tipWatchHarness) reconciler(st *store.Store) *ActiveResourceReconciler 
 			h.readyHit++
 			return exactPull("open", false), nil
 		},
-		tipWatch: testTipWatch,
+		tipWatches: []repositoryTipWatch{testTipWatch},
 		observeTip: func(_ context.Context, repo, branch string) (string, error) {
 			h.reads++
 			if repo != testTipWatch.Repo || branch != testTipWatch.Branch {
@@ -355,7 +355,7 @@ func TestActiveResourceWithoutTipWatchReadsNoTip(t *testing.T) {
 	st := schedTestStore(t)
 	h := &tipWatchHarness{tip: tipA, now: activeResourceTestTime}
 	r := h.reconciler(st)
-	r.tipWatch = repositoryTipWatch{}
+	r.tipWatches = nil
 
 	if failures := reconcileTipWatch(t, r); len(failures) != 0 {
 		t.Fatalf("failures = %v", failures)
@@ -364,7 +364,7 @@ func TestActiveResourceWithoutTipWatchReadsNoTip(t *testing.T) {
 		t.Fatalf("an unset watch read %d tips, wrote %v, handed %v", h.reads, found, h.handed)
 	}
 
-	r.tipWatch, r.upkeepTipAdvance = testTipWatch, nil
+	r.tipWatches, r.upkeepTipAdvance = []repositoryTipWatch{testTipWatch}, nil
 	if _, err := r.Reconcile(context.Background()); err == nil {
 		t.Fatal("a tip watch without an entry point reconciled")
 	}

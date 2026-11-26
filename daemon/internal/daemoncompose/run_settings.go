@@ -155,7 +155,7 @@ func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverC
 		AgentImage: agentImage, ExporterImage: string(instance.Images.Exporter),
 		ContainerBin: instance.HostTools.Container, SeedRoot: instance.SeedRoot,
 		WriterStopTimeout: settings.WriterStopTimeout, WriterStallInterval: settings.WriterStallInterval,
-		Rebuild:  RebuildInputs(instance.Build),
+		Rebuild: RebuildInputs(instance.Build), ImageBuildLimit: instance.ImageBuildLimit(),
 		StateDir: launch.StateDir, RigTokenFile: launch.RigTokenFile,
 		Judgments:                      newJudgmentConfig(instance.Judgment, launch.JudgmentDigest),
 		ProviderEndpoints:              launch.ProviderEndpoints,

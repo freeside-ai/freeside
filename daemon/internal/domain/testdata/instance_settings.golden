@@ -55,5 +55,8 @@
   },
   "execution": {
     "enabled": true
+  },
+  "image_builds": {
+    "max_concurrent": 2
   }
 }

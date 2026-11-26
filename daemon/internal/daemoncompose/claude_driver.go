@@ -73,7 +73,11 @@ type ClaudeDriverConfig struct {
 	// when a candidate changes its dependencies within policy (plan §5.7). An
 	// empty BaseBuildRef leaves the daemon unable to rebuild: such a candidate
 	// then blocks publication as it did before.
-	Rebuild           projectimage.BuildInputs
+	Rebuild projectimage.BuildInputs
+	// ImageBuildLimit is how many project-image builds may run at once, from
+	// the instance's image_builds setting. Zero or below means one, which is
+	// what a configuration with no such setting (the deputy's) runs at.
+	ImageBuildLimit   int
 	ProviderEndpoints []string
 	// The prompt-package files are trusted implementation, specification, and
 	// remediation inputs. The daemon derives every digest from ingested bytes.
@@ -721,7 +725,7 @@ type ClaudeComposition struct {
 	// pending-resolution lookup once upkeep is composed. Both are nil for
 	// an attended composition, which runs no project image.
 	selectImage     engine.ImageSelection
-	bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
+	bindImageUpkeep func(func(context.Context, int64) (*domain.ImageUpkeepHold, error))
 	runConformance  func(context.Context) error
 	// hostVerification is the macOS verification executor, nil when none
 	// is configured.
@@ -737,9 +741,10 @@ type ClaudeComposition struct {
 	// reconciler's tip watch and image upkeep, which feed project-image
 	// upkeep (§5.7).
 	observeRepositoryTip func(ctx context.Context, repo, branch string) (string, error)
-	// fetchTip fetches the configured base branch at tipSHA into dir for
-	// image upkeep and returns the repository ID the checkout carries.
-	fetchTip func(ctx context.Context, tipSHA, dir string) (int64, error)
+	// fetchTip fetches repo's branch at tipSHA into dir for image upkeep
+	// and the readiness check, and returns the repository ID the checkout
+	// carries.
+	fetchTip func(ctx context.Context, repo, branch, tipSHA, dir string) (int64, error)
 	// observePull and observeIssue are the §5.18 completion sweep's
 	// conditional reads through the same reconciler.
 	observePull  pullObserver
@@ -1321,7 +1326,7 @@ func composeClaudeDriver(
 	}
 	var (
 		selectImage     engine.ImageSelection
-		bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
+		bindImageUpkeep func(func(context.Context, int64) (*domain.ImageUpkeepHold, error))
 	)
 	if cfg.OperatingMode == domain.ModeUnattended {
 		selector := &claudeImageSelector{
@@ -1343,8 +1348,8 @@ func composeClaudeDriver(
 		issueReadTokens:        issueReadTokens,
 		openIssues: publish.NewOpenIssueLister(
 			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
-		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (int64, error) {
-			checkout, err := transport.FetchBase(fetchCtx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
+		fetchTip: func(fetchCtx context.Context, repo, branch, tipSHA, dir string) (int64, error) {
+			checkout, err := transport.FetchBase(fetchCtx, repo, branch, tipSHA, dir)
 			if err != nil {
 				return 0, err
 			}
@@ -1420,7 +1425,10 @@ func composeClaudeDriver(
 			agentImage: cfg.AgentImage, approvedRecipe: cfg.ApprovedRecipe,
 			reviewConfigurationDigest: reviewConfigurationDigest,
 			github: projectReadinessGitHub{
-				observeTip: observeRefTip, fetchTip: composition.fetchTip,
+				observeTip: observeRefTip,
+				fetchTip: func(ctx context.Context, tipSHA, dir string) (int64, error) {
+					return composition.fetchTip(ctx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
+				},
 				appBotIdentity: commitAuthors, baseInputs: baseInputs.read,
 			},
 			now: utcNow,
@@ -1858,10 +1866,10 @@ func runClaudeConformance(
 	// refused as dirty before conformance can pass. These are the only two
 	// production SeedBaseCheckout sources; the publication lane's fetches
 	// keep the repository-only shape on purpose.
-	// Each pass seeds at the tip the tip watch last stored, the base a new
-	// run would start at now, so a pass proves a workspace like the next
-	// one admission seeds.
-	base, err := storedRepositoryTip(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef)
+	// Each pass seeds at the tip the tip watch last stored for the image's
+	// own repository, the base a new run on it would start at now, so a
+	// pass proves a workspace like the next one admission seeds.
+	base, err := conformanceBase(ctx, st, cfg, image)
 	if err != nil {
 		return fmt.Errorf("conformance base: %w", err)
 	}
@@ -2055,6 +2063,52 @@ func instanceSettingsRevision(revisions *domain.SettingsRevisions) int {
 		return 0
 	}
 	return revisions.Instance
+}
+
+// conformanceBase is the base a proof pass over image seeds at: the stored
+// tip of the repository the image's record names (#3210), so one
+// repository's image is never proved on another's tree. An image with no
+// record, such as a configured agent image this daemon never built, seeds
+// at cfg's repository and branch. Another repository's tip is the one its
+// own tip watch stored, on the branch that watch reads; a missing tip is
+// exec.ErrInputUnavailable, and one stored under another repository name is
+// domain.ErrRepositoryIdentityMismatch, as storedRepositoryTip reports.
+func conformanceBase(
+	ctx context.Context, st *store.Store, cfg ClaudeDriverConfig, image domain.ImageRef,
+) (domain.BaseRevision, error) {
+	var (
+		recorded    domain.ProjectImage
+		isRecorded  bool
+		observation domain.RepositoryTipObservation
+		found       bool
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if recorded, isRecorded, err = tx.GetProjectImageByRef(ctx, image); err != nil || !isRecorded ||
+			recorded.RepositoryID == cfg.RepositoryID {
+			return err
+		}
+		observation, found, err = tx.GetRepositoryTipObservation(ctx, recorded.RepositoryID)
+		return err
+	}); err != nil {
+		return domain.BaseRevision{}, fmt.Errorf("read the image's repository tip: %w", err)
+	}
+	if !isRecorded || recorded.RepositoryID == cfg.RepositoryID {
+		return storedRepositoryTip(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef)
+	}
+	if !found {
+		return domain.BaseRevision{}, fmt.Errorf("no observed tip of %s, the repository image %s was built for: %w",
+			recorded.Repository, image, exec.ErrInputUnavailable)
+	}
+	if observation.Repository != recorded.Repository {
+		return domain.BaseRevision{}, fmt.Errorf("the observed tip of repository %d is on %s, not %s, which image %s was built for: %w",
+			recorded.RepositoryID, observation.Repository, recorded.Repository, image,
+			domain.ErrRepositoryIdentityMismatch)
+	}
+	return domain.BaseRevision{
+		Repo: recorded.Repository, RepositoryID: recorded.RepositoryID, BaseRef: observation.Branch,
+		BaseSHA: observation.TipSHA,
+	}, nil
 }
 
 // storedRepositoryTip reads the tip observation stored for repositoryID. A

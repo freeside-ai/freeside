@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -88,7 +90,7 @@ func TestImageUpkeepWaitsForMemoryThenBuilds(t *testing.T) {
 			t.Fatalf("builds = %d, refusals = %v, health = %q; want nothing while waiting",
 				len(h.builder.requests), h.refusals(), h.faults)
 		}
-		if !h.upkeep.Rebuild.gate.tryAcquire() {
+		if !h.upkeep.Rebuild.gate.tryAcquire(h.upkeep.Rebuild.BuildLimit) {
 			t.Fatal("upkeep waits for memory holding the build gate")
 		}
 		h.upkeep.Rebuild.gate.release()
@@ -259,7 +261,7 @@ func TestALaneBuildsKeptReservationIsReleasedOnlyOnTheBuildsProof(t *testing.T) 
 	if err := rf.w.proveHeldVerification(t.Context(), rf.run, invocation, false); !errors.Is(err, ward.ErrVerificationAbsenceUnproven) {
 		t.Fatalf("end-of-task proof = %v, want unproven", err)
 	}
-	if !rf.w.rebuild.gate.tryAcquire() {
+	if !rf.w.rebuild.gate.tryAcquire(rf.w.rebuild.BuildLimit) {
 		t.Fatal("gate busy")
 	}
 	if err := rf.w.proveHeldVerification(t.Context(), rf.run, invocation, false); !errors.Is(err, errProjectImageBuilderBusy) {
@@ -304,5 +306,181 @@ func TestAStartMarksLeftVerificationReservationsAsLaneBuilds(t *testing.T) {
 				t.Fatalf("recovered %q, want %d build proofs", recovered, want)
 			}
 		})
+	}
+}
+
+// barrierBuilder holds every build at its start until release closes, and
+// reports each arrival, so a test sees how many builds run at once. The
+// builds it lets through run one at a time, as upkeepBuilder isn't safe
+// for concurrent use.
+type barrierBuilder struct {
+	inner   *upkeepBuilder
+	arrived chan projectimage.Request
+	release chan struct{}
+	mu      sync.Mutex
+}
+
+func (b *barrierBuilder) Build(ctx context.Context, request projectimage.Request) (domain.ProjectImage, error) {
+	b.arrived <- request
+	<-b.release
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.inner.Build(ctx, request)
+}
+
+// secondUpkeepRepository is a harness for repository 43 on h's store,
+// sharing h's rebuild, with its pointer seeded at an image an upgrade left
+// behind.
+func secondUpkeepRepository(t *testing.T, h *upkeepHarness) *upkeepHarness {
+	t.Helper()
+	repo := newUpkeepRepo(t)
+	repo.npmBase()
+	// A commit of its own, so its images differ from h's.
+	built := repo.commit(map[string]string{"src/other.js": "export {};\n"})
+	other := newUpkeepHarness(t, h.st, repo, "")
+	other.upkeep.RepositoryID = 43
+	checkout := other.upkeep.Checkout
+	other.upkeep.Checkout = func(ctx context.Context, tipSHA, dir string) (int64, error) {
+		if _, err := checkout(ctx, tipSHA, dir); err != nil {
+			return 0, err
+		}
+		return 43, nil
+	}
+	other.upkeep.Rebuild = h.upkeep.Rebuild
+	other.seed(upkeepImage(t, built, func(input *domain.ProjectImageInput) {
+		input.Repository, input.RepositoryID = "owner/other", 43
+		input.ImageRef = domain.ImageRef("ghcr.io/owner/other@sha256:" + strings.Repeat("e", 64))
+	}))
+	return other
+}
+
+func pointedImage(t *testing.T, h *upkeepHarness, repositoryID int64) domain.ProjectImage {
+	t.Helper()
+	var image domain.ProjectImage
+	if err := h.st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		_, image, _, err = tx.GetAdmittedImagePointer(t.Context(), repositoryID, domain.HarnessClientClaudeCode)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return image
+}
+
+// TestTwoRepositoriesBuildAtOnceUnderALimitOfTwo: at a build limit of two,
+// two repositories' upkeep builds run at the same time, each under its own
+// build reservation, and each advances its own pointer.
+func TestTwoRepositoriesBuildAtOnceUnderALimitOfTwo(t *testing.T) {
+	t.Parallel()
+	repo := newUpkeepRepo(t)
+	built := repo.npmBase()
+	st := openUpkeepStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		first := newUpkeepHarness(t, st, repo, "")
+		first.seed(upkeepImage(t, built, nil))
+		memory := &DaemonMemory{
+			Store: st, Bound: ward.LaunchBound{BudgetMiB: buildSize() * 5 / 2, RuntimeVersion: ward.RuntimeNone},
+			Now: time.Now,
+		}
+		barrier := &barrierBuilder{
+			inner: first.builder, arrived: make(chan projectimage.Request, 2), release: make(chan struct{}),
+		}
+		first.upkeep.Rebuild.Memory = memory
+		first.upkeep.Rebuild.Builder = barrier
+		first.upkeep.Rebuild.BuildLimit = 2
+		second := secondUpkeepRepository(t, first)
+		done := make(chan error, 2)
+		for _, h := range []*upkeepHarness{first, second} {
+			go func() { done <- h.upkeep.RunAll(t.Context()) }()
+		}
+		repositories := map[int64]bool{}
+		for range 2 {
+			repositories[(<-barrier.arrived).RepositoryID] = true
+		}
+		if !repositories[42] || !repositories[43] {
+			t.Fatalf("builds running at once = %v, want repositories 42 and 43", repositories)
+		}
+		if open := openBuilds(t, memory); len(open) != 2 {
+			t.Fatalf("open build reservations while both build = %+v, want one each", open)
+		}
+		close(barrier.release)
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, id := range []int64{42, 43} {
+			if image := pointedImage(t, first, id); image.Environment.PreparationDigest != projectimage.PreparationDigest() {
+				t.Fatalf("repository %d still points at %s, want the rebuilt image", id, image.ID)
+			}
+		}
+		if open := openBuilds(t, memory); len(open) != 0 {
+			t.Fatalf("open build reservations after both = %+v, want none", open)
+		}
+	})
+}
+
+// TestOneRepositorysPassesTakeTurnsAtAnyLimit: at a build limit of two, a
+// second pass for the same repository waits for the first's build, then
+// finds the pointer the first advanced and builds nothing.
+func TestOneRepositorysPassesTakeTurnsAtAnyLimit(t *testing.T) {
+	t.Parallel()
+	repo := newUpkeepRepo(t)
+	built := repo.npmBase()
+	st := openUpkeepStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := newUpkeepHarness(t, st, repo, "")
+		h.seed(upkeepImage(t, built, nil))
+		barrier := &barrierBuilder{
+			inner: h.builder, arrived: make(chan projectimage.Request, 2), release: make(chan struct{}),
+		}
+		h.upkeep.Rebuild.Builder = barrier
+		h.upkeep.Rebuild.BuildLimit = 2
+		done := make(chan error, 2)
+		go func() { done <- h.upkeep.RunAll(t.Context()) }()
+		<-barrier.arrived
+		go func() { done <- h.upkeep.RunScheduled(t.Context()) }()
+		synctest.Wait()
+		select {
+		case <-barrier.arrived:
+			t.Fatal("a second pass for one repository built beside the first")
+		default:
+		}
+		close(barrier.release)
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(h.builder.requests) != 1 {
+			t.Fatalf("builds = %d, want the first pass's alone", len(h.builder.requests))
+		}
+		if image := h.pointer(); image.Environment.PreparationDigest != projectimage.PreparationDigest() {
+			t.Fatalf("pointer at %s, want the rebuilt image", image.ID)
+		}
+	})
+}
+
+// TestALaneBuildsReservationCoversTheBuilder: the lane's build runs under its
+// task's verification reservation, which policy may raise but never lower
+// below the builder VM's size, so it covers the builder at any build limit.
+func TestALaneBuildsReservationCoversTheBuilder(t *testing.T) {
+	t.Parallel()
+	for _, keys := range [][]domain.PolicyKey{
+		nil,
+		{{Key: ward.PolicyVerificationMemoryMiB, Value: "8192"}},
+		{{Key: ward.PolicyVerificationMemoryMiB, Value: "1024"}},
+	} {
+		sizes, err := ward.ResolveLaunchSizes(keys, ward.LaunchBound{})
+		if err != nil {
+			// A policy below the default is refused, so it never sizes a
+			// reservation.
+			continue
+		}
+		if sizes.Verification.MemoryMiB < projectimage.BuilderSize.MemoryMiB ||
+			sizes.Verification.CPUs < projectimage.BuilderSize.CPUs {
+			t.Fatalf("policy %v: verification size %+v is under the builder's %+v",
+				keys, sizes.Verification, projectimage.BuilderSize)
+		}
 	}
 }

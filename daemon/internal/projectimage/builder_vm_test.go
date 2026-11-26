@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -21,7 +24,7 @@ func TestAppleBuildRunsTheBuilderAtADeclaredSizeAndStopsIt(t *testing.T) {
 	runner := &recordingRunner{}
 	spec := testBuildSpec()
 	spec.BuildProxy = "http://192.168.64.1:53536"
-	if err := (appleBackend{containerPath: "container", runner: runner, manageBuilder: true}).Build(t.Context(), spec); err != nil {
+	if err := (appleBackend{containerPath: "container", runner: runner, registryLockDir: t.TempDir(), manageBuilder: true}).Build(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
 	inspect := []string{"inspect", builderContainerID}
@@ -48,7 +51,7 @@ func TestAppleBuildUsesARunningBuilderAndStillStopsIt(t *testing.T) {
 	runner := &recordingRunner{builder: builderVM{state: "running"}}
 	spec := testBuildSpec()
 	spec.BuildProxy = "http://192.168.64.1:53536"
-	if err := (appleBackend{containerPath: "container", runner: runner, manageBuilder: true}).Build(t.Context(), spec); err != nil {
+	if err := (appleBackend{containerPath: "container", runner: runner, registryLockDir: t.TempDir(), manageBuilder: true}).Build(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
 	if slices.ContainsFunc(runner.builder.calls, func(args []string) bool { return slices.Contains(args, "start") }) ||
@@ -82,7 +85,7 @@ func TestAppleBuildFailsWhenTheBuilderIsNotProvedStopped(t *testing.T) {
 	stuck := &stuckBuilderRunner{recordingRunner: runner}
 	spec := testBuildSpec()
 	spec.BuildProxy = "http://192.168.64.1:53536"
-	err := (appleBackend{containerPath: "container", runner: stuck, manageBuilder: true}).Build(t.Context(), spec)
+	err := (appleBackend{containerPath: "container", runner: stuck, registryLockDir: t.TempDir(), manageBuilder: true}).Build(t.Context(), spec)
 	if !errors.Is(err, ErrContainerAbsenceUnproven) {
 		t.Fatalf("Build = %v, want %v", err, ErrContainerAbsenceUnproven)
 	}
@@ -175,7 +178,7 @@ func TestAppleRecoverBuildDeletesOnlyItsReservationsContainers(t *testing.T) {
 		}
 		return commandOutput{}, nil
 	}
-	if err := (appleBackend{containerPath: "container", runner: runner}).recoverBuild(t.Context(), "image-build-1"); err != nil {
+	if err := (appleBackend{containerPath: "container", runner: runner, registryLockDir: t.TempDir()}).recoverBuild(t.Context(), "image-build-1"); err != nil {
 		t.Fatal(err)
 	}
 	if runner.builder.state != "stopped" {
@@ -184,6 +187,149 @@ func TestAppleRecoverBuildDeletesOnlyItsReservationsContainers(t *testing.T) {
 	if _, kept := labels["probe-b"]; !kept || len(labels) != 1 {
 		t.Fatalf("containers after recovery = %v, want only another build's", labels)
 	}
+}
+
+// sharedBuilderRunner is one host's builder VM seen by several builds and
+// recoveries at once. Each actor's builder commands (its inspections and
+// verbs, and its `container build`, which runs in the VM) go to one log in
+// the order they ran.
+type sharedBuilderRunner struct {
+	mu      sync.Mutex
+	builder builderVM
+	log     []string
+}
+
+type builderActor struct {
+	shared *sharedBuilderRunner
+	name   string
+}
+
+func (r builderActor) Run(_ context.Context, spec commandSpec) (commandOutput, error) {
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	if output, err, ok := r.shared.builder.answer(spec.Args); ok {
+		r.shared.log = append(r.shared.log, r.name)
+		return output, err
+	}
+	switch {
+	case len(spec.Args) > 0 && spec.Args[0] == "build":
+		r.shared.log = append(r.shared.log, r.name)
+		// Long enough that, without the turn, another actor's stop lands
+		// inside this build.
+		r.shared.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		r.shared.mu.Lock()
+		r.shared.log = append(r.shared.log, r.name)
+	case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+		return commandOutput{bytes: []byte("[]")}, nil
+	}
+	return commandOutput{}, nil
+}
+
+// TestBuildsAndRecoveryTakeTurnsOnTheBuilder: two builds and a recovery at
+// once each run their builder commands, from the builder's start to its
+// proved stop and recovery's stop, in one run of the log that no other
+// actor's command interrupts, so no stop ever ends another build's builder.
+func TestBuildsAndRecoveryTakeTurnsOnTheBuilder(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		shared := &sharedBuilderRunner{}
+		lockDir := t.TempDir()
+		backend := func(name string) appleBackend {
+			return appleBackend{
+				containerPath: "container", runner: builderActor{shared: shared, name: name},
+				registryLockDir: lockDir, manageBuilder: true,
+			}
+		}
+		spec := testBuildSpec()
+		spec.BuildProxy = "http://192.168.64.1:53536"
+		var wg sync.WaitGroup
+		errs := make(chan error, 6)
+		for round := range 2 {
+			for _, name := range []string{"build-a", "build-b"} {
+				wg.Go(func() { errs <- backend(fmt.Sprint(name, round)).Build(t.Context(), spec) })
+			}
+			wg.Go(func() { errs <- backend(fmt.Sprint("recovery", round)).recoverBuild(t.Context(), "image-build-1") })
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		seen := map[string]bool{}
+		for i, name := range shared.log {
+			if i > 0 && shared.log[i-1] == name {
+				continue
+			}
+			if seen[name] {
+				t.Fatalf("%s's builder commands are split by another's: %q", name, shared.log)
+			}
+			seen[name] = true
+		}
+		if len(seen) != 6 {
+			t.Fatalf("actors in the log = %v, want all six", seen)
+		}
+	})
+}
+
+// TestABusyBuilderTurnIsAnsweredByTheCaller: while another holds the
+// builder's turn, a build whose TurnBusy gives up fails at once with its
+// error and touches no builder, and one whose TurnBusy waits is told once,
+// builds once the turn is free, and is resumed.
+func TestABusyBuilderTurnIsAnsweredByTheCaller(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		lockDir := t.TempDir()
+		holder := appleBackend{containerPath: "container", runner: &recordingRunner{}, registryLockDir: lockDir}
+		release, err := holder.acquireBuilderTurn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := testBuildSpec()
+		spec.BuildProxy = "http://192.168.64.1:53536"
+
+		giveUp := errors.New("the lane never waits")
+		runner := &recordingRunner{}
+		backend := appleBackend{containerPath: "container", runner: runner, registryLockDir: lockDir, manageBuilder: true}
+		ctx := WithTurnBusy(t.Context(), func() (func(), error) { return nil, giveUp })
+		if err := backend.Build(ctx, spec); !errors.Is(err, giveUp) {
+			t.Fatalf("Build beside a held turn = %v, want %v", err, giveUp)
+		}
+		if len(runner.builder.calls) != 0 || len(runner.specs) != 0 {
+			t.Fatalf("a build that gave up ran builder calls %q and commands %q", runner.builder.calls, runner.specs)
+		}
+
+		var told, resumed int
+		ctx = WithTurnBusy(t.Context(), func() (func(), error) {
+			told++
+			return func() { resumed++ }, nil
+		})
+		shared := &sharedBuilderRunner{}
+		backend.runner = builderActor{shared: shared, name: "waiter"}
+		done := make(chan error, 1)
+		go func() { done <- backend.Build(ctx, spec) }()
+		// The waiter polls the held lease on the bubble's clock; let it poll
+		// a few times, then check it ran nothing.
+		time.Sleep(60 * time.Millisecond)
+		synctest.Wait()
+		shared.mu.Lock()
+		early := slices.Clone(shared.log)
+		shared.mu.Unlock()
+		if len(early) != 0 {
+			t.Fatalf("a waiting build ran %d builder commands before the turn was free", len(early))
+		}
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if told != 1 || resumed != 1 || len(shared.log) == 0 {
+			t.Fatalf("told %d, resumed %d, builder commands %d; want one wait, then the build", told, resumed, len(shared.log))
+		}
+	})
 }
 
 // TestApplePublishReservesTheRegistryItStarts: a build that finds no

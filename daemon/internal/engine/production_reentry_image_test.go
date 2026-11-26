@@ -134,27 +134,31 @@ func TestUnservedReentryBaseHoldsOnlyWhileUpkeepIsPending(t *testing.T) {
 		return stop
 	}
 	lane := &productionPublicationWorkflow{}
-	if err := lane.unservedReentryBase(t.Context(), base, refusal); !stops(err) {
+	if err := lane.unservedReentryBase(t.Context(), 42, base, refusal); !stops(err) {
 		t.Fatalf("no lookup = %v, want the stop", err)
 	}
 
 	var (
 		pending   *domain.ImageUpkeepHold
 		lookupErr error
+		asked     int64
 	)
-	lane.imageUpkeepPending = func(context.Context) (*domain.ImageUpkeepHold, error) { return pending, lookupErr }
-	if err := lane.unservedReentryBase(t.Context(), base, refusal); !stops(err) {
-		t.Fatalf("nothing pending = %v, want the stop", err)
+	lane.imageUpkeepPending = func(_ context.Context, repositoryID int64) (*domain.ImageUpkeepHold, error) {
+		asked = repositoryID
+		return pending, lookupErr
+	}
+	if err := lane.unservedReentryBase(t.Context(), 42, base, refusal); !stops(err) || asked != 42 {
+		t.Fatalf("nothing pending = %v asking repository %d, want the stop asking the run's 42", err, asked)
 	}
 	pending = &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
-	err := lane.unservedReentryBase(t.Context(), base, refusal)
+	err := lane.unservedReentryBase(t.Context(), 42, base, refusal)
 	var held *ImageUpkeepPendingError
 	if stops(err) || !productionPublicationRetryableFailure(err) || !errors.As(err, &held) ||
 		held.Hold.Pending != domain.ImageUpkeepPendingRebuild {
 		t.Fatalf("rebuild pending = %v, want a retryable image_upkeep_pending rebuild", err)
 	}
 	lookupErr = errors.New("store unavailable")
-	if err := lane.unservedReentryBase(t.Context(), base, refusal); stops(err) ||
+	if err := lane.unservedReentryBase(t.Context(), 42, base, refusal); stops(err) ||
 		!productionPublicationRetryableFailure(err) || !errors.Is(err, lookupErr) {
 		t.Fatalf("failed lookup = %v, want it retried", err)
 	}

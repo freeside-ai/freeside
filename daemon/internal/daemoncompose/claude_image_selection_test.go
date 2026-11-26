@@ -487,13 +487,20 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	}
 	var pending *domain.ImageUpkeepHold
 	lookupErr := error(nil)
-	selector.bindImageUpkeep(func(context.Context) (*domain.ImageUpkeepHold, error) { return pending, lookupErr })
+	var asked int64
+	selector.bindImageUpkeep(func(_ context.Context, repositoryID int64) (*domain.ImageUpkeepHold, error) {
+		asked = repositoryID
+		return pending, lookupErr
+	})
 
 	pending = &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
 	var upkeep *engine.ImageUpkeepPendingError
 	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.As(err, &upkeep) ||
 		upkeep.Hold.Pending != domain.ImageUpkeepPendingRebuild {
 		t.Fatalf("select with a rebuild pending = %v, want an image_upkeep_pending rebuild", err)
+	}
+	if asked != selectorRepositoryID {
+		t.Fatalf("asked repository %d's upkeep, want the attempt's %d", asked, selectorRepositoryID)
 	}
 	pending = nil
 	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.Is(err, engine.ErrProjectImageUnserved) {
@@ -571,7 +578,7 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 		backend: ward, base: selectorBaseInputs("5", nil), follower: follower,
 	}
 	task := domain.TaskID("task-repair")
-	selector.bindImageUpkeep(func(context.Context) (*domain.ImageUpkeepHold, error) {
+	selector.bindImageUpkeep(func(context.Context, int64) (*domain.ImageUpkeepHold, error) {
 		return &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingMaintenanceTask, MaintenanceTaskID: &task}, nil
 	})
 	if _, err := selectAfterFetch(t, selector, "", selectorRevision, nil); !errors.Is(err, engine.ErrImageUpkeepPending) {

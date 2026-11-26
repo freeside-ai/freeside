@@ -259,7 +259,7 @@ func TestProjectImageRebuildBoundsOneBuild(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			rebuild := &ProjectImageRebuild{Builder: stallingImageBuilder{}}
 			started := time.Now()
-			_, timedOut, err := rebuild.build(t.Context(), projectimage.Request{})
+			_, timedOut, err := rebuild.build(t.Context(), projectimage.Request{}, nil)
 			if !timedOut || err == nil || !strings.Contains(err.Error(), "1h0m0s") {
 				t.Fatalf("timedOut = %t, err = %v; want the default bound's verdict", timedOut, err)
 			}
@@ -273,7 +273,7 @@ func TestProjectImageRebuildBoundsOneBuild(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			rebuild := &ProjectImageRebuild{Builder: stallingImageBuilder{}, Timeout: time.Minute}
 			started := time.Now()
-			if _, timedOut, _ := rebuild.build(t.Context(), projectimage.Request{}); !timedOut ||
+			if _, timedOut, _ := rebuild.build(t.Context(), projectimage.Request{}, nil); !timedOut ||
 				time.Since(started) != time.Minute {
 				t.Fatalf("timedOut = %t after %s, want the bound at one minute", timedOut, time.Since(started))
 			}
@@ -287,7 +287,7 @@ func TestProjectImageRebuildBoundsOneBuild(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			time.AfterFunc(time.Second, cancel)
 			rebuild := &ProjectImageRebuild{Builder: stallingImageBuilder{}}
-			_, timedOut, err := rebuild.build(ctx, projectimage.Request{})
+			_, timedOut, err := rebuild.build(ctx, projectimage.Request{}, nil)
 			if timedOut || !errors.Is(err, context.Canceled) || errors.Is(err, projectimage.ErrProofFailed) {
 				t.Fatalf("timedOut = %t, err = %v; want the pass's cancellation alone", timedOut, err)
 			}
@@ -297,9 +297,42 @@ func TestProjectImageRebuildBoundsOneBuild(t *testing.T) {
 		t.Parallel()
 		for _, fault := range []error{projectimage.ErrProofFailed, errors.New("registry unreachable")} {
 			rebuild := &ProjectImageRebuild{Builder: stallingImageBuilder{fail: fault}}
-			if _, timedOut, err := rebuild.build(t.Context(), projectimage.Request{}); timedOut || !errors.Is(err, fault) {
+			if _, timedOut, err := rebuild.build(t.Context(), projectimage.Request{}, nil); timedOut || !errors.Is(err, fault) {
 				t.Fatalf("timedOut = %t, err = %v; want %v", timedOut, err, fault)
 			}
+		}
+	})
+}
+
+// TestBuildBoundLeavesOutATurnWait: a wait for the builder VM's turn pauses
+// the bound, so a build that waited behind another's longer than the bound
+// still gets its whole bound for its own work, and a pause after the bound
+// fired leaves it fired.
+func TestBuildBoundLeavesOutATurnWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(t.Context())
+		bound := startBuildBound(time.Minute, cancel)
+		defer bound.stop()
+		time.Sleep(30 * time.Second)
+		resume, err := bound.pause()
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Hour)
+		resume()
+		time.Sleep(29 * time.Second)
+		if ctx.Err() != nil {
+			t.Fatalf("the bound fired after 59s of work: %v", context.Cause(ctx))
+		}
+		time.Sleep(2 * time.Second)
+		if !errors.Is(context.Cause(ctx), errBuildBoundExceeded) {
+			t.Fatalf("cause after 61s of work = %v, want the bound", context.Cause(ctx))
+		}
+		resume, _ = bound.pause()
+		resume()
+		if !errors.Is(context.Cause(ctx), errBuildBoundExceeded) {
+			t.Fatalf("cause after a late pause = %v, want the bound", context.Cause(ctx))
 		}
 	})
 }

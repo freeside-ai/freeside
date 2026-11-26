@@ -61,8 +61,11 @@ func rootImageUser(user string) bool {
 }
 
 type appleBackend struct {
-	containerPath    string
-	runner           commandRunner
+	containerPath string
+	runner        commandRunner
+	// registryLockDir holds the host file leases builds take: one per
+	// loopback registry port and the builder VM's turn. Empty means the
+	// owner's cache directory (leaseDir).
 	registryLockDir  string
 	inspectAllowlist func(context.Context, string) (ward.InspectReport, error)
 	inspectNetwork   func(context.Context, string) (ward.NetworkReport, error)
@@ -192,8 +195,19 @@ func (a appleBackend) Build(ctx context.Context, spec buildSpec) (err error) {
 	)
 	// A daemon build runs in the builder VM, started here at a declared size
 	// and stopped once the build returns, so no VM outlives the build and its
-	// probes boot theirs only after the builder's is gone.
+	// probes boot theirs only after the builder's is gone. The build holds
+	// the builder's turn from before the start until the stop is proved, so
+	// its stop never ends another build's builder.
 	if a.manageBuilder {
+		releaseTurn, turnErr := a.acquireBuilderTurn(ctx)
+		if turnErr != nil {
+			return turnErr
+		}
+		defer func() {
+			if releaseErr := releaseTurn(); releaseErr != nil {
+				err = errors.Join(err, fmt.Errorf("release the image builder turn: %w", releaseErr))
+			}
+		}()
 		if err := a.startBuilder(ctx); err != nil {
 			return err
 		}
@@ -564,16 +578,9 @@ func (a appleBackend) Publish(
 	}()
 
 	if spec.LocalRegistryPort != 0 {
-		lockDir := a.registryLockDir
-		if lockDir == "" {
-			cacheDir, cacheErr := os.UserCacheDir()
-			if cacheErr != nil {
-				return publication{}, fmt.Errorf("resolve local registry lease directory: %w", cacheErr)
-			}
-			lockDir = filepath.Join(cacheDir, "freeside", "project-image-registry-locks")
-		}
-		if mkdirErr := os.MkdirAll(lockDir, 0o700); mkdirErr != nil {
-			return publication{}, fmt.Errorf("create local registry lease directory: %w", mkdirErr)
+		lockDir, dirErr := a.leaseDir()
+		if dirErr != nil {
+			return publication{}, dirErr
 		}
 		releaseRegistryLease, err = acquireLocalRegistryLease(
 			ctx, lockDir, spec.LocalRegistryPort,
@@ -834,16 +841,52 @@ func (a appleBackend) discardPublicationResidue(
 	return errors.Join(errs...)
 }
 
+// leaseDir is the directory of the host file leases builds take, created
+// if absent. Every daemon, deputy, and onboard build of one host user
+// resolves the same one, so a lease holds across them.
+func (a appleBackend) leaseDir() (string, error) {
+	lockDir := a.registryLockDir
+	if lockDir == "" {
+		cacheDir, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve project-image lease directory: %w", err)
+		}
+		lockDir = filepath.Join(cacheDir, "freeside", "project-image-registry-locks")
+	}
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		return "", fmt.Errorf("create project-image lease directory: %w", err)
+	}
+	return lockDir, nil
+}
+
 func acquireLocalRegistryLease(
 	ctx context.Context,
 	lockDir string,
 	port int,
 ) (func() error, error) {
-	lockPath := filepath.Join(lockDir, strconv.Itoa(port)+".lock")
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed numeric port under the owner-private cache directory
+	return acquireHostLease(ctx, filepath.Join(lockDir, strconv.Itoa(port)+".lock"),
+		"local registry port "+strconv.Itoa(port), waitForLease)
+}
+
+// waitForLease is the busy answer of a lease whose holder lets go soon, a
+// registry port's: wait for it without telling the caller.
+func waitForLease() (func(), error) { return func() {}, nil }
+
+// acquireHostLease takes the exclusive file lease at path, which names what
+// it guards. While another holds it, busy decides: an error gives up at
+// once, and a resume waits, polling, until the lease is free or ctx ends,
+// then is called. The returned func releases the lease.
+func acquireHostLease(ctx context.Context, path, what string, busy TurnBusy) (func() error, error) {
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed name under the owner-private cache directory
 	if err != nil {
-		return nil, fmt.Errorf("open local registry lease for port %d: %w", port, err)
+		return nil, fmt.Errorf("open %s lease: %w", what, err)
 	}
+	var resume func()
+	defer func() {
+		if resume != nil {
+			resume()
+		}
+	}()
 	for {
 		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 		if err == nil {
@@ -853,7 +896,13 @@ func acquireLocalRegistryLease(
 		}
 		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
 			_ = lock.Close()
-			return nil, fmt.Errorf("lock local registry port %d: %w", port, err)
+			return nil, fmt.Errorf("lock %s: %w", what, err)
+		}
+		if resume == nil {
+			if resume, err = busy(); err != nil {
+				_ = lock.Close()
+				return nil, fmt.Errorf("%s is held by another build: %w", what, err)
+			}
 		}
 		timer := time.NewTimer(25 * time.Millisecond)
 		select {

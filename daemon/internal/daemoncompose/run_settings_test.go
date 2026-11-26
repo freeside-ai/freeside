@@ -135,6 +135,21 @@ func TestNewClaudeDriverConfigCarriesTheSettingsRevisions(t *testing.T) {
 	}
 }
 
+// TestNewClaudeDriverConfigCarriesTheImageBuildLimit: the image_builds
+// setting reaches the composition, and a configuration without it, such
+// as the deputy's settings file, builds one image at a time.
+func TestNewClaudeDriverConfigCarriesTheImageBuildLimit(t *testing.T) {
+	t.Parallel()
+	var settings daemoncompose.RunSettings
+	if cfg := daemoncompose.NewClaudeDriverConfig(settings, daemoncompose.RunLaunch{}); cfg.ImageBuildLimit != 1 {
+		t.Fatalf("unset limit = %d, want 1", cfg.ImageBuildLimit)
+	}
+	settings.Instance.ImageBuilds = &domain.ImageBuildSettings{MaxConcurrent: 3}
+	if cfg := daemoncompose.NewClaudeDriverConfig(settings, daemoncompose.RunLaunch{}); cfg.ImageBuildLimit != 3 {
+		t.Fatalf("limit = %d, want 3", cfg.ImageBuildLimit)
+	}
+}
+
 // TestLoadRunSettingsRefusesWhatCurrentPolicyRefuses stores values that
 // domain validation accepts and the settings gate refuses; the loader
 // returns no settings.

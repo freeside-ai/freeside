@@ -177,7 +177,8 @@ type ClaudeStartupConfig struct {
 type ClaudeWorkflow struct {
 	ClaudeWiring *ClaudeComposition
 	Workflow     *engine.Engine
-	ImageUpkeep  *engine.ImageUpkeep
+	// ImageUpkeeps are the per-repository image upkeeps.
+	ImageUpkeeps imageUpkeeps
 	// SettleDiscovery closes Workflow's dispatch hold. The startup model
 	// discovery calls it once its pass settles; until then the engine
 	// dispatches no invocation (#3447). It is safe to call more than once.
@@ -200,7 +201,7 @@ func ComposeClaudeWorkflow(
 	var (
 		claudeWiring *ClaudeComposition
 		workflow     *engine.Engine
-		imageUpkeep  *engine.ImageUpkeep
+		upkeeps      imageUpkeeps
 	)
 	// The daemon's own containers reserve from the same budget as launches
 	// (plan §5.4). What an earlier process left is recovered before any
@@ -386,15 +387,18 @@ func ComposeClaudeWorkflow(
 			return UnprovableTaskStop(ctx, st, coverage, task)
 		},
 	}
-	// Upkeep shares the lane's rebuild, and with it the one build gate.
-	imageUpkeep, err = composeImageUpkeep(st, attention, blobs, cfg, claudeWiring, rebuild, manualProjects,
+	// Every repository's upkeep shares the lane's rebuild, and with it the
+	// one build gate.
+	upkeeps, err = composeImageUpkeeps(ctx, st, attention, blobs, cfg, claudeWiring, rebuild, manualProjects,
 		doctorConvergenceLock)
 	if err != nil {
 		return nil, err
 	}
-	imageUpkeep.Running = running
+	for _, served := range upkeeps {
+		served.upkeep.Running = running
+	}
 	if claudeWiring.bindImageUpkeep != nil {
-		claudeWiring.bindImageUpkeep(imageUpkeep.PendingResolution)
+		claudeWiring.bindImageUpkeep(upkeeps.pendingResolution)
 	}
 	production.Publication = engine.ProductionPublicationConfig{
 		WorkDir: filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
@@ -417,7 +421,7 @@ func ComposeClaudeWorkflow(
 		ReviewHostInstructions: claudeWiring.reviewHostInstructions,
 		HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
 		RebuildProjectImage:    rebuild,
-		ImageUpkeepPending:     imageUpkeep.PendingResolution,
+		ImageUpkeepPending:     upkeeps.pendingResolution,
 		OpenIssues:             claudeWiring.openIssues,
 		NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 			return ward.NewProjectImageRoom(claudeWiring.ContainerBin, image, size, cfg.Logger)
@@ -527,7 +531,7 @@ func ComposeClaudeWorkflow(
 		return nil, fmt.Errorf("settle operator messages: %w", err)
 	}
 	return &ClaudeWorkflow{
-		ClaudeWiring: claudeWiring, Workflow: workflow, ImageUpkeep: imageUpkeep, SettleDiscovery: settleDiscovery,
+		ClaudeWiring: claudeWiring, Workflow: workflow, ImageUpkeeps: upkeeps, SettleDiscovery: settleDiscovery,
 	}, nil
 }
 
@@ -546,7 +550,7 @@ type ClaudeLoops struct {
 // coordinator's collection pass, which the scheduled doctor pass starts.
 func ComposeClaudeLoops(
 	parent context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore, cfg ClaudeStartupConfig,
-	claudeWiring *ClaudeComposition, workflow *engine.Engine, imageUpkeep *engine.ImageUpkeep,
+	claudeWiring *ClaudeComposition, workflow *engine.Engine, upkeeps imageUpkeeps,
 	runDoctor func(context.Context) error, collectUsage func(context.Context) error, late *StartupBindings,
 ) (_ *ClaudeLoops, err error) {
 	var (
@@ -557,7 +561,7 @@ func ComposeClaudeLoops(
 	)
 	// The doctor and janitor cadences live on the §5.16 durable scheduler;
 	// their initial coverage remains the direct startup passes before this.
-	claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, collectUsage, imageUpkeep)
+	claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, collectUsage, upkeeps)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +569,7 @@ func ComposeClaudeLoops(
 	if err := armTrustedConfigJobs(parent, claudeSched, cfg); err != nil {
 		return nil, err
 	}
-	upkeepTrigger = newImageUpkeepTrigger()
+	upkeepTrigger = newImageUpkeepTrigger(upkeeps.all()...)
 	late.UpkeepTrigger = upkeepTrigger
 	activeReconciler = &ActiveResourceReconciler{
 		Store: st, Pull: claudeWiring.observePull,
@@ -582,9 +586,7 @@ func ComposeClaudeLoops(
 		handBackLabels:   claudeWiring.handBackLabels,
 		mergeBase:        claudeWiring.mergeBase,
 		evictConcluded:   claudeWiring.evictConcluded,
-		tipWatch: repositoryTipWatch{
-			Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,
-		},
+		tipWatches:       tipWatches(upkeeps.loops()),
 		observeTip:       claudeWiring.observeRepositoryTip,
 		upkeepTipAdvance: upkeepTrigger.tipAdvanced,
 		readinessGate:    claudeWiring.ReadinessGate(),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,18 @@ func recoverDaemonReservations(
 			},
 		}
 	}
+	// Recovering a left build waits for the builder VM's turn, which another
+	// daemon's or a deputy's build on this host can hold for up to its
+	// one-hour bound, so the wait is logged rather than a silent start.
+	logger := memory.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	ctx = projectimage.WithTurnBusy(ctx, func() (func(), error) {
+		logger.Warn("start is waiting for another build on this host to finish with the image builder, " +
+			"to recover a build an earlier daemon left")
+		return func() { logger.Info("start's wait for the image builder ended") }, nil
+	})
 	return rebuild.RecoverLeftBuilds(ctx)
 }
 

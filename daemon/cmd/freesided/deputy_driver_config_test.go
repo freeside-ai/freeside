@@ -61,6 +61,9 @@ func TestDeputyClaudeDriverConfigForTheFixture(t *testing.T) {
 		ReviewImage:   image("review"), ReviewInputRoot: "/review", ReviewAuthMode: "subscription",
 		ReviewAuthSnapshot: "/review/auth.json", ReviewInstructions: "/review/AGENTS.md",
 		ReviewWorkspaceSizeMB: 8192,
+		// The deputy's settings file has no image_builds section, so it
+		// builds one project image at a time (#3210).
+		ImageBuildLimit: 1,
 	}
 	everyOption := base
 	everyOption.Judgments = daemoncompose.JudgmentConfig{

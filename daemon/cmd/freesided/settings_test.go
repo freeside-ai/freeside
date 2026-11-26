@@ -210,6 +210,26 @@ func TestSettingsSetCordonedLaunchesAppliesAtTheNextAdmission(t *testing.T) {
 	}
 }
 
+// TestSettingsSetImageBuildsAppliesAtTheNextStart: the daemon reads the
+// image build limit only at start, so a set says so.
+func TestSettingsSetImageBuildsAppliesAtTheNextStart(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	out, err := runSettings(t, t.Context(), "set", "-db", dbPath, "-section", "image_builds",
+		"-value", `{"max_concurrent":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set settingsSetResult
+	if err := json.Unmarshal([]byte(out), &set); err != nil {
+		t.Fatalf("decode %q: %v", out, err)
+	}
+	if set.TakesEffect != settingsTakeEffect {
+		t.Fatalf("takes effect %q, want %q", set.TakesEffect, settingsTakeEffect)
+	}
+}
+
 func TestSettingsSetAndShowWithTheDaemonStopped(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
@@ -352,10 +372,10 @@ func TestSettingsImportRefusesAProjectAlreadySet(t *testing.T) {
 }
 
 // TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched: an
-// execution pause, a cordoned launch cap, and the two execution switches
-// aren't configuration the deputy's file carries, so a store that only ever
-// held them still takes an import, and the import leaves the switches as
-// the operator set them.
+// execution pause, a cordoned launch cap, an image build limit, and the two
+// execution switches aren't configuration the deputy's file carries, so a
+// store that only ever held them still takes an import, and the import
+// leaves the switches and the limit as the operator set them.
 func TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
@@ -370,6 +390,7 @@ func TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched(t *testing.T)
 			{Section: domain.InstanceSectionExecutionPause},
 			{Section: domain.InstanceSectionCordonedLaunches, Value: json.RawMessage(`{"max_concurrent":2}`)},
 			{Section: domain.InstanceSectionExecution, Value: json.RawMessage(`{"enabled":false}`)},
+			{Section: domain.InstanceSectionImageBuilds, Value: json.RawMessage(`{"max_concurrent":2}`)},
 		} {
 			input.SetBy = "cli:operator"
 			if _, err := tx.AppendInstanceSettingsRevision(t.Context(), input, time.Now().UTC()); err != nil {
@@ -397,8 +418,8 @@ func TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched(t *testing.T)
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.InstanceRevision <= 4 || result.ProjectRevision <= 1 {
-		t.Fatalf("import result %+v, want revisions after the four instance and one project revision", result)
+	if result.InstanceRevision <= 5 || result.ProjectRevision <= 1 {
+		t.Fatalf("import result %+v, want revisions after the five instance and one project revision", result)
 	}
 	st, err = store.Open(t.Context(), dbPath, store.Options{})
 	if err != nil {
@@ -413,6 +434,9 @@ func TestSettingsImportAcceptsAStoreOnlyEverPausedCappedOrSwitched(t *testing.T)
 		loaded.Project.Enabled == nil || !loaded.Project.Enabled.Enabled {
 		t.Fatalf("switches after import: execution %+v, enabled %+v; want them as set before it",
 			loaded.Instance.Execution, loaded.Project.Enabled)
+	}
+	if limit := loaded.Instance.ImageBuildLimit(); limit != 2 {
+		t.Fatalf("image build limit after import = %d, want 2 as set before it", limit)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -43,6 +44,50 @@ var ErrContainerAbsenceUnproven = errors.New("project-image container absence is
 type RegistryMemory interface {
 	Reserve(ctx context.Context, port int) error
 	Release(ctx context.Context, port int) error
+}
+
+// builderTurnLease is the file, in the lease directory beside the registry
+// ports', whose lease is the builder VM's turn.
+const builderTurnLease = "builder.lock"
+
+// TurnBusy is what a build or a recovery does when another build holds the
+// builder VM's turn: return resume to wait for the turn, called once the
+// wait ends, or an error to give up at once. A caller that bounds a build's
+// own work pauses its bound until resume, so a build never spends its bound
+// waiting on another's.
+type TurnBusy func() (resume func(), err error)
+
+type turnBusyKey struct{}
+
+// WithTurnBusy returns ctx carrying busy, which a build or recovery under
+// ctx answers a held builder turn with. Without one it waits.
+func WithTurnBusy(ctx context.Context, busy TurnBusy) context.Context {
+	return context.WithValue(ctx, turnBusyKey{}, busy)
+}
+
+func turnBusy(ctx context.Context) TurnBusy {
+	if busy, ok := ctx.Value(turnBusyKey{}).(TurnBusy); ok && busy != nil {
+		return busy
+	}
+	return waitForLease
+}
+
+// acquireBuilderTurn takes the builder VM's turn, a host file lease every
+// build that manages the builder (ManageBuilder: the daemon's and the
+// deputy's) takes from before its `container builder start` until its stop
+// is proved, and recovery takes around its stop. Apple container runs one
+// builder VM per host user, and a managed build stops it once it returns, so
+// without the turn the first of two builds to finish would stop the other's
+// builder. A build that leaves the VM alone (`onboard`,
+// freeside-project-image, a hand-run `container build`) takes no turn, so a
+// managed build's stop can still end that build's builder, as it could
+// before the turn. The returned func releases the turn.
+func (a appleBackend) acquireBuilderTurn(ctx context.Context) (func() error, error) {
+	dir, err := a.leaseDir()
+	if err != nil {
+		return nil, err
+	}
+	return acquireHostLease(ctx, filepath.Join(dir, builderTurnLease), "the image builder turn", turnBusy(ctx))
 }
 
 // startBuilder starts the builder VM at BuilderSize unless it runs already.
@@ -90,10 +135,12 @@ func (a appleBackend) stopBuilder(ctx context.Context) error {
 }
 
 // RecoverBuild proves gone what a build under reservation left when its
-// process ended: it stops the builder VM and proves it stopped, then deletes
-// every container carrying the reservation's label (ward.ReservationLabel)
-// and proves none remains. The label holds the reservation's random id, so
-// only that build's containers match. An error wraps
+// process ended: it stops the builder VM and proves it stopped, under the
+// builder's turn so the stop never ends another build's builder, then
+// deletes every container carrying the reservation's label
+// (ward.ReservationLabel) and proves none remains. The label holds the
+// reservation's random id, so only that build's containers match. A held
+// turn is answered by ctx's TurnBusy. An error wraps
 // ErrContainerAbsenceUnproven.
 func RecoverBuild(ctx context.Context, containerPath string, reservation domain.InvocationID) error {
 	path, err := resolveExecutable(containerPath, "container")
@@ -104,7 +151,15 @@ func RecoverBuild(ctx context.Context, containerPath string, reservation domain.
 }
 
 func (a appleBackend) recoverBuild(ctx context.Context, reservation domain.InvocationID) error {
-	if err := a.stopBuilder(ctx); err != nil {
+	releaseTurn, err := a.acquireBuilderTurn(ctx)
+	if err != nil {
+		return errors.Join(ErrContainerAbsenceUnproven, err)
+	}
+	err = a.stopBuilder(ctx)
+	if releaseErr := releaseTurn(); releaseErr != nil {
+		err = errors.Join(err, ErrContainerAbsenceUnproven, fmt.Errorf("release the image builder turn: %w", releaseErr))
+	}
+	if err != nil {
 		return err
 	}
 	labeled, err := a.labeledContainers(ctx, ward.ReservationLabel, string(reservation))

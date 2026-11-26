@@ -864,7 +864,8 @@ func (w *productionPublicationWorkflow) verifyReentry(
 			return productionReentryCheckpoint{}, err
 		}
 		if !found {
-			return productionReentryCheckpoint{}, w.unservedReentryBase(ctx, baseSHA, refused)
+			return productionReentryCheckpoint{}, w.unservedReentryBase(
+				ctx, binding.admission.Base.RepositoryID, baseSHA, refused)
 		}
 		binding = served
 	} else {
@@ -1174,18 +1175,19 @@ func (w *productionPublicationWorkflow) bindBaseServingImage(
 }
 
 // unservedReentryBase is a re-entry's answer when no recorded image serves
-// its base. While image upkeep has a resolution pending, which may record an
+// its base. It asks the upkeep of repositoryID, the run's admitted
+// repository. While image upkeep has a resolution pending, which may record an
 // image that does, it is a retryable ImageUpkeepPendingError the lane holds
 // the task under. Otherwise it is the refusal itself, which stops the cycle
 // as it always has. The pending error does not wrap the refusal, so the
 // caller's stop never matches it.
 func (w *productionPublicationWorkflow) unservedReentryBase(
-	ctx context.Context, baseSHA string, refusal error,
+	ctx context.Context, repositoryID int64, baseSHA string, refusal error,
 ) error {
 	if w.imageUpkeepPending == nil {
 		return refusal
 	}
-	hold, err := w.imageUpkeepPending(ctx)
+	hold, err := w.imageUpkeepPending(ctx, repositoryID)
 	if err != nil {
 		return productionPublicationRetryableError(
 			fmt.Errorf("read image upkeep's pending resolution for base %s: %w", baseSHA, err))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,5 +213,58 @@ func TestBindStartupProject(t *testing.T) {
 				t.Fatalf("bound project = (%+v, %v), want %+v", got, err, want)
 			}
 		})
+	}
+}
+
+// A proof pass seeds at the stored tip of its image's own repository, so
+// one repository's image is never proved on another's tree; an image with
+// no record seeds at the configured repository's tip. Another repository's
+// missing tip is input_unavailable and one stored under another name is an
+// identity mismatch, as for the configured repository.
+func TestConformanceBaseIsTheImagesRepositoryTip(t *testing.T) {
+	t.Parallel()
+	served := selectorImage(t, strings.Repeat("a", 40), "1", "d")
+	other, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "owner/other", RepositoryID: 43, CommitSHA: strings.Repeat("e", 40),
+		RecipeDigest: served.RecipeDigest, PreparationCommand: served.PreparationCommand,
+		BaseImageRef: served.BaseImageRef,
+		ImageRef:     domain.ImageRef("ghcr.io/owner/other@sha256:" + strings.Repeat("f", 64)),
+		Environment:  served.Environment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := selectorStore(t, served, other)
+	cfg := ClaudeDriverConfig{Repo: selectorRepo, RepositoryID: selectorRepositoryID, BaseRef: "main"}
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	recordTipObservation(t, st, domain.RepositoryTipObservation{
+		RepositoryID: selectorRepositoryID, Repository: selectorRepo, Branch: "main", TipSHA: selectorBase, ObservedAt: now,
+	})
+	if _, err := conformanceBase(t.Context(), st, cfg, other.ImageRef); !errors.Is(err, exec.ErrInputUnavailable) {
+		t.Fatalf("another repository with no stored tip = %v, want input_unavailable", err)
+	}
+	otherTip := strings.Repeat("9", 40)
+	recordTipObservation(t, st, domain.RepositoryTipObservation{
+		RepositoryID: 43, Repository: "owner/renamed", Branch: "trunk", TipSHA: otherTip, ObservedAt: now,
+	})
+	if _, err := conformanceBase(t.Context(), st, cfg, other.ImageRef); !errors.Is(err, domain.ErrRepositoryIdentityMismatch) {
+		t.Fatalf("another repository's tip stored under another name = %v, want ErrRepositoryIdentityMismatch", err)
+	}
+	recordTipObservation(t, st, domain.RepositoryTipObservation{
+		RepositoryID: 43, Repository: "owner/other", Branch: "trunk", TipSHA: otherTip, ObservedAt: now.Add(time.Minute),
+	})
+	for name, test := range map[string]struct {
+		image domain.ImageRef
+		want  domain.BaseRevision
+	}{
+		"the configured repository's image": {image: served.ImageRef, want: selectorRevision},
+		"an image with no record":           {image: "ghcr.io/owner/agent:latest", want: selectorRevision},
+		"another repository's image": {image: other.ImageRef, want: domain.BaseRevision{
+			Repo: "owner/other", RepositoryID: 43, BaseRef: "trunk", BaseSHA: otherTip,
+		}},
+	} {
+		if base, err := conformanceBase(t.Context(), st, cfg, test.image); err != nil || base != test.want {
+			t.Fatalf("%s seeds at %+v, %v; want %+v", name, base, err, test.want)
+		}
 	}
 }

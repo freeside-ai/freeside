@@ -45,6 +45,7 @@ func instanceSettingsFixture() domain.InstanceSettings {
 		},
 		ExecutionPause:   &domain.ExecutionPauseSettings{State: domain.ExecutionPauseRequested},
 		CordonedLaunches: &domain.CordonedLaunchSettings{MaxConcurrent: 2},
+		ImageBuilds:      &domain.ImageBuildSettings{MaxConcurrent: 2},
 		Execution:        &domain.EnabledSettings{Enabled: true},
 	}
 }
@@ -377,6 +378,8 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.InstanceSectionCordonedLaunches, `{"max_concurrent":0}`, "cordoned_launches.max_concurrent 0 must be at least 1"},
 		{domain.InstanceSectionCordonedLaunches, `{"max_concurrent":-1}`, "cordoned_launches.max_concurrent -1 must be at least 1"},
 		{domain.InstanceSectionCordonedLaunches, `{}`, "cordoned_launches: max_concurrent: required settings key is absent"},
+		{domain.InstanceSectionImageBuilds, `{"max_concurrent":0}`, "image_builds.max_concurrent 0 must be at least 1"},
+		{domain.InstanceSectionImageBuilds, `{}`, "image_builds: max_concurrent: required settings key is absent"},
 		{domain.InstanceSectionExecution, `{}`, "execution: enabled: required settings key is absent"},
 		{domain.InstanceSectionExecution, `true`, "execution: "},
 		{domain.InstanceSectionHostTools, `{"container":"/c","extra":1}`, "unknown"},
@@ -640,5 +643,16 @@ func TestApprovedRecipeReadsAlone(t *testing.T) {
 	}
 	if got, ok, err := record.ApprovedRecipe(); !ok || err != nil || got != recipe {
 		t.Fatalf("recipe: %q, ok %t, error %v; want %q", got, ok, err, recipe)
+	}
+}
+
+// TestImageBuildLimitReadsOneWhenUnset pins the limit the daemon reads at
+// start: one when the section is unset, the section's value when set.
+func TestImageBuildLimitReadsOneWhenUnset(t *testing.T) {
+	if limit := (domain.InstanceSettings{}).ImageBuildLimit(); limit != 1 {
+		t.Fatalf("unset limit = %d, want 1", limit)
+	}
+	if limit := instanceSettingsFixture().ImageBuildLimit(); limit != 2 {
+		t.Fatalf("set limit = %d, want 2", limit)
 	}
 }

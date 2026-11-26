@@ -790,8 +790,10 @@ lists only the names resolved against it. All under `daemon/`:
   `internal/signet/image_policy_adoption.go`,
   `internal/engine/image_upkeep_adoption.go`,
   `internal/projectimage/rebuild_gate.go` (repository manifests gate image
-  rebuilds), and `internal/projectimage/preparation_gate.go` (re-gates a
-  decoded preparation command before it reaches the root launch argv).
+  rebuilds), `internal/daemoncompose/project_loops.go` (chooses the
+  registry set that gate bounds each repository's upkeep rebuild with),
+  and `internal/projectimage/preparation_gate.go` (re-gates a decoded
+  preparation command before it reaches the root launch argv).
   The review dispute joins them, since it decides which findings Freeside
   routes and replies to on GitHub without a person:
   `internal/domain/review_dispute.go` and
