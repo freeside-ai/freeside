@@ -836,6 +836,26 @@ lists only the names resolved against it. All under `daemon/`:
   `internal/daemoncompose/host_checks.go` (the start checks that stop that
   composition, including the review instructions kept apart from the
   credential snapshots).
+- **Agent bases and daemon-opened tasks:** the admitted agent base
+  decides what every project image builds FROM, and a daemon-origin
+  submission opens a task with no device behind it.
+  `internal/domain/admitted_agent_base.go` and
+  `internal/store/admitted_agent_base.go` (the write-once base record,
+  whose content address is re-derived on read, and the pointer that
+  advances only to a recorded base of its harness),
+  `internal/projectimage/agent_base.go` (refuses a Containerfile whose
+  images aren't digest pinned and proves the built base before it is
+  published and tagged), `internal/engine/agent_base_upkeep.go` (builds
+  only from the repository the setting names and only a tip whose pin
+  equals the daemon's, and admits only a proven base),
+  `internal/daemoncompose/agent_base.go` (re-checks the stored
+  `agent_base` setting against the settings gate on every read),
+  `internal/domain/agent_base_bump.go` (the fixed bump task text and its
+  submission identity), `internal/store/task_submission.go` (the
+  daemon-origin gate, which accepts a submission only against a recorded
+  repair refusal, or a recorded bump occurrence and, on write, the fixed
+  text), and `internal/engine/task_submission.go` (lets only the
+  image-repair task past the writer-image readiness check).
 - **Client authority:** `internal/signet/device.go` (the paired-device
   bearer check), `internal/signet/http.go` (where requests meet it),
   `internal/signet/pairing.go`, `internal/signet/secret.go`,

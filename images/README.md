@@ -43,13 +43,15 @@ when neither registry mode is selected.
 
 ## Changes Through Freeside
 
-A Freeside task may edit this directory, but no Freeside path builds or
-adopts an image from it, and no task builds the image it runs in (plan §11).
-A merged change reaches use only through the operator: build the image,
-check an agent base with `scripts/check-agent-image.sh`, and re-pin its
-digest. Agent-base upkeep (#2338) is the deferred route that would build and
-admit a base without the operator. `daemon/README.md` (Onboard Freeside)
-says what the recipe checks and what stays operator work.
+A Freeside task may edit this directory, and no task builds the image it
+runs in (plan §11). Agent-base upkeep builds, proves, and admits the Claude
+base from `agent-claude/` at the default branch's tip, when the daemon's
+`agent_base` setting names this repository and the tip pins the CLI the
+daemon runs (`daemon/README.md`, Keep Project Images Current). Every other
+image reaches use only through the operator: build the image, check an
+agent base with `scripts/check-agent-image.sh`, and re-pin its digest.
+`daemon/README.md` (Onboard Freeside) says what the recipe checks and what
+stays operator work.
 
 ## Build Egress
 
