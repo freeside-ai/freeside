@@ -182,6 +182,19 @@ import Testing
         invalid.completion?.value1.recorded_at = daemonZeroInstant
         #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == "invalid task completion fact")
         invalid = source
+        invalid.completion?.value1.pr_reference?.value1.repo = "repo"
+        #expect(
+            MockContractValidation.taskTimelineObservationsBreach(invalid) == "invalid completion pr_reference repo")
+        invalid = source
+        invalid.completion?.value1.pr_reference?.value1.number += 1
+        #expect(
+            MockContractValidation.taskTimelineObservationsBreach(invalid)
+                == "completion pr_reference names another pull request")
+        // An older daemon serves no reference; that is not a breach.
+        invalid = source
+        invalid.completion?.value1.pr_reference = nil
+        #expect(MockContractValidation.taskTimelineObservationsBreach(invalid) == nil)
+        invalid = source
         invalid.completion?.value1.recorded_at += 1
         #expect(
             MockContractValidation.taskTimelineObservationsBreach(invalid)

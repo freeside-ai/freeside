@@ -149,6 +149,13 @@ enum MockContractValidation {
             {
                 return "invalid task completion fact"
             }
+            // Optional for older daemons, but when present it must name this PR.
+            if let reference = completion.pr_reference?.value1 {
+                if !validPRReferenceRepo(reference.repo) { return "invalid completion pr_reference repo" }
+                if reference.number != completion.pr_number {
+                    return "completion pr_reference names another pull request"
+                }
+            }
             if completed.isEmpty || completed.contains(where: { $0.recorded_at != completion.recorded_at }) {
                 return "completion fact disagrees with milestones"
             }
@@ -532,10 +539,7 @@ enum MockContractValidation {
             if item._type != .ready_for_final_review && item._type != .publish_blocked {
                 return "pr_reference on an item that is neither ready_for_final_review nor publish_blocked"
             }
-            let parts = reference.repo.split(separator: "/", omittingEmptySubsequences: false)
-            if parts.count != 2 || parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) {
-                return "invalid pr_reference repo"
-            }
+            if !validPRReferenceRepo(reference.repo) { return "invalid pr_reference repo" }
             if reference.number < 1 { return "non-positive pr_reference number" }
         } else if item._type == .ready_for_final_review {
             return "ready_for_final_review item lacks pr_reference"
@@ -1529,6 +1533,13 @@ enum MockContractValidation {
 
     private static func isBlank(_ value: String) -> Bool {
         value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Mirrors domain.PRReference.Validate's repo rule: one owner/name pair
+    /// with neither part empty, "." or "..".
+    private static func validPRReferenceRepo(_ repo: String) -> Bool {
+        let parts = repo.split(separator: "/", omittingEmptySubsequences: false)
+        return parts.count == 2 && !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
     }
 
     /// Mirrors signet's validateRequestedActions over the authoritative

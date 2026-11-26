@@ -193,6 +193,10 @@ import Testing
                         timelines.first { $0.run_id == event["run_id"] as? String }?.completion?.value1)
                     #expect(event["pr_number"] as? Int == completion.pr_number)
                     #expect(event["merge_commit_sha"] as? String == completion.merge_commit_sha)
+                    let reference = try #require(event["pr_reference"] as? [String: Any])
+                    let want = try #require(completion.pr_reference?.value1)
+                    #expect(reference["repo"] as? String == want.repo)
+                    #expect(reference["number"] as? Int == completion.pr_number)
                     sawMerge = true
                 }
             }

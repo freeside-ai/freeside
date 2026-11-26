@@ -510,8 +510,8 @@ public enum RunFixtures {
     }
 
     private static let completedFacts = Components.Schemas.WorkUnitCompletionFacts(
-        pr_number: 105, merge_commit_sha: String(repeating: "5", count: 40),
-        bound_issue: 80, recorded_at: date(2_400))
+        pr_number: 105, pr_reference: .init(value1: .init(repo: "owner/repo", number: 105)),
+        merge_commit_sha: String(repeating: "5", count: 40), bound_issue: 80, recorded_at: date(2_400))
     private static let completedCost = Components.Schemas.CostSoFar(
         currency: "USD", amount: "23.75", invocations: 2, complete: true)
     private static let activeCost = Components.Schemas.CostSoFar(
