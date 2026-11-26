@@ -41,6 +41,11 @@ jobs:
   convergence:
     name: convergence (real daemon + Swift client)
     runs-on: xcode-27
+    # The worst passing job in the 2026-11-10 to 11-17 sample took 17 minutes,
+    # and run-convergence.sh bounds its own concurrent test phase at 20. This
+    # backstop ends any other hang (build, harness, convergence-only path) in
+    # under an hour instead of GitHub's six-hour default (#3311).
+    timeout-minutes: 45
     env:
       # Pin one Xcode for the whole job, the recording host's where the
       # image offers it. The screenshot digests compare against what that
