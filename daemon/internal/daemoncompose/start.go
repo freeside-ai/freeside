@@ -334,7 +334,10 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		gated ExecutionState
 		// gatedDetail is what the card for gated names, for the stored states.
 		gatedDetail string
-		stored      RunSettings
+		// retryStateDir is the App authority state directory when prod started
+		// app_authority_in_use, empty in every other state.
+		retryStateDir string
+		stored        RunSettings
 	)
 	if cfg.StoredExecution != nil {
 		gated, gatedDetail, stored, err = decideStoredExecution(parent, st, switches,
@@ -359,9 +362,13 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if pause != nil && pause.State == domain.ExecutionPauseReleased {
 			gated = ExecutionPaused
 		} else {
-			gated, authorityLock, err = gateProdAppAuthority(appStateRoot(cfg), cfg.AppAuthority.Prod.LeaseRoot)
+			stateDir := appStateRoot(cfg)
+			gated, authorityLock, err = gateProdAppAuthority(stateDir, cfg.AppAuthority.Prod.LeaseRoot)
 			if err != nil {
 				return nil, err
+			}
+			if gated == ExecutionAuthorityInUse {
+				retryStateDir = stateDir
 			}
 		}
 		if !gated.Runs() {
@@ -646,7 +653,8 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	if pausable {
 		waiter := executionPauseWaiter{
 			store: st, readiness: attention.RestartReadiness, restart: d.RequestRestart,
-			leaseRoot: cfg.AppAuthority.Prod.LeaseRoot, now: nowOrWallClock(cfg.Now), logger: logger,
+			leaseRoot: cfg.AppAuthority.Prod.LeaseRoot, retryStateDir: retryStateDir,
+			now: nowOrWallClock(cfg.Now), logger: logger,
 		}
 		d.Go(func() {
 			d.ComponentExited(parent, ctx, daemonshell.ComponentExecutionPause, waiter.run(ctx))

@@ -29,6 +29,11 @@ import (
 // A released pause nobody uses keeps prod from executing with nothing to show
 // for it, so once no rig lease manifest has existed for an hour the waiter
 // raises an advisory card naming resume.
+//
+// A prod that started app_authority_in_use (another process held the writer
+// lock, with no pause in force) retries from the same waiter: once no pause is
+// in force, no rig lease manifest exists, and the writer lock is free, it asks
+// for the same restart so the restarted prod runs its gated start order again.
 
 const (
 	executionPauseItemPrefix = "system-health-execution-pause-"
@@ -43,7 +48,9 @@ const (
 	// executionPauseSetBy records the daemon's own release of a pause.
 	executionPauseSetBy = "daemon:execution-pause"
 	// executionPauseInterval is how often the waiter reads restart
-	// readiness while a pause is requested, and the section while none is.
+	// readiness while a pause is requested, reads the section while none is,
+	// and checks whether a freed App authority lets an app_authority_in_use
+	// prod retry.
 	executionPauseInterval = 5 * time.Second
 )
 
@@ -225,14 +232,22 @@ func putPauseCard(ctx context.Context, tx *store.WriteTx, prefix, code, reason s
 // daemon's life in every prod started with a driver, so a pause requested
 // online and one interrupted by a restart are both served. In a prod that
 // started with the pause released it watches for the pause going unused.
+// In a prod that started app_authority_in_use (retryStateDir non-empty), it
+// also checks whether the App authority is free with no pause and no rig
+// lease manifest, and asks for the same restart so prod runs its start order
+// again.
 type executionPauseWaiter struct {
 	store     *store.Store
 	readiness func(context.Context) (signet.RestartReadinessResponse, error)
 	restart   func()
 	// leaseRoot is where a deputy run's rig lease manifest appears.
 	leaseRoot string
-	now       func() time.Time
-	logger    *slog.Logger
+	// retryStateDir is the App authority state directory to check for a
+	// freed writer lock; non-empty only in a prod that started
+	// app_authority_in_use.
+	retryStateDir string
+	now           func() time.Time
+	logger        *slog.Logger
 }
 
 // run returns only when ctx ends or a read or write fails; the caller
@@ -242,12 +257,12 @@ func (w executionPauseWaiter) run(ctx context.Context) error {
 	defer ticker.Stop()
 	leaseSeen := w.now()
 	for {
-		released, err := w.step(ctx, &leaseSeen)
+		restartMessage, err := w.step(ctx, &leaseSeen)
 		if err != nil {
 			return err
 		}
-		if released {
-			w.logger.Info("execution pause released; restarting without execution")
+		if restartMessage != "" {
+			w.logger.Info(restartMessage)
 			w.restart()
 			<-ctx.Done()
 			return nil
@@ -260,25 +275,49 @@ func (w executionPauseWaiter) run(ctx context.Context) error {
 	}
 }
 
-// step releases a requested pause once readiness counts nothing, and keeps
-// the unused-pause card in step with a released one. leaseSeen is when a rig
-// lease manifest was last seen, or when the pause was last not released.
-func (w executionPauseWaiter) step(ctx context.Context, leaseSeen *time.Time) (bool, error) {
+// step releases a requested pause once readiness counts nothing, keeps the
+// unused-pause card in step with a released one, and in a prod that started
+// app_authority_in_use checks whether the App authority is free to retry. It
+// returns the log message for the restart to request, or empty for none.
+// leaseSeen is when a rig lease manifest was last seen, or when the pause was
+// last not released.
+func (w executionPauseWaiter) step(ctx context.Context, leaseSeen *time.Time) (string, error) {
 	pause, err := ReadExecutionPause(ctx, w.store)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if err := w.watchUnused(ctx, pause, leaseSeen); err != nil {
-		return false, err
+		return "", err
 	}
-	if pause == nil || pause.State != domain.ExecutionPauseRequested {
-		return false, nil
+	if pause == nil {
+		if w.retryStateDir == "" {
+			return "", nil
+		}
+		free, err := prodAuthorityFree(w.retryStateDir, w.leaseRoot)
+		if err != nil {
+			// A bad state directory or lease root must not stop a driverless
+			// prod's service; keep serving and try again on the next tick.
+			w.logger.Warn("app authority retry: cannot check whether the authority is free",
+				"state_dir", w.retryStateDir, "lease_root", w.leaseRoot, "error", err)
+			return "", nil
+		}
+		if free {
+			return "app authority writer lock is free; restarting to retry execution", nil
+		}
+		return "", nil
+	}
+	if pause.State != domain.ExecutionPauseRequested {
+		return "", nil
 	}
 	readiness, err := w.readiness(ctx)
 	if err != nil || len(readiness.Blockers) != 0 {
-		return false, err
+		return "", err
 	}
-	return releaseExecutionPause(ctx, w.store, w.now().UTC())
+	released, err := releaseExecutionPause(ctx, w.store, w.now().UTC())
+	if err != nil || !released {
+		return "", err
+	}
+	return "execution pause released; restarting without execution", nil
 }
 
 // watchUnused raises the unused-pause card once a released pause has gone

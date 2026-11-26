@@ -252,6 +252,50 @@ func TestGateProdAppAuthorityFailsOnAnUnusableDirectory(t *testing.T) {
 	requireLockFree(t, stateDir)
 }
 
+// TestProdAuthorityFreeChecksManifestBeforeLock verifies the retry check's
+// contract: a present rig lease manifest returns false without touching the
+// writer lock (proved with a missing state directory, which AcquireAuthorityWriterLock
+// rejects), a held lock returns false without disturbing it, and a free
+// authority returns true and releases the lock before returning.
+func TestProdAuthorityFreeChecksManifestBeforeLock(t *testing.T) {
+	t.Parallel()
+	stateDir, leaseRoot := gateDirs(t)
+	lease, err := acquireGateTestRig(leaseRoot, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+	free, err := prodAuthorityFree(filepath.Join(stateDir, "missing"), leaseRoot)
+	if err != nil || free {
+		t.Fatalf("with manifest and missing stateDir: free=%t, err=%v; want false, nil", free, err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	holder, err := publish.AcquireAuthorityWriterLock(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+	free, err = prodAuthorityFree(stateDir, leaseRoot)
+	if err != nil || free {
+		t.Fatalf("with held lock: free=%t, err=%v; want false, nil", free, err)
+	}
+	if _, err := publish.AcquireAuthorityWriterLock(stateDir); !errors.Is(err, publish.ErrAuthorityWriterLockHeld) {
+		t.Fatalf("retry check disturbed holder's lock: %v, want ErrAuthorityWriterLockHeld", err)
+	}
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	free, err = prodAuthorityFree(stateDir, leaseRoot)
+	if err != nil || !free {
+		t.Fatalf("with authority free: free=%t, err=%v; want true, nil", free, err)
+	}
+	requireLockFree(t, stateDir)
+}
+
 func TestExecutionStatesRegistered(t *testing.T) {
 	t.Parallel()
 	if ExecutionState("").valid() {

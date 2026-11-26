@@ -128,3 +128,34 @@ func gateProdAppAuthority(stateDir, leaseRoot string) (ExecutionState, *publish.
 	}
 	return ExecutionConfigured, lock, nil
 }
+
+// prodAuthorityFree reports whether a prod that started app_authority_in_use
+// can retry its start order: no production rig lease manifest exists under
+// leaseRoot and the App authority writer lock on stateDir is free.
+//
+// It checks the manifest first so it never touches the lock while a manifest
+// already exists. It then runs gateProdAppAuthority (which takes the lock and
+// checks the manifest again) and releases any lock it took before returning: a
+// deputy that publishes its lease after the first read is caught by that second
+// read, which releases the lock, and at worst the deputy is refused the lock
+// once and declines. It grants nothing and opens no keystore or authority
+// store; the restarted prod runs its whole gated start order again.
+func prodAuthorityFree(stateDir, leaseRoot string) (bool, error) {
+	present, err := daemonlock.RigManifestPresent(leaseRoot)
+	if err != nil {
+		return false, fmt.Errorf("check for a production rig lease under %q: %w", leaseRoot, err)
+	}
+	if present {
+		return false, nil
+	}
+	state, lock, err := gateProdAppAuthority(stateDir, leaseRoot)
+	if err != nil {
+		return false, err
+	}
+	if lock != nil {
+		if err := lock.Close(); err != nil {
+			return false, fmt.Errorf("release the App authority writer lock: %w", err)
+		}
+	}
+	return state.Runs(), nil
+}

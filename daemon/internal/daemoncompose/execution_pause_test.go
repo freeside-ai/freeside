@@ -1,6 +1,7 @@
 package daemoncompose
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -281,5 +283,278 @@ func TestExecutionPauseWaiterRaisesTheUnusedCard(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatalf("waiter = %v, want nil on cancel", err)
 		}
+	})
+}
+
+// TestExecutionPauseWaiterRetriesFreedAuthority pins the retry path in
+// executionPauseWaiter inside synctest bubbles: a held lock, a rig lease
+// manifest, a released pause, a blocked requested pause, or an empty
+// retryStateDir produces no restart; freeing the lock asks for one restart on
+// the next tick and leaves the lock free; a ready requested pause with a free
+// lock still releases and restarts as paused; and a check error logs a warning
+// and leaves the waiter running.
+func TestExecutionPauseWaiterRetriesFreedAuthority(t *testing.T) {
+	t.Parallel()
+	newWaiter := func(
+		st *store.Store, leaseRoot, retryStateDir string, restarts *atomic.Int32, logger *slog.Logger,
+	) executionPauseWaiter {
+		if logger == nil {
+			logger = slog.New(slog.DiscardHandler)
+		}
+		return executionPauseWaiter{
+			store: st,
+			readiness: func(context.Context) (signet.RestartReadinessResponse, error) {
+				return signet.RestartReadinessResponse{}, nil
+			},
+			restart:       func() { restarts.Add(1) },
+			leaseRoot:     leaseRoot,
+			retryStateDir: retryStateDir,
+			now:           time.Now,
+			logger:        logger,
+		}
+	}
+
+	t.Run("lock held then freed", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			stateDir, leaseRoot := gateDirs(t)
+			holder, err := publish.AcquireAuthorityWriterLock(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = holder.Close() }()
+
+			var restarts atomic.Int32
+			var logs bytes.Buffer
+			waiter := newWaiter(st, leaseRoot, stateDir, &restarts,
+				slog.New(slog.NewTextHandler(&logs, nil)))
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Sleep(2 * executionPauseInterval)
+			if got := restarts.Load(); got != 0 {
+				t.Fatalf("while lock held: restarts = %d, want 0", got)
+			}
+			if err := holder.Close(); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Sleep(executionPauseInterval)
+			if got := restarts.Load(); got != 1 {
+				t.Fatalf("after lock freed: restarts = %d, want 1", got)
+			}
+			requireLockFree(t, stateDir)
+			synctest.Sleep(3 * executionPauseInterval)
+			if got := restarts.Load(); got != 1 {
+				t.Fatalf("after extra ticks: restarts = %d, want 1", got)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+			if !strings.Contains(logs.String(), "restarting to retry execution") {
+				t.Fatalf("logs %q do not record the retry restart", logs.String())
+			}
+		})
+	})
+
+	t.Run("manifest holds back free lock", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			stateDir, leaseRoot := gateDirs(t)
+			lease, err := acquireGateTestRig(leaseRoot, os.Getpid())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lease.Close() }()
+
+			var restarts atomic.Int32
+			waiter := newWaiter(st, leaseRoot, stateDir, &restarts, nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Sleep(2 * executionPauseInterval)
+			if got := restarts.Load(); got != 0 {
+				t.Fatalf("with manifest present: restarts = %d, want 0", got)
+			}
+			if err := lease.Close(); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Sleep(executionPauseInterval)
+			if got := restarts.Load(); got != 1 {
+				t.Fatalf("after manifest removed: restarts = %d, want 1", got)
+			}
+			requireLockFree(t, stateDir)
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+		})
+	})
+
+	t.Run("pause wins over free lock", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			stateDir, leaseRoot := gateDirs(t)
+			if err := RequestExecutionPause(t.Context(), st, "cli:operator", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+
+			var restarts atomic.Int32
+			var logs bytes.Buffer
+			waiter := newWaiter(st, leaseRoot, stateDir, &restarts,
+				slog.New(slog.NewTextHandler(&logs, nil)))
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Wait()
+			requirePauseState(t, st, domain.ExecutionPauseReleased)
+			if got := restarts.Load(); got != 1 {
+				t.Fatalf("restarts = %d, want 1", got)
+			}
+			requireLockFree(t, stateDir)
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+			if !strings.Contains(logs.String(), "execution pause released") {
+				t.Fatalf("logs %q do not record the pause release", logs.String())
+			}
+		})
+	})
+
+	t.Run("blocked requested pause holds back free lock", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			stateDir, leaseRoot := gateDirs(t)
+			if err := RequestExecutionPause(t.Context(), st, "cli:operator", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+
+			var restarts atomic.Int32
+			waiter := newWaiter(st, leaseRoot, stateDir, &restarts, nil)
+			waiter.readiness = func(context.Context) (signet.RestartReadinessResponse, error) {
+				return signet.RestartReadinessResponse{
+					Blockers: []domain.RestartBlocker{{Kind: domain.AllRestartBlockerKinds[0], Count: 1}},
+				}, nil
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Sleep(2 * executionPauseInterval)
+			requirePauseState(t, st, domain.ExecutionPauseRequested)
+			if got := restarts.Load(); got != 0 {
+				t.Fatalf("with blocked pause: restarts = %d, want 0", got)
+			}
+			requireLockFree(t, stateDir)
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+		})
+	})
+
+	t.Run("released pause never retries", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			stateDir, leaseRoot := gateDirs(t)
+			if err := RequestExecutionPause(t.Context(), st, "cli:operator", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if released, err := releaseExecutionPause(t.Context(), st, time.Now()); err != nil || !released {
+				t.Fatalf("release = %t, %v", released, err)
+			}
+
+			var restarts atomic.Int32
+			waiter := newWaiter(st, leaseRoot, stateDir, &restarts, nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Sleep(2 * executionPauseInterval)
+			if got := restarts.Load(); got != 0 {
+				t.Fatalf("with pause released: restarts = %d, want 0", got)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+		})
+	})
+
+	t.Run("empty retry state dir never retries", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			_, leaseRoot := gateDirs(t)
+
+			var restarts atomic.Int32
+			var logs bytes.Buffer
+			waiter := newWaiter(st, leaseRoot, "", &restarts,
+				slog.New(slog.NewTextHandler(&logs, nil)))
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Sleep(2 * executionPauseInterval)
+			if got := restarts.Load(); got != 0 {
+				t.Fatalf("with retry off: restarts = %d, want 0", got)
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+			// Without the retryStateDir guard, prodAuthorityFree("") fails and
+			// logs a warning while still requesting no restart; asserting no
+			// retry warning proves the check never ran.
+			if strings.Contains(logs.String(), "app authority retry") {
+				t.Fatalf("logs %q recorded a retry check with retry off", logs.String())
+			}
+		})
+	})
+
+	t.Run("check error warns and keeps running", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			st := openPauseStore(t)
+			stateDir, leaseRoot := gateDirs(t)
+			missingDir := filepath.Join(stateDir, "missing")
+
+			var restarts atomic.Int32
+			var logs bytes.Buffer
+			waiter := newWaiter(st, leaseRoot, missingDir, &restarts,
+				slog.New(slog.NewTextHandler(&logs, nil)))
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- waiter.run(ctx) }()
+
+			synctest.Sleep(2 * executionPauseInterval)
+			if got := restarts.Load(); got != 0 {
+				t.Fatalf("with missing state dir: restarts = %d, want 0", got)
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("waiter exited early on check error: %v", err)
+			default:
+			}
+			// Restoring the directory proves the waiter kept running and
+			// still handles the next tick.
+			if err := os.Mkdir(missingDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Sleep(executionPauseInterval)
+			if got := restarts.Load(); got != 1 {
+				t.Fatalf("after state dir restored: restarts = %d, want 1", got)
+			}
+			requireLockFree(t, missingDir)
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("waiter = %v, want nil on cancel", err)
+			}
+			if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "app authority retry") {
+				t.Fatalf("logs %q do not record the check warning", logs.String())
+			}
+		})
 	})
 }
