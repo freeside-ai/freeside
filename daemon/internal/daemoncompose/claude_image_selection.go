@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	osexec "os/exec"
 	"slices"
 	"sync"
 	"time"
@@ -428,11 +429,16 @@ func (f *conformanceFollower) pendingFor(image domain.ImageRef) bool {
 //
 // A failed pass closes only its own image's configuration: it is
 // remembered like a follower pass's, so its image retries after the
-// backoff, and it fails the doctor pass, which stops the daemon, only when
-// the round leaves ward no published proof at all. A failed retirement
-// always fails it, since the durable marker did not land. A pass whose
-// memory the budget refuses for good runs nothing and leaves the standing
-// proof as it was, so it is skipped, logged.
+// backoff, and it fails the doctor pass only when the round leaves ward no
+// published proof at all. A pass that failed only because a command it ran
+// exited nonzero (runtimeCommandFailure) is retried once after
+// followerRetryBackoff; if the retry fails that way too, its error is a
+// reproveRuntimeFailure, which the doctor's failure tracker counts as
+// transient, so the next doctor fire retries it. Any other failure stops
+// the daemon. A failed retirement always fails the doctor pass, since the
+// durable marker did not land. A pass whose memory the budget refuses for
+// good runs nothing and leaves the standing proof as it was, so it is
+// skipped, logged.
 func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	f.passMu.Lock()
 	defer f.passMu.Unlock()
@@ -468,19 +474,9 @@ func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 		}
 	}
 	for _, image := range reprove {
-		if err := f.cfg.Prove(ctx, image); err != nil {
-			if reservationRefusedForGood(err) {
-				f.cfg.Logger.Warn("scheduled conformance pass skipped: the memory budget can never grant it",
-					"image", image, "error", err)
-				continue
-			}
-			if ctx.Err() == nil {
-				f.recordFailure(image)
-			}
+		if err := f.reprove(ctx, image); err != nil {
 			failedPasses = append(failedPasses, fmt.Errorf("re-prove image %s: %w", image, err))
-			continue
 		}
-		f.clearFailure(image)
 	}
 	if len(failedPasses) > 0 {
 		if len(f.cfg.Ledger.ProvenImages()) == 0 {
@@ -492,6 +488,95 @@ func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	}
 	return errors.Join(errs...)
 }
+
+// reprove runs image's scheduled pass, and runs it once more after
+// followerRetryBackoff when it failed only because a command exited
+// nonzero. It returns nil when a pass succeeded or the budget refused it
+// for good, and otherwise the last pass's error, marked as a
+// reproveRuntimeFailure when the retry failed that way too. The wait runs
+// under passMu, so follower passes keep waiting behind the scheduled one.
+func (f *conformanceFollower) reprove(ctx context.Context, image domain.ImageRef) error {
+	err := f.proveScheduled(ctx, image)
+	if err == nil || !runtimeCommandFailure(err) || ctx.Err() != nil {
+		return err
+	}
+	f.cfg.Logger.Warn("scheduled conformance pass failed on a runtime command; retrying it once",
+		"image", image, "retry_in", followerRetryBackoff, "error", err)
+	timer := time.NewTimer(followerRetryBackoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return err
+	case <-timer.C:
+	}
+	err = f.proveScheduled(ctx, image)
+	if err != nil && runtimeCommandFailure(err) {
+		return &reproveRuntimeFailure{err: err}
+	}
+	return err
+}
+
+// proveScheduled runs one scheduled pass of image and remembers its
+// outcome for the image's backoff.
+func (f *conformanceFollower) proveScheduled(ctx context.Context, image domain.ImageRef) error {
+	err := f.cfg.Prove(ctx, image)
+	if err == nil {
+		f.clearFailure(image)
+		return nil
+	}
+	if reservationRefusedForGood(err) {
+		f.cfg.Logger.Warn("scheduled conformance pass skipped: the memory budget can never grant it",
+			"image", image, "error", err)
+		return nil
+	}
+	if ctx.Err() == nil {
+		f.recordFailure(image)
+	}
+	return err
+}
+
+// runtimeCommandFailure reports whether a pass failed only because a
+// command it ran, such as a container runtime CLI call, exited nonzero:
+// every cause in err's tree ends in an *exec.ExitError, which ward's runtime
+// CLI keeps in the chain. errors.As is not enough, because ward.Suite.Full
+// joins a failed pass with a failed conformance-row write, and that write
+// failure must still stop the daemon. A real conformance regression is a
+// ward.ConformanceFailure, whose Unwrap hides its cause, so it never matches
+// even when an exit caused it.
+func runtimeCommandFailure(err error) bool {
+	switch e := err.(type) { //nolint:errorlint // walks the tree itself so every cause must be an exit
+	case *osexec.ExitError:
+		return true
+	case interface{ Unwrap() []error }:
+		causes := e.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !runtimeCommandFailure(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		cause := e.Unwrap()
+		return cause != nil && runtimeCommandFailure(cause)
+	}
+	return false
+}
+
+// reproveRuntimeFailure marks one image's scheduled re-prove that failed
+// only because a command exited nonzero, after its in-pass retry failed
+// the same way. transientExternalFailure counts it as transient, so the
+// doctor pass it fails retries at the next fire instead of stopping the
+// daemon, until scheduledFailureThreshold consecutive failures.
+type reproveRuntimeFailure struct {
+	err error
+}
+
+func (e *reproveRuntimeFailure) Error() string { return e.err.Error() }
+
+func (e *reproveRuntimeFailure) Unwrap() error { return e.err }
 
 // retryDue reports whether image may be proved again: its last pass did
 // not fail, or its backoff has passed.

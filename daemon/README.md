@@ -6143,7 +6143,14 @@ always the most recently selected one, and re-proves each in its own
 pass under its own memory reservation, except that an image whose last
 pass failed waits out its backoff. A failed re-proof fails the scheduled
 doctor pass, which stops the daemon, only when the round leaves ward no
-published proof. It retires every other proof: it
+published proof. A re-proof that failed only because a command it ran,
+such as `container inspect`, exited nonzero runs once more in the same
+pass after the follower's retry backoff. If that retry fails the same way
+and leaves no published proof, the doctor pass's failure is transient:
+the doctor still files its blocking `conformance` item, the next doctor
+pass proves the image again, and the daemon stops only after three
+consecutive failed doctor passes. A real conformance failure still stops
+it on the first. The scheduled pass retires every other proof: it
 records a supersession marker for the image's configuration, so the
 store stops admitting under it and a restart does not restore it, and
 the image proves again when an attempt next selects it or starts on it.

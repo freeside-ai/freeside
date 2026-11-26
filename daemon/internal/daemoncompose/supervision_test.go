@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	osexec "os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func TestScheduledExternalFailureThresholdRecordsTheRun(t *testing.T) {
@@ -47,6 +49,20 @@ func TestScheduledExternalFailureThresholdRecordsTheRun(t *testing.T) {
 	}
 }
 
+// A doctor pass that failed only on a re-proof whose retry failed on a
+// runtime command is transient: it records observe_failed and retries at the
+// next fire.
+func TestScheduledRuntimeCommandReproveFailureIsTransient(t *testing.T) {
+	t.Parallel()
+	tracker := newScheduledFailureTracker(time.Now, nil)
+	failure := fmt.Errorf("scheduled doctor pass: %w", errors.Join(fmt.Errorf("re-prove image %s: %w", "image",
+		&reproveRuntimeFailure{err: fmt.Errorf("container inspect: %w", &osexec.ExitError{})})))
+	consumption, err := tracker.consumption(domain.ScheduleDoctor, failure)
+	if err != nil || consumption.Outcome != domain.OutcomeObserveFailed {
+		t.Fatalf("consumption = outcome %s, err %v; want observe_failed", consumption.Outcome, err)
+	}
+}
+
 func TestScheduledFailureClassificationFailsClosed(t *testing.T) {
 	t.Parallel()
 	for name, failure := range map[string]error{
@@ -58,6 +74,16 @@ func TestScheduledFailureClassificationFailsClosed(t *testing.T) {
 			&publish.APIError{Status: http.StatusServiceUnavailable, RequestPath: "/installations"},
 			&publish.APIError{Status: http.StatusUnauthorized, RequestPath: "/installations"},
 		)),
+		"conformance regression caused by an exit": fmt.Errorf("scheduled doctor pass: %w",
+			fmt.Errorf("re-prove image %s: %w", "image", &ward.ConformanceFailure{
+				Backend: ward.BackendName, Check: ward.CheckCredentialContainment,
+				Reason: "credential seed did not stop", Err: &osexec.ExitError{},
+			})),
+		"runtime-command re-prove joined with an unclassified failure": fmt.Errorf("scheduled doctor pass: %w",
+			errors.Join(
+				fmt.Errorf("re-prove image %s: %w", "image", &reproveRuntimeFailure{err: &osexec.ExitError{}}),
+				errors.New("doctor check unreadable"),
+			)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			tracker := newScheduledFailureTracker(time.Now, nil)
