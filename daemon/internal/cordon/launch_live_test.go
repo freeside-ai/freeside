@@ -90,8 +90,9 @@ func TestLiveLaunchRefusesSessionServices(t *testing.T) {
 	// login keychain closed. A planted item that trusts /usr/bin/security
 	// reads outside a launch and not inside. Its secret is a throwaway, and a
 	// probe that wrongly succeeds prints nothing it read. Adding an item
-	// isn't probed: inside a launch the add asks authd for a login prompt and
-	// waits on it, under these rules and the ones before (#3599's note).
+	// isn't probed: the rules refuse the add's request to authd for a login
+	// prompt (#3611), but a regression would put that prompt on the owner's
+	// screen. The suite's full pass proves the rule stays in the file.
 	item := fmt.Sprintf("freeside-cordon-probe-%d", os.Getpid())
 	if unconfined(t, "/usr/bin/security", "add-generic-password", "-s", item, "-a", "probe", "-w", rand.Text(), "-T", "/usr/bin/security", keychain) {
 		t.Cleanup(func() {

@@ -94,7 +94,7 @@ var deniedServices = []string{
 const controlService = "com.apple.SecurityServer"
 
 // deniedOperations are the operations the probe asks the sandbox about.
-var deniedOperations = []string{"job-creation", "lsopen", "mach-priv-task-port"}
+var deniedOperations = []string{"job-creation", "lsopen", "mach-priv-task-port", "authorization-right-obtain"}
 
 // deniedPreferenceDomains are the preference domains the rules deny
 // writing: the account's default keychain and search list, and its global

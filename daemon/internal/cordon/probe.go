@@ -52,8 +52,9 @@ type probeSpec struct {
 	Services []probeService `json:"services,omitempty"`
 	// Denied are sandbox operations the rules deny without a filter, which
 	// the probe asks the sandbox about where a live attempt has no safe
-	// target: creating a launchd job, opening through Launch Services, and
-	// another process's task port.
+	// target: creating a launchd job, opening through Launch Services,
+	// another process's task port, and obtaining an authorization right
+	// from authd, which would put a prompt on the owner's screen.
 	Denied []string `json:"denied,omitempty"`
 	// Preferences are preference domains the rules deny writing, which the
 	// probe asks the sandbox about: cfprefsd makes the write outside the
