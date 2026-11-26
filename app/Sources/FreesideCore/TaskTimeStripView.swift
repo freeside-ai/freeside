@@ -85,23 +85,16 @@ struct TaskTimeStripView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// The kinds the legend names: each whose total shows as more than
-    /// `0m`, judged on the text the legend draws, so a kind under half a
-    /// minute is left out too. With none, `Other` stays, so the legend is
-    /// never empty. The spoken summary still names every kind.
+    /// The kinds the legend names, by the run strip's rule
+    /// (`RunTimeStripView.legendKinds`).
     static func legendKinds(_ strip: TaskTimeStrip.Strip, locale: Locale) -> [RunTimeStrip.Kind] {
-        let kinds = RunTimeStrip.Kind.allCases.filter { showsTime(strip.total($0), locale: locale) }
-        return kinds.isEmpty ? [.other] : kinds
+        RunTimeStripView.legendKinds(locale: locale, total: strip.total)
     }
 
     /// Whether the legend names `Between runs`, by the same rule: one run
     /// has no time between runs, so it names none.
     static func showsBetweenRuns(_ strip: TaskTimeStrip.Strip, locale: Locale) -> Bool {
-        showsTime(strip.betweenRuns, locale: locale)
-    }
-
-    private static func showsTime(_ total: TimeInterval, locale: Locale) -> Bool {
-        RunTimeStripView.duration(total, locale: locale) != RunTimeStripView.duration(0, locale: locale)
+        RunTimeStripView.showsTime(strip.betweenRuns, locale: locale)
     }
 
     /// One part of the bar as the reader meets it: its spoken label, and

@@ -637,6 +637,18 @@ import Testing
                 .contains { $0.label == "Waiting Since" && $0.value.hasPrefix("2026-") })
     }
 
+    /// A served money amount pads to two decimals and never rounds
+    /// (#3682); an amount outside the served pattern prints as served.
+    @Test func moneyAmountPadsToTwoDecimalsWithoutRounding() {
+        #expect(AttentionDisplay.moneyAmount("8.5") == "8.50")
+        #expect(AttentionDisplay.moneyAmount("8") == "8.00")
+        #expect(AttentionDisplay.moneyAmount("23.75") == "23.75")
+        #expect(AttentionDisplay.moneyAmount("0.125") == "0.125")
+        #expect(AttentionDisplay.moneyAmount("8.") == "8.")
+        #expect(AttentionDisplay.moneyAmount("08.5") == "08.5")
+        #expect(AttentionDisplay.moneyAmount("abc") == "abc")
+    }
+
     /// Survey frame 5.5: a blocked card leads with the wait its typed facts
     /// name and links to the item the run waits on. That item's id is a
     /// binding, so the Identifiers keep it (R17).

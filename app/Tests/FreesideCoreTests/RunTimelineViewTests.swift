@@ -1017,6 +1017,28 @@ import Testing
         #expect(RunTimeStripView.duration(strip.elapsed, locale: locale) == "3h 50m")
     }
 
+    /// The run strip's legend leaves out a kind whose total draws as `0m`,
+    /// as the task strip's does (#3682): 20 seconds goes, 40 seconds,
+    /// drawn as `1m`, stays, and a strip with nothing to show keeps
+    /// `Other`.
+    @Test @MainActor func theLegendNamesOnlyTheKindsWhoseTotalShowsAsMoreThanNothing() throws {
+        let locale = Locale(identifier: "en_US")
+        #expect(RunTimeStripView.legendKinds(try Self.timeStrip(), locale: locale) == RunTimeStrip.Kind.allCases)
+        func strip(_ cuts: [(RunTimeStrip.Kind, TimeInterval)]) -> RunTimeStrip.Strip {
+            let start = RunFixtures.timeStripNow
+            var at = start
+            var segments: [RunTimeStrip.Segment] = []
+            for (kind, seconds) in cuts {
+                segments.append(.init(kind: kind, start: at, end: at.addingTimeInterval(seconds)))
+                at = at.addingTimeInterval(seconds)
+            }
+            return RunTimeStrip.Strip(start: start, end: at, segments: segments)
+        }
+        let mixed = strip([(.agentWorking, 1_800), (.waitingOnYou, 20), (.held, 40)])
+        #expect(RunTimeStripView.legendKinds(mixed, locale: locale) == [.agentWorking, .held])
+        #expect(RunTimeStripView.legendKinds(strip([(.agentWorking, 20)]), locale: locale) == [.other])
+    }
+
     /// A held segment names its reason in the hold callout's words; other
     /// segments name only their kind (#3237).
     @Test @MainActor func aHeldSegmentsLabelNamesItsReason() throws {

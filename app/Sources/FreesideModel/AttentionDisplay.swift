@@ -1025,8 +1025,19 @@ package enum AttentionDisplay {
     static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {
         let invocations =
             cost.invocations == 1 ? "1 invocation" : "\(cost.invocations) invocations"
-        return "\(cost.currency) \(cost.amount) across \(invocations)"
+        return "\(cost.currency) \(moneyAmount(cost.amount)) across \(invocations)"
             + (cost.complete ? "" : ", still accruing")
+    }
+
+    /// A served money amount with at least two decimals and never fewer
+    /// digits than served: `8.5` reads `8.50` and `8` reads `8.00`, while
+    /// `23.75` and `0.125` stay. It pads the text rather than formatting a
+    /// number, so nothing rounds and no locale changes the separator. An
+    /// amount outside the API's `CostSoFar.amount` pattern prints as served.
+    static func moneyAmount(_ amount: String) -> String {
+        guard let match = amount.wholeMatch(of: /(0|[1-9][0-9]*)(?:\.([0-9]+))?/) else { return amount }
+        let fraction = String(match.2 ?? "")
+        return "\(match.1).\(fraction + String(repeating: "0", count: max(0, 2 - fraction.count)))"
     }
 
     /// The change's cumulative diff at round 1 beside the latest round the
