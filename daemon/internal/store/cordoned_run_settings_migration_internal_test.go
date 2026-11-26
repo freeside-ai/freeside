@@ -13,6 +13,7 @@ import (
 // head.
 func rewindCordonedRunSettings(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindExecutionHosts(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE task_writer_classes`,
 		`ALTER TABLE launch_waits DROP COLUMN resource`,

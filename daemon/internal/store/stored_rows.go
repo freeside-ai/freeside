@@ -593,6 +593,10 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.TaskWriterClass(ctx, domain.TaskID(k.s[0])))
 		})},
+	{"execution host", []string{"execution_hosts", "execution_host_conditions"}, eachKey(`SELECT id FROM execution_hosts`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.ExecutionHost(ctx, domain.ExecutionHostID(k.s[0])))
+		})},
 	{"launch wait", []string{"launch_waits"}, eachKey(`SELECT invocation_id FROM launch_waits`, "s",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard2(tx.LaunchWaitRefusedAt(ctx, domain.InvocationID(k.s[0])))
