@@ -14,6 +14,7 @@ func TestBackupPayloadExtractorsIncludeWorkflowMarkers(t *testing.T) {
 	for _, kind := range []string{
 		publish.ExternalReplyIntentKind,
 		publish.ExternalReplyOutcomeKind,
+		publish.ExternalReviewThreadResolutionKind,
 		engine.KindProductionClosureWait,
 		engine.KindSpecificationInvocationRequested,
 		engine.KindSpecificationImplementationClaim,

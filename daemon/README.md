@@ -7546,6 +7546,18 @@ until a head reviewed in the remediation round or later has been published.
 They name the published commit and say that Freeside has not proven the finding
 fixed. The fake driver posts no replies.
 
+After a declined or deferred reply posts in an inline review thread, the daemon
+resolves that thread once, while the run is open and the reviewer remains
+admitted. The thread resolves only when every other comment in it, apart from
+Freeside's own, has a posted declined or deferred reply. A comment Freeside
+does not answer, or a reply that never posts, keeps the thread open for good,
+with no notice. Threads for fixed replies stay open because Freeside has not
+proven the fix, and review-body and conversation-comment findings have no
+thread to resolve. A thread that is already resolved counts as done; once done
+for a posted reply, Freeside does not resolve it again if someone reopens it.
+Freeside does not reopen a thread it resolved, so a later reply in that thread,
+fixed or not, lands in a resolved thread.
+
 The following advisory, acknowledge-only health items describe reply failures:
 
 - `external_review_reply_refused`: the reason failed screening, the thread
@@ -7556,11 +7568,17 @@ The following advisory, acknowledge-only health items describe reply failures:
   Acknowledging the item does not resend it or settle the earlier effect.
 - `external_review_reply_unreadable`: stored dispositions could not be
   reconstructed. Replies for that run wait until the records can be read.
+- `external_review_thread_unresolved`: a declined or deferred inline reply
+  posted, but the daemon could not find or resolve its review thread. Resolve
+  it on the pull request by hand; the daemon will not try again.
 
 An uncertain send is never repeated. Recovery waits ten minutes before looking
 for its comment; a restart begins that wait again. Only a proven rate-limit
-rejection allows retry, at most three attempts per daemon process and at least
-one minute apart. These notices do not block publication or review.
+rejection allows reply retry, at most three attempts per daemon process and at
+least one minute apart. Thread resolution retries only when GitHub refused
+nothing (a proven rate limit, transport failure, or 5xx response), under the
+same bound of at most three attempts per daemon process and at least one minute
+apart. These notices do not block publication or review.
 
 An earlier ambiguous reply may still post after its outcome was recorded.
 Later replies can still be sent once, and a validated create response can
