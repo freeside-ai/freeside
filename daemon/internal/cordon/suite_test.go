@@ -16,6 +16,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+// The process that runs these tests may hold an approval itself (a
+// terminal often holds accessibility), which would refuse every launch, and
+// off macOS with cgo the reader always refuses. The approval check has its
+// own tests, which give each backend the facts they need.
+func init() {
+	hostFactsReader = func() (HostFacts, error) { return HostFacts{}, nil }
+}
+
 type fakeRecorder struct {
 	mu       sync.Mutex
 	outcomes []domain.ConformanceOutcome

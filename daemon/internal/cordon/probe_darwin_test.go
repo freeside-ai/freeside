@@ -52,6 +52,7 @@ func TestRunProbeUnconfinedFailsEveryCheck(t *testing.T) {
 		Reads:       []probeRead{{Path: present, Present: true}, {Path: filepath.Join(dir, "absent")}},
 		Creates:     []probeCreate{{Path: filepath.Join(dir, "new")}, {Path: filepath.Join(dir, "newdir"), Dir: true}},
 		Sockets:     []string{filepath.Join(dir, "nothing.sock")},
+		Unwritable:  []string{present},
 		Ports:       []int{freePort(t)},
 		Services:    []probeService{{Name: "com.apple.cfprefsd.daemon", Registered: true}},
 		Denied:      ops,

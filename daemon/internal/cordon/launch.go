@@ -77,6 +77,10 @@ type LaunchRequest struct {
 	// or the probe fails, which also withdraws the declaration. Every
 	// unattended launch must set it.
 	RequireProof bool
+	// Seeder, when set, seeds this launch in place of the backend's own. A
+	// host launcher sets it to the tree the daemon sent over its
+	// connection, since a host holds no forge credential to fetch with.
+	Seeder Seeder
 }
 
 // LaunchResult is how a launch ended, once no process from it is alive.
@@ -115,6 +119,11 @@ var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 func plainRunID(runID string) bool {
 	return runIDPattern.MatchString(runID) && !strings.Contains(runID, "..")
 }
+
+// ValidRunID reports whether runID is one plain path component, the rule
+// every run ID a launch, a recovery, or a host launcher's staging path takes
+// is held to.
+func ValidRunID(runID string) bool { return plainRunID(runID) }
 
 // layout is a launch's directories. Every path follows from RunsRoot and
 // RunID alone, so a restarted daemon can rebuild it (#3468).
@@ -247,6 +256,11 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	if err := req.validate(); err != nil {
 		return LaunchResult{}, err
 	}
+	// Whatever RequireProof says: an approval the launching program holds
+	// reaches the run whether or not a pass declared the class.
+	if err := b.approvalRefusal(); err != nil {
+		return LaunchResult{}, err
+	}
 	if req.RequireProof {
 		suite := b.suite.Load()
 		if suite == nil {
@@ -344,7 +358,11 @@ func (b *Backend) prepare(l layout) error {
 // seed is a writer launch's preparation: it seeds the worktree and gives
 // it the evidence directory the agent stages evidence in.
 func (b *Backend) seed(ctx context.Context, req LaunchRequest, l layout) error {
-	if err := b.seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
+	seeder := b.seeder
+	if req.Seeder != nil {
+		seeder = req.Seeder
+	}
+	if err := seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
 		return fmt.Errorf("cordon: seed worktree: %w", err)
 	}
 	if err := os.Mkdir(filepath.Join(l.worktree, export.EvidenceWorkspaceDir), 0o700); err != nil {

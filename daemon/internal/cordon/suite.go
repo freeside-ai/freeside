@@ -126,6 +126,16 @@ type Suite struct {
 	args            []string
 	managedSettings string
 	now             func() time.Time
+	launcher        *Launcher
+}
+
+// Launcher names the host launcher a suite runs under: the socket it
+// serves and the files that make it, its binary and its LaunchAgent plist.
+// A run that could reach the socket could start runs of its own, and one
+// that could write either file would run its own code as the launcher at
+// its next start.
+type Launcher struct {
+	Socket, Binary, Plist string
 }
 
 // SuiteOption configures a Suite.
@@ -137,6 +147,12 @@ type SuiteOption func(*Suite)
 // declared, because a declaration needs a recorded pass.
 func WithConformanceRecorder(r ConformanceRecorder) SuiteOption {
 	return func(s *Suite) { s.recorder = r }
+}
+
+// WithLauncher adds the host launcher's targets to both passes: a run
+// can't connect to its socket or write its binary or plist.
+func WithLauncher(l Launcher) SuiteOption {
+	return func(s *Suite) { s.launcher = &l }
 }
 
 // NewSuite builds the suite over b and attaches it, so a launch that
@@ -151,6 +167,13 @@ func NewSuite(b *Backend, opts ...SuiteOption) (*Suite, error) {
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if l := s.launcher; l != nil {
+		for _, path := range []string{l.Socket, l.Binary, l.Plist} {
+			if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+				return nil, fmt.Errorf("cordon: the launcher's path %q must be clean and absolute", path)
+			}
+		}
 	}
 	if !b.suite.CompareAndSwap(nil, s) {
 		return nil, errors.New("cordon: the backend already has a suite")
@@ -234,13 +257,13 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 
 // ProbeBeforeJob re-proves, inside a launch of its own, the checks with no
 // lasting effect: the preconditions, the secret reads, the protected
-// writes, the reserved ports, and the service, operation, and preference
-// denials. It refuses when no recorded pass declares the class, and passes
-// only when the declaration it began under still stands at its end, so a
-// pass that began or failed meanwhile refuses the job. A failed probe
-// withdraws the declaration, in memory and by a durable failed record, so
-// only a new Full declares again; a failure to write that record wraps
-// ErrConformanceRecord. The record is failed rather than superseded
+// writes, the reserved ports, the host launcher's socket and files, and the
+// service, operation, and preference denials. It refuses when no recorded
+// pass declares the class, and passes only when the declaration it began
+// under still stands at its end, so a pass that began or failed meanwhile
+// refuses the job. A failed probe withdraws the declaration, in memory and
+// by a durable failed record, so only a new Full declares again; a failure
+// to write that record wraps ErrConformanceRecord. The record is failed rather than superseded
 // because the store reads a superseded latest row as a re-proof under way
 // and lets admitted work authenticate against the pass before it. A
 // canceled ctx withdraws nothing, since a job that went away proved
@@ -273,10 +296,14 @@ func (s *Suite) ProbeBeforeJob(ctx context.Context) error {
 	return err
 }
 
-// preconditions are the checks outside any launch: nothing secret in what
-// a launch can read of the daemon, the CLI's own sandbox off, the rule file
+// preconditions are the checks outside any launch: the launching program
+// holds no approval that would reach the run, nothing secret in what a
+// launch can read of the daemon, the CLI's own sandbox off, the rule file
 // its digest, and the CLI its pin.
 func (s *Suite) preconditions() error {
+	if err := s.b.approvalRefusal(); err != nil {
+		return err
+	}
 	var names []string
 	for _, kv := range s.environ() {
 		name, value, _ := strings.Cut(kv, "=")
@@ -384,7 +411,37 @@ func (s *Suite) commonTargets(nonce string) (*targets, error) {
 		}
 	}
 	t.spec.Preferences = deniedPreferenceDomains
+	if err := s.launcherTargets(t); err != nil {
+		return nil, err
+	}
 	return t, nil
+}
+
+// launcherTargets adds the host launcher's socket and files, when the
+// suite runs under one. The socket's control is a connection from outside
+// the launch; each file's is that it exists and the account can't write it,
+// which the launcher's install check also refuses to serve without.
+func (s *Suite) launcherTargets(t *targets) error {
+	l := s.launcher
+	if l == nil {
+		return nil
+	}
+	conn, err := net.Dial("unix", l.Socket)
+	if err != nil {
+		return failure(checkConnect(l.Socket), "control: %v", err)
+	}
+	_ = conn.Close()
+	t.spec.Sockets = append(t.spec.Sockets, l.Socket)
+	for _, path := range []string{l.Binary, l.Plist} {
+		if _, err := os.Stat(path); err != nil {
+			return failure(checkWrite(path), "control: %v", err)
+		}
+		if unix.Access(path, unix.W_OK) == nil {
+			return failure(checkWrite(path), "control: the account can write it")
+		}
+		t.spec.Unwritable = append(t.spec.Unwritable, path)
+	}
+	return nil
 }
 
 // readTargets are the secret paths, the login keychain's file, the owner's
@@ -666,7 +723,7 @@ func (s *Suite) socketTarget(t *targets, nonce string) error {
 		return failure(checkConnect(path), "control: %v", err)
 	}
 	_ = conn.Close()
-	t.spec.Sockets = []string{path}
+	t.spec.Sockets = append(t.spec.Sockets, path)
 	return nil
 }
 

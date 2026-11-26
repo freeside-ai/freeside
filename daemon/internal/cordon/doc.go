@@ -76,6 +76,19 @@
 // withdraws the declaration. Rationale:
 // devlog/2026-11-22-2144-cordon-conformance-proof.md.
 //
+// No launch starts, and the suite's preconditions fail, while the program
+// that starts runs holds the screen-recording or accessibility approval
+// (hostfacts.go; docs/plan.md §5.7, Execution Hosts): macOS grants those to
+// the responsible process, which a run's processes share, so either would
+// reach every run.
+//
+// A launch seeds from the backend's seeder unless its request brings one.
+// The host launcher (internal/cordonhost) holds no forge credential, so its
+// backend's seeder refuses, and each launch brings the base the daemon
+// streamed to it. Under that launcher the suite also proves a run can't
+// connect to its socket or write its binary or plist (WithLauncher).
+// Rationale: devlog/2026-11-26-0409-cordon-host-launcher.md.
+//
 // This package is the launch, recovery, and export halves of a cordoned
 // handoff, behind its own API. The stage driver reaches it through its
 // CordonGate port (internal/exec/stage/cordon.go), which a daemoncompose

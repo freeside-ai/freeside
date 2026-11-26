@@ -28,6 +28,11 @@ const fakeAgentArg = "cordon-fake-agent"
 
 func TestMain(m *testing.M) {
 	args := os.Args[1:]
+	if len(args) > 0 {
+		if verb, ok := testVerbs[args[0]]; ok {
+			os.Exit(verb(args[1:]))
+		}
+	}
 	// A launch's supervisor runs from the daemon's executable, which in a
 	// test is this binary.
 	if len(args) >= len(superviseVerb) && slices.Equal(args[:len(superviseVerb)], superviseVerb) {
@@ -52,20 +57,22 @@ func TestMain(m *testing.M) {
 
 // fakeAgent is the agent CLI's stand-in.
 //
-//	exit CODE        exit with CODE
+//	exit CODE WORDS  print WORDS, if any, then exit with CODE
 //	idle             sleep until killed (a stand-in outside a launch)
 //	env              print the environment, one variable a line
 //	token            read the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
 //	                 names to end of file and print its length and SHA-256,
 //	                 never its bytes; then print stdin
+//	witness          print each argument and each environment variable,
+//	                 one a line, then do what token does
 //	probe            run each probe line from stdin; print ok or FAIL
 //	hop              start a chain of processes that each fork the next and
 //	                 exit at once, appending to ./hops as it goes; exit
 //	spawn THEN       write its own pid to ./agent.pid, start three detached
 //	                 children, write their pids to ./pids, then THEN: exit,
 //	                 chatter (print until killed), silent (print nothing
-//	                 until killed), or release (print until ./release
-//	                 exists, then exit 0)
+//	                 until killed), or release [CODE] (print until
+//	                 ./release exists, then exit CODE, or 0)
 func fakeAgent(args []string) int {
 	if len(args) == 0 {
 		return 2
@@ -73,6 +80,9 @@ func fakeAgent(args []string) int {
 	switch args[0] {
 	case "exit":
 		code, _ := strconv.Atoi(args[1])
+		if len(args) > 2 {
+			fmt.Println(strings.Join(args[2:], " "))
+		}
 		return code
 	case "idle":
 		select {}
@@ -82,6 +92,14 @@ func fakeAgent(args []string) int {
 		}
 		return 0
 	case "token":
+		return readToken()
+	case "witness":
+		for _, arg := range os.Args {
+			fmt.Println("arg", arg)
+		}
+		for _, kv := range os.Environ() {
+			fmt.Println("env", kv)
+		}
 		return readToken()
 	case "probe":
 		return runProbes()
@@ -111,7 +129,11 @@ func fakeAgent(args []string) int {
 		case "release":
 			for {
 				if _, err := os.Stat("release"); err == nil {
-					return 0
+					code := 0
+					if len(args) > 2 {
+						code, _ = strconv.Atoi(args[2])
+					}
+					return code
 				}
 				fmt.Println("working")
 				time.Sleep(100 * time.Millisecond)
