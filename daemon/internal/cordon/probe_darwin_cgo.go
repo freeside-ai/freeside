@@ -14,6 +14,7 @@ extern int sandbox_check(pid_t pid, const char *operation, int type, ...);
 enum {
 	cordon_probe_filter_none = 0,
 	cordon_probe_filter_global_name = 2,
+	cordon_probe_filter_preference_domain = 6,
 	cordon_probe_no_report = 0x40000000,
 };
 
@@ -25,6 +26,10 @@ static int cordon_probe_denies(const char *op) {
 
 static int cordon_probe_denies_service(const char *name) {
 	return sandbox_check(getpid(), "mach-lookup", cordon_probe_filter_global_name | cordon_probe_no_report, name);
+}
+
+static int cordon_probe_denies_preference(const char *domain) {
+	return sandbox_check(getpid(), "user-preference-write", cordon_probe_filter_preference_domain | cordon_probe_no_report, domain);
 }
 
 // cordon_probe_look_up returns the bootstrap server's answer and drops any
@@ -72,6 +77,13 @@ func sandboxDeniesService(name string) (bool, error) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 	r, err := C.cordon_probe_denies_service(cname)
+	return sandboxAnswer(r, err)
+}
+
+func sandboxDeniesPreference(domain string) (bool, error) {
+	cdomain := C.CString(domain)
+	defer C.free(unsafe.Pointer(cdomain))
+	r, err := C.cordon_probe_denies_preference(cdomain)
 	return sandboxAnswer(r, err)
 }
 

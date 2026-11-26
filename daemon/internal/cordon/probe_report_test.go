@@ -8,16 +8,18 @@ import (
 
 func reportSpec() probeSpec {
 	return probeSpec{
-		Reads:   []probeRead{{Path: "/home/.ssh", Present: true}},
-		Ports:   []int{47100},
-		Denied:  []string{"job-creation"},
-		StandIn: &probeStandIn{Pid: 4242, Start: 17},
-		Detach:  true,
+		Reads:       []probeRead{{Path: "/home/.ssh", Present: true}},
+		Ports:       []int{47100},
+		Denied:      []string{"job-creation"},
+		Preferences: []string{"com.apple.security"},
+		StandIn:     &probeStandIn{Pid: 4242, Start: 17},
+		Detach:      true,
 	}
 }
 
 const passingReport = "ok read /home/.ssh\n  (refused as expected: operation not permitted)\n" +
-	"ok bind 47100\nok denied job-creation\nok signal 4242\ndetached 5151 99\n"
+	"ok bind 47100\nok denied job-creation\nok preference-write com.apple.security\n" +
+	"ok signal 4242\ndetached 5151 99\n"
 
 func TestCheckProbeReportAcceptsAnExactPassingReport(t *testing.T) {
 	t.Parallel()
@@ -86,6 +88,7 @@ func TestRunProbeRefusesBadUsage(t *testing.T) {
 		{`{"reads":[{"path":"relative"}]}`},
 		{`{"unknown":1}`},
 		{`{"commands":[{"name":"x","argv":["launchctl"]}]}`},
+		{`{"preferences":[""]}`},
 		{`{} {}`},
 	} {
 		var out strings.Builder

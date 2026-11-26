@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -292,6 +293,26 @@ func TestSecretPathsAreTheRuleFilesHomePaths(t *testing.T) {
 	slices.Sort(listed)
 	if !slices.Equal(inRules, listed) {
 		t.Fatalf("rules.sb denies %q, the suite lists %q", inRules, listed)
+	}
+}
+
+// preferenceDomain finds each preference domain rules.sb names.
+var preferenceDomain = regexp.MustCompile(`\(preference-domain "([^"]+)"\)`)
+
+// TestDeniedPreferenceDomainsAreTheRuleFilesDomains pins the suite's
+// domains to the rule file, so a domain rule can't be added or dropped
+// without the probe following.
+func TestDeniedPreferenceDomainsAreTheRuleFilesDomains(t *testing.T) {
+	t.Parallel()
+	var inRules []string
+	for _, m := range preferenceDomain.FindAllStringSubmatch(ruleTemplate, -1) {
+		inRules = append(inRules, m[1])
+	}
+	listed := slices.Clone(deniedPreferenceDomains)
+	slices.Sort(inRules)
+	slices.Sort(listed)
+	if len(inRules) == 0 || !slices.Equal(inRules, listed) {
+		t.Fatalf("rules.sb names preference domains %q, the suite lists %q", inRules, listed)
 	}
 }
 

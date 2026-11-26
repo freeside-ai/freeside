@@ -17,6 +17,8 @@ func sandboxDeniesOperation(string) (bool, error) { return false, errProbeUnsupp
 
 func sandboxDeniesService(string) (bool, error) { return false, errProbeUnsupported }
 
+func sandboxDeniesPreference(string) (bool, error) { return false, errProbeUnsupported }
+
 func lookUpService(string) int { return -1 }
 
 func processStart(int) (int64, error) { return 0, errProbeUnsupported }

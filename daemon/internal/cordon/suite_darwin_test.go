@@ -173,6 +173,18 @@ func TestFullProvesEveryDenialInARealLaunch(t *testing.T) {
 	if !declares(b) {
 		t.Fatal("a passing pre-job probe withdrew the declaration")
 	}
+	// Both passes probe the common targets, so both proved each
+	// preference domain's denial.
+	common, err := s.commonTargets(newNonce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.close()
+	for _, domain := range deniedPreferenceDomains {
+		if !slices.Contains(common.spec.checks(), checkPreference(domain)) {
+			t.Errorf("the passes do not probe %s", checkPreference(domain))
+		}
+	}
 	left, err := os.ReadDir(cfg.RunsRoot)
 	if err != nil {
 		t.Fatal(err)
