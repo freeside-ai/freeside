@@ -1112,6 +1112,11 @@ struct CompactMark: View {
 /// An inert list records a choice already made (a closed card, #2097): no
 /// mark column, no focus stop, and no buttons, so VoiceOver reads a plain
 /// list; the made choice keeps its ink outline and the selected trait.
+///
+/// An option may carry a drawn `detail` under its consequence (the role
+/// picker's usage line, #3675) and an `accessibilityValue` VoiceOver reads
+/// after its label. A caller that sets both hides the drawn detail from
+/// VoiceOver, so the value is read once.
 struct ChoiceList<Value: Hashable>: View {
     /// Whose words an option is, which decides its shape.
     enum Register {
@@ -1133,6 +1138,10 @@ struct ChoiceList<Value: Hashable>: View {
         /// False draws the option faint and takes no tap or arrow key: a
         /// choice that is shown but can't be picked now.
         var isEnabled = true
+        /// Drawn under the consequence; nil draws nothing.
+        var detail: AnyView? = nil
+        /// Spoken after the label as the option's value; nil sets none.
+        var accessibilityValue: String? = nil
         var id: Value { value }
     }
 
@@ -1180,6 +1189,7 @@ struct ChoiceList<Value: Hashable>: View {
             label: optionContent(option)
         )
         .accessibilityElement(children: .combine)
+        .accessibilityValue(option.accessibilityValue ?? "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -1192,6 +1202,9 @@ struct ChoiceList<Value: Hashable>: View {
                     .foregroundStyle(option.isEnabled ? Color.inkDim : Color.inkFaint)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let detail = option.detail {
+                detail
             }
         }
     }
@@ -1220,6 +1233,7 @@ struct ChoiceList<Value: Hashable>: View {
                 hoveredOption = nil
             }
         }
+        .accessibilityValue(option.accessibilityValue ?? "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
