@@ -74,6 +74,27 @@ import Testing
         #expect(atlas.map(\.1) == [["task-other-project"]])
     }
 
+    /// Every row's bar reads one scale: the largest count, held groups
+    /// included. An all-zero tab fills nothing, and one dominant count
+    /// fills its track while a small count fills its share.
+    @Test func barsShareTheLargestCountAsTheirScale() {
+        #expect(WorkStatus(open: [], tasks: [], projectFilter: nil).largestCount == 0)
+        #expect(WorkStatus.barFraction(0, largest: 0) == 0)
+
+        #expect(WorkStatus.barFraction(9, largest: 9) == 1)
+        #expect(WorkStatus.barFraction(1, largest: 9) == 1.0 / 9)
+
+        let status = WorkStatus(
+            open: WorkStatusFixtures.openItems(), tasks: WorkStatusFixtures.tasks(), projectFilter: nil)
+        #expect(status.largestCount == 2)
+        // Held groups alone still set the scale.
+        let heldIDs: Set = ["task-base", "task-capacity", "task-parallel"]
+        let held = WorkStatus(
+            open: [], tasks: WorkStatusFixtures.tasks().filter { heldIDs.contains($0.task.id) }, projectFilter: nil)
+        #expect(held.groups.map(\.position) == [.held(.base_advanced), .held(.usage_pool_exhausted)])
+        #expect(held.largestCount == 2)
+    }
+
     @Test func aQuietTaskSitsUnderItsHoldBeforeItsStage() {
         let tasks = WorkStatusFixtures.tasks()
         func position(_ id: String) -> Position? {
