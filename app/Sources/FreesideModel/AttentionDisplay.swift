@@ -365,6 +365,14 @@ package enum AttentionDisplay {
         item.blocked_on.map { "Waiting on \(phrase($0.value1.kind))." }
     }
 
+    /// A system-health finding's name: its diagnostic code as a label
+    /// (`work_held` reads "Work held"). The name says nothing of admission;
+    /// the System Health pane's header states admission and each row's
+    /// effect line states the finding's part in it (#3678).
+    package static func findingName(_ item: Components.Schemas.AttentionItem) -> String {
+        item.health_diagnostic.map { diagnosticLabel($0.value1.code) } ?? "System health finding"
+    }
+
     package static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
         if let lead = ConclusionDisplay.leadSentence(item) { return lead }
         switch item._type {
@@ -405,20 +413,7 @@ package enum AttentionDisplay {
         case .effect_proposal:
             return "A proposed effect is ready to review."
         case .system_health:
-            guard let diagnostic = item.health_diagnostic?.value1 else {
-                return "A system-health condition needs attention."
-            }
-            let lead = diagnosticLabel(diagnostic.code)
-            guard diagnostic.impairs != Components.Schemas.ImpairedCapability.none else {
-                return "\(lead). No capability is impaired."
-            }
-            // An advisory finding names the capability it warns about but
-            // leaves admission open, so the row must not read as a closed
-            // gate beside the Admission row's "Open" (#3026).
-            guard SystemHealthFindings.isBlocking(item) else {
-                return "\(lead). Warns about \(label(diagnostic.impairs).lowercased()); admission stays open."
-            }
-            return "\(lead). \(label(diagnostic.impairs)) is impaired."
+            return findingName(item)
         case .blocked:
             return blockedWaitSentence(item) ?? "A run is waiting on a blocker."
         case .unknown:

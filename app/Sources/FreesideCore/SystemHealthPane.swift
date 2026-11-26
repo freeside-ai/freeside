@@ -190,10 +190,12 @@ struct SystemHealthPane: View {
 
 /// One finding on the scanning row (R31): its posture, or its outcome once
 /// closed, on the keyword line, where the list puts the type, since every
-/// row here is the same type; the sentence its typed fields make, with the
-/// daemon's reason in full under it, since the reason is what names the
-/// held run and the refused check (#3026); and what it is about, its task
-/// or else its project, with the time it opened or closed.
+/// row here is the same type, with an open finding's effect on admission
+/// beside it (#3678); the finding's name, with the daemon's reason in full
+/// under it, since the reason is what names the held run and the refused
+/// check (#3026); and what it is about, its task or else its project, with
+/// the time it opened or closed. An accent chevron, centered on the row,
+/// says the row opens the finding's card.
 ///
 /// An open blocking finding is marked in wax (#3356): its keyword in wax
 /// semibold and a 3pt wax rule down its leading edge, the color the
@@ -204,6 +206,9 @@ struct FindingRow: View {
     /// grouped row's 14pt padding, keeps 10pt from it.
     static let ruleWidth: CGFloat = 3
     static let ruleInset: CGFloat = 1
+    /// The chevron's inset from the group's trailing edge: the grouped
+    /// row's padding, so it lines up with the content's leading inset.
+    static let chevronTrailingPadding: CGFloat = 14
     /// `SettingsGroup`'s corner radius, which the rule follows.
     static let groupCornerRadius: CGFloat = 8
 
@@ -224,29 +229,15 @@ struct FindingRow: View {
 
     var body: some View {
         let marked = Self.isMarkedBlocking(item)
-        SidebarRow(
-            keyword: .init(
-                text: SystemHealthFindings.keyword(item), color: marked ? .waxText : .inkDim, isStrong: marked),
-            time: time, grouped: true
-        ) {
-            EmptyView()
-        } title: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(AttentionDisplay.rowSummary(item))
-                    .font(FreesideFont.rowTitle)
-                    .foregroundStyle(Color.ink)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                if !item.reason.isEmpty {
-                    Text(item.reason)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        } context: {
-            SidebarRowContext(text: Self.context(item))
-        } closing: {
-            EmptyView()
+        HStack(alignment: .center, spacing: 0) {
+            row(marked: marked)
+            // Says the row opens the finding's card; the row is already a
+            // button to VoiceOver.
+            Text("›")
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.accentText)
+                .padding(.trailing, Self.chevronTrailingPadding)
+                .accessibilityHidden(true)
         }
         // A background, so the rule takes the row's full height without
         // moving its content. Only the rule clips to the group's corner, as
@@ -268,6 +259,34 @@ struct FindingRow: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private func row(marked: Bool) -> some View {
+        SidebarRow(
+            keyword: .init(
+                text: SystemHealthFindings.keyword(item), color: marked ? .waxText : .inkDim, isStrong: marked,
+                effect: SystemHealthFindings.effect(item)),
+            time: time, grouped: true
+        ) {
+            EmptyView()
+        } title: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(AttentionDisplay.findingName(item))
+                    .font(FreesideFont.rowTitle)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                if !item.reason.isEmpty {
+                    Text(item.reason)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } context: {
+            SidebarRowContext(text: Self.context(item))
+        } closing: {
+            EmptyView()
+        }
     }
 
     /// The task a finding is about by the name the Unified List gives it,
