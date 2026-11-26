@@ -3,12 +3,12 @@ import SwiftUI
 
 /// Settings' Workflow pane on both platforms (`SettingsPaneView`): the
 /// per-effect gates and the follow-up filing caps (plan §3.2), read from
-/// sync and changed as a saved command. General holds what every project
-/// inherits; each project the daemon serves follows with its own rows,
-/// which show the value that wins (the project's, else general's, else the
-/// default) and where it came from. A project row its own layer sets offers
-/// a reset to general. Each row's line says what its value does today.
-/// Each control saves at once.
+/// sync and changed as a saved command. General lists every setting, with
+/// the value that wins (general's, else the default) and where it came
+/// from. Each project the daemon serves lists only the settings its own
+/// layer overrides, each with a reset to general, then how many follow
+/// general and a menu that overrides one more. Each row's line says what
+/// its value does today. Each control saves at once.
 struct WorkflowPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -44,11 +44,88 @@ struct WorkflowPolicyView: View {
             }
             ForEach(model.sections, id: \.self) { section in
                 SettingsSection(keyword: Self.keyword(section)) {
-                    SettingsGroup(elements: model.settings(in: section), id: \.key) { setting in
-                        row(setting, in: section)
+                    if let project = section.projectID {
+                        projectSection(project)
+                    } else {
+                        SettingsGroup(elements: model.settings(in: section), id: \.key) { setting in
+                            row(setting, in: section)
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// A project's overrides, then the count that follows general and the
+    /// menu that adds an override, which go once every setting is
+    /// overridden.
+    @ViewBuilder private func projectSection(_ project: String) -> some View {
+        let overrides = model.overrides(projectID: project)
+        if !overrides.isEmpty {
+            SettingsGroup(elements: overrides, id: \.key) { setting in
+                row(setting, in: .project(project))
+            }
+        }
+        if let line = Self.followingGeneralLine(
+            following: model.followingGeneralCount(projectID: project), overridden: overrides.count)
+        {
+            // The control drops under the line where both don't fit on one.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    followingGeneral(line)
+                    Spacer(minLength: 0)
+                    overrideMenu(project)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    followingGeneral(line)
+                    overrideMenu(project)
+                }
+            }
+        }
+    }
+
+    private func followingGeneral(_ line: String) -> some View {
+        Text(line)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func overrideMenu(_ project: String) -> some View {
+        let choices = model.overridable(projectID: project)
+        if !choices.isEmpty {
+            let label = SettingsPopupLabel(text: "Override a Setting")
+            Group {
+                if rendersInteractiveControls {
+                    Menu {
+                        ForEach(choices, id: \.key) { setting in
+                            Button(Self.label(setting.key)) {
+                                Task { await model.addOverride(setting.key, projectID: project) }
+                            }
+                        }
+                    } label: {
+                        label
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .accessibilityLabel("Override a setting for \(project)")
+                } else {
+                    label
+                }
+            }
+            .disabled(!model.canEdit)
+        }
+    }
+
+    /// The line under a project's overrides: how many of its settings
+    /// follow general, or nil once it overrides every one.
+    static func followingGeneralLine(following: Int, overridden: Int) -> String? {
+        switch (following, overridden) {
+        case (0, _): nil
+        case (let count, 0): "All \(count) settings follow General."
+        case (1, _): "The other setting follows General."
+        case (let count, _): "The other \(count) settings follow General."
         }
     }
 

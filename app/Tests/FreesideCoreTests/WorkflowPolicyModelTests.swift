@@ -83,6 +83,60 @@ import Testing
         #expect(clause(.gates_period_source_issue_closure) == nil)
     }
 
+    /// #3679: a project section lists only what its own layer overrides,
+    /// counts the rest, and offers to override any of the rest.
+    @Test(arguments: [0, 1, 6])
+    func aProjectListsOnlyItsOverrides(overridden: Int) async throws {
+        let keys = WorkflowPolicyFixtures.paneKeys
+        let setAt = Date(timeIntervalSince1970: 1_786_502_400)
+        var entries: [WorkflowPolicyLayers.Layer: WorkflowPolicyLayers.Entry] = [
+            .init(projectID: nil, key: .gates_period_source_issue_closure): .init(
+                value: "true", setBy: "device:device-mock", setAt: setAt)
+        ]
+        for key in keys.prefix(overridden) {
+            entries[.init(projectID: project, key: key)] = .init(
+                value: WorkflowPolicyFixtures.defaultValue(key), setBy: "device:device-mock", setAt: setAt)
+        }
+        let server = MockServer(workflowPolicy: WorkflowPolicyLayers(revision: 1, entries: entries))
+        let model = WorkflowPolicyModel(coordinator: await coordinator(server))
+        #expect(model.overrides(projectID: project).map(\.key) == Array(keys.prefix(overridden)))
+        #expect(model.followingGeneralCount(projectID: project) == keys.count - overridden)
+        #expect(model.overridable(projectID: project).map(\.key) == Array(keys.dropFirst(overridden)))
+        let line = WorkflowPolicyView.followingGeneralLine(
+            following: model.followingGeneralCount(projectID: project), overridden: overridden)
+        switch overridden {
+        case 0: #expect(line == "All 6 settings follow General.")
+        case 1: #expect(line == "The other 5 settings follow General.")
+        default: #expect(line == nil)
+        }
+        // General always lists every setting.
+        #expect(model.settings(in: .general).count == keys.count)
+    }
+
+    @Test func oneSettingFollowingGeneralReadsSingular() {
+        #expect(
+            WorkflowPolicyView.followingGeneralLine(following: 1, overridden: 5) == "The other setting follows General."
+        )
+    }
+
+    @Test func overridingASettingSavesItsCurrentValueForTheProject() async throws {
+        let coordinator = await coordinator()
+        let model = WorkflowPolicyModel(coordinator: coordinator)
+        await model.addOverride(.gates_period_source_issue_closure, projectID: project)
+        // One change recorded: the revision moves from 2 to 3.
+        #expect(coordinator.workflowPolicy?.revision == 3)
+        let confirmed = try #require(model.confirmed)
+        #expect(confirmed.scope == .project && confirmed.project_id == project)
+        #expect(confirmed.key == .gates_period_source_issue_closure && confirmed.value == "true")
+        let closure = try #require(setting(model, .project(project), .gates_period_source_issue_closure))
+        #expect(closure.value == "true" && closure.origin == .project)
+        #expect(
+            model.overrides(projectID: project).map(\.key) == [
+                .gates_period_source_issue_closure, .follow_up_filing_period_max_per_day,
+            ])
+        #expect(!model.overridable(projectID: project).contains { $0.key == .gates_period_source_issue_closure })
+    }
+
     @Test func aCapOffersItsLadderAndTheCurrentValue() {
         #expect(WorkflowPolicyView.capChoices(current: "10") == [1, 2, 3, 5, 10, 20, 50])
         #expect(WorkflowPolicyView.capChoices(current: "7") == [1, 2, 3, 5, 7, 10, 20, 50])

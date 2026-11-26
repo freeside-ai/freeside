@@ -80,6 +80,32 @@ package final class WorkflowPolicyModel {
         }
     }
 
+    /// The project's settings its own layer sets, in sync order: the rows
+    /// its section lists.
+    package func overrides(projectID: String) -> [Components.Schemas.WorkflowPolicySetting] {
+        settings(in: .project(projectID)).filter { $0.origin == .project }
+    }
+
+    /// How many of the project's settings follow general or the default.
+    /// It counts an unknown key too, though `overridable` can't offer it.
+    package func followingGeneralCount(projectID: String) -> Int {
+        settings(in: .project(projectID)).count - overrides(projectID: projectID).count
+    }
+
+    /// The project's settings it can still override, in sync order: every
+    /// one its own layer doesn't set, except an unknown key this app can't
+    /// set.
+    package func overridable(projectID: String) -> [Components.Schemas.WorkflowPolicySetting] {
+        settings(in: .project(projectID)).filter { $0.origin != .project && $0.key != .unknown }
+    }
+
+    /// Sets the project's layer of the key to the value it holds now, saved
+    /// at once, so the project keeps that value when general later changes.
+    package func addOverride(_ key: Components.Schemas.WorkflowPolicyKey, projectID: String) async {
+        guard let current = overridable(projectID: projectID).first(where: { $0.key == key }) else { return }
+        await set(key, to: current.value, in: .project(projectID))
+    }
+
     /// Whether Reset can return the row to general: only a project row
     /// whose own layer sets the key.
     package static func canReset(
