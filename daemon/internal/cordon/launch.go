@@ -77,6 +77,10 @@ type LaunchRequest struct {
 	// or the probe fails, which also withdraws the declaration. Every
 	// unattended launch must set it.
 	RequireProof bool
+	// Seeder, when set, seeds this launch in place of the backend's own. A
+	// host launcher sets it to the tree the daemon sent over its
+	// connection, since a host holds no forge credential to fetch with.
+	Seeder Seeder
 }
 
 // LaunchResult is how a launch ended, once no process from it is alive.
@@ -344,7 +348,11 @@ func (b *Backend) prepare(l layout) error {
 // seed is a writer launch's preparation: it seeds the worktree and gives
 // it the evidence directory the agent stages evidence in.
 func (b *Backend) seed(ctx context.Context, req LaunchRequest, l layout) error {
-	if err := b.seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
+	seeder := b.seeder
+	if req.Seeder != nil {
+		seeder = req.Seeder
+	}
+	if err := seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
 		return fmt.Errorf("cordon: seed worktree: %w", err)
 	}
 	if err := os.Mkdir(filepath.Join(l.worktree, export.EvidenceWorkspaceDir), 0o700); err != nil {

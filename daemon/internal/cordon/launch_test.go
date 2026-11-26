@@ -800,3 +800,28 @@ func TestBackendIdentityEntersTheConfigurationDigest(t *testing.T) {
 		t.Fatal("the zero Backend declares something")
 	}
 }
+
+// TestLaunchSeedsFromTheRequestsSeeder shows a launch that brings its own
+// seeder seeds from it alone: the backend's own is never called.
+func TestLaunchSeedsFromTheRequestsSeeder(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{host: newFakeHost(), script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
+		own := &fakeSeeder{}
+		b, err := New(cfg, own)
+		if err != nil {
+			t.Fatal(err)
+		}
+		useFakes(b, l)
+		req := request("run-seeded")
+		brought := &fakeSeeder{}
+		req.Seeder = brought
+		if _, err := b.Launch(t.Context(), req); err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		if own.calls != 0 || brought.calls != 1 {
+			t.Fatalf("the backend's seeder ran %d times and the request's %d, want 0 and 1", own.calls, brought.calls)
+		}
+	})
+}
