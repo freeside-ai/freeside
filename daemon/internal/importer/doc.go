@@ -62,6 +62,8 @@
 //     the built commit
 //   - commit_plan.go the opaque plan intake, tolerant decoded-string secret
 //     pass, strict V1 validation, exact-cover resolution, and tree-order checks
+//   - plan_check.go read-only CheckCommitPlan convenience entry point and
+//     PlanProblemCode registry (decides nothing for Import)
 //   - message.go the built-in versioned publishing-message screening rules
 //   - paths.go    structural path gates (git-component injection,
 //     file/directory conflicts)

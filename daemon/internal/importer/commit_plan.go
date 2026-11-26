@@ -20,7 +20,46 @@ import (
 
 const commitPlanVersion = "freeside.commit-plan/v1"
 
+// MaxReportedUncoveredPaths bounds how many uncovered changed paths an
+// exact-cover structural failure lists in one CheckCommitPlan report.
+const MaxReportedUncoveredPaths = 50
+
 var errPlanStructural = errors.New("commit plan is structurally invalid")
+
+// planStructuralError attaches a stable PlanProblemCode and optional location
+// to a commit-plan structural failure while preserving errors.Is matching on
+// errPlanStructural for Import.
+type planStructuralError struct {
+	code    PlanProblemCode
+	group   int
+	path    string
+	paths   []string
+	total   int
+	message string
+	cause   error
+}
+
+func (e *planStructuralError) Error() string {
+	return e.message
+}
+
+func (e *planStructuralError) Is(target error) bool {
+	return target == errPlanStructural
+}
+
+func (e *planStructuralError) Unwrap() error {
+	return e.cause
+}
+
+func newPlanStructuralError(code PlanProblemCode, group int, path, message string, cause error) error {
+	return &planStructuralError{
+		code:    code,
+		group:   group,
+		path:    path,
+		message: message,
+		cause:   cause,
+	}
+}
 
 type commitPlan struct {
 	Version string               `json:"version"`
@@ -126,7 +165,7 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 	// Keep invalid UTF-8 ahead of the structural allocation gates, matching
 	// this boundary's established classification. strictjson rechecks it.
 	if !utf8.Valid(raw) {
-		return nil, fmt.Errorf("commit plan is not UTF-8: %w", errPlanStructural)
+		return nil, newPlanStructuralError(PlanProblemInvalidUTF8, 0, "", "commit plan is not UTF-8", nil)
 	}
 	if err := preboundCommitPlan(raw, pol.MaxCommitPlanGroups, pol.MaxEntries); err != nil {
 		return nil, err
@@ -136,18 +175,21 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 		raw, &plan, strictjson.RejectInvalidUTF8, strictjson.Limit(pol.MaxCommitPlanBytes),
 	); err != nil {
 		if errors.Is(err, strictjson.ErrInvalidUTF8) {
-			return nil, fmt.Errorf("commit plan is not UTF-8: %w", errPlanStructural)
+			return nil, newPlanStructuralError(PlanProblemInvalidUTF8, 0, "", "commit plan is not UTF-8", err)
 		}
 		if errors.Is(err, strictjson.ErrTrailingData) {
-			return nil, fmt.Errorf("commit plan carries trailing content: %w", errPlanStructural)
+			return nil, newPlanStructuralError(PlanProblemTrailingData, 0, "", "commit plan carries trailing content", err)
 		}
-		return nil, fmt.Errorf("decode commit plan: %w: %w", errPlanStructural, err)
+		return nil, newPlanStructuralError(PlanProblemInvalidJSON, 0, "", fmt.Sprintf("decode commit plan: %v", err), err)
 	}
 	if plan.Version != commitPlanVersion {
-		return nil, fmt.Errorf("commit plan version %q: %w", plan.Version, errPlanStructural)
+		return nil, newPlanStructuralError(PlanProblemVersionUnsupported, 0, "", fmt.Sprintf("commit plan version %q", plan.Version), nil)
 	}
-	if len(plan.Groups) == 0 || len(plan.Groups) > pol.MaxCommitPlanGroups {
-		return nil, fmt.Errorf("commit plan has %d groups: %w", len(plan.Groups), errPlanStructural)
+	if len(plan.Groups) == 0 {
+		return nil, newPlanStructuralError(PlanProblemGroupsEmpty, 0, "", "commit plan has 0 groups", nil)
+	}
+	if len(plan.Groups) > pol.MaxCommitPlanGroups {
+		return nil, newPlanStructuralError(PlanProblemGroupCapExceeded, 0, "", fmt.Sprintf("commit plan has %d groups", len(plan.Groups)), nil)
 	}
 
 	byPath := make(map[string]plannedChange, len(changes))
@@ -160,13 +202,14 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 	resolved := make([]resolvedCommitGroup, 0, len(plan.Groups))
 	remainderSeen := false
 	for i, group := range plan.Groups {
+		groupNum := i + 1
 		if strings.TrimSpace(group.Name) == "" {
-			return nil, fmt.Errorf("group %d has no name: %w", i+1, errPlanStructural)
+			return nil, newPlanStructuralError(PlanProblemGroupNameEmpty, groupNum, "", fmt.Sprintf("group %d has no name", groupNum), nil)
 		}
 		hasPaths := len(group.Paths) != 0
 		hasRemainder := len(group.Remainder) != 0
 		if hasPaths == hasRemainder {
-			return nil, fmt.Errorf("group %d discriminator: %w", i+1, errPlanStructural)
+			return nil, newPlanStructuralError(PlanProblemGroupDiscriminator, groupNum, "", fmt.Sprintf("group %d discriminator", groupNum), nil)
 		}
 		rg := resolvedCommitGroup{name: group.Name, message: group.Message}
 		if hasRemainder {
@@ -174,7 +217,7 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 			if bytes.Equal(bytes.TrimSpace(group.Remainder), []byte("null")) ||
 				json.Unmarshal(group.Remainder, &remainder) != nil || !remainder ||
 				remainderSeen || i != len(plan.Groups)-1 {
-				return nil, fmt.Errorf("group %d remainder: %w", i+1, errPlanStructural)
+				return nil, newPlanStructuralError(PlanProblemGroupRemainderInvalid, groupNum, "", fmt.Sprintf("group %d remainder", groupNum), nil)
 			}
 			remainderSeen = true
 			for _, c := range changes {
@@ -185,19 +228,22 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 			}
 		} else {
 			if bytes.Equal(bytes.TrimSpace(group.Paths), []byte("null")) {
-				return nil, fmt.Errorf("group %d paths: %w", i+1, errPlanStructural)
+				return nil, newPlanStructuralError(PlanProblemGroupPathsInvalid, groupNum, "", fmt.Sprintf("group %d paths", groupNum), nil)
 			}
 			var paths []string
 			if err := json.Unmarshal(group.Paths, &paths); err != nil || len(paths) == 0 {
-				return nil, fmt.Errorf("group %d paths: %w", i+1, errPlanStructural)
+				return nil, newPlanStructuralError(PlanProblemGroupPathsInvalid, groupNum, "", fmt.Sprintf("group %d paths", groupNum), nil)
 			}
 			for _, p := range paths {
-				if err := validateCommitPlanPath(p, pol); err != nil {
-					return nil, fmt.Errorf("group %d path: %w", i+1, err)
+				if err := validateCommitPlanPath(groupNum, p, pol); err != nil {
+					return nil, err
 				}
 				c, ok := byPath[p]
-				if !ok || assigned[p] {
-					return nil, fmt.Errorf("group %d path is absent or duplicated: %w", i+1, errPlanStructural)
+				if !ok {
+					return nil, newPlanStructuralError(PlanProblemPathNotInChanges, groupNum, p, fmt.Sprintf("group %d path is not in the derived change set", groupNum), nil)
+				}
+				if assigned[p] {
+					return nil, newPlanStructuralError(PlanProblemPathDuplicated, groupNum, p, fmt.Sprintf("group %d path is duplicated", groupNum), nil)
 				}
 				assigned[p] = true
 				rg.changes = append(rg.changes, c)
@@ -206,7 +252,22 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 		resolved = append(resolved, rg)
 	}
 	if len(assigned) != len(changes) {
-		return nil, fmt.Errorf("commit plan does not exactly cover the derived change set: %w", errPlanStructural)
+		var uncovered []string
+		totalUncovered := 0
+		for _, c := range changes {
+			if !assigned[c.path] {
+				totalUncovered++
+				if len(uncovered) < MaxReportedUncoveredPaths {
+					uncovered = append(uncovered, c.path)
+				}
+			}
+		}
+		return nil, &planStructuralError{
+			code:    PlanProblemPathUncovered,
+			paths:   uncovered,
+			total:   totalUncovered,
+			message: "commit plan does not exactly cover the derived change set",
+		}
 	}
 	if err := validateCommitPlanOrder(resolved, base); err != nil {
 		return nil, err
@@ -214,18 +275,22 @@ func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[st
 	return resolved, nil
 }
 
-func validateCommitPlanPath(p string, pol Policy) error {
+func validateCommitPlanPath(groupNum int, p string, pol Policy) error {
 	if p == "." || !fs.ValidPath(p) || !utf8.ValidString(p) || strings.ContainsRune(p, 0) ||
 		int64(len(p)) > pol.MaxPathBytes || strings.Count(p, "/")+1 > pol.MaxPathDepth {
-		return fmt.Errorf("path is not canonical or exceeds its cap: %w", errPlanStructural)
+		reported := ""
+		if utf8.ValidString(p) && !strings.ContainsRune(p, 0) && int64(len(p)) <= pol.MaxPathBytes {
+			reported = p
+		}
+		return newPlanStructuralError(PlanProblemPathInvalid, groupNum, reported, fmt.Sprintf("group %d path is not canonical or exceeds its cap", groupNum), nil)
 	}
 	if export.IsCommitPlanNamespacePath(p) ||
 		p == export.EvidenceWorkspaceDir || strings.HasPrefix(p, export.EvidenceWorkspaceDir+"/") {
-		return fmt.Errorf("path occupies a reserved channel: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemPathReserved, groupNum, p, fmt.Sprintf("group %d path occupies a reserved channel", groupNum), nil)
 	}
 	for _, comp := range strings.Split(p, "/") {
 		if GitUnsafeComponent(comp) {
-			return fmt.Errorf("path contains git metadata: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemPathGitMetadata, groupNum, p, fmt.Sprintf("group %d path contains git metadata", groupNum), nil)
 		}
 	}
 	return nil
@@ -244,14 +309,18 @@ func validateCommitPlanOrder(groups []resolvedCommitGroup, base map[string]treeE
 				state[c.path] = treeEntry{mode: c.mode, oid: c.oid}
 			}
 		}
-		if err := validateTreePathSet(state); err != nil {
-			return fmt.Errorf("group %d creates an invalid intermediate tree: %w: %w", i+1, err, errPlanStructural)
+		if se := validateTreePathSet(state); se != nil {
+			return newPlanStructuralError(
+				se.code, i+1, se.path,
+				fmt.Sprintf("group %d creates an invalid intermediate tree: %s", i+1, se.message),
+				nil,
+			)
 		}
 	}
 	return nil
 }
 
-func validateTreePathSet(state map[string]treeEntry) error {
+func validateTreePathSet(state map[string]treeEntry) *planStructuralError {
 	paths := make([]string, 0, len(state))
 	for p := range state {
 		paths = append(paths, p)
@@ -263,14 +332,22 @@ func validateTreePathSet(state map[string]treeEntry) error {
 		exact[p] = true
 		fold := pathfold.FoldPath(p)
 		if folded[fold] {
-			return fmt.Errorf("paths collide under case/normalization folding")
+			return &planStructuralError{
+				code:    PlanProblemIntermediateTreeCollision,
+				path:    p,
+				message: "paths collide under case/normalization folding",
+			}
 		}
 		folded[fold] = true
 	}
 	for _, p := range paths {
 		for dir := parentDir(p); dir != ""; dir = parentDir(dir) {
 			if exact[dir] {
-				return fmt.Errorf("path is both a file and directory")
+				return &planStructuralError{
+					code:    PlanProblemIntermediateTreeFileDir,
+					path:    p,
+					message: "path is both a file and directory",
+				}
 			}
 		}
 		fold := pathfold.FoldPath(p)
@@ -280,7 +357,11 @@ func validateTreePathSet(state map[string]treeEntry) error {
 		// collision on the target checkout.
 		for dir := parentDir(fold); dir != ""; dir = parentDir(dir) {
 			if folded[dir] {
-				return fmt.Errorf("paths collide under case/normalization folding")
+				return &planStructuralError{
+					code:    PlanProblemIntermediateTreeCollision,
+					path:    p,
+					message: "paths collide under case/normalization folding",
+				}
 			}
 		}
 	}
@@ -295,70 +376,70 @@ func preboundCommitPlan(raw []byte, maxGroups, maxPaths int) error {
 	dec.UseNumber()
 	open, err := dec.Token()
 	if err != nil || open != json.Delim('{') || !dec.More() {
-		return fmt.Errorf("commit plan root: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemInvalidJSON, 0, "", "commit plan root", err)
 	}
 	key, err := dec.Token()
 	if err != nil || !strings.EqualFold(fmt.Sprint(key), "version") {
-		return fmt.Errorf("commit plan version is not first: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemVersionNotFirst, 0, "", "commit plan version is not first", err)
 	}
 	version, err := dec.Token()
 	if err != nil || version != commitPlanVersion {
-		return fmt.Errorf("commit plan version: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemVersionUnsupported, 0, "", "commit plan version", err)
 	}
 	groups, paths := 0, 0
 	for dec.More() {
 		key, err := dec.Token()
 		if err != nil {
-			return fmt.Errorf("commit plan token: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemInvalidJSON, 0, "", "commit plan token", err)
 		}
 		if !strings.EqualFold(fmt.Sprint(key), "groups") {
 			if err := skipJSONValue(dec); err != nil {
-				return fmt.Errorf("commit plan value: %w", errPlanStructural)
+				return newPlanStructuralError(PlanProblemInvalidJSON, 0, "", "commit plan value", err)
 			}
 			continue
 		}
 		open, err := dec.Token()
 		if err != nil || open != json.Delim('[') {
-			return fmt.Errorf("commit plan groups is not an array: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemGroupsInvalid, 0, "", "commit plan groups is not an array", err)
 		}
 		for dec.More() {
 			groups++
 			if groups > maxGroups {
-				return fmt.Errorf("commit plan group cap exceeded: %w", errPlanStructural)
+				return newPlanStructuralError(PlanProblemGroupCapExceeded, 0, "", "commit plan group cap exceeded", nil)
 			}
-			if err := preboundCommitPlanGroup(dec, &paths, maxPaths); err != nil {
+			if err := preboundCommitPlanGroup(dec, groups, &paths, maxPaths); err != nil {
 				return err
 			}
 		}
 		if _, err := dec.Token(); err != nil {
-			return fmt.Errorf("commit plan groups: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemInvalidJSON, 0, "", "commit plan groups", err)
 		}
 	}
 	if _, err := dec.Token(); err != nil {
-		return fmt.Errorf("commit plan root: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemInvalidJSON, 0, "", "commit plan root", err)
 	}
 	return nil
 }
 
-func preboundCommitPlanGroup(dec *json.Decoder, paths *int, maxPaths int) error {
+func preboundCommitPlanGroup(dec *json.Decoder, groupNum int, paths *int, maxPaths int) error {
 	open, err := dec.Token()
 	if err != nil || open != json.Delim('{') {
-		return fmt.Errorf("commit plan group is not an object: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemGroupInvalid, groupNum, "", "commit plan group is not an object", err)
 	}
 	for dec.More() {
 		key, err := dec.Token()
 		if err != nil {
-			return fmt.Errorf("commit plan group: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemInvalidJSON, groupNum, "", "commit plan group", err)
 		}
 		if !strings.EqualFold(fmt.Sprint(key), "paths") {
 			if err := skipJSONValue(dec); err != nil {
-				return fmt.Errorf("commit plan group value: %w", errPlanStructural)
+				return newPlanStructuralError(PlanProblemInvalidJSON, groupNum, "", "commit plan group value", err)
 			}
 			continue
 		}
 		open, err := dec.Token()
 		if err != nil {
-			return fmt.Errorf("commit plan paths: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemInvalidJSON, groupNum, "", "commit plan paths", err)
 		}
 		if open != json.Delim('[') {
 			if d, ok := open.(json.Delim); ok && (d == '{' || d == '[') {
@@ -368,19 +449,19 @@ func preboundCommitPlanGroup(dec *json.Decoder, paths *int, maxPaths int) error 
 		}
 		for dec.More() {
 			if err := skipJSONValue(dec); err != nil {
-				return fmt.Errorf("commit plan path: %w", errPlanStructural)
+				return newPlanStructuralError(PlanProblemInvalidJSON, groupNum, "", "commit plan path", err)
 			}
 			(*paths)++
 			if *paths > maxPaths {
-				return fmt.Errorf("commit plan path cap exceeded: %w", errPlanStructural)
+				return newPlanStructuralError(PlanProblemPathCapExceeded, groupNum, "", "commit plan path cap exceeded", nil)
 			}
 		}
 		if _, err := dec.Token(); err != nil {
-			return fmt.Errorf("commit plan paths: %w", errPlanStructural)
+			return newPlanStructuralError(PlanProblemInvalidJSON, groupNum, "", "commit plan paths", err)
 		}
 	}
 	if _, err := dec.Token(); err != nil {
-		return fmt.Errorf("commit plan group: %w", errPlanStructural)
+		return newPlanStructuralError(PlanProblemInvalidJSON, groupNum, "", "commit plan group", err)
 	}
 	return nil
 }

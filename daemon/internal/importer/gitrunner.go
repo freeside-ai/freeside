@@ -95,10 +95,9 @@ func (g *gitRunner) run(ctx context.Context, stdin io.Reader, args ...string) ([
 	return g.shared.Run(ctx, stdin, args...)
 }
 
-// verifyBase enforces the base binding: the enforced SHA must resolve
-// to a commit in the checkout and be exactly where HEAD points, so
-// integration evidence belongs to one known base.
-func (g *gitRunner) verifyBase(ctx context.Context, baseSHA string) error {
+// verifyBaseCommit verifies that baseSHA resolves to that exact commit in
+// the repository without requiring HEAD to equal it.
+func (g *gitRunner) verifyBaseCommit(ctx context.Context, baseSHA string) error {
 	out, err := g.run(ctx, nil, "rev-parse", "--verify", baseSHA+"^{commit}")
 	if err != nil {
 		return fmt.Errorf("base %s is not a commit in the checkout: %w: %w", baseSHA, ErrBaseMismatch, err)
@@ -106,7 +105,17 @@ func (g *gitRunner) verifyBase(ctx context.Context, baseSHA string) error {
 	if got := strings.TrimSpace(string(out)); got != baseSHA {
 		return fmt.Errorf("base %s resolved to %s: %w", baseSHA, got, ErrBaseMismatch)
 	}
-	out, err = g.run(ctx, nil, "rev-parse", "HEAD")
+	return nil
+}
+
+// verifyBase enforces the base binding: the enforced SHA must resolve
+// to a commit in the checkout and be exactly where HEAD points, so
+// integration evidence belongs to one known base.
+func (g *gitRunner) verifyBase(ctx context.Context, baseSHA string) error {
+	if err := g.verifyBaseCommit(ctx, baseSHA); err != nil {
+		return err
+	}
+	out, err := g.run(ctx, nil, "rev-parse", "HEAD")
 	if err != nil {
 		return err
 	}
