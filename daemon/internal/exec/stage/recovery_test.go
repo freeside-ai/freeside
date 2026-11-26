@@ -882,9 +882,12 @@ func TestCurrentPolicyRequiredForWorkAndImportRetries(t *testing.T) {
 				}
 			}
 			d.authority = stubAuthority{startErr: drift, importErr: drift}
-			if failure := listFailure(t, ctx, d, testIntentEntry); !errors.Is(failure.err, drift) {
-				t.Fatalf("list %s intent = %v, want current-policy refusal",
-					preterminalPhase, failure.err)
+			// The listing checks admission only; Reconcile runs the
+			// current-policy check per intent off the driver's lock.
+			if failure := reconcileQuarantined(t, ctx, d); failure.Entry != testIntentEntry ||
+				failure.Cause != QuarantineUnauthenticated || !errors.Is(failure.Err, drift) {
+				t.Fatalf("reconcile %s intent = %+v, want current-policy refusal",
+					preterminalPhase, failure)
 			}
 		})
 	}

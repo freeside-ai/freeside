@@ -2041,6 +2041,12 @@ type RecoveryReport struct {
 // others (#386): every intent is attempted, whatever order a failing one
 // has in the directory.
 //
+// The listing reconstructs each intent against its admission under the
+// driver's lock. The current-policy check, which can reach GitHub, runs per
+// preterminal intent with the lock released, before that intent's recovery,
+// so a slow check never blocks Inspect of another invocation. A check that
+// couldn't reach its authority (ErrAuthorityUnavailable) is retryable.
+//
 // A failure that ErrRecoveryRetryable marks, or that held accepts (a nil
 // held accepts none), is held: the intent keeps its preterminal phase for the
 // engine's later Inspect passes, as before. Every other failure, including a
@@ -2099,6 +2105,15 @@ func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (Recovery
 		if live {
 			continue
 		}
+		// The current-policy check runs before the cordoned hold, so current
+		// policy's refusal of a cordoned running intent still quarantines it.
+		if err := d.regate(ctx, in, false); err != nil {
+			record(IntentFailure{
+				Entry: filepath.Base(d.intentPath(in.RunID)), Invocation: in.InvocationID,
+				Cause: unauthenticatedCause(err), Err: err,
+			})
+			continue
+		}
 		// A cordoned run may still be running under its supervisor, and the
 		// cordon's Recover waits for its end, which startup must not do. So
 		// this pass holds it, and the attempt's Inspect recovers it off the
@@ -2112,13 +2127,9 @@ func (d *Driver) Reconcile(ctx context.Context, held func(error) bool) (Recovery
 			continue
 		}
 		if err := d.reconcileIntent(ctx, in); err != nil {
-			cause := QuarantineUnauthenticated
-			if errors.Is(err, errExportAuthorityConflict) {
-				cause = QuarantineExportConflict
-			}
 			record(IntentFailure{
 				Entry: filepath.Base(d.intentPath(in.RunID)), Invocation: in.InvocationID,
-				Cause: cause, Err: err,
+				Cause: unauthenticatedCause(err), Err: err,
 			})
 		}
 	}

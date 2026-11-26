@@ -856,9 +856,12 @@ type intentListingFailure struct {
 }
 
 // listIntents returns every durable intent that passes the reconstruction
-// gate, for restart reconciliation, and one failure per entry that does not.
-// A bad entry never hides the entries after it: recovery isolates each
-// intent (#386). Only a directory that cannot be listed fails the whole call.
+// gate against its admission, for restart reconciliation, and one failure per
+// entry that does not. That gate reaches no network, so the caller can list
+// under the driver's lock; the caller runs the current-policy gate (regate)
+// on each preterminal intent before recovering it. A bad entry never hides
+// the entries after it: recovery isolates each intent (#386). Only a
+// directory that cannot be listed fails the whole call.
 func (d *Driver) listIntents(ctx context.Context) ([]intent, []intentListingFailure, error) {
 	entries, err := os.ReadDir(d.dir)
 	if err != nil {
@@ -914,23 +917,23 @@ func (d *Driver) listIntent(ctx context.Context, entry os.DirEntry) (intent, *in
 			filepath.Base(d.intentPath(in.RunID))))
 	}
 	unauthenticated := func(err error) (intent, *intentListingFailure) {
-		cause := QuarantineUnauthenticated
-		if errors.Is(err, errExportAuthorityConflict) {
-			cause = QuarantineExportConflict
-		}
 		return intent{}, &intentListingFailure{
-			entry: entry.Name(), invocation: in.InvocationID, cause: cause, err: err,
+			entry: entry.Name(), invocation: in.InvocationID,
+			cause: unauthenticatedCause(err), err: err,
 		}
 	}
-	// The same fail-closed reconstruction gate loadIntent runs. Recovery
-	// hands this record's RunID straight to the ward gate, so an
-	// enumeration path that skipped the gate would let a corrupted or
-	// tampered file retarget recovery at another run's objects.
+	// The same fail-closed reconstruction gate loadIntent runs, against the
+	// admission only. Recovery hands this record's RunID straight to the ward
+	// gate, so an enumeration path that skipped the gate would let a corrupted
+	// or tampered file retarget recovery at another run's objects. The
+	// current-policy check can reach GitHub, so Reconcile runs it per intent
+	// with the lock released. For a terminal phase the two gates check the
+	// same things.
 	in, restored, err := d.restoreDurableOutcome(ctx, in)
 	if err != nil {
 		return unauthenticated(err)
 	}
-	if err := d.regate(ctx, in, false); err != nil {
+	if err := d.regateAdmission(ctx, in); err != nil {
 		return unauthenticated(err)
 	}
 	if restored {
@@ -940,4 +943,14 @@ func (d *Driver) listIntent(ctx context.Context, entry os.DirEntry) (intent, *in
 		}
 	}
 	return in, nil
+}
+
+// unauthenticatedCause names why an intent that failed reconstruction is
+// quarantined: a released export that conflicts with durable authority, or
+// any other refusal.
+func unauthenticatedCause(err error) QuarantineCause {
+	if errors.Is(err, errExportAuthorityConflict) {
+		return QuarantineExportConflict
+	}
+	return QuarantineUnauthenticated
 }

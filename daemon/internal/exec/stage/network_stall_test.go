@@ -482,3 +482,44 @@ func TestRestartCurrentCheckRetriesAnUnreachableAuthority(t *testing.T) {
 		t.Fatalf("recoveries launched once the authority answers = %d, want 1", got)
 	}
 }
+
+// TestReconcileCurrentCheckHoldsNoDriverLock: while startup Reconcile's
+// current-policy check of one intent hangs, an Inspect of another
+// invocation still answers, because the check runs off the driver's lock
+// (#3381).
+func TestReconcileCurrentCheckHoldsNoDriverLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	launched := countRecoveryLaunches(d)
+	orphan(t, d, phaseRunning, nil)
+	authority := &stallingStartAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+	d.authority = authority
+	release := sync.OnceFunc(func() { close(authority.release) })
+	t.Cleanup(release)
+
+	type outcome struct {
+		report RecoveryReport
+		err    error
+	}
+	reconciled := make(chan outcome, 1)
+	go func() {
+		report, err := d.Reconcile(ctx, nil)
+		reconciled <- outcome{report, err}
+	}()
+	<-authority.reached
+	returnsWithin(t, "another invocation's Inspect", func() {
+		if _, err := d.Inspect(ctx, quarantineSecond); !errors.Is(err, exec.ErrUnknownInvocation) {
+			t.Errorf("Inspect of another invocation = %v, want unknown", err)
+		}
+	})
+
+	release()
+	got := <-reconciled
+	if got.err != nil || len(got.report.Held) != 0 || len(got.report.Quarantined) != 0 {
+		t.Fatalf("Reconcile = %+v, %v; want a clean pass", got.report, got.err)
+	}
+	if n := launched.Load(); n != 1 {
+		t.Fatalf("recoveries launched after the check = %d, want 1", n)
+	}
+}
