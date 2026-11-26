@@ -1,0 +1,11 @@
+{
+  "id": "sha256:67b55348230de67b8b91b8963d113ae630ed90181e81056acbfb648fd03b2ab0",
+  "harness": "claude_code",
+  "image_ref": "127.0.0.1:5100/freeside-agent-claude@sha256:abababababababababababababababababababababababababababababababab",
+  "harness_build": "claude-code 2.1.319",
+  "source_repository_id": 1278475858,
+  "source_repository": "freeside-ai/freeside",
+  "source_commit": "1111111111111111111111111111111111111111",
+  "source_tree_sha": "2222222222222222222222222222222222222222",
+  "admitted_at": "2026-11-26T12:00:00Z"
+}

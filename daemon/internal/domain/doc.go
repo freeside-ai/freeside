@@ -165,6 +165,7 @@
 //   - image_upkeep.go, image_policy_adoption.go, rebuild_refusal.go
 //     image upkeep refusals, image policy adoption, and rebuild refusal
 //     clauses (§5.7)
+//   - admitted_agent_base.go the admitted agent base and its pointer (§5.7)
 //   - registry_set.go project registry sets and the egress profile key
 //   - effect_proposal.go effect proposals: task proposals and image policy
 //     adoption, and their gates

@@ -356,6 +356,14 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard3(tx.GetAdmittedImagePointer(ctx, k.n[0], domain.HarnessClientKind(k.s[0])))
 		})},
+	{"admitted agent base", []string{"admitted_agent_bases"}, eachKey(`SELECT id FROM admitted_agent_bases`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard(tx.GetAdmittedAgentBase(ctx, domain.Digest(k.s[0])))
+		})},
+	{"admitted agent base pointer", []string{"admitted_agent_base_pointers"}, eachKey(`SELECT harness FROM admitted_agent_base_pointers`, "s",
+		func(ctx context.Context, tx *ReadTx, k rowKey) error {
+			return discard3(tx.GetAdmittedAgentBasePointer(ctx, domain.HarnessClientKind(k.s[0])))
+		})},
 	{"image upkeep refusal", []string{"image_upkeep_refusals"}, eachKey(`SELECT id FROM image_upkeep_refusals`, "s",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard(tx.GetImageUpkeepRefusal(ctx, domain.Digest(k.s[0])))
