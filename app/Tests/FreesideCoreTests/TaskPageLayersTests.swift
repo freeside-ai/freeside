@@ -454,10 +454,11 @@ import Testing
                 == [history.sections[1].campaign_id])
     }
 
-    /// #3455: the Runs section lists every run of the task, newest first,
-    /// the current one and an earlier campaign's among them, and still does
-    /// once the task finishes and Current Run is gone.
-    @Test func theRunsSectionListsEveryRunNewestFirst() throws {
+    /// #3455, #3681: while Current Run is drawn, the runs section lists
+    /// every run but the current one, newest first, an earlier campaign's
+    /// among them, even when the current one is not the newest; once the
+    /// task finishes and Current Run is gone, it lists every run.
+    @Test func theRunsSectionLeavesOutOnlyCurrentRunsRun() throws {
         let page = TaskStageFixtures.page(.secondCampaign)
         let history = try #require(page.history)
         let every = history.sections.flatMap(\.runs).map(\.run_id)
@@ -468,10 +469,51 @@ import Testing
                 if case .runsRow(let id) = $0 { id } else { nil }
             }
         }
-        #expect(rows(page.task) == every)
+        let current = try #require(
+            TaskTimelinePresentation.currentRunSection(page.task, timeline: history, runTimelines: [:]))
+        #expect(rows(page.task) == every.filter { $0 != current.run.run_id })
+        // A current position naming an older run leaves out that run and
+        // keeps the newest.
+        var older = page.task
+        let olderID = try #require(history.sections.last?.runs.first?.run_id)
+        #expect(olderID != every.first)
+        older.current_position?.value1.run_id = olderID
+        #expect(rows(older) == every.filter { $0 != olderID })
         var finished = page.task
         finished.lifecycle = .finished
         #expect(rows(finished) == every)
+    }
+
+    /// #3681: the runs section's three states. A current run and an
+    /// earlier one give `Earlier Runs` with the earlier run; a current run
+    /// alone gives no section; a finished task gives `Runs` with every run.
+    @Test func theRunsSectionIsEarlierRunsUnderCurrentRun() {
+        let at = Date(timeIntervalSince1970: 1_786_502_400)
+        func timeline(_ runIDs: [String]) -> Components.Schemas.TaskTimeline {
+            .init(
+                as_of_revision: 1, as_of: at, task_id: "task-1", project_id: "freeside",
+                name: .init(text: "Named", source: ._operator),
+                events: [.init(kind: .task_created, recorded_at: at)],
+                sections: [
+                    .init(
+                        campaign_id: "campaign-a", events: [],
+                        runs: runIDs.map { .init(run_id: $0, milestones: [], events: []) })
+                ])
+        }
+        typealias Section = TaskTimelinePresentation.RunsSection
+        func section(_ timeline: Components.Schemas.TaskTimeline, finished: Bool = false) -> Section? {
+            var task = TaskHistoryFixtures.snapshot(timeline).task
+            if finished { task.lifecycle = .finished }
+            return TaskTimelinePresentation.runsSection(task, in: timeline)
+        }
+        // With no current position, Current Run names the newest run.
+        let earlier = section(timeline(["run-2", "run-1"]))
+        #expect(earlier?.title == "Earlier Runs")
+        #expect(earlier?.runs.map(\.run_id) == ["run-1"])
+        #expect(section(timeline(["run-1"])) == nil)
+        let finished = section(timeline(["run-2", "run-1"]), finished: true)
+        #expect(finished?.title == "Runs")
+        #expect(finished?.runs.map(\.run_id) == ["run-2", "run-1"])
     }
 
     /// #3455: the stage strip names a run by its stage, an implementation

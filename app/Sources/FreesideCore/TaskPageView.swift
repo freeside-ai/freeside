@@ -1149,16 +1149,18 @@ struct TaskPageView: View {
         }
     }
 
-    /// Runs (#3455): every run of the task, newest first, one line each:
-    /// its stage and attempt, its outcome chip, then the run line's
-    /// columns. Always open, under Elapsed, so the strip sits over the rows
-    /// it summarizes. Each row opens its run's history.
+    /// Runs (#3455), or Earlier Runs while Current Run is drawn (#3681):
+    /// the section's runs newest first, one line each: its stage and
+    /// attempt, its outcome chip, then the run line's columns. Always open,
+    /// under Elapsed, so the strip sits over the rows it summarizes. Each
+    /// row opens its run's history. The run lines still measure every run,
+    /// so the rows share their columns with Current Run's lead line.
     @ViewBuilder
     private func runsSection(_ timeline: Components.Schemas.TaskTimeline) -> some View {
-        let runs = TaskTimelinePresentation.allRuns(timeline)
-        if !runs.isEmpty {
+        if let section = TaskTimelinePresentation.runsSection(snapshot.task, in: timeline) {
+            let runs = section.runs
             VStack(alignment: .leading, spacing: 5) {
-                KeywordLabel(text: "Runs")
+                KeywordLabel(text: section.title)
                     .accessibilityAddTraits(.isHeader)
                 withRunLines(timeline) { lines in
                     VStack(alignment: .leading, spacing: 0) {
@@ -1425,9 +1427,10 @@ struct TaskPageView: View {
             boxed: true)
     }
 
-    /// Elapsed, then Runs, then the Timeline: the task's events, always
-    /// open, the rail that says which stage the task is in and how it got
-    /// there, the current campaign's included, with no fold around them
+    /// Elapsed, then Runs or Earlier Runs (#3681), then the Timeline: the
+    /// task's events, always open, the rail that says which stage the task
+    /// is in and how it got there, the current campaign's included, with
+    /// no fold around them
     /// but each event's explanation, folded behind its marker (#3455).
     /// Current Run sits above this block (#3375). Under the rail each earlier campaign
     /// is one folded disclosure row, and the page's exact identifiers close
@@ -2091,14 +2094,14 @@ enum TaskTimelinePresentation {
     }
 
     /// The page's elements flattened in render order, so a test can pin the
-    /// order without a view: the current run, then the Runs section's rows,
-    /// then the event rail's rows by their words, then each earlier
-    /// campaign and its runs.
+    /// order without a view: the current run, then the runs section's rows
+    /// (`Earlier Runs` or `Runs`), then the event rail's rows by their
+    /// words, then each earlier campaign and its runs.
     enum Entry: Equatable {
         case row(String)
         case section(campaignID: String?)
         case run(String)
-        /// A row of the Runs section, which opens its run page.
+        /// A row of the runs section, which opens its run page.
         case runsRow(String)
     }
 
@@ -2107,7 +2110,7 @@ enum TaskTimelinePresentation {
         if let current = currentRunSection(task, timeline: timeline, runTimelines: [:]) {
             entries.append(.run(current.run.run_id))
         }
-        entries += allRuns(timeline).map { .runsRow($0.run_id) }
+        entries += (runsSection(task, in: timeline)?.runs ?? []).map { .runsRow($0.run_id) }
         entries += rows(timeline).map { .row($0.label) }
         for section in earlierSections(task, in: timeline) {
             entries.append(.section(campaignID: section.campaign_id))
@@ -2391,8 +2394,8 @@ enum TaskTimelinePresentation {
     }
 
     /// What the Current Run section holds (◆C): the run the task is on and
-    /// nothing else. Every run of the task, this one among them, is a row of
-    /// the Runs section, which opens its run page (#3455).
+    /// nothing else. Its lead line opens this run's page; every other run
+    /// is a row of Earlier Runs, which opens its own (#3455, #3681).
     struct CurrentRun {
         let run: Components.Schemas.TaskTimelineRun
         /// What runs it, in the run page's grammar; nil when nothing names it.
@@ -2572,13 +2575,37 @@ enum TaskTimelinePresentation {
         return present.isEmpty ? nil : present.joined(separator: " · ")
     }
 
-    /// Every run of the task, newest first: the Runs section's rows. The
-    /// daemon serves campaigns newest first and each campaign's runs
+    /// Every run of the task, newest first, as the stage strip names them.
+    /// The daemon serves campaigns newest first and each campaign's runs
     /// newest first, so the flattened order is newest first. A run listed
     /// twice keeps its first place.
     static func allRuns(_ timeline: Components.Schemas.TaskTimeline) -> [Components.Schemas.TaskTimelineRun] {
         var seen: Set<String> = []
         return timeline.sections.flatMap(\.runs).filter { seen.insert($0.run_id).inserted }
+    }
+
+    /// The runs section under Elapsed: its heading and its rows, newest
+    /// first.
+    struct RunsSection: Equatable {
+        let title: String
+        let runs: [Components.Schemas.TaskTimelineRun]
+    }
+
+    /// The runs section, or nil where the page draws none (#3681). While
+    /// Current Run is drawn it is `Earlier Runs`, every run but the one
+    /// Current Run names, which its lead line already opens, and absent
+    /// when no other run exists. Otherwise it is `Runs`, every run. The
+    /// condition is `currentRunSection` itself, not a copy of its guard,
+    /// so the two never disagree about which run is current.
+    static func runsSection(
+        _ task: Components.Schemas.Task, in timeline: Components.Schemas.TaskTimeline
+    ) -> RunsSection? {
+        let runs = allRuns(timeline)
+        if let current = currentRunSection(task, timeline: timeline, runTimelines: [:]) {
+            let earlier = runs.filter { $0.run_id != current.run.run_id }
+            return earlier.isEmpty ? nil : RunsSection(title: "Earlier Runs", runs: earlier)
+        }
+        return runs.isEmpty ? nil : RunsSection(title: "Runs", runs: runs)
     }
 
     /// A run's stage as the stage strip over Elapsed names it:
