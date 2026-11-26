@@ -38,8 +38,8 @@ const (
 	recordExecutionAdmissionSQL = `
 INSERT INTO execution_admissions
     (invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id,
-     agent_digest, enrollment_id, enrollment_generation, admitted_at, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     agent_digest, enrollment_id, enrollment_generation, execution_host_id, admitted_at, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (invocation_id) DO NOTHING`
 	selectExecutionAdmissionBodySQL = `SELECT body FROM execution_admissions WHERE invocation_id = ?`
 	getExecutionAdmissionSQL        = `
@@ -73,7 +73,7 @@ WHERE admission.invocation_id <> ?
 	supersedeExecutionAdmissionSQL = `
 UPDATE execution_admissions
 SET id = ?, auth_identity_id = ?, agent_digest = ?, enrollment_id = ?,
-    enrollment_generation = ?, admitted_at = ?, body = ?
+    enrollment_generation = ?, execution_host_id = ?, admitted_at = ?, body = ?
 WHERE invocation_id = ? AND id = ?`
 	recordSupersededExecutionAdmissionSQL = `
 INSERT INTO superseded_execution_admissions
@@ -209,12 +209,12 @@ func (tx *WriteTx) RecordExecutionAdmissionReserving(
 	if err := tx.requireNewAdmissionGates(ctx, run, admission, memory); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
-	identity, agentDigest, enrollmentID, enrollmentGeneration := admissionColumns(admission)
+	identity, agentDigest, enrollmentID, enrollmentGeneration, host := admissionColumns(admission)
 	inserted, err := tx.putImmutableInserted(ctx, recordExecutionAdmissionSQL,
 		[]any{
 			admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
 			admission.AttemptID, admission.OperatingMode, identity,
-			agentDigest, enrollmentID, enrollmentGeneration,
+			agentDigest, enrollmentID, enrollmentGeneration, host,
 			formatTime(admission.AdmittedAt), body,
 		},
 		selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body)
@@ -295,8 +295,13 @@ func (tx *WriteTx) requireNewAdmissionGates(
 	return tx.RequireExecutionMemory(ctx, admission, memory)
 }
 
-// admissionColumns is the nullable extracted columns of an admission row.
-func admissionColumns(admission domain.ExecutionAdmission) (identity, agentDigest, enrollmentID, enrollmentGeneration any) {
+// admissionColumns is the extracted columns of an admission row: the nullable
+// ones, and the host, which is never null because an admission without one
+// reads as the daemon's host. The store derives them from the body on every
+// write and reads none of them back as authority.
+func admissionColumns(
+	admission domain.ExecutionAdmission,
+) (identity, agentDigest, enrollmentID, enrollmentGeneration any, host domain.ExecutionHostID) {
 	if admission.AuthIdentityID != nil {
 		identity = *admission.AuthIdentityID
 	}
@@ -305,7 +310,7 @@ func admissionColumns(admission domain.ExecutionAdmission) (identity, agentDiges
 		enrollmentID = binding.EnrollmentID
 		enrollmentGeneration = binding.EnrollmentGeneration
 	}
-	return identity, agentDigest, enrollmentID, enrollmentGeneration
+	return identity, agentDigest, enrollmentID, enrollmentGeneration, admission.Host()
 }
 
 // reserveAdmittedDispatch takes a credentialed admission's dispatch
@@ -409,9 +414,9 @@ func (tx *WriteTx) SupersedeUnstartedExecutionAdmission(
 		stale.ID, stale.InvocationID, fresh.ID, formatTime(fresh.AdmittedAt), staleBody); err != nil {
 		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)
 	}
-	identity, agentDigest, enrollmentID, enrollmentGeneration := admissionColumns(fresh)
+	identity, agentDigest, enrollmentID, enrollmentGeneration, host := admissionColumns(fresh)
 	result, err := tx.tx.ExecContext(ctx, supersedeExecutionAdmissionSQL,
-		fresh.ID, identity, agentDigest, enrollmentID, enrollmentGeneration,
+		fresh.ID, identity, agentDigest, enrollmentID, enrollmentGeneration, host,
 		formatTime(fresh.AdmittedAt), freshBody, stale.InvocationID, stale.ID)
 	if err != nil {
 		return fmt.Errorf("supersede execution admission %q: %w", stale.InvocationID, err)

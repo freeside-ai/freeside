@@ -239,7 +239,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 				[]any{
 					admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
 					admission.AttemptID, admission.OperatingMode, identity,
-					nil, nil, nil,
+					nil, nil, nil, admission.Host(),
 					formatTime(admission.AdmittedAt), body,
 				},
 				selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body)
