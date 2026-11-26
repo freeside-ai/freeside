@@ -113,16 +113,15 @@ func requireDead(t *testing.T, pids []int) {
 	}
 }
 
-// TestHostLaunchOutlivesItsDaemon kills the daemon mid-launch with SIGKILL,
-// as a crash or launchd would: the supervisor keeps the agent running, and
-// a fresh backend adopts the run, waits for it, and exports it.
-func TestHostLaunchOutlivesItsDaemon(t *testing.T) {
-	t.Parallel()
-	f := newHostFixture(t)
-	const id = "restart"
-	l := layoutFor(f.cfg.RunsRoot, id)
+// killDaemonMidLaunch starts a daemon stand-in that launches run id under
+// cfg, waits for the run's agent to spawn its survivors, and kills the
+// stand-in with SIGKILL, as a crash or launchd would. It fails the test
+// unless the run's supervisor and agent outlive the stand-in, and returns
+// their pids and the survivors'.
+func killDaemonMidLaunch(t *testing.T, cfg Config, id string) (supervisor, agent int, survivors []int) {
+	t.Helper()
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
-	body, err := json.Marshal(f.cfg)
+	body, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,15 +138,28 @@ func TestHostLaunchOutlivesItsDaemon(t *testing.T) {
 	if err := daemon.Start(); err != nil {
 		t.Fatal(err)
 	}
-	agent, survivors := startedAgent(t, l)
+	l := layoutFor(cfg.RunsRoot, id)
+	agent, survivors = startedAgent(t, l)
 	_ = daemon.Process.Kill()
 	_ = daemon.Wait()
-	supervisor := claimedSupervisor(t, l, id)
+	supervisor = claimedSupervisor(t, l, id)
 	for _, pid := range []int{supervisor, agent} {
 		if !processLive(t, pid) {
 			t.Fatalf("%d died with the daemon; it said: %s", pid, said.String())
 		}
 	}
+	return supervisor, agent, survivors
+}
+
+// TestHostLaunchOutlivesItsDaemon kills the daemon mid-launch with SIGKILL,
+// as a crash or launchd would: the supervisor keeps the agent running, and
+// a fresh backend adopts the run, waits for it, and exports it.
+func TestHostLaunchOutlivesItsDaemon(t *testing.T) {
+	t.Parallel()
+	f := newHostFixture(t)
+	const id = "restart"
+	l := layoutFor(f.cfg.RunsRoot, id)
+	supervisor, agent, survivors := killDaemonMidLaunch(t, f.cfg, id)
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
