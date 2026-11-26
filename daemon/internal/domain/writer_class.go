@@ -49,7 +49,11 @@ func (r TaskWriterClass) Validate() error {
 // task requires it, and otherwise the default, cordoned
 // (BackendCordonedHostProcess; plan §5.7, Cordoned Runs).
 // project is the project settings' writer_class, nil when unset; task is the
-// task's requirement, nil when it has none.
+// task's requirement, nil when it has none; hasImage is whether the project
+// has a project image. A warded result for a project with no image is
+// refused (ErrWardedWithoutProjectImage), since the warded writer runs in
+// that image: the settings and the task requirement are each refused on
+// write, but a recipe binding set after a task's requirement reaches here.
 //
 // The resolver decides which containment a writer runs under, so its caller
 // (#3472's writer admission) is where it applies: that caller scopes it to
@@ -57,7 +61,18 @@ func (r TaskWriterClass) Validate() error {
 // does. A project value the settings gate would refuse can't reach here,
 // because the run settings loader re-checks it before a run composes; the
 // resolver still refuses one rather than default it to the cordon.
-func ResolveWriterClass(project *RunnerBackendClass, task *TaskWriterClass) (RunnerBackendClass, error) {
+func ResolveWriterClass(project *RunnerBackendClass, task *TaskWriterClass, hasImage bool) (RunnerBackendClass, error) {
+	class, err := resolveWriterClass(project, task)
+	if err != nil {
+		return "", err
+	}
+	if class == BackendFreshVMReadOnlyVolumeHandoff && !hasImage {
+		return "", fmt.Errorf("writer class %q: %w", class, ErrWardedWithoutProjectImage)
+	}
+	return class, nil
+}
+
+func resolveWriterClass(project *RunnerBackendClass, task *TaskWriterClass) (RunnerBackendClass, error) {
 	if task != nil {
 		if err := task.Validate(); err != nil {
 			return "", err

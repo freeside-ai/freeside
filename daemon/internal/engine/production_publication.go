@@ -1157,8 +1157,13 @@ type productionBinding struct {
 	replay         ProductionReplay
 	profile        domain.AutomationTrustProfile
 	// image is the project image the run was admitted with. It answers
-	// whether the run's base is served and names the recipe.
+	// whether the run's base is served and names the recipe. It is zero when
+	// recipeBinding is set.
 	image domain.ProjectImage
+	// recipeBinding is the recipe binding the producing admission pins for a
+	// project with no project image (#3620); nil for an image project. When
+	// set it names the recipe and no project image is looked up.
+	recipeBinding *domain.RecipeBinding
 	// rebuilt is the image the run is bound to for the verified commit when
 	// that is not image (production_rebuild.go); nil otherwise.
 	rebuilt     *domain.ProjectImage
@@ -1276,24 +1281,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 		if err != nil {
 			return err
 		}
-		images, err := tx.ListProjectImages(ctx, binding.admission.Base.RepositoryID)
-		if err != nil {
-			return err
-		}
-		for _, image := range images {
-			if image.ImageRef == binding.admission.ImageRef {
-				if binding.image.ID != "" {
-					return fmt.Errorf("multiple project-image records name the admitted image: %w",
-						domain.ErrParentKeyMismatch)
-				}
-				binding.image = image
-			}
-		}
-		if binding.image.ID == "" {
-			return fmt.Errorf("admitted image has no project-image record: %w",
-				domain.ErrParentKeyMismatch)
-		}
-		return nil
+		return bindAdmittedRecipe(ctx, tx, &binding)
 	})
 	if err != nil {
 		return productionBinding{}, fmt.Errorf("load production publication authority: %w", err)
@@ -1323,8 +1311,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 			binding.profile.ProfileDigest != *binding.admission.TrustProfileDigest) ||
 			binding.profile.Repo != binding.admission.Base.Repo ||
 			binding.profile.RepositoryID != binding.admission.Base.RepositoryID)) ||
-		binding.image.Repository != binding.admission.Base.Repo ||
-		binding.image.RepositoryID != binding.admission.Base.RepositoryID {
+		!binding.recipeSourceIn(binding.admission.Base) {
 		return productionBinding{}, fmt.Errorf("production publication binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -1344,6 +1331,77 @@ func (w *productionPublicationWorkflow) loadBinding(
 		return productionBinding{}, err
 	}
 	return binding, nil
+}
+
+// bindAdmittedRecipe sets the binding's recipe source from its producing
+// admission: the recipe binding the admission pins, when it names one, and
+// otherwise the one project-image record that names the admitted image. A
+// pinned binding looks up no project image. Both loaders call it, and each
+// then checks the source names the admitted repository (recipeSourceIn).
+func bindAdmittedRecipe(ctx context.Context, tx *store.ReadTx, binding *productionBinding) error {
+	if pinned := binding.admission.RecipeBinding; pinned != nil {
+		recipe := *pinned
+		binding.recipeBinding = &recipe
+		return nil
+	}
+	images, err := tx.ListProjectImages(ctx, binding.admission.Base.RepositoryID)
+	if err != nil {
+		return err
+	}
+	for _, image := range images {
+		if image.ImageRef == binding.admission.ImageRef {
+			if binding.image.ID != "" {
+				return fmt.Errorf("multiple project-image records name the admitted image: %w",
+					domain.ErrParentKeyMismatch)
+			}
+			binding.image = image
+		}
+	}
+	if binding.image.ID == "" {
+		return fmt.Errorf("admitted image has no project-image record: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// recipeSourceIn reports whether the binding's recipe source, its recipe
+// binding or its admitted image, names base's repository and id.
+func (b productionBinding) recipeSourceIn(base domain.BaseRevision) bool {
+	if b.recipeBinding != nil {
+		return b.recipeBinding.Repository == base.Repo && b.recipeBinding.RepositoryID == base.RepositoryID
+	}
+	return b.image.Repository == base.Repo && b.image.RepositoryID == base.RepositoryID
+}
+
+// boundRecipe is the one resolver for the recipe digest a run's proofs
+// bind: the pinned recipe binding's when the producing admission names one,
+// the admitted image's otherwise. A rebuilt image carries the admitted
+// image's recipe (bindVerificationImage), so it never changes the answer.
+//
+// It checks no approval. Every decision that binds the digest checks it
+// against the currently approved recipes (w.recipes) where it uses it, so a
+// revoked recipe holds publication for a no-image run as for an image run.
+func (b productionBinding) boundRecipe() domain.Digest {
+	if b.recipeBinding != nil {
+		return b.recipeBinding.RecipeDigest
+	}
+	return b.image.RecipeDigest
+}
+
+// errNoVerificationRoom refuses a fresh verification for a run whose project
+// has no project image: there is no room to verify it in until #3627 builds
+// one.
+var errNoVerificationRoom = errors.New(
+	"the project has no project image, so there is no verification room to verify the candidate in")
+
+// requireVerificationRoom refuses, before any image or room is touched, a
+// binding with no project image. Every path that builds a verification room
+// or reads binding.image as a real image calls it first.
+func (b productionBinding) requireVerificationRoom() error {
+	if b.recipeBinding != nil {
+		return fmt.Errorf("verify run %s at recipe %s: %w", b.run.ID, b.recipeBinding.RecipeDigest, errNoVerificationRoom)
+	}
+	return nil
 }
 
 // requireProjectImageServesBase refuses to build a verification room from an
@@ -1853,7 +1911,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
-	if !recipes[binding.image.RecipeDigest] {
+	if !recipes[binding.boundRecipe()] {
 		pendingIntent, err := w.hasPendingPublicationIntent(ctx, task.PublicationID)
 		if err != nil {
 			return productionTaskOutcome{}, err
@@ -2226,7 +2284,7 @@ func (w *productionPublicationWorkflow) currentReadinessVerdict(
 			BaseSHA: base.BaseSHA, HeadSHA: task.HeadSHA, MergeSHA: binding.evaluatedSHA,
 		}, base, recipe)
 	}
-	verificationProof, err := newProof(resolutions[0], binding.image.RecipeDigest)
+	verificationProof, err := newProof(resolutions[0], binding.boundRecipe())
 	if err != nil {
 		return productionReadiness{}, nil, err
 	}
@@ -2428,7 +2486,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
-		if !recipes[binding.image.RecipeDigest] {
+		if !recipes[binding.boundRecipe()] {
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
 				"Publication is durably held because current trust no longer approves the verification recipe that authorized the candidate. Restore that approval before creating readiness.",
@@ -2557,9 +2615,9 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 	if err != nil {
 		return false, err
 	}
-	approved := recipes[binding.image.RecipeDigest]
+	approved := recipes[binding.boundRecipe()]
 	historicalRecipes := recipes
-	historicalRecipes[binding.image.RecipeDigest] = true
+	historicalRecipes[binding.boundRecipe()] = true
 	expectedReady, err := w.readyItemWithRecipes(
 		ctx, task, checkpoint, published, readiness, yieldHistory, historicalRecipes,
 	)
@@ -3124,7 +3182,7 @@ func (w *productionPublicationWorkflow) productionCandidate(
 	if err != nil {
 		return publish.Candidate{}, err
 	}
-	recipe := binding.image.RecipeDigest
+	recipe := binding.boundRecipe()
 	authorization := checkpoint.Authorization.ID
 	profile := binding.profile.ProfileDigest
 	candidate := publish.Candidate{
@@ -3439,7 +3497,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	if err != nil {
 		return nil, err
 	}
-	historicalRecipes[binding.image.RecipeDigest] = true
+	historicalRecipes[binding.boundRecipe()] = true
 	facts, err := definitivePublishBlockFacts(current.Reason)
 	if err != nil {
 		return nil, fmt.Errorf("production blocked item %q has no fact contract: %w", current.ID, err)

@@ -274,3 +274,84 @@ func TestSettingsGateChecksOneSection(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// noImageProjectSections is storedProjectSections with the image replaced
+// by a recipe binding at the approved recipe.
+func noImageProjectSections() map[domain.ProjectSettingsSection]string {
+	project := storedProjectSections()
+	delete(project, domain.ProjectSectionAgentImage)
+	project[domain.ProjectSectionRecipeBinding] = `{"repository":"acme/widgets","repository_id":42,` +
+		`"commit_sha":"` + strings.Repeat("c", 40) + `","recipe_digest":"sha256:` + strings.Repeat("b", 64) + `"}`
+	return project
+}
+
+// TestLoadRunSettingsReadsANoImageProject: a project with a recipe binding
+// and no image loads with its binding, and the loader refuses a binding that
+// names another repository or a recipe other than approved_recipe.
+func TestLoadRunSettingsReadsANoImageProject(t *testing.T) {
+	t.Parallel()
+	st := seedRunSettings(t, storedInstanceSections(), noImageProjectSections())
+	settings, err := daemoncompose.LoadRunSettings(context.Background(), st, runSettingsProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Project.AgentImage != nil || settings.Project.RecipeBinding == nil ||
+		settings.Project.RecipeBinding.RecipeDigest != settings.Project.ApprovedRecipe {
+		t.Fatalf("loaded image %v and binding %+v, want the binding alone", settings.Project.AgentImage, settings.Project.RecipeBinding)
+	}
+	for name, tc := range map[string]struct {
+		binding string
+		want    string
+	}{
+		"another repository": {
+			`{"repository":"acme/gadgets","repository_id":43,"commit_sha":"` + strings.Repeat("c", 40) +
+				`","recipe_digest":"sha256:` + strings.Repeat("b", 64) + `"}`,
+			"not the project's acme/widgets (42)",
+		},
+		"an unapproved recipe": {
+			`{"repository":"acme/widgets","repository_id":42,"commit_sha":"` + strings.Repeat("c", 40) +
+				`","recipe_digest":"sha256:` + strings.Repeat("e", 64) + `"}`,
+			"not the approved_recipe",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			project := noImageProjectSections()
+			project[domain.ProjectSectionRecipeBinding] = tc.binding
+			st := seedRunSettings(t, storedInstanceSections(), project)
+			settings, err := daemoncompose.LoadRunSettings(context.Background(), st, runSettingsProject)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || settings.ProjectID != "" {
+				t.Fatalf("LoadRunSettings = %+v, %v; want a refusal containing %q", settings.ProjectID, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestSettingsGateRefusesAnAmbiguousOrWardedNoImageProject: the gate runs
+// the cross-section rules a stored record can't be relied on to hold.
+func TestSettingsGateRefusesAnAmbiguousOrWardedNoImageProject(t *testing.T) {
+	t.Parallel()
+	st := seedRunSettings(t, storedInstanceSections(), noImageProjectSections())
+	loaded, err := daemoncompose.LoadRunSettings(context.Background(), st, runSettingsProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warded := loaded.Project
+	warded.WriterClass = new(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	both := loaded.Project
+	both.AgentImage = new(domain.ImageRef(runSettingsImage("agent")))
+	neither := loaded.Project
+	neither.RecipeBinding = nil
+	for name, tc := range map[string]struct {
+		settings domain.ProjectSettings
+		want     error
+	}{
+		"warded with no image":   {warded, domain.ErrWardedWithoutProjectImage},
+		"an image and a binding": {both, domain.ErrProjectRecipeSourceAmbiguous},
+		"neither":                {neither, domain.ErrSettingsSectionMissing},
+	} {
+		if err := daemoncompose.CheckProjectSettings(tc.settings); !errors.Is(err, tc.want) {
+			t.Errorf("%s: CheckProjectSettings = %v, want %v", name, err, tc.want)
+		}
+	}
+}

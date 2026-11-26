@@ -449,6 +449,80 @@ func TestAdmissionSettingsRevisionsEncoding(t *testing.T) {
 	}
 }
 
+func admissionRecipeBinding() domain.RecipeBinding {
+	return domain.RecipeBinding{
+		Repository: "owner/repo", RepositoryID: 424242, CommitSHA: strings.Repeat("c", 40),
+		RecipeDigest: stageDigest("8"),
+	}
+}
+
+// A pinned recipe binding is a bound fact: it moves the identity onto the
+// v8 label over the settings-bound v7 one, survives the store's JSON round
+// trip, and leaves every admission without one encoded as before. A binding
+// for another repository than the base is refused.
+func TestAdmissionRecipeBindingEncoding(t *testing.T) {
+	t.Parallel()
+	settingsOnly := admissionInput()
+	settingsOnly.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+	unset := mustAdmission(t, settingsOnly)
+	in := settingsOnly
+	in.RecipeBinding = new(admissionRecipeBinding())
+	bound := mustAdmission(t, in)
+	if bound.ID == unset.ID {
+		t.Fatal("recipe binding did not change the admission identity")
+	}
+	unsetBody, err := json.Marshal(unset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unsetBody), "recipe_binding") {
+		t.Fatalf("unset recipe binding reached the body: %s", unsetBody)
+	}
+	in.RecipeBinding.CommitSHA = strings.Repeat("d", 40)
+	if bound.RecipeBinding.CommitSHA != strings.Repeat("c", 40) {
+		t.Fatalf("admission followed the caller's pointer: %+v", *bound.RecipeBinding)
+	}
+
+	body, err := json.Marshal(bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded domain.ExecutionAdmission
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.Validate(); err != nil || *decoded.RecipeBinding != admissionRecipeBinding() {
+		t.Fatalf("decoded admission: %v, binding %+v", err, decoded.RecipeBinding)
+	}
+	edited := decoded
+	edited.RecipeBinding = &domain.RecipeBinding{
+		Repository: "owner/repo", RepositoryID: 424242, CommitSHA: strings.Repeat("c", 40), RecipeDigest: stageDigest("9"),
+	}
+	if err := edited.Validate(); !errors.Is(err, domain.ErrAdmissionInconsistent) {
+		t.Fatalf("edited binding Validate() = %v, want ErrAdmissionInconsistent", err)
+	}
+
+	for name, binding := range map[string]domain.RecipeBinding{
+		"another repository": {
+			Repository: "owner/other", RepositoryID: 424242, CommitSHA: strings.Repeat("c", 40), RecipeDigest: stageDigest("8"),
+		},
+		"another repository id": {
+			Repository: "owner/repo", RepositoryID: 7, CommitSHA: strings.Repeat("c", 40), RecipeDigest: stageDigest("8"),
+		},
+	} {
+		bad := admissionInput()
+		bad.RecipeBinding = &binding
+		if _, err := domain.NewExecutionAdmission(bad); !errors.Is(err, domain.ErrAdmissionInconsistent) {
+			t.Errorf("%s: NewExecutionAdmission() = %v, want ErrAdmissionInconsistent", name, err)
+		}
+	}
+	malformed := admissionInput()
+	malformed.RecipeBinding = &domain.RecipeBinding{Repository: "owner/repo", RepositoryID: 424242}
+	if _, err := domain.NewExecutionAdmission(malformed); !errors.Is(err, domain.ErrRecipeBindingInvalid) {
+		t.Errorf("malformed binding: NewExecutionAdmission() = %v, want ErrRecipeBindingInvalid", err)
+	}
+}
+
 // TestUnboundUnattendedAdmissionIsRefused covers the decode path the
 // constructor refuses: an unattended admission with no backend-configuration
 // digest, the shape written before that binding, no longer validates.

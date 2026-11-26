@@ -22,6 +22,7 @@ const (
 	admissionCapabilityManifestEncodingVersion = "freeside.execution.admission/v5"
 	admissionHydrationEncodingVersion          = "freeside.execution.admission/v6"
 	admissionSettingsEncodingVersion           = "freeside.execution.admission/v7"
+	admissionRecipeBindingEncodingVersion      = "freeside.execution.admission/v8"
 )
 
 // SettingsRevisions names the stored instance and project settings revisions
@@ -262,7 +263,15 @@ type ExecutionAdmission struct {
 	// admission written before it existed, which keep their bytes and id.
 	// An edit to either record after admission doesn't change it.
 	SettingsRevisions *SettingsRevisions `json:"settings_revisions,omitempty"`
-	AdmittedAt        time.Time          `json:"admitted_at"`
+	// RecipeBinding pins, by value, the recipe binding of a project with no
+	// project image (#3620); a set value selects the v8 encoding. It is nil
+	// on an image project's admission, which stays pinned to its recipe by
+	// ImageRef, and on every admission written before it existed, which keep
+	// their bytes and id. A later change to the project's recipe_binding
+	// doesn't change it. It vouches for no approval: each use re-checks its
+	// digest against the currently approved recipes.
+	RecipeBinding *RecipeBinding `json:"recipe_binding,omitempty"`
+	AdmittedAt    time.Time      `json:"admitted_at"`
 }
 
 // AdmissionAgentBinding is what §5.4 admission step 5 snapshots beyond the
@@ -517,6 +526,7 @@ type ExecutionAdmissionInput struct {
 	AgentBinding               *AdmissionAgentBinding
 	WorkspaceHydration         WorkspaceHydration
 	SettingsRevisions          *SettingsRevisions
+	RecipeBinding              *RecipeBinding
 	AdmittedAt                 time.Time
 }
 
@@ -558,6 +568,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		AgentBinding:               canonicalAgentBinding(in.AgentBinding),
 		WorkspaceHydration:         in.WorkspaceHydration,
 		SettingsRevisions:          clonePtr(in.SettingsRevisions),
+		RecipeBinding:              clonePtr(in.RecipeBinding),
 		AdmittedAt:                 in.AdmittedAt.UTC(),
 	}
 	id, err := a.ComputeID()
@@ -601,6 +612,7 @@ type canonicalAdmission struct {
 	AgentBinding               *AdmissionAgentBinding  `json:"agent_binding,omitempty"`
 	WorkspaceHydration         WorkspaceHydration      `json:"workspace_hydration,omitempty"`
 	SettingsRevisions          *SettingsRevisions      `json:"settings_revisions,omitempty"`
+	RecipeBinding              *RecipeBinding          `json:"recipe_binding,omitempty"`
 	AdmittedAt                 time.Time               `json:"admitted_at"`
 }
 
@@ -635,6 +647,11 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	if a.SettingsRevisions != nil {
 		version = admissionSettingsEncodingVersion
 	}
+	// Checked after v7 so an admission that pins a recipe binding always
+	// carries the v8 label; one without keeps the label and id it had.
+	if a.RecipeBinding != nil {
+		version = admissionRecipeBindingEncodingVersion
+	}
 	body, err := json.Marshal(canonicalAdmission{
 		Version:                    version,
 		InvocationID:               a.InvocationID,
@@ -661,6 +678,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		AgentBinding:               canonicalAgentBinding(a.AgentBinding),
 		WorkspaceHydration:         a.WorkspaceHydration,
 		SettingsRevisions:          a.SettingsRevisions,
+		RecipeBinding:              a.RecipeBinding,
 		AdmittedAt:                 a.AdmittedAt,
 	})
 	if err != nil {
@@ -797,6 +815,16 @@ func (a ExecutionAdmission) Validate() error {
 	if a.SettingsRevisions != nil {
 		if err := a.SettingsRevisions.Validate(); err != nil {
 			return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+		}
+	}
+	if a.RecipeBinding != nil {
+		if err := a.RecipeBinding.Validate(); err != nil {
+			return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+		}
+		if a.RecipeBinding.Repository != a.Base.Repo || a.RecipeBinding.RepositoryID != a.Base.RepositoryID {
+			return fmt.Errorf("execution admission %s recipe binding repository %s (%d) is not the base's %s (%d): %w",
+				a.InvocationID, a.RecipeBinding.Repository, a.RecipeBinding.RepositoryID,
+				a.Base.Repo, a.Base.RepositoryID, ErrAdmissionInconsistent)
 		}
 	}
 	if a.AdmittedAt.IsZero() {

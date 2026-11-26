@@ -3,6 +3,7 @@ package daemoncompose
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -19,7 +20,13 @@ import (
 //   - the record folds with every required section (checkProjectRecord);
 //   - every section passes the settings gate (CheckProjectSettings);
 //   - the repository ID matches the project's binding
-//     (CheckProjectRepositoryBinding).
+//     (CheckProjectRepositoryBinding);
+//   - the project has a project image. A start composes no driver for a
+//     project with a recipe binding and no image (storedDriverConfig), so
+//     the gates refuse its tasks too, rather than admit one under another
+//     project's driver and reach a verification with no room to run in.
+//     #3627 lifts both once it builds that room; the binding then reaches
+//     admission through RecipeBinding.
 //
 // A failed check is a configuration verdict and comes back joined with
 // engine.ErrProjectSettingsRefused, so the gate holds the task until the
@@ -40,6 +47,10 @@ func StoredProjectAuthority(ctx context.Context, tx *store.ReadTx, project domai
 		}
 		return engine.ProjectAuthority{}, err
 	}
+	if settings.AgentImage == nil {
+		return engine.ProjectAuthority{}, errors.Join(engine.ErrProjectSettingsRefused,
+			fmt.Errorf("project %q binds its recipe with recipe_binding and has no agent_image: %w", project, ErrNoProjectImage))
+	}
 	authority := engine.ProjectAuthority{
 		ProjectID:        project,
 		SettingsRevision: record.Revision,
@@ -49,6 +60,7 @@ func StoredProjectAuthority(ctx context.Context, tx *store.ReadTx, project domai
 		AllowedPaths:     slices.Clone(settings.AllowedPaths),
 		ApprovedRecipe:   settings.ApprovedRecipe,
 		WriterClass:      settings.WriterClass,
+		RecipeBinding:    settings.RecipeBinding,
 	}
 	if settings.HandBackLabel != nil {
 		authority.HandBackLabel = *settings.HandBackLabel

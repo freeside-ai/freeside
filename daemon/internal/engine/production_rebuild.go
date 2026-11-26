@@ -388,6 +388,11 @@ func (w *productionPublicationWorkflow) resolveVerificationImage(
 	ctx context.Context, binding *productionBinding, verifiedSHA string,
 ) error {
 	binding.rebuilt = nil
+	// A run with no project image has no admitted image to rebuild, so no
+	// rebuild row can name one.
+	if binding.recipeBinding != nil {
+		return nil
+	}
 	key := productionRebuildKey(productionRebuildImageKind, binding.run.ID, verifiedSHA)
 	var rebuilt domain.ProjectImage
 	found := false
@@ -771,7 +776,7 @@ func refusedRebuildVerification(
 		"%s\n\n"+
 			"Freeside did not verify candidate %s. Its dependency manifests differ from the ones project image %s was built with, and Freeside rebuilds an image without a person only for a change inside the project's policy. No verification command ran.\n",
 		rebuildRefusedLine(refusal), headSHA, binding.image.ImageRef)
-	recipe := binding.image.RecipeDigest
+	recipe := binding.boundRecipe()
 	// The stable per-verification time a room's evidence carries, so a
 	// replayed refusal converges on the same artifact.
 	evidence, err := daemonVerificationEvidence(task.verificationInvocationID(), headSHA, recipe,

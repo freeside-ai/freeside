@@ -107,6 +107,47 @@ func TestWriterAdmissionResolvesTheWriterClass(t *testing.T) {
 	}
 }
 
+// A project with no project image pins its recipe binding on each
+// admission, by value, and its writer resolves to the cordon; a warded
+// project setting is refused at admission, naming the missing image (#3620).
+func TestWriterAdmissionPinsTheRecipeBinding(t *testing.T) {
+	t.Parallel()
+	binding := domain.RecipeBinding{
+		Repository: "owner/repo", RepositoryID: 1, CommitSHA: strings.Repeat("c", 40),
+		RecipeDigest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+	}
+	// noImageProject stands in for the authority of a project that binds
+	// its recipe with binding and has no image.
+	noImageProject := func(e *Engine, class *domain.RunnerBackendClass) {
+		base := e.admission.environment.Base
+		e.projectAuthoritySource = FixedProjectAuthority(ProjectAuthority{
+			Repo: base.Repo, RepositoryID: base.RepositoryID, BaseRef: base.BaseRef,
+			WriterClass: class, RecipeBinding: &binding,
+		})
+	}
+	f := newInputFilesFixture(t)
+	f.composeCordon()
+	noImageProject(f.engine, nil)
+	admission, admitted, err := f.admitAs(t, domain.RoleImplementer)
+	if err != nil || !admitted {
+		t.Fatalf("admit = %t, %v", admitted, err)
+	}
+	if admission.RecipeBinding == nil || *admission.RecipeBinding != binding || admission.RecipeBinding == &binding {
+		t.Fatalf("admission recipe binding = %+v, want a copy of %+v", admission.RecipeBinding, binding)
+	}
+	if admission.Backend != string(domain.BackendCordonedHostProcess) {
+		t.Fatalf("admission placed on %s, want the cordon", admission.Backend)
+	}
+	f.record(t, admission)
+
+	warded := newInputFilesFixture(t)
+	warded.composeCordon()
+	noImageProject(warded.engine, new(domain.BackendFreshVMReadOnlyVolumeHandoff))
+	if _, _, err := warded.admitAs(t, domain.RoleImplementer); !errors.Is(err, domain.ErrWardedWithoutProjectImage) {
+		t.Fatalf("warded project with no image: admit err = %v, want ErrWardedWithoutProjectImage", err)
+	}
+}
+
 // The specifier has no writer class: it runs on the ward even where a
 // writer would resolve to a cordon this daemon lacks.
 func TestSpecifierAdmissionResolvesNoWriterClass(t *testing.T) {

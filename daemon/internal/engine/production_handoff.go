@@ -344,7 +344,7 @@ func (w *productionPublicationWorkflow) proveHandoffMerge(
 	}
 	tip := binding.admission.Base
 	tip.BaseSHA = check.TipSHA
-	proof, err := domain.NewProspectiveMergeCheckProof(*cleanVerification, identity, tip, binding.image.RecipeDigest)
+	proof, err := domain.NewProspectiveMergeCheckProof(*cleanVerification, identity, tip, binding.boundRecipe())
 	if err != nil {
 		return domain.HandoffCheck{}, err
 	}
@@ -453,7 +453,7 @@ func (w *productionPublicationWorkflow) recordHandoffStop(
 		return nil, err
 	}
 	evidence, err := daemonVerificationEvidence(handoffVerificationInvocationID(task), task.HeadSHA,
-		binding.image.RecipeDigest, account, createdAt, recipes)
+		binding.boundRecipe(), account, createdAt, recipes)
 	if err != nil {
 		return nil, err
 	}

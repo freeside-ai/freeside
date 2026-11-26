@@ -22,8 +22,12 @@ const (
 	ProjectSectionAllowedPaths   ProjectSettingsSection = "allowed_paths"
 	ProjectSectionApprovedRecipe ProjectSettingsSection = "approved_recipe"
 	ProjectSectionAgentImage     ProjectSettingsSection = "agent_image"
-	ProjectSectionHandBackLabel  ProjectSettingsSection = "hand_back_label"
-	ProjectSectionWriterClass    ProjectSettingsSection = "writer_class"
+	// ProjectSectionRecipeBinding binds the recipe of a project with no
+	// project image (plan §5.7). A project's settings hold exactly one of it
+	// and agent_image.
+	ProjectSectionRecipeBinding ProjectSettingsSection = "recipe_binding"
+	ProjectSectionHandBackLabel ProjectSettingsSection = "hand_back_label"
+	ProjectSectionWriterClass   ProjectSettingsSection = "writer_class"
 	// ProjectSectionEnabled marks the project whose runs the installed
 	// daemon composes its driver for (#2083). Unset reads as not enabled,
 	// and settings import never writes it.
@@ -34,13 +38,15 @@ const (
 // a record shows them; it is the single registration point.
 var AllProjectSettingsSections = []ProjectSettingsSection{
 	ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-	ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass, ProjectSectionEnabled,
+	ProjectSectionAgentImage, ProjectSectionRecipeBinding, ProjectSectionHandBackLabel, ProjectSectionWriterClass,
+	ProjectSectionEnabled,
 }
 
 func (s ProjectSettingsSection) valid() bool {
 	switch s {
 	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-		ProjectSectionAgentImage, ProjectSectionHandBackLabel, ProjectSectionWriterClass, ProjectSectionEnabled:
+		ProjectSectionAgentImage, ProjectSectionRecipeBinding, ProjectSectionHandBackLabel, ProjectSectionWriterClass,
+		ProjectSectionEnabled:
 		return true
 	default:
 		return false
@@ -56,13 +62,14 @@ func ParseProjectSettingsSection(name string) (ProjectSettingsSection, error) {
 }
 
 // Optional reports whether a project's settings are complete without the
-// section, so a revision may clear it.
+// section, so a revision may clear it. agent_image and recipe_binding are
+// each optional alone; ProjectSettings.Validate requires exactly one of them.
 func (s ProjectSettingsSection) Optional() bool {
 	switch s {
-	case ProjectSectionHandBackLabel, ProjectSectionWriterClass, ProjectSectionEnabled:
+	case ProjectSectionAgentImage, ProjectSectionRecipeBinding, ProjectSectionHandBackLabel,
+		ProjectSectionWriterClass, ProjectSectionEnabled:
 		return true
-	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-		ProjectSectionAgentImage:
+	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe:
 		return false
 	}
 	return false
@@ -87,7 +94,11 @@ type ProjectSettings struct {
 	Repository     ProjectRepositorySettings `json:"repository"`
 	AllowedPaths   []string                  `json:"allowed_paths"`
 	ApprovedRecipe Digest                    `json:"approved_recipe"`
-	AgentImage     ImageRef                  `json:"agent_image"`
+	// AgentImage is the project image the project's runs are admitted with;
+	// RecipeBinding binds the recipe of a project that has none. Exactly one
+	// is set.
+	AgentImage    *ImageRef      `json:"agent_image"`
+	RecipeBinding *RecipeBinding `json:"recipe_binding"`
 	// HandBackLabel is the label the landing batch puts on a pull request it
 	// hands back for rework (#3160); unset leaves hand-backs with a person.
 	HandBackLabel *string `json:"hand_back_label"`
@@ -100,7 +111,9 @@ type ProjectSettings struct {
 }
 
 // Validate checks every section that is set and that every required one
-// holds a value.
+// holds a value, and the rules that span sections: exactly one of
+// agent_image and recipe_binding is set, and a project with no image isn't
+// warded.
 func (s ProjectSettings) Validate() error {
 	for _, section := range AllProjectSettingsSections {
 		if s.unset(section) {
@@ -109,6 +122,24 @@ func (s ProjectSettings) Validate() error {
 		if err := s.ValidateSection(section); err != nil {
 			return err
 		}
+	}
+	if s.AgentImage == nil && s.RecipeBinding == nil {
+		return fmt.Errorf("%s or %s: %w", ProjectSectionAgentImage, ProjectSectionRecipeBinding,
+			ErrSettingsSectionMissing)
+	}
+	return checkRecipeSource(s.AgentImage != nil, s.RecipeBinding != nil, s.WriterClass)
+}
+
+// checkRecipeSource refuses settings that hold both an image and a recipe
+// binding, and a warded writer_class without an image: the warded writer
+// runs in the project image, so a project with none can't be warded.
+func checkRecipeSource(hasImage, hasBinding bool, writerClass *RunnerBackendClass) error {
+	if hasImage && hasBinding {
+		return fmt.Errorf("%s and %s: %w", ProjectSectionAgentImage, ProjectSectionRecipeBinding,
+			ErrProjectRecipeSourceAmbiguous)
+	}
+	if hasBinding && writerClass != nil && *writerClass == BackendFreshVMReadOnlyVolumeHandoff {
+		return fmt.Errorf("%s %q: %w", ProjectSectionWriterClass, *writerClass, ErrWardedWithoutProjectImage)
 	}
 	return nil
 }
@@ -135,8 +166,19 @@ func (s ProjectSettings) ValidateSection(section ProjectSettingsSection) error {
 		}
 		return nil
 	case ProjectSectionAgentImage:
+		if s.AgentImage == nil {
+			return errors.New("agent_image is required")
+		}
 		if s.AgentImage.Validate() != nil {
 			return errors.New("agent_image is not a digest-pinned image reference")
+		}
+		return nil
+	case ProjectSectionRecipeBinding:
+		if s.RecipeBinding == nil {
+			return errors.New("recipe_binding is required")
+		}
+		if err := s.RecipeBinding.Validate(); err != nil {
+			return fmt.Errorf("recipe_binding: %w", err)
 		}
 		return nil
 	case ProjectSectionHandBackLabel:
@@ -187,6 +229,8 @@ func (s *ProjectSettings) field(section ProjectSettingsSection) any {
 		return &s.ApprovedRecipe
 	case ProjectSectionAgentImage:
 		return &s.AgentImage
+	case ProjectSectionRecipeBinding:
+		return &s.RecipeBinding
 	case ProjectSectionHandBackLabel:
 		return &s.HandBackLabel
 	case ProjectSectionWriterClass:
@@ -212,14 +256,17 @@ func (s ProjectSettings) SectionValue(section ProjectSettingsSection) (json.RawM
 // unset reports whether an optional section holds no value.
 func (s ProjectSettings) unset(section ProjectSettingsSection) bool {
 	switch section {
+	case ProjectSectionAgentImage:
+		return s.AgentImage == nil
+	case ProjectSectionRecipeBinding:
+		return s.RecipeBinding == nil
 	case ProjectSectionHandBackLabel:
 		return s.HandBackLabel == nil
 	case ProjectSectionWriterClass:
 		return s.WriterClass == nil
 	case ProjectSectionEnabled:
 		return s.Enabled == nil
-	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe,
-		ProjectSectionAgentImage:
+	case ProjectSectionRepository, ProjectSectionAllowedPaths, ProjectSectionApprovedRecipe:
 	}
 	return false
 }
@@ -396,6 +443,37 @@ func (r ProjectSettingsRecord) Enabled() (bool, error) {
 func (r ProjectSettingsRecord) ApprovedRecipe() (_ Digest, ok bool, _ error) {
 	settings, set, err := r.sectionAlone(ProjectSectionApprovedRecipe)
 	return settings.ApprovedRecipe, set, err
+}
+
+// RecipeBinding returns the project's recipe_binding section, read alone as
+// ApprovedRecipe reads its section; nil when the section is unset.
+func (r ProjectSettingsRecord) RecipeBinding() (*RecipeBinding, error) {
+	settings, _, err := r.sectionAlone(ProjectSectionRecipeBinding)
+	return settings.RecipeBinding, err
+}
+
+// CheckRecipeSource runs the cross-section rules of ProjectSettings.Validate
+// that an incomplete record can already break: it refuses a record holding
+// both agent_image and recipe_binding, or a recipe_binding and a warded
+// writer_class. It reads only those three sections, so the store can run it
+// on every append before the record is complete.
+func (r ProjectSettingsRecord) CheckRecipeSource() error {
+	_, hasImage, err := r.sectionAlone(ProjectSectionAgentImage)
+	if err != nil {
+		return err
+	}
+	_, hasBinding, err := r.sectionAlone(ProjectSectionRecipeBinding)
+	if err != nil {
+		return err
+	}
+	writer, _, err := r.sectionAlone(ProjectSectionWriterClass)
+	if err != nil {
+		return err
+	}
+	if err := checkRecipeSource(hasImage, hasBinding, writer.WriterClass); err != nil {
+		return fmt.Errorf("project %q settings: %w", r.ProjectID, err)
+	}
+	return nil
 }
 
 // sectionAlone decodes and validates one section's current revision and no

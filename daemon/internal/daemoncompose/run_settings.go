@@ -144,8 +144,15 @@ func NewClaudeDriverConfig(settings RunSettings, launch RunLaunch) ClaudeDriverC
 	if project.HandBackLabel != nil {
 		handBackLabel = *project.HandBackLabel
 	}
+	// A project with no image leaves AgentImage empty, which
+	// ClaudeDriverConfig.Validate refuses; the installed daemon refuses one
+	// earlier, in storedDriverConfig, with a host check.
+	var agentImage domain.ImageRef
+	if project.AgentImage != nil {
+		agentImage = *project.AgentImage
+	}
 	return ClaudeDriverConfig{
-		AgentImage: project.AgentImage, ExporterImage: string(instance.Images.Exporter),
+		AgentImage: agentImage, ExporterImage: string(instance.Images.Exporter),
 		ContainerBin: instance.HostTools.Container, SeedRoot: instance.SeedRoot,
 		WriterStopTimeout: settings.WriterStopTimeout, WriterStallInterval: settings.WriterStallInterval,
 		Rebuild:  RebuildInputs(instance.Build),

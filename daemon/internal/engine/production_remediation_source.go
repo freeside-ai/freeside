@@ -242,7 +242,7 @@ func (w *productionPublicationWorkflow) loadReentryRemediationSourceTree(
 		return "", remediationSourceReadError(ctx, err)
 	}
 	if checkpoint.ProjectImage != source.verificationImage().ID ||
-		checkpoint.RecipeDigest != binding.image.RecipeDigest {
+		checkpoint.RecipeDigest != binding.boundRecipe() {
 		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
 	}
 	for _, artifact := range checkpoint.Artifacts {

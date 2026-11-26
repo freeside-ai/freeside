@@ -70,6 +70,8 @@
 //   - instance_settings.go, project_settings.go
 //     the run settings an instance and each project store as section
 //     revisions, and the fold that names a missing section
+//   - recipe_binding.go the recipe a project with no project image binds,
+//     which an admission pins and every proof binds by digest
 //   - writer_class.go the classes a writer may run on, a task's requirement
 //     that its writers run warded, and the resolver that picks a writer's class
 //   - project_readiness.go the per-project checks the daemon evaluates

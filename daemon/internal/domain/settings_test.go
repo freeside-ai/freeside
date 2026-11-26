@@ -54,11 +54,30 @@ func projectSettingsFixture() domain.ProjectSettings {
 		Repository:     domain.ProjectRepositorySettings{Repo: "acme/widgets", RepositoryID: 42, BaseRef: "main"},
 		AllowedPaths:   []string{"src/**"},
 		ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("b", 64)),
-		AgentImage:     settingsImage("agent"),
+		AgentImage:     new(settingsImage("agent")),
 		HandBackLabel:  new("needs-rework"),
 		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		Enabled:        &domain.EnabledSettings{Enabled: true},
 	}
+}
+
+// recipeBindingFixture is a valid binding for projectSettingsFixture's
+// repository and approved recipe.
+func recipeBindingFixture() domain.RecipeBinding {
+	return domain.RecipeBinding{
+		Repository: "acme/widgets", RepositoryID: 42, CommitSHA: strings.Repeat("c", 40),
+		RecipeDigest: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+	}
+}
+
+// noImageProjectSettingsFixture is a project with no project image: its
+// recipe is bound by recipe_binding and its writers run cordoned.
+func noImageProjectSettingsFixture() domain.ProjectSettings {
+	project := projectSettingsFixture()
+	project.AgentImage = nil
+	project.RecipeBinding = new(recipeBindingFixture())
+	project.WriterClass = new(domain.BackendCordonedHostProcess)
+	return project
 }
 
 func instanceRevision(t *testing.T, revision int, section domain.InstanceSettingsSection, value json.RawMessage) domain.InstanceSettingsRevision {
@@ -105,6 +124,16 @@ func TestSettingsGolden(t *testing.T) {
 		t.Fatalf("project Validate: %v", err)
 	}
 	assertSettingsGolden(t, "project_settings", project)
+	noImage := noImageProjectSettingsFixture()
+	if err := noImage.Validate(); err != nil {
+		t.Fatalf("no-image project Validate: %v", err)
+	}
+	assertSettingsGolden(t, "project_settings_recipe_binding", noImage)
+	binding := recipeBindingFixture()
+	if err := binding.Validate(); err != nil {
+		t.Fatalf("recipe binding Validate: %v", err)
+	}
+	assertSettingsGolden(t, "recipe_binding", binding)
 
 	set := instanceRevision(t, 1, domain.InstanceSectionHostTools, json.RawMessage(`{ "container": "/usr/local/bin/container" }`))
 	clear := instanceRevision(t, 2, domain.InstanceSectionJudgment, nil)
@@ -193,6 +222,110 @@ func TestSettingsSectionValuesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSameJSON(t, gotProject, project)
+
+	noImage := noImageProjectSettingsFixture()
+	var noImageRevisions []domain.ProjectSettingsRevision
+	for _, section := range domain.AllProjectSettingsSections {
+		value, err := noImage.SectionValue(section)
+		if err != nil {
+			t.Fatal(err)
+		}
+		noImageRevisions = append(noImageRevisions, projectRevision(t, len(noImageRevisions)+1, section, value))
+	}
+	noImageRecord, err := domain.NewProjectSettingsRecord("project-widgets", noImageRevisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotNoImage, err := noImageRecord.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSameJSON(t, gotNoImage, noImage)
+	gotBinding, err := noImageRecord.RecipeBinding()
+	if err != nil || gotBinding == nil || *gotBinding != recipeBindingFixture() {
+		t.Fatalf("record RecipeBinding = %+v, %v; want the fixture", gotBinding, err)
+	}
+}
+
+// TestProjectSettingsNeedExactlyOneRecipeSource refuses settings with
+// neither an image nor a recipe binding, naming both sections, and settings
+// with both, and refuses the warded class for a project with no image.
+func TestProjectSettingsNeedExactlyOneRecipeSource(t *testing.T) {
+	neither := projectSettingsFixture()
+	neither.AgentImage = nil
+	err := neither.Validate()
+	if !errors.Is(err, domain.ErrSettingsSectionMissing) ||
+		!strings.Contains(err.Error(), "agent_image") || !strings.Contains(err.Error(), "recipe_binding") {
+		t.Errorf("neither: Validate = %v, want ErrSettingsSectionMissing naming agent_image and recipe_binding", err)
+	}
+	both := projectSettingsFixture()
+	both.RecipeBinding = new(recipeBindingFixture())
+	if err := both.Validate(); !errors.Is(err, domain.ErrProjectRecipeSourceAmbiguous) {
+		t.Errorf("both: Validate = %v, want ErrProjectRecipeSourceAmbiguous", err)
+	}
+	warded := noImageProjectSettingsFixture()
+	warded.WriterClass = new(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if err := warded.Validate(); !errors.Is(err, domain.ErrWardedWithoutProjectImage) ||
+		!strings.Contains(err.Error(), "project image") {
+		t.Errorf("warded with no image: Validate = %v, want ErrWardedWithoutProjectImage naming the image", err)
+	}
+	unsetClass := noImageProjectSettingsFixture()
+	unsetClass.WriterClass = nil
+	if err := unsetClass.Validate(); err != nil {
+		t.Errorf("no image, writer_class unset: Validate = %v, want nil", err)
+	}
+
+	// The record check reads only the three sections, so it refuses each
+	// pair before the record is complete, in either order of writing.
+	image, err := json.Marshal(settingsImage("agent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := json.Marshal(recipeBindingFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wardedValue := json.RawMessage(`"fresh_vm_read_only_volume_handoff"`)
+	for name, tc := range map[string]struct {
+		sections []domain.ProjectSettingsSection
+		values   []json.RawMessage
+		want     error
+	}{
+		"image then binding": {
+			[]domain.ProjectSettingsSection{domain.ProjectSectionAgentImage, domain.ProjectSectionRecipeBinding},
+			[]json.RawMessage{image, binding},
+			domain.ErrProjectRecipeSourceAmbiguous,
+		},
+		"binding then warded": {
+			[]domain.ProjectSettingsSection{domain.ProjectSectionRecipeBinding, domain.ProjectSectionWriterClass},
+			[]json.RawMessage{binding, wardedValue},
+			domain.ErrWardedWithoutProjectImage,
+		},
+		"warded then binding": {
+			[]domain.ProjectSettingsSection{domain.ProjectSectionWriterClass, domain.ProjectSectionRecipeBinding},
+			[]json.RawMessage{wardedValue, binding},
+			domain.ErrWardedWithoutProjectImage,
+		},
+		"image cleared then binding": {
+			[]domain.ProjectSettingsSection{
+				domain.ProjectSectionAgentImage, domain.ProjectSectionAgentImage, domain.ProjectSectionRecipeBinding,
+			},
+			[]json.RawMessage{image, nil, binding},
+			nil,
+		},
+	} {
+		var revisions []domain.ProjectSettingsRevision
+		for i, section := range tc.sections {
+			revisions = append(revisions, projectRevision(t, i+1, section, tc.values[i]))
+		}
+		record, err := domain.NewProjectSettingsRecord("project-widgets", revisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := record.CheckRecipeSource(); !errors.Is(err, tc.want) || (tc.want == nil) != (err == nil) {
+			t.Errorf("%s: CheckRecipeSource = %v, want %v", name, err, tc.want)
+		}
+	}
 }
 
 func assertSameJSON(t *testing.T, got, want any) {
@@ -269,6 +402,16 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.ProjectSectionAllowedPaths, `["src/**,docs/**"]`, "allowed_paths holds an empty entry or a comma"},
 		{domain.ProjectSectionApprovedRecipe, `"sha256:abc"`, "approved_recipe is not a sha256 digest"},
 		{domain.ProjectSectionAgentImage, `"registry.local/agent:latest"`, "agent_image is not a digest-pinned image reference"},
+		{
+			domain.ProjectSectionRecipeBinding,
+			`{"repository":"acme/widgets","repository_id":42,"commit_sha":"abc","recipe_digest":"sha256:` + strings.Repeat("b", 64) + `"}`,
+			"recipe_binding: recipe binding commit_sha",
+		},
+		{
+			domain.ProjectSectionRecipeBinding,
+			`{"repository":"acme/widgets","repository_id":42,"commit_sha":"` + strings.Repeat("c", 40) + `"}`,
+			"recipe_binding: recipe_digest: required settings key is absent",
+		},
 		{domain.ProjectSectionHandBackLabel, `""`, "hand_back_label is required"},
 		{domain.ProjectSectionWriterClass, `"credential_free_host_verification"`, `writer_class "credential_free_host_verification" is not`},
 		{domain.ProjectSectionWriterClass, `"warded"`, `writer_class "warded" is not`},

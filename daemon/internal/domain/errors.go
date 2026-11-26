@@ -664,6 +664,9 @@ var (
 	ErrSettingsSectionMissing         = errors.New("required settings section is not set")
 	ErrSettingsKeyMissing             = errors.New("required settings key is absent")
 	ErrSettingsRevisionOrder          = errors.New("settings revisions are not numbered 1, 2, 3 in order")
+	// ErrProjectRecipeSourceAmbiguous refuses project settings that hold
+	// both agent_image and recipe_binding (#3620).
+	ErrProjectRecipeSourceAmbiguous = errors.New("a project's settings hold both a project image and a recipe binding")
 	// ErrProjectNotReady refuses or defers work for a project whose
 	// readiness record is missing, unreadable, keyed to other settings
 	// revisions, or holds a check that has not passed.
@@ -675,6 +678,10 @@ var (
 var (
 	ErrInvalidWriterClass       = errors.New("not a class a writer may run on")
 	ErrTaskWriterClassNotWarded = errors.New("a task can only require the warded writer class")
+	// ErrWardedWithoutProjectImage refuses the warded class for a project
+	// with no project image, or for one of its tasks (#3620): the warded
+	// writer runs in the project image.
+	ErrWardedWithoutProjectImage = errors.New("the warded writer class needs a project image, and the project has none")
 )
 
 // ErrInvalidWorkHoursPeriod refuses a work-hours period outside 1 to

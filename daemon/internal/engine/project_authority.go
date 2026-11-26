@@ -34,6 +34,11 @@ type ProjectAuthority struct {
 	// WriterClass is the project's writer_class setting, nil when unset
 	// (domain.ResolveWriterClass).
 	WriterClass *domain.RunnerBackendClass
+	// RecipeBinding is the recipe binding of a project with no project image
+	// (#3620), nil for an image project. Admission copies it by value onto
+	// every admission, so the run's proofs bind that recipe, and the
+	// writer-class resolver reads it as the project having no image.
+	RecipeBinding *domain.RecipeBinding
 }
 
 // ProjectAuthoritySource reads a project's current authority inside the
@@ -67,6 +72,10 @@ func (a ProjectAuthority) clone() ProjectAuthority {
 	if a.WriterClass != nil {
 		class := *a.WriterClass
 		a.WriterClass = &class
+	}
+	if a.RecipeBinding != nil {
+		binding := *a.RecipeBinding
+		a.RecipeBinding = &binding
 	}
 	return a
 }

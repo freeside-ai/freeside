@@ -97,6 +97,27 @@ func TestTaskWriterClassRefusesAMissingTaskAndAnotherClass(t *testing.T) {
 	}
 }
 
+// TestTaskWriterClassRefusesATaskOfAProjectWithNoImage refuses the warded
+// requirement for a task whose project binds its recipe with no image.
+func TestTaskWriterClassRefusesATaskOfAProjectWithNoImage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStoreAt(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	binding := `{"repository":"acme/widgets","repository_id":42,"commit_sha":"` + hex64[:40] +
+		`","recipe_digest":"sha256:` + hex64 + `"}`
+	if _, err := appendProjectSettings(t, s, "project", domain.ProjectSectionRecipeBinding, binding); err != nil {
+		t.Fatal(err)
+	}
+	requirement := domain.TaskWriterClass{
+		TaskID: taskID, Class: domain.BackendFreshVMReadOnlyVolumeHandoff, SetBy: "cli:operator", SetAt: taskWriterClassSetAt,
+	}
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error { return tx.SetTaskWriterClass(ctx, requirement) })
+	if !errors.Is(err, domain.ErrWardedWithoutProjectImage) {
+		t.Fatalf("set on a no-image project's task: %v, want ErrWardedWithoutProjectImage", err)
+	}
+}
+
 // TestTaskWriterClassReadFailsOnAStoredRowNamingAnotherClass rewrites a
 // stored requirement to the cordon: the read refuses it rather than hand
 // the resolver a class a task may not require.

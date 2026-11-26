@@ -3,6 +3,7 @@ package daemoncompose
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -208,10 +209,27 @@ func ManualInitiatorLookup(
 	}
 }
 
+// ErrNoProjectImage refuses to compose a driver for a project with no
+// project image (#3620): its settings bind a recipe_binding, and composing
+// its runs is #3621's work.
+var ErrNoProjectImage = errors.New("the project has no project image, and the daemon can't run a project without one yet")
+
 // storedDriverConfig composes the driver configuration from the loaded
 // settings and the launch, binding the digest of the stored judgment
-// configuration as the deputy's preflight does for its manifest.
+// configuration as the deputy's preflight does for its manifest. A project
+// with no project image composes no driver: it fails the project_image host
+// check, so the daemon serves driverless and its card names the missing
+// image.
 func storedDriverConfig(settings RunSettings, launch RunLaunch) (ClaudeDriverConfig, error) {
+	if settings.Project.AgentImage == nil {
+		return ClaudeDriverConfig{}, &HostCheckError{
+			Check:    "project_image",
+			Evidence: fmt.Sprintf("project %q binds its recipe with recipe_binding and has no agent_image", settings.ProjectID),
+			Fix: "set the project's image with freesided settings set -section agent_image after clearing " +
+				"recipe_binding, or enable a project that has one",
+			Err: ErrNoProjectImage,
+		}
+	}
 	cfg := NewClaudeDriverConfig(settings, launch)
 	if cfg.Judgments == (JudgmentConfig{}) {
 		return cfg, nil

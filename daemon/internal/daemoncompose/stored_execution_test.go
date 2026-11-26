@@ -109,3 +109,24 @@ func TestDecideStoredExecutionStopsAtTheFirstThatApplies(t *testing.T) {
 		}
 	}
 }
+
+// TestStoredDriverConfigNamesTheMissingProjectImage: the installed daemon
+// composes no driver for a project that binds its recipe with no image, and
+// the failure it serves driverless with is the project_image host check.
+func TestStoredDriverConfigNamesTheMissingProjectImage(t *testing.T) {
+	t.Parallel()
+	settings := RunSettings{ProjectID: "project-widgets", Project: domain.ProjectSettings{
+		RecipeBinding: &domain.RecipeBinding{
+			Repository: "acme/widgets", RepositoryID: 42, CommitSHA: strings.Repeat("c", 40),
+			RecipeDigest: domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		},
+	}}
+	cfg, err := storedDriverConfig(settings, RunLaunch{})
+	if !errors.Is(err, ErrNoProjectImage) || cfg.AgentImage != "" {
+		t.Fatalf("storedDriverConfig = %+v, %v; want ErrNoProjectImage and no configuration", cfg, err)
+	}
+	named := namedCompositionFailure(&StoredCompositionError{Err: err})
+	if named == nil || named.Check != "project_image" || !strings.Contains(named.Evidence, "no agent_image") {
+		t.Fatalf("named failure %+v, want the project_image check naming the missing image", named)
+	}
+}
