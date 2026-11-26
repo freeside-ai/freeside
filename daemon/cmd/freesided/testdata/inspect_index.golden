@@ -14,7 +14,7 @@
       "ids": [
         "task_id"
       ],
-      "version": "freeside-task-record-v23"
+      "version": "freeside-task-record-v24"
     },
     {
       "name": "inspect conversations",

@@ -42,13 +42,14 @@ func TestTaskEventDetailContract(t *testing.T) {
 	triage := TaskEventTriage{
 		Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTierEscalated), Reason: ptr("A contract change."), Escalated: true,
 	}
+	pr := PRReference{Repo: "owner/repo", Number: 42}
 	fixtures := []TaskEvent{
 		{Kind: TaskEventCreated, RecordedAt: at},
 		{Kind: TaskEventCampaignAllocated, RecordedAt: at, CampaignID: ptr(CampaignID("campaign-1")), SpecificationRunID: ptr(RunID("spec-1"))},
 		{Kind: TaskEventSpecificationApproved, RecordedAt: at, CampaignID: ptr(CampaignID("campaign-1")), RunID: ptr(RunID("impl-1")), ApprovedSpecDigest: ptr(Digest("sha256:spec")), SpecificationRunID: ptr(RunID("spec-1"))},
-		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42)},
-		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), MergeCommitSHA: ptr("abc123")},
-		{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), ExternalReview: &externalReview},
+		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), PRReference: &pr},
+		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), PRReference: &pr, MergeCommitSHA: ptr("abc123")},
+		{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), PRReference: &pr, ExternalReview: &externalReview},
 		{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &line},
 		{Kind: TaskEventSpecifierTriaged, RecordedAt: at, Triage: &triage},
 	}
@@ -64,7 +65,11 @@ func TestTaskEventDetailContract(t *testing.T) {
 				func(e *TaskEvent) { e.RunID = toggled(e.RunID, RunID("impl-1")) },
 				func(e *TaskEvent) { e.ApprovedSpecDigest = toggled(e.ApprovedSpecDigest, Digest("sha256:spec")) },
 				func(e *TaskEvent) { e.SpecificationRunID = toggled(e.SpecificationRunID, RunID("spec-1")) },
+				// The pull request toggles as a pair so the kind rule, not the
+				// pairing rule, is what rejects it; the next two break the pair.
+				func(e *TaskEvent) { e.PRNumber, e.PRReference = toggled(e.PRNumber, 42), toggled(e.PRReference, pr) },
 				func(e *TaskEvent) { e.PRNumber = toggled(e.PRNumber, 42) },
+				func(e *TaskEvent) { e.PRReference = toggled(e.PRReference, pr) },
 				func(e *TaskEvent) { e.MergeCommitSHA = toggled(e.MergeCommitSHA, "abc123") },
 				func(e *TaskEvent) { e.ExternalReview = toggled(e.ExternalReview, externalReview) },
 				func(e *TaskEvent) { e.Line = toggled(e.Line, line) },
@@ -82,12 +87,23 @@ func TestTaskEventDetailContract(t *testing.T) {
 		{Kind: "named", RecordedAt: at},
 		{Kind: TaskEventCreated},
 		{Kind: TaskEventCreated, RecordedAt: at.In(time.FixedZone("local", 3600))},
-		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("")), PRNumber: ptr(42)},
-		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(0)},
-		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(42), MergeCommitSHA: ptr("")},
+		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("")), PRNumber: ptr(42), PRReference: &pr},
+		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(0), PRReference: &PRReference{Repo: "owner/repo"}},
+		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(42), PRReference: &pr, MergeCommitSHA: ptr("")},
 	} {
 		if err := invalid.Validate(); err == nil {
 			t.Errorf("invalid event %+v accepted", invalid)
+		}
+	}
+	// The reference must be a valid coordinate naming the event's own number.
+	for name, ref := range map[string]PRReference{
+		"another number": {Repo: "owner/repo", Number: 43},
+		"bare repo":      {Repo: "repo", Number: 42},
+		"dotted owner":   {Repo: "../repo", Number: 42},
+	} {
+		invalid := TaskEvent{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(42), PRReference: &ref}
+		if err := invalid.Validate(); !errors.Is(err, ErrTaskEventDetailMismatch) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 	// Every external review detail is required, and the login is the
@@ -102,7 +118,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 	} {
 		detail := externalReview
 		change(&detail)
-		invalid := TaskEvent{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(42), ExternalReview: &detail}
+		invalid := TaskEvent{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(42), PRReference: &pr, ExternalReview: &detail}
 		if err := invalid.Validate(); !errors.Is(err, ErrTaskEventDetailMismatch) {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -271,7 +287,7 @@ func TestTaskHistoryEventDetails(t *testing.T) {
 				t.Fatal(err)
 			}
 			invalid := e
-			invalid.PRNumber = ptr(1)
+			invalid.PRNumber, invalid.PRReference = ptr(1), &PRReference{Repo: "owner/repo", Number: 1}
 			if err := invalid.Validate(); err == nil {
 				t.Fatal("unrelated PR detail accepted")
 			}

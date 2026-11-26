@@ -437,7 +437,9 @@ func (d ElapsedDeadline) Validate() error {
 
 // PRReference is the structured identity of the published pull request a
 // ready_for_final_review item links to, or of the pull request a held run has
-// already published when a publish_blocked item carries one. The repository
+// already published when a publish_blocked item carries one. Task events that
+// name a pull request and work-unit completion facts carry it too, built from
+// the recorded PR binding when they are served. The repository
 // is GitHub's canonical owner/name coordinate; clients may render it or
 // compose its browser URL without parsing presentation prose.
 type PRReference struct {

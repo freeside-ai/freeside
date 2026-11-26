@@ -117,7 +117,9 @@ public enum TaskFixtures {
                         events.append(
                             .init(
                                 kind: .pr_merged, recorded_at: completion.recorded_at, run_id: run.id,
-                                pr_number: completion.pr_number, merge_commit_sha: completion.merge_commit_sha))
+                                pr_number: completion.pr_number,
+                                pr_reference: completion.pr_reference.map { .init(value1: $0.value1) },
+                                merge_commit_sha: completion.merge_commit_sha))
                     }
                     let role: Components.Schemas.TaskRunRole? =
                         run.campaign_id == nil

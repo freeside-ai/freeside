@@ -43,6 +43,10 @@
   ],
   "completion": {
     "pr_number": 725,
+    "pr_reference": {
+      "repo": "owner/repo",
+      "number": 725
+    },
     "merge_commit_sha": "5555555555555555555555555555555555555555",
     "bound_issue": 724,
     "recorded_at": "2026-08-10T15:34:56Z"

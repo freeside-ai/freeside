@@ -125,9 +125,10 @@ func taskTimelineFixtureInputs() (domain.Task, []taskTimelineInput) {
 		if seed.number == 2 {
 			input.run.ParentRunID = "run-impl-1"
 			input.run.AttemptReason = "Retry after the provider outage"
-			input.prBinding = &domain.WorkUnitPRBinding{PRNumber: 73, RecordedAt: at.Add(210 * time.Minute)}
+			input.prBinding = &domain.WorkUnitPRBinding{Repo: "owner/repo", PRNumber: 73, RecordedAt: at.Add(210 * time.Minute)}
 			input.facts.completion = &WorkUnitCompletionFacts{
-				PRNumber: 73, MergeCommitSHA: strings.Repeat("a", 40), RecordedAt: at.Add(4 * time.Hour),
+				PRReference: domain.PRReference{Repo: "owner/repo", Number: 73},
+				PRNumber:    73, MergeCommitSHA: strings.Repeat("a", 40), RecordedAt: at.Add(4 * time.Hour),
 			}
 			// The writer finishes and its first verification passes before
 			// publication; the external round's verification fails. The
@@ -151,7 +152,7 @@ func taskTimelineFixtureInputs() (domain.Task, []taskTimelineInput) {
 				predecessor: domain.AttentionItem{ID: "ready-run-retry-1", Conclusion: &domain.Conclusion{
 					Cause: domain.ConcludedBySupersession, ConcludedAt: at.Add(225 * time.Minute),
 				}},
-				prNumber: 73,
+				pr: domain.PRReference{Repo: "owner/repo", Number: 73},
 				finding: domain.Finding{ID: "finding-external-1", RunID: seed.run, External: &domain.ExternalFindingProvenance{
 					ReviewerLogin: "octocat", HeadSHA: strings.Repeat("b", 40),
 				}},

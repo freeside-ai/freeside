@@ -5041,7 +5041,7 @@ public enum Components {
                 case clocks
             }
         }
-        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. specifier_triaged requires triage and no run_id: the task's one triage record (plan §5.13), at its recorded_at. Its reason is advisory, for display only. All other details are null. Events are observations, never authority.
+        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. specifier_triaged requires triage and no run_id: the task's one triage record (plan §5.13), at its recorded_at. Its reason is advisory, for display only. All other details are null. Events are observations, never authority. Every event that carries pr_number (pr_opened, pr_merged and external_review_reentered) also carries pr_reference, whose number equals pr_number; it is null on every other kind. Every daemon that has pr_reference serves it. It is optional so an app still reads the timeline from a daemon built before the field existed.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEvent`.
@@ -5198,6 +5198,32 @@ public enum Components {
             public var specification_run_id: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TaskEvent/pr_number`.
             public var pr_number: Swift.Int?
+            /// The repository and number of the event's pull request, from the daemon's recorded PR binding. When present, it is null exactly when pr_number is null.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/pr_reference`.
+            public struct pr_referencePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/pr_reference/value1`.
+                public var value1: Components.Schemas.PRReference
+                /// Creates a new `pr_referencePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.PRReference) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The repository and number of the event's pull request, from the daemon's recorded PR binding. When present, it is null exactly when pr_number is null.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/pr_reference`.
+            public var pr_reference: Components.Schemas.TaskEvent.pr_referencePayload?
             /// - Remark: Generated from `#/components/schemas/TaskEvent/merge_commit_sha`.
             public var merge_commit_sha: Swift.String?
             /// Creates a new `TaskEvent`.
@@ -5216,6 +5242,7 @@ public enum Components {
             ///   - approved_spec_digest:
             ///   - specification_run_id:
             ///   - pr_number:
+            ///   - pr_reference: The repository and number of the event's pull request, from the daemon's recorded PR binding. When present, it is null exactly when pr_number is null.
             ///   - merge_commit_sha:
             public init(
                 milestone: Components.Schemas.TaskEvent.milestonePayload? = nil,
@@ -5231,6 +5258,7 @@ public enum Components {
                 approved_spec_digest: Components.Schemas.TaskEvent.approved_spec_digestPayload? = nil,
                 specification_run_id: Swift.String? = nil,
                 pr_number: Swift.Int? = nil,
+                pr_reference: Components.Schemas.TaskEvent.pr_referencePayload? = nil,
                 merge_commit_sha: Swift.String? = nil
             ) {
                 self.milestone = milestone
@@ -5246,6 +5274,7 @@ public enum Components {
                 self.approved_spec_digest = approved_spec_digest
                 self.specification_run_id = specification_run_id
                 self.pr_number = pr_number
+                self.pr_reference = pr_reference
                 self.merge_commit_sha = merge_commit_sha
             }
             public enum CodingKeys: String, CodingKey {
@@ -5262,6 +5291,7 @@ public enum Components {
                 case approved_spec_digest
                 case specification_run_id
                 case pr_number
+                case pr_reference
                 case merge_commit_sha
             }
         }
@@ -6862,13 +6892,39 @@ public enum Components {
                 case unreadable_records
             }
         }
-        /// The facts behind a work_unit_completed milestone, read from the daemon's re-gated completion record: the PR whose merge satisfied the unit's completion criterion, the merge commit, the bound issue when the criterion names one, and the instant the daemon recorded the completion. The milestone itself carries none of these.
+        /// The facts behind a work_unit_completed milestone, read from the daemon's re-gated completion record: the PR whose merge satisfied the unit's completion criterion, the merge commit, the bound issue when the criterion names one, and the instant the daemon recorded the completion. The milestone itself carries none of these. pr_reference is the same PR with its repository. Every daemon that has the field serves it. It is optional so an app still reads the facts from a daemon built before the field existed.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/WorkUnitCompletionFacts`.
         public struct WorkUnitCompletionFacts: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/WorkUnitCompletionFacts/pr_number`.
             public var pr_number: Swift.Int
+            /// The merged PR's repository and number, from the daemon's recorded PR binding. Its number equals pr_number. Never null when present.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkUnitCompletionFacts/pr_reference`.
+            public struct pr_referencePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/WorkUnitCompletionFacts/pr_reference/value1`.
+                public var value1: Components.Schemas.PRReference
+                /// Creates a new `pr_referencePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.PRReference) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The merged PR's repository and number, from the daemon's recorded PR binding. Its number equals pr_number. Never null when present.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/WorkUnitCompletionFacts/pr_reference`.
+            public var pr_reference: Components.Schemas.WorkUnitCompletionFacts.pr_referencePayload?
             /// - Remark: Generated from `#/components/schemas/WorkUnitCompletionFacts/merge_commit_sha`.
             public var merge_commit_sha: Swift.String
             /// The issue the merge closed, for the bound-issue completion criterion; null for a PR-merge criterion.
@@ -6882,22 +6938,26 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - pr_number:
+            ///   - pr_reference: The merged PR's repository and number, from the daemon's recorded PR binding. Its number equals pr_number. Never null when present.
             ///   - merge_commit_sha:
             ///   - bound_issue: The issue the merge closed, for the bound-issue completion criterion; null for a PR-merge criterion.
             ///   - recorded_at:
             public init(
                 pr_number: Swift.Int,
+                pr_reference: Components.Schemas.WorkUnitCompletionFacts.pr_referencePayload? = nil,
                 merge_commit_sha: Swift.String,
                 bound_issue: Swift.Int? = nil,
                 recorded_at: Foundation.Date
             ) {
                 self.pr_number = pr_number
+                self.pr_reference = pr_reference
                 self.merge_commit_sha = merge_commit_sha
                 self.bound_issue = bound_issue
                 self.recorded_at = recorded_at
             }
             public enum CodingKeys: String, CodingKey {
                 case pr_number
+                case pr_reference
                 case merge_commit_sha
                 case bound_issue
                 case recorded_at

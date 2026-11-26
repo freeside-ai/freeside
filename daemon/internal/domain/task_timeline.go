@@ -195,7 +195,10 @@ func (t TaskEventTriage) validate() error {
 // allocation names its specification run; approval also names the bound
 // implementation run. PR events name their run, including legacy runs, and
 // an external review re-entry names its run and pull request. A task line
-// event is task-scoped and names no run.
+// event is task-scoped and names no run. Every event that names a pull
+// request carries it twice: PRNumber, for clients built before the
+// reference existed, and PRReference, whose repository lets a client link
+// it; the two always name the same number.
 type TaskEvent struct {
 	Milestone          *RunMilestone            `json:"milestone"`
 	Review             *TaskEventReview         `json:"review"`
@@ -210,6 +213,7 @@ type TaskEvent struct {
 	ApprovedSpecDigest *Digest                  `json:"approved_spec_digest"`
 	SpecificationRunID *RunID                   `json:"specification_run_id"`
 	PRNumber           *int                     `json:"pr_number"`
+	PRReference        *PRReference             `json:"pr_reference"`
 	MergeCommitSHA     *string                  `json:"merge_commit_sha"`
 }
 
@@ -230,6 +234,20 @@ func (e TaskEvent) Validate() error {
 	if (e.ApprovedSpecDigest != nil && *e.ApprovedSpecDigest == "") ||
 		(e.MergeCommitSHA != nil && *e.MergeCommitSHA == "") || (e.PRNumber != nil && *e.PRNumber < 1) {
 		return fmt.Errorf("task event detail: %w", ErrTaskEventDetailMismatch)
+	}
+	// The reference rides with the number on every kind, so the per-kind
+	// checks below need only govern PRNumber.
+	if (e.PRReference != nil) != (e.PRNumber != nil) {
+		return fmt.Errorf("task event pr_reference: %w", ErrTaskEventDetailMismatch)
+	}
+	if e.PRReference != nil {
+		if err := e.PRReference.Validate(); err != nil {
+			return fmt.Errorf("task event pr_reference: %w: %w", ErrTaskEventDetailMismatch, err)
+		}
+		if e.PRReference.Number != *e.PRNumber {
+			return fmt.Errorf("task event pr_reference number %d, pr_number %d: %w",
+				e.PRReference.Number, *e.PRNumber, ErrTaskEventDetailMismatch)
+		}
 	}
 	check := func(campaign, run, digest, specification, pr, merge bool) error {
 		if (e.CampaignID != nil) != campaign || (e.RunID != nil) != run ||

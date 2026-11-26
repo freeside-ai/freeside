@@ -245,11 +245,15 @@ type Run struct {
 // commit, the bound issue when the criterion names one, and the instant the
 // daemon recorded it. The milestone that ends the timeline carries none of
 // these; they are read from the store's re-gated completion row.
+// PRReference is the same PR with its repository, taken from the
+// authenticated work-unit binding at read time rather than stored on the
+// completion, so a completion recorded before the field existed serves it.
 type WorkUnitCompletionFacts struct {
-	PRNumber       int       `json:"pr_number"`
-	MergeCommitSHA string    `json:"merge_commit_sha"`
-	BoundIssue     *int      `json:"bound_issue"`
-	RecordedAt     time.Time `json:"recorded_at"`
+	PRNumber       int                `json:"pr_number"`
+	PRReference    domain.PRReference `json:"pr_reference"`
+	MergeCommitSHA string             `json:"merge_commit_sha"`
+	BoundIssue     *int               `json:"bound_issue"`
+	RecordedAt     time.Time          `json:"recorded_at"`
 }
 
 // RunTimeline is the typed daemon-observation projection read under one
@@ -1472,12 +1476,13 @@ func runProjectionFactsFor(
 		if milestone.Kind != domain.MilestoneWorkUnitCompleted {
 			continue
 		}
-		completion, err := authenticatedWorkUnitCompletion(ctx, tx, run.ID, milestone)
+		completion, binding, err := authenticatedWorkUnitCompletion(ctx, tx, run.ID, milestone)
 		if err != nil {
 			return runProjectionFacts{}, err
 		}
 		facts.completion = &WorkUnitCompletionFacts{
-			PRNumber: completion.PRNumber, MergeCommitSHA: completion.MergeCommitSHA,
+			PRReference: domain.PRReference{Repo: binding.Repo, Number: completion.PRNumber},
+			PRNumber:    completion.PRNumber, MergeCommitSHA: completion.MergeCommitSHA,
 			BoundIssue: completion.BoundIssue, RecordedAt: completion.RecordedAt,
 		}
 		break
@@ -1588,7 +1593,8 @@ func authenticatedCompletionMilestone(
 	); err != nil {
 		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 	}
-	return authenticatedWorkUnitCompletion(ctx, tx, run.ID, milestone)
+	completion, _, err := authenticatedWorkUnitCompletion(ctx, tx, run.ID, milestone)
+	return completion, err
 }
 
 // authenticatedWorkUnitCompletion binds a work_unit_completed milestone to the
@@ -1603,17 +1609,18 @@ func authenticatedCompletionMilestone(
 // whole listing read; anything else is infrastructure and propagates. The
 // binding the record was derived from must also restate the run's ready
 // resource, so the completion is bound to the pull request this run
-// published rather than to any consistent set of rows.
+// published rather than to any consistent set of rows. It returns that
+// authenticated binding beside the completion, for the PR's repository.
 func authenticatedWorkUnitCompletion(
 	ctx context.Context, tx *store.ReadTx, runID domain.RunID, milestone domain.RunMilestone,
-) (domain.WorkUnitCompletion, error) {
+) (domain.WorkUnitCompletion, domain.WorkUnitPRBinding, error) {
 	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
 	if store.IsRowVerdict(err) {
-		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s run %q has no supported work unit: %w (%w)",
+		return domain.WorkUnitCompletion{}, domain.WorkUnitPRBinding{}, fmt.Errorf("milestone %s run %q has no supported work unit: %w (%w)",
 			milestone.Kind, runID, domain.ErrParentKeyMismatch, err)
 	}
 	if err != nil {
-		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		return domain.WorkUnitCompletion{}, domain.WorkUnitPRBinding{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 	}
 	completion, err := tx.GetWorkUnitCompletion(ctx, declaration.ID)
 	if store.IsRowVerdict(err) {
@@ -1623,20 +1630,21 @@ func authenticatedWorkUnitCompletion(
 		// the listing reads exclude it instead of failing the whole request.
 		// Any other error is infrastructure and propagates unwrapped, so a
 		// transient failure never reads as an integrity contradiction.
-		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s has no supported completion record: %w (%w)",
+		return domain.WorkUnitCompletion{}, domain.WorkUnitPRBinding{}, fmt.Errorf("milestone %s has no supported completion record: %w (%w)",
 			milestone.Kind, domain.ErrParentKeyMismatch, err)
 	}
 	if err != nil {
-		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		return domain.WorkUnitCompletion{}, domain.WorkUnitPRBinding{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 	}
 	if !completion.RecordedAt.Equal(milestone.RecordedAt) {
-		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s instant disagrees with the completion record: %w",
+		return domain.WorkUnitCompletion{}, domain.WorkUnitPRBinding{}, fmt.Errorf("milestone %s instant disagrees with the completion record: %w",
 			milestone.Kind, domain.ErrParentKeyMismatch)
 	}
-	if err := authenticatedCompletionPRBinding(ctx, tx, runID, declaration.ID); err != nil {
-		return domain.WorkUnitCompletion{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+	binding, err := authenticatedCompletionPRBinding(ctx, tx, runID, declaration.ID)
+	if err != nil {
+		return domain.WorkUnitCompletion{}, domain.WorkUnitPRBinding{}, fmt.Errorf("milestone %s: %w", milestone.Kind, err)
 	}
-	return completion, nil
+	return completion, binding, nil
 }
 
 // authenticatedCompletionPRBinding requires the work-unit binding the
@@ -1649,42 +1657,42 @@ func authenticatedWorkUnitCompletion(
 // makes the same comparison before it observes anything through the binding
 // (scheduler.go, "work-unit binding disagrees with ready resource"), but a
 // write-time check is not read-time evidence, which is the whole reason the
-// store re-gates on read.
+// store re-gates on read. It returns the effective binding it checked.
 func authenticatedCompletionPRBinding(
 	ctx context.Context, tx *store.ReadTx, runID domain.RunID, unitID domain.WorkUnitID,
-) error {
+) (domain.WorkUnitPRBinding, error) {
 	binding, err := tx.EffectiveWorkUnitPRBinding(ctx, unitID)
 	if store.IsRowVerdict(err) {
-		return fmt.Errorf("work unit %s has no supported pr binding: %w (%w)",
+		return domain.WorkUnitPRBinding{}, fmt.Errorf("work unit %s has no supported pr binding: %w (%w)",
 			unitID, domain.ErrParentKeyMismatch, err)
 	}
 	if err != nil {
-		return err
+		return domain.WorkUnitPRBinding{}, err
 	}
 	itemID, err := tx.PublishedProductionReadyItemID(ctx, runID)
 	if err != nil {
-		return err
+		return domain.WorkUnitPRBinding{}, err
 	}
 	ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
 	if store.IsRowVerdict(err) {
-		return fmt.Errorf("run %q has no supported ready resource binding: %w (%w)",
+		return domain.WorkUnitPRBinding{}, fmt.Errorf("run %q has no supported ready resource binding: %w (%w)",
 			runID, domain.ErrParentKeyMismatch, err)
 	}
 	if err != nil {
-		return err
+		return domain.WorkUnitPRBinding{}, err
 	}
 	// A proven rebase moves the work-unit head past the published one
 	// (issue #2129); the store re-gates that move on this read.
 	covers, err := tx.WorkUnitBindingCovers(ctx, binding, ready.HeadSHA)
 	if err != nil {
-		return err
+		return domain.WorkUnitPRBinding{}, err
 	}
 	if ready.RunID != runID || binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
 		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef || !covers {
-		return fmt.Errorf("work-unit binding %s disagrees with ready resource %s: %w",
+		return domain.WorkUnitPRBinding{}, fmt.Errorf("work-unit binding %s disagrees with ready resource %s: %w",
 			binding.UnitID, ready.ItemID, domain.ErrParentKeyMismatch)
 	}
-	return nil
+	return binding, nil
 }
 
 // projectRunSnapshot re-derives one run's authenticated observation projection

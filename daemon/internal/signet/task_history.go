@@ -119,7 +119,7 @@ func taskHistoryEvents(
 		for _, reentry := range input.externalReentries {
 			events = append(events, domain.TaskEvent{
 				Kind: domain.TaskEventExternalReviewReentered, RecordedAt: reentry.predecessor.Conclusion.ConcludedAt,
-				RunID: &input.run.ID, PRNumber: &reentry.prNumber,
+				RunID: &input.run.ID, PRNumber: &reentry.pr.Number, PRReference: &reentry.pr,
 				ExternalReview: &domain.TaskEventExternalReview{
 					ItemID: reentry.predecessor.ID, FindingID: reentry.finding.ID,
 					ReviewerLogin: reentry.finding.External.ReviewerLogin,

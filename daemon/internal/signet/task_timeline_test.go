@@ -619,7 +619,9 @@ func TestTaskTimelineAuthenticatesOpenedPRWithoutCompletionMilestone(t *testing.
 			}
 			events := timeline.Sections[0].Runs[0].Events
 			if len(events) != 1 || events[0].Kind != domain.TaskEventPROpened ||
-				*events[0].PRNumber != corpusReadyPRNumber || !events[0].RecordedAt.Equal(f.at.Add(time.Hour)) {
+				*events[0].PRNumber != corpusReadyPRNumber || !events[0].RecordedAt.Equal(f.at.Add(time.Hour)) ||
+				events[0].PRReference == nil ||
+				*events[0].PRReference != (domain.PRReference{Repo: "owner/repo", Number: corpusReadyPRNumber}) {
 				t.Fatalf("opened events = %+v", events)
 			}
 		})
