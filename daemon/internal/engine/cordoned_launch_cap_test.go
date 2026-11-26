@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -103,8 +104,18 @@ func TestCordonedDispatchWaitsForACapAndReservesNoMemory(t *testing.T) {
 	if _, err := engine.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if hold := storedRunHold(t, f.store, runID); hold == nil || hold.Reason != domain.HoldCordonedLaunchCap {
+	hold := storedRunHold(t, f.store, runID)
+	if hold == nil || hold.Reason != domain.HoldCordonedLaunchCap {
 		t.Fatalf("hold = %+v, want cordoned_launch_cap", hold)
+	}
+	// No cap set reads as the daemon's host with a full count of 0.
+	wantFact := domain.CordonedLaunchHold{Hosts: []domain.CordonedLaunchHost{{
+		HostID:        domain.DaemonHostID,
+		Conditions:    []domain.ExecutionHostCondition{domain.ExecutionHostCordonedCountFull},
+		CordonedCount: &domain.CordonedLaunchCount{Running: 0, Limit: 0},
+	}}}
+	if hold.CordonedLaunch == nil || !reflect.DeepEqual(*hold.CordonedLaunch, wantFact) {
+		t.Fatalf("hold fact = %+v, want %+v", hold.CordonedLaunch, wantFact)
 	}
 	if _, started := driver.StartSpec(id); started {
 		t.Fatal("a cordoned dispatch started with no cap set")

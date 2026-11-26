@@ -53,7 +53,7 @@ const (
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
 			quota_reading_observed_at, quota_resets_at, quota_set_at, quota_alternate_agents,
 			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
-			first_observed_at, last_observed_at
+			cordoned_launch, first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
 	replaceRunHoldSQL = `INSERT INTO run_hold_observations
 		(run_id, invocation_id, reason,
@@ -63,8 +63,8 @@ const (
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
 			quota_reading_observed_at, quota_resets_at, quota_set_at, quota_alternate_agents,
 			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
-			first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			cordoned_launch, first_observed_at, last_observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
@@ -91,6 +91,7 @@ const (
 			capacity_reserved_mib = excluded.capacity_reserved_mib,
 			capacity_budget_mib = excluded.capacity_budget_mib,
 			capacity_ahead = excluded.capacity_ahead,
+			cordoned_launch = excluded.cordoned_launch,
 			first_observed_at = excluded.first_observed_at,
 			last_observed_at = excluded.last_observed_at`
 	clearRunHoldSQL      = `DELETE FROM run_hold_observations WHERE run_id = ?`
@@ -292,11 +293,19 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 		capacityReservation, capacityReserved = c.ReservationMiB, c.ReservedMiB
 		capacityBudget, capacityAhead = c.BudgetMiB, c.Ahead
 	}
+	var cordonedLaunch any
+	if c := h.CordonedLaunch; c != nil {
+		body, err := json.Marshal(c)
+		if err != nil {
+			return fmt.Errorf("record run hold %s cordoned launch: %w", h.RunID, err)
+		}
+		cordonedLaunch = string(body)
+	}
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
 		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest, unservedPart, unservedEnrollment,
 		pending, refusal, item, task, usagePool,
 		quotaPool, quotaWindow, quotaSource, quotaInvocation, quotaReadingAt, quotaResetsAt, quotaSetAt, quotaAlternates,
-		capacityReservation, capacityReserved, capacityBudget, capacityAhead,
+		capacityReservation, capacityReserved, capacityBudget, capacityAhead, cordonedLaunch,
 		formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
 	}
@@ -486,6 +495,7 @@ func (tx *ReadTx) GetRunHold(
 		quotaPool, quotaWindow, quotaSource           sql.NullString
 		quotaInvocation, quotaReadingAt               sql.NullString
 		quotaResetsAt, quotaSetAt, quotaAlternates    sql.NullString
+		cordonedLaunch                                sql.NullString
 		capacityReservation, capacityReserved         sql.NullInt64
 		capacityBudget, capacityAhead                 sql.NullInt64
 	)
@@ -496,7 +506,7 @@ func (tx *ReadTx) GetRunHold(
 			&quotaPool, &quotaWindow, &quotaSource, &quotaInvocation, &quotaReadingAt, &quotaResetsAt, &quotaSetAt,
 			&quotaAlternates,
 			&capacityReservation, &capacityReserved, &capacityBudget, &capacityAhead,
-			&first, &last)
+			&cordonedLaunch, &first, &last)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return domain.RunHoldObservation{}, false, nil
@@ -592,6 +602,14 @@ func (tx *ReadTx) GetRunHold(
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
 	}
 	h.MachineCapacity = capacity
+	if cordonedLaunch.Valid {
+		// Validate on the whole hold checks the decoded fact and its reason.
+		h.CordonedLaunch = new(domain.CordonedLaunchHold)
+		if err := json.Unmarshal([]byte(cordonedLaunch.String), h.CordonedLaunch); err != nil {
+			return domain.RunHoldObservation{}, false,
+				fmt.Errorf("get run hold %s cordoned_launch: %w", runID, errRowInconsistent)
+		}
+	}
 	if err := h.Validate(); err != nil {
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -135,11 +136,33 @@ func recordCordonedWait(t *testing.T, st *Store, name string) {
 	}
 }
 
-func wantCordonedCapRefusal(t *testing.T, err error, when string) {
+// wantCordonedCapRefusal fails t unless err is the cap's refusal carrying
+// want, the fact the run's hold records.
+func wantCordonedCapRefusal(t *testing.T, err error, when string, want domain.CordonedLaunchHold) {
 	t.Helper()
 	if !errors.Is(err, domain.ErrCordonedLaunchCap) {
 		t.Fatalf("%s: admission = %v, want ErrCordonedLaunchCap", when, err)
 	}
+	var refusal *domain.CordonedLaunchCapError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("%s: admission = %v, want a *domain.CordonedLaunchCapError", when, err)
+	}
+	if !reflect.DeepEqual(refusal.Hold, want) {
+		t.Fatalf("%s: hold fact = %+v, want %+v", when, refusal.Hold, want)
+	}
+	if err := refusal.Hold.Validate(); err != nil {
+		t.Fatalf("%s: hold fact Validate = %v", when, err)
+	}
+}
+
+// fullDaemonHost is the cap's fact for the daemon's host when its count is
+// full: running launches against limit, 0 when no cap is set.
+func fullDaemonHost(running, limit int) domain.CordonedLaunchHold {
+	return domain.CordonedLaunchHold{Hosts: []domain.CordonedLaunchHost{{
+		HostID:        domain.DaemonHostID,
+		Conditions:    []domain.ExecutionHostCondition{domain.ExecutionHostCordonedCountFull},
+		CordonedCount: &domain.CordonedLaunchCount{Running: running, Limit: limit},
+	}}}
 }
 
 // TestCordonedLaunchCapRefusesWithNoCapAndAtTheCap: with no cap set no
@@ -151,7 +174,7 @@ func TestCordonedLaunchCapRefusesWithNoCapAndAtTheCap(t *testing.T) {
 	st := cordonedCapStore(t, "1-first", "2-second")
 	first := cordonedCapAdmission(t, "1-first", domain.BackendCordonedHostProcess)
 	second := cordonedCapAdmission(t, "2-second", domain.BackendCordonedHostProcess)
-	wantCordonedCapRefusal(t, admitCordonedCap(t, st, first), "no cap set")
+	wantCordonedCapRefusal(t, admitCordonedCap(t, st, first), "no cap set", fullDaemonHost(0, 0))
 
 	setCordonedCap(t, st, 1)
 	if err := admitCordonedCap(t, st, first); err != nil {
@@ -160,7 +183,7 @@ func TestCordonedLaunchCapRefusesWithNoCapAndAtTheCap(t *testing.T) {
 	if err := admitCordonedCap(t, st, first); err != nil {
 		t.Fatalf("replay of the running launch at the cap: %v", err)
 	}
-	wantCordonedCapRefusal(t, admitCordonedCap(t, st, second), "a second launch at a cap of one")
+	wantCordonedCapRefusal(t, admitCordonedCap(t, st, second), "a second launch at a cap of one", fullDaemonHost(1, 1))
 
 	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
 		InvocationID: first.InvocationID, AdmissionID: first.ID,
@@ -182,14 +205,24 @@ func TestCordonedLaunchCapRefusesWithNoCapAndAtTheCap(t *testing.T) {
 
 // TestCordonedLaunchCapGrantsInTaskSubmissionOrder: a place that frees goes
 // to the older task's waiting launch, not a newer one that asks first, and
-// the older launch's admission ends its wait.
+// the older launch's admission ends its wait. A full host's refusal counts
+// the older launch ahead too.
 func TestCordonedLaunchCapGrantsInTaskSubmissionOrder(t *testing.T) {
 	t.Parallel()
 	st := cordonedCapStore(t, "1-older", "2-newer")
-	setCordonedCap(t, st, 1)
 	recordCordonedWait(t, st, "1-older")
 	newer := cordonedCapAdmission(t, "2-newer", domain.BackendCordonedHostProcess)
-	wantCordonedCapRefusal(t, admitCordonedCap(t, st, newer), "a newer launch behind an older wait")
+	fullBehindOlder := fullDaemonHost(0, 0)
+	fullBehindOlder.Ahead = 1
+	wantCordonedCapRefusal(t, admitCordonedCap(t, st, newer), "a newer launch with no cap set behind an older wait",
+		fullBehindOlder)
+
+	setCordonedCap(t, st, 1)
+	wantCordonedCapRefusal(t, admitCordonedCap(t, st, newer), "a newer launch behind an older wait",
+		domain.CordonedLaunchHold{
+			Hosts: []domain.CordonedLaunchHost{{HostID: domain.DaemonHostID, Conditions: []domain.ExecutionHostCondition{}}},
+			Ahead: 1,
+		})
 
 	if err := admitCordonedCap(t, st, cordonedCapAdmission(t, "1-older", domain.BackendCordonedHostProcess)); err != nil {
 		t.Fatalf("older launch under the cap: %v", err)
@@ -260,5 +293,39 @@ func TestCordonedLaunchCapPassesARunningLaunchItReads(t *testing.T) {
 		return tx.RequireCordonedLaunchCap(context.Background(), running)
 	}); err != nil {
 		t.Fatalf("running launch under a cleared cap: %v", err)
+	}
+}
+
+// TestRunHoldCordonedLaunchRoundTrip: a cordoned_launch_cap hold's fact
+// round-trips, and one recorded without a fact, as every hold before the
+// fact existed was, reads back without one.
+func TestRunHoldCordonedLaunchRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "run-hold-cordoned.db"), Options{})
+	closed := fullDaemonHost(2, 2)
+	closed.Hosts = append(closed.Hosts, domain.CordonedLaunchHost{
+		HostID: "mac-studio", Conditions: []domain.ExecutionHostCondition{domain.ExecutionHostUnreachable},
+	})
+	for name, fact := range map[string]*domain.CordonedLaunchHold{"with a fact": &closed, "without one": nil} {
+		want := domain.RunHoldObservation{
+			RunID: domain.RunID("run-" + name), InvocationID: new(domain.InvocationID("inv-1")),
+			Reason: domain.HoldCordonedLaunchCap, CordonedLaunch: fact,
+			FirstObservedAt: cordonedCapAt, LastObservedAt: cordonedCapAt,
+		}
+		if err := st.Write(ctx, func(tx *WriteTx) error { return tx.RecordRunHold(ctx, want) }); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var got domain.RunHoldObservation
+		if err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			got, _, err = tx.GetRunHold(ctx, want.RunID)
+			return err
+		}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: hold = %+v, want %+v", name, got, want)
+		}
 	}
 }
