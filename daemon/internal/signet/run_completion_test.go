@@ -173,7 +173,8 @@ func TestRunObservationCompletedBaseline(t *testing.T) {
 	}
 
 	wantFacts := signet.WorkUnitCompletionFacts{
-		PRNumber: 123, MergeCommitSHA: "feedface",
+		PRReference: domain.PRReference{Repo: "owner/repo", Number: 123},
+		PRNumber:    123, MergeCommitSHA: "feedface",
 		BoundIssue: ptr(corpusCompletionBoundIssue), RecordedAt: completion.RecordedAt,
 	}
 	assertFacts := func(t *testing.T, name string, got *signet.WorkUnitCompletionFacts) {
@@ -181,7 +182,8 @@ func TestRunObservationCompletedBaseline(t *testing.T) {
 		if got == nil || got.BoundIssue == nil {
 			t.Fatalf("%s completion = %+v, want %+v", name, got, wantFacts)
 		}
-		if got.PRNumber != wantFacts.PRNumber || got.MergeCommitSHA != wantFacts.MergeCommitSHA ||
+		if got.PRReference != wantFacts.PRReference ||
+			got.PRNumber != wantFacts.PRNumber || got.MergeCommitSHA != wantFacts.MergeCommitSHA ||
 			*got.BoundIssue != *wantFacts.BoundIssue || !got.RecordedAt.Equal(wantFacts.RecordedAt) {
 			t.Fatalf("%s completion = %+v, want %+v", name, *got, wantFacts)
 		}

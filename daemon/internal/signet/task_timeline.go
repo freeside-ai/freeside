@@ -62,7 +62,7 @@ type taskTimelineInput struct {
 type taskTimelineExternalReentry struct {
 	successor   domain.PublicationSuccessor
 	predecessor domain.AttentionItem
-	prNumber    int
+	pr          domain.PRReference
 	finding     domain.Finding
 }
 
@@ -318,7 +318,8 @@ func taskTimelineExternalReentries(
 			return nil, fmt.Errorf("external review re-entry predecessor %s binding: %w", predecessor.ID, domain.ErrParentKeyMismatch)
 		}
 		out = append(out, taskTimelineExternalReentry{
-			successor: successor, predecessor: predecessor, prNumber: binding.PRNumber, finding: finding,
+			successor: successor, predecessor: predecessor, finding: finding,
+			pr: domain.PRReference{Repo: binding.Repo, Number: binding.PRNumber},
 		})
 	}
 	return out, nil
@@ -348,7 +349,7 @@ func taskTimelinePRBinding(ctx context.Context, tx *store.ReadTx, runID domain.R
 	// Re-anchor the PR to its published resource, as completion does. Keep
 	// the original binding's instant through successor republication; the
 	// event describes opening the PR, not its latest head update.
-	if err := authenticatedCompletionPRBinding(ctx, tx, runID, declaration.ID); err != nil {
+	if _, err := authenticatedCompletionPRBinding(ctx, tx, runID, declaration.ID); err != nil {
 		return nil, asRunObservationIntegrityError(err)
 	}
 	return &binding, nil
@@ -432,12 +433,14 @@ func taskTimeline(
 		if binding := input.prBinding; binding != nil {
 			entry.Events = append(entry.Events, domain.TaskEvent{
 				Kind: domain.TaskEventPROpened, RecordedAt: binding.RecordedAt, RunID: &run.ID, PRNumber: &binding.PRNumber,
+				PRReference: &domain.PRReference{Repo: binding.Repo, Number: binding.PRNumber},
 			})
 		}
 		if completion := input.facts.completion; completion != nil {
 			entry.Events = append(entry.Events, domain.TaskEvent{
 				Kind: domain.TaskEventPRMerged, RecordedAt: completion.RecordedAt, RunID: &run.ID,
-				PRNumber: &completion.PRNumber, MergeCommitSHA: &completion.MergeCommitSHA,
+				PRNumber: &completion.PRNumber, PRReference: &completion.PRReference,
+				MergeCommitSHA: &completion.MergeCommitSHA,
 			})
 		}
 		slices.SortStableFunc(entry.Milestones, func(a, b domain.RunMilestone) int { return b.RecordedAt.Compare(a.RecordedAt) })

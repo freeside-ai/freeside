@@ -604,7 +604,7 @@ func TestTaskTimelineShowsExternalReviewReentry(t *testing.T) {
 	pr := 450
 	want := []domain.TaskEvent{{
 		Kind: domain.TaskEventExternalReviewReentered, RecordedAt: withdrawn.Conclusion.ConcludedAt,
-		RunID: &runID, PRNumber: &pr,
+		RunID: &runID, PRNumber: &pr, PRReference: &domain.PRReference{Repo: "owner/repo", Number: pr},
 		ExternalReview: &domain.TaskEventExternalReview{
 			ItemID: item.ID, FindingID: trigger.ID, ReviewerLogin: externalTestMaintainerLogin,
 			Round: 2, HeadSHA: reentryTestHead,

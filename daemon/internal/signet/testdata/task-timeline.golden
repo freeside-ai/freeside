@@ -30,6 +30,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -46,6 +47,7 @@
       "approved_spec_digest": "sha256:spec-2",
       "specification_run_id": "run-spec-2",
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -62,6 +64,7 @@
       "approved_spec_digest": null,
       "specification_run_id": "run-spec-2",
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -86,6 +89,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -102,6 +106,10 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": 73,
+      "pr_reference": {
+        "repo": "owner/repo",
+        "number": 73
+      },
       "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
@@ -126,6 +134,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -150,6 +159,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -172,6 +182,10 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": 73,
+      "pr_reference": {
+        "repo": "owner/repo",
+        "number": 73
+      },
       "merge_commit_sha": null
     },
     {
@@ -188,6 +202,10 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": 73,
+      "pr_reference": {
+        "repo": "owner/repo",
+        "number": 73
+      },
       "merge_commit_sha": null
     },
     {
@@ -212,6 +230,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -236,6 +255,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -260,6 +280,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -284,6 +305,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -308,6 +330,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -332,6 +355,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -348,6 +372,7 @@
       "approved_spec_digest": "sha256:spec-1",
       "specification_run_id": "run-spec-1",
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -401,6 +426,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -422,6 +448,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -438,6 +465,7 @@
       "approved_spec_digest": null,
       "specification_run_id": "run-spec-1",
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -462,6 +490,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -478,6 +507,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     },
     {
@@ -504,6 +534,7 @@
       "approved_spec_digest": null,
       "specification_run_id": null,
       "pr_number": null,
+      "pr_reference": null,
       "merge_commit_sha": null
     }
   ],
@@ -525,6 +556,7 @@
           "approved_spec_digest": "sha256:spec-2",
           "specification_run_id": "run-spec-2",
           "pr_number": null,
+          "pr_reference": null,
           "merge_commit_sha": null
         },
         {
@@ -541,6 +573,7 @@
           "approved_spec_digest": null,
           "specification_run_id": "run-spec-2",
           "pr_number": null,
+          "pr_reference": null,
           "merge_commit_sha": null
         }
       ],
@@ -622,6 +655,7 @@
           "approved_spec_digest": "sha256:spec-1",
           "specification_run_id": "run-spec-1",
           "pr_number": null,
+          "pr_reference": null,
           "merge_commit_sha": null
         },
         {
@@ -638,6 +672,7 @@
           "approved_spec_digest": null,
           "specification_run_id": "run-spec-1",
           "pr_number": null,
+          "pr_reference": null,
           "merge_commit_sha": null
         }
       ],
@@ -757,6 +792,10 @@
               "approved_spec_digest": null,
               "specification_run_id": null,
               "pr_number": 73,
+              "pr_reference": {
+                "repo": "owner/repo",
+                "number": 73
+              },
               "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             {
@@ -773,6 +812,10 @@
               "approved_spec_digest": null,
               "specification_run_id": null,
               "pr_number": 73,
+              "pr_reference": {
+                "repo": "owner/repo",
+                "number": 73
+              },
               "merge_commit_sha": null
             }
           ],

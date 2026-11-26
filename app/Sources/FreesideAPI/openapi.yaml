@@ -3464,6 +3464,7 @@ components:
             approved_spec_digest: null
             specification_run_id: null
             pr_number: null
+            pr_reference: null
             merge_commit_sha: null
             milestone: null
             review: null
@@ -3601,6 +3602,11 @@ components:
         triage record (plan §5.13), at its recorded_at. Its reason is
         advisory, for display only.
         All other details are null. Events are observations, never authority.
+        Every event that carries pr_number (pr_opened, pr_merged and
+        external_review_reentered) also carries pr_reference, whose number
+        equals pr_number; it is null on every other kind. Every daemon that
+        has pr_reference serves it. It is optional so an app still reads the
+        timeline from a daemon built before the field existed.
       required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review, line, triage]
       properties:
         milestone:
@@ -3652,6 +3658,14 @@ components:
           type: integer
           minimum: 1
           nullable: true
+        pr_reference:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PRReference"
+          description: >
+            The repository and number of the event's pull request, from the
+            daemon's recorded PR binding. When present, it is null exactly
+            when pr_number is null.
         merge_commit_sha:
           type: string
           minLength: 1
@@ -3664,6 +3678,7 @@ components:
         approved_spec_digest: null
         specification_run_id: null
         pr_number: null
+        pr_reference: null
         merge_commit_sha: null
         milestone: null
         review: null
@@ -4469,11 +4484,20 @@ components:
         unit's completion criterion, the merge commit, the bound issue when
         the criterion names one, and the instant the daemon recorded the
         completion. The milestone itself carries none of these.
+        pr_reference is the same PR with its repository. Every daemon that
+        has the field serves it. It is optional so an app still reads the
+        facts from a daemon built before the field existed.
       required: [pr_number, merge_commit_sha, bound_issue, recorded_at]
       properties:
         pr_number:
           type: integer
           minimum: 1
+        pr_reference:
+          allOf:
+            - $ref: "#/components/schemas/PRReference"
+          description: >
+            The merged PR's repository and number, from the daemon's recorded
+            PR binding. Its number equals pr_number. Never null when present.
         merge_commit_sha:
           type: string
           minLength: 1
@@ -4489,6 +4513,7 @@ components:
           format: date-time
       example:
         pr_number: 105
+        pr_reference: {repo: owner/repo, number: 105}
         merge_commit_sha: "5555555555555555555555555555555555555555"
         bound_issue: 80
         recorded_at: "2026-09-04T15:04:05Z"

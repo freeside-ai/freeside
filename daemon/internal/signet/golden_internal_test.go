@@ -95,7 +95,8 @@ func TestSignetWireGoldens(t *testing.T) {
 	boundIssue := 724
 	facts := runProjectionFacts{
 		completion: &WorkUnitCompletionFacts{
-			PRNumber: 725, MergeCommitSHA: strings.Repeat("5", 40),
+			PRReference: domain.PRReference{Repo: "owner/repo", Number: 725},
+			PRNumber:    725, MergeCommitSHA: strings.Repeat("5", 40),
 			BoundIssue: &boundIssue, RecordedAt: mergedAt,
 		},
 		cost: &domain.CostSoFar{Currency: "USD", Amount: "17.5", Invocations: 1, Complete: true},
