@@ -177,6 +177,14 @@ public actor MockServer {
     /// beside the device row, so setting it moves the server revision but
     /// not the device's entity version, and a device with none is off.
     private var notificationsEnabledByDeviceID: [String: Bool] = [:]
+    /// What `POST /devices/{device_id}/test-notification` answers for the
+    /// calling device. Defaults to `.accepted`.
+    public enum TestNotificationAnswer: Equatable, Sendable {
+        case outcome(Components.Schemas.DeviceTestNotification)
+        case tooRecent(retryAfter: Int = 30)
+    }
+    private var testNotificationAnswer: TestNotificationAnswer = .outcome(
+        .init(outcome: .accepted, provider_status: nil, transport_failure: nil))
     /// Pairing-grant test hooks. Defaults satisfy the contract; callers can
     /// inject malformed values to exercise client-side returned-object gates.
     private let pairingNtfyServerURL: String
@@ -936,6 +944,29 @@ public actor MockServer {
             notificationsEnabledByDeviceID[id] = enabled
         }
         return listEntry(id: id).map { .set($0) } ?? .unknown
+    }
+
+    /// Configures what `POST /devices/{device_id}/test-notification` returns
+    /// for an active calling device, so tests can exercise every outcome and
+    /// the 429 rate-limit refusal.
+    public func setTestNotificationAnswer(_ answer: TestNotificationAnswer) {
+        testNotificationAnswer = answer
+    }
+
+    enum DeviceTestNotificationResult {
+        case ok(Components.Schemas.DeviceTestNotification)
+        case tooManyRequests(retryAfter: Int)
+        case inactive
+        case notFound
+    }
+
+    func sendDeviceTestNotification(id: String) -> DeviceTestNotificationResult {
+        guard let current = devicesByID[id] else { return .notFound }
+        guard case .active = current.device else { return .inactive }
+        switch testNotificationAnswer {
+        case .outcome(let body): return .ok(body)
+        case .tooRecent(let retryAfter): return .tooManyRequests(retryAfter: retryAfter)
+        }
     }
 
     private static func id(of device: Components.Schemas.Device) -> String {

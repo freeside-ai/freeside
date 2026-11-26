@@ -81,6 +81,7 @@ func (h httpHandler) routes() []httpRoute {
 		{"GET /devices", h.authenticated(h.listDevices)},
 		{"POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice)},
 		{"PUT /devices/{device_id}/notifications", h.authenticated(h.setDeviceNotifications)},
+		{"POST /devices/{device_id}/test-notification", h.authenticated(h.sendDeviceTestNotification)},
 		{"GET /sync/bootstrap", h.authenticated(h.getBootstrap)},
 		{"GET /sync/revision", h.authenticated(h.getRevision)},
 		{"GET /restart-readiness", h.authenticated(h.getRestartReadiness)},

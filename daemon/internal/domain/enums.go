@@ -2970,6 +2970,8 @@ const (
 	DaemonFeatureQuestionOptionAnswers DaemonFeature = "question_option_answers"
 	// DaemonFeatureExecutionHosts is the GET /execution-hosts read.
 	DaemonFeatureExecutionHosts DaemonFeature = "execution_hosts"
+	// DaemonFeatureDeviceTestNotification is POST /devices/{device_id}/test-notification.
+	DaemonFeatureDeviceTestNotification DaemonFeature = "device_test_notification"
 )
 
 // AllDaemonFeatures lists every feature this build serves; it is the single
@@ -2979,12 +2981,13 @@ var AllDaemonFeatures = []DaemonFeature{
 	DaemonFeatureWorkHours,
 	DaemonFeatureQuestionOptionAnswers,
 	DaemonFeatureExecutionHosts,
+	DaemonFeatureDeviceTestNotification,
 }
 
 func (f DaemonFeature) valid() bool {
 	switch f {
 	case DaemonFeatureParkedTaskMove, DaemonFeatureWorkHours, DaemonFeatureQuestionOptionAnswers,
-		DaemonFeatureExecutionHosts:
+		DaemonFeatureExecutionHosts, DaemonFeatureDeviceTestNotification:
 		return true
 	default:
 		return false

@@ -1189,6 +1189,57 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /devices/{device_id}/test-notification:
+    post:
+      operationId: sendDeviceTestNotification
+      tags: [devices]
+      summary: Send one test notification to the calling device
+      description: |
+        Publishes one test notification to the calling device's ntfy topic so
+        notification setup can finish on the phone without running
+        `freesided notify-test` on the daemon host. The notification carries
+        the `freeside://inbox` link, writes no delivery row, moves no server
+        revision, and ignores the device's notifications switch, as the host
+        command does. The path device must equal the authenticated caller's
+        own device (else 404). Repeated publishes for one device are limited
+        by a minimum interval kept in daemon memory; a call that publishes
+        nothing (a refusal, or no configured notifier) does not start the
+        interval. No response body, header, log line, or error carries the
+        device's topic, publish URL, or ntfy access token.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+      responses:
+        "200":
+          description: The outcome of attempting to send the test notification.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceTestNotification"
+        "403":
+          description: >
+            The calling device was revoked after the request was
+            authenticated. Nothing was published.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: >
+            A test notification was already published for this device less
+            than the minimum interval ago. Nothing was published.
+          headers:
+            Retry-After:
+              description: Whole seconds until the next test notification is admitted.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /devices/{device_id}/capability-contract:
     put:
       operationId: registerCapabilityContract
@@ -7573,7 +7624,7 @@ components:
 
     DaemonFeature:
       type: string
-      enum: [parked_task_move, work_hours, question_option_answers, execution_hosts, unknown]
+      enum: [parked_task_move, work_hours, question_option_answers, execution_hosts, device_test_notification, unknown]
       description: >
         A feature a daemon build may serve, named in `/health`'s `features`
         so an app can turn off what an older daemon lacks. A name is
@@ -7583,6 +7634,7 @@ components:
         park). `work_hours`: the `GET /work-hours` read.
         `question_option_answers`: `question_answers` on an agent_question
         answer. `execution_hosts`: the `GET /execution-hosts` read.
+        `device_test_notification`: `POST /devices/{device_id}/test-notification`.
 
     PairingRequest:
       type: object
@@ -8277,6 +8329,56 @@ components:
           description: True to notify the device of new attention items.
       example:
         enabled: true
+
+    DeviceTestNotificationOutcome:
+      type: string
+      enum:
+        - accepted
+        - provider_rejected
+        - transport_failed
+        - notifier_unavailable
+        - unknown
+      description: >
+        The outcome of `POST /devices/{device_id}/test-notification`.
+        `accepted`: ntfy accepted the publish (never a claim that the phone
+        showed it). `provider_rejected`: ntfy returned a non-2xx HTTP status,
+        reported in `provider_status`. `transport_failed`: the publish got no
+        HTTP response, with the daemon's fixed failure class in
+        `transport_failure`. `notifier_unavailable`: the daemon has no usable
+        notification channel configured. `unknown`: the value a client decodes
+        a member it does not recognize as; the daemon never sends it.
+
+    DeviceTestNotification:
+      type: object
+      description: >
+        The outcome of attempting to send one test notification to the
+        calling device. Carries only the typed outcome and, when applicable,
+        the provider HTTP status or fixed failure class; never carries the
+        topic, publish URL, or access token.
+      required: [outcome, provider_status, transport_failure]
+      properties:
+        outcome:
+          $ref: "#/components/schemas/DeviceTestNotificationOutcome"
+        provider_status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          nullable: true
+          description: >
+            ntfy's HTTP status code when `outcome` is `provider_rejected`,
+            and null otherwise.
+        transport_failure:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The daemon's fixed description of the failure class (such as
+            `request timed out`) when `outcome` is `transport_failed`, and
+            null otherwise.
+      example:
+        outcome: accepted
+        provider_status: null
+        transport_failure: null
 
     ClientCapabilityContractInput:
       type: object
