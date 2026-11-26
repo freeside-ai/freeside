@@ -287,6 +287,9 @@ public enum AgentChoiceDisplay {
         /// Its pool's latest reading and when it was observed, or nil when
         /// no pool lists the enrollment.
         public let reading: String?
+        /// The same reading in parts, for the role picker's usage line;
+        /// nil when no pool lists the enrollment.
+        package let usage: EnrollmentUsage?
 
         /// The entry's text: the enrollment, `not discovered yet` when it
         /// has no discovery record, and its pool's reading.
@@ -308,7 +311,8 @@ public enum AgentChoiceDisplay {
                 id: enrollment.enrollment_id, isDiscovered: enrollment.discovery != nil,
                 isPickable: !models(on: enrollment.enrollment_id, catalog: catalog).isEmpty,
                 reading: reading(
-                    for: enrollment.enrollment_id, pools: pools, now: now, locale: locale, timeZone: timeZone))
+                    for: enrollment.enrollment_id, pools: pools, now: now, locale: locale, timeZone: timeZone),
+                usage: usage(for: enrollment.enrollment_id, pools: pools, now: now, locale: locale, timeZone: timeZone))
         }
     }
 
@@ -325,20 +329,82 @@ public enum AgentChoiceDisplay {
         locale: Locale = .current, timeZone: TimeZone = .current
     ) -> String? {
         guard let found = tightestWindow(for: enrollmentID, pools: pools, now: now) else { return nil }
-        let (pool, tightest, shown) = (found.pool, found.tightest, found.shown)
+        let when = readTime(found, now: now, locale: locale, timeZone: timeZone)
+        return ([found.tightest.map { "\($0.name): \($0.value)" }, when].compactMap(\.self))
+            .joined(separator: " · ")
+    }
+
+    /// An enrollment's reading in the parts the role picker's usage line
+    /// draws (#3675). It names the same window and time as `reading`.
+    package enum EnrollmentUsage: Equatable, Sendable {
+        /// The window with the least left, then the reset when the record
+        /// says, then when the reading was observed or went stale (the
+        /// collector's last attempt when the window has no reading).
+        case window(UsageDisplay.WindowCapacity, times: [String])
+        /// No window reading, and the provider reports none for the plan.
+        case unsupported
+        /// No window reading, and the collector's last attempt in words
+        /// (`refresh failed …`, `unrecognized reading …`, `no reading`).
+        case attempt(String)
+
+        package static let unsupportedSentence = "No usage reading: the provider reports none for this plan"
+
+        /// The times as one drawn line: `Resets Fri 2:40 AM · read …`.
+        package var timeLine: String? {
+            switch self {
+            case .window(_, let times): times.joined(separator: " · ")
+            case .unsupported: nil
+            case .attempt(let text): text
+            }
+        }
+
+        /// The whole line as VoiceOver reads it, as the row's value: the
+        /// window, its reading, and each time, comma-separated.
+        package var spoken: String {
+            switch self {
+            case .window(let capacity, let times): ([capacity.name, capacity.value] + times).joined(separator: ", ")
+            case .unsupported: Self.unsupportedSentence
+            case .attempt(let text): text
+            }
+        }
+    }
+
+    /// The reading of the pool that lists `enrollmentID`, in parts: the
+    /// window and time `reading` names, with the window's reset. Nil when
+    /// no pool lists the enrollment.
+    package static func usage(
+        for enrollmentID: String, pools: [Components.Schemas.UsagePoolSnapshot], now: Date,
+        locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> EnrollmentUsage? {
+        guard let found = tightestWindow(for: enrollmentID, pools: pools, now: now) else { return nil }
+        let when = readTime(found, now: now, locale: locale, timeZone: timeZone)
+        guard let tightest = found.tightest else {
+            // No window means no reading to go stale, so the attempt line
+            // here is the attempt itself.
+            return found.pool.last_attempt?.value1.status == .unsupported ? .unsupported : .attempt(when)
+        }
+        let reset = tightest.resetsAt.map {
+            UsageDisplay.resetLine(to: $0, now: now, locale: locale, timeZone: timeZone)
+        }
+        return .window(tightest, times: [reset, when].compactMap(\.self))
+    }
+
+    /// When the tightest window's reading was observed (`read 10:15 PM`),
+    /// or `stale since` once the client's clock passes its `stale_at`;
+    /// with no reading behind the window, the collector's last attempt.
+    private static func readTime(
+        _ found: TightestWindow, now: Date, locale: Locale, timeZone: TimeZone
+    ) -> String {
         func time(_ date: Date) -> String {
             FreesideFormat.shortTime(date, now: now, locale: locale, timeZone: timeZone)
         }
-        let when =
-            if let shown, let staleAt = shown.stale_at, UsageDisplay.isStale(shown, now: now) {
-                "stale since \(time(staleAt))"
-            } else if let shown {
-                "read \(time(shown.observed_at))"
-            } else {
-                UsageDisplay.attemptLine(pool, now: now, locale: locale, timeZone: timeZone).text
-            }
-        return ([tightest.map { "\($0.name): \($0.value)" }, when].compactMap(\.self))
-            .joined(separator: " · ")
+        return if let shown = found.shown, let staleAt = shown.stale_at, UsageDisplay.isStale(shown, now: now) {
+            "stale since \(time(staleAt))"
+        } else if let shown = found.shown {
+            "read \(time(shown.observed_at))"
+        } else {
+            UsageDisplay.attemptLine(found.pool, now: now, locale: locale, timeZone: timeZone).text
+        }
     }
 
     /// Whether the pool that lists `enrollmentID` has quota left by the
@@ -358,16 +424,18 @@ public enum AgentChoiceDisplay {
         }
     }
 
-    /// The pool that lists `enrollmentID`, its window with the least left,
-    /// and that window's reading, the one place `reading` and
-    /// `hasQuotaLeft` choose them, so the two can't name different
-    /// windows. Nil when no pool lists the enrollment.
-    private static func tightestWindow(
-        for enrollmentID: String, pools: [Components.Schemas.UsagePoolSnapshot], now: Date
-    ) -> (
+    private typealias TightestWindow = (
         pool: Components.Schemas.UsagePoolUsage, tightest: UsageDisplay.WindowCapacity?,
         shown: Components.Schemas.UsageWindowReading?
-    )? {
+    )
+
+    /// The pool that lists `enrollmentID`, its window with the least left,
+    /// and that window's reading, the one place `reading`, `usage`, and
+    /// `hasQuotaLeft` choose them, so they can't name different windows.
+    /// Nil when no pool lists the enrollment.
+    private static func tightestWindow(
+        for enrollmentID: String, pools: [Components.Schemas.UsagePoolSnapshot], now: Date
+    ) -> TightestWindow? {
         guard
             let pool = pools.first(where: { snapshot in
                 snapshot.pool.enrollments.contains { $0.enrollment_id == enrollmentID }

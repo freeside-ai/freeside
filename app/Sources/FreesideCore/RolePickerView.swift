@@ -33,6 +33,11 @@ struct RolePickerView: View {
     /// environment value.
     var now: Date? = nil
 
+    /// Reports where the Enrollment section and the scroll view end, in the
+    /// picker's own space, for the popover layout test (#3675); nil reports
+    /// nothing.
+    var layoutReport: ((RolePickerLayout.Part, CGRect) -> Void)? = nil
+
     @State private var picker: RolePicker
 
     init(
@@ -69,8 +74,14 @@ struct RolePickerView: View {
         VStack(spacing: 0) {
             header
             ScrollView { sections }
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named(RolePickerLayout.space))
+                } action: {
+                    layoutReport?(.scroll, $0)
+                }
             footer
         }
+        .coordinateSpace(.named(RolePickerLayout.space))
         .background(Color.ground2)
         .onChange(of: catalog) { picker.absorb(catalog: catalog) }
     }
@@ -107,15 +118,24 @@ struct RolePickerView: View {
                     accessibilityLabel: "\(title) enrollment",
                     options: current.enrollmentRows(
                         catalog: catalog, policy: policy, pools: pools, now: now, locale: locale, timeZone: timeZone
-                    ).map {
+                    ).map { row in
                         .init(
-                            value: $0.id, label: $0.label, consequence: $0.detail, register: .item,
-                            isEnabled: $0.isEnabled)
+                            value: row.id, label: row.label, consequence: row.detail, register: .item,
+                            isEnabled: row.isEnabled,
+                            detail: row.usage.map {
+                                AnyView(EnrollmentUsageLine(usage: $0, isEnabled: row.isEnabled))
+                            },
+                            accessibilityValue: row.usage?.spoken)
                     },
                     // A closure, not the method itself: Swift 6.3's IR
                     // generation crashes on the thunk that converts the
                     // isolated method to the binding's setter.
                     selection: Binding(get: { current.chosenRow }, set: { choose($0) }))
+            }
+            .onGeometryChange(for: CGRect.self) {
+                $0.frame(in: .named(RolePickerLayout.space))
+            } action: {
+                layoutReport?(.enrollment, $0)
             }
             section("Model") {
                 pills(current.modelPills(catalog: catalog), named: "model") {
@@ -232,6 +252,77 @@ struct RolePickerView: View {
     }
 }
 
+/// An enrollment row's usage line (#3675): the tightest window's name
+/// leading and its reading trailing, the Usage pane's meter under them
+/// where the reading has a percent, then the reset and read time on a
+/// faint mono line. With no window reading it draws the provider's
+/// sentence or the collector's last attempt alone. Hidden from VoiceOver:
+/// the row speaks `usage.spoken` as its value.
+private struct EnrollmentUsageLine: View {
+    let usage: AgentChoiceDisplay.EnrollmentUsage
+    let isEnabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            switch usage {
+            case .window(let capacity, _):
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        name(capacity)
+                        Spacer(minLength: 0)
+                        value(capacity)
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        name(capacity)
+                        value(capacity)
+                    }
+                }
+                if let left = capacity.left {
+                    CapacityMeter(left: left, level: capacity.level)
+                }
+            case .unsupported:
+                Text(AgentChoiceDisplay.EnrollmentUsage.unsupportedSentence)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(isEnabled ? Color.inkDim : Color.inkFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .attempt:
+                EmptyView()
+            }
+            if let timeLine = usage.timeLine {
+                Text(timeLine)
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(Color.inkFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityHidden(true)
+    }
+
+    private func name(_ capacity: UsageDisplay.WindowCapacity) -> some View {
+        Text(capacity.name)
+            .font(capacity.nameIsWindowID ? FreesideFont.monoValue : FreesideFont.factLabel)
+            .foregroundStyle(isEnabled ? Color.inkDim : Color.inkFaint)
+    }
+
+    /// The reading in `CapacityBlock`'s colours, so the colour always
+    /// carries a word; used up also reads semibold.
+    private func value(_ capacity: UsageDisplay.WindowCapacity) -> some View {
+        Text(capacity.value)
+            .font(capacity.level == .usedUp ? FreesideFont.strongMonoValue : FreesideFont.monoValue)
+            .foregroundStyle(isEnabled ? valueColor(capacity.level) : Color.inkFaint)
+    }
+
+    private func valueColor(_ level: UsageDisplay.WindowCapacity.Level) -> Color {
+        switch level {
+        case .low, .usedUp: .waxText
+        case .noReading: .inkDim
+        case .fine: .ink
+        }
+    }
+}
+
 /// A Model or Effort pill: R33's pill, marked with the accent while it is
 /// the pick, its text faint while it can't be picked. On the phone it
 /// takes a 44pt touch height around the drawn pill.
@@ -290,7 +381,7 @@ extension View {
 
     private func rolePickerContainer() -> some View {
         #if os(macOS)
-            frame(width: RolePickerLayout.popoverWidth).frame(maxHeight: 640)
+            frame(width: RolePickerLayout.popoverWidth).frame(maxHeight: RolePickerLayout.popoverMaxHeight)
         #else
             presentationDetents([.large]).freesideSheetPresentation()
         #endif
@@ -300,4 +391,16 @@ extension View {
 enum RolePickerLayout {
     /// The Mac popover's width, which the goldens draw too.
     static let popoverWidth: CGFloat = 420
+    /// The Mac popover's height cap; past it the sections scroll between
+    /// the fixed header and footer.
+    static let popoverMaxHeight: CGFloat = 640
+
+    /// The parts `RolePickerView.layoutReport` measures.
+    enum Part {
+        case enrollment
+        case scroll
+    }
+
+    /// The picker's own coordinate space, which `layoutReport` measures in.
+    static let space = "rolePicker"
 }

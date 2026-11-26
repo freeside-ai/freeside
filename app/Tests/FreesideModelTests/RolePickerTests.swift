@@ -17,9 +17,12 @@ import Testing
     private static let codex = UsageFixtures.unsupportedCollectorID
     private static let now = Date(timeIntervalSince1970: 1_786_502_400)
 
-    private func rows(_ picker: RolePicker, catalog: AgentChoiceDisplay.Catalog?) -> [RolePicker.EnrollmentRow] {
+    private func rows(
+        _ picker: RolePicker, catalog: AgentChoiceDisplay.Catalog?,
+        pools: [Components.Schemas.UsagePoolSnapshot] = UsageFixtures.defaultUsagePools()
+    ) -> [RolePicker.EnrollmentRow] {
         picker.enrollmentRows(
-            catalog: catalog, policy: policy, pools: UsageFixtures.defaultUsagePools(), now: Self.now,
+            catalog: catalog, policy: policy, pools: pools, now: Self.now,
             locale: Locale(identifier: "en_US_POSIX"), timeZone: TimeZone(identifier: "UTC")!)
     }
 
@@ -83,7 +86,9 @@ import Testing
         #expect(picker.chosenRow == .byName)
         let shown = rows(picker, catalog: catalog)
         #expect(shown.prefix(2).map(\.id) == [.lineup, .byName])
-        #expect(shown[1] == .init(id: .byName, label: "claude-primary", detail: "set by name", isEnabled: false))
+        #expect(
+            shown[1] == .init(id: .byName, label: "claude-primary", detail: "set by name", isEnabled: false, usage: nil)
+        )
         #expect(picker.modelPills(catalog: catalog).isEmpty && picker.effortPills(catalog: catalog).isEmpty)
         #expect(picker.confirmation(catalog: catalog) == .blocked("The implementer runs on this now."))
 
@@ -154,18 +159,59 @@ import Testing
         #expect(shown.map(\.id) == [.lineup, .enrollment(Self.mac), .enrollment(Self.mini), .enrollment(Self.codex)])
         #expect(shown[0].label == "Default")
         #expect(shown[0].detail == "lineup \(Self.mac) · Opus · high or routing policy")
-        #expect(shown[2].detail?.hasPrefix("not discovered yet") == true)
+        #expect(shown[0].usage == nil)
+        // The detail keeps only `not discovered yet`; the reading moved to
+        // the usage line (#3675).
+        #expect(shown.dropFirst().map(\.detail) == [nil, "not discovered yet", nil])
         #expect(
-            shown.dropFirst().map(\.detail)
+            shown.dropFirst().map(\.usage)
                 == AgentChoiceDisplay.enrollments(
                     catalog, pools: UsageFixtures.defaultUsagePools(), now: Self.now,
                     locale: Locale(identifier: "en_US_POSIX"), timeZone: TimeZone(identifier: "UTC")!
-                ).map { option in
-                    let parts = [option.isDiscovered ? nil : "not discovered yet", option.reading].compactMap(\.self)
-                    return parts.isEmpty ? nil : parts.joined(separator: " · ")
-                })
+                ).map(\.usage))
         let change = RolePicker.change(role: .implementer, current: nil, byName: nil, catalog: catalog)
         #expect(rows(change, catalog: catalog).first?.label == "Clear")
+    }
+
+    /// A used-up enrollment's usage line names its window, `Used up`, an
+    /// empty meter, and the reset then the read time, and VoiceOver reads
+    /// them as the row's one value (#3675).
+    @Test func aUsedUpEnrollmentShowsItsWindowAnEmptyMeterAndTheReset() throws {
+        let shown = rows(RolePicker.draft(role: .implementer, chosen: nil, catalog: catalog), catalog: catalog)
+        let usage = try #require(shown[1].usage)
+        guard case .window(let capacity, let times) = usage else {
+            Issue.record("expected a window")
+            return
+        }
+        #expect(capacity.name == "Weekly Opus" && capacity.value == "Used up")
+        #expect(capacity.left == 0 && capacity.level == .usedUp)
+        // The formatter puts a narrow no-break space before AM.
+        #expect(times.map { $0.replacing("\u{202F}", with: " ") } == ["Resets Fri 2:40 AM", "read Aug 12, 3:20 AM"])
+        #expect(
+            usage.spoken.replacing("\u{202F}", with: " ")
+                == "Weekly Opus, Used up, Resets Fri 2:40 AM, read Aug 12, 3:20 AM")
+        // The second enrollment on the pool reads the same line.
+        #expect(shown[2].usage == usage)
+    }
+
+    @Test func aLowEnrollmentShowsWhatIsLeftAndAFilledMeter() throws {
+        var pools = UsageFixtures.alternatesUsagePools(now: Self.now)
+        let current = try #require(pools.firstIndex { $0.pool.id == UsageFixtures.currentPoolID })
+        pools[current].pool.windows[0].used_percent = 90
+        let shown = rows(
+            RolePicker.draft(role: .implementer, chosen: nil, catalog: catalog), catalog: catalog, pools: pools)
+        guard case .window(let capacity, _) = shown[2].usage else {
+            Issue.record("expected a window")
+            return
+        }
+        #expect(capacity.name == "5-hour" && capacity.value == "10% left")
+        #expect(capacity.left == 10 && capacity.level == .low)
+    }
+
+    @Test func anEnrollmentWhoseProviderReportsNoUsageShowsTheSentence() {
+        let shown = rows(RolePicker.draft(role: .implementer, chosen: nil, catalog: catalog), catalog: catalog)
+        #expect(shown[3].id == .enrollment(Self.codex))
+        #expect(shown[3].usage == .unsupported)
     }
 
     /// With Default chosen the Model and Effort sections show the lineup's
@@ -222,7 +268,9 @@ import Testing
                 .enrollment("enrollment-new"),
             ])
         #expect(
-            shown[2] == .init(id: .enrollment(Self.mini), label: Self.mini, detail: "not offered", isEnabled: false))
+            shown[2]
+                == .init(
+                    id: .enrollment(Self.mini), label: Self.mini, detail: "not offered", isEnabled: false, usage: nil))
         let pills = picker.modelPills(catalog: newer)
         #expect(pills.map(\.id) == ["claude-opus", "claude-sonnet", "claude-haiku"])
         #expect(pills.map(\.isEnabled) == [true, false, true])
@@ -242,7 +290,7 @@ import Testing
             rows(picker, catalog: catalog).last
                 == .init(
                     id: .enrollment("enrollment-gone"), label: "enrollment-gone", detail: "not offered",
-                    isEnabled: false))
+                    isEnabled: false, usage: nil))
         #expect(
             picker.modelPills(catalog: catalog) == [
                 .init(id: "claude-opus", label: "claude-opus · not offered", isChosen: true, isEnabled: false)

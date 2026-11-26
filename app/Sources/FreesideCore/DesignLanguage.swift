@@ -532,6 +532,9 @@ enum FreesideFont {
     static var factLabel: Font { fixed("IBMPlexSans", ladder.label, relativeTo: .callout) }
     /// A fact's value.
     static var monoValue: Font { fixed("IBMPlexMono", ladder.monoValue, relativeTo: .callout) }
+    /// A fact's value in the semibold, for one that must stand out at a
+    /// glance: a used-up window in the role picker (#3675).
+    static var strongMonoValue: Font { fixed("IBMPlexMono-SmBld", ladder.monoValue, relativeTo: .callout) }
     /// The dim summary trailing a disclosure's label.
     static var trailingSummary: Font { fixed("IBMPlexMono", ladder.trailingSummary, relativeTo: .footnote) }
     static var actionLabel: Font { fixed("IBMPlexSans-Medm", ladder.actionLabel, relativeTo: .body) }
