@@ -1030,6 +1030,13 @@ import Testing
         #expect(rows.last?.value == claim.digest)
     }
 
+    /// A fold under an agent's quote is named by what it holds, on every
+    /// card: the report's text reads Full Report, metadata alone Source.
+    @Test func aQuoteFoldIsNamedByWhatItHolds() {
+        #expect(DecisionDetailView.QuoteFold.report.label == "Full Report")
+        #expect(DecisionDetailView.QuoteFold.source.label == "Source")
+    }
+
     @Test func reservedSummariesNeverRenderAsGenericClaims() throws {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
         let composition = DecisionCardComposition.forType(.ready_for_final_review)

@@ -1427,7 +1427,7 @@ struct DecisionDetailView: View {
                             .proseMeasure()
                         }
                         SentenceDisclosure(
-                            label: isFinalReview ? "Full Report" : "Source and Original Report",
+                            label: QuoteFold.report.label,
                             summary: Self.fullReportSummary(claim, presentation: presentation),
                             isExpanded: summaryReportExpanded(
                                 DecisionSummaryIdentity(itemID: item.id, claim: claim))
@@ -2272,7 +2272,7 @@ struct DecisionDetailView: View {
                 .proseMeasure()
         }
         SentenceDisclosure(
-            label: "Source and Supporting Details",
+            label: QuoteFold.source.label,
             isExpanded: disclosure(.claimSource(claim))
         ) {
             FactGroup(spacing: 6) {
@@ -2293,6 +2293,22 @@ struct DecisionDetailView: View {
     private func transcript(_ claim: Components.Schemas.AgentClaim) -> AttachmentRow.Transcript? {
         guard claim.label == AgentClaimLabels.agentTranscript, let item = model.snapshot?.item else { return nil }
         return runTimelines.transcript(for: item, invocationID: Self.producerInvocationID(claim))
+    }
+
+    /// What a fold under an agent's quote holds, which names it, so the
+    /// same control reads the same on every card.
+    enum QuoteFold {
+        /// The report's own text, with or without where it came from.
+        case report
+        /// Only metadata about where the quote came from.
+        case source
+
+        var label: String {
+            switch self {
+            case .report: "Full Report"
+            case .source: "Source"
+            }
+        }
     }
 
     static func claimSourceRows(
