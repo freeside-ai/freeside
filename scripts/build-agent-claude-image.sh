@@ -144,6 +144,7 @@ fi
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 context="$repo_root/images/agent-claude"
+binary="$context/freeside-commit-plan"
 registry_container=""
 
 # The Containerfile is the single source of the pin; an override still has to
@@ -176,6 +177,7 @@ remove_registry() {
 cleanup() {
 	status=$?
 	trap - EXIT
+	rm -f "$binary"
 	if ! remove_registry && [ "$status" -eq 0 ]; then
 		status=1
 	fi
@@ -201,6 +203,12 @@ if [ -n "${HTTPS_PROXY:-}" ]; then
 else
 	build=(go run ./cmd/freeside-image-build --)
 fi
+
+echo "build-agent-claude-image: cross-compiling the static commit-plan validator" >&2
+(
+	cd "$repo_root/daemon"
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "$binary" ./cmd/freeside-commit-plan
+)
 
 echo "build-agent-claude-image: building with Apple container (Claude CLI ${claude_version})" >&2
 (cd "$repo_root/daemon" && "${build[@]}" ${dns_args[@]+"${dns_args[@]}"} \
@@ -233,6 +241,42 @@ if ! container run --rm --network none "$image_name:local" \
 	jq -e '(.enabledPlugins | length > 0) and all(.enabledPlugins[]; . == false)' \
 	/etc/claude-code/managed-settings.json >/dev/null; then
 	echo "build-agent-claude-image: /etc/claude-code/managed-settings.json in the built image is not readable by the agent user or does not set every enabledPlugins entry to false" >&2
+	exit 1
+fi
+
+# Assert the shipped commit-plan validator as the agent uid with networking off,
+# proving both that the static binary is on PATH and that the image's git
+# satisfies the importer's runner.
+echo "build-agent-claude-image: asserting freeside-commit-plan validate in the built image" >&2
+# shellcheck disable=SC2016 # Single-quoted script expands inside the container.
+if ! container run --rm --network none "$image_name:local" \
+	setpriv --reuid=1001 --regid=1001 --clear-groups \
+	sh -eu -c '
+		d=$(mktemp -d)
+		trap '\''rm -rf "$d"'\'' EXIT
+		git -C "$d" init --object-format=sha1 -q -b main
+		git -C "$d" config user.name test
+		git -C "$d" config user.email test@example.invalid
+		printf "old\n" >"$d/a.txt"
+		git -C "$d" add a.txt
+		git -C "$d" commit -q -m base
+		base=$(git -C "$d" rev-parse HEAD)
+		git -C "$d" update-ref refs/freeside/import-base "$base"
+		printf "new\n" >"$d/a.txt"
+		git -C "$d" add a.txt
+		git -C "$d" commit -q -m "local commit"
+		printf '\''{"version":"freeside.commit-plan/v1","groups":[{"name":"all","message":"Update a","remainder":true}]}\n'\'' >"$d/.freeside-commit-plan.json"
+		out=$(cd "$d" && freeside-commit-plan validate)
+		printf "%s" "$out" | jq -e --arg base "$base" '\''.ok == true and .base_sha == $base and (.problems | length == 0)'\'' >/dev/null
+		printf '\''{"version":"freeside.commit-plan/v1","groups":[{"name":"bad","message":"Fixes #1","remainder":true}]}\n'\'' >"$d/.freeside-commit-plan.json"
+		set +e
+		out=$(cd "$d" && freeside-commit-plan validate)
+		rc=$?
+		set -e
+		[ "$rc" -eq 1 ]
+		printf "%s" "$out" | jq -e '\''.ok == false and .problems[0].code == "github_close_directive" and .problems[0].group == 1'\'' >/dev/null
+	' >/dev/null; then
+	echo "build-agent-claude-image: freeside-commit-plan validate failed inside the built image as uid 1001" >&2
 	exit 1
 fi
 

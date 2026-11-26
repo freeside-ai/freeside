@@ -97,12 +97,13 @@ printf '\nfunc helper() {}\n' >>"$REPO/daemon/cmd/freesided/main.go"
 C3=$(commit main)
 printf 'LABEL x=y\n' >>"$REPO/images/x/Containerfile"
 C4=$(commit image)
-mkdir -p "$REPO/prompts" "$REPO/policy" "$REPO/scripts" "$REPO/daemon/cmd/freeside-export"
+mkdir -p "$REPO/prompts" "$REPO/policy" "$REPO/scripts" "$REPO/daemon/cmd/freeside-export" "$REPO/daemon/cmd/freeside-commit-plan"
 printf 'prompt\n' >"$REPO/prompts/p.md"
 printf 'policy\n' >"$REPO/policy/p.yaml"
 printf '#!/bin/sh\n' >"$REPO/scripts/build-x-image.sh"
 printf '#!/bin/sh\n' >"$REPO/scripts/build-x.sh"
 printf 'package main\n' >"$REPO/daemon/cmd/freeside-export/main_test.go"
+printf 'package main\n' >"$REPO/daemon/cmd/freeside-commit-plan/main_test.go"
 C5=$(commit flagged)
 printf '\n// BUILD_FAILS\n' >>"$REPO/daemon/cmd/freesided/main.go"
 C6=$(commit broken)
@@ -150,7 +151,7 @@ assert_contains "runtime-diff: changed: freesided differs; path images/x/Contain
 CASE=every-flagged-path
 run_check "$C4" "$C5"
 assert_rc 1
-assert_contains "runtime-diff: changed: path daemon/cmd/freeside-export/main_test.go; path policy/p.yaml; path prompts/p.md; path scripts/build-x-image.sh"
+assert_contains "runtime-diff: changed: path daemon/cmd/freeside-commit-plan/main_test.go; path daemon/cmd/freeside-export/main_test.go; path policy/p.yaml; path prompts/p.md; path scripts/build-x-image.sh"
 assert_not_contains "path scripts/build-x.sh"
 assert_not_contains "freesided differs"
 

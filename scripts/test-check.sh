@@ -389,7 +389,7 @@ STUB
 chmod +x "$TMP/goflags-tools/"*
 assert_goflags() { # <expected-flags>
   local expected
-  expected=$(printf 'go %s|%s\n' build "$1" build "$1" test "$1" vet "$1")
+  expected=$(printf 'go %s|%s\n' build "$1" build "$1" build "$1" test "$1" vet "$1")
   expected+=$'\n'"lint|$1"
   if [ "$(cat "$TMP/goflags.receipt")" = "$expected" ]; then
     pass=$((pass + 1))
@@ -1299,7 +1299,7 @@ assert_contains 'DAEMON_TEST_INTEGRATION_PARTITIONS must be a positive integer'
 RUN=$TMP/partition-usage PATH=$partition_path DAEMON_TEST_INTEGRATION_PARTITIONS=abc \
   run_check daemon build
 assert_rc 0
-[[ $(cut -f1 "$TMP/partition-usage.record") == $'build ./...\nbuild -o /dev/null ./cmd/freeside-export' ]] ||
+[[ $(cut -f1 "$TMP/partition-usage.record") == $'build ./...\nbuild -o /dev/null ./cmd/freeside-export\nbuild -o /dev/null ./cmd/freeside-commit-plan' ]] ||
   report_failure "a step without test checked the count: $(cut -f1 "$TMP/partition-usage.record")"
 
 begin_case "a partition count of 1 runs go test ./... whole without discovery"
@@ -1455,7 +1455,7 @@ assert_record() { # <expected record>
     report_failure "unexpected go and python3 calls"
   fi
 }
-no_trim=$'go build\ngo build'
+no_trim=$'go build\ngo build\ngo build'
 
 begin_case "a daemon step trims the cache go env GOCACHE names, once, before the step"
 run_trim_check -- daemon build

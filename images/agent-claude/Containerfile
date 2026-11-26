@@ -103,6 +103,11 @@ RUN set -eux; \
 
 COPY --from=build /usr/local /usr/local
 
+# scripts/build-agent-claude-image.sh cross-compiles this static linux/arm64
+# commit-plan validator into the build context before invoking the image build.
+# It is a writer convenience that grants no authority.
+COPY --chmod=0755 freeside-commit-plan /usr/local/bin/freeside-commit-plan
+
 # Managed policy settings, the Linux system-wide path Claude Code reads before
 # user and project settings. Auto-update is disabled here so the pinned version
 # survives a run that has provider egress; the image cannot set DISABLE_AUTOUPDATER
@@ -137,6 +142,7 @@ RUN set -eux; \
 		echo "claude $(claude --version)"; \
 		echo "jq $(jq --version)"; \
 		echo "rg $(rg --version | head -n 1)"; \
+		echo "freeside-commit-plan $(sha256sum /usr/local/bin/freeside-commit-plan | awk '{print $1}')"; \
 		echo "--- dpkg ---"; \
 		dpkg-query -W -f='${binary:Package} ${Version}\n'; \
 		echo "--- npm -g ---"; \

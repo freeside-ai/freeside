@@ -8367,7 +8367,9 @@ untrusted data at handoff.
   removes its temporary directory before exiting.
 - **Delivery to writers.** Every cordoned launch gets `freeside-commit-plan` on
   its `PATH` through its per-launch `run/tools` shim (`exec <freesided>
-  commit-plan "$@"`).
+  commit-plan "$@"`). Warded writers receive `/usr/local/bin/freeside-commit-plan`
+  in `images/agent-claude` once the operator rebuilds and re-pins the agent base
+  and project images are rebuilt on it.
 
 ### Output And Exit Codes
 

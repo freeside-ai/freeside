@@ -259,11 +259,13 @@ in_dir() { # <dir> <command...>; runs the command inside <dir>
 
 daemon_build() {
   in_dir "$ROOT/daemon" go build ./...
-  # The exporter must stay a static cross-compilable binary for the
-  # exporter image (#73 acceptance 4); a creeping cgo dependency fails
-  # here instead of at image-build time.
+  # The exporter and commit-plan validator must stay static cross-compilable
+  # binaries for their container images (#73 acceptance 4, #988); a creeping
+  # cgo dependency fails here instead of at image-build time.
   in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o /dev/null ./cmd/freeside-export
+  in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+    go build -o /dev/null ./cmd/freeside-commit-plan
 }
 daemon_test_shard_mode() {
   [[ ${DAEMON_TEST_SHARD_KIND+x}${DAEMON_TEST_SHARD_INDEX+x}${DAEMON_TEST_SHARD_COUNT+x}${DAEMON_TEST_INTEGRATION_SHARDS+x}${DAEMON_TEST_EVIDENCE_DIR+x} ]]
