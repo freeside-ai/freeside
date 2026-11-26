@@ -321,7 +321,7 @@ func Collect(ctx context.Context, config Config, runner QueryRunner, clock func(
 	for _, tracker := range openTrackers {
 		labeledTrackers[tracker.Number] = true
 	}
-	trackers, commentIssueNumbers, err := c.buildContainingTrackers(ctx, openIssues, merged.ClosingIssues, labeledTrackers)
+	trackers, commentIssueNumbers, err := c.buildContainingTrackers(ctx, openIssues, merged.ClosingIssues, merged.Number, labeledTrackers)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -990,15 +990,16 @@ func (c *collector) fetchPullRequestClosingIssues(ctx context.Context, number in
 }
 
 // buildContainingTrackers returns the open trackers whose Units section lists
-// a closing issue. labeledTrackers holds the open issues carrying the
-// `tracker` label; any other issue whose checklist names a closing issue is
-// reported as ambiguous rather than refreshed, since a checklist alone
-// doesn't make an issue a tracker.
-func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []graphIssue, closing []IssueSummary, labeledTrackers map[int]bool) ([]ContainingTracker, map[int]bool, error) {
-	closingSet := make(map[int]bool, len(closing))
+// a closing issue or the merged pull request. labeledTrackers holds the open
+// issues carrying the `tracker` label; any other issue whose checklist names
+// a closing issue or the merged pull request is reported as ambiguous rather
+// than refreshed, since a checklist alone doesn't make an issue a tracker.
+func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []graphIssue, closing []IssueSummary, mergedPullRequest int, labeledTrackers map[int]bool) ([]ContainingTracker, map[int]bool, error) {
+	closingSet := make(map[int]bool, len(closing)+1)
 	for _, issue := range closing {
 		closingSet[issue.Number] = true
 	}
+	closingSet[mergedPullRequest] = true
 	commentIssues := make(map[int]bool)
 	var trackers []ContainingTracker
 	for _, issue := range openIssues {

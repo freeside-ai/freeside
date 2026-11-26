@@ -395,7 +395,7 @@ func TestDuplicateTrackerEntriesAreAmbiguous(t *testing.T) {
 	runner := loadFixtureRunner(t)
 	c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
 	issue := graphIssue{ID: "tracker", DatabaseID: 100, Number: 100, State: "OPEN", Body: "## Status\nPending\n\n## Units\n- [ ] #935 first\n2. [x] #935 second"}
-	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
+	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, 300, map[int]bool{100: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestUnlabeledChecklistIsNotATracker(t *testing.T) {
 	runner := loadFixtureRunner(t)
 	c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
 	issue := graphIssue{ID: "task", DatabaseID: 101, Number: 101, State: "OPEN", Body: "## Status\nPending\n\n## Units\n- [ ] #935"}
-	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
+	trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, 300, map[int]bool{100: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestTrackerMembershipComesFromUnitsOnly(t *testing.T) {
 			runner := loadFixtureRunner(t)
 			c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
 			issue := graphIssue{ID: "tracker", DatabaseID: 100, Number: 100, State: "OPEN", Body: test.body}
-			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
+			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, 300, map[int]bool{100: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -461,7 +461,7 @@ func TestContainingTrackerRequiresTrackerStructureAndValidEntries(t *testing.T) 
 			runner := loadFixtureRunner(t)
 			c := &collector{config: fixtureConfig(""), runner: runner, issueCache: map[int]UnitEvidence{}, prCache: map[int]PullRequestRef{}}
 			issue := graphIssue{ID: "candidate", DatabaseID: 100, Number: 100, State: "OPEN", Body: test.body}
-			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, map[int]bool{100: true})
+			trackers, _, err := c.buildContainingTrackers(context.Background(), []graphIssue{issue}, []IssueSummary{{Number: 935}}, 300, map[int]bool{100: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1122,6 +1122,43 @@ func TestOpenPullRequestUnitSkipsIssueComments(t *testing.T) {
 	unit := snapshot.ContainingTrackers[0].Units[0]
 	if unit.Number != 401 || unit.Kind != "pull_request" || unit.State != "OPEN" || unit.PullRequest == nil || unit.PullRequest.Merged {
 		t.Fatalf("open PR unit = %#v", unit)
+	}
+}
+
+func TestTrackerListingMergedPullRequestDirectlyIsContainingTracker(t *testing.T) {
+	runner := loadFixtureRunner(t)
+	merged := mergedPullRequestFixture(t, runner.responses["MergedPullRequest:300:"])
+	merged["closingIssuesReferences"] = map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}}
+	runner.responses["MergedPullRequest:300:"], _ = json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{
+		"defaultBranchRef": map[string]any{"name": "main", "target": map[string]any{"oid": "base-sha"}},
+		"pullRequest":      merged,
+	}}})
+	setFixtureNodeField(t, runner, "OpenIssues::", []string{"data", "repository", "issues", "nodes"}, "body", "## Status\nPending\n\n## Units\n- [ ] #300")
+	runner.responses["TrackerEntryKind:300:"] = json.RawMessage(`{"data":{"repository":{"issueOrPullRequest":{"__typename":"PullRequest","number":300}}}}`)
+	runner.responses["PullRequestReference:300:"] = json.RawMessage(`{"data":{"repository":{"pullRequest":{"id":"PR_300","databaseId":300,"number":300,"title":"Merge the unit","state":"MERGED","merged":true,"updatedAt":"2026-08-25T10:00:00Z","headRefName":"work","baseRefName":"main","body":"Direct PR unit","headRepository":{"nameWithOwner":"freeside-ai/freeside"}}}}}`)
+
+	config := fixtureConfig("")
+	config.Direct = true
+	snapshot, err := Collect(context.Background(), config, runner, fixedClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Ambiguities) != 0 {
+		t.Fatalf("ambiguities = %#v", snapshot.Ambiguities)
+	}
+	if len(snapshot.ContainingTrackers) != 1 || snapshot.ContainingTrackers[0].Number != 100 {
+		t.Fatalf("containing trackers = %#v", snapshot.ContainingTrackers)
+	}
+	units := snapshot.ContainingTrackers[0].Units
+	if len(units) != 1 || units[0].Number != 300 || units[0].Kind != "pull_request" || units[0].State != "MERGED" || units[0].PullRequest == nil || !units[0].PullRequest.Merged {
+		t.Fatalf("units = %#v", units)
+	}
+	if runner.hasKey("IssueComments:300:") || runner.hasKey("IssueDetails:300:") {
+		t.Fatalf("direct-unit PR hit issue-only queries: %v", runner.keys)
+	}
+	report := RenderReport(snapshot)
+	if strings.Contains(report, "no containing tracker work") || !strings.Contains(report, "#### Unit PR #300, Merge the unit (MERGED)") {
+		t.Fatalf("direct-unit report:\n%s", report)
 	}
 }
 

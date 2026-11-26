@@ -30,7 +30,9 @@ A tracker's Units section may list a pull request directly with no work-unit
 issue. `snapshot.json` (schema version 3) marks each unit's `kind` (`issue` or
 `pull_request`). A pull request unit carries its PR facts (state, merged flag,
 head and base refs, head repository, and stamp) and no Dependencies,
-closing-PR, or stacked-on evidence, and is not read for issue comments.
+closing-PR, or stacked-on evidence, and is not read for issue comments. A
+tracker whose Units section lists the merged PR's own number counts as a
+containing tracker.
 
 Run the built binary when its exact exit code is required. `go run` reports a
 child exit status but returns its own nonzero status, so it cannot preserve the

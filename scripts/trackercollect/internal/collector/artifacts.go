@@ -78,7 +78,11 @@ func RenderReport(snapshot Snapshot) string {
 	if closingIssuesTruncated {
 		fmt.Fprintln(&report, "Closing issues: incomplete because the connection reached its page cap; see **AMBIGUOUS**.")
 	} else if snapshot.MergedPullRequest.DirectUnit {
-		fmt.Fprintln(&report, "Closing issues: none (direct session-contained unit; no containing tracker work).")
+		if len(snapshot.ContainingTrackers) > 0 {
+			fmt.Fprintln(&report, "Closing issues: none (direct pull request unit; see Containing Trackers).")
+		} else {
+			fmt.Fprintln(&report, "Closing issues: none (direct session-contained unit; no containing tracker work).")
+		}
 	} else if len(snapshot.MergedPullRequest.ClosingIssues) == 0 {
 		fmt.Fprintln(&report, "Closing issues: no verified current closing issue retained; provenance or reconciliation is unresolved. See **AMBIGUOUS**.")
 	} else {
