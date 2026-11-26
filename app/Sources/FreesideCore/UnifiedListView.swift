@@ -48,7 +48,7 @@ struct UnifiedListView: View {
     let store: InboxStore
     let tasks: [Components.Schemas.TaskSnapshot]
     /// The run list, so a task's stage line can follow its newest run
-    /// (`TaskDisplay.position`).
+    /// (`TaskDisplay.position`) and a slot narrowing finds its tasks.
     var runs: [Components.Schemas.RunSnapshot] = []
     var taskTimelines: [String: Components.Schemas.TaskTimeline] = [:]
     /// Run timelines by run id, whose review rounds tell the task rail a
@@ -87,8 +87,8 @@ struct UnifiedListView: View {
 
     private var list: UnifiedList {
         UnifiedList(
-            open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks,
-            projectFilter: store.projectID, positionFilter: store.positionFilter, keeping: store.keptTaskID)
+            open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks, runs: runs,
+            projectFilter: store.projectID, narrowing: store.narrowing, keeping: store.keptTaskID)
     }
 
     private var selection: UnifiedSelection? {
@@ -133,7 +133,7 @@ struct UnifiedListView: View {
             finishedLimit = max(finishedLimit, finishedPage(list).rows.count)
         }
         .onChange(of: store.projectID) { repairSelection() }
-        .onChange(of: store.positionFilter) { repairSelection() }
+        .onChange(of: store.narrowing) { repairSelection() }
         .onChange(of: preferences.finishedExpanded) { _, expanded in
             if !expanded { finishedLimit = FinishedPage.initialLimit }
         }
@@ -174,19 +174,20 @@ struct UnifiedListView: View {
         FinishedPage(list.finished, limit: finishedLimit, holding: selection)
     }
 
-    /// Keeps the selected row under the position filter, and drops the
-    /// filters that hide a routed row (`UnifiedList.filters`).
+    /// Keeps the selected row under the narrowing, and drops the filters
+    /// that hide a routed row (`UnifiedList.filters`).
     private func revealSelection() {
         store.applyListFilters(
             UnifiedList.filters(
-                .init(projectID: store.projectID, position: store.positionFilter, keptTaskID: store.keptTaskID),
-                showing: selection, open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks))
+                .init(projectID: store.projectID, narrowing: store.narrowing, keptTaskID: store.keptTaskID),
+                showing: selection, open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks,
+                runs: runs))
     }
 
     /// One line: the filter's state, Work Status, the filter, and on the Mac
     /// New Task (the iPhone's is in its bottom bar); the state takes a line
     /// of its own when they don't fit. A disabled New Task says why on a
-    /// line of its own, and a position filter names itself and its Clear on
+    /// line of its own, and a narrowing names itself and its Clear on
     /// another.
     private func tools(_ list: UnifiedList) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -211,8 +212,8 @@ struct UnifiedListView: View {
                     }
                 }
             }
-            if let position = store.positionFilter {
-                positionFilterLine(position)
+            if let narrowing = store.narrowing {
+                narrowingLine(narrowing)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -287,17 +288,17 @@ struct UnifiedListView: View {
         #endif
     }
 
-    /// The work status count the list shows, and its Clear.
-    private func positionFilterLine(_ position: WorkStatus.Position) -> some View {
+    /// What the list is narrowed to, and its Clear.
+    private func narrowingLine(_ narrowing: UnifiedList.Narrowing) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(position.label)
+            Text(narrowing.label)
                 .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.ink)
-                .accessibilityLabel("Showing \(position.label)")
+                .accessibilityLabel("Showing \(narrowing.label)")
             Spacer(minLength: 8)
             Button {
                 navigation.recordOperatorNavigation()
-                store.selectPositionFilter(nil)
+                store.selectNarrowing(nil)
             } label: {
                 Text("Clear")
                     .font(FreesideFont.noticeAction)
@@ -305,7 +306,7 @@ struct UnifiedListView: View {
             }
             .buttonStyle(.plain)
             .freesideFocusRing(cornerRadius: 4)
-            .accessibilityLabel("Clear \(position.label) filter")
+            .accessibilityLabel("Clear \(narrowing.label) filter")
         }
     }
 

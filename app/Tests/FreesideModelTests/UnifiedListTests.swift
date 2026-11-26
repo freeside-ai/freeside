@@ -423,7 +423,7 @@ import Testing
             for group in status.groups {
                 let list = UnifiedList(
                     open: open, closed: [closed], tasks: tasks, projectFilter: projectFilter,
-                    positionFilter: group.position)
+                    narrowing: .position(group.position))
                 #expect(list.rows.map(\.id) == group.taskIDs.map(UnifiedSelection.task), "\(group.position)")
                 #expect(list.finished.isEmpty)
             }
@@ -432,35 +432,38 @@ import Testing
 
     private func filters(
         _ current: UnifiedList.Filters, showing selection: UnifiedSelection?,
-        tasks: [Components.Schemas.TaskSnapshot] = WorkStatusFixtures.tasks()
+        tasks: [Components.Schemas.TaskSnapshot] = WorkStatusFixtures.tasks(),
+        runs: [Components.Schemas.RunSnapshot] = []
     ) -> UnifiedList.Filters {
         UnifiedList.filters(
-            current, showing: selection, open: WorkStatusFixtures.openItems(), closed: [], tasks: tasks)
+            current, showing: selection, open: WorkStatusFixtures.openItems(), closed: [], tasks: tasks, runs: runs)
     }
 
     /// A route to a row the position filter hides drops it, and the project
     /// filter too when that one also hides the row; a row no filter shows
     /// leaves both.
     @Test func aRouteToAHiddenRowDropsTheFiltersThatHideIt() {
-        let review = UnifiedList.Filters(projectID: nil, position: .stage("review"))
-        #expect(filters(review, showing: .task("task-spec")) == .init(projectID: nil, position: nil))
-        #expect(filters(review, showing: .item("item-project")) == .init(projectID: nil, position: nil))
+        let review = UnifiedList.Filters(projectID: nil, narrowing: .position(.stage("review")))
+        #expect(filters(review, showing: .task("task-spec")) == .init(projectID: nil, narrowing: nil))
+        #expect(filters(review, showing: .item("item-project")) == .init(projectID: nil, narrowing: nil))
 
-        let freesideReview = UnifiedList.Filters(projectID: WorkStatusFixtures.project, position: .stage("review"))
+        let freesideReview = UnifiedList.Filters(
+            projectID: WorkStatusFixtures.project, narrowing: .position(.stage("review")))
         #expect(
             filters(freesideReview, showing: .task("task-spec"))
-                == .init(projectID: WorkStatusFixtures.project, position: nil))
-        #expect(filters(freesideReview, showing: .task("task-other-project")) == .init(projectID: nil, position: nil))
+                == .init(projectID: WorkStatusFixtures.project, narrowing: nil))
+        #expect(
+            filters(freesideReview, showing: .task("task-other-project")) == .init(projectID: nil, narrowing: nil))
         #expect(filters(freesideReview, showing: .task("no-such-task")) == freesideReview)
     }
 
     /// A selected row the position filter shows stays after its task moves
     /// to another position, until the selection moves on.
     @Test func theSelectedRowStaysUnderThePositionFilterAfterItMoves() throws {
-        let implementation = UnifiedList.Filters(projectID: nil, position: .stage("implementation"))
+        let implementation = UnifiedList.Filters(projectID: nil, narrowing: .position(.stage("implementation")))
         let selected = filters(implementation, showing: .task("task-implement"))
         #expect(selected.keptTaskID == "task-implement")
-        #expect(selected.position == .stage("implementation"))
+        #expect(selected.narrowing == .position(.stage("implementation")))
 
         var tasks = WorkStatusFixtures.tasks()
         let index = try #require(tasks.firstIndex { $0.task.id == "task-implement" })
@@ -468,7 +471,7 @@ import Testing
             value1: .init(run_id: "run-task-implement", stage: "review", round: nil, hold_reason: nil))
         let moved = UnifiedList(
             open: WorkStatusFixtures.openItems(), closed: [], tasks: tasks, projectFilter: nil,
-            positionFilter: .stage("implementation"), keeping: selected.keptTaskID)
+            narrowing: .position(.stage("implementation")), keeping: selected.keptTaskID)
         #expect(moved.rows.map(\.id) == [.task("task-implement"), .task("task-implementation")])
         #expect(filters(selected, showing: .task("task-implement"), tasks: tasks) == selected)
 
@@ -476,7 +479,70 @@ import Testing
         #expect(filters(selected, showing: nil, tasks: tasks).keptTaskID == nil)
         #expect(
             filters(selected, showing: .task("task-implementation"), tasks: tasks).keptTaskID == "task-implementation")
-        #expect(filters(.init(projectID: nil, position: nil), showing: .task("task-spec")).keptTaskID == nil)
+        #expect(filters(.init(projectID: nil, narrowing: nil), showing: .task("task-spec")).keptTaskID == nil)
+    }
+
+    /// A run of `taskID`, held on `pool` the way the daemon projects a live
+    /// `usage_pool_exhausted` hold, or unheld when `pool` is nil. The list
+    /// reads only the task and the pool.
+    private func run(_ id: String, task taskID: String, waitingOn pool: String?) -> Components.Schemas.RunSnapshot {
+        var snapshot = RunFixtures.defaultRuns()[0]
+        snapshot.run.id = id
+        snapshot.run.task_id = taskID
+        snapshot.run.hold_reason = pool.map { _ in .init(value1: .usage_pool_exhausted) }
+        snapshot.run.hold_usage_pool = pool
+        return snapshot
+    }
+
+    private func slotWaiters(
+        runs: [Components.Schemas.RunSnapshot], keeping keptTaskID: String? = nil
+    ) -> [UnifiedSelection] {
+        UnifiedList(
+            open: WorkStatusFixtures.openItems(), closed: [], tasks: WorkStatusFixtures.tasks(), runs: runs,
+            projectFilter: nil, narrowing: .waitingForSlot(pool: "pool-a"), keeping: keptTaskID
+        ).rows.map(\.id)
+    }
+
+    /// A pool's slot narrowing holds one row per task with a run waiting on
+    /// that pool, two runs of one task giving one row, in list order: no
+    /// run on another pool, no unheld run, and no scoped item or Finished
+    /// row.
+    @Test func aSlotNarrowingHoldsOneRowPerTaskWaitingOnThePool() {
+        let runs = [
+            run("run-capacity-1", task: "task-capacity", waitingOn: "pool-a"),
+            run("run-capacity-2", task: "task-capacity", waitingOn: "pool-a"),
+            run("run-implement", task: "task-implement", waitingOn: "pool-a"),
+            run("run-parallel", task: "task-parallel", waitingOn: "pool-b"),
+            run("run-spec", task: "task-spec", waitingOn: nil),
+        ]
+        #expect(slotWaiters(runs: runs) == [.task("task-implement"), .task("task-capacity")])
+        #expect(slotWaiters(runs: []).isEmpty)
+    }
+
+    /// The narrowing names the pool, not a task set: a task leaves once its
+    /// last waiting run's hold clears, unless it is the kept row, and the
+    /// narrowing stays on until cleared.
+    @Test func aTaskLeavesTheSlotNarrowingWhenItsLastHoldClearsUnlessKept() {
+        let waiting = [
+            run("run-capacity-1", task: "task-capacity", waitingOn: "pool-a"),
+            run("run-capacity-2", task: "task-capacity", waitingOn: "pool-a"),
+            run("run-implement", task: "task-implement", waitingOn: "pool-a"),
+        ]
+        var oneCleared = waiting
+        oneCleared[0] = run("run-capacity-1", task: "task-capacity", waitingOn: nil)
+        #expect(slotWaiters(runs: oneCleared) == [.task("task-implement"), .task("task-capacity")])
+
+        var bothCleared = oneCleared
+        bothCleared[1] = run("run-capacity-2", task: "task-capacity", waitingOn: nil)
+        #expect(slotWaiters(runs: bothCleared) == [.task("task-implement")])
+
+        let narrowing = UnifiedList.Filters(projectID: nil, narrowing: .waitingForSlot(pool: "pool-a"))
+        let selected = filters(narrowing, showing: .task("task-capacity"), runs: waiting)
+        #expect(selected.keptTaskID == "task-capacity")
+        #expect(
+            slotWaiters(runs: bothCleared, keeping: selected.keptTaskID)
+                == [.task("task-implement"), .task("task-capacity")])
+        #expect(filters(selected, showing: .task("task-capacity"), runs: bothCleared) == selected)
     }
 
     private func position(

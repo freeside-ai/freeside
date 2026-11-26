@@ -134,6 +134,11 @@ public final class NavigationModel {
     /// every selection: view state would reopen the composer each time the
     /// item is reselected.
     public private(set) var launchComposer: LaunchComposerRequest?
+    /// The pool whose slot waiters the Usage pane asked the list to show,
+    /// until the root narrows the list to them and consumes it. Held here
+    /// because the narrowing lives in the coordinator's store and Working's
+    /// fold in the root's preferences, neither of which Settings holds.
+    public private(set) var slotWaitersRequest: String?
     public private(set) var operatorNavigationRevision = 0
 
     public init(launchInputs: LaunchInputs) {
@@ -300,6 +305,20 @@ public final class NavigationModel {
 
     public func consumeSettingsWindowRequest() {
         settingsWindowRequested = false
+    }
+
+    /// The Usage pane's slot row: leave Settings and ask the root for the
+    /// list narrowed to the tasks waiting for a slot on `pool`. Leaving
+    /// pops the iPhone's Settings path; the Mac's Settings window is its
+    /// own, so there it drops only a seated finding, which the Usage pane
+    /// never shows, and the caller brings the main window forward.
+    public func showSlotWaiters(pool: String) {
+        closeSettings()
+        slotWaitersRequest = pool
+    }
+
+    public func consumeSlotWaitersRequest() {
+        slotWaitersRequest = nil
     }
 
     /// The launch's composer for this item's card, or nil for any other item

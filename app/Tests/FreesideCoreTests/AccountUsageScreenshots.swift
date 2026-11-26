@@ -14,11 +14,11 @@
         enum State: CaseIterable {
             /// The default pools: one with readings and refusal marks and two
             /// enrollments to collect, one whose collector can't read usage,
-            /// and one with no reading yet. Two runs are parked on the first,
-            /// so its used-up window says so.
+            /// and one with no reading yet. Two runs wait for a slot on the
+            /// first, so its slot row shows.
             case usage
             /// The same pools once the client's clock passes the readings'
-            /// `stale_at`, with no run parked.
+            /// `stale_at`, with no run waiting for a slot.
             case stale
             /// The #2389 shape for Claude under a setup token: a weekly share
             /// with its reset, and a five-hour window with a status alone.

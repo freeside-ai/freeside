@@ -1,6 +1,7 @@
 import FreesideAPI
 
-/// Runs parked on a usage pool, for the usage page's parked count (#2583).
+/// Runs waiting for a slot on a usage pool, for the usage page's slot row
+/// (#2583, #3677).
 /// `RunFixtures` keeps its parked-run builder private, so each is a copy of
 /// the default specification run (no campaign, no hold) under its own run,
 /// task, stage, attempt, and invocation ids, held on `pool` the way the

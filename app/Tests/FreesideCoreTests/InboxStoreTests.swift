@@ -45,16 +45,50 @@ import Testing
         #expect(store.conversationsByID.isEmpty)
     }
 
-    /// An epoch change drops the position filter with the project filter:
-    /// the counts it came from no longer hold.
+    /// An epoch change drops the narrowing with the project filter: the
+    /// counts it came from no longer hold.
     @Test func discardingSnapshotsClearsBothListFilters() {
         let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
-        store.applyListFilters(.init(projectID: "freeside", position: .stage("review"), keptTaskID: "task-review"))
+        store.applyListFilters(
+            .init(projectID: "freeside", narrowing: .position(.stage("review")), keptTaskID: "task-review"))
         #expect(store.keptTaskID == "task-review")
         store.discardSnapshots()
         #expect(store.projectID == nil)
+        #expect(store.narrowing == nil)
+        #expect(store.keptTaskID == nil)
+    }
+
+    /// A work status count and a pool's slot waiters share one slot, so
+    /// choosing either replaces the other and starts with no kept row; Work
+    /// Status draws a count as selected only while the slot holds one.
+    @Test func aCountAndAPoolReplaceEachOtherInTheOneSlot() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.applyListFilters(
+            .init(projectID: nil, narrowing: .position(.stage("review")), keptTaskID: "task-review"))
+        #expect(store.positionFilter == .stage("review"))
+
+        store.selectNarrowing(.waitingForSlot(pool: "pool-a"))
+        #expect(store.narrowing == .waitingForSlot(pool: "pool-a"))
         #expect(store.positionFilter == nil)
         #expect(store.keptTaskID == nil)
+
+        store.selectNarrowing(.position(.notStarted))
+        #expect(store.narrowing == .position(.notStarted))
+        #expect(store.positionFilter == .notStarted)
+    }
+
+    /// A pool serves every project, so its slot row's count can name tasks
+    /// the project filter hides; choosing the row drops the filter, and a
+    /// count, drawn under the filter, keeps it.
+    @Test func aSlotNarrowingDropsTheProjectFilterAndACountKeepsIt() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.selectProjectFilter("project-a")
+        store.selectNarrowing(.position(.notStarted))
+        #expect(store.projectID == "project-a")
+
+        store.selectNarrowing(.waitingForSlot(pool: "pool-a"))
+        #expect(store.projectID == nil)
+        #expect(store.narrowing == .waitingForSlot(pool: "pool-a"))
     }
 
     /// The local clear of the unviewed mark (#2930) holds while sync keeps

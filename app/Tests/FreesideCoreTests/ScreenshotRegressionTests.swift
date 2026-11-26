@@ -808,7 +808,7 @@
                     name: "work-status-project-filter", width: 640,
                     view: view(projectID: WorkStatusFixtures.otherProject, selected: nil)))
             surfaces += try workHoursSurfaces(tasks: tasks, store: store)
-            store.selectPositionFilter(.held(.usage_pool_exhausted))
+            store.selectNarrowing(.position(.held(.usage_pool_exhausted)))
             try surfaces.append(
                 Surface(
                     name: "unified-list-position-filter", width: 320,
@@ -817,7 +817,35 @@
                             store: store, tasks: tasks, navigation: screenshotNavigation(selecting: nil),
                             preferences: screenshotListPreferences(expanded: true)
                         ).screenshotContent(now: screenshotNow))))
+            try surfaces.append(slotFilterSurface(tasks: tasks))
             return surfaces
+        }
+
+        /// The sidebar narrowed to the tasks waiting for a slot on a pool,
+        /// as the Usage pane's slot row opens it (#3677): two runs of one
+        /// task and one of another give two rows. Its own store, since the
+        /// position filter's surface holds the other.
+        private func slotFilterSurface(tasks: [Components.Schemas.TaskSnapshot]) throws -> Surface {
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: WorkStatusFixtures.openItems())
+            store.selectNarrowing(.waitingForSlot(pool: UsageFixtures.readingPoolID))
+            // The two tasks the fixtures hold for capacity, under run ids no
+            // task's position names, so each row reads as it does unfiltered.
+            let runs = [
+                ("slot-capacity-1", "task-capacity"), ("slot-capacity-2", "task-capacity"),
+                ("slot-parallel", "task-parallel"),
+            ].map { id, taskID in
+                var run = ParkedRunFixtures.run(id, on: UsageFixtures.readingPoolID)
+                run.run.task_id = taskID
+                return run
+            }
+            return try Surface(
+                name: "unified-list-slot-filter", width: 320,
+                view: AnyView(
+                    UnifiedListView(
+                        store: store, tasks: tasks, runs: runs, navigation: screenshotNavigation(selecting: nil),
+                        preferences: screenshotListPreferences(expanded: true)
+                    ).screenshotContent(now: screenshotNow)))
         }
 
         /// The work status view's Over Time tab (#3242): the week ending on

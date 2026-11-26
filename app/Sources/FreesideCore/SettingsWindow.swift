@@ -16,17 +16,20 @@
         private let launchColorScheme: ColorScheme?
         private let launchDynamicTypeSize: DynamicTypeSize?
         private let openTask: (String) -> Void
+        private let openSlotWaiters: (String) -> Void
         private let pairDevice: (() -> Void)?
         @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
 
         /// `openTask` shows a task's page in the main window, for a seated
         /// finding card's Task link: this window has no page of its own to
-        /// show it in. `pairDevice` opens the Pair a Device window from the
-        /// Devices pane.
+        /// show it in. `openSlotWaiters` shows the main window's list
+        /// narrowed to a pool's slot waiters, for the Usage pane's row.
+        /// `pairDevice` opens the Pair a Device window from the Devices pane.
         public init(
             session: AppSession, navigation: NavigationModel, daemon: DaemonMenuModel?,
             flowPreferences: DecisionFlowPreferences, launchInputs: LaunchInputs,
-            openTask: @escaping (String) -> Void, pairDevice: (() -> Void)? = nil
+            openTask: @escaping (String) -> Void, openSlotWaiters: @escaping (String) -> Void,
+            pairDevice: (() -> Void)? = nil
         ) {
             FreesideFont.registration
             self.session = session
@@ -34,6 +37,7 @@
             self.daemon = daemon
             self.flowPreferences = flowPreferences
             self.openTask = openTask
+            self.openSlotWaiters = openSlotWaiters
             self.pairDevice = pairDevice
             launchColorScheme = launchInputs.colorScheme
             launchDynamicTypeSize = launchInputs.dynamicTypeSize
@@ -46,7 +50,8 @@
                     // models afresh.
                     SyncedSettingsWindow(
                         session: session, coordinator: coordinator, navigation: navigation,
-                        flowPreferences: flowPreferences, daemon: macDaemon, openTask: openTask
+                        flowPreferences: flowPreferences, daemon: macDaemon, openTask: openTask,
+                        openSlotWaiters: openSlotWaiters
                     )
                     .id(ObjectIdentifier(coordinator))
                 } else {
@@ -88,6 +93,7 @@
         let flowPreferences: DecisionFlowPreferences
         let daemon: DaemonPane.MacDaemon?
         let openTask: (String) -> Void
+        let openSlotWaiters: (String) -> Void
         @State private var devices: DevicesModel
         @State private var routing: RoutingPolicyModel
         @State private var workflow: WorkflowPolicyModel
@@ -96,7 +102,7 @@
         init(
             session: AppSession, coordinator: SyncCoordinator, navigation: NavigationModel,
             flowPreferences: DecisionFlowPreferences, daemon: DaemonPane.MacDaemon?,
-            openTask: @escaping (String) -> Void
+            openTask: @escaping (String) -> Void, openSlotWaiters: @escaping (String) -> Void
         ) {
             self.session = session
             self.coordinator = coordinator
@@ -104,6 +110,7 @@
             self.flowPreferences = flowPreferences
             self.daemon = daemon
             self.openTask = openTask
+            self.openSlotWaiters = openSlotWaiters
             // The Mac takes no notification link, so it holds no
             // subscription; revoking this device signs out to pairing.
             _devices = State(
@@ -144,7 +151,8 @@
                     host: SettingsHost.line(session.serverURL),
                     daemon: daemon,
                     tasks: coordinator.tasks,
-                    openTask: openTask
+                    openTask: openTask,
+                    openSlotWaiters: openSlotWaiters
                 )
                 // The Agents pane names devices and the Devices pane lists them:
                 // on open, and again when the heartbeat observes a newer revision.
@@ -173,6 +181,8 @@
         /// what opens one.
         var tasks: [Components.Schemas.TaskSnapshot] = []
         var openTask: (String) -> Void = { _ in }
+        /// What the Usage pane's slot row opens.
+        var openSlotWaiters: (String) -> Void = { _ in }
         /// Where the System Health pane keeps its History fold's state.
         var listDefaults: UserDefaults = .standard
         var rendersInteractiveControls = true
@@ -206,7 +216,8 @@
         private var pane: some View {
             SettingsPaneView(
                 page: navigation.settingsPane, sync: sync, flowPreferences: flowPreferences, host: host,
-                client: .mac, mac: daemon, openFinding: navigation.openFinding, listDefaults: listDefaults,
+                client: .mac, mac: daemon, openFinding: navigation.openFinding,
+                openSlotWaiters: openSlotWaiters, listDefaults: listDefaults,
                 rendersInteractiveControls: rendersInteractiveControls)
         }
 
