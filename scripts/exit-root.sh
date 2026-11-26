@@ -38,27 +38,35 @@
 #   1. Refuse a root under a supervised state root (supervised-paths.sh), a
 #      root another pass made, and settings that a template and the machine
 #      file both set, or that set a key this script computes, all before
-#      anything is created.
+#      anything is created. Fetch repository.base_ref from origin into the
+#      repository checkout the machine file names; a failed fetch stops the
+#      run (exit 1) before anything is created. A template or machine file
+#      that sets repository.base_sha names the base the pass requires, and
+#      a fetched tip other than that commit is refused (exit 2), on a new
+#      root and a rerun alike, and again at each review's fetch; a real
+#      run's template leaves it out.
 #   2. Pick the lowest free port from port_base that no other root under
 #      roots_dir claims, and keep it on every rerun.
 #   3. Build <root>/builds/<sha>/freesided from `git archive`, stamped with
 #      -X main.version=<sha> (preflight's daemon_build check needs the stamp).
 #   4. Render <root>/daemon/settings.json, mode 0600, from the machine file,
-#      the template, and the state file, on every run. The template's
-#      repository.base_sha seeds a fresh root; once a review has run, the
-#      rendered repository.base_sha is the tip that review covered.
+#      the template, and the state file, on every run. The rendered
+#      repository.base_sha is the tip step 1 fetched, or the tip a later
+#      onboarding review in the same run fetched, so the deputy follows the
+#      base ref with no fetch or re-pin by hand.
 #   5. Pin images.agent and approved_recipe from
 #      <root>/daemon/onboard-approved.json whenever it holds a completed
 #      approval the script hasn't pinned from yet. An approval that applied
 #      at a tip the base ref moved to after its review records that tip as
 #      its image_request.commit_sha; the state file takes it as the
-#      reviewed tip, so step 4 pins the deputy there. A pin that replaces
-#      the recipe adds the replaced one to retained_recipes, so evidence
-#      stored under it still reads (#3556). When the settings or the
+#      reviewed tip. A pin that replaces the recipe adds the replaced one
+#      to retained_recipes, so evidence stored under it still reads
+#      (#3556). When the settings, apart from repository.base_sha, or the
 #      root's enrollments (from `freesided auth list`) differ from the last
 #      start that composed (a new root, a new build's prompt packages, a
 #      changed machine file, a new image, an enrollment from enroll-codex),
-#      start the deputy once and stop it. Before that start, a Codex
+#      start the deputy once and stop it; a moved tip alone starts none,
+#      since no adoption input reads the base. Before that start, a Codex
 #      reviewer whose review.auth_snapshot doesn't exist stops the run with
 #      approval=codex_enrollment: the login and enroll-codex commands that
 #      create it; a rerun once it exists goes on. On a tree mismatch, commit
@@ -77,13 +85,15 @@
 #   6. Every onboarding review runs at the base ref's tip, fetched from the
 #      repository checkout's origin just before `freesided onboard` runs
 #      (which refuses any other -commit), with no deputy start in between;
-#      the state file records that tip, and step 4 pins the deputy to it.
+#      the state file records that tip, and step 4 renders the deputy at it.
 #      A review refused because the tip moved in those seconds keeps the
 #      completed approval in place, and a rerun reviews the new tip with no
 #      start first. Once onboarded, run the review again when the review
 #      configuration digest or the template's repository.base_sha differs
 #      from the ones the last review answered, since prelaunch keeps passing
 #      the old trust profile; the base ref moving on its own asks for none.
+#      A root whose state file predates that record but holds a completed
+#      approval reviews again once, to record what its review binds.
 #      Before that review's approval, stop with its approval command, which
 #      fetches the base ref into the repository checkout first: an approval
 #      after the tip moved applies at the new tip when nothing it covers
@@ -103,7 +113,11 @@
 #      system_health items that all close on a deputy start, start the
 #      deputy once to rerun its start-up checks and prelaunch again; a second
 #      such failure stops with the items' ids.
-#   7. Apply the pass's routing order and pool limits, run
+#   7. Stop (exit 1) while the passing prelaunch says no recorded image
+#      serves the rendered base: a submit then would hold under
+#      image_upkeep_pending until image upkeep builds the tip's image, so
+#      the operator reruns once it has. Then apply the pass's routing
+#      order and pool limits, run
 #      `freesided probe-lineup` (one short call per role), and require
 #      `prelaunch -no-live` to pass.
 #
@@ -123,8 +137,9 @@
 # Progress goes to stderr; logs go to <root>/logs.
 #
 # Exit codes: 0 when the root is ready, 3 when it stopped for an approval,
-# 2 on a usage error or refusal, 1 on any other failure. A scenario pass
-# exits with dev-instance.sh's code.
+# 2 on a usage error or refusal, 1 on any other failure, including a failed
+# fetch of the base ref and a tip no recorded image serves yet. A scenario
+# pass exits with dev-instance.sh's code.
 #
 # Bash 3.2 compatible (macOS /bin/bash). Needs jq, git, go, and lsof.
 set -euo pipefail
@@ -233,7 +248,8 @@ trap cleanup EXIT
 # ------------------------------------------------------------ the template
 # Settings paths the script sets itself; a template or machine file that sets
 # one, or a key inside one, is refused. repository.base_sha isn't one: the
-# template seeds it, and the script overrides it only once a review has run.
+# script always renders the fetched tip there, but a template may set it to
+# name the base the pass requires.
 computed_paths='[["version"],["listen"],["seed_root"],["prompts","prompt_package"],
   ["prompts","specification_prompt_package"],["prompts","remediation_prompt_package"],
   ["repository","checkout"],["agent_tree","commit"],["agent_tree","second_writer"],
@@ -262,6 +278,20 @@ pass_file() {
   elif [[ -n "$base_dir" && -f "$base_dir/$1" ]]; then
     printf '%s\n' "$base_dir/$1"
   fi
+}
+
+# resolve_tip <base_ref>: fetches the base ref from the repository checkout's
+# origin and prints its tip. The fetch also puts the tip in the checkout,
+# which the deputy's base checks and `freesided onboard -source` read the
+# commit from. git's error goes to the scratch directory, since the root's
+# logs may not exist yet.
+resolve_tip() {
+  git -C "$repo_checkout" fetch --quiet --no-tags origin "$1" 2>"$work/fetch-base.err" || {
+    tail -n 20 "$work/fetch-base.err" >&2
+    die "could not fetch $1 from origin in $repo_checkout; exit-root renders the deputy at the base ref's tip"
+  }
+  git -C "$repo_checkout" rev-parse --verify --quiet 'FETCH_HEAD^{commit}' ||
+    die "fetching $1 in $repo_checkout gave no commit"
 }
 
 inputs=(task.md policy.json publication.json work-unit.json)
@@ -301,9 +331,11 @@ if [[ -z "$scenario" ]]; then
   [[ -n "$repo" ]] || refuse 'neither the template nor the machine file sets repository.repo'
   repo_checkout=$(jq -r --arg r "$repo" '.exit_root.repositories[$r].checkout // empty' "$machine")
   [[ "$repo_checkout" == /* ]] || refuse "the machine file names no absolute exit_root.repositories[\"$repo\"].checkout"
-  # The template's pin, read here once: the rendered settings carry the last
-  # reviewed tip in its place.
+  # The base the template requires, if any, read here once: the rendered
+  # settings carry the fetched tip in its place.
   template_base=$(jq -r '.repository.base_sha // empty' "$work/sources.json")
+  base_ref=$(jq -r '.repository.base_ref // empty' "$work/sources.json")
+  [[ -n "$base_ref" ]] || refuse 'neither the template nor the machine file sets repository.base_ref'
   tree_checkout=$(jq -r '.agent_tree.checkout // empty' "$work/sources.json")
   [[ "$tree_checkout" == /* ]] || refuse 'agent_tree.checkout must be an absolute path'
   second_writer=$(jq -r '.second_writer // false' <<<"$pass_json")
@@ -328,6 +360,15 @@ if [[ -z "$scenario" ]]; then
         . != \"-replace-intent\")" "$machine" >/dev/null ||
       refuse "$list must be an array of strings without a flag the script sets or -approve"
   done
+
+  # Every pass renders the deputy at the base ref's tip, so it fetches that
+  # first, before anything on the root is created or changed: the deputy's
+  # repository_base and implementer_image checks read the base from this
+  # checkout. A required base guards a pass that needs one exact commit,
+  # such as the fixture's reset baseline.
+  base_tip=$(resolve_tip "$base_ref") || exit 1
+  [[ -z "$template_base" || "$template_base" == "$base_tip" ]] ||
+    refuse "the template requires repository.base_sha $template_base, but $base_ref's tip in $repo_checkout is $base_tip; reset $base_ref to $template_base, or drop repository.base_sha from the template or machine file so exit-root renders the tip"
 fi
 
 # --------------------------------------------------------- refuse and create
@@ -416,14 +457,15 @@ if [[ -z "$(state_get .tree_commit)" ]]; then
   state_set tree_commit "\"$tree_start\""
 fi
 
-# render_settings: once a review has run, repository.base_sha is the tip it
-# reviewed, so the deputy runs at the base its approval binds.
+# render_settings: repository.base_sha is the tip this run fetched last,
+# step 1's or a later review's, so the deputy follows the base ref; the
+# approval stays the trust profile's, which a moved tip alone doesn't change.
 render_settings() {
   local second='null'
   [[ "$second_writer" != true ]] || second=$(jq -c '.exit_root.second_writer' "$machine")
   jq -n --slurpfile sources "$work/sources.json" --slurpfile s "$state" --slurpfile m "$machine" \
     --arg listen "$listen" --arg root "$root" --arg prompts "$src/prompts/phase-1a" \
-    --arg checkout "$repo_checkout" --argjson second "$second" '
+    --arg checkout "$repo_checkout" --arg base "$base_tip" --argjson second "$second" '
     $sources[0] * {
       version: "freeside-deputy-settings-v1",
       listen: $listen,
@@ -433,8 +475,7 @@ render_settings() {
         specification_prompt_package: ($prompts + "/specifier.md"),
         remediation_prompt_package: ($prompts + "/remediator.md")
       },
-      repository: ({checkout: $checkout}
-        + (if $s[0].onboarded.base_sha == null then {} else {base_sha: $s[0].onboarded.base_sha} end)),
+      repository: {checkout: $checkout, base_sha: $base},
       agent_tree: ({commit: $s[0].tree_commit} + (if $second == null then {} else {second_writer: $second} end)),
       images: {agent: ($s[0].image // $m[0].exit_root.placeholder.image)},
       approved_recipe: ($s[0].recipe // $m[0].exit_root.placeholder.recipe)
@@ -603,33 +644,25 @@ emit_head() {
   printf 'client=bash %s --attach %s\n' "$(printf '%q' "$src/scripts/dev-instance.sh")" "$(printf '%q' "$root")"
 }
 
-# resolve_tip <base_ref>: fetches the base ref from the repository checkout's
-# origin and prints its tip. The fetch also puts the tip in the checkout,
-# which `freesided onboard -source` reads the commit's image inputs from.
-resolve_tip() {
-  git -C "$repo_checkout" fetch --quiet --no-tags origin "$1" 2>"$logs/fetch-base.err" || {
-    tail -n 20 "$logs/fetch-base.err" >&2
-    die "could not fetch $1 from origin in $repo_checkout; the review needs the base ref's tip"
-  }
-  git -C "$repo_checkout" rev-parse --verify --quiet 'FETCH_HEAD^{commit}' ||
-    die "fetching $1 in $repo_checkout gave no commit"
-}
-
 # onboard_review: the one-time review, never -approve; stops with exit 3
 # unless the review carried the active approval forward, which it records
 # as the completed approval and returns. The digest comes from the state
 # file, so a rerun that starts no deputy (the installation resume) still
 # has it. `freesided onboard` refuses a -commit that isn't the base ref's
 # live tip, so the review runs at the tip fetched just before it, with no
-# deputy start in between, and the settings then pin the deputy there.
+# deputy start in between, and the run then renders the deputy there.
 onboard_review() {
   local digest tip bound args=() arg status review="$root/daemon/onboard-review.json" approved="$root/daemon/onboard-approved.json"
   digest=$(state_get .review_configuration_digest)
   [[ -n "$digest" ]] || die "the last composed start's manifest names no review_configuration_digest; see $logs/composition-manifest.json"
-  tip=$(resolve_tip "$(setting .repository.base_ref)") || exit 1
+  tip=$(resolve_tip "$base_ref") || exit 1
+  # The tip can move during a deputy start; a required base still binds.
+  [[ -z "$template_base" || "$template_base" == "$tip" ]] ||
+    refuse "the template requires repository.base_sha $template_base, but $base_ref moved to $tip before the onboarding review; reset $base_ref to $template_base and rerun"
+  base_tip=$tip
   args=(onboard "$(setting .repository.repo)" -db "$root/daemon/freeside.db"
     -repository-id "$(setting .repository.repository_id)" -commit "$tip"
-    -base-ref "$(setting .repository.base_ref)" -source "$repo_checkout" -review-config-digest "$digest")
+    -base-ref "$base_ref" -source "$repo_checkout" -review-config-digest "$digest")
   while IFS= read -r arg; do args+=("$arg"); done < <(jq -r --arg r "$repo" \
     '(.exit_root.onboard_args // [])[], (.exit_root.repositories[$r].onboard_args // [])[]' "$machine")
   if [[ "$replace_intent" == true ]]; then
@@ -677,7 +710,7 @@ onboard_review() {
     # covers changed, reading the tip's recipe and image inputs from the
     # checkout.
     local command
-    command="$(printf '%q ' git -C "$repo_checkout" fetch --quiet --no-tags origin "$(setting .repository.base_ref)")&& "
+    command="$(printf '%q ' git -C "$repo_checkout" fetch --quiet --no-tags origin "$base_ref")&& "
     command+="$(printf '%q ' "$freesided" "${args[@]}" -approve "$(jq -r '.approval_digest' "$review")")> $(printf '%q' "$approved")"
     state_set approval_command "$(jq -n --arg c "$command" '$c')"
     state_set onboarded "$bound"
@@ -747,7 +780,8 @@ stop_for_approval() {
 # image while prelaunch still passes on the old one, so this runs whenever
 # the approval changes, not only when prelaunch names the image missing.
 # An approval that applied at a tip the base ref moved to after the review
-# names that tip in image_request.commit_sha, and the deputy runs there.
+# names that tip in image_request.commit_sha, which the state file records
+# as the base the approval bound.
 pin_approved_image() {
   local approved="$root/daemon/onboard-approved.json" source image recipe commit bound previous
   approved_complete || return 0
@@ -760,7 +794,7 @@ pin_approved_image() {
   bound=$(state_get .onboarded.base_sha)
   if [[ -n "$commit" && -n "$bound" && "$commit" != "$bound" ]]; then
     state_set onboarded "$(jq -c --arg b "$commit" '.onboarded + {base_sha: $b}' "$state")"
-    say "the approval applied at $commit, the base ref's tip after the review at $bound; the deputy runs there"
+    say "the approval applied at $commit, the base ref's tip after the review at $bound"
   fi
   # Evidence the root stored under the recipe this replaces still names it,
   # and the deputy's store refuses evidence under a recipe it doesn't
@@ -788,20 +822,29 @@ take_onboarding_image() {
 # configuration or base has since moved, so the script compares the review
 # configuration digest and the template's repository.base_sha with what its
 # onboarding review answered, and reviews again, once, when either moved.
-# The base ref moving on its own asks for no review: the deputy stays pinned
-# to the tip the last review bound. A review not yet approved stops for its
-# approval rather than running again, with two exceptions: --replace-intent
-# reviews again under a new intent, and an approval that ran but did not
-# complete (its redirect left onboard-approved.json without a complete
-# status) reviews again, because its digest may no longer match: an
-# approval that promoted the installation before a failed build leaves it
-# trusted, and the next review returns a new digest. A root onboarded
-# before the script recorded this skips the check, and one recorded before
-# it kept the template's pin reads the reviewed base, which was then that
-# pin.
+# The base ref moving on its own asks for no review: the deputy follows the
+# tip, and the approval stays the trust profile's. A review not yet approved
+# stops for its approval rather than running again, with two exceptions:
+# --replace-intent reviews again under a new intent, and an approval that
+# ran but did not complete (its redirect left onboard-approved.json without
+# a complete status) reviews again, because its digest may no longer match:
+# an approval that promoted the installation before a failed build leaves
+# it trusted, and the next review returns a new digest. A root with no
+# record and no completed approval is a fresh one, which prelaunch's
+# trust_profile step onboards. A root with no record but a completed
+# approval was onboarded before the script recorded what a review bound, so
+# there is nothing to compare: it reviews again, and that review records
+# it. One recorded before the template's pin was kept reads the reviewed
+# base, which was then that pin.
 check_onboarding() {
   local bound_digest bound_base digest moved=false
-  [[ -n "$(state_get .onboarded)" ]] || return 0
+  if [[ -z "$(state_get .onboarded)" ]]; then
+    approved_complete || return 0
+    say "the root's onboarding predates the record of what its review bound; reviewing again at $base_ref's tip"
+    onboard_review
+    approved_complete || stop_for_approval
+    return 0
+  fi
   if [[ "$replace_intent" == true ]]; then
     say "reviewing again under a new installation intent (--replace-intent)"
     moved=true
@@ -817,7 +860,7 @@ check_onboarding() {
     moved=true
   fi
   if [[ "$template_base" != "$bound_base" ]]; then
-    say "repository.base_sha moved from $bound_base to $template_base in the template since the onboarding review; reviewing the base ref's tip"
+    say "repository.base_sha moved from ${bound_base:-none} to ${template_base:-none} in the template since the onboarding review; reviewing the base ref's tip"
     moved=true
   fi
   [[ "$moved" == false ]] || onboard_review
@@ -825,13 +868,16 @@ check_onboarding() {
 }
 
 # start_key: the inputs a deputy start adopts from, the rendered settings
-# and the root's enrollments, as one digest. The enrollment part keeps only
-# what adoption reads, leaving out generations, expiries, timestamps, pools,
-# and model catalogs, which change without changing the adopted tree. Prints
-# nothing when the enrollments can't be read, which forces a start.
+# and the root's enrollments, as one digest. The settings part leaves out
+# repository.base_sha, which no adoption input reads and which follows the
+# base ref, so a moved tip alone starts no deputy; prelaunch reads the base
+# from the settings itself. The enrollment part keeps only what adoption
+# reads, leaving out generations, expiries, timestamps, pools, and model
+# catalogs, which change without changing the adopted tree. Prints nothing
+# when the enrollments can't be read, which forces a start.
 start_key() {
   local settings_key enrollments db="$root/daemon/freeside.db"
-  settings_key=$(git -C "$repo_root" hash-object -- "$settings")
+  settings_key=$(jq -S 'del(.repository.base_sha)' "$settings" | git -C "$repo_root" hash-object --stdin)
   if [[ ! -f "$db" ]]; then
     enrollments=none
   elif ! enrollments=$("$freesided" auth list -db "$db" 2>"$logs/auth-list.err" | jq -cS '
@@ -905,6 +951,23 @@ for _ in 1 2 3 4 5 6 7 8; do
   esac
 done
 [[ -z "$missing" && "$passed" == true ]] || die 'the root did not converge; see the steps above'
+
+# Readiness passes a base no recorded image serves, since attempts hold on
+# it, so a submit now would wait under image_upkeep_pending. The match is on
+# the evidence prose of preflight's implementer_image selection
+# (daemon/cmd/freesided/preflight.go), which prelaunch -no-live copies under
+# the composition group; if that wording changes, this stop stops firing.
+# It runs before routing, so a rerun pays for no lineup probe.
+rendered_base=$(setting .repository.base_sha)
+if jq -e --arg e "no recorded image serves base $rendered_base" \
+  'any(.checks[]; .group == "composition" and .name == "implementer_image" and (.evidence | contains($e)))' \
+  "$root/daemon/prelaunch.json" >/dev/null; then
+  emit_head
+  say "no recorded image serves $base_ref's tip $rendered_base yet, so a submit now would hold under image_upkeep_pending"
+  say "image upkeep builds it in a running deputy: start $freesided deputy -root $root, wait for its image upkeep to record the tip's image, stop it, and rerun this command"
+  say "if upkeep refuses the tip instead, as its gate may for a changed recipe, this stop stays until that change is approved and an image serves the tip"
+  exit 1
+fi
 
 # ------------------------------------------------------- routing and pools
 writer=$(setting .agent_tree.auth_identity)

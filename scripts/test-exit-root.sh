@@ -30,14 +30,18 @@
 # installation-intent stop, the reviewer-enrollment stop before the first
 # start and the resume once the store exists, the rerun on a new build or a
 # new enrollment, the serve wait, the review at the base ref's tip fetched
-# just before it (after a template pin older than the tip, and after a
-# deputy start that moved the tip), a root recorded before the template's
-# pin was kept, the base ref moving alone asking for no review, a review
-# refused at a moved tip keeping the approval, an approval run after the tip
-# moved applying at the tip and pinning the deputy there, the re-onboarding after a
+# just before it (after a template pin moved to the tip, and after a deputy
+# start that moved the tip), a root recorded before the template's pin was
+# kept, a root whose state predates the onboarded record reviewing again,
+# the base ref moving alone rendering the new tip with no review and no
+# deputy start, a required base that differs from the fetched tip (at the
+# start, and after a deputy start moved the tip), a failed
+# fetch, a review refused at a moved tip keeping the approval, an approval
+# run after the tip moved applying at the tip, the re-onboarding after a
 # moved review configuration, the re-pin of a newer approval's image, the
-# submit line, port selection, the seeded-routing overlay, the scenario
-# pass, and the refusals that create nothing.
+# withheld ready while no recorded image serves the tip, the submit line,
+# port selection, the seeded-routing overlay, the scenario pass, and the
+# refusals that create nothing.
 #
 # Exit code: 0 when every assertion passes, 1 otherwise.
 set -euo pipefail
@@ -219,10 +223,19 @@ prelaunch)
   fi
   passed=false
   [[ "$missing" != null || "${FAKE_PRELAUNCH_MODE:-}" == fail || "$card" == true ]] || passed=true
-  jq -n --arg m "$missing" --argjson passed "$passed" --argjson card "$card" '{
+  # Mode image-pending passes, as readiness does, with preflight's
+  # implementer_image wording for a base no recorded image serves.
+  pending=false
+  [[ "${FAKE_PRELAUNCH_MODE:-}" != image-pending ]] || pending=true
+  jq -n --arg m "$missing" --argjson passed "$passed" --argjson card "$card" --argjson pending "$pending" \
+    --arg base "$(jq -r '.repository.base_sha' "$settings")" '{
     passed: $passed,
     first_missing: (if $m == "null" then null else {prerequisite: $m, evidence: "fake", fix: "fake"} end),
-    checks: (if $passed then [] elif $card then
+    checks: (if $passed and $pending then
+      [{group: "composition", name: "implementer_image", status: "passed",
+        evidence: ("implementer image resolved exact digest sha256:fake and passed required tool probes; no recorded image serves base "
+          + $base + ", so a daemon whose observed tip is that base starts ward on the admitted image, and writer attempts will hold under image_upkeep_pending until image upkeep records an image for the base")}]
+    elif $passed then [] elif $card then
       [{group: "state", name: "system_health", status: "failed", evidence: "open items hold unattended admission"}]
     else [{group: "rig", name: "rig", status: "failed", evidence: "fake failure"}] end),
     health_items: (if $card then [{id: "system-health-deputy-preflight-7", requested_decision: ["acknowledge"],
@@ -407,6 +420,10 @@ REPO=$TMP/repo
 mkdir -p "$REPO/scripts" "$REPO/daemon/cmd/freesided" "$REPO/prompts/phase-1a"
 cp "$SCRIPT_DIR/exit-root.sh" "$SCRIPT_DIR/supervised-paths.sh" "$REPO/scripts/"
 cp -R "$SCRIPT_DIR/exit-root" "$REPO/scripts/exit-root"
+# The synthetic fixture follows the base ref's tip, as a real run's
+# template does; the cases that need a required base set one on a copy.
+jq 'del(.repository.base_sha)' "$SCRIPT_DIR/exit-root/passes/fixture/settings.json" \
+  >"$REPO/scripts/exit-root/passes/fixture/settings.json"
 cat >"$REPO/scripts/dev-instance.sh" <<'DEV'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$STUB_DIR/dev-instance.args"
@@ -445,7 +462,15 @@ git clone -q "$UPSTREAM" "$CLONE" 2>/dev/null
 git_q -C "$CLONE" commit --allow-empty -m 'Start the fixture repository'
 git -C "$CLONE" push -q origin HEAD:refs/heads/main
 upstream_tip() { git -C "$UPSTREAM" rev-parse refs/heads/main; }
-TEMPLATE_BASE=584dba6120ee6e126460438032c3189762603306
+# The bundled fixture's required base, the fixture repository's reset
+# baseline, which the synthetic upstream never holds.
+TEMPLATE_BASE=$(jq -r '.repository.base_sha' "$SCRIPT_DIR/exit-root/passes/fixture/settings.json")
+
+# pin_template <dir> <sha>: sets the template copy's required base.
+pin_template() {
+  jq --arg b "$2" '.repository.base_sha = $b' "$1/settings.json" >"$1/settings.json.tmp"
+  mv "$1/settings.json.tmp" "$1/settings.json"
+}
 
 # deputy_calls_before_review: how many deputy starts the case's run logged
 # before its first onboard call.
@@ -532,10 +557,10 @@ assert_eq "$(jq -r .review_configuration_digest "$FIX/exit-root.json")" "$REVIEW
 mode=$(stat -c %a "$FIX/logs/composition-manifest.json" 2>/dev/null || stat -f %Lp "$FIX/logs/composition-manifest.json" 2>/dev/null || true)
 assert_eq "$mode" 600 'manifest copy mode'
 assert_line "$CASE_DIR/onboard-1.args" "$CLONE"
-# The review runs at the base ref's tip, not the template's older pin.
+# The review runs at the base ref's tip.
 assert_line "$CASE_DIR/onboard-1.args" "$(upstream_tip)"
-assert_eq "$(jq -r '.onboarded.base_sha, .onboarded.template_base_sha' "$FIX/exit-root.json" | tr '\n' ' ')" \
-  "$(upstream_tip) $TEMPLATE_BASE " 'state binds the reviewed tip and the template pin'
+assert_eq "$(jq -r '[.onboarded.base_sha, .onboarded.template_base_sha] | join(",")' "$FIX/exit-root.json")" \
+  "$(upstream_tip)," 'state binds the reviewed tip and no template pin'
 assert_line "$CASE_DIR/onboard-1.args" '-image-name'
 assert_line "$CASE_DIR/onboard-1.args" '-registration-id'
 if grep -q "main.version=$SHA1" "$CASE_DIR/go.log" && grep -q "^$FIX/builds/.partial.*/src/daemon |" "$CASE_DIR/go.log"; then
@@ -564,9 +589,8 @@ expected=$(jq -S -n --slurpfile m "$MACHINE" --slurpfile t "$REPO/scripts/exit-r
     repository: {checkout: $clone, base_sha: $base}, agent_tree: {commit: $tip},
     images: {agent: $m[0].exit_root.placeholder.image}, approved_recipe: $m[0].exit_root.placeholder.recipe}')
 assert_eq "$(jq -S . "$settings")" "$expected" 'rendered settings'
-assert_eq "$(jq -r '.repository.base_sha' "$REPO/scripts/exit-root/passes/fixture/settings.json")" "$TEMPLATE_BASE" 'template pin'
 assert_eq "$(jq -r '.repository.base_sha, .writers.implementer.model, .review.model, .repository.project' "$settings" | tr '\n' ' ')" \
-  "$(upstream_tip) claude-haiku-5-5 gpt-6-luna fixture " 'fixture-table values, with the reviewed tip as the base'
+  "$(upstream_tip) claude-haiku-5-5 gpt-6-luna fixture " 'fixture-table values, with the fetched tip as the base'
 keys=$(jq -r '[paths(type != "object") | select(all(.[]; type == "string")) | join(".")] | sort | join(" ")' "$settings")
 assert_eq "$keys" "$(tr -s ' \n' '\n' <<<"$SETTINGS_KEYS" | sort | tr '\n' ' ' | sed 's/ $//')" 'settings key set'
 assert_eq "$(jq -r .commit_author.app_slug "$FIX/inputs/publication.json")" '<prod App slug>' 'publication commit author'
@@ -909,20 +933,18 @@ assert_rc 3
 approve
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
 assert_rc 0
-# The base ref moves past the reviewed tip, so the template's new pin is
-# older than the tip the review must cover.
+# The base ref moves, and the template requires the new tip.
 "$STUB_BIN/advance-upstream"
-NEW_BASE=1111111111111111111111111111111111111111
-jq --arg b "$NEW_BASE" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
-mv "$CASE_DIR/t.json" "$TPL/settings.json"
+NEW_BASE=$(upstream_tip)
+pin_template "$TPL" "$NEW_BASE"
 mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" moves
 assert_rc 3
-assert_contains "repository.base_sha moved from $TEMPLATE_BASE to $NEW_BASE"
+assert_contains "repository.base_sha moved from none to $NEW_BASE"
 # onboard-1 is the first review and onboard-2 the operator's approval.
 assert_line "$CASE_DIR/onboard-3.args" "$(upstream_tip)"
 assert_eq "$(deputy_calls_before_review)" 0 'deputy starts before the review'
-assert_eq "$(jq -r .repository.base_sha "$ROOTS/moves/daemon/settings.json")" "$(upstream_tip)" 'rendered base is the reviewed tip'
+assert_eq "$(jq -r .repository.base_sha "$ROOTS/moves/daemon/settings.json")" "$(upstream_tip)" 'rendered base is the fetched tip'
 assert_eq "$(jq -r '.onboarded.base_sha, .onboarded.template_base_sha' "$ROOTS/moves/exit-root.json" | tr '\n' ' ')" \
   "$(upstream_tip) $NEW_BASE " 'state binds the reviewed tip and the new pin'
 first_approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
@@ -940,8 +962,8 @@ assert_rc 3
 approve
 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
 assert_rc 0
-jq --arg b "$NEW_BASE" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
-mv "$CASE_DIR/t.json" "$TPL/settings.json"
+NEW_BASE=$(upstream_tip)
+pin_template "$TPL" "$NEW_BASE"
 FAKE_ONBOARD_MODE=carry FAKE_APPROVE_IMAGE=$FAKE_IMAGE2 \
   run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
 assert_rc 0
@@ -985,45 +1007,71 @@ if [[ "$(upstream_tip)" != "$before" ]]; then ok; else report_failure "the deput
 assert_line "$CASE_DIR/onboard-1.args" "$(upstream_tip)"
 
 begin_case "a root recorded before the template pin was kept reads its reviewed base as that pin"
-run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" legacy
+TPL=$CASE_DIR/template
+cp -R "$REPO/scripts/exit-root/passes/fixture" "$TPL"
+pin_template "$TPL" "$(upstream_tip)"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" legacy
 assert_rc 3
 approve
-run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" legacy
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" legacy
 assert_rc 0
 # Such a root's onboarded record has no template_base_sha, and its base_sha
 # is the template's pin, which the review then ran at.
-jq --arg b "$TEMPLATE_BASE" '.onboarded = {review_configuration_digest: .onboarded.review_configuration_digest, base_sha: $b}' \
+jq --arg b "$(upstream_tip)" '.onboarded = {review_configuration_digest: .onboarded.review_configuration_digest, base_sha: $b}' \
   "$ROOTS/legacy/exit-root.json" >"$CASE_DIR/state.json"
 cp "$CASE_DIR/state.json" "$ROOTS/legacy/exit-root.json"
 mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
-run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" legacy
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" legacy
 assert_rc 0
 assert_not_contains 'moved from'
 if grep -qx onboard "$CASE_DIR/calls.log"; then report_failure "an unchanged legacy root reviewed again"; else ok; fi
-assert_eq "$(jq -r .repository.base_sha "$ROOTS/legacy/daemon/settings.json")" "$TEMPLATE_BASE" 'legacy root keeps its reviewed base'
 
-begin_case "the base ref moving after a review asks for no review and starts no deputy"
-TPL=$TMP/carry-template
-# Settle the template edits the cases above made, then move only the tip.
-run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+begin_case "a root whose state predates the onboarded record reviews again and records it"
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" older
+assert_rc 3
+approve
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" older
 assert_rc 0
-assert_not_exists "$CASE_DIR/onboard-1.args"
-reviewed=$(jq -r .onboarded.base_sha "$ROOTS/carry/exit-root.json")
+jq 'del(.onboarded)' "$ROOTS/older/exit-root.json" >"$CASE_DIR/state.json"
+cp "$CASE_DIR/state.json" "$ROOTS/older/exit-root.json"
 "$STUB_BIN/advance-upstream"
 mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
-run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+rm -f "$CASE_DIR"/onboard-*.args
+run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" older
+assert_rc 3
+assert_contains "the root's onboarding predates the record of what its review bound"
+assert_line "$CASE_DIR/onboard-1.args" "$(upstream_tip)"
+assert_eq "$(jq -r .onboarded.base_sha "$ROOTS/older/exit-root.json")" "$(upstream_tip)" 'the review recorded what it bound'
+
+begin_case "the base ref moving after a review renders the new tip with no review and no deputy start"
+# Settle the root at the current tip, then move only the tip.
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+"$STUB_BIN/advance-upstream"
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
 assert_rc 0
 assert_not_exists "$CASE_DIR/onboard-1.args"
 if grep -qx deputy "$CASE_DIR/calls.log"; then report_failure "a moved tip alone started the deputy"; else ok; fi
-assert_eq "$(jq -r .repository.base_sha "$ROOTS/carry/daemon/settings.json")" "$reviewed" 'deputy stays at the reviewed tip'
+assert_eq "$(jq -r .repository.base_sha "$FIX/daemon/settings.json")" "$(upstream_tip)" 'deputy renders the fetched tip'
+if git -C "$CLONE" cat-file -e "$(upstream_tip)^{commit}" 2>/dev/null; then ok; else report_failure "the checkout lacks the fetched tip"; fi
 
 begin_case "a review refused because the tip moved keeps the approval, and a rerun reviews at once"
+# Settle the template edits the cases above made, at a pin on the current
+# tip, so the run below changes only the pin.
+TPL=$TMP/carry-template
+pin_template "$TPL" "$(upstream_tip)"
+FAKE_ONBOARD_MODE=carry run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
+assert_rc 0
+mv "$CASE_DIR/calls.log" "$CASE_DIR/calls-settle.log"
+rm -f "$CASE_DIR"/onboard-*.args
 APPROVED=$ROOTS/carry/daemon/onboard-approved.json
 cp "$APPROVED" "$CASE_DIR/approved-before.json"
 superseded() { find "$ROOTS/carry/daemon" -name 'onboard-approved.superseded-*' | wc -l | tr -d ' '; }
 superseded_before=$(superseded)
-NEW_BASE2=2222222222222222222222222222222222222222
-jq --arg b "$NEW_BASE2" '.repository.base_sha = $b' "$TPL/settings.json" >"$CASE_DIR/t.json"
+# Dropping the template's pin, as a real run's template does, asks for one
+# review, which the tip moving refuses.
+jq 'del(.repository.base_sha)' "$TPL/settings.json" >"$CASE_DIR/t.json"
 mv "$CASE_DIR/t.json" "$TPL/settings.json"
 FAKE_ONBOARD_MODE=moves run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" carry
 assert_rc 1
@@ -1037,9 +1085,9 @@ FAKE_ONBOARD_MODE=carry run_exit_root --pass fixture --template "$TPL" --build "
 assert_rc 0
 assert_line "$CASE_DIR/onboard-2.args" "$(upstream_tip)"
 assert_eq "$(deputy_calls_before_review)" 0 'deputy starts before the rerun review'
-assert_eq "$(jq -r .onboarded.template_base_sha "$ROOTS/carry/exit-root.json")" "$NEW_BASE2" 'rerun answered the new pin'
+assert_eq "$(jq -r .onboarded.template_base_sha "$ROOTS/carry/exit-root.json")" '' 'rerun answered the dropped pin'
 
-begin_case "an approval run after the tip moved applies at the tip, and the deputy runs there"
+begin_case "an approval run after the tip moved applies at the tip, and the state binds it"
 run_exit_root --pass fixture --build "$SHA1" --machine "$MACHINE" late
 assert_rc 3
 approval=$(sed -n 's/^approval=//p' "$CASE_DIR/stdout")
@@ -1058,6 +1106,60 @@ assert_contains "the approval applied at $(upstream_tip), the base ref's tip aft
 assert_eq "$(jq -r .repository.base_sha "$ROOTS/late/daemon/settings.json")" "$(upstream_tip)" 'rendered base is the approval commit'
 assert_eq "$(jq -r .onboarded.base_sha "$ROOTS/late/exit-root.json")" "$(upstream_tip)" 'state binds the approval commit'
 if grep -qx onboard "$CASE_DIR/calls.log"; then report_failure "the approved root reviewed again"; else ok; fi
+
+begin_case "a required base that differs from the fetched tip is refused, on a new root and a rerun"
+# The bundled fixture, unreset: its required base isn't the upstream's tip.
+TPL=$CASE_DIR/unreset
+cp -R "$SCRIPT_DIR/exit-root/passes/fixture" "$TPL"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" unreset
+assert_rc 2
+assert_contains "requires repository.base_sha $TEMPLATE_BASE, but main's tip in $CLONE is $(upstream_tip)"
+assert_contains 'drop repository.base_sha from the template or machine file'
+assert_not_exists "$ROOTS/unreset"
+assert_not_exists "$CASE_DIR/go.log"
+pin_template "$TPL" 1111111111111111111111111111111111111111
+cp "$FIX/daemon/settings.json" "$CASE_DIR/settings-before.json"
+cp "$FIX/exit-root.json" "$CASE_DIR/state-before.json"
+run_exit_root --pass fixture --template "$TPL" --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 2
+assert_contains "requires repository.base_sha 1111111111111111111111111111111111111111, but main's tip"
+if cmp -s "$FIX/daemon/settings.json" "$CASE_DIR/settings-before.json" &&
+  cmp -s "$FIX/exit-root.json" "$CASE_DIR/state-before.json"; then ok; else report_failure "the refused rerun changed the root"; fi
+assert_not_exists "$CASE_DIR/calls.log"
+
+begin_case "a required base the tip moves past during the first deputy start is refused before the review"
+TPL=$CASE_DIR/pinned
+cp -R "$REPO/scripts/exit-root/passes/fixture" "$TPL"
+pin_template "$TPL" "$(upstream_tip)"
+FAKE_DEPUTY_ADVANCES_TIP=1 run_exit_root --pass fixture --template "$TPL" --build "$SHA1" --machine "$MACHINE" pinned-race
+assert_rc 2
+assert_contains "but main moved to $(upstream_tip) before the onboarding review"
+if grep -qx onboard "$CASE_DIR/calls.log"; then report_failure "the refused run reviewed"; else ok; fi
+
+begin_case "a failed fetch of the base ref stops with git's error and creates no root"
+BROKEN=$CASE_DIR/broken-clone
+git clone -q "$UPSTREAM" "$BROKEN" 2>/dev/null
+git -C "$BROKEN" remote set-url origin "$CASE_DIR/missing.git"
+M=$CASE_DIR/machine.json
+make_machine "$M" "$CASE_DIR/roots" ".exit_root.repositories[\"$REPO_SLUG\"].checkout = \"$BROKEN\""
+run_exit_root --pass fixture --build "$SHA1" --machine "$M" nofetch
+assert_rc 1
+assert_contains "could not fetch main from origin in $BROKEN"
+assert_contains 'missing.git'
+assert_not_exists "$CASE_DIR/roots"
+assert_not_exists "$CASE_DIR/go.log"
+
+begin_case "a tip no recorded image serves withholds ready, and a rerun once it does is ready"
+FAKE_PRELAUNCH_MODE=image-pending run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 1
+assert_contains "no recorded image serves main's tip $(upstream_tip) yet, so a submit now would hold under image_upkeep_pending"
+assert_contains 'wait for its image upkeep to record the tip'"'"'s image'
+if grep -q '^submit=' "$CASE_DIR/stdout"; then report_failure "a root with no image for its tip printed submit="; else ok; fi
+assert_not_contains 'ready:'
+assert_not_exists "$CASE_DIR/probe.args"
+run_exit_root --pass fixture --build "$SHA2" --machine "$MACHINE" fix
+assert_rc 0
+if grep -q '^submit=' "$CASE_DIR/stdout"; then ok; else report_failure "the rerun with an image printed no submit="; fi
 
 begin_case "usage errors and an unknown pass create nothing"
 run_exit_root --pass fixture --machine "$MACHINE" nobuild
