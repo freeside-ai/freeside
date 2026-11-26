@@ -118,6 +118,7 @@ type conformanceConfiguration struct {
 	AgentCLI          string   `json:"agent_cli"`
 	AgentCLISHA256    string   `json:"agent_cli_sha256"`
 	AgentCLISettings  []string `json:"agent_cli_settings"`
+	AgentCLIInput     []string `json:"agent_cli_input"`
 	Path              []string `json:"path"`
 	StallLimit        int64    `json:"stall_limit_ns"`
 	EndGrace          int64    `json:"end_grace_ns"`
@@ -126,14 +127,14 @@ type conformanceConfiguration struct {
 
 // ConfigurationDigest is the stable identity of the configuration a
 // conformance pass proves: the daemon executable, the agent CLI's fixed
-// settings, and every Config field, with the rule file entered by its
+// settings and input format, and every Config field, with the rule file entered by its
 // digest.
 func (b *Backend) ConfigurationDigest() domain.Digest {
 	if b == nil || b.rules == nil {
 		return ""
 	}
 	body, err := json.Marshal(conformanceConfiguration{
-		Version:           "freeside.cordon.conformance-configuration/v2",
+		Version:           "freeside.cordon.conformance-configuration/v3",
 		Daemon:            b.daemonPath + "@" + b.daemonDigest,
 		Rules:             contentaddr.Sum(b.rules),
 		RunsRoot:          b.cfg.RunsRoot,
@@ -147,6 +148,7 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		AgentCLI:          b.cfg.AgentCLI,
 		AgentCLISHA256:    b.cfg.AgentCLISHA256,
 		AgentCLISettings:  cliSettings,
+		AgentCLIInput:     cliInput,
 		Path:              b.cfg.Path,
 		StallLimit:        int64(b.cfg.StallLimit),
 		EndGrace:          int64(b.cfg.EndGrace),

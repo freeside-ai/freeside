@@ -10,9 +10,17 @@
 // applied twice.
 //
 // The agent gets the enrolled identity's setup token on its own pipe, fd 3,
-// named by CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR; the prompt stays alone
-// on stdin, and no argv, environment, or file under the launch's directory
+// named by CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR; stdin carries only
+// messages, and no argv, environment, or file under the launch's directory
 // carries the token. Rationale: devlog/2026-11-22-2039-cordoned-writer-token.md.
+//
+// The CLI reads its stdin as streamed JSON messages: the prompt first, then
+// any message an operator sends the running writer (SendMessage), which
+// the daemon leaves in the launch's inbox and the supervisor takes
+// (inbox.go). The supervisor closes the input once a turn ends with no
+// message waiting, so the CLI exits as a one-prompt launch does, and the
+// run still ends by the CLI's exit status. Rationale:
+// devlog/2026-11-26-1700-steer-cordoned-writer.md.
 //
 // A launch's directory, <RunsRoot>/<RunID>, holds three parts:
 //
@@ -23,10 +31,10 @@
 //	  mise-state/ MISE_STATE_DIR, so mise's trust in the worktree's config
 //	             ends with the run (#3601)
 //	ctl/       the rule file, the proof's tag and control, the transcript
-//	           (the agent's stdout), its stderr, the prompt, the
-//	           supervisor's stderr, and the records (record.go): the
-//	           supervisor's request, the claim, the cancellation marker,
-//	           and the end and export records
+//	           (the agent's stdout), its stderr, the prompt, the inbox and
+//	           its input-closed marker, the supervisor's stderr, and the
+//	           records (record.go): the supervisor's request, the claim,
+//	           the cancellation marker, and the end and export records
 //	export/    the export's manifests and blobs, once Export runs
 //
 // ctl and export sit under a protected root and outside RUN_ROOT, so the

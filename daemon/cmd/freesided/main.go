@@ -151,6 +151,9 @@ func main() {
 		case "stop":
 			runStopMain(os.Args[2:])
 			return
+		case "message":
+			runMessageMain(os.Args[2:])
+			return
 		case "drain":
 			runDrainMain(os.Args[2:])
 			return

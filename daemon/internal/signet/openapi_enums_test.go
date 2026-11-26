@@ -153,6 +153,8 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"RestartBlockerKind":          enumStrings(domain.AllRestartBlockerKinds),
 		"ExecutionHostCondition":      enumStrings(domain.AllExecutionHostConditions),
 		"WorkUnitCompatibility":       enumStrings(domain.AllWorkUnitCompatibilities),
+		"OperatorMessageState":        enumStrings(domain.AllOperatorMessageStates),
+		"OperatorMessageRefusal":      enumStrings(domain.AllOperatorMessageRefusals),
 
 		// Signet-owned wire vocabulary for the transcript read.
 		"InvocationTranscriptAvailability": enumStrings(signet.AllInvocationTranscriptAvailabilities),

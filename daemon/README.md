@@ -2137,6 +2137,38 @@ and concludes the Stop, as it does for a client's.
   start. To give a task up offline, use `freesided abandon`, which closes the
   task's workflow but doesn't stop an execution in flight.
 
+### Message A Running Writer
+
+`freesided message -db <database> -run <run-id> -invocation <invocation-id>
+[-text <text>]` sends an operator's message to a running cordoned writer,
+with the same effect and record as a client's `send_writer_message` command
+(#3632). With no `-text` it reads the message from stdin, up to 8 KiB of
+UTF-8. It forwards to the running daemon over the control socket.
+
+- **It prints the message's record** as one JSON object on stdout. The
+  `sender` is `cli:<account>`, as `freesided stop` records it.
+- **The record is written before the message is offered,** then settles
+  once: `delivered` when the run's supervisor took it for the writer's
+  input, or `refused` with a `refusal` reason (`run_ended`,
+  `input_closed`, `not_streamed`, `not_taken`, `not_started`, or, after a
+  restart found the run's files gone, `delivery_unknown`). A record left
+  `recorded` means the offer didn't answer; the next start offers it again
+  under the same ordinal, and the run never writes it to the writer twice.
+- **`delivered` is at most once.** It means the run's supervisor took the
+  message for the writer's input, never that the writer read it: a writer
+  that exits before reading its input never sees it, and neither does one
+  whose supervisor dies after the take.
+- **It refuses before recording** an invocation the run doesn't record as a
+  writer, a warded writer, text that is empty, not UTF-8, or over the
+  bound, and a daemon with no driver.
+- **The transcript read returns the records** beside the agent's transcript,
+  as `operator_messages` on `GET
+  /runs/{run_id}/invocations/{invocation_id}/transcript`, for a running and
+  an ended writer. The transcript's scan never screens them: they are the
+  operator's own text.
+- **It needs a running daemon.** Only the running daemon's driver can offer
+  the message to the run.
+
 ### Inspect A Live Database
 
 A `prod` or `dev` daemon holds its database in SQLite exclusive locking mode
@@ -7084,8 +7116,8 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
 - **The token reaches the CLI alone.** `LaunchRequest.Token` carries the
   enrolled identity's setup token, and a request without one is refused
   before anything is created. The agent reads it from its own pipe on fd 3,
-  named by `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3`; the prompt stays
-  alone on stdin, the canary gets nothing, and the CLI keeps its config in
+  named by `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3`; stdin carries only
+  messages, the canary gets nothing, and the CLI keeps its config in
   the launch's own `run/config`. No argv, environment, transcript, or file
   under the launch's directory holds the token.
 - **A supervisor, not the daemon, runs each launch.** The daemon writes
@@ -7099,6 +7131,24 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   launch outlives a daemon restart. `Detach` makes every waiting `Launch`
   and `Recover` return `ErrDetached` and leaves the runs to their
   supervisors.
+- **An operator's message reaches a running writer.** A launch fixes
+  `--input-format stream-json` after its settings and refuses a caller's
+  own, and the supervisor writes the prompt as the first message.
+  `SendMessage` leaves a message in `ctl/messages/` as
+  `<ordinal>.json`; the supervisor takes it by renaming it to `.taken`,
+  while a turn runs or when one ends, and writes it to the agent's input.
+  The daemon withdraws one nobody took by renaming it to `.refused`, so
+  exactly one rename wins. When a turn ends, which the supervisor reads
+  from a `result` line on stdout, with no message waiting, it writes
+  `ctl/input-closed.json` and closes the input; it does so too when the
+  agent exits. The CLI runs a message it read before the close, and the
+  run still ends by its exit status, so an early or forged `result` only
+  closes the input early. A message is refused once the run ended, its
+  input closed, or nobody took it within 10 seconds; a run launched before
+  the inbox has none and is refused as not streamed. An ordinal offered
+  again settles from its files, so a restarted daemon can offer it again.
+  The input format enters the configuration digest, so the conformance
+  suite must pass again before a launch is unattended.
 - **Recovery adopts a run by its ID.** `Recover` returns an authenticated
   export already written; waits for a supervisor still alive with its
   claimed start time; removes an export directory with no export record

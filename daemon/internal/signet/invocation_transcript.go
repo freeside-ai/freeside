@@ -58,13 +58,18 @@ func (a InvocationTranscriptAvailability) valid() bool {
 // bytes the client fetches by digest; it is set only when Availability is
 // available. For a running writer, Live carries its scanned records; it is
 // set only when Availability is live.
+//
+// OperatorMessages are the messages operators sent the invocation, in
+// ordinal order. They are the daemon's own records, not the agent's
+// transcript, so the transcript's scan never screens or withholds them.
 type InvocationTranscript struct {
-	RunID        domain.RunID                     `json:"run_id"`
-	InvocationID domain.InvocationID              `json:"invocation_id"`
-	Availability InvocationTranscriptAvailability `json:"availability"`
-	Transcript   *domain.AgentClaim               `json:"transcript"`
-	Live         *LiveTranscript                  `json:"live"`
-	Prompt       *string                          `json:"prompt"`
+	RunID            domain.RunID                     `json:"run_id"`
+	InvocationID     domain.InvocationID              `json:"invocation_id"`
+	Availability     InvocationTranscriptAvailability `json:"availability"`
+	Transcript       *domain.AgentClaim               `json:"transcript"`
+	Live             *LiveTranscript                  `json:"live"`
+	Prompt           *string                          `json:"prompt"`
+	OperatorMessages []domain.OperatorMessage         `json:"operator_messages"`
 }
 
 // LiveTranscript is a running writer's complete, scanned records in the
@@ -101,6 +106,7 @@ func (s *Service) GetInvocationTranscript(
 ) (InvocationTranscript, error) {
 	var claim *domain.AgentClaim
 	var writer bool
+	var messages []domain.OperatorMessage
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		run, err := tx.GetRun(ctx, runID)
 		if err != nil {
@@ -124,13 +130,18 @@ func (s *Service) GetInvocationTranscript(
 			}
 		}
 		writer = recordedWriter(run, invocationID)
-		return nil
+		messages, err = tx.OperatorMessages(ctx, invocationID)
+		return err
 	})
 	if err != nil {
 		return InvocationTranscript{}, err
 	}
 	out := InvocationTranscript{
 		RunID: runID, InvocationID: invocationID, Availability: InvocationTranscriptUnavailable,
+		OperatorMessages: messages,
+	}
+	if out.OperatorMessages == nil {
+		out.OperatorMessages = []domain.OperatorMessage{}
 	}
 	// A claim whose bytes are gone is served as no claim: the client has
 	// nothing to fetch, and the stored availability may predate the loss.

@@ -788,6 +788,15 @@ func newAttentionService(
 			}
 			return liveTranscriptReader{driver: late.ClaudeWiring.driver}
 		}),
+		// A send_writer_message offers its message through the stage driver.
+		// A daemon without a Claude driver refuses the command before
+		// recording anything.
+		signet.WithWriterMessages(func() signet.WriterMessageSender {
+			if late.ClaudeWiring == nil || late.ClaudeWiring.driver == nil {
+				return nil
+			}
+			return writerMessageSender{driver: late.ClaudeWiring.driver, noRun: domain.OperatorMessageRefusalRunEnded}
+		}),
 		// An approved image-policy adoption wakes upkeep to build under it.
 		signet.WithImageUpkeepWake(func() {
 			if late.UpkeepTrigger != nil {

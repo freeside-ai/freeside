@@ -582,6 +582,13 @@ func (c *Client) ProbeBeforeJob(ctx context.Context) error {
 	return expectEmpty(reply, "")
 }
 
+// SendMessage refuses every message with ErrMessageUnsupported, without
+// dialing: the launcher's backend streams its runs' input, but no frame
+// carries a message to it yet (#3702).
+func (c *Client) SendMessage(context.Context, string, int64, string, string) error {
+	return ErrMessageUnsupported
+}
+
 // Detach closes every connection and refuses every later operation with
 // cordon.ErrDetached, signaling nothing: the launches keep running on the
 // launcher, for a later client to recover.

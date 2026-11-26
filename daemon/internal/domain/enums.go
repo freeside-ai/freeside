@@ -515,6 +515,9 @@ const (
 	CommandKindSetRoutingPolicy  CommandKind = "set_routing_policy"
 	CommandKindMoveParkedTask    CommandKind = "move_parked_task"
 	CommandKindSetWorkflowPolicy CommandKind = "set_workflow_policy"
+	// CommandKindSendWriterMessage sends text to a running cordoned writer;
+	// it records an OperatorMessage, not a CommandReceipt.
+	CommandKindSendWriterMessage CommandKind = "send_writer_message"
 )
 
 // AllCommandKinds lists every valid CommandKind; it is the single registration
@@ -529,13 +532,14 @@ var AllCommandKinds = []CommandKind{
 	CommandKindSetRoutingPolicy,
 	CommandKindMoveParkedTask,
 	CommandKindSetWorkflowPolicy,
+	CommandKindSendWriterMessage,
 }
 
 func (k CommandKind) valid() bool {
 	switch k {
 	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask, CommandKindRefreshUsage,
 		CommandKindReassignCollector, CommandKindChangeTaskLine, CommandKindSetRoutingPolicy,
-		CommandKindMoveParkedTask, CommandKindSetWorkflowPolicy:
+		CommandKindMoveParkedTask, CommandKindSetWorkflowPolicy, CommandKindSendWriterMessage:
 		return true
 	default:
 		return false

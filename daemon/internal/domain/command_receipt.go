@@ -65,7 +65,7 @@ func (r CommandReceipt) CommandID() string {
 		return r.ParkedTaskMove.CommandID
 	case CommandKindSetWorkflowPolicy:
 		return r.WorkflowPolicyChange.CommandID
-	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
+	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask, CommandKindSendWriterMessage:
 	}
 	return ""
 }
@@ -86,7 +86,7 @@ func (r CommandReceipt) Validate() error {
 		return r.ParkedTaskMove.Validate()
 	case CommandKindSetWorkflowPolicy:
 		return r.WorkflowPolicyChange.Validate()
-	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
+	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask, CommandKindSendWriterMessage:
 	}
 	return ErrCommandReceiptArms
 }

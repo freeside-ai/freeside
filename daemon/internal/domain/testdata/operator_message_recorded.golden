@@ -1,0 +1,12 @@
+{
+  "command_id": "cmd-1",
+  "sender": "device:dev-1",
+  "run_id": "run-1",
+  "invocation_id": "inv-1",
+  "text": "Stop editing the parser; the failing test is in the lexer.",
+  "ordinal": 1,
+  "recorded_at": "2026-11-26T17:00:00Z",
+  "state": "recorded",
+  "settled_at": null,
+  "refusal": null
+}

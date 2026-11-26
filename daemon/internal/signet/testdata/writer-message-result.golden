@@ -1,0 +1,16 @@
+{
+  "record": {
+    "kind": "send_writer_message",
+    "command_id": "cmd-message-1",
+    "sender": "device:device-569",
+    "run_id": "run-570",
+    "invocation_id": "writer-570",
+    "text": "The failing test is in the lexer, not the parser.",
+    "ordinal": 1,
+    "recorded_at": "2026-11-26T17:00:00Z",
+    "state": "delivered",
+    "settled_at": "2026-11-26T17:00:02Z",
+    "refusal": null
+  },
+  "revision": 27
+}

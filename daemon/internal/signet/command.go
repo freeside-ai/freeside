@@ -45,6 +45,7 @@ type ClientCommand struct {
 	SetRoutingPolicy  SetRoutingPolicyPayload
 	MoveParkedTask    MoveParkedTaskPayload
 	SetWorkflowPolicy SetWorkflowPolicyPayload
+	SendWriterMessage SendWriterMessagePayload
 }
 
 // SubmitTaskPayload mirrors the API contract's SubmitTaskPayload: the project
@@ -323,8 +324,11 @@ type CommandResult struct {
 	Submission *domain.TaskSubmission
 	// Receipt is set only for an accepted operator command; the wire record is
 	// its arm with the arm's kind.
-	Receipt  *domain.CommandReceipt
-	Revision int64
+	Receipt *domain.CommandReceipt
+	// OperatorMessage is set only for a send_writer_message command, in
+	// whatever state the send reached; the wire record is it with its kind.
+	OperatorMessage *domain.OperatorMessage
+	Revision        int64
 }
 
 // kindedCommandRecord and kindedSubmissionRecord embed the domain record so its
@@ -360,6 +364,11 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		wire.Record = record
+	} else if r.OperatorMessage != nil {
+		wire.Record = struct {
+			Kind domain.CommandKind `json:"kind"`
+			domain.OperatorMessage
+		}{domain.CommandKindSendWriterMessage, *r.OperatorMessage}
 	} else if r.Submission != nil {
 		wire.Record = kindedSubmissionRecord{
 			Kind: domain.CommandKindSubmitTask, TaskSubmission: *r.Submission,
@@ -432,7 +441,8 @@ func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
 			kind, move.CommandIdentity, move.TaskID, wireAlternateAgentChoice(*move.Choice), move.Retry,
 			wireTaskLines(move.Lines),
 		}, nil
-	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
+	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask,
+		domain.CommandKindSendWriterMessage:
 	}
 	return nil, domain.ErrCommandReceiptArms
 }

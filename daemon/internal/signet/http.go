@@ -537,7 +537,7 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		return
 	case domain.CommandKindRefreshUsage, domain.CommandKindReassignCollector,
 		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy, domain.CommandKindMoveParkedTask,
-		domain.CommandKindSetWorkflowPolicy:
+		domain.CommandKindSetWorkflowPolicy, domain.CommandKindSendWriterMessage:
 		h.operatorCommand(w, r, request, kindProbe.Kind)
 		return
 	case domain.CommandKindDecision, "":
@@ -775,6 +775,11 @@ func (h httpHandler) operatorCommand(
 			Kind domain.CommandKind `json:"kind"`
 			*SetWorkflowPolicyPayload
 		}{SetWorkflowPolicyPayload: &in.SetWorkflowPolicy}
+	case domain.CommandKindSendWriterMessage:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*SendWriterMessagePayload
+		}{SendWriterMessagePayload: &in.SendWriterMessage}
 	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
 		return
@@ -1153,6 +1158,12 @@ func isCommandRequestError(err error) bool {
 		// refusal may clear once the daemon's state changes. That makes it
 		// a 400, never an ambiguous 500.
 		ErrOperatorSettingUnavailable, ErrUsageOperationUnavailable,
+		// An operator message is refused before it is recorded for its
+		// text or command ID, an unbound sender, or an invocation that
+		// isn't a cordoned writer: nothing is written, so the outcome is
+		// definite.
+		domain.ErrInvalidOperatorMessageText, domain.ErrInvalidOperatorMessageCommandID,
+		ErrWriterMessageUnavailable, ErrNotACordonedWriter,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 		// question_answers that don't answer the question exactly are the

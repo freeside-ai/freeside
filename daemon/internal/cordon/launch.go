@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -62,8 +63,9 @@ type LaunchRequest struct {
 	Repository string
 	BaseRef    string
 	BaseSHA    string
-	// Prompt goes to the agent on stdin, so no file in the worktree holds
-	// it.
+	// Prompt goes to the agent on stdin, as the first message of its
+	// streamed input (supervisor.go), so no file in the worktree holds it.
+	// It must be UTF-8, since a message is a JSON string.
 	Prompt []byte
 	// Args are the agent CLI's arguments.
 	Args []string
@@ -138,9 +140,12 @@ type layout struct {
 	// claim, and cancel the supervisor's request, its claim, and the
 	// cancellation marker (record.go).
 	ended, exportRecord, request, claim, cancel string
-	// prompt is the agent's stdin, and supervisorStderr the supervisor's
-	// own stderr, where it says why it failed.
+	// prompt is the agent's first message, and supervisorStderr the
+	// supervisor's own stderr, where it says why it failed.
 	prompt, supervisorStderr string
+	// messages is a writer launch's inbox, and inputClosed the marker its
+	// supervisor writes once nothing more reaches the agent (inbox.go).
+	messages, inputClosed string
 	// dir is the launch's directory; export is the export's output, beside
 	// run/ and ctl/: outside RUN_ROOT, so no launch can write it.
 	dir, export string
@@ -159,6 +164,7 @@ func layoutFor(runsRoot, runID string) layout {
 		exportRecord: filepath.Join(ctl, "export.json"), request: filepath.Join(ctl, "request.json"),
 		claim: filepath.Join(ctl, "supervisor.json"), cancel: filepath.Join(ctl, "cancel.json"),
 		prompt: filepath.Join(ctl, "prompt"), supervisorStderr: filepath.Join(ctl, "supervisor.stderr"),
+		messages: filepath.Join(ctl, "messages"), inputClosed: filepath.Join(ctl, "input-closed.json"),
 		dir: dir, export: filepath.Join(dir, "export"),
 	}
 }
@@ -231,9 +237,17 @@ var cliSettings = []string{
 	`{"sandbox":{"enabled":false},"attribution":{"commit":"","pr":""},"enabledPlugins":{"agents-md@builtin":false}}`,
 }
 
+// cliInput makes the agent CLI read its input as a stream of JSON
+// messages, one per line, rather than one prompt to end of file, so an
+// operator's message reaches a running writer (inbox.go). The CLI reads
+// messages until its input closes, and the supervisor closes it once a turn
+// ends with none waiting (supervisor.go). A launch fixes it, as it fixes the
+// settings, because the supervisor writes every launch's input this way.
+var cliInput = []string{"--input-format", "stream-json"}
+
 // agentArgs is the agent CLI's whole argument list for a launch.
 func agentArgs(args []string) []string {
-	return append(slices.Clone(cliSettings), args...)
+	return append(append(slices.Clone(cliSettings), cliInput...), args...)
 }
 
 // Launch runs one writer launch and returns once no process from it is
@@ -280,6 +294,9 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	if err := writeExclusive(l.prompt, req.Prompt); err != nil {
 		return LaunchResult{}, err
 	}
+	if err := os.Mkdir(l.messages, 0o700); err != nil {
+		return LaunchResult{}, fmt.Errorf("cordon: create the inbox: %w", err)
+	}
 	token := req.Token.Reveal()
 	defer clear(token)
 	return b.supervise(ctx, l, supervisorRequest{
@@ -301,9 +318,14 @@ func (r LaunchRequest) validate() error {
 		return errors.New("cordon: a launch needs its repository, base ref, and base commit")
 	}
 	for _, arg := range r.Args {
-		if arg == cliSettings[0] || strings.HasPrefix(arg, cliSettings[0]+"=") {
-			return fmt.Errorf("cordon: a launch fixes the agent CLI's %s itself", cliSettings[0])
+		for _, fixed := range []string{cliSettings[0], cliInput[0]} {
+			if arg == fixed || strings.HasPrefix(arg, fixed+"=") {
+				return fmt.Errorf("cordon: a launch fixes the agent CLI's %s itself", fixed)
+			}
 		}
+	}
+	if !utf8.Valid(r.Prompt) {
+		return errors.New("cordon: a launch's prompt must be UTF-8")
 	}
 	token := r.Token.Reveal()
 	defer clear(token)

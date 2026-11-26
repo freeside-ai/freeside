@@ -264,6 +264,10 @@ func TestControlRefusesHeldLockWithoutSocket(t *testing.T) {
 			_, err := runStopCommand(ctx, stopCommandConfig{DBPath: dbPath, TaskID: "task-1"})
 			return err
 		},
+		"message": func() error {
+			_, err := runMessageCommand(ctx, messageCommandConfig{DBPath: dbPath, RunID: "run-1", InvocationID: "writer-1", Text: "steer"})
+			return err
+		},
 		"comprehension measures": func() error { return runComprehensionCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
 		"cause counts":           func() error { return runCauseCountsCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },
 		"ready share":            func() error { return runReadyShareCommand(ctx, []string{"-db", dbPath}, io.Discard, io.Discard) },

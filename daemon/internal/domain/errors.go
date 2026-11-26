@@ -517,6 +517,16 @@ var (
 		"workflow policy names a project exactly when its scope is project")
 	ErrWorkflowPolicyProjectUnserved = errors.New(
 		"workflow policy project is not one the daemon serves")
+	ErrInvalidOperatorMessageText = errors.New(
+		"operator message text is empty, not UTF-8, or over the size limit")
+	ErrInvalidOperatorMessageCommandID = errors.New(
+		"operator message command id is over the size limit")
+	ErrInvalidOperatorMessageState   = errors.New("invalid operator message state")
+	ErrInvalidOperatorMessageRefusal = errors.New("invalid operator message refusal")
+	// ErrInvalidOperatorMessageSettlement marks a record whose ordinal,
+	// times, or refusal disagree with its state.
+	ErrInvalidOperatorMessageSettlement = errors.New("operator message settlement disagrees with its state")
+	ErrOperatorMessageSettled           = errors.New("operator message is already settled")
 	// ErrTaskLinesNotCanonical marks a submission record whose lines are
 	// present but empty or out of role order.
 	ErrTaskLinesNotCanonical       = errors.New("recorded task lines are empty or out of role order")

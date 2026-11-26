@@ -23,5 +23,6 @@
     }
   },
   "live": null,
-  "prompt": "Implement the approved work item."
+  "prompt": "Implement the approved work item.",
+  "operator_messages": []
 }

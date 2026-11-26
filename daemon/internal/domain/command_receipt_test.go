@@ -222,7 +222,8 @@ func TestCommandReceiptGoldens(t *testing.T) {
 				arm = receipt.ParkedTaskMove
 			case domain.CommandKindSetWorkflowPolicy:
 				arm = receipt.WorkflowPolicyChange
-			case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
+			case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask,
+				domain.CommandKindSendWriterMessage:
 				t.Fatalf("kind %q", receipt.Kind())
 			}
 			body, err := json.MarshalIndent(arm, "", "  ")

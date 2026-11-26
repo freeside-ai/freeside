@@ -14,20 +14,24 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-// ExtractClaudeUsage returns the measurements from the last trusted terminal
-// result envelope in a Claude JSON or JSONL transcript, under source. A
-// transcript with no result envelope, because the invocation was killed or
-// lost before it ended, falls back to the partial sum
-// (claudePartialUsage) under domain.UsageSourcePartialTranscript. Malformed
-// or missing telemetry is observation absence, not a stage error.
+// ExtractClaudeUsage returns the measurements from the terminal result
+// envelopes in a Claude JSON or JSONL transcript, under source. A streamed
+// writer that took an operator's message ends one turn per result, and the
+// CLI (2.1.332, measured) reports each result's token counts for its own
+// turn but its total_cost_usd for the whole session so far. So the token
+// counts are summed over the results and the cost is the last result's
+// (sumClaudeResults). A transcript with no result envelope, because the
+// invocation was killed or lost before it ended, falls back to the partial
+// sum (claudePartialUsage) under domain.UsageSourcePartialTranscript.
+// Malformed or missing telemetry, in any result, is observation absence,
+// not a stage error.
 func ExtractClaudeUsage(
 	transcript []byte,
 	observedAt time.Time,
 	source domain.UsageSource,
 	rejectDuplicateKeys func([]byte) error,
 ) []UsageMeasurement {
-	var latest []UsageMeasurement
-	resulted := false
+	var results [][]UsageMeasurement
 	partial := claudePartialUsage{messages: map[string]claudeMessageUsage{}}
 	for line := range bytes.SplitSeq(transcript, []byte("\n")) {
 		line = bytes.TrimSpace(line)
@@ -44,16 +48,45 @@ func ExtractClaudeUsage(
 		}
 		switch envelopeType.Type {
 		case "result":
-			resulted = true
-			latest = decodeClaudeUsageResult(line, observedAt.UTC(), source)
+			results = append(results, decodeClaudeUsageResult(line, observedAt.UTC(), source))
 		case "assistant":
 			partial.add(line)
 		}
 	}
-	if resulted {
-		return latest
+	if len(results) > 0 {
+		return sumClaudeResults(results)
 	}
 	return partial.measurements(observedAt.UTC())
+}
+
+// sumClaudeResults folds each result's measurements into one reading, in
+// the order each metric first appears: the latest billable cost, already a
+// running total, and the sum of every result's token counts by metric. It
+// returns nil when any result had no readable telemetry, since a sum
+// missing a turn would under-report, or when a sum overflows.
+func sumClaudeResults(results [][]UsageMeasurement) []UsageMeasurement {
+	var summed []UsageMeasurement
+	for _, result := range results {
+		if result == nil {
+			return nil
+		}
+		for _, m := range result {
+			at := slices.IndexFunc(summed, func(s UsageMeasurement) bool {
+				return s.Kind == m.Kind && s.Metric == m.Metric
+			})
+			switch {
+			case at < 0:
+				summed = append(summed, m)
+			case m.Kind == domain.UsageMeasurementBillableCost:
+				summed[at].Quantity = m.Quantity
+			case m.Quantity > math.MaxInt64-summed[at].Quantity:
+				return nil
+			default:
+				summed[at].Quantity += m.Quantity
+			}
+		}
+	}
+	return summed
 }
 
 // claudePartialUsage sums the usage of a transcript's assistant messages.

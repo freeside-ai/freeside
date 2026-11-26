@@ -61,6 +61,10 @@ func (f *fakeCordonLauncher) AuthenticateReleasedExport(context.Context, string,
 
 func (f *fakeCordonLauncher) ReleaseFinished(context.Context, []string) error { return f.err }
 
+func (f *fakeCordonLauncher) SendMessage(context.Context, string, int64, string, string) error {
+	return f.err
+}
+
 func (f *fakeCordonLauncher) Detach() { f.once.Do(func() { close(f.detached) }) }
 
 func (f *fakeCordonLauncher) launched() []cordon.LaunchRequest {
@@ -368,6 +372,11 @@ func TestCordonPortError(t *testing.T) {
 		{"not exportable", fmt.Errorf("%w: r stalled", cordon.ErrNotExportable), cordon.ErrNotExportable, true},
 		{"canceled", fmt.Errorf("%w: %w: r", cordon.ErrCanceled, cordon.ErrNotExportable), stage.ErrCordonCanceled, false},
 		{"already exported", cordon.ErrAlreadyExported, cordon.ErrAlreadyExported, false},
+		{"run ended", fmt.Errorf("%w: r", cordon.ErrRunEnded), stage.ErrCordonRunEnded, false},
+		{"input closed", fmt.Errorf("%w: r", cordon.ErrInputClosed), stage.ErrCordonInputClosed, false},
+		{"not streamed", fmt.Errorf("%w: r", cordon.ErrNotStreamed), stage.ErrCordonNotStreamed, false},
+		{"not taken", fmt.Errorf("%w: r", cordon.ErrNotTaken), stage.ErrCordonNotTaken, false},
+		{"not started", fmt.Errorf("%w: r", cordon.ErrNotStarted), stage.ErrCordonNotStarted, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

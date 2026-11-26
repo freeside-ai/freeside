@@ -27,6 +27,12 @@ var (
 	// released export's authentication, and a recovery that would export:
 	// no export returns from a host yet (#3624).
 	ErrExportUnsupported = errors.New("cordonhost: the launcher returns no export yet")
+	// ErrMessageUnsupported is the client's refusal of an operator's
+	// message: the protocol carries none yet (#3702). It wraps
+	// cordon.ErrNotStreamed, so the gate settles the message refused as
+	// not_streamed rather than leaving it to be offered again at every
+	// start.
+	ErrMessageUnsupported = fmt.Errorf("cordonhost: the launcher takes no message yet: %w", cordon.ErrNotStreamed)
 	// ErrProtocol is a frame that breaks the protocol: too large, not
 	// strict JSON, the wrong kind, or a field its kind doesn't carry.
 	ErrProtocol = errors.New("cordonhost: protocol violation")

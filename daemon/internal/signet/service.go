@@ -100,6 +100,9 @@ type Service struct {
 	// liveTranscripts reads a running writer's transcript for the transcript
 	// read (WithLiveTranscripts). Nil means none is bound.
 	liveTranscripts func() LiveTranscriptReader
+	// writerMessages offers an operator's message to a running cordoned
+	// writer (WithWriterMessages). Nil means none is bound.
+	writerMessages func() WriterMessageSender
 	// imageUpkeepWake asks image upkeep for a pass after an approved
 	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
 	imageUpkeepWake func()
@@ -409,6 +412,8 @@ func (s *Service) submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		return s.moveParkedTask(ctx, in)
 	case domain.CommandKindSetWorkflowPolicy:
 		return s.setWorkflowPolicy(ctx, in)
+	case domain.CommandKindSendWriterMessage:
+		return s.sendWriterMessage(ctx, in)
 	case domain.CommandKindDecision, "":
 		// The empty zero value is the intentional legacy decision default, so
 		// existing decision callers stay unchanged (ClientCommand.Kind).

@@ -239,6 +239,63 @@ func TestHostLaunchHandsTheTokenOnItsDescriptor(t *testing.T) {
 	requireNoToken(t, filepath.Dir(layoutFor(f.cfg.RunsRoot, "token").runRoot), []byte(fixtureToken))
 }
 
+// TestHostLaunchTakesAMessageWhileATurnRuns shows a real supervisor feeds
+// a message to a running agent once, then closes the agent's input when a
+// turn ends with nothing waiting, so the agent exits.
+func TestHostLaunchTakesAMessageWhileATurnRuns(t *testing.T) {
+	t.Parallel()
+	f := newHostFixture(t)
+	b := f.backend(t)
+	type outcome struct {
+		got LaunchResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		got, err := b.Launch(t.Context(), hostRequest("steer", "the prompt", "steer"))
+		done <- outcome{got, err}
+	}()
+	l := layoutFor(f.cfg.RunsRoot, "steer")
+	awaitTranscript(t, l, `got "the prompt"`)
+	for range 2 {
+		if err := b.SendMessage(t.Context(), "steer", 1, "cmd-1", "keep going"); err != nil {
+			t.Fatalf("SendMessage 1: %v", err)
+		}
+	}
+	if err := b.SendMessage(t.Context(), "steer", 2, "cmd-2", "end turn"); err != nil {
+		t.Fatalf("SendMessage 2: %v", err)
+	}
+	r := <-done
+	if r.err != nil || r.got.ExitCode != 0 {
+		t.Fatalf("Launch = %+v, %v", r.got, r.err)
+	}
+	transcript, err := os.ReadFile(r.got.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "got \"the prompt\"\ngot \"keep going\"\ngot \"end turn\"\n" +
+		`{"subtype":"success","type":"result","is_error":false}` + "\neof\n"
+	if string(transcript) != want {
+		t.Fatalf("transcript = %q, want %q", transcript, want)
+	}
+	if err := b.SendMessage(t.Context(), "steer", 3, "cmd-3", "too late"); !errors.Is(err, ErrRunEnded) {
+		t.Fatalf("SendMessage after the end = %v, want ErrRunEnded", err)
+	}
+}
+
+// awaitTranscript waits for l's transcript to hold want.
+func awaitTranscript(t *testing.T, l layout, want string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if body, err := os.ReadFile(l.transcript); err == nil && strings.Contains(string(body), want) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the transcript never held %q", want)
+}
+
 // requireNoToken fails the test when any file under dir holds token. It
 // names the file and the offset, never the bytes around them.
 func requireNoToken(t *testing.T, dir string, token []byte) {
