@@ -27,6 +27,10 @@ struct PhoneNotificationSetup: View {
     @Environment(\.pinnedNow) private var pinnedNow
     /// False where the pane's own head already names the steps.
     var showsHeading = true
+    /// True when the daemon advertises `device_test_notification` in `/health`.
+    var testNotificationServed = false
+    var testNotificationState: DevicesModel.TestNotificationState = .idle
+    var onSendTestNotification: (() -> Void)? = nil
     @State private var copiedTopic = false
 
     var body: some View {
@@ -62,16 +66,32 @@ struct PhoneNotificationSetup: View {
                     .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
                 }
             }
-            step(Self.testStep) {
-                if let openedAt {
-                    FactRow(
-                        label: Self.openedLabel,
-                        value: FreesideFormat.shortTime(
-                            openedAt, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone)
-                    )
-                    .exactInstant(openedAt)
-                } else {
-                    FactRow(label: Self.openedLabel, value: "Never")
+            step(Self.testStep(served: testNotificationServed)) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if testNotificationServed {
+                        let isSending = testNotificationState == .sending
+                        Button(isSending ? "Sending Test Notification…" : "Send Test Notification") {
+                            onSendTestNotification?()
+                        }
+                        .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
+                        .disabled(isSending)
+                        if case .finished(let outcome) = testNotificationState {
+                            Text(outcome.message)
+                                .font(FreesideFont.cardBody)
+                                .foregroundStyle(outcome.isFailure ? Color.waxText : Color.inkDim)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if let openedAt {
+                        FactRow(
+                            label: Self.openedLabel,
+                            value: FreesideFormat.shortTime(
+                                openedAt, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone)
+                        )
+                        .exactInstant(openedAt)
+                    } else {
+                        FactRow(label: Self.openedLabel, value: "Never")
+                    }
                 }
             }
         }
@@ -80,6 +100,11 @@ struct PhoneNotificationSetup: View {
     static let installStep = "1. Install the ntfy app and allow its notifications."
     static let testStep =
         "3. On the daemon's host, run freesided notify-test, then tap the notification it sends."
+    static let sendTestStep = "3. Send a test notification, then tap it when it arrives."
+
+    static func testStep(served: Bool) -> String {
+        served ? sendTestStep : testStep
+    }
 
     /// Says what was observed, not that notifications work: any app can
     /// open the link a notification carries.

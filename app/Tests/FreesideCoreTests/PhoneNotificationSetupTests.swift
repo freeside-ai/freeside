@@ -27,4 +27,15 @@ import Testing
         // enter one.
         #expect(PhoneNotificationSetup.subscribeStep(for: subscription).contains("server") == !hosted)
     }
+
+    @Test @MainActor func testStepReplacesHostCommandOnlyWhenDaemonServesTheFeature() {
+        let served = PhoneNotificationSetup.testStep(served: true)
+        #expect(served == PhoneNotificationSetup.sendTestStep)
+        #expect(!served.contains("freesided notify-test"))
+        #expect(served.contains("Send a test notification"))
+
+        let unserved = PhoneNotificationSetup.testStep(served: false)
+        #expect(unserved == PhoneNotificationSetup.testStep)
+        #expect(unserved.contains("freesided notify-test"))
+    }
 }

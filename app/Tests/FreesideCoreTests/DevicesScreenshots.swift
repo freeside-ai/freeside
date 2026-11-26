@@ -14,10 +14,13 @@
         /// leaves off.
         static func model(
             notificationSubscription: DeviceNtfySubscription? = nil, openedAt: Date? = nil,
-            notificationsOn: Bool = false
+            notificationsOn: Bool = false,
+            testNotificationAnswer: MockServer.TestNotificationAnswer? = nil
         ) async -> DevicesModel {
+            let server = MockServer()
             let coordinator = SyncCoordinator(
-                client: APIClientFactory.mock(server: MockServer()), cache: InMemoryCacheStore())
+                client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+            await coordinator.refresh()
             let opens = NotificationOpenLog(defaults: nil)
             if let openedAt {
                 opens.record(deviceID: coordinator.store.device.deviceID, at: openedAt)
@@ -28,6 +31,10 @@
             await model.load()
             if notificationsOn {
                 await model.setNotifications(coordinator.store.device.deviceID, enabled: true)
+            }
+            if let testNotificationAnswer {
+                await server.setTestNotificationAnswer(testNotificationAnswer)
+                await model.sendTestNotification()
             }
             return model
         }

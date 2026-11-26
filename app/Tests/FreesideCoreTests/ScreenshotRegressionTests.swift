@@ -1864,6 +1864,23 @@
                         view: phonePane(.notifications, sync: settingsSync(hostedNotificationsModel))))
             }
 
+            // A failed test notification on the phone's Notifications pane
+            // (#1959), so the outcome line under Send Test Notification is
+            // visible by day and by dusk.
+            let failedTestNotificationModel = await DevicesScreenshots.model(
+                notificationSubscription: hostedSubscription, notificationsOn: true,
+                testNotificationAnswer: .outcome(
+                    .init(outcome: .provider_rejected, provider_status: 403, transport_failure: nil)))
+            for (name, scheme) in [
+                ("notifications-phone-test-failed", ColorScheme.light),
+                ("notifications-phone-test-failed-dark", ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: 390, colorScheme: scheme,
+                        view: phonePane(.notifications, sync: settingsSync(failedTestNotificationModel))))
+            }
+
             // The Answer-and-retry composer with the route picker (#1083): the
             // operator answers and chooses whether to retry the implementer or
             // revise the specification. Captured on Mac and phone, light and dark.

@@ -28,11 +28,59 @@ private struct MisdirectedRevokeTransport: ClientTransport {
     }
 }
 
+/// Replaces one operation's response with raw JSON bytes so tests can exercise
+/// forward-compatible `unknown` enum decoding on the wire.
+private struct RawJSONTransport: ClientTransport {
+    let base: MockServerTransport
+    let operationID: String
+    let json: String
+
+    func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        if operationID == self.operationID {
+            let response = HTTPResponse(
+                status: .ok, headerFields: [.contentType: "application/json"])
+            return (response, HTTPBody(Data(json.utf8)))
+        }
+        return try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
+    }
+}
+
 private actor CallCounter {
     private(set) var counts: [String: Int] = [:]
 
     func record(_ operationID: String) {
         counts[operationID, default: 0] += 1
+    }
+}
+
+private actor InFlightGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func hold() async {
+        entered = true
+        enteredWaiter?.resume()
+        enteredWaiter = nil
+        if released { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilHeld() async {
+        if entered { return }
+        await withCheckedContinuation { enteredWaiter = $0 }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
 
@@ -361,5 +409,133 @@ private final class SignOutSpy {
                 .contains("1 unresolved action made"))
         // Revoking another device signs nothing out here.
         #expect(!DevicesView.confirmationMessage(for: other, unresolvedActionCount: 3).contains("signs out"))
+    }
+
+    @Test func testNotificationServedFollowsDaemonHealthFeatures() async {
+        let server = MockServer()
+        let served = DevicesModel(coordinator: await coordinator(server), signOut: {})
+        #expect(served.testNotificationServed)
+
+        let older = MockServer()
+        await older.setHealthFeatures(
+            MockServer.servedFeatures.filter { $0 != .device_test_notification })
+        let unserved = DevicesModel(coordinator: await coordinator(older), signOut: {})
+        #expect(!unserved.testNotificationServed)
+    }
+
+    @Test func testNotificationMapsEveryOutcomeAndLeavesNotificationOpenedUnchanged() async {
+        let server = MockServer()
+        let opens = NotificationOpenLog(defaults: nil)
+        let model = DevicesModel(
+            coordinator: await coordinator(server), notificationOpens: opens, signOut: {})
+        await model.load()
+
+        // Accepted: shows accepted message and never records an opened notification.
+        await model.sendTestNotification()
+        #expect(model.testNotificationState == .finished(.accepted(DevicesModel.testNotificationAcceptedMessage)))
+        #expect(opens.openedAt(deviceID: DeviceFixtures.currentDeviceID) == nil)
+
+        // Provider rejected with status.
+        await server.setTestNotificationAnswer(
+            .outcome(.init(outcome: .provider_rejected, provider_status: 403, transport_failure: nil)))
+        await model.sendTestNotification()
+        #expect(
+            model.testNotificationState
+                == .finished(.failed("ntfy refused the test notification (HTTP 403).")))
+
+        // Transport failed with failure class.
+        await server.setTestNotificationAnswer(
+            .outcome(.init(outcome: .transport_failed, provider_status: nil, transport_failure: "request timed out")))
+        await model.sendTestNotification()
+        #expect(
+            model.testNotificationState
+                == .finished(.failed("Couldn't reach ntfy: request timed out.")))
+
+        // No notifier configured.
+        await server.setTestNotificationAnswer(
+            .outcome(.init(outcome: .notifier_unavailable, provider_status: nil, transport_failure: nil)))
+        await model.sendTestNotification()
+        #expect(model.testNotificationState == .finished(.failed(DevicesModel.testNotificationUnavailableMessage)))
+
+        // Too recent (429 with Retry-After).
+        await server.setTestNotificationAnswer(.tooRecent(retryAfter: 25))
+        await model.sendTestNotification()
+        #expect(
+            model.testNotificationState
+                == .finished(.failed("A test notification was just sent. Try again in 25 seconds.")))
+
+        // 403 (revoked after auth) and 404 (unrecognized device).
+        await server.setBeforeRespond { operationID in
+            if operationID == "sendDeviceTestNotification" { throw MockServer.ForcedStatus(403) }
+        }
+        await model.sendTestNotification()
+        #expect(model.testNotificationState == .finished(.failed(DevicesModel.testNotificationInactiveMessage)))
+
+        await server.setBeforeRespond { operationID in
+            if operationID == "sendDeviceTestNotification" { throw MockServer.ForcedStatus(404) }
+        }
+        await model.sendTestNotification()
+        #expect(model.testNotificationState == .finished(.failed(DevicesModel.testNotificationNotFoundMessage)))
+
+        // Thrown transport error (daemon unreachable).
+        await server.setBeforeRespond { operationID in
+            if operationID == "sendDeviceTestNotification" { throw URLError(.notConnectedToInternet) }
+        }
+        await model.sendTestNotification()
+        #expect(model.testNotificationState == .finished(.failed(DevicesModel.testNotificationUnreachableMessage)))
+
+        // Unknown outcome from a newer daemon decodes via tolerant enum.
+        let futureServer = MockServer()
+        let rawTransport = RawJSONTransport(
+            base: MockServerTransport(server: futureServer), operationID: "sendDeviceTestNotification",
+            json: #"{"outcome":"future_outcome","provider_status":null,"transport_failure":null}"#)
+        let futureModel = DevicesModel(
+            coordinator: await coordinator(futureServer, transport: rawTransport), signOut: {})
+        await futureModel.sendTestNotification()
+        #expect(
+            futureModel.testNotificationState
+                == .finished(.failed(DevicesModel.testNotificationUnknownOutcomeMessage)))
+    }
+
+    @Test func testNotificationIgnoresOverlappingCallsWhileInFlight() async {
+        let server = MockServer()
+        let counter = CallCounter()
+        let gate = InFlightGate()
+        await server.setBeforeRespond { operationID in
+            guard operationID == "sendDeviceTestNotification" else { return }
+            await counter.record(operationID)
+            await gate.hold()
+        }
+        let model = DevicesModel(coordinator: await coordinator(server), signOut: {})
+        await model.load()
+
+        let first = Task { await model.sendTestNotification() }
+        await gate.waitUntilHeld()
+        #expect(model.testNotificationState == .sending)
+
+        // Second call while the first is running does nothing.
+        await model.sendTestNotification()
+        #expect(await counter.counts["sendDeviceTestNotification"] == 1)
+
+        await gate.release()
+        await first.value
+        #expect(model.testNotificationState == .finished(.accepted(DevicesModel.testNotificationAcceptedMessage)))
+        #expect(await counter.counts["sendDeviceTestNotification"] == 1)
+    }
+
+    @Test func aRefusedCredentialWhileSendingTestNotificationFlagsThePairing() async {
+        let server = MockServer()
+        let transport = StatusOverrideTransport(
+            base: MockServerTransport(server: server), operationID: "sendDeviceTestNotification", status: 401,
+            once: OneShot())
+        let coordinator = await coordinator(server, transport: transport)
+        let model = DevicesModel(coordinator: coordinator, signOut: {})
+        await model.load()
+
+        await model.sendTestNotification()
+
+        #expect(model.loadState == .failed(DevicesModel.unauthenticatedMessage))
+        #expect(model.rows.isEmpty)
+        #expect(coordinator.store.freshness == .unauthenticated)
     }
 }
