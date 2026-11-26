@@ -674,6 +674,8 @@ lists only the names resolved against it. All under `daemon/`:
   remediation source tree),
   `internal/engine/production_review_gate.go` (decides whether a reviewed
   candidate may reach publication),
+  `internal/engine/review_workspace_staging.go` (authenticates an abandoned
+  review-workspace staging directory to its invocation before deleting it),
   `internal/engine/production_reentry*.go` (re-earn readiness against a
   new base), `internal/engine/hand_back_reentry.go` (seals the authority
   that adopts a handed-back head Freeside did not push),

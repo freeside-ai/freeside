@@ -101,6 +101,8 @@
 //     producing agent's claim at the verified head and base
 //   - production_review_gate.go whether a reviewed candidate may reach
 //     publication
+//   - review_workspace_staging.go the ownership record that lets a review
+//     invocation reclaim the staging directories a crash left behind
 //   - shadow_review.go the observation-only shadow review arm
 //   - remediation.go  remediation dispatch and its review outcome
 //   - review_round_metrics.go, review_yield.go
