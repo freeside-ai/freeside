@@ -332,34 +332,48 @@ func (b *Backend) recoveredExport(ctx context.Context, l layout, runID string) (
 	if err != nil {
 		return RecoveryResult{}, err
 	}
-	res := RecoveryResult{
+	exp, err := ReadExportDir(l.export)
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	exp.BaseSHA = end.BaseSHA
+	return RecoveryResult{
 		Outcome: RecoveryExported, EndedBy: end.EndedBy, ExitCode: end.ExitCode,
-		TranscriptPath: l.transcript, StderrPath: l.stderr,
-		Export: ExportResult{Dir: l.export, BaseSHA: end.BaseSHA},
-	}
-	manifest, err := readMember(l.export, export.ManifestFilename)
+		TranscriptPath: l.transcript, StderrPath: l.stderr, Export: exp,
+	}, nil
+}
+
+// ReadExportDir reads an export directory's result from its own members:
+// the manifest, the evidence manifest when present, and whether a commit
+// plan is present. BaseSHA is left empty; it never comes from the export.
+func ReadExportDir(dir string) (ExportResult, error) {
+	res := ExportResult{Dir: dir}
+	manifest, err := readMember(dir, export.ManifestFilename)
 	if err != nil {
-		return RecoveryResult{}, err
+		return ExportResult{}, err
 	}
-	if err := strictjson.Decode(manifest, &res.Export.Manifest, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
-		return RecoveryResult{}, fmt.Errorf("cordon: decode the exported manifest: %w", err)
+	if manifest == nil {
+		return ExportResult{}, fmt.Errorf("cordon: the export has no %s", export.ManifestFilename)
 	}
-	evidence, err := readMember(l.export, export.EvidenceFilename)
+	if err := strictjson.Decode(manifest, &res.Manifest, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		return ExportResult{}, fmt.Errorf("cordon: decode the exported manifest: %w", err)
+	}
+	evidence, err := readMember(dir, export.EvidenceFilename)
 	if err != nil {
-		return RecoveryResult{}, err
+		return ExportResult{}, err
 	}
 	if evidence != nil {
-		res.Export.EvidencePresent = true
-		if res.Export.Evidence, err = export.DecodeEvidenceManifest(evidence); err != nil {
-			return RecoveryResult{}, fmt.Errorf("cordon: decode the exported evidence: %w", err)
+		res.EvidencePresent = true
+		if res.Evidence, err = export.DecodeEvidenceManifest(evidence); err != nil {
+			return ExportResult{}, fmt.Errorf("cordon: decode the exported evidence: %w", err)
 		}
 	}
-	plan, err := openMember(l.export, export.CommitPlanFilename)
+	plan, err := openMember(dir, export.CommitPlanFilename)
 	if err != nil {
-		return RecoveryResult{}, err
+		return ExportResult{}, err
 	}
 	if plan != nil {
-		res.Export.CommitPlanPresent = true
+		res.CommitPlanPresent = true
 		_ = plan.Close()
 	}
 	return res, nil
