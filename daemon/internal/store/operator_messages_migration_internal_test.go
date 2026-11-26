@@ -12,6 +12,7 @@ import (
 // conventions); the rewind keeps the earlier migrations' tests at head.
 func rewindOperatorMessages(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindConformanceHost(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE operator_messages`,
 		`DELETE FROM schema_migrations WHERE name = '0151_operator_messages.sql'`,

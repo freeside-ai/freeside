@@ -166,7 +166,7 @@ func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendConformance: %v", err)
 	}
-	if err := (StoreConformanceRecorder{Store: st}).RecordBackendConformance(ctx, record); err != nil {
+	if err := (StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}).RecordBackendConformance(ctx, record); err != nil {
 		t.Fatalf("RecordBackendConformance: %v", err)
 	}
 
@@ -177,7 +177,7 @@ func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		got, found, err = tx.LatestBackendConformance(
-			ctx, domain.BackendFreshVMReadOnlyVolumeHandoff,
+			ctx, domain.DaemonHostID, domain.BackendFreshVMReadOnlyVolumeHandoff,
 		)
 		return err
 	}); err != nil {

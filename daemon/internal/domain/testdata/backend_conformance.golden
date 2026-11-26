@@ -9,6 +9,7 @@
     "supports_post_exit_export",
     "supports_read_only_remount"
   ],
+  "host": "daemon",
   "generation": 7,
   "proved_at": "2026-07-27T08:30:00Z"
 }

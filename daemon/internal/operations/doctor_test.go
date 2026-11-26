@@ -66,7 +66,7 @@ func TestDoctorConvergesAndClearsSystemHealthItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(ctx, record)
+		_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestDoctorConvergesAndClearsSystemHealthItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(ctx, unattendedRecord)
+		_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, unattendedRecord)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestDoctorReportsActivatedReviewConfigurationDrift(t *testing.T) {
 	matching := doctorTrustProfile(t, "example/matching", 1, effective)
 	drifted := doctorTrustProfile(t, "example/drifted", 2, mismatched)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		if _, err := tx.RecordBackendConformance(ctx, conformance); err != nil {
+		if _, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance); err != nil {
 			return err
 		}
 		if err := tx.RecordTrustProfile(ctx, matching, conformance.ProvedAt); err != nil {

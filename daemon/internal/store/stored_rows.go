@@ -286,9 +286,9 @@ var storedRowKinds = []storedRowKind{
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
 			return discard2(tx.LatestAdapterConformance(ctx, domain.Digest(k.s[0])))
 		})},
-	{"backend conformance", []string{"backend_conformance_records"}, eachKey(`SELECT DISTINCT backend FROM backend_conformance_records`, "s",
+	{"backend conformance", []string{"backend_conformance_records"}, eachKey(`SELECT DISTINCT host_id, backend FROM backend_conformance_records`, "ss",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {
-			return discard2(tx.LatestBackendConformance(ctx, domain.RunnerBackendClass(k.s[0])))
+			return discard2(tx.LatestBackendConformance(ctx, domain.ExecutionHostID(k.s[0]), domain.RunnerBackendClass(k.s[1])))
 		})},
 	{"trust profile", []string{"trust_profiles"}, eachKey(`SELECT profile_digest FROM trust_profiles`, "s",
 		func(ctx context.Context, tx *ReadTx, k rowKey) error {

@@ -66,7 +66,7 @@ func TestTamperedConformanceRowFailsClosed(t *testing.T) {
 				t.Fatalf("NewBackendConformance: %v", err)
 			}
 			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
-				_, err := tx.RecordBackendConformance(ctx, record)
+				_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, record)
 				return err
 			}); err != nil {
 				t.Fatalf("record: %v", err)
@@ -77,7 +77,7 @@ func TestTamperedConformanceRowFailsClosed(t *testing.T) {
 				t.Fatalf("tamper: %v", err)
 			}
 			err = s.Read(ctx, func(tx *ReadTx) error {
-				_, _, err := tx.LatestBackendConformance(ctx, domain.BackendFreshVMReadOnlyVolumeHandoff)
+				_, _, err := tx.LatestBackendConformance(ctx, domain.DaemonHostID, domain.BackendFreshVMReadOnlyVolumeHandoff)
 				return err
 			})
 			if err == nil {

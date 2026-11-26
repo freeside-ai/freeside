@@ -136,7 +136,7 @@ func openUnattendedFixtureWith(
 		if err != nil {
 			return err
 		}
-		_, err = tx.RecordBackendConformance(ctx, conformance)
+		_, err = tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance)
 		return err
 	}); err != nil {
 		t.Fatalf("seed identity, profile, and conformance: %v", err)

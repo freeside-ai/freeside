@@ -222,7 +222,7 @@ func TestHistoricalSpecificationCheckpointRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		if _, err := tx.RecordBackendConformance(ctx, conformance); err != nil {
+		if _, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance); err != nil {
 			return err
 		}
 		for _, entry := range entries {

@@ -3,6 +3,7 @@
   "outcome": "superseded",
   "configuration_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "capabilities": null,
+  "host": "daemon",
   "generation": 9,
   "proved_at": "2026-07-27T09:20:00Z"
 }

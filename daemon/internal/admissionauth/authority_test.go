@@ -199,7 +199,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-			_, err := tx.RecordBackendConformance(ctx, record)
+			_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, record)
 			return err
 		}); err != nil {
 			t.Fatal(err)

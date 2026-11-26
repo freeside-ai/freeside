@@ -61,7 +61,7 @@ func TestDoctorReportsTheCordonedClassWithoutConverging(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-			_, err := tx.RecordBackendConformance(ctx, r)
+			_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, r)
 			return err
 		}); err != nil {
 			t.Fatal(err)

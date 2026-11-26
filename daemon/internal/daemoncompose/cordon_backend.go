@@ -235,7 +235,7 @@ func ComposeCordonBackend(
 	if err != nil {
 		return nil, fmt.Errorf("configure the cordon: %w", err)
 	}
-	suite, err := cordon.NewSuite(backend, cordon.WithConformanceRecorder(StoreConformanceRecorder{Store: st}))
+	suite, err := cordon.NewSuite(backend, cordon.WithConformanceRecorder(StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}))
 	if err != nil {
 		return nil, fmt.Errorf("configure the cordon: %w", err)
 	}

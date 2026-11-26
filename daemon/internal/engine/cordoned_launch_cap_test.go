@@ -75,7 +75,7 @@ func newCordonedImplementer(t *testing.T) cordonedImplementer {
 		t.Fatal(err)
 	}
 	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(ctx, proof)
+		_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, proof)
 		return err
 	}); err != nil {
 		t.Fatal(err)

@@ -80,7 +80,7 @@ func seedUnattendedAdmissionTrust(t *testing.T, st *store.Store, base domain.Bas
 		if err := tx.RecordTrustProfile(t.Context(), profile, unattendedExportEpoch); err != nil {
 			return err
 		}
-		_, err := tx.RecordBackendConformance(t.Context(), conformance)
+		_, err := tx.RecordBackendConformance(t.Context(), domain.DaemonHostID, conformance)
 		return err
 	}); err != nil {
 		t.Fatalf("seed trust profile and conformance: %v", err)

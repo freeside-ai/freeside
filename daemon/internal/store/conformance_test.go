@@ -36,7 +36,7 @@ func recordConformance(t *testing.T, s *store.Store, record domain.BackendConfor
 	var generation uint64
 	if err := s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
 		var err error
-		generation, err = tx.RecordBackendConformance(context.Background(), record)
+		generation, err = tx.RecordBackendConformance(context.Background(), domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatalf("RecordBackendConformance: %v", err)
@@ -470,7 +470,7 @@ func TestRecordBackendConformanceRefusals(t *testing.T) {
 	s, _ := openUnattendedNoConformance(t)
 	record := func(c domain.BackendConformance) error {
 		return s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
-			_, err := tx.RecordBackendConformance(context.Background(), c)
+			_, err := tx.RecordBackendConformance(context.Background(), domain.DaemonHostID, c)
 			return err
 		})
 	}
@@ -527,7 +527,7 @@ func TestLatestBackendConformanceAbsence(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openUnattendedNoConformance(t)
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
-		_, found, err := tx.LatestBackendConformance(ctx, domain.BackendFreshVMReadOnlyVolumeHandoff)
+		_, found, err := tx.LatestBackendConformance(ctx, domain.DaemonHostID, domain.BackendFreshVMReadOnlyVolumeHandoff)
 		if err != nil {
 			return err
 		}

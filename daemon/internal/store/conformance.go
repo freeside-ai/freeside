@@ -25,13 +25,22 @@ var ErrBackendNotConformant = errors.New(
 var ErrConformanceGenerationSupplied = errors.New(
 	"conformance proof generation is store-assigned; a record must arrive with generation zero")
 
+// ErrConformanceHostSupplied is returned when a conformance record arrives
+// already naming a host. The daemon names the host a pass proved when it
+// records the pass, never the suite that ran it, so a record that names one
+// would let a suite claim another host's proof.
+var ErrConformanceHostSupplied = errors.New(
+	"conformance host is named by the recorder; a record must arrive with no host")
+
 // The durable backend-conformance record (plan §5.7; issues #327, #320,
-// #3211): the append-only log of what each backend's completed full
-// conformance passes proved, bound to the normalized configuration each pass
-// exercised. The row id is the proof generation, mirroring ward's in-memory
-// generation guard: a newer append (any outcome) supersedes the older record
-// for the same configuration, and a failed append invalidates that
-// configuration's declaration. Ward holds one declaration per configuration
+// #3211, #2165): the append-only log of what each backend's completed full
+// conformance passes proved on each execution host, bound to the normalized
+// configuration each pass exercised. Every read names a host, so one host's
+// records never admit, refuse, or supersede another's. The row id is the
+// proof generation, mirroring ward's in-memory generation guard: within a
+// host, a newer append (any outcome) supersedes the older record for the
+// same configuration, and a failed append invalidates that configuration's
+// declaration. Ward holds one declaration per configuration
 // it proves (one per writer image), so a ward admission is judged against the
 // newest row for its own configuration digest, and a row for another
 // configuration neither admits nor refuses it. The macOS verification
@@ -42,24 +51,24 @@ var ErrConformanceGenerationSupplied = errors.New(
 const (
 	recordBackendConformanceSQL = `
 INSERT INTO backend_conformance_records
-    (backend, outcome, configuration_digest, capabilities, proved_at)
-VALUES (?, ?, ?, ?, ?)`
-	// Newest row per backend by id (insertion order), never by the
+    (host_id, backend, outcome, configuration_digest, capabilities, proved_at)
+VALUES (?, ?, ?, ?, ?, ?)`
+	// Newest row per host and backend by id (insertion order), never by the
 	// RFC3339Nano proved_at column: trailing zeros are trimmed, so
 	// sub-second instants misorder lexicographically.
 	latestBackendConformanceSQL = `
 SELECT id, outcome, configuration_digest, capabilities, proved_at
-FROM backend_conformance_records WHERE backend = ? ORDER BY id DESC LIMIT 1`
-	// The newest row for one backend and configuration digest: a ward
+FROM backend_conformance_records WHERE host_id = ? AND backend = ? ORDER BY id DESC LIMIT 1`
+	// The newest row for one host, backend, and configuration digest: a ward
 	// configuration's current declaration. Ordered by id for the same reason
 	// as latestBackendConformanceSQL.
 	latestConfigurationConformanceSQL = `
 SELECT id, outcome, configuration_digest, capabilities, proved_at
 FROM backend_conformance_records
-WHERE backend = ? AND configuration_digest = ?
+WHERE host_id = ? AND backend = ? AND configuration_digest = ?
 ORDER BY id DESC LIMIT 1`
-	// The row immediately preceding a given generation for one backend and
-	// configuration digest, across every outcome, ordered by id for the same
+	// The row immediately preceding a given generation for one host, backend,
+	// and configuration digest, across every outcome, ordered by id for the same
 	// reason as latestBackendConformanceSQL. In the append-only log this row
 	// is, by construction, exactly the declaration of that configuration a
 	// supersession marker at that generation superseded: whatever was that
@@ -71,26 +80,29 @@ ORDER BY id DESC LIMIT 1`
 	// from a recheck that never concluded (a restart mid-recheck, or a
 	// retirement followed by a new proof), means no completed pass currently
 	// authorizes the configuration, and the immediately-preceding row makes
-	// that refuse. Rows for other configurations are not in this
+	// that refuse. Rows for other configurations or hosts are not in this
 	// configuration's history and do not matter.
 	latestConfigurationConformanceBeforeSQL = `
 SELECT id, outcome, configuration_digest, capabilities, proved_at
 FROM backend_conformance_records
-WHERE backend = ? AND configuration_digest = ? AND id < ?
+WHERE host_id = ? AND backend = ? AND configuration_digest = ? AND id < ?
 ORDER BY id DESC LIMIT 1`
 )
 
-// RecordBackendConformance appends one completed pass's record and returns
-// the store-assigned proof generation. Append-only by design: the log is the
-// audit trail of every completed pass, and a repeated outcome (a second
-// failure after a failure) is a real recorded pass, not a conflict. The
-// record must arrive unpersisted (Generation zero) and bound to a concrete
-// configuration: the generation is this store's append identity, and
-// accepting a caller-supplied one would let a writer forge where its proof
-// sits in the supersession order. Migrated unbound rows are audit history,
-// never valid new appends.
+// RecordBackendConformance appends one completed pass's record on host and
+// returns the store-assigned proof generation. Append-only by design: the
+// log is the audit trail of every completed pass, and a repeated outcome (a
+// second failure after a failure) is a real recorded pass, not a conflict.
+// The record must arrive unpersisted (Generation zero), naming no host, and
+// bound to a concrete configuration: the generation is this store's append
+// identity, and accepting a caller-supplied one would let a writer forge
+// where its proof sits in the supersession order; the host is the
+// recorder's to name, never the suite's. host must be a host the store
+// holds (ErrNotFound otherwise): the column carries no foreign key
+// (migration 0152), so this is where a record's host is checked. Migrated
+// unbound rows are audit history, never valid new appends.
 func (tx *InternalTx) RecordBackendConformance(
-	ctx context.Context, record domain.BackendConformance,
+	ctx context.Context, host domain.ExecutionHostID, record domain.BackendConformance,
 ) (uint64, error) {
 	if err := record.Validate(); err != nil {
 		return 0, fmt.Errorf("record backend conformance: %w", err)
@@ -98,6 +110,13 @@ func (tx *InternalTx) RecordBackendConformance(
 	if record.Generation != 0 {
 		return 0, fmt.Errorf("record backend conformance for %q: generation %d: %w",
 			record.Backend, record.Generation, ErrConformanceGenerationSupplied)
+	}
+	if record.Host != "" {
+		return 0, fmt.Errorf("record backend conformance for %q: host %q: %w",
+			record.Backend, record.Host, ErrConformanceHostSupplied)
+	}
+	if _, err := tx.ExecutionHost(ctx, host); err != nil {
+		return 0, fmt.Errorf("record backend conformance for %q: %w", record.Backend, err)
 	}
 	if !record.ConfigurationBound() {
 		return 0, fmt.Errorf("record backend conformance for %q: %w",
@@ -108,7 +127,7 @@ func (tx *InternalTx) RecordBackendConformance(
 		return 0, fmt.Errorf("record backend conformance for %q: %w", record.Backend, err)
 	}
 	result, err := tx.tx.ExecContext(ctx, recordBackendConformanceSQL,
-		string(record.Backend), string(record.Outcome), string(record.ConfigurationDigest),
+		string(host), string(record.Backend), string(record.Outcome), string(record.ConfigurationDigest),
 		string(capabilities),
 		formatTime(record.ProvedAt))
 	if err != nil {
@@ -125,35 +144,36 @@ func (tx *InternalTx) RecordBackendConformance(
 	return uint64(generation), nil
 }
 
-// LatestBackendConformance reconstructs a backend's current declaration: the
-// newest appended record, with presence reported separately because an empty
+// LatestBackendConformance reconstructs a backend's current declaration on
+// host: the newest record appended there, with presence reported separately because an empty
 // log is the legitimate "never proved anything" state, not an error (the
 // LookupExecutionAdmission shape). Gets validate after reading: the decoded
 // record re-runs domain validation, including the class capability ceiling,
 // so a tampered row claiming beyond what the class's suite could ever prove
 // fails closed instead of reconstructing as a wider declaration.
 func (tx *ReadTx) LatestBackendConformance(
-	ctx context.Context, backend domain.RunnerBackendClass,
+	ctx context.Context, host domain.ExecutionHostID, backend domain.RunnerBackendClass,
 ) (domain.BackendConformance, bool, error) {
-	row := tx.tx.QueryRowContext(ctx, latestBackendConformanceSQL, string(backend))
-	return scanBackendConformance(backend, row)
+	row := tx.tx.QueryRowContext(ctx, latestBackendConformanceSQL, string(host), string(backend))
+	return scanBackendConformance(host, backend, row)
 }
 
 // LatestConfigurationConformance reconstructs one configuration's current
-// declaration: the newest record a backend appended for digest. Presence and
+// declaration on host: the newest record a backend appended there for
+// digest. Presence and
 // validation follow LatestBackendConformance. Ward startup reads it to
 // restore each image's proof, and the doctor to judge each configuration
 // ward tracks.
 func (tx *ReadTx) LatestConfigurationConformance(
-	ctx context.Context, backend domain.RunnerBackendClass, digest domain.Digest,
+	ctx context.Context, host domain.ExecutionHostID, backend domain.RunnerBackendClass, digest domain.Digest,
 ) (domain.BackendConformance, bool, error) {
 	row := tx.tx.QueryRowContext(ctx, latestConfigurationConformanceSQL,
-		string(backend), string(digest))
-	return scanBackendConformance(backend, row)
+		string(host), string(backend), string(digest))
+	return scanBackendConformance(host, backend, row)
 }
 
 // latestConfigurationConformanceBefore recovers the row immediately
-// preceding generation for one backend and configuration digest: in the
+// preceding generation for one host, backend, and configuration digest: in the
 // append-only log, exactly the declaration of that configuration a
 // supersession marker at that generation superseded. It deliberately returns
 // a marker or a failure too, since the authenticate re-gate re-binds only
@@ -162,11 +182,12 @@ func (tx *ReadTx) LatestConfigurationConformance(
 // longer validates against the class ceiling fails closed rather than
 // restoring a wider declaration.
 func (tx *ReadTx) latestConfigurationConformanceBefore(
-	ctx context.Context, backend domain.RunnerBackendClass, digest domain.Digest, generation uint64,
+	ctx context.Context, host domain.ExecutionHostID, backend domain.RunnerBackendClass, digest domain.Digest,
+	generation uint64,
 ) (domain.BackendConformance, bool, error) {
 	row := tx.tx.QueryRowContext(ctx, latestConfigurationConformanceBeforeSQL,
-		string(backend), string(digest), generation)
-	return scanBackendConformance(backend, row)
+		string(host), string(backend), string(digest), generation)
+	return scanBackendConformance(host, backend, row)
 }
 
 // scanBackendConformance reconstructs one conformance record from a scanned
@@ -174,9 +195,10 @@ func (tx *ReadTx) latestConfigurationConformanceBefore(
 // the class's suite could ever prove fails closed instead of reconstructing as
 // a wider declaration. Presence is reported separately because an empty result
 // is a legitimate "no such record" state, not an error. It is the single
-// reconstruction point shared by every conformance read.
+// reconstruction point shared by every conformance read. It stamps the host
+// the read named, which its query filtered by.
 func scanBackendConformance(
-	backend domain.RunnerBackendClass, row *sql.Row,
+	host domain.ExecutionHostID, backend domain.RunnerBackendClass, row *sql.Row,
 ) (domain.BackendConformance, bool, error) {
 	var (
 		id                  int64
@@ -213,6 +235,7 @@ func scanBackendConformance(
 		Outcome:             domain.ConformanceOutcome(outcome),
 		ConfigurationDigest: domain.Digest(configurationDigest),
 		Capabilities:        caps,
+		Host:                host,
 		Generation:          uint64(id),
 		ProvedAt:            at,
 	}
@@ -290,6 +313,7 @@ func (tx *ReadTx) requireBackendConformant(
 	}
 	return tx.requireConformantDeclaration(ctx, conformanceSubject{
 		label:            fmt.Sprintf("admission %q", admission.InvocationID),
+		host:             admissionHost(admission),
 		class:            domain.RunnerBackendClass(admission.Backend),
 		digest:           admission.BackendConfigurationDigest,
 		capabilities:     admission.Capabilities,
@@ -305,7 +329,8 @@ func (tx *ReadTx) requireBackendConformant(
 // for the class, whatever its configuration: the executor holds one
 // declaration, and a proof of any other configuration replaces it. The class
 // is fixed here rather than taken from the caller, so a host verification job
-// can never be re-gated against the ward's record. There is no authenticate
+// can never be re-gated against the ward's record. So is the host: the
+// executor runs on the daemon's host. There is no authenticate
 // variant: a host verification admission is not yet persisted (#2882), so no
 // recorded admission has to survive a recheck window.
 func (tx *ReadTx) RequireHostVerificationConformant(
@@ -313,19 +338,31 @@ func (tx *ReadTx) RequireHostVerificationConformant(
 ) error {
 	return tx.requireConformantDeclaration(ctx, conformanceSubject{
 		label:        "host verification",
+		host:         domain.DaemonHostID,
 		class:        domain.BackendCredentialFreeHostVerification,
 		digest:       digest,
 		capabilities: capabilities,
 	}, backendConformanceMint)
 }
 
+// admissionHost names the execution host whose proof an admission is gated
+// against. The gates take it from the admission here, never from a caller,
+// so no caller can pair an admission with another host's proof. An
+// admission records no host yet (#3641), and every admitted launch runs on
+// the daemon's host, so this returns the daemon's host; #2166 makes it
+// return the host the admission records.
+func admissionHost(domain.ExecutionAdmission) domain.ExecutionHostID {
+	return domain.DaemonHostID
+}
+
 // conformanceSubject is what requireConformantDeclaration gates: a declaration
-// a backend of class made under configuration digest. label prefixes every
-// refusal so the caller's record is named. perConfiguration judges it by the
-// newest row for digest (a ward admission); otherwise by the newest row for
-// the class (the executor).
+// a backend of class made on host under configuration digest. label prefixes
+// every refusal so the caller's record is named. perConfiguration judges it by
+// the newest row for digest (a ward admission); otherwise by the newest row
+// for the class (the executor). Either way only host's rows count.
 type conformanceSubject struct {
 	label            string
+	host             domain.ExecutionHostID
 	class            domain.RunnerBackendClass
 	digest           domain.Digest
 	capabilities     domain.CapabilitySnapshot
@@ -341,16 +378,16 @@ func (tx *ReadTx) requireConformantDeclaration(
 		err    error
 	)
 	if subject.perConfiguration {
-		record, found, err = tx.LatestConfigurationConformance(ctx, subject.class, subject.digest)
+		record, found, err = tx.LatestConfigurationConformance(ctx, subject.host, subject.class, subject.digest)
 	} else {
-		record, found, err = tx.LatestBackendConformance(ctx, subject.class)
+		record, found, err = tx.LatestBackendConformance(ctx, subject.host, subject.class)
 	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", subject.label, err)
 	}
 	if !found {
-		return fmt.Errorf("%s backend %q configuration %s: %w",
-			subject.label, subject.class, subject.digest, ErrBackendNotConformant)
+		return fmt.Errorf("%s backend %q host %q configuration %s: %w",
+			subject.label, subject.class, subject.host, subject.digest, ErrBackendNotConformant)
 	}
 	if record.Outcome != domain.ConformancePassed {
 		// A supersession marker for the subject's configuration, in the
@@ -423,7 +460,7 @@ func (tx *ReadTx) supersededSameConfigurationProof(
 		return domain.BackendConformance{}, false, nil
 	}
 	superseded, found, err := tx.latestConfigurationConformanceBefore(
-		ctx, subject.class, subject.digest, latest.Generation)
+		ctx, subject.host, subject.class, subject.digest, latest.Generation)
 	if err != nil {
 		return domain.BackendConformance{}, false, err
 	}

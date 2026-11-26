@@ -7041,15 +7041,16 @@ recipe command: the room hashes its staged copy, the prepare copies the daemon
 binary (tens of megabytes) into the job directory, the checks return at once,
 and the slot is reaped and torn down.
 
-**Read the record.** The newest `credential_free_host_verification` row in
-the conformance log is the executor's record; only `passed` with the current
-configuration digest admits it. Copy the database (Inspect A Live Database)
-and query it:
+**Read the record.** The newest `credential_free_host_verification` row on
+the daemon's host in the conformance log is the executor's record; only
+`passed` with the current configuration digest admits it. Copy the
+database (Inspect A Live Database) and query it:
 
 ```sh
 freesided snapshot -db <live-db> <output-path>
 sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, proved_at
-  FROM backend_conformance_records WHERE backend = 'credential_free_host_verification'
+  FROM backend_conformance_records
+  WHERE host_id = 'daemon' AND backend = 'credential_free_host_verification'
   ORDER BY id DESC LIMIT 1"
 ```
 

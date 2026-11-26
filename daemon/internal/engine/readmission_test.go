@@ -141,7 +141,7 @@ func (h *readmissionFixture) prove(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := h.fixture.store.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(t.Context(), record)
+		_, err := tx.RecordBackendConformance(t.Context(), domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatal(err)

@@ -385,7 +385,7 @@ func (d Doctor) conformanceFindings(
 		)
 		if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
-			record, found, err = tx.LatestConfigurationConformance(ctx, d.Backend, digest)
+			record, found, err = tx.LatestConfigurationConformance(ctx, domain.DaemonHostID, d.Backend, digest)
 			return err
 		}); err != nil {
 			return DoctorFinding{}, DoctorFinding{}, fmt.Errorf("doctor: read conformance: %w", err)
@@ -419,7 +419,7 @@ func (d Doctor) cordonedConformanceFinding(ctx context.Context) (DoctorFinding, 
 	)
 	if err := d.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		record, found, err = tx.LatestConfigurationConformance(ctx, backend, d.CordonConfigurationDigest)
+		record, found, err = tx.LatestConfigurationConformance(ctx, domain.DaemonHostID, backend, d.CordonConfigurationDigest)
 		return err
 	}); err != nil {
 		return DoctorFinding{}, fmt.Errorf("doctor: read cordoned conformance: %w", err)

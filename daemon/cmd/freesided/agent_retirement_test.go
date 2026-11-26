@@ -315,7 +315,7 @@ func legacyAdmittedTask(t *testing.T, identityID domain.AuthIdentityID) (*store.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (daemoncompose.StoreConformanceRecorder{Store: st}).RecordBackendConformance(ctx, record); err != nil {
+	if err := (daemoncompose.StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}).RecordBackendConformance(ctx, record); err != nil {
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentity{

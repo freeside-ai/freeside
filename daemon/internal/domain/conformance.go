@@ -168,10 +168,16 @@ type BackendConformance struct {
 	// when the pass failed: a failed pass proves nothing, and letting it keep
 	// a base set would let a broken backend keep admitting.
 	Capabilities CapabilitySnapshot `json:"capabilities"`
-	// Generation is the store-assigned, per-backend-monotonic proof
-	// generation: zero on a record that has not been persisted yet, and the
-	// row identity once it has. The store stamps it at append and range-checks
-	// it at reconstruction; no caller-supplied value is ever trusted.
+	// Host is the execution host the pass proved (§5.7, Conformance per
+	// host): empty on a record a suite builds, and set on a record the store
+	// reads. Like Generation it is the store's to stamp: the daemon names the
+	// host when it records the pass, so a suite can't claim another host's
+	// proof.
+	Host ExecutionHostID `json:"host"`
+	// Generation is the store-assigned proof generation, rising within each
+	// host: zero on a record that has not been persisted yet, and the row
+	// identity once it has. The store stamps it at append and range-checks it
+	// at reconstruction; no caller-supplied value is ever trusted.
 	Generation uint64 `json:"generation"`
 	// ProvedAt is the UTC instant the pass completed. It is recorded for
 	// audit; supersession is decided by Generation, never by comparing
@@ -231,10 +237,14 @@ func (c BackendConformance) ConfigurationBound() bool {
 // change what a class's suite could ever prove, so every boundary that decodes
 // or accepts a record enforces it identically. Generation is deliberately
 // unconstrained: zero means not yet persisted, and the store stamps and
-// range-checks the persisted value itself.
+// range-checks the persisted value itself. Host may be empty for the same
+// reason; a host that is set must be a single line, as a host's id is.
 func (c BackendConformance) Validate() error {
 	if !c.Backend.valid() {
 		return fmt.Errorf("backend conformance class %q: %w", c.Backend, ErrInvalidRunnerBackendClass)
+	}
+	if c.Host != "" && !singleLine(string(c.Host)) {
+		return fmt.Errorf("backend conformance host %q: %w", c.Host, ErrInvalidExecutionHost)
 	}
 	if !c.Outcome.valid() {
 		return fmt.Errorf("backend conformance outcome %q: %w", c.Outcome, ErrInvalidConformanceOutcome)

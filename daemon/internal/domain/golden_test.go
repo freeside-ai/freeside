@@ -2180,6 +2180,7 @@ func TestGolden(t *testing.T) {
 	}
 	// The store stamps the generation at append; the golden pins the
 	// reconstructed render.
+	backendConformance.Host = domain.DaemonHostID
 	backendConformance.Generation = 7
 	failedConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
@@ -2190,6 +2191,7 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	failedConformance.Host = domain.DaemonHostID
 	failedConformance.Generation = 8
 	supersededConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
@@ -2200,6 +2202,7 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	supersededConformance.Host = domain.DaemonHostID
 	supersededConformance.Generation = 9
 	restoreTestedAt := ts.Add(2 * time.Hour)
 	backupCheckpoint := domain.BackupCheckpoint{

@@ -60,7 +60,7 @@ func recordHostConformance(
 		t.Fatalf("NewBackendConformance: %v", err)
 	}
 	if err := e.store.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(context.Background(), record)
+		_, err := tx.RecordBackendConformance(context.Background(), domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatalf("RecordBackendConformance: %v", err)

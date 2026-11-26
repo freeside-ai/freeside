@@ -911,7 +911,7 @@ func restoreRecordedProofs(
 		)
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
-			record, found, err = tx.LatestConfigurationConformance(ctx,
+			record, found, err = tx.LatestConfigurationConformance(ctx, domain.DaemonHostID,
 				domain.BackendFreshVMReadOnlyVolumeHandoff, backend.ConfigurationDigestFor(string(image)))
 			return err
 		}); err != nil {
