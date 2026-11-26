@@ -1377,9 +1377,8 @@ private struct ChoiceOptionSurface<Value: Hashable, Label: View>: View {
 /// The task timeline draws two more: the start of a stage in the diff
 /// green, and an entry that records a failure in wax. Neither color is the
 /// only signal, since the entry's words say the same. The Finished list
-/// draws three of them before each task to say how it ended
-/// (`FinishedRowView`): the diff green for finished, wax for stopped, and
-/// the hollow ring for abandoned; the row speaks the outcome too.
+/// does not draw these markers: its rows draw the lifecycle glyphs, whose
+/// shapes tell the outcomes apart (`FinishedRowView`, #3671).
 ///
 /// An entry that folds an explanation draws its marker as a disclosure
 /// triangle of the same size, color, and fill (hollow where the dot is a

@@ -180,16 +180,16 @@ import Testing
         #expect(TaskDisplay.ambiguousTaskIDs(tasks) == ["task-a", "task-b", "task-d", "task-e"])
     }
 
-    /// Acceptance (#3456): a Finished task row draws its outcome's marker
-    /// and speaks the outcome, adding the recorded status only when it says
-    /// more; an issue-backed row names its issue, and an item row does
-    /// neither.
+    /// Acceptance (#3456, #3671): a Finished task row draws its outcome's
+    /// lifecycle glyph and speaks the outcome word, adding the recorded
+    /// status only when it says more; an issue-backed row names its issue,
+    /// and an item row does neither.
     @Test @MainActor func finishedRowsDrawAndSpeakTheirOutcome() throws {
         let retries = TaskFixtures.issueRetries().map(\.task)
         let rows = retries.map {
             FinishedRowView(subject: .task($0, status: TaskDisplay.lifecycleLabel($0).text, showsIdentifier: true))
         }
-        #expect(rows.map(\.marker) == [.prior, .failure, .stageStart])
+        #expect(rows.map(\.glyph) == ["minus.circle", "stop.circle", "checkmark.circle"])
         #expect(rows.map(\.spokenStatus) == [["Abandoned"], ["Stopped"], ["Finished"]])
         #expect(rows.map(\.context) == Array(repeating: "freeside · #80", count: 3))
 
@@ -198,7 +198,7 @@ import Testing
         let legacy = try #require(TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.legacyTaskID }).task
         #expect(FinishedRowView(subject: .task(legacy, status: "Finished", showsIdentifier: false)).context == nil)
         let item = FinishedRowView(subject: .item(AttentionFixtures.fixture(type: .agent_question).item))
-        #expect(item.marker == nil)
+        #expect(item.glyph == nil)
         #expect(item.context == nil)
     }
 
