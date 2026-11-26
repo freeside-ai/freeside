@@ -92,17 +92,37 @@
             return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
         }
 
-        /// Capture every entry before opening the destination. An unstable
-        /// surface must leave the previously reviewed manifest intact.
-        static func record(
-            to url: URL, capture: () async throws -> [String: String]
-        ) async throws {
-            let manifest = try await capture()
+        static func encodeManifest(_ manifest: [String: String]) throws -> Data {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             var data = try encoder.encode(manifest)
             data.append(0x0A)
+            return data
+        }
+
+        /// Write `manifest` to `url` only when the encoded bytes differ from
+        /// what is already on disk, so a no-op recording leaves tracked files
+        /// untouched.
+        @discardableResult
+        static func writeManifestIfChanged(_ manifest: [String: String], to url: URL) throws -> Bool {
+            let data = try encodeManifest(manifest)
+            if let existing = try? Data(contentsOf: url), existing == data {
+                return false
+            }
             try data.write(to: url, options: .atomic)
+            return true
+        }
+
+        /// Capture every selected family before writing any file, then write
+        /// only the files whose encoded bytes changed. An unstable surface
+        /// leaves previously reviewed manifests intact.
+        static func record(
+            capture: () async throws -> [(url: URL, manifest: [String: String])]
+        ) async throws {
+            let entries = try await capture()
+            for entry in entries {
+                _ = try writeManifestIfChanged(entry.manifest, to: entry.url)
+            }
         }
     }
 #endif
