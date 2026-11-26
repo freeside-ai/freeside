@@ -7078,13 +7078,17 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   four capabilities only once its passed record is durable. Every refusal
   must be the sandbox's own: each target first passes a positive control
   outside the launch, a failed control fails the pass, and a target the
-  account itself can't reach is left out. The proof binds the rule file,
-  the CLI's SHA-256, and the daemon executable's digest through the
-  configuration digest. A launch with `RequireProof` set first runs the
-  lighter pre-job probe, which passes only while the declaration it began
-  under still stands. Its failure withdraws the declaration and records
-  `failed`, not `superseded`, which the store would read as a re-proof
-  under way, so only a new full pass declares again.
+  account itself can't reach is left out. Both passes ask the sandbox
+  whether it denies preference writes to the global and `com.apple.security`
+  domains, because cfprefsd makes those writes outside the launch; the suite
+  writes no preference to prove it, and a test pins the domains it asks
+  about to the rule file's. The proof binds the rule file, the CLI's
+  SHA-256, and the daemon executable's digest through the configuration
+  digest. A launch with `RequireProof` set first runs the lighter pre-job
+  probe, which passes only while the declaration it began under still
+  stands. Its failure withdraws the declaration and records `failed`, not
+  `superseded`, which the store would read as a re-proof under way, so only
+  a new full pass declares again.
 - **What the suite touches.** It reads the account's secret paths only to
   see whether they open, and prints nothing a probe read; the environment
   check names variables, never values. Its signal, launchd, and app

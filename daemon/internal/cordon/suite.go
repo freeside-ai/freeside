@@ -96,6 +96,11 @@ const controlService = "com.apple.SecurityServer"
 // deniedOperations are the operations the probe asks the sandbox about.
 var deniedOperations = []string{"job-creation", "lsopen", "mach-priv-task-port"}
 
+// deniedPreferenceDomains are the preference domains the rules deny
+// writing: the account's default keychain and search list, and its global
+// domain. A test pins the list to the rule file's preference-domain names.
+var deniedPreferenceDomains = []string{"com.apple.security", "kCFPreferencesAnyApplication"}
+
 // secretName finds a variable or argument name that holds a credential.
 // A value that is an absolute path names where a credential lives, as
 // -publication-credentials-dir does, not the credential (namesSecret).
@@ -229,12 +234,12 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 
 // ProbeBeforeJob re-proves, inside a launch of its own, the checks with no
 // lasting effect: the preconditions, the secret reads, the protected
-// writes, the reserved ports, and the service and operation denials. It
-// refuses when no recorded pass declares the class, and passes only when
-// the declaration it began under still stands at its end, so a pass that
-// began or failed meanwhile refuses the job. A failed probe withdraws the
-// declaration, in memory and by a durable failed record, so only a new
-// Full declares again; a failure to write that record wraps
+// writes, the reserved ports, and the service, operation, and preference
+// denials. It refuses when no recorded pass declares the class, and passes
+// only when the declaration it began under still stands at its end, so a
+// pass that began or failed meanwhile refuses the job. A failed probe
+// withdraws the declaration, in memory and by a durable failed record, so
+// only a new Full declares again; a failure to write that record wraps
 // ErrConformanceRecord. The record is failed rather than superseded
 // because the store reads a superseded latest row as a re-proof under way
 // and lets admitted work authenticate against the pass before it. A
@@ -369,6 +374,16 @@ func (s *Suite) commonTargets(nonce string) (*targets, error) {
 		}
 	}
 	t.spec.Denied = deniedOperations
+	for _, domain := range deniedPreferenceDomains {
+		denied, err := sandboxDeniesPreference(domain)
+		if err != nil {
+			return nil, failure(checkPreference(domain), "control: %v", err)
+		}
+		if denied {
+			return nil, failure(checkPreference(domain), "control: the daemon itself is denied writing it")
+		}
+	}
+	t.spec.Preferences = deniedPreferenceDomains
 	return t, nil
 }
 

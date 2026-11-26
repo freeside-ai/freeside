@@ -55,6 +55,11 @@ type probeSpec struct {
 	// target: creating a launchd job, opening through Launch Services, and
 	// another process's task port.
 	Denied []string `json:"denied,omitempty"`
+	// Preferences are preference domains the rules deny writing, which the
+	// probe asks the sandbox about: cfprefsd makes the write outside the
+	// launch, and the real domains are the owner's, so no live attempt has
+	// a safe target.
+	Preferences []string `json:"preferences,omitempty"`
 	// StandIn is a process of the suite's own that the probe tries to signal.
 	StandIn *probeStandIn `json:"stand_in,omitempty"`
 	// Commands each must fail inside the launch; the suite checks their
@@ -92,14 +97,15 @@ type probeCommand struct {
 	Argv []string `json:"argv"`
 }
 
-func checkRead(path string) string    { return "read " + path }
-func checkCreate(path string) string  { return "create " + path }
-func checkConnect(path string) string { return "connect " + path }
-func checkBind(port int) string       { return "bind " + strconv.Itoa(port) }
-func checkLookup(name string) string  { return "lookup " + name }
-func checkDenied(op string) string    { return "denied " + op }
-func checkCommand(name string) string { return "command " + name }
-func checkSignal(pid int) string      { return "signal " + strconv.Itoa(pid) }
+func checkRead(path string) string         { return "read " + path }
+func checkCreate(path string) string       { return "create " + path }
+func checkConnect(path string) string      { return "connect " + path }
+func checkBind(port int) string            { return "bind " + strconv.Itoa(port) }
+func checkLookup(name string) string       { return "lookup " + name }
+func checkDenied(op string) string         { return "denied " + op }
+func checkPreference(domain string) string { return "preference-write " + domain }
+func checkCommand(name string) string      { return "command " + name }
+func checkSignal(pid int) string           { return "signal " + strconv.Itoa(pid) }
 func detachedLine(pid int, start int64) string {
 	return fmt.Sprintf("detached %d %d", pid, start)
 }
@@ -124,6 +130,9 @@ func (s probeSpec) checks() []string {
 	}
 	for _, op := range s.Denied {
 		checks = append(checks, checkDenied(op))
+	}
+	for _, domain := range s.Preferences {
+		checks = append(checks, checkPreference(domain))
 	}
 	if s.StandIn != nil {
 		checks = append(checks, checkSignal(s.StandIn.Pid))
@@ -151,6 +160,11 @@ func (s probeSpec) validate() error {
 	for _, port := range s.Ports {
 		if port < 1 || port > 65535 {
 			return fmt.Errorf("port %d out of range", port)
+		}
+	}
+	for _, domain := range s.Preferences {
+		if domain == "" {
+			return errors.New("an empty preference domain")
 		}
 	}
 	if s.StandIn != nil && s.StandIn.Pid <= 1 {
@@ -247,6 +261,9 @@ func (p *probe) run(s probeSpec) {
 	}
 	for _, op := range s.Denied {
 		p.check(checkDenied(op), p.operationDenied(op))
+	}
+	for _, domain := range s.Preferences {
+		p.check(checkPreference(domain), p.preferenceDenied(domain))
 	}
 	if s.StandIn != nil {
 		p.check(checkSignal(s.StandIn.Pid), p.signalDenied(*s.StandIn))
@@ -353,6 +370,32 @@ func (p *probe) operationDenied(op string) error {
 		return errors.New("the rules allow it")
 	}
 	p.detail("the rules deny it")
+	return nil
+}
+
+// unrelatedPreferenceDomain is a domain no rule names. The probe's answer
+// for it must be "allowed", so a sandbox that stops matching the domain's
+// name, and denies every domain once any is denied, fails the check rather
+// than passing for a rule the file no longer has.
+const unrelatedPreferenceDomain = "com.freeside.cordon-probe.unrelated"
+
+// preferenceDenied asks the sandbox, with the preference-domain filter,
+// whether the rules deny writing domain, and that they still allow an
+// unrelated one. It writes nothing.
+func (p *probe) preferenceDenied(domain string) error {
+	denied, err := sandboxDeniesPreference(domain)
+	if err != nil {
+		return err
+	}
+	if !denied {
+		return errors.New("the rules allow writing it")
+	}
+	if unrelated, err := sandboxDeniesPreference(unrelatedPreferenceDomain); err != nil {
+		return err
+	} else if unrelated {
+		return fmt.Errorf("the sandbox denies writing %s too, so its answer doesn't name the domain", unrelatedPreferenceDomain)
+	}
+	p.detail("the rules deny writing it")
 	return nil
 }
 
