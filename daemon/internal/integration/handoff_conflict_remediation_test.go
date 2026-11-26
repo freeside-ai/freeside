@@ -335,6 +335,22 @@ func TestHandoffConflictRemediatesAtTheTip(t *testing.T) {
 	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
 	}
+	// The run's timeline shows the conflict's remediation on the round whose
+	// head conflicted, though it is at the tip and no finding was routed to
+	// it, and the tip's review reviews that remediation (issue #3609).
+	timeline, err := p.attention.GetRunTimeline(p.ctx, p.runID)
+	if err != nil {
+		t.Fatalf("run timeline after publication: %v", err)
+	}
+	if timeline.Review == nil || len(timeline.Review.Rounds) != 2 {
+		t.Fatalf("timeline review = %#v, want two rounds", timeline.Review)
+	}
+	if fix := timeline.Review.Rounds[0].Remediation; fix == nil || len(fix.FindingIDs) != 0 || fix.DecidedAt != nil {
+		t.Errorf("round 1 remediation = %#v, want the conflict's remediation with no finding and no decision", fix)
+	}
+	if subject := timeline.Review.Rounds[1].Subject; subject == nil || subject.Kind != domain.ReviewSubjectRemediation {
+		t.Errorf("round 2 subject = %#v, want the remediation", subject)
+	}
 }
 
 // TestHandoffVerificationFailureRemediatesAtTheTip: a merge into the tip that

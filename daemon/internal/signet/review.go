@@ -317,7 +317,9 @@ func reviewRoundSubject(ctx context.Context, tx *store.ReadTx, runID domain.RunI
 // reviewRoundRemediation reads the remediation dispatched from this round's
 // findings. An intent bound to a different review invocation, base or head
 // did not supersede this round, the same rule the engine applies, so it
-// yields nil rather than an error.
+// yields nil rather than an error. The one intent at another base that does
+// supersede its round is a handoff conflict's first remediation, which its
+// authority admits at the sealed tip (issue #3609).
 func reviewRoundRemediation(ctx context.Context, tx *store.ReadTx, runID domain.RunID, r RunReviewRound) (*ReviewRoundRemediation, error) {
 	id := domain.RemediationInvocationID(runID, r.Round)
 	entry, err := tx.GetOutbox(ctx, string(id))
@@ -339,8 +341,17 @@ func reviewRoundRemediation(ctx context.Context, tx *store.ReadTx, runID domain.
 	if err != nil {
 		return nil, err
 	}
-	if intent.ReviewInvocationID != r.InvocationID || intent.BaseSHA != r.BaseSHA || intent.HeadSHA != r.HeadSHA {
+	if intent.ReviewInvocationID != r.InvocationID || intent.HeadSHA != r.HeadSHA {
 		return nil, nil
+	}
+	if intent.BaseSHA != r.BaseSHA {
+		successor, err := remediationSuccessor(ctx, tx, runID, intent)
+		if err != nil {
+			return nil, err
+		}
+		if successor == nil || !successor.AdmitsHandoffConflictRemediation(intent) {
+			return nil, nil
+		}
 	}
 	adjudication, err := authenticateRemediationLineage(ctx, tx, runID, intent)
 	if err != nil {
@@ -358,9 +369,11 @@ func reviewRoundRemediation(ctx context.Context, tx *store.ReadTx, runID domain.
 // authenticateRemediationLineage re-gates a decoded remediation intent against
 // the review record and adjudication it names, as the successor-producer gate
 // does. Dispatch authentication binds only the intent's own identity, so its
-// round lineage and finding IDs are decoded claims until proven here. A
-// check_failure cycle's remediation answers a failed required check, not
-// findings, so it names no adjudication and yields none (issue #3598).
+// round lineage and finding IDs are decoded claims until proven here. Two
+// cycles' first remediations answer something other than findings, so they
+// name no adjudication and yield none: a check_failure cycle's answers a
+// failed required check (issue #3598), and a handoff conflict's answers the
+// conflict, at the sealed tip rather than its review's base (issue #3609).
 func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID domain.RunID, intent domain.RemediationInvocationIntent) (*domain.FindingAdjudication, error) {
 	mismatch := fmt.Errorf("remediation intent %q lineage: %w", intent.InvocationID, domain.ErrParentKeyMismatch)
 	review, err := tx.GetReviewRecord(ctx, intent.ReviewInvocationID)
@@ -370,12 +383,14 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 	if err != nil {
 		return nil, err
 	}
-	if review.RunID != runID || review.Round != intent.Round || review.BaseSHA != intent.BaseSHA ||
-		review.HeadSHA != intent.HeadSHA {
+	if review.RunID != runID || review.Round != intent.Round || review.HeadSHA != intent.HeadSHA {
 		return nil, mismatch
 	}
 	if len(intent.FindingIDs) == 0 {
-		return nil, authenticateCheckFailureLineage(ctx, tx, runID, intent, review, mismatch)
+		return nil, authenticateFindinglessLineage(ctx, tx, runID, intent, review, mismatch)
+	}
+	if review.BaseSHA != intent.BaseSHA {
+		return nil, mismatch
 	}
 	// An external review cycle's first round may fix the cycle's admitted
 	// external findings, which no review record lists, and may answer a clean
@@ -438,28 +453,52 @@ func authenticateRemediationLineage(ctx context.Context, tx *store.ReadTx, runID
 	return &adjudication, nil
 }
 
-// authenticateCheckFailureLineage proves an intent that names no finding is
-// its check_failure cycle's remediation: the authority it names admits it,
-// and the review of its round, already matched to its base and head, was
-// clean, as the store requires before it commits one.
-func authenticateCheckFailureLineage(
+// authenticateFindinglessLineage proves an intent that names no finding is
+// the first remediation of the cycle whose authority it names, mirroring the
+// store's successor-producer gate. A handoff conflict's needs nothing more:
+// the authority's own read proved its review and tip against the sealed
+// handoff check, so its base is the tip, not the review's. A check_failure
+// cycle's must also be at its review's base, and that review, already
+// matched to its head, must be clean, as the store requires before it
+// commits one.
+func authenticateFindinglessLineage(
 	ctx context.Context, tx *store.ReadTx, runID domain.RunID, intent domain.RemediationInvocationIntent,
 	review domain.ReviewRecord, mismatch error,
 ) error {
-	if intent.SuccessorPublicationID == "" || review.Outcome != domain.ReviewClean {
-		return mismatch
-	}
-	successor, err := tx.GetPublicationSuccessor(ctx, runID, intent.SuccessorPublicationID)
-	if errors.Is(err, store.ErrNotFound) {
-		return mismatch
-	}
+	successor, err := remediationSuccessor(ctx, tx, runID, intent)
 	if err != nil {
 		return err
 	}
-	if !successor.AdmitsCheckFailureRemediation(intent) {
+	if successor == nil {
+		return mismatch
+	}
+	if successor.AdmitsHandoffConflictRemediation(intent) {
+		return nil
+	}
+	if review.BaseSHA != intent.BaseSHA || review.Outcome != domain.ReviewClean ||
+		!successor.AdmitsCheckFailureRemediation(intent) {
 		return mismatch
 	}
 	return nil
+}
+
+// remediationSuccessor reads the publication successor a remediation intent
+// names through the store's own gate. An intent that names none, or names one
+// the run does not have, yields nil.
+func remediationSuccessor(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, intent domain.RemediationInvocationIntent,
+) (*domain.PublicationSuccessor, error) {
+	if intent.SuccessorPublicationID == "" {
+		return nil, nil
+	}
+	successor, err := tx.GetPublicationSuccessor(ctx, runID, intent.SuccessorPublicationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &successor, nil
 }
 
 // findingAdjudicationDecidedAt returns when the adjudication's item was
