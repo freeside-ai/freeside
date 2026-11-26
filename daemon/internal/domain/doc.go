@@ -134,6 +134,8 @@
 //     who submitted a task and manual intake bookkeeping
 //   - task_attachment.go the operator-supplied files a submission carries (§5.15)
 //   - task_cancellation.go stop-task requests, targets, and receipts
+//   - operator_message.go an operator's message to a running cordoned writer
+//     and how it settles (#3632)
 //   - task_triage.go  the specifier triager's outcome (§5.13)
 //   - intake_occurrence.go intake subject bindings and atomic admission
 //   - task_line.go, task_line_change.go

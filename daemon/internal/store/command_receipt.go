@@ -37,7 +37,8 @@ func (tx *WriteTx) RecordCommandReceipt(ctx context.Context, receipt domain.Comm
 }
 
 // RequireCommandIDFree refuses a command_id any command kind already recorded
-// (a decision, a submission, a Stop, or a receipt) with ErrImmutableConflict.
+// (a decision, a submission, a Stop, a receipt, or an operator message) with
+// ErrImmutableConflict.
 // An operator command runs it before applying its effect, so a reused id is
 // refused before anything else can answer for it.
 func (tx *WriteTx) RequireCommandIDFree(ctx context.Context, commandID string) error {
@@ -90,10 +91,11 @@ func (tx *ReadTx) GetCommandReceipt(ctx context.Context, commandID string) (doma
 	return receipt, snap, nil
 }
 
-// rejectRecordedCommandID refuses a command_id that already holds a receipt,
-// so the decision, submission, and Stop writers keep command_id unique across
-// every kind. Before migration 0118 the table does not exist and nothing can
-// collide.
+// rejectRecordedCommandID refuses a command_id that already holds a receipt
+// or an operator message, so the decision, submission, and Stop writers keep
+// command_id unique across every kind. Before migration 0118 (receipts) or
+// 0151 (operator messages) a table does not exist and nothing can collide
+// with it.
 func (tx *WriteTx) rejectRecordedCommandID(ctx context.Context, commandID string) error {
 	if exists, err := tx.tableExists(ctx, "client_command_receipts"); err != nil {
 		return err
@@ -104,6 +106,15 @@ func (tx *WriteTx) rejectRecordedCommandID(ctx context.Context, commandID string
 		`SELECT body FROM client_command_receipts WHERE command_id = ?`, commandID); err != nil {
 		return err
 	} else if body != nil {
+		return fmt.Errorf("command %q: %w", commandID, ErrImmutableConflict)
+	}
+	if exists, err := tx.tableExists(ctx, "operator_messages"); err != nil || !exists {
+		return err
+	}
+	if held, err := tx.existingBody(ctx,
+		`SELECT command_id FROM operator_messages WHERE command_id = ?`, commandID); err != nil {
+		return err
+	} else if held != nil {
 		return fmt.Errorf("command %q: %w", commandID, ErrImmutableConflict)
 	}
 	return nil

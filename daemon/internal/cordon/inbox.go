@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // A writer launch's inbox is ctl/messages/, where the daemon leaves an
@@ -57,10 +59,11 @@ var (
 	ErrNotTaken = errors.New("cordon: the run did not take the message in time")
 )
 
-// MaxMessageBytes bounds a message's text. A message file is a record, which
+// MaxMessageBytes bounds a message's text: the bound the daemon's record
+// of an operator message takes. A message file is a record, which
 // readRecord bounds at maxRecordBytes, and JSON can write one byte as six
-// (\u003c for <), so the text is bounded at well under a sixth of that.
-const MaxMessageBytes = 8 << 10
+// (\u003c for <), so the bound must stay well under a sixth of that.
+const MaxMessageBytes = domain.MaxOperatorMessageBytes
 
 // messageTakeTimeout is how long SendMessage waits for the supervisor to
 // take a message. The supervisor looks every inputPollInterval while a turn

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // steerScript is an in-process CLI that runs every message it reads: it
@@ -256,5 +259,28 @@ func TestTakeAndWithdrawLeaveOneWinner(t *testing.T) {
 	}
 	if delivered != len(taken) {
 		t.Fatalf("%d messages read as taken, but the take returned %d", delivered, len(taken))
+	}
+}
+
+// TestTheLongestMessageFitsItsRecord writes a message whose text and
+// command ID are at their bounds, made of the byte JSON escapes longest,
+// and reads it back, so the domain's bounds never outgrow the record a
+// message file is read through.
+func TestTheLongestMessageFitsItsRecord(t *testing.T) {
+	t.Parallel()
+	l := layoutFor(t.TempDir(), "run-long")
+	if err := os.MkdirAll(l.messages, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Repeat("<", MaxMessageBytes)
+	f := filesFor(l, 1)
+	commandID := strings.Repeat("<", domain.MaxOperatorMessageCommandIDBytes)
+	m := inboxMessage{Version: messageVersion, RunID: "run-long", Ordinal: 1, CommandID: commandID, Text: text}
+	if err := writeRecord(f.waiting, m); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readMessage(f.waiting, "run-long", 1)
+	if err != nil || got.Text != text {
+		t.Fatalf("readMessage: %v", err)
 	}
 }

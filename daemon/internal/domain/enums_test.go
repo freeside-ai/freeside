@@ -190,6 +190,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["WorkflowPolicyOrigin"] = append(valids["WorkflowPolicyOrigin"], v.valid)
 	}
 	invalids["WorkflowPolicyOrigin"] = WorkflowPolicyOrigin("").valid
+	for _, v := range AllOperatorMessageStates {
+		valids["OperatorMessageState"] = append(valids["OperatorMessageState"], v.valid)
+	}
+	invalids["OperatorMessageState"] = OperatorMessageState("").valid
+	for _, v := range AllOperatorMessageRefusals {
+		valids["OperatorMessageRefusal"] = append(valids["OperatorMessageRefusal"], v.valid)
+	}
+	invalids["OperatorMessageRefusal"] = OperatorMessageRefusal("").valid
 	for _, v := range AllInstanceSettingsSections {
 		valids["InstanceSettingsSection"] = append(valids["InstanceSettingsSection"], v.valid)
 	}

@@ -13,6 +13,7 @@ import (
 // migrations' tests at head.
 func rewindExecutionHosts(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindOperatorMessages(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE execution_host_conditions`,
 		`DROP TABLE execution_hosts`,
