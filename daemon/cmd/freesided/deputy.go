@@ -350,7 +350,8 @@ func proveDeputyRigClear(ctx context.Context, host rigHost, stateRoot string) er
 	if err := cleanupRigContainers(ctx, host, deputyContainerBin, manifest.Resources.Containers); err != nil {
 		return err
 	}
-	return requireRigResourcesAbsent(ctx, host, deputyContainerBin, manifest.Resources)
+	return requireRigResourcesAbsent(ctx, host, deputyContainerBin, manifest.Resources,
+		clearWithRigRecover("the next deputy start on this root recovers them, or ", stateRoot))
 }
 
 // acquireDeputyLease takes the production rig lease for this root. A stale

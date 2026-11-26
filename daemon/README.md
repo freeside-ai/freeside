@@ -5677,7 +5677,9 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    recovered as `freesided rig recover -migrate` would (a database an older
    build left migrates forward, as the start's own open would migrate it),
    and a `system_health` card (`deputy_run_interrupted`) names the run it
-   interrupted. A stale lease for another root refuses and names the
+   interrupted. That recovery also deletes a recorded lineup probe network
+   a killed discovery left, once its labels bind it to its recorded name
+   (#3447). A stale lease for another root refuses and names the
    `rig recover` command.
 4. Check `prod`'s App authority against `prod.installed_daemon`, under the
    lease. Open the task runtime coverage record under the database daemon

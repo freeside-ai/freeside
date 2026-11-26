@@ -46,6 +46,15 @@ type rigHost interface {
 	PresentPersistentResources(context.Context, string, []string, []string) ([]string, []string, error)
 	RuntimeCLIActive(context.Context, string) (bool, error)
 	RecoverReviewResources(ctx context.Context, executable string, manifest daemonlock.RigManifest, migrate bool) error
+	ReapLineupProbeNetworks(ctx context.Context, executable string, networks []string) error
+}
+
+// ReapLineupProbeNetworks deletes the recorded lineup probe networks that a
+// killed probe left, each only once its labels bind it to its recorded name
+// (ward.RecoverLineupProbeNetworks). No journal owns them, so without this
+// they would hold the rig until a person deleted them (#3447).
+func (productionRigHost) ReapLineupProbeNetworks(ctx context.Context, executable string, networks []string) error {
+	return ward.RecoverLineupProbeNetworks(ctx, ward.NewCLIRuntime(executable), networks)
 }
 
 // RecoverReviewResources tears down the recorded review volumes and networks
@@ -695,7 +704,8 @@ func runRigCleanup(
 	if err := cleanupRigContainers(ctx, host, *containerBin, manifest.Resources.Containers); err != nil {
 		return err
 	}
-	return requireRigResourcesAbsent(ctx, host, *containerBin, manifest.Resources)
+	return requireRigResourcesAbsent(ctx, host, *containerBin, manifest.Resources,
+		clearWithRigRecover("once this hold ends, ", *stateRoot))
 }
 
 func cleanupRigContainers(
@@ -704,8 +714,44 @@ func cleanupRigContainers(
 	return host.DeleteContainers(ctx, containerBin, names)
 }
 
+// rigResidue is the recorded resources a rig absence proof found present.
+type rigResidue struct{ containers, volumes, networks []string }
+
+// clearWithRigRecover is the refusal advice where rig recover clears what
+// remains: it reaps recorded containers and lineup probe networks and hands
+// the rest to their review journal. when says when the lease is recoverable.
+func clearWithRigRecover(when, stateRoot string) func(rigResidue) string {
+	return func(rigResidue) string {
+		return when + "clear them with `freesided rig recover -state-root " + stateRoot + " -confirm`"
+	}
+}
+
+// clearByHand is rig recover's own refusal advice: recovery already ran and
+// could not clear what is left, which may belong to someone else, so it names
+// the runtime command that deletes each remaining name, as ward.CLIRuntime
+// spells it, for a person who has checked first.
+func clearByHand(containerBin string) func(rigResidue) string {
+	return func(residue rigResidue) string {
+		var commands []string
+		for _, name := range residue.containers {
+			commands = append(commands, containerBin+" delete "+name)
+		}
+		for _, name := range residue.volumes {
+			commands = append(commands, containerBin+" volume delete "+name)
+		}
+		for _, name := range residue.networks {
+			commands = append(commands, containerBin+" network delete "+name)
+		}
+		return "recovery could not clear them; once you confirm nothing still uses them, delete them with `" +
+			strings.Join(commands, "`, `") + "`, then recover again"
+	}
+}
+
+// requireRigResourcesAbsent proves every recorded resource gone. A refusal
+// names what remains and ends with clear's advice for the caller's path.
 func requireRigResourcesAbsent(
 	ctx context.Context, host rigHost, containerBin string, resources daemonlock.RigResources,
+	clear func(rigResidue) string,
 ) error {
 	active, err := host.RuntimeCLIActive(ctx, containerBin)
 	if err != nil {
@@ -726,8 +772,8 @@ func requireRigResourcesAbsent(
 	}
 	if len(containers) != 0 || len(volumes) != 0 || len(networks) != 0 {
 		return fmt.Errorf(
-			"recorded ward resources remain; recover their owning journal first: containers=%q volumes=%q networks=%q",
-			containers, volumes, networks,
+			"recorded ward resources remain: containers=%q volumes=%q networks=%q; %s",
+			containers, volumes, networks, clear(rigResidue{containers, volumes, networks}),
 		)
 	}
 	return nil
@@ -755,7 +801,10 @@ func runRigRecover(
 // recoverStaleRig is rig recover after its flags. Without confirm it prints
 // what it would clean up and refuses; deputy confirms for the lease its own
 // root recorded, because that lease is the one its previous start left.
-// Migrate reaches only the review journal (rigHost.RecoverReviewResources).
+// Confirmed, it deletes the recorded containers, reaps the recorded lineup
+// probe networks, and hands any other remaining volume or network to its
+// review journal. Migrate reaches only the review journal
+// (rigHost.RecoverReviewResources).
 func recoverStaleRig(
 	ctx context.Context, stdout io.Writer, host rigHost,
 	stateRoot, containerBin string, confirm, migrate bool,
@@ -817,6 +866,7 @@ func recoverStaleRig(
 	if err != nil {
 		return err
 	}
+	var reapErr error
 	if len(volumes)+len(networks) > 0 {
 		active, err := host.RuntimeCLIActive(ctx, containerBin)
 		if err != nil {
@@ -825,12 +875,27 @@ func recoverStaleRig(
 		if active {
 			return errors.New("runtime CLI process is still active; wait before recovering review journals")
 		}
-		if err := host.RecoverReviewResources(ctx, containerBin, manifest, migrate); err != nil {
-			return fmt.Errorf("recover recorded review journals: %w", err)
+		// A refused reap leaves its networks for the absence proof below to
+		// name, and holds back no review's own recovery.
+		if err := host.ReapLineupProbeNetworks(ctx, containerBin, networks); err != nil {
+			reapErr = fmt.Errorf("reap recorded lineup probe networks: %w", err)
+		}
+		// Only a journal-owned name opens the journal, so probe networks
+		// alone never need this build's schema.
+		volumes, networks, err = host.PresentPersistentResources(ctx, containerBin,
+			manifest.Resources.Volumes, manifest.Resources.Networks)
+		if err != nil {
+			return err
+		}
+		if len(volumes)+len(networks) > 0 {
+			if err := host.RecoverReviewResources(ctx, containerBin, manifest, migrate); err != nil {
+				return fmt.Errorf("recover recorded review journals: %w", err)
+			}
 		}
 	}
-	if err := requireRigResourcesAbsent(ctx, host, containerBin, manifest.Resources); err != nil {
-		return err
+	if err := requireRigResourcesAbsent(ctx, host, containerBin, manifest.Resources,
+		clearByHand(containerBin)); err != nil || reapErr != nil {
+		return errors.Join(reapErr, err)
 	}
 	if err := lease.Close(); err != nil {
 		return err

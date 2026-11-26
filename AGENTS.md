@@ -544,9 +544,11 @@ lists only the names resolved against it. All under `daemon/`:
   supervise verb that runs every launch, and the flags the configuration
   comes from).
 - **Rig cleanup namespace:** `internal/wardname/` (the one definition of
-  the runtime names rig cleanup and stale recovery may act on) and
+  the runtime names rig cleanup and stale recovery may act on),
   `internal/daemonlock/rig.go` (admits a bound name only through those
-  patterns).
+  patterns), and `cmd/freesided/rig.go` (deletes the recorded containers
+  and lineup probe networks a stale or held rig left, and decides which
+  remaining names reach a review journal).
 - **Credential injection, admission, and runner capabilities:**
   `internal/engine/agent_admission.go` (choosing an agent chooses which
   credential runs), `internal/engine/admission.go` (the runner capability

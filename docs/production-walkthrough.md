@@ -1044,14 +1044,20 @@ or resources that cannot be cleaned, and it never kills a stored PID.
 Never delete a rig manifest by hand or clear the gate while the daemon
 or recorded resources remain live.
 
-Recovery first removes exactly the manifest-recorded containers, then
-recovers review-owned volumes and networks through their existing journal.
+Recovery first removes exactly the manifest-recorded containers. It then
+deletes each recorded lineup probe network a killed model discovery or
+lineup probe left: no journal owns one, so the network must show the run
+and ownership labels that bind it to its recorded name, or recovery refuses
+and deletes none (#3447). Last, it recovers review-owned volumes and
+networks through their existing journal.
 The full review namespace must belong to the stale manifest; journal
 ownership, fingerprints, and lease checks still govern persistent resource
 removal. A lost review receives its normal interrupted outcome, without
 running a provider or advancing the workflow. Unknown persistent resources
-keep the rig gate closed. Recovery never creates a database, and by default
-it reads the review journal only at this build's schema.
+keep the rig gate closed, and the refusal names the `container` command that
+deletes each one, for a person who has checked nothing still uses it.
+Recovery never creates a database, and by default it reads the review
+journal only at this build's schema.
 
 A lease left by an older build, whose database is at an older schema, makes
 recovery refuse when the manifest records review volumes or networks. The
