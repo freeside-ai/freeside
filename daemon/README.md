@@ -2786,7 +2786,7 @@ for them, so one long verification delays only its own run, and a task
 queued meanwhile starts on the next pass. A run's tasks still run one after
 another, in the order the pass read them. The lane adds no cap of its own:
 the memory budget, the macOS verification executor's slots, the review
-pools, the judgment sites' call limits, and the one image builder bound how
+pools, the judgment sites' call limits, and the image build limit bound how
 much runs at once. While any of its tasks runs, the lane keeps its waiting
 launches in the order, even one whose run is busy with another task.
 
@@ -3145,8 +3145,9 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
 - **The sections.** The instance scope holds `host_tools`, `images`,
   `seed_root`, `prompts`, `agent_tree`, `review`, `judgment`, `timeouts`,
   `manual_submission_config`, `build`, `macos_verification`,
-  `cordoned_launches` (`max_concurrent`), and `execution`; a project holds
-  `repository` (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
+  `cordoned_launches` (`max_concurrent`), `image_builds`
+  (`max_concurrent`), and `execution`; a project holds `repository`
+  (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
   `approved_recipe`, `agent_image`, `recipe_binding`, `hand_back_label`,
   `writer_class`, and `enabled`. A value takes the fields its `settings.json` key
   has, less the launch-only ones `import` lists below; `agent_image` is
@@ -3187,11 +3188,11 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   differs from the project's `projects` row is refused.
 - **Only an optional section clears.** `-clear` records a revision that
   clears `judgment`, `manual_submission_config`, `macos_verification`,
-  `cordoned_launches`, `execution`, or a project's `agent_image`,
-  `recipe_binding`, `hand_back_label`, `writer_class`, or `enabled`;
-  clearing any other section is refused. A cleared switch reads as off,
-  and a project left with neither `agent_image` nor `recipe_binding` fails
-  the loader, which names both.
+  `cordoned_launches`, `image_builds`, `execution`, or a project's
+  `agent_image`, `recipe_binding`, `hand_back_label`, `writer_class`, or
+  `enabled`; clearing any other section is refused. A cleared switch reads
+  as off, and a project left with neither `agent_image` nor
+  `recipe_binding` fails the loader, which names both.
 - **`writer_class` picks the class a project's writers run on.** It is
   `cordoned_host_process` (the cordoned run, the default when unset) or
   `fresh_vm_read_only_volume_handoff` (warded); any other class is refused.
@@ -3201,6 +3202,10 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   field, `max_concurrent`, is at least 1. With the section unset or
   cleared, no cordoned launch starts (Bound Container Memory). The
   deputy's `settings.json` has no key for it, so set it with `set`.
+- **`image_builds` caps concurrent project-image builds.** Its one field,
+  `max_concurrent`, is at least 1; unset or cleared, it reads as one
+  (Keep Project Images Current, Build limit). The deputy's `settings.json`
+  has no key for it either, so the deputy builds one at a time.
 - **Some project sections apply while the daemon runs.** Every `set`
   prints `takes_effect`. The path, publish, recipe, and hand-back gates
   read the task's project's current record at each gate (#3209), so
@@ -6506,11 +6511,12 @@ restart during a build converges on the image the build recorded and does not
 build a second one.
 
 One build, with its proofs, is bounded at one hour. The proofs run the
-candidate's verification commands, and a build holds the daemon's one image
-builder, so an unbounded build would stop every other rebuild and image
-upkeep; a build that does not finish is a verdict (`build_or_proof_failed`)
-and not a retry. The bound covers the build and its proofs, not the builder's
-cleanup afterwards: a container runtime that stalls while images are removed
+candidate's verification commands, and a build holds a build slot, so an
+unbounded build would keep that slot for good and, at the default limit of
+one, stop every other rebuild and image upkeep; a build that does not finish
+is a verdict (`build_or_proof_failed`) and not a retry. The bound covers the
+build and its proofs, not a wait for another build's turn on the builder VM
+and not the builder's cleanup afterwards: a container runtime that stalls while images are removed
 holds the builder, and its task's run, until the daemon restarts (#1806).
 
 A refusal is the task's recorded verification result, so it does not clear
@@ -6520,15 +6526,20 @@ through the item's rerun action, or in a new run.
 
 ### Keep Project Images Current
 
-The image-upkeep job keeps the repository's admitted-image pointer on an
-image that serves the default-branch tip (`docs/plan.md` §5.7,
-**Project-image upkeep**). A production driver daemon runs it at three
-points: once at start; whenever the active-resource reconciler sees the
-base branch's tip move, whether or not a bound PR moved it; and as the
-`schedule-image-upkeep` trusted-config job on the doctor's cadence
-(`-doctor-interval`), a backstop for a missed tip. Start and tip passes run
-one at a time on one worker, and a tip still waiting when a newer one
-arrives is skipped for the newer one.
+The image-upkeep job keeps each served repository's admitted-image pointer
+on an image that serves its default-branch tip (`docs/plan.md` §5.7,
+**Project-image upkeep**). A production driver daemon runs one job per
+repository it serves, at three points: once at start; whenever the
+active-resource reconciler sees that repository's base branch tip move,
+whether or not a bound PR moved it; and as the `schedule-image-upkeep`
+trusted-config job on the doctor's cadence (`-doctor-interval`), a backstop
+for a missed tip. Each repository's start and tip passes run one at a time
+on that repository's own worker, so one repository's stalled pass never
+delays another's (#3210), and a tip still waiting when a newer one arrives
+is skipped for the newer one. The reconciler reads each repository's tip,
+and each project's pull requests, on a goroutine of its own, so a stalled
+GitHub call holds up only its own repository or project; the next pass
+skips it instead of waiting.
 
 Each pass reads the tip, fetches it into a scratch checkout under
 `<seed-root>/image-upkeep`, and reaches one verdict:
@@ -6552,7 +6563,11 @@ Each pass reads the tip, fetches it into a scratch checkout under
 
 **Host faults.** A failure that is the host's, not the repository's,
 records a `host_fault` refusal and converges the advisory
-`image_upkeep_host_fault` doctor item: a room or builder failure, an
+`image_upkeep_host_fault` doctor item, filed under the repository's
+project, so one repository's healthy pass resolves only its own item (the
+first convergence after each start also resolves any item filed under a
+project no served repository's item goes under, such as the system project
+an earlier daemon used or a project no longer served): a room or builder failure, an
 invalid build request, a build past its one-hour bound, a tip the job could
 not measure, an image whose build commit is not on the branch, an image
 record that disagrees with its recipe or with the build, or a daemon
@@ -6560,15 +6575,34 @@ without `-base-build-ref`. A host fault is measured again on every pass.
 The item is advisory, so it does not stop unattended admission, and the
 next pass that reaches a verdict resolves it.
 
-**Shared builder.** Upkeep and the publication lane run one build at a
-time. Upkeep waits its turn. A publication rebuild that finds the builder
-busy stays queued under `publication_environment`, and its next attempt
-reuses the image upkeep built when that image serves its commit.
+**Build limit.** At most `image_builds.max_concurrent` builds run at once
+(Store Instance And Project Settings), one when it is unset, upkeep's and
+the publication lane's together; the daemon reads it at start. Upkeep waits
+for a slot, oldest first. A publication rebuild that finds every slot held
+stays queued under `publication_environment`, and its next attempt reuses
+the image upkeep built when that image serves its commit. Each build
+reserves its own memory, so the budget still bounds a raised limit. One
+repository's passes build one at a time at any limit, so a scheduled pass
+re-checks the pointer a tip pass advanced instead of building the same image
+again.
 
-**Registry set.** Upkeep reads the registry set from the projects in the
-manual-submission config. A production driver daemon refuses to start when
-two projects declare different sets, because the repository has one
-pointer.
+**Builder VM.** The host has one builder VM, so builds take turns on it
+through a host file lease that every daemon and deputy build of the host
+user shares. A build holds the turn from the builder's start until its stop
+is proved, so one such build's stop never ends another's builder. An
+`onboard` or hand-run build leaves the VM alone and takes no turn, so a
+daemon build's stop can still end its builder, as it could before the turn;
+don't run one while the daemon builds.
+Upkeep waits for the turn with its one-hour bound paused. A publication
+rebuild that finds the turn held stays queued, as one that finds every slot
+held does. Under a raised limit, builds therefore overlap in their recipe
+reads and probes while their builder steps take turns.
+
+**Registry set.** Upkeep reads each repository's registry set from that
+repository's projects in the manual-submission config. A production driver
+daemon refuses to start when two projects on one repository declare
+different sets, because a repository has one pointer; projects on different
+repositories may differ.
 
 A failed scheduled pass logs and waits for the next one; it does not stop
 the daemon.
