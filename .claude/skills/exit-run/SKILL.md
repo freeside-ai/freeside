@@ -15,10 +15,11 @@ proposing exit dispositions, and recording everything on the tracker.
 Three parties share it:
 
 - **You** drive the deputy and the forge, and write every record.
-- **The operator** does what needs a human or a physical device: pairs the
-  Mac and iPhone, approves the specification in a client, and exercises
-  cards. Hand each of these over as an explicit
-  checkpoint and wait; never assume it happened.
+- **The operator** does what needs a human or a physical device: hands
+  the App authority over from `prod` and back, pairs the Mac and iPhone,
+  approves the specification in a client, and exercises cards. Hand each
+  of these over as an explicit checkpoint and wait; never assume it
+  happened.
 - **The owner** decides which findings block exit and merges the run's pull
   request. You propose dispositions; the owner adopts, amends, or rejects;
   only then do you record them as decided. The owner merges every real-work
@@ -178,11 +179,40 @@ open (daemon/README.md, Read A Task's Record). The forge's draft read is
 the other half of its evidence (docs/production-walkthrough.md, Walk
 Through, Merge, And Raise The Alerts).
 
+## Hand Over From `prod`
+
+Every command that takes the App authority writer lock refuses while the
+installed `prod` executes: `prelaunch`, `onboard`, each `exit-root.sh` pass,
+and the deputy (daemon/README.md, Run An Unreleased Build With The Deputy).
+So before Preflight's first `prelaunch`, send the operator the Hand Over
+From `prod` list in `references/checkpoints.md` as one message. Its
+commands are the operator's (plan §10): never run a command against
+`prod`'s database yourself, here or at Close Out.
+
+Check the answers against daemon/README.md (Pause Execution For A Deputy
+Run) and record them:
+
+- **`"executes":false` and `"pause":null`:** `prod` holds no lock and
+  needs no pause. Record that the run didn't pause it.
+- **`"executes":true`:** the pause output must end on `execution pause:
+  released; prod runs without execution`, and the status that follows it
+  must show `"executes":false` and `"pause":{"state":"released"}`.
+  Record that the run paused `prod`.
+- **`"executes":false` with a released pause already in force:** `prod`
+  holds no lock. Record the pause the run found; Close Out treats it as
+  the run's.
+- **Anything else** stops the run with an Exit Preparation comment
+  (`references/tracker-comment.md`) that quotes what the operator sent: an
+  error that no daemon is running (ask once for the app's `daemon start`
+  and a fresh status first, since a stopped `prod` passes `prelaunch`'s
+  `prod_execution` check unseen), a pause that didn't release, or a status
+  that still reports `"executes":true`.
+
 ## Preflight (Stop on Failure)
 
-You run these checks yourself, before the fixture pass; none needs the
-operator. Their environment checks come later, as one checkpoint list
-(The Environment Checkpoint below).
+You run these checks yourself, before the fixture pass, once the handover
+above is recorded; none needs the operator. Their environment checks come
+later, as one checkpoint list (The Environment Checkpoint below).
 
 Check each item and record the result. A failure here is reported on the
 tracker as an "Exit Preparation" comment (template in
@@ -413,10 +443,13 @@ surfaces mid-wave and not at the exit run. It starts by the owner's word.
 Run this section's fixture pass, and any seeded pass the unit's Acceptance
 names, with these differences from an exit run:
 
-- **No real target and no operator.** There is no go-ahead on real spend
-  and no checkpoint. Preflight's checks of the real project don't apply,
-  and its exit set can't be resolved mid-wave; run `prelaunch` on the
-  pass's own root instead, and record the `main` SHA the pass builds.
+- **No real target, and the operator only for `prod`.** There is no
+  go-ahead on real spend and no other checkpoint. Preflight's checks of
+  the real project don't apply, and its exit set can't be resolved
+  mid-wave; run `prelaunch` on the pass's own root instead, and record the
+  `main` SHA the pass builds. That `prelaunch` and the pass take the App
+  authority writer lock too, so hand over from `prod` first (Hand Over
+  From `prod`) and hand back once the pass has ended (Close Out).
 - **The contract is the unit's Acceptance list.** Say which line each
   step evidences.
 - **Record every attempt when it happens**, as an Exit Preparation comment
@@ -444,10 +477,11 @@ step is next.
 
 Each operator step is one list from `references/checkpoints.md`, filled in
 and sent as one message: pairing and health, specification approval, the
-pre-merge walkthrough and merge, and the post-merge alerts. Between
-checkpoints, ask the operator nothing. Status, cards, timeline, delivery,
-and spend come from the record (Walk Through on Both Clients), never from
-the operator.
+pre-merge walkthrough and merge, and the post-merge alerts. The handover
+lists that open and close the run (Hand Over From `prod`, Close Out) are
+checkpoints too. Between checkpoints, ask the operator nothing. Status,
+cards, timeline, delivery, and spend come from the record (Walk Through on
+Both Clients), never from the operator.
 
 1. Start only after a fixture pass completed on the same build, or on
    an older SHA that `runtime-diff` carries to this one (Rehearse Before
@@ -812,6 +846,20 @@ unit stays open.
 
 ## Close Out
 
+- **Hand back to `prod`** when the run paused it or found it paused (Hand
+  Over From `prod`). Once the last deputy pass has ended and released its
+  lease, send the Hand Back To `prod` list in `references/checkpoints.md`.
+  Check that `execution resume` printed the status JSON with
+  `"pause":null` (or, with no daemon running, `execution resume: cleared
+  the pause; ...`) and no rig-lease warning, and that the `execution
+  status` after it reports `"pause":null` and `"executes":true` when
+  `prod` executed before the run. The daemon that answers right after a
+  resume can be the one about to restart, which reports
+  `"executes":false`; ask for the status once more a minute later before
+  you treat it as a failed hand-back. A rig-lease warning means a deputy still holds
+  or left its lease: end it, or have the operator run `freesided rig
+  recover` for a stale one, then ask for the list again. Record the
+  result. When the run never paused `prod`, skip this and record that.
 - Open a PR for any in-run fix branch that is still local, and for a
   `references/prior-runs.md` update when the run taught something a future
   run should look for on purpose. Routine rows aren't needed; the tracker
@@ -822,7 +870,8 @@ unit stays open.
   status never goes in a note.
 - Report to the user: whether the tracker can close, the exit set with
   its critical path, what waits on the owner, and what waits on the
-  operator. Name every exit-set unit whose Dependencies carry
+  operator, including a hand-back to `prod` that didn't complete, since
+  nothing else records that `prod` was left paused. Name every exit-set unit whose Dependencies carry
   `merges-after`, with its prerequisite: no tool reads that relation at
   landing, so it holds only through the order the owner approves or types
   (docs/coordination.md, Relationship Types). Do not claim, start, or plan
@@ -841,9 +890,11 @@ win when this skill or its references disagree with them:
   pass and recovery: docs/production-walkthrough.md, starting at An Exit
   Run In Order.
 - The deputy's settings, the pre-spend checks, the `raise-item` command,
-  and the task record's fields: daemon/README.md, under Run Real Work With
-  The Deputy, Run The Pre-Spend Checks Before A Launch, Operational
-  Commands, and Read A Task's Record.
+  and the task record's fields: daemon/README.md, under Run An Unreleased
+  Build With The Deputy, Run The Pre-Spend Checks Before A Launch,
+  Operational Commands, and Read A Task's Record.
+- The handover between `prod` and the deputy, and what each command
+  prints: daemon/README.md, under Pause Execution For A Deputy Run.
 - Seeding a condition: daemon/README.md, under Seed An Exhausted Window
   For An Exit Run and Run A Scenario.
 - The Stop check: docs/task-cancellation-check.md.
