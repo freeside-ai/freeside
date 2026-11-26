@@ -138,6 +138,11 @@ type Engine struct {
 	// running counts the in-process work a restart would cut short (see
 	// WithRunningWork); nil counts nothing.
 	running *RunningWork
+	// dispatchHold, while open, keeps invocation dispatch from starting
+	// anything (WithDispatchHold); nil holds nothing. dispatchHoldLogged
+	// reports the wait once.
+	dispatchHold       <-chan struct{}
+	dispatchHoldLogged sync.Once
 }
 
 // WithDaemonLock authorizes recovery of a pre-start reservation.
@@ -224,6 +229,37 @@ func WithUnattendedHealthRefresh(refresh func(context.Context) error) Option {
 		}
 		e.refreshUnattendedHealth = refresh
 		return nil
+	}
+}
+
+// WithDispatchHold makes invocation dispatch wait for hold to close. A pass
+// while it is open starts nothing and leaves every intent pending; the first
+// pass after it closes dispatches as before. The rest of each pass runs
+// either way. The daemon closes it once its startup model discovery settles,
+// so a discovery probe never runs beside a task's first launch (#3447).
+func WithDispatchHold(hold <-chan struct{}) Option {
+	return func(e *Engine) error {
+		if hold == nil {
+			return errors.New("engine dispatch hold: nil channel")
+		}
+		e.dispatchHold = hold
+		return nil
+	}
+}
+
+// dispatchHeld reports whether the dispatch hold is still open.
+func (e *Engine) dispatchHeld() bool {
+	if e.dispatchHold == nil {
+		return false
+	}
+	select {
+	case <-e.dispatchHold:
+		return false
+	default:
+		e.dispatchHoldLogged.Do(func() {
+			e.logger.Info("invocation dispatch waits for startup model discovery")
+		})
+		return true
 	}
 }
 
