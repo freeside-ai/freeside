@@ -1112,7 +1112,10 @@ func (e *Engine) admitAttemptIn(
 		WorkspaceHydration:         hydration,
 		SettingsRevisions:          settings,
 		RecipeBinding:              project.RecipeBinding,
-		AdmittedAt:                 admittedAt,
+		// Every launch runs on the daemon's host until admission chooses one
+		// (#2166).
+		ExecutionHostID: domain.DaemonHostID,
+		AdmittedAt:      admittedAt,
 	})
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
