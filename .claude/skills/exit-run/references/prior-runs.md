@@ -280,12 +280,18 @@ Look for each of these before and during the run; most have bitten twice.
   by default, #2205). Once it has, a call without `-resume` silently opens a
   new intent and changes the approval digest, so the reviewed digest is
   refused (#2203). Pass `-install-wait 1h` so an operator round trip fits.
-- **A lease left by an older-schema build may need that build to recover
-  it.** When the lease records review volumes or networks, the current
-  build refuses to open the older store, so `rig recover` must come from a
-  build at that schema; a lease with only containers recovers across
-  schemas. A stale lease for another root blocks every deputy start on the
-  machine (#2201).
+- **A lease left by an older-schema build recovers with `rig recover
+  -migrate`.** When the lease records review volumes or networks, the
+  current build refuses the older database and names its schema, this
+  build's schema, and the newest migration file at the older schema.
+  Rerun `freesided rig recover -state-root <root>/daemon -confirm
+  -migrate` to migrate the database forward first; that is one-way,
+  since a build at the older schema can no longer open it (a build at
+  that schema is the other way out). A lease with only containers
+  recovers across schemas, and the deputy migrates its own root's
+  database when it recovers its own lease. A stale lease for another
+  root still blocks every deputy start on the machine until `rig
+  recover` clears it (#2201).
 - **Check the specification's criteria against the stage.** The specifier
   can write a criterion the implementer can't meet, such as opening a
   follow-up issue with no forge access. Read the criteria before approving
