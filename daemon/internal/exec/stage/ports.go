@@ -205,6 +205,14 @@ type CordonGate interface {
 	// Gate.ReleaseFinishedHandoffs is: a failed release keeps a directory,
 	// the safe direction, for the next reconcile.
 	ReleaseFinished(ctx context.Context, runIDs []string)
+	// SendMessage offers an operator's message to the run's writer as
+	// ordinal, and returns nil once the run's supervisor took it for the
+	// writer's input. An ordinal offered before settles from what the run
+	// recorded, so the caller may offer it again with the same command ID.
+	// Refusals wrap ErrCordonRunEnded, ErrCordonInputClosed,
+	// ErrCordonNotStreamed, ErrCordonNotTaken, ErrCordonNotStarted, or
+	// ErrCordonNoRun; any other error leaves the delivery unknown.
+	SendMessage(ctx context.Context, runID string, ordinal int64, commandID, text string) error
 }
 
 var (
@@ -222,6 +230,21 @@ var (
 	// landed. The run ended canceled and nothing exports, so the driver
 	// records it canceled, not failed.
 	ErrCordonCanceled = errors.New("cordon run canceled")
+	// ErrCordonRunEnded is a message to a run that has ended or whose
+	// cancellation was requested.
+	ErrCordonRunEnded = errors.New("cordon run ended")
+	// ErrCordonInputClosed is a message to a run whose writer's input is
+	// closed: its turn ended with nothing waiting, or it exited.
+	ErrCordonInputClosed = errors.New("cordon run input closed")
+	// ErrCordonNotStreamed is a message to a run whose writer reads no
+	// messages: one launched before the cordon streamed its input.
+	ErrCordonNotStreamed = errors.New("cordon run input not streamed")
+	// ErrCordonNotTaken is a message the run's supervisor didn't take in
+	// time, so it was withdrawn.
+	ErrCordonNotTaken = errors.New("cordon run did not take the message")
+	// ErrCordonNotStarted is a message to a run whose writer hasn't
+	// started: it is being probed or seeded.
+	ErrCordonNotStarted = errors.New("cordon run not started")
 )
 
 // CordonExportRefusal is an export the cordon refused in a way that will

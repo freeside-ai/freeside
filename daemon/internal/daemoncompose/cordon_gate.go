@@ -33,6 +33,7 @@ type cordonLauncher interface {
 	Recover(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
 	AuthenticateReleasedExport(context.Context, string, string) error
 	ReleaseFinished(context.Context, []string) error
+	SendMessage(ctx context.Context, runID string, ordinal int64, commandID, text string) error
 	Detach()
 }
 
@@ -249,6 +250,13 @@ func (g *cordonGate) Recover(ctx context.Context, req stage.CordonExportRequest)
 	return stage.CordonRecovery{}, fmt.Errorf("cordon recovery reported outcome %q", res.Outcome)
 }
 
+// SendMessage reaches the backend whether or not the gate is detaching: a
+// message changes nothing about how the run ends, and the run outlives the
+// daemon.
+func (g *cordonGate) SendMessage(ctx context.Context, runID string, ordinal int64, commandID, text string) error {
+	return cordonPortError(g.backend.SendMessage(ctx, runID, ordinal, commandID, text))
+}
+
 // AuthenticateReleasedExport refuses for good, as ward's journal refusal
 // does, an export directory that isn't the one the cordon recorded.
 func (g *cordonGate) AuthenticateReleasedExport(ctx context.Context, runID, dir string) error {
@@ -410,6 +418,16 @@ func cordonPortError(err error) error {
 		return fmt.Errorf("%w: %w", stage.ErrCordonEndUnproven, err)
 	case errors.Is(err, cordon.ErrNoRun):
 		return fmt.Errorf("%w: %w", stage.ErrCordonNoRun, err)
+	case errors.Is(err, cordon.ErrRunEnded):
+		return fmt.Errorf("%w: %w", stage.ErrCordonRunEnded, err)
+	case errors.Is(err, cordon.ErrInputClosed):
+		return fmt.Errorf("%w: %w", stage.ErrCordonInputClosed, err)
+	case errors.Is(err, cordon.ErrNotStreamed):
+		return fmt.Errorf("%w: %w", stage.ErrCordonNotStreamed, err)
+	case errors.Is(err, cordon.ErrNotTaken):
+		return fmt.Errorf("%w: %w", stage.ErrCordonNotTaken, err)
+	case errors.Is(err, cordon.ErrNotStarted):
+		return fmt.Errorf("%w: %w", stage.ErrCordonNotStarted, err)
 	case errors.As(err, &scan):
 		return &stage.CordonExportRefusal{Reason: "the credential scan refused it: " + scan.Reason, Err: err}
 	case errors.Is(err, cordon.ErrWorktreeReplaced):

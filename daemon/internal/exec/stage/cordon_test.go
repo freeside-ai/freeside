@@ -53,6 +53,7 @@ type fakeCordon struct {
 	startedFn func(string) (bool, error)
 	recoverFn func(CordonExportRequest) (CordonRecovery, error)
 	authFn    func(runID, dir string) error
+	sendFn    func(runID string, ordinal int64, commandID, text string) error
 	preJobErr error
 	launches  []CordonLaunch
 	cancels   []string
@@ -129,6 +130,14 @@ func (c *fakeCordon) AuthenticateReleasedExport(_ context.Context, runID, dir st
 		return fmt.Errorf("%w: no export record or manifest for %s", ErrUnsupportedStart, runID)
 	}
 	return nil
+}
+
+func (c *fakeCordon) SendMessage(_ context.Context, runID string, ordinal int64, commandID, text string) error {
+	c.called()
+	if c.sendFn == nil {
+		return errors.New("no send scripted")
+	}
+	return c.sendFn(runID, ordinal, commandID, text)
 }
 
 // ReleaseFinished removes each run's directory, as the real backend does.
@@ -544,6 +553,47 @@ func TestCordonedCancelGoesThroughThePort(t *testing.T) {
 	}
 	if result, err := d.Collect(ctx, testInvoke); err != nil || result.Status != exec.StatusCanceled {
 		t.Fatalf("Collect = %+v, %v; want canceled", result, err)
+	}
+}
+
+// TestCordonedSendMessageGoesThroughThePort shows a message reaches the
+// port under the intent's run, and that a writer yet to start refuses as
+// not started however the driver learns it.
+func TestCordonedSendMessageGoesThroughThePort(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		phase   phase
+		portErr error
+		want    error
+		reached bool
+	}{
+		{"running", phaseRunning, nil, nil, true},
+		{"refused by the run", phaseRunning, ErrCordonInputClosed, ErrCordonInputClosed, true},
+		{"seeding", phaseSeeding, nil, ErrCordonNotStarted, false},
+		{"running before its launch claims a directory", phaseRunning, ErrCordonNoRun, ErrCordonNotStarted, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var sent []string
+			cordon := &fakeCordon{sendFn: func(runID string, ordinal int64, commandID, text string) error {
+				sent = append(sent, fmt.Sprintf("%s %d %s %s", runID, ordinal, commandID, text))
+				return tc.portErr
+			}}
+			d, base := newCordonDriver(t, cordon, &stubGate{}, newStubExports())
+			orphanWithSpec(t, d, tc.phase, nil, cordonSpec(base))
+			err := d.SendMessage(context.Background(), testInvoke, 2, "cmd-2", "keep going")
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatalf("SendMessage = %v, want %v", err, tc.want)
+			}
+			want := []string{testRunIDFor(testInvoke) + " 2 cmd-2 keep going"}
+			if !tc.reached {
+				want = nil
+			}
+			if !slices.Equal(sent, want) {
+				t.Fatalf("the port got %q, want %q", sent, want)
+			}
+		})
 	}
 }
 

@@ -391,6 +391,46 @@ func (d *Driver) requestCancellation(ctx context.Context, in intent) error {
 	return port.RequestCancellation(ctx, in.RunID)
 }
 
+// SendMessage offers an operator's message to the invocation's running
+// cordoned writer through the cordon (#3632), with the ordinal and command
+// ID the caller recorded it under, and returns nil once the run's
+// supervisor took it. Refusals wrap the port's sentinels (CordonGate);
+// any other error leaves the delivery unknown. A seeding intent, or a
+// running one whose launch hasn't claimed its directory yet, refuses with
+// ErrCordonNotStarted. A terminal intent still reaches the port, so an
+// ordinal offered before settles from what its run recorded, until the
+// run is released.
+//
+// It is read-only and takes no lock, as InvocationPrompt is: it reads the
+// intent and changes nothing the driver sequences.
+func (d *Driver) SendMessage(ctx context.Context, id domain.InvocationID, ordinal int64, commandID, text string) error {
+	in, err := d.loadIntentAdmission(ctx, id)
+	if err != nil {
+		return err
+	}
+	cordoned, err := runnerClassOf(in.Spec)
+	if err != nil {
+		return err
+	}
+	if !cordoned {
+		return fmt.Errorf("%w: invocation %s is a warded writer", ErrCordonNotStreamed, id)
+	}
+	if in.Phase == phaseSeeding {
+		return fmt.Errorf("%w: invocation %s is seeding", ErrCordonNotStarted, id)
+	}
+	port, err := d.cordonPort()
+	if err != nil {
+		return err
+	}
+	err = port.SendMessage(ctx, in.RunID, ordinal, commandID, text)
+	// A running intent's directory goes only with release, which follows a
+	// terminal intent, so a missing one is a launch yet to claim it.
+	if errors.Is(err, ErrCordonNoRun) && in.Phase == phaseRunning {
+		return fmt.Errorf("%w: invocation %s: %w", ErrCordonNotStarted, id, err)
+	}
+	return err
+}
+
 // releaseFinished releases each terminal intent's run through its own
 // gate. An intent whose class can't be read releases nothing, the safe
 // direction.

@@ -597,3 +597,14 @@ func TestAwakeHolderHoldsWhileAnyWorkRuns(t *testing.T) {
 		t.Fatalf("taken %d, released %d after a second round", taken, released)
 	}
 }
+
+// TestClientRefusesAMessageAsNotStreamed: until the protocol carries a
+// message (#3702), the client refuses one without dialing, as a refusal
+// the gate settles not_streamed rather than an error it would retry.
+func TestClientRefusesAMessageAsNotStreamed(t *testing.T) {
+	t.Parallel()
+	err := (&Client{}).SendMessage(t.Context(), "run-1", 1, "cmd-1", "steer")
+	if !errors.Is(err, ErrMessageUnsupported) || !errors.Is(err, cordon.ErrNotStreamed) {
+		t.Fatalf("SendMessage = %v, want ErrMessageUnsupported wrapping cordon.ErrNotStreamed", err)
+	}
+}
