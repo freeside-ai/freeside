@@ -2364,6 +2364,56 @@ import Testing
         // A CRLF file: Swift reads "\r\n" as one character.
         #expect(DecisionReviewGuideView.lines("a\r\nb\r\n") == ["a", "b"])
     }
+
+    struct CopyablePRLinkCase: Sendable, CustomTestStringConvertible {
+        let testDescription: String
+        let type: Components.Schemas.AttentionType
+        let repo: String?
+        let number: Int
+        let expected: String?
+    }
+
+    @Test(arguments: [
+        CopyablePRLinkCase(
+            testDescription: "valid final review reference",
+            type: .ready_for_final_review, repo: "owner/repo", number: 42,
+            expected: "https://github.com/owner/repo/pull/42"),
+        CopyablePRLinkCase(
+            testDescription: "missing reference",
+            type: .ready_for_final_review, repo: nil, number: 0, expected: nil),
+        CopyablePRLinkCase(
+            testDescription: "path traversal repo",
+            type: .ready_for_final_review, repo: "../other", number: 42, expected: nil),
+        CopyablePRLinkCase(
+            testDescription: "empty owner",
+            type: .ready_for_final_review, repo: "/repo", number: 42, expected: nil),
+        CopyablePRLinkCase(
+            testDescription: "bad repo shape",
+            type: .ready_for_final_review, repo: "owner-only", number: 42, expected: nil),
+        CopyablePRLinkCase(
+            testDescription: "number zero",
+            type: .ready_for_final_review, repo: "owner/repo", number: 0, expected: nil),
+        CopyablePRLinkCase(
+            testDescription: "publish blocked with valid reference",
+            type: .publish_blocked, repo: "owner/repo", number: 42, expected: nil),
+    ])
+    @MainActor
+    func copyablePullRequestLinkBuildsOnlyForValidFinalReviewReferences(
+        _ testCase: CopyablePRLinkCase
+    ) {
+        var item = AttentionFixtures.fixture(type: testCase.type).item
+        if let repo = testCase.repo {
+            item.pr_reference = .init(value1: .init(repo: repo, number: testCase.number))
+        } else {
+            item.pr_reference = nil
+        }
+
+        let link = DecisionCardComposition.copyablePullRequestLink(item)
+        #expect(link == testCase.expected)
+        if testCase.expected != nil, let reference = item.pr_reference?.value1 {
+            #expect(link == DecisionModel.pullRequestURL(for: reference)?.absoluteString)
+        }
+    }
 }
 
 /// The ready card's outcome list (#3264): what the run filed, posted, or set
