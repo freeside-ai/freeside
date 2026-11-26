@@ -54,7 +54,7 @@
         "id": "I_100", "databaseId": 100, "number": 100,
         "title": "Ad hoc tracking", "state": "OPEN",
         "updatedAt": "2026-08-25T09:30:00Z",
-        "body": "## Status\nPending\n\n## Units\n- [ ] #935",
+        "body": "## Status\nPending\n\n## Units\n- [ ] #935\n- [x] #401",
         "labels": {
           "nodes": [{"name": "tracker"}],
           "pageInfo": {"hasNextPage": false, "endCursor": null}
@@ -90,6 +90,25 @@
       }],
       "pageInfo": {"hasNextPage": false, "endCursor": null}
     }}}}
+  },
+  "TrackerEntryKind:935:": {
+    "data": {"repository": {"issueOrPullRequest": {
+      "__typename": "Issue", "number": 935
+    }}}
+  },
+  "TrackerEntryKind:401:": {
+    "data": {"repository": {"issueOrPullRequest": {
+      "__typename": "PullRequest", "number": 401
+    }}}
+  },
+  "PullRequestReference:401:": {
+    "data": {"repository": {"pullRequest": {
+      "id": "PR_401", "databaseId": 401, "number": 401,
+      "title": "Direct PR unit", "state": "MERGED", "merged": true,
+      "updatedAt": "2026-08-25T09:50:00Z", "headRefName": "direct-unit",
+      "baseRefName": "main", "body": "Direct unit change",
+      "headRepository": {"nameWithOwner": "freeside-ai/freeside"}
+    }}}
   },
   "IssueDetails:935:": {
     "data": {"repository": {"issue": {

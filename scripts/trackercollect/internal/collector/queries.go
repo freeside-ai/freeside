@@ -111,6 +111,16 @@ const pullRequestReferenceQuery = `query PullRequestReference($owner: String!, $
   }
 }`
 
+const trackerEntryKindQuery = `query TrackerEntryKind($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue { number }
+      ... on PullRequest { number }
+    }
+  }
+}`
+
 var allQueryDocuments = []string{
 	mergedPullRequestQuery,
 	openTrackersQuery,
@@ -120,4 +130,5 @@ var allQueryDocuments = []string{
 	issueDetailsQuery,
 	issueCommentsQuery,
 	pullRequestReferenceQuery,
+	trackerEntryKindQuery,
 }

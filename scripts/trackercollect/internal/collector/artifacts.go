@@ -132,6 +132,13 @@ func RenderReport(snapshot Snapshot) string {
 			fmt.Fprintf(&report, "- [%s] #%d\n", mark, entry.UnitNumber)
 		}
 		for _, unit := range tracker.Units {
+			if unit.Kind == "pull_request" {
+				fmt.Fprintf(&report, "\n#### Unit PR #%d, %s (%s)\n\n", unit.Number, unit.Title, unit.State)
+				fmt.Fprintf(&report, "Direct pull request unit with no work-unit issue: merged: %t, `%s` → `%s`, %s.\n",
+					unit.PullRequest.Merged, unit.PullRequest.HeadRef, unit.PullRequest.BaseRef,
+					repositoryIdentityEvidence(unit.PullRequest.HeadRepository, canonicalRepository))
+				continue
+			}
 			fmt.Fprintf(&report, "\n#### Unit #%d, %s (%s)\n\n", unit.Number, unit.Title, unit.State)
 			writeRawSection(&report, "Dependencies", unit.DependenciesSection)
 			closingPRsTruncated := snapshotHasAmbiguity(snapshot, "page-cap-truncation", fmt.Sprintf("issue #%d closing pull requests", unit.Number))

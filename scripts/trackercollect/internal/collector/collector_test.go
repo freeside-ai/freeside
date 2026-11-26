@@ -18,6 +18,7 @@ import (
 type fixtureRunner struct {
 	responses map[string]json.RawMessage
 	queries   []string
+	keys      []string
 }
 
 func loadFixtureRunner(t *testing.T) *fixtureRunner {
@@ -50,11 +51,21 @@ func (r *fixtureRunner) Query(_ context.Context, query string, variables map[str
 		cursor = *value
 	}
 	key := match[1] + ":" + number + ":" + cursor
+	r.keys = append(r.keys, key)
 	response, ok := r.responses[key]
 	if !ok {
 		return nil, errors.New("missing fixture response for " + key)
 	}
 	return response, nil
+}
+
+func (r *fixtureRunner) hasKey(wanted string) bool {
+	for _, key := range r.keys {
+		if key == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func toString(value any) string {
@@ -770,6 +781,20 @@ func TestRequestedObjectLookupsBindParentIdentity(t *testing.T) {
 		}
 	})
 
+	t.Run("tracker entry kind rejects number mismatch and unexpected type", func(t *testing.T) {
+		runner := &fixtureRunner{responses: map[string]json.RawMessage{
+			"TrackerEntryKind:92:": json.RawMessage(`{"data":{"repository":{"issueOrPullRequest":{"__typename":"PullRequest","number":93}}}}`),
+			"TrackerEntryKind:94:": json.RawMessage(`{"data":{"repository":{"issueOrPullRequest":{"__typename":"Discussion"}}}}`),
+		}}
+		c := &collector{config: fixtureConfig(""), runner: runner}
+		if _, err := c.fetchTrackerEntryKind(context.Background(), 92); err == nil || !strings.Contains(err.Error(), "names #93, want #92") {
+			t.Fatalf("number mismatch error = %v", err)
+		}
+		if _, err := c.fetchTrackerEntryKind(context.Background(), 94); err == nil || !strings.Contains(err.Error(), "unexpected type") {
+			t.Fatalf("unexpected type error = %v", err)
+		}
+	})
+
 	t.Run("linked issues reject wrong parent", func(t *testing.T) {
 		runner := loadFixtureRunner(t)
 		parent := connectionParentFixture(t, runner.responses["PullRequestClosingIssues:400:"], "pullRequest")
@@ -998,6 +1023,9 @@ func TestFixtureCollectionDrainsPaginationAndIsDeterministic(t *testing.T) {
 	if RenderReport(first) != RenderReport(second) {
 		t.Fatal("report is not deterministic")
 	}
+	if first.SchemaVersion != 3 {
+		t.Fatalf("schema version = %d, want 3", first.SchemaVersion)
+	}
 	if len(first.OpenTrackers) != 2 || first.OpenTrackers[0].Milestone != "" || first.OpenTrackers[1].Milestone != "1B" {
 		t.Fatalf("pagination retained open trackers %#v, want #100 without a milestone and #835 with 1B", first.OpenTrackers)
 	}
@@ -1006,6 +1034,51 @@ func TestFixtureCollectionDrainsPaginationAndIsDeterministic(t *testing.T) {
 	}
 	if len(first.ContainingTrackers) != 1 || len(first.OpenPullRequests) != 1 || len(first.MarkerComments) != 1 {
 		t.Fatalf("fixture evidence missing: trackers=%d prs=%d comments=%d", len(first.ContainingTrackers), len(first.OpenPullRequests), len(first.MarkerComments))
+	}
+	units := first.ContainingTrackers[0].Units
+	if len(units) != 2 {
+		t.Fatalf("containing tracker units = %#v, want 2 (#401 and #935)", units)
+	}
+	prUnit, issueUnit := units[0], units[1]
+	if prUnit.Number != 401 || prUnit.Kind != "pull_request" || prUnit.State != "MERGED" || prUnit.PullRequest == nil {
+		t.Fatalf("direct PR unit = %#v", prUnit)
+	}
+	if !prUnit.PullRequest.Merged || prUnit.PullRequest.HeadRef != "direct-unit" || prUnit.PullRequest.BaseRef != "main" || !identityMatches(prUnit.PullRequest.HeadRepository, "freeside-ai/freeside") || prUnit.Stamp != prUnit.PullRequest.Stamp {
+		t.Fatalf("direct PR facts = %#v, stamp = %#v", prUnit.PullRequest, prUnit.Stamp)
+	}
+	if prUnit.Body != "" || prUnit.DependenciesSection != "" || len(prUnit.ClosingPullRequests) != 0 || len(prUnit.StackedOn) != 0 {
+		t.Fatalf("direct PR unit carried issue-only evidence: %#v", prUnit)
+	}
+	if issueUnit.Number != 935 || issueUnit.Kind != "issue" || issueUnit.State != "CLOSED" || issueUnit.PullRequest != nil || len(issueUnit.ClosingPullRequests) != 1 {
+		t.Fatalf("issue unit = %#v", issueUnit)
+	}
+	report := RenderReport(first)
+	wantPRHeading := "#### Unit PR #401, Direct PR unit (MERGED)"
+	wantPRLine := "Direct pull request unit with no work-unit issue: merged: true, `direct-unit` → `main`, head repository: `freeside-ai/freeside`, canonical repository: true."
+	if !strings.Contains(report, wantPRHeading) || !strings.Contains(report, wantPRLine) || strings.Contains(report, "#### Unit #401") {
+		t.Fatalf("direct PR unit report rendering:\n%s", report)
+	}
+	if runner.hasKey("IssueComments:401:") || runner.hasKey("IssueDetails:401:") {
+		t.Fatalf("direct PR unit hit issue-only queries: %v", runner.keys)
+	}
+	output := filepath.Join(t.TempDir(), "out")
+	code, err := Run(context.Background(), fixtureConfig(output), loadFixtureRunner(t), fixedClock)
+	if err != nil || code != 0 {
+		t.Fatalf("Run() = %d, %v; want 0, nil", code, err)
+	}
+	snapshotBytes, err := os.ReadFile(filepath.Join(output, "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(snapshotBytes) != string(firstJSON)+"\n" || !strings.Contains(string(snapshotBytes), `"schema_version": 3`) || !strings.Contains(string(snapshotBytes), `"pull_request": null`) {
+		t.Fatalf("unexpected snapshot.json:\n%s", snapshotBytes)
+	}
+	reportBytes, err := os.ReadFile(filepath.Join(output, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reportBytes) != report {
+		t.Fatalf("report.md does not match RenderReport")
 	}
 	if got := first.MarkerComments[0].MatchedOpenPullRequests; len(got) != 1 || got[0] != 400 {
 		t.Fatalf("canonical claim match = %#v, want [400]", got)
@@ -1018,6 +1091,37 @@ func TestFixtureCollectionDrainsPaginationAndIsDeterministic(t *testing.T) {
 		if !strings.HasPrefix(trimmed, "query ") || strings.Contains(strings.ToLower(trimmed), "mutation") {
 			t.Fatalf("fixture runner received non-query document: %s", query)
 		}
+	}
+}
+
+func TestTrackerEntryNamingNothingFailsHard(t *testing.T) {
+	runner := loadFixtureRunner(t)
+	runner.responses["TrackerEntryKind:935:"] = json.RawMessage(`{"data":{"repository":{"issueOrPullRequest":null}}}`)
+	if _, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock); err == nil || !strings.Contains(err.Error(), "names no issue or pull request") {
+		t.Fatalf("error = %v, want hard failure for missing tracker entry", err)
+	}
+}
+
+func TestOpenPullRequestUnitSkipsIssueComments(t *testing.T) {
+	runner := loadFixtureRunner(t)
+	pr := connectionParentFixture(t, runner.responses["PullRequestReference:401:"], "pullRequest")
+	pr["state"] = "OPEN"
+	pr["merged"] = false
+	runner.responses["PullRequestReference:401:"] = wrapConnectionParent(t, "pullRequest", pr)
+
+	snapshot, err := Collect(context.Background(), fixtureConfig(""), runner, fixedClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Ambiguities) != 0 {
+		t.Fatalf("ambiguities = %#v", snapshot.Ambiguities)
+	}
+	if runner.hasKey("IssueComments:401:") {
+		t.Fatalf("open PR unit queried issue comments: %v", runner.keys)
+	}
+	unit := snapshot.ContainingTrackers[0].Units[0]
+	if unit.Number != 401 || unit.Kind != "pull_request" || unit.State != "OPEN" || unit.PullRequest == nil || unit.PullRequest.Merged {
+		t.Fatalf("open PR unit = %#v", unit)
 	}
 }
 

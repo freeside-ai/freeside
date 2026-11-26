@@ -1055,7 +1055,7 @@ func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []gr
 				return nil, nil, err
 			}
 			tracker.Units = append(tracker.Units, unit)
-			if unit.State == "OPEN" {
+			if unit.Kind == "issue" && unit.State == "OPEN" {
 				commentIssues[number] = true
 			}
 		}
@@ -1065,9 +1065,66 @@ func (c *collector) buildContainingTrackers(ctx context.Context, openIssues []gr
 	return trackers, commentIssues, nil
 }
 
+func (c *collector) fetchTrackerEntryKind(ctx context.Context, number int) (string, error) {
+	vars := c.baseVariables()
+	vars["number"] = number
+	raw, err := c.runner.Query(ctx, trackerEntryKindQuery, vars)
+	if err != nil {
+		return "", fmt.Errorf("classify tracker entry #%d: %w", number, err)
+	}
+	var data struct {
+		Repository *struct {
+			Entry *struct {
+				TypeName string `json:"__typename"`
+				Number   int    `json:"number"`
+			} `json:"issueOrPullRequest"`
+		} `json:"repository"`
+	}
+	if err := decodeResponse(raw, &data); err != nil {
+		return "", err
+	}
+	if data.Repository == nil || data.Repository.Entry == nil {
+		return "", fmt.Errorf("tracker entry #%d names no issue or pull request", number)
+	}
+	entry := data.Repository.Entry
+	var kind string
+	switch entry.TypeName {
+	case "Issue":
+		kind = "issue"
+	case "PullRequest":
+		kind = "pull_request"
+	default:
+		return "", fmt.Errorf("tracker entry #%d has unexpected type %q", number, entry.TypeName)
+	}
+	if entry.Number != number {
+		return "", fmt.Errorf("tracker entry response names #%d, want #%d", entry.Number, number)
+	}
+	return kind, nil
+}
+
 func (c *collector) fetchUnit(ctx context.Context, number int) (UnitEvidence, error) {
 	if cached, ok := c.issueCache[number]; ok {
 		return cached, nil
+	}
+	kind, err := c.fetchTrackerEntryKind(ctx, number)
+	if err != nil {
+		return UnitEvidence{}, err
+	}
+	if kind == "pull_request" {
+		ref, err := c.fetchPullRequestReference(ctx, number)
+		if err != nil {
+			return UnitEvidence{}, err
+		}
+		unit := UnitEvidence{
+			Number:      ref.Number,
+			Kind:        "pull_request",
+			Title:       ref.Title,
+			State:       ref.State,
+			Stamp:       ref.Stamp,
+			PullRequest: &ref,
+		}
+		c.issueCache[number] = unit
+		return unit, nil
 	}
 	issue, pulls, err := c.fetchIssueDetails(ctx, number)
 	if err != nil {
@@ -1082,7 +1139,7 @@ func (c *collector) fetchUnit(ctx context.Context, number int) (UnitEvidence, er
 		dependencies = dependencySections[0]
 	}
 	unit := UnitEvidence{
-		Number: issue.Number, Title: issue.Title, State: issue.State, Body: issue.Body,
+		Number: issue.Number, Kind: "issue", Title: issue.Title, State: issue.State, Body: issue.Body,
 		DependenciesSection: dependencies, Stamp: issueStamp(issue),
 		ClosingPullRequests: pulls,
 	}
