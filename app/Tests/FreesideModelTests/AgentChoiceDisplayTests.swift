@@ -274,6 +274,70 @@ import Testing
                 at: now.addingTimeInterval(3_000)))
     }
 
+    private func usage(
+        _ enrollment: String, _ pools: [Components.Schemas.UsagePoolSnapshot], at offset: TimeInterval
+    ) -> AgentChoiceDisplay.EnrollmentUsage? {
+        AgentChoiceDisplay.usage(
+            for: enrollment, pools: pools, now: Self.base.addingTimeInterval(offset), locale: Self.locale,
+            timeZone: Self.utc)
+    }
+
+    /// The role picker's usage line (#3675) names the window and time
+    /// `reading` names, with the window's reset ahead of the time.
+    @Test func theUsageLineSplitsTheReadingAndAddsTheReset() throws {
+        let pools = UsageFixtures.defaultUsagePools()
+        let mac = UsageFixtures.readingCollectorID
+        guard case .window(let capacity, let times) = try #require(usage(mac, pools, at: 3_000)) else {
+            Issue.record("expected a window")
+            return
+        }
+        #expect(capacity.name == "Weekly Opus" && capacity.value == "Used up")
+        #expect(capacity.left == 0 && capacity.level == .usedUp)
+        // The refusal mark's reset, the latest of the window's causes.
+        #expect(times.map { $0.replacing("\u{202F}", with: " ") } == ["Resets Fri 2:40 AM", "read Aug 12, 3:20 AM"])
+        // Past the readings' stale_at the time says so instead.
+        guard case .window(_, let stale) = usage(mac, pools, at: 5_000) else {
+            Issue.record("expected a window")
+            return
+        }
+        #expect(stale.last == "stale since \(time(4_200))")
+        #expect(usage(mac, [], at: 3_000) == nil)
+    }
+
+    @Test func aWindowWithNoKnownResetGivesTheReadTimeAlone() {
+        var pools = UsageFixtures.defaultUsagePools()
+        pools[0].pool.recorded_exhausted_marks[0].resets_at = nil
+        guard case .window(let capacity, let times) = usage(UsageFixtures.readingCollectorID, pools, at: 3_000) else {
+            Issue.record("expected a window")
+            return
+        }
+        #expect(capacity.resetsAt == nil)
+        #expect(times == ["read \(time(2_400))"])
+    }
+
+    @Test func aProviderThatReportsNoUsageReadsAsASentence() {
+        let unsupported = usage(UsageFixtures.unsupportedCollectorID, UsageFixtures.defaultUsagePools(), at: 3_000)
+        #expect(unsupported == .unsupported)
+        #expect(unsupported?.spoken == "No usage reading: the provider reports none for this plan")
+        #expect(unsupported?.timeLine == nil)
+    }
+
+    /// With no window reading, any other attempt keeps the words
+    /// `reading` gives it.
+    @Test func anotherAttemptWithNoWindowKeepsTodaysWords() {
+        var pools = UsageFixtures.defaultUsagePools()
+        pools[1].pool.last_attempt = .init(
+            value1: .init(status: .failed, at: Self.base.addingTimeInterval(1_800), detail: "timed out"))
+        let failed = usage(UsageFixtures.unsupportedCollectorID, pools, at: 3_000)
+        #expect(failed == .attempt("refresh failed \(time(1_800))"))
+        #expect(
+            failed?.timeLine
+                == AgentChoiceDisplay.reading(
+                    for: UsageFixtures.unsupportedCollectorID, pools: pools,
+                    now: Self.base.addingTimeInterval(3_000), locale: Self.locale, timeZone: Self.utc))
+        #expect(failed?.spoken == failed?.timeLine)
+    }
+
     @Test func aUsageReadingNeverReordersHidesOrDisablesAnEnrollment() {
         let pools = UsageFixtures.defaultUsagePools()
         let catalogOrder = catalog.enrollments.map(\.enrollment_id)

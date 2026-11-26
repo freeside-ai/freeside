@@ -142,10 +142,13 @@ public struct RolePicker: Equatable, Sendable {
 
         public let id: ID
         public let label: String
-        /// Dim under the label: the lineup's settings, the usage reading,
-        /// or why the row can't be picked.
+        /// Dim under the label: the lineup's settings, `not discovered
+        /// yet`, or why the row can't be picked.
         public let detail: String?
         public let isEnabled: Bool
+        /// An enrollment's usage line, under the detail; nil on the
+        /// lineup and by-name rows and where no pool lists the enrollment.
+        package let usage: AgentChoiceDisplay.EnrollmentUsage?
     }
 
     /// The Enrollment section: Default or Clear naming what the lineup
@@ -162,18 +165,19 @@ public struct RolePicker: Equatable, Sendable {
             uniquingKeysWith: { first, _ in first })
         let lineupRow = EnrollmentRow(
             id: .lineup, label: mode == .draft ? "Default" : "Clear",
-            detail: AgentChoiceDisplay.lineupLabel(role: role, policy: policy, catalog: catalog), isEnabled: true)
+            detail: AgentChoiceDisplay.lineupLabel(role: role, policy: policy, catalog: catalog), isEnabled: true,
+            usage: nil)
         let byNameRow = byName.map {
-            EnrollmentRow(id: .byName, label: $0, detail: "set by name", isEnabled: false)
+            EnrollmentRow(id: .byName, label: $0, detail: "set by name", isEnabled: false, usage: nil)
         }
         let enrollmentRows = enrollmentOrder.map { id in
             guard let option = options[id] else {
-                return EnrollmentRow(id: .enrollment(id), label: id, detail: "not offered", isEnabled: false)
+                return EnrollmentRow(
+                    id: .enrollment(id), label: id, detail: "not offered", isEnabled: false, usage: nil)
             }
-            let detail = [option.isDiscovered ? nil : "not discovered yet", option.reading].compactMap(\.self)
             return EnrollmentRow(
-                id: .enrollment(id), label: id,
-                detail: detail.isEmpty ? nil : detail.joined(separator: " · "), isEnabled: option.isPickable)
+                id: .enrollment(id), label: id, detail: option.isDiscovered ? nil : "not discovered yet",
+                isEnabled: option.isPickable, usage: option.usage)
         }
         return [lineupRow] + [byNameRow].compactMap(\.self) + enrollmentRows
     }
