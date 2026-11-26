@@ -7341,7 +7341,9 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   `MaxOutputBytes` with `Truncated` set when it wrote more. Cancellation
   and the stall limit end a check as they end a writer, and
   `RecoverCheck` finds how one ended after a restart without exporting it.
-  Nothing admits a check yet (#3627). Decision record:
+  A check takes a writer's approval refusal and seeds from its request's
+  seeder when it brings one, so it also runs behind the host launcher
+  (below). Nothing admits a check yet (#3627). Decision record:
   `devlog/2026-11-26-0355-cordoned-check-launch.md`.
 - **Export.** `Export` runs only for a launch whose end record says it
   exited with code 0, and only once. It writes the daemon's own evidence
@@ -7566,10 +7568,12 @@ cd daemon && FREESIDE_CORDON_CREDENTIAL_LIVE_TEST=1 \
 `freesided cordon serve` is the host launcher (`internal/cordonhost`, #3623):
 it serves a cordoned backend and its suite on a Unix socket to a client on
 the same machine, which has the backend's operations behind the stage
-driver's port. Nothing reaches it over a network yet (#3625). A clean run's
-export returns over the connection, and the client receives it as untrusted
-input under `ClientConfig.ExportRoot`, which the composition sets to the
-stage driver's `CordonRunsRoot`. The protocol and its rules are in
+driver's port, a check's among them: a check's output crosses in its
+end's one frame, so its bound is at most `cordonhost.MaxCheckOutputBytes`.
+Nothing reaches it over a network yet (#3625). A clean run's export
+returns over the connection, and the client receives it as untrusted input
+under `ClientConfig.ExportRoot`, which the composition sets to the stage
+driver's `CordonRunsRoot`. The protocol and its rules are in
 `internal/cordonhost`'s doc comments; the decision records are
 `devlog/2026-11-26-0409-cordon-host-launcher.md` and
 `devlog/2026-11-26-0848-cordon-host-export.md`.

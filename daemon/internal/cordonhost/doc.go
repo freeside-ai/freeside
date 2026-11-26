@@ -10,10 +10,10 @@
 // Each frame is a four-byte big-endian length and a strict-JSON body of at
 // most maxFrame bytes, which carries only its kind's fields. Each
 // operation has its own connection: the client's hello, the launcher's,
-// the request, then the reply. A launch's seed follows its request, a
-// clean run's export follows the reply that reports it, each a tree stream
-// (Seeds, Exports), and record frames from the launcher's suite, each
-// answered by a recorded frame, may come before the reply.
+// the request, then the reply. A launch's or a check's seed follows its
+// request, a clean run's export follows the reply that reports it, each a
+// tree stream (Seeds, Exports), and record frames from the launcher's
+// suite, each answered by a recorded frame, may come before the reply.
 //
 //   - The protocol's version is the build's. Each side decodes the
 //     other's hello leniently, so it can name a different build, and
@@ -27,6 +27,10 @@
 //     clear their copy of its bytes once it is wrapped or written. The
 //     launcher hands it to the backend, which gives it to the agent alone
 //     on its own pipe.
+//   - A check crosses as a launch does, with no token. Its end carries the
+//     tail of the command's output, the command's own untrusted bytes, at
+//     most the request's bound, which is at most MaxCheckOutputBytes so it
+//     fits the end's one frame. A check's recovery never exports.
 //   - A refusal crosses as a code, and the client rebuilds the backend's
 //     error from it: ErrDetached, ErrRunEndUnproven, ErrNoRun, ErrCanceled,
 //     ErrWorktreeReplaced, export.ErrLinkedFile, ErrNotExportable,
@@ -83,9 +87,9 @@
 //
 // # Disconnects and Records
 //
-// A client that leaves mid-launch, as a daemon shutting down does, leaves
-// the run running: only a cancel frame cancels a launch, and a restarted
-// daemon recovers the run. Every other operation ends when its client
+// A client that leaves mid-launch or mid-check, as a daemon shutting down
+// does, leaves the run running: only a cancel frame cancels a launch or a
+// check, and a restarted daemon recovers the run. Every other operation ends when its client
 // leaves. The suite's records cross on the connection whose operation runs
 // the pass (ConnectionRecorder), found through the context the suite keeps
 // values from, so a pre-job probe's withdrawal crosses on its launch's

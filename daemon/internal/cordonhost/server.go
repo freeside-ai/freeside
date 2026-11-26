@@ -26,10 +26,12 @@ const recordTimeout = 2 * time.Minute
 // attached to it.
 type served interface {
 	Launch(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
+	Check(context.Context, cordon.CheckRequest) (cordon.CheckResult, error)
 	Started(context.Context, string) (bool, error)
 	RequestCancellation(context.Context, string) error
 	Recover(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
 	Export(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
+	RecoverCheck(context.Context, cordon.CheckRecoverRequest) (cordon.CheckResult, error)
 	ReleaseFinished(context.Context, []string) error
 	Detach()
 	HostFacts() (cordon.HostFacts, error)
@@ -64,8 +66,8 @@ type ServerConfig struct {
 // Tier A: it receives a launch's token and hands it to the backend alone,
 // reports a run's end only once the backend proved it, and streams an
 // export only once the backend's Export, which refuses a run with no end
-// record, wrote it. A client that disconnects leaves its launch running;
-// only a cancel frame cancels it.
+// record, wrote it. A client that disconnects leaves its launch or check
+// running; only a cancel frame cancels it.
 type Server struct {
 	build    string
 	backend  served
@@ -334,32 +336,46 @@ func (s *Server) hello() *helloBody {
 
 // handle runs one request and returns its reply and, for a reply that
 // carries an export, the directory to stream after it. Every operation but
-// a launch ends when its client leaves; a launch keeps running and only a
-// cancel frame cancels it.
+// one that starts a run, a launch or a check, ends when its client leaves;
+// a run keeps running and only a cancel frame cancels it.
 func (s *Server) handle(c *connection, req frame) (*replyBody, string) {
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), connKey{}, c))
 	defer cancel()
-	launch := req.Kind == kindLaunch
-	var staged string
+	starts := req.Kind == kindLaunch || req.Kind == kindCheck
+	var staged, runID string
 	var token ward.SetupToken
-	if launch {
-		var refusal *replyBody
+	var refusal *replyBody
+	switch req.Kind {
+	case kindLaunch:
+		runID = req.Launch.RunID
 		staged, token, refusal = s.receiveLaunch(c.conn, req.Launch)
-		if refusal != nil {
-			return refusal, ""
-		}
+	case kindCheck:
+		runID = req.Check.RunID
+		staged, refusal = s.receiveCheck(c.conn, req.Check)
+	case kindHello, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation, kindRecover,
+		kindRecoverCheck, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply:
+		// No seed follows these.
+	}
+	if refusal != nil {
+		return refusal, ""
+	}
+	if staged != "" {
 		defer func() {
 			if err := os.RemoveAll(staged); err != nil {
-				s.logger.Warn("cordon host: remove a staged seed", "run", req.Launch.RunID, "error", err)
+				s.logger.Warn("cordon host: remove a staged seed", "run", runID, "error", err)
 			}
 		}()
 	}
-	go s.read(c, cancel, launch)
+	go s.read(c, cancel, starts)
 	switch req.Kind {
 	case kindLaunch:
 		return s.launch(ctx, req.Launch, staged, token), ""
+	case kindCheck:
+		return s.check(ctx, req.Check, staged), ""
 	case kindRecover:
 		return s.recover(ctx, req.Recover)
+	case kindRecoverCheck:
+		return s.recoverCheck(ctx, req.RecoverCheck), ""
 	case kindExport:
 		return s.export(ctx, req.Export)
 	case kindStarted:
@@ -381,36 +397,37 @@ func (s *Server) handle(c *connection, req frame) (*replyBody, string) {
 	return refuse(fmt.Errorf("%w: a %s frame is not a request", ErrProtocol, req.Kind)), ""
 }
 
-// read takes the client's frames while its operation runs: a launch's
-// cancel, and the answers to records. A client that leaves, or breaks the
-// protocol, ends every operation but a launch, which keeps running.
-func (s *Server) read(c *connection, cancel context.CancelFunc, launch bool) {
+// read takes the client's frames while its operation runs: a launch's or
+// a check's cancel, and the answers to records. A client that leaves, or
+// breaks the protocol, ends every operation but one that starts a run,
+// which keeps running.
+func (s *Server) read(c *connection, cancel context.CancelFunc, starts bool) {
 	defer c.leave()
 	for {
 		f, err := readFrame(c.conn, false)
 		if err != nil {
-			if !launch {
+			if !starts {
 				cancel()
 			}
 			return
 		}
 		s.saw(f.Kind)
 		switch {
-		case f.Kind == kindCancel && launch:
+		case f.Kind == kindCancel && starts:
 			cancel()
 		case f.Kind == kindRecorded:
 			select {
 			case c.acks <- *f.Recorded:
 			default:
 				s.logger.Warn("cordon host: a client answered a record nobody sent")
-				if !launch {
+				if !starts {
 					cancel()
 				}
 				return
 			}
 		default:
 			s.logger.Warn("cordon host: a client sent a stray frame", "kind", f.Kind)
-			if !launch {
+			if !starts {
 				cancel()
 			}
 			return
@@ -428,22 +445,42 @@ func (s *Server) receiveLaunch(r io.Reader, req *launchBody) (string, ward.Setup
 	if err != nil {
 		return "", ward.SetupToken{}, refuse(fmt.Errorf("cordonhost: the launch's token: %w", err))
 	}
-	if !cordon.ValidRunID(req.RunID) {
-		return "", ward.SetupToken{}, refuse(fmt.Errorf("cordonhost: run id %q is not one plain path component", req.RunID))
+	staged, refusal := s.stageSeed(r, req.RunID)
+	if refusal != nil {
+		return "", ward.SetupToken{}, refusal
 	}
-	staged := filepath.Join(s.seedRoot, req.RunID)
+	return staged, token, nil
+}
+
+// receiveCheck refuses an output bound the reply can't carry, before the
+// seed is read, and stages the check's seed.
+func (s *Server) receiveCheck(r io.Reader, req *checkBody) (string, *replyBody) {
+	if err := checkOutputBound(req.MaxOutputBytes); err != nil {
+		return "", refuse(err)
+	}
+	return s.stageSeed(r, req.RunID)
+}
+
+// stageSeed reads the seed that follows a request into the seed root,
+// under runID. A refusal before the seed is read leaves it unread; the
+// connection closes after the reply.
+func (s *Server) stageSeed(r io.Reader, runID string) (string, *replyBody) {
+	if !cordon.ValidRunID(runID) {
+		return "", refuse(fmt.Errorf("cordonhost: run id %q is not one plain path component", runID))
+	}
+	staged := filepath.Join(s.seedRoot, runID)
 	if err := os.Mkdir(staged, 0o700); err != nil {
 		// Another connection stages this run, or a stale seed survived:
 		// either way it is not this connection's to remove.
-		return "", ward.SetupToken{}, refuse(fmt.Errorf("cordonhost: stage %s's seed: %w", req.RunID, err))
+		return "", refuse(fmt.Errorf("cordonhost: stage %s's seed: %w", runID, err))
 	}
 	if err := readTree(r, filepath.Join(staged, "tree"), seedRules); err != nil {
 		if rmErr := os.RemoveAll(staged); rmErr != nil {
-			s.logger.Warn("cordon host: remove a staged seed", "run", req.RunID, "error", rmErr)
+			s.logger.Warn("cordon host: remove a staged seed", "run", runID, "error", rmErr)
 		}
-		return "", ward.SetupToken{}, refuse(fmt.Errorf("cordonhost: receive %s's seed: %w", req.RunID, err))
+		return "", refuse(fmt.Errorf("cordonhost: receive %s's seed: %w", runID, err))
 	}
-	return staged, token, nil
+	return staged, nil
 }
 
 func (s *Server) launch(ctx context.Context, req *launchBody, staged string, token ward.SetupToken) *replyBody {
@@ -463,6 +500,50 @@ func (s *Server) launch(ctx context.Context, req *launchBody, staged string, tok
 	}
 	s.logger.Info("cordon host: launch ended", "run", req.RunID, "ended_by", res.EndedBy, "exit_code", res.ExitCode)
 	return &replyBody{End: failedEnd(endBody{EndedBy: res.EndedBy, ExitCode: res.ExitCode}, res.TranscriptPath, res.StderrPath)}
+}
+
+// check runs a check on the backend, seeded from its staged seed. The
+// command's argv is never logged.
+func (s *Server) check(ctx context.Context, req *checkBody, staged string) *replyBody {
+	release := s.awake.hold()
+	defer release()
+	s.logger.Info("cordon host: check", "run", req.RunID)
+	res, err := s.backend.Check(ctx, cordon.CheckRequest{
+		RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
+		Argv: req.Argv, MaxOutputBytes: req.MaxOutputBytes, RequireProof: req.RequireProof,
+		Seeder: &stagedSeed{
+			tree: filepath.Join(staged, "tree"), repository: req.Repository, baseRef: req.BaseRef, baseSHA: req.BaseSHA,
+		},
+	})
+	if err != nil {
+		s.logger.Warn("cordon host: check refused or blocked", "run", req.RunID, "error", err)
+		return refuse(err)
+	}
+	s.logger.Info("cordon host: check ended", "run", req.RunID, "ended_by", res.EndedBy, "exit_code", res.ExitCode)
+	return &replyBody{CheckEnd: checkEndOf(res)}
+}
+
+// recoverCheck finds how a check ended on the backend. It never exports:
+// the backend's RecoverCheck has no export to run.
+func (s *Server) recoverCheck(ctx context.Context, req *recoverCheckBody) *replyBody {
+	if err := checkOutputBound(req.MaxOutputBytes); err != nil {
+		return refuse(err)
+	}
+	release := s.awake.hold()
+	defer release()
+	res, err := s.backend.RecoverCheck(ctx, cordon.CheckRecoverRequest{RunID: req.RunID, MaxOutputBytes: req.MaxOutputBytes})
+	if err != nil {
+		return refuse(err)
+	}
+	s.logger.Info("cordon host: recovered a check", "run", req.RunID, "ended_by", res.EndedBy)
+	return &replyBody{CheckEnd: checkEndOf(res)}
+}
+
+func checkEndOf(res cordon.CheckResult) *checkEndBody {
+	return &checkEndBody{
+		EndedBy: res.EndedBy, ExitCode: res.ExitCode, Output: res.Output, Truncated: res.Truncated,
+		Reason: boundText(res.Reason),
+	}
 }
 
 func (s *Server) recover(ctx context.Context, body *exportRequestBody) (*replyBody, string) {

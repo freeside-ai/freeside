@@ -42,22 +42,30 @@ const maxFrame = 3 * ward.MaxFailureTranscriptBytes
 // maxText bounds a host's error text, reason, and every short string.
 const maxText = 4096
 
+// MaxCheckOutputBytes bounds a check's MaxOutputBytes on a host: the
+// output crosses in its end's one frame, so it shares the bound a failed
+// run's transcript has.
+const MaxCheckOutputBytes = ward.MaxFailureTranscriptBytes
+
 // kind is a frame's kind. A connection carries one operation: the
 // client's hello and the launcher's, then the client's request, then the
 // launcher's reply, with record and recorded frames between them while the
-// launcher's suite writes a conformance record, and a launch's cancel. A
-// reply that carries an export is followed by the export's stream.
+// launcher's suite writes a conformance record, and a launch's or a
+// check's cancel. A reply that carries an export is followed by the
+// export's stream.
 type kind string
 
 const (
 	kindHello               kind = "hello"
 	kindLaunch              kind = "launch"
+	kindCheck               kind = "check"
 	kindCancel              kind = "cancel"
 	kindRecord              kind = "record"
 	kindRecorded            kind = "recorded"
 	kindStarted             kind = "started"
 	kindRequestCancellation kind = "request_cancellation"
 	kindRecover             kind = "recover"
+	kindRecoverCheck        kind = "recover_check"
 	kindReleaseFinished     kind = "release_finished"
 	kindExport              kind = "export"
 	kindFull                kind = "full"
@@ -67,14 +75,14 @@ const (
 
 // allKinds is the single registration point for kind.
 var allKinds = []kind{
-	kindHello, kindLaunch, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation,
-	kindRecover, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply,
+	kindHello, kindLaunch, kindCheck, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation,
+	kindRecover, kindRecoverCheck, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply,
 }
 
 func (k kind) valid() bool {
 	switch k {
-	case kindHello, kindLaunch, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation,
-		kindRecover, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply:
+	case kindHello, kindLaunch, kindCheck, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation,
+		kindRecover, kindRecoverCheck, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply:
 		return true
 	default:
 		return false
@@ -84,16 +92,18 @@ func (k kind) valid() bool {
 // frame is one message. Each kind carries exactly the fields fieldsOf
 // names; validate refuses any other.
 type frame struct {
-	Kind     kind               `json:"kind"`
-	Hello    *helloBody         `json:"hello,omitempty"`
-	Launch   *launchBody        `json:"launch,omitempty"`
-	Recover  *exportRequestBody `json:"recover,omitempty"`
-	Export   *exportRequestBody `json:"export,omitempty"`
-	RunID    string             `json:"run_id,omitempty"`
-	RunIDs   []string           `json:"run_ids,omitempty"`
-	Record   *recordBody        `json:"record,omitempty"`
-	Recorded *recordedBody      `json:"recorded,omitempty"`
-	Reply    *replyBody         `json:"reply,omitempty"`
+	Kind         kind               `json:"kind"`
+	Hello        *helloBody         `json:"hello,omitempty"`
+	Launch       *launchBody        `json:"launch,omitempty"`
+	Check        *checkBody         `json:"check,omitempty"`
+	Recover      *exportRequestBody `json:"recover,omitempty"`
+	RecoverCheck *recoverCheckBody  `json:"recover_check,omitempty"`
+	Export       *exportRequestBody `json:"export,omitempty"`
+	RunID        string             `json:"run_id,omitempty"`
+	RunIDs       []string           `json:"run_ids,omitempty"`
+	Record       *recordBody        `json:"record,omitempty"`
+	Recorded     *recordedBody      `json:"recorded,omitempty"`
+	Reply        *replyBody         `json:"reply,omitempty"`
 }
 
 // helloBody is each side's first frame. The client's carries its build;
@@ -133,6 +143,23 @@ type launchBody struct {
 	RequireProof bool     `json:"require_proof"`
 }
 
+// checkBody is a check's request. It carries no token: a check gets
+// none. The base follows the frame as a seed stream, as a launch's does.
+type checkBody struct {
+	RunID          string   `json:"run_id"`
+	Repository     string   `json:"repository"`
+	BaseRef        string   `json:"base_ref"`
+	BaseSHA        string   `json:"base_sha"`
+	Argv           []string `json:"argv"`
+	MaxOutputBytes int64    `json:"max_output_bytes"`
+	RequireProof   bool     `json:"require_proof"`
+}
+
+type recoverCheckBody struct {
+	RunID          string `json:"run_id"`
+	MaxOutputBytes int64  `json:"max_output_bytes"`
+}
+
 // exportRequestBody is an export's request, and a recovery's, which
 // exports a clean end.
 type exportRequestBody struct {
@@ -157,14 +184,15 @@ type recordedBody struct {
 	Error string `json:"error"`
 }
 
-// replyBody ends an operation: an error, a run's end, Started's answer,
-// or an export. An export reply, and a recovery's that exported, carries
-// Export, and the export's stream follows the frame.
+// replyBody ends an operation: an error, a run's end, a check's end,
+// Started's answer, or an export. An export reply, and a recovery's that
+// exported, carries Export, and the export's stream follows the frame.
 type replyBody struct {
-	Error   *wireError       `json:"error,omitempty"`
-	End     *endBody         `json:"end,omitempty"`
-	Started *bool            `json:"started,omitempty"`
-	Export  *exportReplyBody `json:"export,omitempty"`
+	Error    *wireError       `json:"error,omitempty"`
+	End      *endBody         `json:"end,omitempty"`
+	CheckEnd *checkEndBody    `json:"check_end,omitempty"`
+	Started  *bool            `json:"started,omitempty"`
+	Export   *exportReplyBody `json:"export,omitempty"`
 }
 
 // exportReplyBody is what the launcher says of an export besides its
@@ -188,6 +216,17 @@ type endBody struct {
 	Stderr     *failureBody           `json:"stderr,omitempty"`
 }
 
+// checkEndBody is a check's or a check recovery's end. Output is the end
+// of the command's output, the command's own untrusted bytes, at most the
+// request's MaxOutputBytes. Reason comes with a lost end alone.
+type checkEndBody struct {
+	EndedBy   cordon.EndedBy `json:"ended_by"`
+	ExitCode  int            `json:"exit_code"`
+	Output    []byte         `json:"output"`
+	Truncated bool           `json:"truncated"`
+	Reason    string         `json:"reason,omitempty"`
+}
+
 type failureBody struct {
 	Bytes []byte `json:"bytes"`
 }
@@ -199,8 +238,12 @@ func fieldsOf(k kind) []string {
 		return []string{"hello"}
 	case kindLaunch:
 		return []string{"launch"}
+	case kindCheck:
+		return []string{"check"}
 	case kindRecover:
 		return []string{"recover"}
+	case kindRecoverCheck:
+		return []string{"recover_check"}
 	case kindExport:
 		return []string{"export"}
 	case kindStarted, kindRequestCancellation:
@@ -227,7 +270,9 @@ func (f frame) present() []string {
 	}{
 		{"hello", f.Hello != nil},
 		{"launch", f.Launch != nil},
+		{"check", f.Check != nil},
 		{"recover", f.Recover != nil},
+		{"recover_check", f.RecoverCheck != nil},
 		{"export", f.Export != nil},
 		{"run_id", f.RunID != ""},
 		{"run_ids", f.RunIDs != nil},
@@ -475,3 +520,11 @@ func boundText(s string) string {
 }
 
 func shortText(s string) bool { return len(s) <= maxText }
+
+// checkOutputBound refuses a check's output bound a reply can't carry.
+func checkOutputBound(n int64) error {
+	if n <= 0 || n > MaxCheckOutputBytes {
+		return fmt.Errorf("cordonhost: a check's output bound of %d bytes is outside 1 to %d", n, MaxCheckOutputBytes)
+	}
+	return nil
+}
