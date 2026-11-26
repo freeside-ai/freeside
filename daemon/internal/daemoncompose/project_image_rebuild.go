@@ -60,7 +60,7 @@ func newProjectImageRebuild(
 		return nil, fmt.Errorf("compose project-image rebuild: %w", err)
 	}
 	return &engine.ProjectImageRebuild{
-		Builder: builder, Inputs: cfg.Rebuild, Memory: memory,
+		Builder: builder, Inputs: cfg.Rebuild, Memory: memory, BuildLimit: cfg.ImageBuildLimit,
 		RecoverBuild: func(ctx context.Context, id domain.InvocationID) error {
 			return projectimage.RecoverBuild(ctx, cfg.ContainerBin, id)
 		},

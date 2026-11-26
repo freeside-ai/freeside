@@ -73,7 +73,11 @@ type ClaudeDriverConfig struct {
 	// when a candidate changes its dependencies within policy (plan §5.7). An
 	// empty BaseBuildRef leaves the daemon unable to rebuild: such a candidate
 	// then blocks publication as it did before.
-	Rebuild           projectimage.BuildInputs
+	Rebuild projectimage.BuildInputs
+	// ImageBuildLimit is how many project-image builds may run at once, from
+	// the instance's image_builds setting. Zero or below means one, which is
+	// what a configuration with no such setting (the deputy's) runs at.
+	ImageBuildLimit   int
 	ProviderEndpoints []string
 	// The prompt-package files are trusted implementation, specification, and
 	// remediation inputs. The daemon derives every digest from ingested bytes.
