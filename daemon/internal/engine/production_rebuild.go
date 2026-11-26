@@ -244,6 +244,31 @@ func (r *ProjectImageRebuild) build(
 	return domain.ProjectImage{}, false, err
 }
 
+// inputsFor returns the build inputs for an image FROM base: the
+// operator's, except that a base the daemon admitted (plan §5.7, Agent-base
+// upkeep) is resolved through its own local tag, since the operator's
+// BaseBuildRef names the base the operator built. Which base an image
+// builds FROM is still the image's; this picks only the tag the builder
+// checks against it.
+func (r *ProjectImageRebuild) inputsFor(
+	ctx context.Context, st *store.Store, base domain.ImageRef,
+) (projectimage.BuildInputs, error) {
+	inputs := r.Inputs
+	inputs.DNS = slices.Clone(r.Inputs.DNS)
+	admitted := false
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		_, admitted, err = tx.FindAdmittedAgentBaseByImage(ctx, base)
+		return err
+	}); err != nil {
+		return projectimage.BuildInputs{}, fmt.Errorf("read the admitted agent base for %s: %w", base, err)
+	}
+	if admitted {
+		inputs.BaseBuildRef = projectimage.AgentBaseLocalTag(base)
+	}
+	return inputs, nil
+}
+
 // containersUnproven returns err when it says a container the work started
 // may still run, and nil otherwise: the proof a reservation's release takes.
 func containersUnproven(err error) error {
@@ -794,7 +819,11 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 		roomErr = err
 		return domain.ProjectImage{}, nil, err
 	}
-	request, err := projectimage.RebuildRequest(binding.image, verifiedSHA, checkoutDir, recipe, w.rebuild.Inputs)
+	inputs, err := w.rebuild.inputsFor(ctx, w.store, binding.image.BaseImageRef)
+	if err != nil {
+		return domain.ProjectImage{}, nil, err
+	}
+	request, err := projectimage.RebuildRequest(binding.image, verifiedSHA, checkoutDir, recipe, inputs)
 	if err != nil {
 		return refuse(err)
 	}

@@ -47,6 +47,7 @@ func instanceSettingsFixture() domain.InstanceSettings {
 		CordonedLaunches: &domain.CordonedLaunchSettings{MaxConcurrent: 2},
 		ImageBuilds:      &domain.ImageBuildSettings{MaxConcurrent: 2},
 		Execution:        &domain.EnabledSettings{Enabled: true},
+		AgentBase:        &domain.AgentBaseSettings{RepositoryID: 42, Repository: "acme/freeside"},
 	}
 }
 
@@ -381,6 +382,9 @@ func TestSettingsSectionRefusalsNameTheField(t *testing.T) {
 		{domain.InstanceSectionImageBuilds, `{"max_concurrent":0}`, "image_builds.max_concurrent 0 must be at least 1"},
 		{domain.InstanceSectionImageBuilds, `{}`, "image_builds: max_concurrent: required settings key is absent"},
 		{domain.InstanceSectionExecution, `{}`, "execution: enabled: required settings key is absent"},
+		{domain.InstanceSectionAgentBase, `{"repository_id":0,"repository":"acme/freeside"}`, "source repository_id 0"},
+		{domain.InstanceSectionAgentBase, `{"repository_id":42,"repository":"freeside"}`, `source repository "freeside"`},
+		{domain.InstanceSectionAgentBase, `{"repository_id":42}`, "agent_base: repository: required settings key is absent"},
 		{domain.InstanceSectionExecution, `true`, "execution: "},
 		{domain.InstanceSectionHostTools, `{"container":"/c","extra":1}`, "unknown"},
 		{domain.InstanceSectionHostTools, `{"container":"/c","container":"/d"}`, "duplicate"},

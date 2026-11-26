@@ -178,6 +178,8 @@
 //   - image_selection.go, image_upkeep.go, image_upkeep_adoption.go, image_repair_task.go
 //     project image selection, upkeep at the tip, policy adoption cards, and
 //     repair runs (§5.7)
+//   - agent_base_upkeep.go keeping the Claude agent base current at the
+//     tip, inside the image upkeep pass (§5.7)
 //   - production_rebuild.go, project_image_build_gate.go
 //     candidate image rebuilds and the one-build-at-a-time gate
 //   - backup_payloads.go the outbox blob extractors the backup checkpoint reads

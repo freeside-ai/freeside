@@ -86,15 +86,26 @@ type ImageUpkeep struct {
 	// Running counts a build under the gate as running image_build work for
 	// the restart readiness read. Nil counts nothing.
 	Running *RunningWork
+	// AgentBase keeps the agent base current before the project image is
+	// measured (keepAgentBase). Nil builds no base; a project image still
+	// moves to the base the daemon last admitted.
+	AgentBase *AgentBaseUpkeep
 
 	// settledMu guards settled, the last settled outcome this process
-	// reached, which PendingResolution reads.
-	settledMu sync.Mutex
-	settled   *imageUpkeepOutcome
+	// reached, which PendingResolution reads; baseFault, the agent base's
+	// fault at the last pass that read the tip, which joins every pass's
+	// health; baseFailed, the last failed base build; and tipBaseVersion,
+	// the CLI pin of the agent base source at the last tip read.
+	settledMu      sync.Mutex
+	settled        *imageUpkeepOutcome
+	baseFault      string
+	baseFailed     *agentBaseFailure
+	tipBaseVersion string
 	// pointerTurn lets one of this repository's passes build at a time, at
 	// any build limit: the tip trigger's and the doctor's schedule's passes
 	// both rebuild one pointer, and the second re-checks the pointer the
-	// first advanced instead of building the same image again.
+	// first advanced instead of building the same image again. The agent
+	// base's pointer takes the same turn (keepAgentBase).
 	pointerTurn projectImageBuildGate
 }
 
@@ -194,7 +205,10 @@ func (u *ImageUpkeep) run(ctx context.Context, tipSHA string, reuseVerdict bool)
 			return outcome, err
 		}
 	}
-	if err := u.Health(ctx, outcome.hostFault); err != nil {
+	u.settledMu.Lock()
+	baseFault := u.baseFault
+	u.settledMu.Unlock()
+	if err := u.Health(ctx, joinUpkeepFaults(baseFault, outcome.hostFault)); err != nil {
 		return outcome, fmt.Errorf("converge image upkeep health: %w", err)
 	}
 	if refusal := outcome.refusal; refusal != nil && refusal.Class == domain.ImageUpkeepRefusalRepair &&
@@ -305,7 +319,14 @@ func (u *ImageUpkeep) pass(ctx context.Context, tipSHA string, reuseVerdict bool
 			"fetched tip carries repository id %d, not the configured %d: %w",
 			repositoryID, u.RepositoryID, domain.ErrRepositoryIdentityMismatch)
 	}
-	if u.current(ctx, dir, image, tipSHA) {
+	base, baseFault, err := u.keepAgentBase(ctx, dir, tipSHA, image)
+	if err != nil {
+		return imageUpkeepOutcome{}, err
+	}
+	u.settledMu.Lock()
+	u.baseFault = baseFault
+	u.settledMu.Unlock()
+	if u.current(ctx, dir, image, tipSHA, base) {
 		return imageUpkeepOutcome{tipSHA: tipSHA, current: true}, nil
 	}
 	adoptedHosts, err := adoptedRegistryHosts(ctx, u.Store, u.RepositoryID)
@@ -338,7 +359,7 @@ func (u *ImageUpkeep) pass(ctx context.Context, tipSHA string, reuseVerdict bool
 		}
 		return outcome, u.proposeAdoption(ctx, dir, image, *outcome.refusal)
 	}
-	target, found, err := u.recordedServing(ctx, dir, keeps(image, adopted), decision.Head)
+	target, found, err := u.recordedServing(ctx, dir, keeps(image, adopted, base), decision.Head)
 	if err != nil {
 		return imageUpkeepOutcome{}, err
 	}
@@ -349,7 +370,7 @@ func (u *ImageUpkeep) pass(ctx context.Context, tipSHA string, reuseVerdict bool
 				[]domain.ImageUpkeepClauseFinding{{Clause: projectimage.RebuildRefusalNotConfigured, Detail: detail}},
 				"this daemon is not configured to rebuild project images: "+detail)
 		}
-		built, outcome, err := u.rebuild(ctx, pointer, image, dir, tipSHA, decision.Head, adopted)
+		built, outcome, err := u.rebuild(ctx, pointer, image, dir, tipSHA, decision.Head, adopted, base)
 		if err != nil || built == nil {
 			return outcome, err
 		}
@@ -375,10 +396,17 @@ func (u *ImageUpkeep) readPointer(
 // current is the contract's verdict: AdmissibleAt passes at the tip, and the
 // image was prepared with this binary's preparation sources. AdmissibleAt
 // alone takes an image at its own build commit without comparing them, so
-// after an upgrade an image built at the tip would never be rebuilt. A tip
-// whose inputs cannot be read is not current; the gate says why.
-func (u *ImageUpkeep) current(ctx context.Context, dir string, image domain.ProjectImage, tipSHA string) bool {
+// after an upgrade an image built at the tip would never be rebuilt. An
+// image not built FROM the admitted agent base, when the daemon admitted
+// one, is not current either. A tip whose inputs cannot be read is not
+// current; the gate says why.
+func (u *ImageUpkeep) current(
+	ctx context.Context, dir string, image domain.ProjectImage, tipSHA string, base *domain.AdmittedAgentBase,
+) bool {
 	if image.Environment == nil || image.Environment.PreparationDigest != u.PreparationDigest {
+		return false
+	}
+	if base != nil && image.BaseImageRef != base.ImageRef {
 		return false
 	}
 	tip, err := projectimage.ObserveBaseInputs(ctx, "git", dir, tipSHA, image.InputLayout())
@@ -420,7 +448,8 @@ func (u *ImageUpkeep) recordedServing(
 // shared gate. It returns the image to advance to, or, with a nil image, the
 // outcome that ends the pass: a refusal, or none when another pass moved the
 // pointer. A non-nil adopted builds a new image from the tip's recipe, which
-// must hash to adopted, instead of the image's own.
+// must hash to adopted, instead of the image's own; a non-nil base builds it
+// FROM that admitted agent base instead of the image's own base.
 func (u *ImageUpkeep) rebuild(
 	ctx context.Context,
 	pointer domain.AdmittedImagePointer,
@@ -428,6 +457,7 @@ func (u *ImageUpkeep) rebuild(
 	dir, tipSHA string,
 	tip domain.ProjectImageBaseInputs,
 	adopted *domain.Digest,
+	base *domain.AdmittedAgentBase,
 ) (*domain.ProjectImage, imageUpkeepOutcome, error) {
 	// Taken first and held through the build, so a pass waits behind
 	// another of this repository holding nothing a build slot or a release
@@ -485,7 +515,7 @@ func (u *ImageUpkeep) rebuild(
 	if err != nil || !found || again.ImageID != pointer.ImageID {
 		return nil, imageUpkeepOutcome{}, err
 	}
-	want := keeps(image, adopted)
+	want := keeps(image, adopted, base)
 	if recorded, found, err := u.recordedServing(ctx, dir, want, tip); err != nil || found {
 		return &recorded, imageUpkeepOutcome{}, err
 	}
@@ -503,10 +533,15 @@ func (u *ImageUpkeep) rebuild(
 		outcome, err := u.refuse(ctx, image, tipSHA, class, findings, fault)
 		return nil, outcome, err
 	}
+	inputs, err := u.Rebuild.inputsFor(ctx, u.Store, want.BaseImageRef)
+	if err != nil {
+		return nil, imageUpkeepOutcome{}, err
+	}
 	var request projectimage.Request
 	if adopted != nil {
 		// A new image under the adopted recipe, read from the tip's tree.
-		request, err = projectimage.AdoptedRecipeRequest(ctx, "git", image, tipSHA, dir, *adopted, u.Rebuild.Inputs)
+		request, err = projectimage.AdoptedRecipeRequest(
+			ctx, "git", keeps(image, nil, base), tipSHA, dir, *adopted, inputs)
 	} else {
 		var recipe []byte
 		recipe, err = u.readRecipe(ctx, image)
@@ -517,7 +552,7 @@ func (u *ImageUpkeep) rebuild(
 		if err != nil {
 			return nil, imageUpkeepOutcome{}, err
 		}
-		request, err = projectimage.RebuildRequest(image, tipSHA, dir, recipe, u.Rebuild.Inputs)
+		request, err = projectimage.RebuildRequest(keeps(image, nil, base), tipSHA, dir, recipe, inputs)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -597,10 +632,14 @@ func (u *ImageUpkeep) adoptedRecipe(
 }
 
 // keeps is what an image that replaces image must keep: everything image
-// binds, with the adopted recipe in place of its own when one is given.
-func keeps(image domain.ProjectImage, adopted *domain.Digest) domain.ProjectImage {
+// binds, with the adopted recipe in place of its own and the admitted agent
+// base in place of its base when either is given.
+func keeps(image domain.ProjectImage, adopted *domain.Digest, base *domain.AdmittedAgentBase) domain.ProjectImage {
 	if adopted != nil {
 		image.RecipeDigest = *adopted
+	}
+	if base != nil {
+		image.BaseImageRef = base.ImageRef
 	}
 	return image
 }

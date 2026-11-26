@@ -20,7 +20,8 @@ import (
 // domain section rules (among them the container tool's absolute, clean
 // path), then the rules domain cannot hold: review.auth_mode is one of
 // ReviewAuthModes, and the build section passes projectimage's proxy and
-// rebuild-input checks. Each refusal names the field.
+// rebuild-input checks, and agent_base.repository is a repository the
+// forge transport accepts. Each refusal names the field.
 func CheckInstanceSettingsSection(settings domain.InstanceSettings, section domain.InstanceSettingsSection) error {
 	if err := settings.ValidateSection(section); err != nil {
 		return err
@@ -32,6 +33,12 @@ func CheckInstanceSettingsSection(settings domain.InstanceSettings, section doma
 		}
 	case domain.InstanceSectionBuild:
 		return checkBuildSettings(settings.Build)
+	case domain.InstanceSectionAgentBase:
+		// The slug is what the daemon compares with its project's
+		// repository, so it must be one the forge transport accepts.
+		if err := publish.ValidateRepository(settings.AgentBase.Repository); err != nil {
+			return fmt.Errorf("agent_base.repository: %w", err)
+		}
 	case domain.InstanceSectionHostTools, domain.InstanceSectionImages, domain.InstanceSectionSeedRoot,
 		domain.InstanceSectionPrompts, domain.InstanceSectionAgentTree, domain.InstanceSectionJudgment,
 		domain.InstanceSectionTimeouts, domain.InstanceSectionManualSubmissionConfig,
