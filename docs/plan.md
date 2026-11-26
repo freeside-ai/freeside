@@ -3403,14 +3403,12 @@ confined run reads a repository's manager configuration. Tool and dependency
 caches are shared across runs, so builds start warm. #3596 measured Go, uv,
 and cargo fetching tools and dependencies and building; a `toolchain` line in
 `go.mod`, a rustup toolchain download, and switching Xcode versions are
-unmeasured. mise can't install under the cordon yet (#3599), and a plain
-`mise install` leaves a trust entry that outlives the run (#3601), so a
-project that needs mise isn't run cordoned until both land.
+unmeasured.
 
 **What a run can do from day one,** within the limits above: build and test
 with warm caches; fetch dependencies and tools over the open network (Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency)), mise excepted;
-keep long-lived helpers alive while it runs, which end with it; see its own
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)); keep
+long-lived helpers alive while it runs, which end with it; see its own
 work through the standard ways above, and, with its project's setting on an
 eligible host, the Simulator and desktop control; and let the operator watch
 and steer it live (Writer Outcome Authority).
@@ -8619,7 +8617,7 @@ Revision 137 ("Cordoned Runs on Several Hosts"):
    and Project Images): its recipe is bound by its own digest, it runs
    cordoned only, and every candidate of it gets the self-check.
 9. **Each project's files pick tool versions** through native managers, on
-   a fixed `PATH` list the same on every host; mise waits on #3599 and #3601.
+   a fixed `PATH` list the same on every host.
    What Freeside itself runs on a host comes from paths no run can write.
 10. **The operator can steer a running writer** (Section
     [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Writer
