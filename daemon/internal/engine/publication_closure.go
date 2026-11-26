@@ -481,7 +481,7 @@ func (w *productionPublicationWorkflow) publicationClosureMerge(
 	targetBaseSHA string,
 	checkpoint productionVerificationCheckpoint,
 ) (domain.ProspectiveMerge, error) {
-	recipe := binding.image.RecipeDigest
+	recipe := binding.boundRecipe()
 	identity, err := publicationIdentity(publish.Candidate{
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
 		HeadSHA: task.HeadSHA, Artifacts: checkpoint.Artifacts, RecipeDigest: &recipe,

@@ -297,24 +297,7 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 		if err != nil {
 			return err
 		}
-		images, err := tx.ListProjectImages(ctx, binding.admission.Base.RepositoryID)
-		if err != nil {
-			return err
-		}
-		for _, image := range images {
-			if image.ImageRef == binding.admission.ImageRef {
-				if binding.image.ID != "" {
-					return fmt.Errorf("multiple project-image records name the admitted image: %w",
-						domain.ErrParentKeyMismatch)
-				}
-				binding.image = image
-			}
-		}
-		if binding.image.ID == "" {
-			return fmt.Errorf("admitted image has no project-image record: %w",
-				domain.ErrParentKeyMismatch)
-		}
-		return nil
+		return bindAdmittedRecipe(ctx, tx, &binding)
 	})
 	if err != nil {
 		return productionBinding{}, fmt.Errorf("load production re-entry authority: %w", err)
@@ -338,8 +321,7 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 			binding.profile.ProfileDigest != *binding.admission.TrustProfileDigest) ||
 			binding.profile.Repo != base.Repo ||
 			binding.profile.RepositoryID != base.RepositoryID)) ||
-		binding.image.Repository != base.Repo ||
-		binding.image.RepositoryID != base.RepositoryID {
+		!binding.recipeSourceIn(base) {
 		return productionBinding{}, fmt.Errorf(
 			"production re-entry binding disagrees with durable authority: %w",
 			domain.ErrParentKeyMismatch)
@@ -473,7 +455,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
-	if !readyExists && !recipes[binding.image.RecipeDigest] {
+	if !readyExists && !recipes[binding.boundRecipe()] {
 		return w.holdBlockedTask(ctx, task, held,
 			"Readiness re-entry is durably held because current trust no longer approves the admitted project-image recipe. Restore that approval to resume.",
 			domain.HoldRecipeRevoked)
@@ -835,6 +817,9 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	binding productionBinding,
 	checkoutDir string,
 ) (productionReentryCheckpoint, error) {
+	if err := binding.requireVerificationRoom(); err != nil {
+		return productionReentryCheckpoint{}, err
+	}
 	baseSHA := binding.admission.Base.BaseSHA
 	workspaceSHA := reentryWorkspaceSHA(task, binding)
 	changes, diffStats, err := w.reentryDiff(ctx, checkoutDir, baseSHA, workspaceSHA, task.HeadSHA)
@@ -944,7 +929,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		}
 		return productionReentryCheckpoint{}, fmt.Errorf("clean re-entry verification: %w", err)
 	}
-	if verified.HeadSHA != task.HeadSHA || verified.RecipeDigest != binding.image.RecipeDigest {
+	if verified.HeadSHA != task.HeadSHA || verified.RecipeDigest != binding.boundRecipe() {
 		return productionReentryCheckpoint{}, fmt.Errorf(
 			"re-entry verification disagrees with project-image binding: %w",
 			domain.ErrParentKeyMismatch)
@@ -1072,7 +1057,7 @@ func (w *productionPublicationWorkflow) reuseReentryVerification(
 			"re-entry predecessor verification report: %w", errors.Join(err, domain.ErrParentKeyMismatch))
 	}
 	if verified.HeadSHA != task.HeadSHA || verified.BaseSHA != baseSHA || verified.EvaluatedSHA != "" ||
-		verified.RecipeDigest != binding.image.RecipeDigest ||
+		verified.RecipeDigest != binding.boundRecipe() ||
 		verified.Outcome != verify.OutcomePassed || len(verified.Findings) != 0 {
 		return productionReentryCheckpoint{}, false, nil
 	}
@@ -1422,7 +1407,7 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 		checkpoint.EvaluatedSHA != binding.evaluatedSHA ||
 		(checkpoint.Outcome != domain.VerificationPassed &&
 			checkpoint.Outcome != domain.VerificationFailed) ||
-		checkpoint.RecipeDigest != binding.image.RecipeDigest ||
+		checkpoint.RecipeDigest != binding.boundRecipe() ||
 		checkpoint.EvidenceSnapshotDigest != evidenceDigest {
 		return productionReentryCheckpoint{}, false, fmt.Errorf(
 			"production re-entry checkpoint disagrees with task: %w", domain.ErrParentKeyMismatch)

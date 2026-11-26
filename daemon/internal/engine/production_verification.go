@@ -201,7 +201,7 @@ func hostVerificationRefusedVerification(
 			"Freeside did not verify candidate %s. No verification command ran.\n\n"+
 			"Configure and prove the executor (freesided -macverify-root and -run-conformance), then rerun the work.\n",
 		hostVerificationRefusedLine(unavailable), headSHA)
-	recipe := binding.image.RecipeDigest
+	recipe := binding.boundRecipe()
 	// The stable per-verification time a room's evidence carries, so a
 	// replayed refusal converges on the same artifact.
 	evidence, err := daemonVerificationEvidence(task.verificationInvocationID(), headSHA, recipe,
@@ -419,6 +419,9 @@ func (w *productionPublicationWorkflow) roomAndRecipe(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
 	image domain.ProjectImage,
 ) (ProductionVerificationRoom, []byte, error) {
+	if err := binding.requireVerificationRoom(); err != nil {
+		return nil, nil, err
+	}
 	// The writer start already resolved this durable policy, so a failure
 	// here means the stored policy changed under the run.
 	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys, ward.LaunchBound{})
@@ -449,10 +452,10 @@ func (w *productionPublicationWorkflow) roomAndRecipe(
 			verify.DefaultMaxRecipeBytes,
 		)
 	}
-	if got := verify.RecipeDigest(recipe); got != binding.image.RecipeDigest {
+	if got := verify.RecipeDigest(recipe); got != binding.boundRecipe() {
 		return nil, nil, fmt.Errorf(
 			"project-image verification recipe digest %s, want %s: %w",
-			got, binding.image.RecipeDigest, domain.ErrParentKeyMismatch,
+			got, binding.boundRecipe(), domain.ErrParentKeyMismatch,
 		)
 	}
 	return room, recipe, nil
@@ -483,6 +486,9 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	imported importer.Result,
 	checkoutDir string,
 ) (productionVerificationCheckpoint, error) {
+	if err := binding.requireVerificationRoom(); err != nil {
+		return productionVerificationCheckpoint{}, err
+	}
 	repair, err := w.repairVerification(ctx, binding, binding.admission.Base.BaseSHA)
 	if err != nil {
 		return productionVerificationCheckpoint{}, err
@@ -537,7 +543,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 			return productionVerificationCheckpoint{}, err
 		}
 	}
-	if verified.HeadSHA != imported.CommitSHA || verified.RecipeDigest != binding.image.RecipeDigest {
+	if verified.HeadSHA != imported.CommitSHA || verified.RecipeDigest != binding.boundRecipe() {
 		return productionVerificationCheckpoint{}, fmt.Errorf("verification disagrees with project-image binding: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -846,7 +852,7 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		authorization.BaseSHA != binding.admission.Base.BaseSHA ||
 		authorization.HeadSHA != task.HeadSHA ||
 		authorization.ImportResultDigest != importDigest ||
-		authorization.VerificationRecipeDigest != binding.image.RecipeDigest ||
+		authorization.VerificationRecipeDigest != binding.boundRecipe() ||
 		authorization.EvidenceSnapshotDigest != evidenceDigest ||
 		authorization.TrustProfileDigest != binding.profile.ProfileDigest ||
 		authorization.InvocationID != task.verificationInvocationID() {
