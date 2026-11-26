@@ -219,7 +219,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 			if err != nil {
 				return err
 			}
-			if _, err := tx.RecordBackendConformance(ctx, conformance); err != nil {
+			if _, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance); err != nil {
 				return err
 			}
 		}

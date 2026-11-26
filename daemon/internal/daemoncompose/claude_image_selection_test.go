@@ -298,7 +298,7 @@ func recordConformance(t *testing.T, st *store.Store, ward *fakeWard, image doma
 		t.Fatal(err)
 	}
 	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(t.Context(), record)
+		_, err := tx.RecordBackendConformance(t.Context(), domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatal(err)

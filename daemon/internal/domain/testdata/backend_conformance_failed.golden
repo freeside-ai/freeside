@@ -3,6 +3,7 @@
   "outcome": "failed",
   "configuration_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "capabilities": null,
+  "host": "daemon",
   "generation": 8,
   "proved_at": "2026-07-27T09:15:00Z"
 }

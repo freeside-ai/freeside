@@ -494,7 +494,7 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		t.Fatalf("NewBackendConformance: %v", err)
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(ctx, conformance)
+		_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance)
 		return err
 	}); err != nil {
 		t.Fatalf("RecordBackendConformance: %v", err)

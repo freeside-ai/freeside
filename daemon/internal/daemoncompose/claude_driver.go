@@ -1297,7 +1297,7 @@ func composeClaudeDriver(
 			return proveImage(runCtx, image, true)
 		},
 		Retire: func(runCtx context.Context, image domain.ImageRef) error {
-			return backend.RetireConformance(runCtx, string(image), StoreConformanceRecorder{Store: st})
+			return backend.RetireConformance(runCtx, string(image), StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID})
 		},
 		Start:  startImage,
 		Now:    time.Now,
@@ -1384,7 +1384,8 @@ func composeClaudeDriver(
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
 		// The cordon's pass follows the ward's; it returns only a record
-		// the store didn't take, so a failed pass never stops the daemon.
+		// the store didn't take or a proof condition it couldn't write, so
+		// a failed pass never stops the daemon.
 		runConformance: func(runCtx context.Context) error {
 			return errors.Join(follower.runScheduled(runCtx), cordonBackend.RunScheduled(runCtx))
 		},
@@ -1763,15 +1764,20 @@ func BindRigRuntimeResources(
 	return nil
 }
 
+// StoreConformanceRecorder records each pass a suite reports against Host,
+// the execution host the suite ran on. The daemon names the host here,
+// never the suite, which builds its record with no host as it builds it
+// with no generation (§5.7, Conformance per host).
 type StoreConformanceRecorder struct {
 	Store *store.Store
+	Host  domain.ExecutionHostID
 }
 
 func (r StoreConformanceRecorder) RecordBackendConformance(
 	ctx context.Context, record domain.BackendConformance,
 ) error {
 	return r.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(ctx, record)
+		_, err := tx.RecordBackendConformance(ctx, r.Host, record)
 		return err
 	})
 }
@@ -1883,7 +1889,7 @@ func runReservedConformance(
 ) error {
 	suite, err := ward.NewSuite(
 		backend, conformanceSuiteFixture(image, base, runID, registryRunID, nonce, seedDir),
-		ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st}),
+		ward.WithConformanceRecorder(StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}),
 	)
 	if err != nil {
 		return err

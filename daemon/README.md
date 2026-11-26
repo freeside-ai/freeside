@@ -5028,12 +5028,17 @@ doctor does not check it. The cordoned host process
 denial, daemon protection, and run-end proof) and none under
 `attended_dev`, and it can claim no other class's capability. A daemon
 with `-cordon-agent-cli` writes its conformance record at every start and
-on every scheduled doctor pass (Cordoned Launches), and doctor reports the
-newest one as `cordoned_conformance`, which names the class, the
-configuration digest, and the record's outcome, generation, and time. The
-finding is report-only: it files no `system_health` item, because a failed
-cordon holds only its own class, never the ward's writers. The daemon's
-pass supplies the digest; a one-shot doctor takes it as
+on every scheduled doctor pass (Cordoned Launches). Every conformance record
+names the execution host it proved, and doctor reports one
+`cordoned_conformance` finding per host in `execution_hosts`, each naming
+the class, the host, its newest cordoned record's outcome, generation,
+configuration digest, and time, and the host's conditions. A host is
+healthy when that record passed and the host isn't in `proof_not_current`.
+The daemon's own host must also hold its pass for the configuration it
+runs now, and is left out when the daemon runs no cordon. The findings are
+report-only: they file no `system_health` item, because a failed cordon
+holds only its own class on its own host, never the ward's writers. The
+daemon's pass supplies the digest; a one-shot doctor takes it as
 `-cordon-configuration-digest`, from the `configuration_digest` field of
 the daemon's log record for its latest pass. Pass `-operating-mode
 unattended -review-configuration-digest <digest>` to a one-shot doctor for an
@@ -7041,15 +7046,16 @@ recipe command: the room hashes its staged copy, the prepare copies the daemon
 binary (tens of megabytes) into the job directory, the checks return at once,
 and the slot is reaped and torn down.
 
-**Read the record.** The newest `credential_free_host_verification` row in
-the conformance log is the executor's record; only `passed` with the current
-configuration digest admits it. Copy the database (Inspect A Live Database)
-and query it:
+**Read the record.** The newest `credential_free_host_verification` row on
+the daemon's host in the conformance log is the executor's record; only
+`passed` with the current configuration digest admits it. Copy the
+database (Inspect A Live Database) and query it:
 
 ```sh
 freesided snapshot -db <live-db> <output-path>
 sqlite3 <output-path> "SELECT id, outcome, configuration_digest, capabilities, proved_at
-  FROM backend_conformance_records WHERE backend = 'credential_free_host_verification'
+  FROM backend_conformance_records
+  WHERE host_id = 'daemon' AND backend = 'credential_free_host_verification'
   ORDER BY id DESC LIMIT 1"
 ```
 
@@ -7227,6 +7233,19 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   stands. Its failure withdraws the declaration and records `failed`, not
   `superseded`, which the store would read as a re-proof under way, so only
   a new full pass declares again.
+- **Each host is proved on its own.** Every record names the execution host
+  whose suite wrote it: the daemon binds the host through the recorder it
+  hands the suite, never the suite itself, and the store refuses a record
+  that names a host or names one it doesn't hold. Admission reads only the
+  admission's host's records, so a pass on one host admits nothing on
+  another. `internal/daemoncompose/cordon_proofs.go` holds a suite per
+  host: it runs the full pass when the host joins, on the doctor schedule,
+  and before a job when the host's configuration digest changed since its
+  last pass, and the pre-job probe runs on the job's own host. After each
+  full pass and each failed probe it sets `proof_not_current` on the host
+  exactly when the host's newest cordoned record isn't a pass, writing only
+  when that changes; a recheck under way leaves it as it is until the pass
+  ends. Only the daemon's host is composed until #3625.
 - **What the suite touches.** It reads the account's secret paths only to
   see whether they open, and prints nothing a probe read; the environment
   check names variables, never values. Its signal, launchd, and app
@@ -7321,10 +7340,12 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   database and `confstr`, never `HOME` or `TMPDIR`; the reserved ports are
   the macOS verification executor's. The full pass runs at every start,
   with no restore from an earlier record, and again after the ward's on
-  every scheduled doctor pass. A passed pass logs its configuration
-  digest, the value `freesided doctor -cordon-configuration-digest` takes.
-  A failed pass logs why and leaves the class undeclared; only a record
-  the store didn't take stops startup or the scheduled pass.
+  every scheduled doctor pass, each recorded against the daemon's host. A
+  passed pass logs its configuration digest, the value
+  `freesided doctor -cordon-configuration-digest` takes. A failed pass
+  logs why and leaves the class undeclared; only a record the store didn't
+  take, or a proof condition it couldn't write, stops startup or the
+  scheduled pass.
 
 The darwin tests launch the test binary as the fake agent, under the real
 rule file, with a fake home under the test's directory; no default test

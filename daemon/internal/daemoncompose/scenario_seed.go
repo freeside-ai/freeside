@@ -259,7 +259,7 @@ func seedScenarioRecords(
 		if err := tx.RecordProjectImage(ctx, world.Image); err != nil {
 			return err
 		}
-		if _, err := tx.RecordBackendConformance(ctx, conformance); err != nil {
+		if _, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance); err != nil {
 			return err
 		}
 		if _, err := tx.RecordAdapterConformance(ctx, adapterConformance); err != nil {

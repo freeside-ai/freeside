@@ -47,7 +47,8 @@ func runDoctorCommand(
 		"effective review configuration digest (required in unattended mode)")
 	cordonConfigurationDigest := flags.String(
 		"cordon-configuration-digest", "",
-		"cordoned launch backend configuration digest; reports its newest conformance record (optional)")
+		"configuration digest of the cordon on the daemon's host; reports that host's newest cordoned record "+
+			"and requires it to be for this configuration (optional; every other execution host is reported either way)")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest (repeatable)")

@@ -278,7 +278,7 @@ func seedExecutionPublicationChain(
 		if err != nil {
 			return err
 		}
-		if _, err := tx.RecordBackendConformance(ctx, conformance); err != nil {
+		if _, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, conformance); err != nil {
 			return err
 		}
 		if !opts.attended {

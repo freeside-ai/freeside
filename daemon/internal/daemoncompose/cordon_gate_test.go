@@ -96,6 +96,7 @@ func newTestCordonGate(t *testing.T, backend *fakeCordonLauncher, unattended boo
 	gate := &cordonGate{
 		backend: backend,
 		probe:   func(context.Context) error { return errors.New("the class is not declared") },
+		settle:  func(context.Context) error { return nil },
 		admission: func(_ context.Context, id domain.InvocationID) (domain.ExecutionAdmission, error) {
 			if id != testCordonInvocation {
 				return domain.ExecutionAdmission{}, fmt.Errorf("no admission for %s", id)
@@ -167,6 +168,39 @@ func TestCordonGateLaunchUsesTheAdmittedGeneration(t *testing.T) {
 			}
 			if err := gate.PreJob(context.Background(), testCordonInvocation); (err != nil) != tc.requireProof {
 				t.Fatalf("PreJob = %v; it probes exactly when the launch requires the proof", err)
+			}
+		})
+	}
+}
+
+// TestCordonGateSettlesAfterAFailedProvenLaunch shows the gate settles the
+// host's proof condition after a launch that required proof fails, since
+// that launch's probe may have recorded a failure the runner never saw,
+// and only then.
+func TestCordonGateSettlesAfterAFailedProvenLaunch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		unattended bool
+		launchErr  error
+		settles    int
+	}{
+		{"failed proven launch", true, errors.New("the probe refused"), 1},
+		{"failed attended launch", false, errors.New("the launch failed"), 0},
+		{"clean proven launch", true, nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			backend := newFakeCordonLauncher()
+			backend.err = tc.launchErr
+			gate, _ := newTestCordonGate(t, backend, tc.unattended)
+			settles := 0
+			gate.settle = func(context.Context) error { settles++; return nil }
+			if _, err := gate.Launch(context.Background(), testGateLaunch()); (err != nil) != (tc.launchErr != nil) {
+				t.Fatalf("Launch = %v, want the launch's error %v", err, tc.launchErr)
+			}
+			if settles != tc.settles {
+				t.Fatalf("settles = %d, want %d", settles, tc.settles)
 			}
 		})
 	}

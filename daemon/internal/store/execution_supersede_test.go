@@ -46,7 +46,7 @@ func seedConformanceFor(t *testing.T, s *store.Store, digest domain.Digest) {
 		t.Fatalf("NewBackendConformance: %v", err)
 	}
 	if err := s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(context.Background(), record)
+		_, err := tx.RecordBackendConformance(context.Background(), domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatalf("seed conformance for %s: %v", digest, err)

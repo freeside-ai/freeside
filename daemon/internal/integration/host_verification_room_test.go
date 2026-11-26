@@ -84,7 +84,7 @@ func newHostExecutor(t *testing.T, p *productionPublicationHarness) *hostExecuto
 		t.Fatal(err)
 	}
 	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(p.ctx, record)
+		_, err := tx.RecordBackendConformance(p.ctx, domain.DaemonHostID, record)
 		return err
 	}); err != nil {
 		t.Fatal(err)

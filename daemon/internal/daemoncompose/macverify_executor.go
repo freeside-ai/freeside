@@ -82,7 +82,7 @@ func ComposeHostVerificationExecutor(
 		return nil, fmt.Errorf("configure the macOS verification executor: %w", err)
 	}
 	if runConformance {
-		if err := prove(ctx, backend, StoreConformanceRecorder{Store: st}); err != nil {
+		if err := prove(ctx, backend, StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}); err != nil {
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("run macOS verification executor conformance: %w", err)
 			}
@@ -102,7 +102,7 @@ func ComposeHostVerificationExecutor(
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		record, found, err = tx.LatestBackendConformance(ctx, domain.BackendCredentialFreeHostVerification)
+		record, found, err = tx.LatestBackendConformance(ctx, domain.DaemonHostID, domain.BackendCredentialFreeHostVerification)
 		return err
 	}); err != nil {
 		return nil, fmt.Errorf("read macOS verification executor conformance: %w", err)

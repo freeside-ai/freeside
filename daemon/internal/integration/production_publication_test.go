@@ -411,7 +411,7 @@ func newProductionPublicationHarnessWithMetadata(
 		if err != nil {
 			return err
 		}
-		_, err = tx.RecordBackendConformance(h.ctx, conformance)
+		_, err = tx.RecordBackendConformance(h.ctx, domain.DaemonHostID, conformance)
 		return err
 	}); err != nil {
 		t.Fatal(err)

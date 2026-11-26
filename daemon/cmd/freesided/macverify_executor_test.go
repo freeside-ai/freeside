@@ -60,7 +60,7 @@ func recordHostVerificationConformance(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := (daemoncompose.StoreConformanceRecorder{Store: st}).RecordBackendConformance(context.Background(), record); err != nil {
+	if err := (daemoncompose.StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}).RecordBackendConformance(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -214,7 +214,7 @@ func TestHostVerificationExecutorRunsTheFullPass(t *testing.T) {
 		t.Fatalf("run conformance = %v, %v; the pass ran on %v", backend, err, proved)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		record, found, err := tx.LatestBackendConformance(ctx, domain.BackendCredentialFreeHostVerification)
+		record, found, err := tx.LatestBackendConformance(ctx, domain.DaemonHostID, domain.BackendCredentialFreeHostVerification)
 		if err == nil && (!found || record.ConfigurationDigest != backend.ConfigurationDigest()) {
 			t.Errorf("recorded pass = %#v (found %v), want one for %s", record, found, backend.ConfigurationDigest())
 		}

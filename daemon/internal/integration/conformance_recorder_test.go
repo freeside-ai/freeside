@@ -24,7 +24,7 @@ func (r storeConformanceRecorder) RecordBackendConformance(
 	ctx context.Context, record domain.BackendConformance,
 ) error {
 	return r.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordBackendConformance(ctx, record)
+		_, err := tx.RecordBackendConformance(ctx, domain.DaemonHostID, record)
 		return err
 	})
 }
@@ -58,7 +58,7 @@ func TestStoreBackedConformanceRecorder(t *testing.T) {
 	}
 
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		got, found, err := tx.LatestBackendConformance(ctx, record.Backend)
+		got, found, err := tx.LatestBackendConformance(ctx, domain.DaemonHostID, record.Backend)
 		if err != nil {
 			return err
 		}

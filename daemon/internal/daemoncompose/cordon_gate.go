@@ -52,8 +52,14 @@ type cordonLauncher interface {
 // enrollment generation, and the token read refuses any other generation.
 type cordonGate struct {
 	backend cordonLauncher
-	// probe is the attached suite's pre-job probe.
+	// probe proves the launch's host before a job: the runner's pre-job
+	// pass, which reruns the full suite when the host's configuration
+	// changed and then runs the probe.
 	probe func(context.Context) error
+	// settle brings the launch's host's proof condition in line with its
+	// newest record, after a launch that required proof failed: the probe
+	// the launch runs again may have withdrawn the declaration.
+	settle func(context.Context) error
 	// admission reads the attempt's durable admission.
 	admission func(context.Context, domain.InvocationID) (domain.ExecutionAdmission, error)
 	// readToken is wardstore.CredentialReader.Read.
@@ -73,7 +79,9 @@ var (
 )
 
 // newCordonGate is the port over a composed cordon. It reads each
-// admission from st and each token through readToken.
+// admission from st and each token through readToken. Every launch runs on
+// the daemon's host, the only one composed until #3625, so the probe and
+// the proof condition are the daemon's host's.
 func newCordonGate(
 	c *ComposedCordon, st *store.Store,
 	readToken func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error),
@@ -81,7 +89,8 @@ func newCordonGate(
 ) *cordonGate {
 	return &cordonGate{
 		backend: c.Backend,
-		probe:   c.suite.ProbeBeforeJob,
+		probe:   func(ctx context.Context) error { return c.proofs.PreJob(ctx, domain.DaemonHostID) },
+		settle:  func(ctx context.Context) error { return c.proofs.Settle(ctx, domain.DaemonHostID) },
 		admission: func(ctx context.Context, id domain.InvocationID) (domain.ExecutionAdmission, error) {
 			var admission domain.ExecutionAdmission
 			err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -173,6 +182,13 @@ func (g *cordonGate) Launch(ctx context.Context, launch stage.CordonLaunch) (sta
 		Prompt: launch.Prompt, Args: launch.Args, Token: token, RequireProof: requireProof,
 	})
 	if err != nil {
+		if requireProof {
+			// The launch's own error is what the driver acts on; a
+			// condition left unsettled is repaired by the host's next pass.
+			if settleErr := g.settle(ctx); settleErr != nil {
+				g.logger.Warn("settle the host's proof condition after a failed launch", "error", settleErr)
+			}
+		}
 		return stage.CordonEnd{}, cordonPortError(err)
 	}
 	return g.end(ctx, res.EndedBy, res.ExitCode, res.TranscriptPath, res.StderrPath)
