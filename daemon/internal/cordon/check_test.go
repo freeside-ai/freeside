@@ -90,6 +90,32 @@ func TestCheckRunsItsCommandInAFreshSeededWorktree(t *testing.T) {
 	})
 }
 
+// TestCheckSeedsFromTheRequestsSeeder shows a check that brings its own
+// seeder seeds from it alone, as a launch does: the backend's own is never
+// called.
+func TestCheckSeedsFromTheRequestsSeeder(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		l := &fakeLauncher{host: newFakeHost(), script: checkWriting("", "", 0)}
+		own := &fakeSeeder{}
+		b, err := New(cfg, own)
+		if err != nil {
+			t.Fatal(err)
+		}
+		useFakes(b, l)
+		req := checkRequest("check-seeded")
+		brought := &fakeSeeder{}
+		req.Seeder = brought
+		if _, err := b.Check(t.Context(), req); err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		if own.calls != 0 || brought.calls != 1 {
+			t.Fatalf("the backend's seeder ran %d times and the request's %d, want 0 and 1", own.calls, brought.calls)
+		}
+	})
+}
+
 func TestCheckRefusesAnInvalidRequestBeforeCreatingAnything(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)

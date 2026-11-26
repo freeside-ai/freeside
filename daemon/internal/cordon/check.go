@@ -29,6 +29,10 @@ type CheckRequest struct {
 	// RequireProof runs the attached suite's pre-job probe first, as a
 	// writer's LaunchRequest.RequireProof does.
 	RequireProof bool
+	// Seeder, when set, seeds this check in place of the backend's own,
+	// as LaunchRequest.Seeder does: a host launcher sets it to the tree
+	// the daemon sent over its connection.
+	Seeder Seeder
 }
 
 // CheckResult is how a check ended, once no process from it is alive.
@@ -82,7 +86,7 @@ func (b *Backend) Check(ctx context.Context, req CheckRequest) (CheckResult, err
 	if err != nil {
 		return CheckResult{}, err
 	}
-	if err := b.seed(ctx, nil, req.Repository, req.BaseRef, req.BaseSHA, l); err != nil {
+	if err := b.seed(ctx, req.Seeder, req.Repository, req.BaseRef, req.BaseSHA, l); err != nil {
 		return CheckResult{}, err
 	}
 	res, err := b.supervise(ctx, l, supervisorRequest{
