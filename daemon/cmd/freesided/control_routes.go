@@ -294,6 +294,13 @@ func (p *pairingControl) registerControlRoutes(
 		}
 		return stopTaskInDaemon(ctx, daemon, cfg.TaskID)
 	})
+	p.handle(mux, messageRoute, func(ctx context.Context, body json.RawMessage) (any, error) {
+		cfg, err := decodeControlPayload[messageCommandConfig](body)
+		if err != nil {
+			return nil, err
+		}
+		return sendMessageInDaemon(ctx, attention, cfg)
+	})
 	p.handle(mux, updateDrainRoute, func(ctx context.Context, body json.RawMessage) (any, error) {
 		cfg, err := decodeControlPayload[drainCommandConfig](body)
 		if err != nil {

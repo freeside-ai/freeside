@@ -520,6 +520,11 @@ func ComposeClaudeWorkflow(
 	if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("report quarantined stage intents: %w", err)
 	}
+	// Settle what a stopped daemon left recorded before the command surface
+	// serves, so no send_writer_message races the pass for a record (#3632).
+	if err := settleOperatorMessages(ctx, st, claudeWiring.driver, cfg.Now, cfg.Logger); err != nil {
+		return nil, fmt.Errorf("settle operator messages: %w", err)
+	}
 	return &ClaudeWorkflow{
 		ClaudeWiring: claudeWiring, Workflow: workflow, ImageUpkeep: imageUpkeep, SettleDiscovery: settleDiscovery,
 	}, nil

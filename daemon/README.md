@@ -2137,6 +2137,38 @@ and concludes the Stop, as it does for a client's.
   start. To give a task up offline, use `freesided abandon`, which closes the
   task's workflow but doesn't stop an execution in flight.
 
+### Message A Running Writer
+
+`freesided message -db <database> -run <run-id> -invocation <invocation-id>
+[-text <text>]` sends an operator's message to a running cordoned writer,
+with the same effect and record as a client's `send_writer_message` command
+(#3632). With no `-text` it reads the message from stdin, up to 8 KiB of
+UTF-8. It forwards to the running daemon over the control socket.
+
+- **It prints the message's record** as one JSON object on stdout. The
+  `sender` is `cli:<account>`, as `freesided stop` records it.
+- **The record is written before the message is offered,** then settles
+  once: `delivered` when the run's supervisor took it for the writer's
+  input, or `refused` with a `refusal` reason (`run_ended`,
+  `input_closed`, `not_streamed`, `not_taken`, `not_started`, or, after a
+  restart found the run's files gone, `delivery_unknown`). A record left
+  `recorded` means the offer didn't answer; the next start offers it again
+  under the same ordinal, and the run never writes it to the writer twice.
+- **`delivered` is at most once.** It means the run's supervisor took the
+  message for the writer's input, never that the writer read it: a writer
+  that exits before reading its input never sees it, and neither does one
+  whose supervisor dies after the take.
+- **It refuses before recording** an invocation the run doesn't record as a
+  writer, a warded writer, text that is empty, not UTF-8, or over the
+  bound, and a daemon with no driver.
+- **The transcript read returns the records** beside the agent's transcript,
+  as `operator_messages` on `GET
+  /runs/{run_id}/invocations/{invocation_id}/transcript`, for a running and
+  an ended writer. The transcript's scan never screens them: they are the
+  operator's own text.
+- **It needs a running daemon.** Only the running daemon's driver can offer
+  the message to the run.
+
 ### Inspect A Live Database
 
 A `prod` or `dev` daemon holds its database in SQLite exclusive locking mode
