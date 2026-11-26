@@ -3,6 +3,7 @@ package stage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -444,5 +445,40 @@ func TestRestartCurrentCheckRefusalIsBoundToItsPhase(t *testing.T) {
 	d.mu.Unlock()
 	if check.state != currentCheckPassed || check.phase != phaseExported {
 		t.Fatalf("check after the phase moved = %+v, want passed for the exported phase", check)
+	}
+}
+
+// TestRestartCurrentCheckRetriesAnUnreachableAuthority: while the authority
+// can't be reached, Inspect keeps a held restarted intent running and
+// launches no recovery; once the authority answers, a later Inspect
+// recovers it (#3381).
+func TestRestartCurrentCheckRetriesAnUnreachableAuthority(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	launched := countRecoveryLaunches(d)
+	orphan(t, d, phaseRunning, nil)
+	d.authority = stubAuthority{startErr: fmt.Errorf("resolve App bot identity: %w", ErrAuthorityUnavailable)}
+
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) {
+		t.Fatalf("held error = %v, want retryable", err)
+	}
+	for range 3 {
+		if status, err := inspectChecked(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
+			t.Fatalf("Inspect while the authority is unreachable = %+v, %v; want running", status, err)
+		}
+	}
+	if got := launched.Load(); got != 0 {
+		t.Fatalf("recoveries launched while the authority is unreachable = %d, want none", got)
+	}
+
+	// inspectChecked waited for the last check, so no check reads the
+	// authority while it is replaced.
+	d.authority = stubAuthority{}
+	if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect once the authority answers = %+v, %v; want running", status, err)
+	}
+	if got := launched.Load(); got != 1 {
+		t.Fatalf("recoveries launched once the authority answers = %d, want 1", got)
 	}
 }

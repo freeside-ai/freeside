@@ -796,7 +796,8 @@ func (d *Driver) regateWithCurrentPolicy(
 				// Ward authenticated the released export above; private phase
 				// alone cannot select this terminal-only authority.
 				if err := d.authority.AuthenticateImport(ctx, i.InvocationID, i.Spec); err != nil {
-					return fmt.Errorf("authenticate current import %s: %w", i.InvocationID, err)
+					return currentAuthorityFailure(
+						fmt.Errorf("authenticate current import %s: %w", i.InvocationID, err))
 				}
 			}
 		}
@@ -805,10 +806,23 @@ func (d *Driver) regateWithCurrentPolicy(
 	}
 	if requireCurrent {
 		if err := d.authority.AuthenticateStart(ctx, i.InvocationID, i.Spec); err != nil {
-			return fmt.Errorf("authenticate current intent %s: %w", i.InvocationID, err)
+			return currentAuthorityFailure(
+				fmt.Errorf("authenticate current intent %s: %w", i.InvocationID, err))
 		}
 	}
 	return nil
+}
+
+// currentAuthorityFailure marks a current-policy check that couldn't reach
+// its authority as retryable, so restart recovery holds the intent and
+// Inspect's check asks again, instead of reading an unknown verdict as a
+// refusal and quarantining it for the life of the process. Every other
+// failure stays a refusal.
+func currentAuthorityFailure(err error) error {
+	if errors.Is(err, ErrAuthorityUnavailable) {
+		return fmt.Errorf("%w: %w", ErrRecoveryRetryable, err)
+	}
+	return err
 }
 
 // saveIntent writes one intent durably, so a crash mid-write leaves the

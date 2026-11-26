@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -394,5 +395,52 @@ func TestQuarantineCausesAreRegistered(t *testing.T) {
 	}
 	if QuarantineCause("").valid() {
 		t.Fatal("the zero cause is valid")
+	}
+}
+
+// TestReconcileHoldsAnUnreachableAuthority: a restarted intent whose
+// current-policy check couldn't reach its authority is held, not
+// quarantined, and Inspect reports it running (#3381). Seeding and running
+// intents re-check their start; an exported intent with a current import
+// start re-checks its import.
+func TestReconcileHoldsAnUnreachableAuthority(t *testing.T) {
+	t.Parallel()
+	unavailable := fmt.Errorf("resolve App bot identity: %w", ErrAuthorityUnavailable)
+	for _, ph := range []phase{phaseSeeding, phaseRunning, phaseExported} {
+		t.Run(string(ph), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			exports := newStubExports()
+			d := newTestDriver(t, &stubGate{}, exports)
+			var released *releasedExport
+			if ph == phaseExported {
+				released = &releasedExport{
+					Dir: filepath.Join(os.TempDir(),
+						"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-unreachable-authority"),
+					Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
+					ObservedBaseSHA: testBase.BaseSHA,
+				}
+			}
+			in := orphan(t, d, ph, released)
+			if ph == phaseExported {
+				exports.importStarts[testInvoke] = domain.CurrentImportStart{
+					InvocationID: testInvoke, AdmissionID: in.Spec.AdmissionID,
+				}
+			}
+			d.authority = stubAuthority{startErr: unavailable, importErr: unavailable}
+
+			if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) || !errors.Is(err, unavailable) {
+				t.Fatalf("held error = %v, want the retryable unavailable authority", err)
+			}
+			d.mu.Lock()
+			quarantined := len(d.quarantined)
+			d.mu.Unlock()
+			if quarantined != 0 {
+				t.Fatalf("quarantine set holds %d intents, want none", quarantined)
+			}
+			if status, err := inspectChecked(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
+				t.Fatalf("Inspect of the held intent = %+v, %v; want running", status, err)
+			}
+		})
 	}
 }
