@@ -338,14 +338,22 @@ bold; this section says what makes a pass count. Decision record:
    --build <sha> <name>` makes the root and the build, with a `<name>` no
    earlier pass used: a rerun on a new SHA reuses its root, which suits
    iterating but doesn't count. Record its `root=` and `api_url=` lines, and
-   each `approval=` line it stopped at, in the run record. When `main` advances before the real run
+   each `approval=` line it stopped at, in the run record. Every run
+   fetches `main` and renders its tip as `repository.base_sha`, so a
+   moved `main` needs no fetch, re-pin, or record edit by hand, and a real
+   run's `--template` leaves `repository.base_sha` out. An exit 1
+   saying no recorded image serves the tip yet means image upkeep hasn't
+   built that tip's image: let it, then rerun; it isn't a finding. When `main` advances before the real run
    launches, the run may start from the newer tip only when `runtime-diff`
    carries the pass to it; the run record then names both SHAs and the
    script's verdict line. Any other result means a new pass on the new tip.
    An in-run fix keeps its own rule (Run the Deputy).
 2. **The fixture reset** (**The fixture**) ran before onboarding. A pass
    from another base or issue is not comparable with the last one and
-   doesn't count.
+   doesn't count. exit-root checks the base: the fixture's
+   `repository.base_sha` is the base the pass requires, and the script
+   refuses (exit 2) when `main`'s fetched tip isn't that commit. The
+   issue's reopen is still yours to confirm.
 3. **The fixture's settings, exactly** (**Settings**): every key the table
    lists takes the value it lists, and nothing comes from the real run's
    settings. `scripts/exit-root/passes/fixture/settings.json` is the

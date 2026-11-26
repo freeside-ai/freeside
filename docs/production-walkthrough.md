@@ -39,7 +39,9 @@ section it links.
    the pre-spend checks on its root ([Start And Verify](#start-and-verify)).
    `bash scripts/exit-root.sh --template <dir>` can stand the root up from
    a pass directory of the operator's own
-   ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
+   ([Rehearse Before The Real Run](#rehearse-before-the-real-run)); that
+   template leaves `repository.base_sha` out, so every run renders the tip
+   of `main` it fetches.
 3. Stand up a fresh root for the fixture pass with `bash
    scripts/exit-root.sh --pass fixture` on the build the real run will use
    and run the pass, then any seeded pass the exit contract names that needs
@@ -556,7 +558,7 @@ change to one changes both:
 | `repository.repo` | `freeasinbird/freeside-review-challenge` |
 | `repository.repository_id` | `1363494422` |
 | `repository.base_ref` | `main` |
-| `repository.base_sha` | The `fixture-baseline` commit (`git ls-remote origin fixture-baseline`); once a root's onboarding review runs, the root renders the tip that review covered instead (step 3 below) |
+| `repository.base_sha` | The `fixture-baseline` commit (`git ls-remote origin fixture-baseline`), as the base the pass requires: the script fetches `main` into the fixture clone and refuses (exit 2) when its tip isn't that commit, which means the fixture wasn't reset. The rendered settings carry the fetched tip (step 3 below) |
 | `repository.allowed_paths` | `src/**`, `test/**`, `README.md` |
 | `repository.checkout` | A clone of the fixture of its own |
 | `repository.project` | `fixture` |
@@ -644,23 +646,25 @@ one; it resumes where it stopped. In order:
    after the approval promoted the installation leaves a new approval
    digest to review.
 
-   Every review runs at the base ref's tip, because `freesided onboard`
-   refuses a `-commit` that isn't the live tip. The script fetches
-   `repository.base_ref` from the repository checkout's `origin` (so that
-   checkout needs an `origin` that reaches the repository) just before it
-   runs the review, with no deputy start in between, and from then on
-   renders that tip as `repository.base_sha`, so the deputy runs at the
-   base the approval binds. A change to the template's
-   `repository.base_sha` asks for a new review, which runs before any
-   deputy start; `main` moving on its own asks for none. If a merge lands
-   in the seconds between the fetch and the review, the review is refused,
-   the root keeps its completed approval, and a rerun reviews the new tip
-   at once. The approval needn't race `main`: when the tip moved while you
-   read the review, the approval applies at the new tip if nothing it
-   covers (the workflows, the recipe, the installation, the flags) changed
-   there, and the next rerun renders that tip as `repository.base_sha`.
-   If something did change, the approval command fails, prints what
-   changed, and a rerun of the script reviews the new tip.
+   Every run first fetches `repository.base_ref` from the repository
+   checkout's `origin` (so that checkout needs an `origin` that reaches the
+   repository) and renders the tip it fetched as `repository.base_sha`, so
+   the deputy follows `main` with no fetch or re-pin by hand. A failed
+   fetch stops the run with git's error (exit 1) before anything is
+   created. Every review runs at the base ref's tip, because `freesided
+   onboard` refuses a `-commit` that isn't the live tip, so the script
+   fetches again just before it runs the review, with no deputy start in
+   between, and renders that tip. `main` moving on its own asks for no
+   review and starts no deputy; a change to the review configuration
+   digest or the template's `repository.base_sha` asks for a new review,
+   which runs before any deputy start. If a merge lands in the seconds
+   between the fetch and the review, the review is refused, the root keeps
+   its completed approval, and a rerun reviews the new tip at once. The
+   approval needn't race `main`: when the tip moved while you read the
+   review, the approval applies at the new tip if nothing it covers (the
+   workflows, the recipe, the installation, the flags) changed there. If
+   something did change, the approval command fails, prints what changed,
+   and a rerun of the script reviews the new tip.
 4. **Ready.** The next rerun takes `images.agent` and `approved_recipe` from
    the approving run, keeps a replaced recipe in `retained_recipes` so the
    root's earlier evidence still reads, applies the pass's routing and pool
@@ -669,8 +673,13 @@ one; it resumes where it stopped. In order:
    ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
    so a model the pinned CLIs refuse fails for the cost of one short call
    per role, not partway through the pass, and requires `freesided
-   prelaunch -no-live` to pass. It exits 0 and prints `root=`, `api_url=`,
-   `client=`, and a `submit=` line, the exact `freesided submit ...
+   prelaunch -no-live` to pass. Before the routing and the probe, while
+   prelaunch says no recorded image serves the rendered tip, it stops with
+   exit 1 and no `submit=` line, because a submit would hold under
+   `image_upkeep_pending`: start the deputy, let its image upkeep record
+   the tip's image, stop it, and rerun. Otherwise it exits 0 and prints
+   `root=`, `api_url=`, `client=`, and a `submit=` line, the exact
+   `freesided submit ...
    -require-composition` command for the pass's inputs. Start the deputy,
    attach the client, then run that command from a second terminal; it
    waits while the deputy is still starting, and the deputy logs `ready for
@@ -687,11 +696,15 @@ enroll-codex`) starts the deputy again to re-adopt the tree, one after the
 review configuration digest or the template's `repository.base_sha` moves
 runs the onboarding review again at the base ref's tip and stops for its
 approval unless that review carried the approval forward, and one after a newer
-approval pins that approval's image and recipe. A setup start waits as long
-as the deputy's log keeps growing and gives up only once it has stayed
-still for 900 s. Exit 2 is a refusal
-(a supervised path, a root another pass made, a setting both files set) and
-exit 1 any other failure; the script's header lists every step and refusal.
+approval pins that approval's image and recipe. One after `main` moved
+renders the new tip with no review and no deputy start. A root onboarded
+before the script recorded what its review bound reviews again once. A
+setup start waits as long as the deputy's log keeps growing and gives up
+only once it has stayed still for 900 s. Exit 2 is a refusal (a supervised
+path, a root another pass made, a setting both files set, a fetched tip
+other than the template's required `repository.base_sha`) and exit 1 any
+other failure, including a failed fetch and a tip no recorded image serves
+yet; the script's header lists every step and refusal.
 A setup start that exits nonzero says so with the `freesided rig recover`
 command for its lease.
 
