@@ -7,7 +7,8 @@ import SwiftUI
 /// inherits; each project the daemon serves follows with its own rows,
 /// which show the value that wins (the project's, else general's, else the
 /// default) and where it came from. A project row its own layer sets offers
-/// a reset to general. Each control saves at once.
+/// a reset to general. Each row's line says what its value does today.
+/// Each control saves at once.
 struct WorkflowPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -48,15 +49,6 @@ struct WorkflowPolicyView: View {
                     }
                 }
             }
-            // Until autonomous dispatch (#3150), only the closure gate
-            // changes what a task does; the other two are stored and
-            // resolved so a task created now carries them.
-            Text(
-                "Only the closure gate changes what a task does today. Filing and comment gates apply once tasks can act on their own."
-            )
-            .font(FreesideFont.cardBody)
-            .foregroundStyle(Color.inkFaint)
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -134,8 +126,8 @@ struct WorkflowPolicyView: View {
         }
     }
 
-    /// The row's dim line: the winning value, its layer, and who set it
-    /// when.
+    /// The row's dim line: the winning value, its layer, who set it when,
+    /// and what the value does today where that isn't plain from the row.
     private func line(
         _ setting: Components.Schemas.WorkflowPolicySetting, in section: WorkflowPolicySection
     )
@@ -148,7 +140,30 @@ struct WorkflowPolicyView: View {
         if let setAt = setting.set_at {
             parts.append(FreesideFormat.shortTime(setAt, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone))
         }
+        if let clause = Self.todayClause(setting) {
+            parts.append(clause)
+        }
         return parts.joined(separator: " · ")
+    }
+
+    /// What an off gate does today, which its title alone misstates: the
+    /// daemon still opens a filing's card while gates.follow_up_filing is
+    /// off, because filing without one waits on the trust profile accepting
+    /// the repository's audited issues workflows
+    /// (daemon/internal/engine/follow_up_filing.go), and it approves an
+    /// eligible comment by policy while gates.issue_comment is off
+    /// (daemon/internal/engine/issue_comment_proposal.go). An on gate, the
+    /// closure gate, and a cap do what the row says.
+    static func todayClause(_ setting: Components.Schemas.WorkflowPolicySetting) -> String? {
+        guard setting.value != "true" else { return nil }
+        switch setting.key {
+        case .gates_period_follow_up_filing:
+            return "a filing still asks you today; off takes effect once tasks can file on their own"
+        case .gates_period_issue_comment: return "an eligible comment is approved without asking you"
+        case .gates_period_source_issue_closure, .follow_up_filing_period_max_per_day,
+            .follow_up_filing_period_max_per_run, .follow_up_filing_period_max_depth, .unknown:
+            return nil
+        }
     }
 
     static func isGate(_ key: Components.Schemas.WorkflowPolicyKey) -> Bool {
@@ -175,7 +190,7 @@ struct WorkflowPolicyView: View {
     /// A gate reads as the path it takes; a cap as its number.
     static func valueText(_ setting: Components.Schemas.WorkflowPolicySetting) -> String {
         guard isGate(setting.key) else { return setting.value }
-        return setting.value == "true" ? "Ask first" : "Autonomous"
+        return setting.value == "true" ? "Ask first" : "Off"
     }
 
     static func originText(

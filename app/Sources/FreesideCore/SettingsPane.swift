@@ -84,9 +84,8 @@ enum SettingsSummary {
         return names.isEmpty ? "Lineup order" : names.joined(separator: " · ")
     }
 
-    /// Usage: an unanswered command, or how many pools sync holds.
-    /// The gates that ask first in any section, or Autonomous when none
-    /// does.
+    /// Workflow: an unanswered command, or the gates that ask first in any
+    /// section.
     static func workflow(_ workflow: WorkflowPolicyModel) -> String {
         if let pending = workflow.pending, pending.receipt == nil { return "Unconfirmed" }
         guard workflow.policy != nil else { return "Not synced" }
@@ -95,12 +94,13 @@ enum SettingsSummary {
                 .filter { WorkflowPolicyView.isGate($0.key) && $0.value == "true" }
                 .map(\.key))
         switch asking.count {
-        case 0: return "Autonomous"
+        case 0: return "No gate asks first"
         case 1: return "1 gate asks first"
         case let count: return "\(count) gates ask first"
         }
     }
 
+    /// Usage: an unanswered command, or how many pools sync holds.
     static func usage(_ usage: AccountUsageModel) -> String {
         if let pending = usage.pending, pending.receipt == nil { return "Unconfirmed" }
         switch usage.pools.count {
