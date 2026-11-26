@@ -915,6 +915,7 @@
           "egress_profile": "clean_verification",
           "operating_mode": "attended_dev",
           "isolation_class": "fresh_vm_read_only_volume_handoff",
+          "execution_host_id": "daemon",
           "independence": null
         },
         "retry_outlook": "may_succeed"
@@ -1013,6 +1014,7 @@
           "egress_profile": "clean_verification",
           "operating_mode": "attended_dev",
           "isolation_class": "fresh_vm_read_only_volume_handoff",
+          "execution_host_id": "daemon",
           "independence": null
         },
         "retry_outlook": "may_succeed"

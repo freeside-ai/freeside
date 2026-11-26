@@ -158,6 +158,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			CostOwner: new("platform-team"), LineageGroup: new("anthropic"),
 			CredentialMode: new(domain.CredentialSubscriptionContained), EgressProfile: new(domain.EgressProviderOnly),
 			OperatingMode: new(domain.ModeUnattended), IsolationClass: new("fresh_vm_read_only_volume_handoff"),
+			ExecutionHostID: new(domain.DaemonHostID),
 		},
 		{
 			InvocationID: "review-569-1", Kind: domain.AdmissionKindReview,

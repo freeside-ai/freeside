@@ -67,6 +67,7 @@
       "egress_profile": null,
       "operating_mode": null,
       "isolation_class": null,
+      "execution_host_id": null,
       "independence": [
         {
           "writing_role": "implementer",
