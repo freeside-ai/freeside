@@ -5,21 +5,25 @@ import SwiftUI
 /// task's name, or a closed item's summary, on one dim serif line with the
 /// time it finished trailing, and no card. Finished work is a log to look
 /// back through, so it gives up the keyword line a row that still asks
-/// something of the operator needs. A task row draws its outcome as a
-/// timeline marker before its name, and an issue-backed task names its
-/// issue on a context line under the title, so retries of one issue read
-/// as one issue's attempts (owner decision, 19 Nov 2026,
-/// devlog/2026-11-19-1259-issue-backed-task-names.md). The outcome is
-/// spoken too, since two of the markers differ by color alone, and so is
-/// the recorded status the full row's keyword drew when it says more.
+/// something of the operator needs. A task row draws its outcome as the
+/// lifecycle glyph before its name, so the shape and not the color tells
+/// finished, stopped, and abandoned apart, and a look-alike's short id
+/// ends the context line, so the title keeps the whole name (owner
+/// decision, 26 Nov 2026,
+/// devlog/2026-11-26-0610-finished-row-outcome-glyphs.md). An issue-backed
+/// task names its issue on that line, so retries of one issue read as one
+/// issue's attempts (owner decision, 19 Nov 2026,
+/// devlog/2026-11-19-1259-issue-backed-task-names.md). VoiceOver reads the
+/// outcome word, not the glyph's name, and the recorded status the full
+/// row's keyword drew when it says more.
 /// Selection and hover follow the full row: the accent wash under a 4pt
 /// bar, the hover cut on the Mac.
 struct FinishedRowView: View {
     enum Subject {
         /// `status` is the recorded status the full row's keyword drew;
         /// `showsIdentifier` marks a look-alike task
-        /// (`TaskDisplay.ambiguousTaskIDs`): the one-line row draws its
-        /// short id, and VoiceOver reads the full marker.
+        /// (`TaskDisplay.ambiguousTaskIDs`): its context line ends with the
+        /// short id, and VoiceOver reads when it was created beside the name.
         case task(Components.Schemas.Task, status: String, showsIdentifier: Bool)
         case item(Components.Schemas.AttentionItem)
     }
@@ -30,6 +34,7 @@ struct FinishedRowView: View {
     var now: Date?
     var onRevealTechnicalDetails: () -> Void = {}
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = screenshotMetricBase(13, relativeTo: .body)
     /// The marker's clock reads the view's locale and time zone, as the
     /// task page's header does, so the two print the same string.
     @Environment(\.locale) private var locale
@@ -50,20 +55,26 @@ struct FinishedRowView: View {
 
     private func line(at now: Date) -> some View {
         let time = time(at: now)
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let marker {
-                ChronologyMarker(kind: marker)
-                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+        return HStack(alignment: .firstTextBaseline, spacing: 7) {
+            if let glyph, let outcome {
+                Image(systemName: glyph)
+                    .font(.system(size: glyphSize))
+                    .foregroundStyle(Self.color(outcome))
+                    .accessibilityHidden(true)
             }
+            // The time trails the title alone, so the context line, which
+            // a look-alike's short id lengthens, runs under it.
             VStack(alignment: .leading, spacing: 2) {
-                title
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    title
+                    Spacer(minLength: 8)
+                    if let time {
+                        timeText(time)
+                    }
+                }
                 if let context {
                     SidebarRowContext(text: context)
                 }
-            }
-            Spacer(minLength: 8)
-            if let time {
-                timeText(time)
             }
         }
         .padding(.vertical, 6)
@@ -75,26 +86,42 @@ struct FinishedRowView: View {
         .modifier(Surface(isSelected: isSelected))
         .textSelection(.disabled)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            ([titleText(at: now)] + spokenStatus + [context, time?.text].compactMap { $0 }).joined(separator: ", "))
+        .accessibilityLabel(spokenLabel(at: now))
     }
 
-    /// The outcome marker a task row draws; nil for an item, or a task
-    /// that hasn't ended.
-    var marker: ChronologyMarker.Kind? {
-        guard case .task(let task, _, _) = subject, let outcome = TaskDisplay.outcome(task) else { return nil }
+    /// The row's whole VoiceOver label: title, outcome and status, the
+    /// context line, then the time.
+    func spokenLabel(at now: Date) -> String {
+        ([titleText(at: now)] + spokenStatus + [context, time(at: now)?.text].compactMap { $0 }).joined(separator: ", ")
+    }
+
+    /// The outcome glyph a task row draws, the symbol the task page's
+    /// lifecycle label uses; nil for an item, or a task that hasn't ended.
+    var glyph: String? {
+        guard case .task(let task, _, _) = subject, TaskDisplay.outcome(task) != nil else { return nil }
+        return TaskDisplay.lifecycleLabel(task).systemImage
+    }
+
+    private var outcome: TaskDisplay.Outcome? {
+        guard case .task(let task, _, _) = subject else { return nil }
+        return TaskDisplay.outcome(task)
+    }
+
+    /// The colors the outcome's dot had before the glyph (#3456); the
+    /// glyph's shape now tells the outcomes apart without them.
+    private static func color(_ outcome: TaskDisplay.Outcome) -> Color {
         switch outcome {
-        case .finished: return .stageStart
-        case .stopped: return .failure
-        case .abandoned: return .prior
+        case .finished: .diffAdd
+        case .stopped: .waxText
+        case .abandoned: .milestonePrior
         }
     }
 
-    /// A task's context line: project, then its issue, for an issue-backed
-    /// task alone.
+    /// A task's context line: project, its issue when it has one, and a
+    /// look-alike's short id; nil for a task with neither.
     var context: String? {
-        guard case .task(let task, _, _) = subject else { return nil }
-        return TaskDisplay.finishedContext(task)
+        guard case .task(let task, _, let showsIdentifier) = subject else { return nil }
+        return TaskDisplay.finishedContext(task, showsIdentifier: showsIdentifier)
     }
 
     /// What VoiceOver reads after the title: a task's outcome, then its
@@ -111,18 +138,10 @@ struct FinishedRowView: View {
     private var title: some View {
         let lineLimit = dynamicTypeSize.isAccessibilitySize ? nil : 1
         switch subject {
-        case .task(let task, _, let showsIdentifier):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                TaskNameLabel(
-                    name: task.display_names.task, font: FreesideFont.rowTitle, monoFont: FreesideFont.monoValue,
-                    color: .inkDim, lineLimit: lineLimit)
-                if showsIdentifier {
-                    Text(ShortIdentifier.short(task.id))
-                        .font(FreesideFont.trailingSummary)
-                        .foregroundStyle(Color.inkDim)
-                        .fixedSize()
-                }
-            }
+        case .task(let task, _, _):
+            TaskNameLabel(
+                name: task.display_names.task, font: FreesideFont.rowTitle, monoFont: FreesideFont.monoValue,
+                color: .inkDim, lineLimit: lineLimit)
         case .item(let item):
             Text(AttentionDisplay.rowSummary(item))
                 .font(FreesideFont.rowTitle)
@@ -131,13 +150,13 @@ struct FinishedRowView: View {
         }
     }
 
-    /// The title VoiceOver reads. A look-alike task's carries the whole
-    /// marker the one-line row has no room to draw.
+    /// The title VoiceOver reads. A look-alike task's adds when it was
+    /// created; its short id is read once, with the context line.
     private func titleText(at now: Date) -> String {
         switch subject {
         case .task(let task, _, let showsIdentifier):
             showsIdentifier
-                ? "\(task.display_names.task.text), \(TaskDisplay.lookAlikeMarker(task, now: now, locale: locale, timeZone: timeZone))"
+                ? "\(task.display_names.task.text), \(TaskDisplay.lookAlikeCreated(task, now: now, locale: locale, timeZone: timeZone))"
                 : task.display_names.task.text
         case .item(let item):
             AttentionDisplay.rowSummary(item)

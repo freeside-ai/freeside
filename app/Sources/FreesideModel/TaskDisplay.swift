@@ -176,8 +176,9 @@ package enum TaskDisplay {
     /// The ids of look-alike tasks (#1922): a task whose displayed name text
     /// equals another visible task's, or whose issue (repository and issue
     /// number) is another's, whatever their names. Rows and the task
-    /// page draw `lookAlikeMarker` only for these, so it appears only where
-    /// two tasks would otherwise read alike. An identifier-fallback name is
+    /// page draw `lookAlikeMarker`, and a compact Finished row its short id,
+    /// only for these, so they appear only where two tasks would otherwise
+    /// read alike. An identifier-fallback name is
     /// the task id, which is unique, so those rows never collide by name.
     package static func ambiguousTaskIDs(_ tasks: [Components.Schemas.TaskSnapshot]) -> Set<String> {
         var idsByName: [String: [String]] = [:]
@@ -209,8 +210,16 @@ package enum TaskDisplay {
     package static func lookAlikeMarker(
         _ task: Components.Schemas.Task, now: Date, locale: Locale = .current, timeZone: TimeZone = .current
     ) -> String {
-        let created = FreesideFormat.shortTime(task.created_at, now: now, locale: locale, timeZone: timeZone)
-        return "created \(created) · \(ShortIdentifier.short(task.id))"
+        "\(lookAlikeCreated(task, now: now, locale: locale, timeZone: timeZone)) · \(ShortIdentifier.short(task.id))"
+    }
+
+    /// The marker's first half, when the task was created
+    /// (`created Nov 9, 2:14 PM`). A compact Finished row speaks it beside
+    /// the name, since its context line already carries the short id.
+    package static func lookAlikeCreated(
+        _ task: Components.Schemas.Task, now: Date, locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> String {
+        "created \(FreesideFormat.shortTime(task.created_at, now: now, locale: locale, timeZone: timeZone))"
     }
 
     /// A task with no lifecycle yet (no run) is work that exists and has
@@ -690,10 +699,14 @@ package enum TaskDisplay {
         task.issue.map { "#\($0.value1.issue_number)" }
     }
 
-    /// A Finished row's context line: project, then the issue, for an
-    /// issue-backed task; nil for any other, which draws no context line.
-    package static func finishedContext(_ task: Components.Schemas.Task) -> String? {
-        task.issue == nil ? nil : pageIdentity(task)
+    /// A Finished row's context line: project, then the issue when the
+    /// task has one, then a look-alike's short id (`showsIdentifier`), so
+    /// the title line keeps the whole name (#3671). Nil for a task with
+    /// neither an issue nor a look-alike, which draws no context line.
+    package static func finishedContext(_ task: Components.Schemas.Task, showsIdentifier: Bool) -> String? {
+        guard task.issue != nil || showsIdentifier else { return nil }
+        let identifier = showsIdentifier ? [ShortIdentifier.short(task.id)] : []
+        return ([pageIdentity(task)] + identifier).joined(separator: " · ")
     }
 
     /// The row's meta line: project, the issue when the task has one,
