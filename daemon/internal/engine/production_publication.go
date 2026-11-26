@@ -321,6 +321,10 @@ type productionPublicationWorkflow struct {
 	// readiness re-entry a moved head starts applies. engine.New sets it;
 	// nil checks nothing.
 	readinessGate ProjectReadinessGate
+	// projectAuthority reads a task's project authority for the publish
+	// gate's repository check (requireProjectRepository). engine.New sets it
+	// from WithProjectAuthority; nil checks nothing.
+	projectAuthority ProjectAuthoritySource
 	// hostVerificationRoom admits a verification job onto the host executor
 	// and builds its room (Engine.admitHostVerificationRoom). engine.New sets
 	// it; nil admits nothing.
@@ -1159,6 +1163,37 @@ type productionBinding struct {
 	evaluatedSHA string
 }
 
+// requireProjectRepository is the publish gate's repository check (#3209):
+// a task publishes only to its own project's current repository. It
+// compares the admitted base with the repository, repository ID, and base
+// ref the run's project names now, so a task of one project can't publish
+// to another's repository, and a repository edit holds an in-flight task at
+// its next publication. A refusal, or a project whose settings grant it
+// nothing, is retryable: the task holds under the environment hold and a
+// corrected setting releases it, with no publisher call in between.
+func (w *productionPublicationWorkflow) requireProjectRepository(
+	ctx context.Context, tx *store.ReadTx, run domain.Run, base domain.BaseRevision,
+) error {
+	if w.projectAuthority == nil {
+		return nil
+	}
+	project, err := w.projectAuthority(ctx, tx, run.ProjectID)
+	if errors.Is(err, ErrProjectSettingsRefused) {
+		return productionPublicationRetryableError(fmt.Errorf("project %q authority: %w", run.ProjectID, err))
+	}
+	if err != nil {
+		return fmt.Errorf("project %q authority: %w", run.ProjectID, err)
+	}
+	if !project.sameRepository(base) {
+		return productionPublicationRetryableError(fmt.Errorf(
+			"run %s was admitted at %s#%d@%s, project %q names %s#%d@%s: %w",
+			run.ID, base.Repo, base.RepositoryID, base.BaseRef,
+			run.ProjectID, project.Repo, project.RepositoryID, project.BaseRef,
+			domain.ErrRepositoryIdentityMismatch))
+	}
+	return nil
+}
+
 func (w *productionPublicationWorkflow) loadBinding(
 	ctx context.Context, task productionPublicationTask,
 ) (productionBinding, error) {
@@ -1180,6 +1215,9 @@ func (w *productionPublicationWorkflow) loadBinding(
 		}
 		binding.admission, err = tx.GetExecutionAdmissionRecord(ctx, task.ProducingInvocationID)
 		if err != nil {
+			return err
+		}
+		if err := w.requireProjectRepository(ctx, tx, binding.run, binding.admission.Base); err != nil {
 			return err
 		}
 		binding.export, err = tx.GetExecutionExportRecord(ctx, task.ProducingInvocationID)

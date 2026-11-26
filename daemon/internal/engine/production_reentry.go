@@ -273,6 +273,9 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 		if err != nil {
 			return err
 		}
+		if err := w.requireProjectRepository(ctx, tx, binding.run, binding.admission.Base); err != nil {
+			return err
+		}
 		binding.resolvedPolicy, err = tx.GetResolvedPolicy(ctx, task.RunID)
 		if err != nil {
 			return err

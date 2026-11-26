@@ -3143,23 +3143,30 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
 - **`writer_class` picks the class a project's writers run on.** It is
   `cordoned_host_process` (the cordoned run, the default when unset) or
   `fresh_vm_read_only_volume_handoff` (warded); any other class is refused.
-  A task can also require warded (Require A Task's Writers Run Warded). No
-  writer admission reads either yet; #3472 routes writers by them.
+  A task can also require warded (Require A Task's Writers Run Warded).
+  Each writer admission resolves its class from both (#3472).
 - **`cordoned_launches` caps concurrent cordoned launches.** Its one
   field, `max_concurrent`, is at least 1. With the section unset or
   cleared, no cordoned launch starts (Bound Container Memory). The
   deputy's `settings.json` has no key for it, so set it with `set`.
-- **A change takes effect at the next start.** Every `set` prints
-  `takes_effect`. The installed daemon loads the records when it starts,
-  so `freesided execution resume` restarts it on them, until the project
-  gates read them while it runs (#3209). The exception is
-  `cordoned_launches`, which each admission reads from the store, so a
-  set applies from the next admission.
+- **Some project sections apply while the daemon runs.** Every `set`
+  prints `takes_effect`. The path, publish, and hand-back gates read the
+  task's project's current record at each gate (#3209), so
+  `allowed_paths`, `repository`, and `hand_back_label` apply at each
+  task's next gate. The tip watch and readiness still follow the
+  repository the daemon started with, so until its next start a
+  `repository` edit holds new admissions with a repository mismatch.
+  `writer_class` and `cordoned_launches` apply at the next admission,
+  which reads them from the store. Every other section, `approved_recipe`,
+  `agent_image`, and `enabled` included, takes effect at the daemon's next
+  start, so `freesided execution resume` restarts it on them.
 - **A run re-checks what's stored.** The loader a run composes from folds
   both scopes, refuses a scope that lacks a required section and names it,
   and re-runs every check above against current policy, with the
   repository against the project's `projects` row, so a value stored under
-  an older policy fails closed rather than reaching a run.
+  an older policy fails closed rather than reaching a run. Each gate that
+  reads a project's record runs the project half of those checks again,
+  and holds the task when the project has no record or its record fails.
 
 **Import a deputy settings file once.** `settings import` turns a deputy
 `settings.json` into both scopes' records, one revision per set section,
@@ -3173,9 +3180,10 @@ when the instance or the file's project already has a revision, other than
 an execution pause, a cordoned launch cap, or a switch, which the file
 doesn't carry;
 change sections with `set` after that. It prints both head revisions, the
-project, `takes_effect`, and `not_imported`: the file's keys a run takes
-from its launch instead of the records, except `repository.base_sha`,
-which only preflight reads (`version`, `listen`,
+project, `takes_effect` (the instance sections', and each project
+section's as a `set` of it reports), and `not_imported`: the file's keys
+a run takes from its launch instead of the records, except
+`repository.base_sha`, which only preflight reads (`version`, `listen`,
 `repository.base_sha`, `repository.checkout`, the `agent_tree` adoption
 inputs, `writers`, the review and judgment models and efforts, `prod`, and
 `memory_budget_mib`).

@@ -113,8 +113,8 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 			VendorInstructions: engine.VendorInstructionConfig{Vendor: domain.AgentVendorClaude, Delivery: domain.VendorInstructionDeliveryAppendFile, HostPath: "/nonexistent/client-fixture-CLAUDE.md"},
 			Base:               domain.BaseRevision{Repo: h.profile.Repo, RepositoryID: h.profile.RepositoryID, BaseRef: "main", BaseSHA: h.baseSHA},
 			Workspace:          "client-specification", AuthIdentityID: &identity,
-			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		}, func() time.Time { return h.now }),
+		wardedProject(domain.BaseRevision{Repo: h.profile.Repo, RepositoryID: h.profile.RepositoryID, BaseRef: "main"}),
 		specification,
 	)
 	if err != nil {

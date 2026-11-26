@@ -31,7 +31,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/exportscan"
-	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/macverify"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -689,16 +688,15 @@ func isPermanentSeedCredentialError(err error) bool {
 type ClaudeComposition struct {
 	// work runs the daemon's own proof passes and probes under memory
 	// reservations.
-	work                   daemonWorkRunner
-	driver                 *claude.Driver
-	Backend                *ward.Backend
-	authority              *publish.InstallationAuthorityStore
-	publicationTransport   engine.PublicationTransport
-	publisher              *publish.Publisher
-	FollowUpFiler          *publish.FollowUpFiler
-	IssueCommentDispatcher *publish.IssueCommentDispatcher
-	ReviewReplier          *publish.ExternalReviewReplier
-	// HandBackLabels is nil when no hand-back label is configured.
+	work                            daemonWorkRunner
+	driver                          *claude.Driver
+	Backend                         *ward.Backend
+	authority                       *publish.InstallationAuthorityStore
+	publicationTransport            engine.PublicationTransport
+	publisher                       *publish.Publisher
+	FollowUpFiler                   *publish.FollowUpFiler
+	IssueCommentDispatcher          *publish.IssueCommentDispatcher
+	ReviewReplier                   *publish.ExternalReviewReplier
 	HandBackLabels                  *publish.HandBackLabelRemover
 	CheckReruns                     *publish.CheckRerunner
 	reviewSource                    exec.ReviewSource
@@ -717,6 +715,7 @@ type ClaudeComposition struct {
 	specificationPromptPackage domain.Digest
 	remediationPromptPackage   domain.Digest
 	derive                     engine.AdmissionDerivation
+	projectAuthority           engine.ProjectAuthoritySource
 	// selectImage selects each unattended writer attempt's image from the
 	// admitted-image pointer, and bindImageUpkeep gives it image upkeep's
 	// pending-resolution lookup once upkeep is composed. Both are nil for
@@ -748,6 +747,9 @@ type ClaudeComposition struct {
 	// mergeBase reads a head's merge base with the target branch through the
 	// same reconciler, for hand-back intake (issue #3160).
 	mergeBase func(ctx context.Context, repo, baseRef, head string) (string, error)
+	// handBackLabels names each project's hand-back label for intake, from
+	// the same project authority the gates read (#3209).
+	handBackLabels publish.HandBackLabelLookup
 	// observeLabelIssues is the label-intake loop's conditional read of the open
 	// issues carrying one initiator label, through the same reconciler (#659).
 	observeLabelIssues labelIssueObserver
@@ -1207,7 +1209,7 @@ func composeClaudeDriver(
 		ImportStarts: ExportRecorder{Store: st, usage: usage, logger: logger},
 		Outcomes:     ExportRecorder{Store: st, usage: usage, logger: logger},
 		Authority: admissionauth.Authority{
-			Store: st, Blobs: blobs, AllowedPaths: slices.Clone(cfg.AllowedPaths),
+			Store: st, Blobs: blobs, Projects: projectAuthoritySource(cfg),
 			CommitAuthors: commitAuthors,
 			StartAuthors:  admissionauth.NewCommitAuthorCache(),
 			// An attempt admitted under configuration A starts only while
@@ -1244,9 +1246,6 @@ func composeClaudeDriver(
 				return err
 			})
 			return hosts, err
-		},
-		Import: importer.Options{
-			Policy: importer.Policy{Allowlist: cfg.AllowedPaths},
 		},
 		Preparation:    preparation,
 		Now:            func() time.Time { return time.Now().UTC() },
@@ -1285,9 +1284,10 @@ func composeClaudeDriver(
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second task
 		// is submitted.
-		Agents:            agents,
-		SettingsRevisions: cfg.SettingsRevisions,
-		WriterClass:       cfg.WriterClass,
+		Agents: agents,
+		// The project revision and writer class come from each
+		// admission's project authority read (#3209).
+		InstanceSettingsRevision: instanceSettingsRevision(cfg.SettingsRevisions),
 	}
 	follower = newConformanceFollower(followerConfig{
 		Ledger: backend,
@@ -1309,8 +1309,7 @@ func composeClaudeDriver(
 	)
 	if cfg.OperatingMode == domain.ModeUnattended {
 		selector := &claudeImageSelector{
-			store: st, repo: cfg.Repo, repositoryID: cfg.RepositoryID,
-			backend: backend, base: baseInputs, follower: follower,
+			store: st, backend: backend, base: baseInputs, follower: follower,
 		}
 		selectImage, bindImageUpkeep = selector.selectImage, selector.bindImageUpkeep
 	}
@@ -1342,7 +1341,7 @@ func composeClaudeDriver(
 		observeIssue: func(obsCtx context.Context, repo string, number int) (publish.IssueObservation, error) {
 			return reconciler.ReconcileIssue(obsCtx, repo, number)
 		},
-		mergeBase: reconciler.MergeBase,
+		mergeBase: reconciler.MergeBase, handBackLabels: handBackLabelLookup(projectAuthoritySource(cfg)),
 		observeLabelIssues: func(obsCtx context.Context, repo, label string) (publish.LabelIssuesObservation, error) {
 			return reconciler.ReconcileLabelIssues(obsCtx, repo, label)
 		},
@@ -1380,7 +1379,8 @@ func composeClaudeDriver(
 		env:                             env,
 		specificationPromptPackage:      specificationPromptPackage,
 		remediationPromptPackage:        remediationPromptPackage,
-		derive:                          claudeAdmissionDerivation(st, cfg),
+		derive:                          claudeAdmissionDerivation(st),
+		projectAuthority:                projectAuthoritySource(cfg),
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
 		// The cordon's pass follows the ward's; it returns only a record
@@ -1829,7 +1829,7 @@ func runClaudeConformance(
 	// Each pass seeds at the tip the tip watch last stored, the base a new
 	// run would start at now, so a pass proves a workspace like the next
 	// one admission seeds.
-	base, err := storedRepositoryTip(ctx, st, cfg)
+	base, err := storedRepositoryTip(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef)
 	if err != nil {
 		return fmt.Errorf("conformance base: %w", err)
 	}
@@ -1906,17 +1906,19 @@ func runReservedConformance(
 // The workspace must be derived per attempt (each ward handoff owns its own
 // volume) and is derived exactly as the driver derives it, so the gate
 // creates the volume the admission recorded. The base is the tip the tip
-// watch last stored for the configured repository and branch
+// watch last stored for the task's project's repository and branch
 // (observeRepositoryTip), which a start stores when none is. It is where a
 // run that has not been admitted starts: the engine records it on the run
 // with the run's first admission and admits every later attempt of the run
 // at that recorded base instead, then applies its three exceptions (see
-// engine.AdmissionDerivation). With no stored tip for this repository and
-// branch the attempt holds as input_unavailable rather than starting
-// anywhere.
-func claudeAdmissionDerivation(st *store.Store, cfg ClaudeDriverConfig) engine.AdmissionDerivation {
-	return func(ctx context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
-		tip, err := storedRepositoryTip(ctx, st, cfg)
+// engine.AdmissionDerivation). With no stored tip for the project's
+// repository the attempt holds as input_unavailable rather than starting
+// anywhere; a stored tip of another repository or branch, which is what a
+// project's repository edit meets until the tip watch follows it (#3210),
+// holds it as a repository identity mismatch.
+func claudeAdmissionDerivation(st *store.Store) engine.AdmissionDerivation {
+	return func(ctx context.Context, id domain.InvocationID, project engine.ProjectAuthority) (string, domain.BaseRevision, error) {
+		tip, err := storedRepositoryTip(ctx, st, project.Repo, project.RepositoryID, project.BaseRef)
 		if err != nil {
 			return "", domain.BaseRevision{}, err
 		}
@@ -1965,7 +1967,7 @@ func startupRepositoryTip(
 ) (domain.BaseRevision, error) {
 	sha, err := observe(ctx, cfg.Repo, cfg.BaseRef)
 	if err != nil {
-		stored, storedErr := storedRepositoryTip(ctx, st, cfg)
+		stored, storedErr := storedRepositoryTip(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef)
 		if storedErr != nil {
 			return domain.BaseRevision{}, errors.Join(
 				fmt.Errorf("read the tip of %s@%s: %w", cfg.Repo, cfg.BaseRef, err), storedErr)
@@ -1984,27 +1986,43 @@ func startupRepositoryTip(
 	return domain.BaseRevision{Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: sha}, nil
 }
 
-// storedRepositoryTip reads the tip observation stored for cfg's repository
-// and branch. A missing observation, or one for another repository or
-// branch, is exec.ErrInputUnavailable.
-func storedRepositoryTip(ctx context.Context, st *store.Store, cfg ClaudeDriverConfig) (domain.BaseRevision, error) {
+// instanceSettingsRevision is the composed instance settings revision an
+// admission records beside its project's, 0 for a configuration composed
+// from a settings file or flags.
+func instanceSettingsRevision(revisions *domain.SettingsRevisions) int {
+	if revisions == nil {
+		return 0
+	}
+	return revisions.Instance
+}
+
+// storedRepositoryTip reads the tip observation stored for repositoryID. A
+// missing observation is exec.ErrInputUnavailable; one that names another
+// repository or branch than repo and baseRef is
+// domain.ErrRepositoryIdentityMismatch.
+func storedRepositoryTip(ctx context.Context, st *store.Store, repo string, repositoryID int64, baseRef string) (domain.BaseRevision, error) {
 	var (
 		observation domain.RepositoryTipObservation
 		found       bool
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		observation, found, err = tx.GetRepositoryTipObservation(ctx, cfg.RepositoryID)
+		observation, found, err = tx.GetRepositoryTipObservation(ctx, repositoryID)
 		return err
 	}); err != nil {
 		return domain.BaseRevision{}, fmt.Errorf("read the observed tip: %w", err)
 	}
-	if !found || observation.Repository != cfg.Repo || observation.Branch != cfg.BaseRef {
+	if !found {
 		return domain.BaseRevision{}, fmt.Errorf("no observed tip of %s@%s: %w",
-			cfg.Repo, cfg.BaseRef, exec.ErrInputUnavailable)
+			repo, baseRef, exec.ErrInputUnavailable)
+	}
+	if observation.Repository != repo || observation.Branch != baseRef {
+		return domain.BaseRevision{}, fmt.Errorf("the observed tip of repository %d is %s@%s, not %s@%s: %w",
+			repositoryID, observation.Repository, observation.Branch, repo, baseRef,
+			domain.ErrRepositoryIdentityMismatch)
 	}
 	return domain.BaseRevision{
-		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: observation.TipSHA,
+		Repo: repo, RepositoryID: repositoryID, BaseRef: baseRef, BaseSHA: observation.TipSHA,
 	}, nil
 }
 
@@ -2066,14 +2084,14 @@ func claudeTransport(
 		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	var sweepers forgeSweepers
-	if cfg.HandBackLabel != "" {
-		// The remover's own token source mints only the label grant, so the
-		// publication token never reaches the label call.
-		sweepers.handBackLabels, err = publish.NewHandBackLabelRemover(st, publish.NewHandBackLabelTokenSource(minter, time.Now),
-			client, DefaultGitHubAPIBase, cfg.HandBackLabel)
-		if err != nil {
-			return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
-		}
+	// The remover's own token source mints only the label grant, so the
+	// publication token never reaches the label call. It runs whether or
+	// not a project names a label now, since an edit can name one later
+	// (#3209); a pass over projects that name none sends nothing.
+	sweepers.handBackLabels, err = publish.NewHandBackLabelRemover(st, publish.NewHandBackLabelTokenSource(minter, time.Now),
+		client, DefaultGitHubAPIBase, handBackLabelLookup(projectAuthoritySource(cfg)))
+	if err != nil {
+		return nil, nil, nil, followUpPosters{}, nil, nil, nil, forgeSweepers{}, nil, err
 	}
 	// The rerunner's token holds only actions:write, which publication
 	// never gets (#3598).
@@ -2138,7 +2156,6 @@ func claudeTransport(
 // forgeSweepers are the minute sweepers that each send one kind of GitHub
 // write on a token narrowed to it.
 type forgeSweepers struct {
-	// handBackLabels is nil when no hand-back label is configured.
 	handBackLabels *publish.HandBackLabelRemover
 	checkReruns    *publish.CheckRerunner
 }

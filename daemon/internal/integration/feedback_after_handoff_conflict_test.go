@@ -399,7 +399,7 @@ func TestReturnToAgentWithoutAHandoffConflictStartsAtTheRunBase(t *testing.T) {
 		t, productionCrashSeams{}, true, map[domain.Digest]bool{p.recipeD: true},
 		domain.ModeUnattended, false,
 		engine.WithAdmissionDerivation(func(
-			_ context.Context, _ domain.InvocationID,
+			_ context.Context, _ domain.InvocationID, _ engine.ProjectAuthority,
 		) (string, domain.BaseRevision, error) {
 			return "freeside-handoff-production-publication-ws", domain.BaseRevision{
 				Repo: fakePublicationRepo, RepositoryID: p.profile.RepositoryID,
@@ -432,7 +432,7 @@ func TestReturnToAgentAfterAHandoffConflictRefusesAnotherRepository(t *testing.T
 				t, productionCrashSeams{}, true, map[domain.Digest]bool{p.recipeD: true},
 				domain.ModeUnattended, false,
 				engine.WithAdmissionDerivation(func(
-					_ context.Context, _ domain.InvocationID,
+					_ context.Context, _ domain.InvocationID, _ engine.ProjectAuthority,
 				) (string, domain.BaseRevision, error) {
 					base := domain.BaseRevision{
 						Repo: fakePublicationRepo, RepositoryID: p.profile.RepositoryID,

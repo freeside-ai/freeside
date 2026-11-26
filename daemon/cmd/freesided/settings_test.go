@@ -58,9 +58,14 @@ func exerciseSettingsSetAndShow(t *testing.T, ctx context.Context, dbPath string
 	if set.Revision.Revision != 1 || set.Revision.SetBy != setBy || set.TakesEffect != settingsTakeEffect {
 		t.Fatalf("set result %+v", set)
 	}
-	if _, err := runSettings(t, ctx, "set", "-db", dbPath, "-project", "project-widgets",
-		"-section", "allowed_paths", "-value", `["src/**"]`); err != nil {
+	out, err = runSettings(t, ctx, "set", "-db", dbPath, "-project", "project-widgets",
+		"-section", "allowed_paths", "-value", `["src/**"]`)
+	if err != nil {
 		t.Fatal(err)
+	}
+	var pathsSet settingsSetResult
+	if err := json.Unmarshal([]byte(out), &pathsSet); err != nil || pathsSet.TakesEffect != nextGateTakeEffect {
+		t.Fatalf("allowed_paths set result %q (%v), want it to apply %s", out, err, nextGateTakeEffect)
 	}
 
 	out, err = runSettings(t, ctx, "show", "-db", dbPath)
@@ -159,6 +164,26 @@ func exerciseSettingsSetAndShow(t *testing.T, ctx context.Context, dbPath string
 	}
 }
 
+// TestProjectSectionTakesEffect: a set of a project section says when it
+// applies, one row per answer (#3209). allowed_paths stands for the sections
+// the per-task gates read (hand_back_label too), the repository adds that
+// its loops follow at the next start, writer_class applies at the next
+// admission, and agent_image stands for the sections composed at start
+// (approved_recipe and enabled too).
+func TestProjectSectionTakesEffect(t *testing.T) {
+	t.Parallel()
+	for section, want := range map[domain.ProjectSettingsSection]string{
+		domain.ProjectSectionAllowedPaths: nextGateTakeEffect,
+		domain.ProjectSectionRepository:   repositoryTakeEffect,
+		domain.ProjectSectionWriterClass:  nextAdmissionTakeEffect,
+		domain.ProjectSectionAgentImage:   settingsTakeEffect,
+	} {
+		if got := settingsSetTakesEffect("project-widgets", string(section)); got != want {
+			t.Errorf("%s takes effect %q, want %q", section, got, want)
+		}
+	}
+}
+
 // TestSettingsSetCordonedLaunchesAppliesAtTheNextAdmission: a set of the
 // cordoned launch cap reports that it applies at the next admission, not
 // the daemon's next start, and a cap below one is refused.
@@ -175,8 +200,8 @@ func TestSettingsSetCordonedLaunchesAppliesAtTheNextAdmission(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &set); err != nil {
 		t.Fatalf("decode %q: %v", out, err)
 	}
-	if set.TakesEffect != cordonedLaunchesTakeEffect {
-		t.Fatalf("takes effect %q, want %q", set.TakesEffect, cordonedLaunchesTakeEffect)
+	if set.TakesEffect != nextAdmissionTakeEffect {
+		t.Fatalf("takes effect %q, want %q", set.TakesEffect, nextAdmissionTakeEffect)
 	}
 	if _, err := runSettings(t, t.Context(), "set", "-db", dbPath, "-section", "cordoned_launches",
 		"-value", `{"max_concurrent":0}`); err == nil || !strings.Contains(err.Error(), "max_concurrent") {
@@ -249,6 +274,12 @@ func TestSettingsImportYieldsTheFileSettings(t *testing.T) {
 			if result.Project != "project-widgets" || result.InstanceRevision == 0 || result.ProjectRevision == 0 ||
 				!slices.Contains(result.NotImported, "listen") || !slices.Contains(result.NotImported, "writers") {
 				t.Fatalf("import result %+v", result)
+			}
+			// Each imported project section says when an edit of it
+			// applies, as a set of it would.
+			if result.TakesEffect.Instance != settingsTakeEffect || !slices.Contains(result.TakesEffect.Project,
+				settingsSectionEffect{Section: domain.ProjectSectionAllowedPaths, TakesEffect: nextGateTakeEffect}) {
+				t.Fatalf("import takes effect %+v", result.TakesEffect)
 			}
 
 			loaded, err := loadDeputySettings(settingsPath)

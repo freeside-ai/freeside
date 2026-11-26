@@ -247,6 +247,7 @@ func ComposeClaudeWorkflow(
 		Backend: claudeWiring.Backend, AdmissionFloor: AdmissionFloor(cfg.Claude.OperatingMode),
 		Admission: claudeWiring.env, AdmissionNow: func() time.Time { return time.Now().UTC() },
 		Derive:           claudeWiring.derive,
+		ProjectAuthority: claudeWiring.projectAuthority,
 		SelectImage:      claudeWiring.selectImage,
 		HostVerification: claudeWiring.hostVerification,
 		Cordon:           claudeWiring.cordonWriters(),
@@ -573,7 +574,7 @@ func ComposeClaudeLoops(
 		readJobLog:       claudeWiring.readJobLog,
 		excerpts:         blobs,
 		appBotIdentity:   claudeWiring.appBotIdentity,
-		handBackLabel:    cfg.Claude.HandBackLabel,
+		handBackLabels:   claudeWiring.handBackLabels,
 		mergeBase:        claudeWiring.mergeBase,
 		evictConcluded:   claudeWiring.evictConcluded,
 		tipWatch: repositoryTipWatch{

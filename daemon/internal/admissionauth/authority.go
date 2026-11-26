@@ -41,10 +41,15 @@ import (
 //     that configuration's current durable record still authorizes it. A
 //     cordoned admission is checked against the cordon, a warded one against
 //     the ward, so neither starts on the other's configuration.
+//   - Under current policy, the run's project authority (Projects), read in
+//     the same transaction: the admitted base must name the project's
+//     current repository, repository ID, and base ref
+//     (domain.ErrRepositoryIdentityMismatch), so a task of one project never
+//     starts or imports against another's repository.
 //   - The resolved policy's digest against the admission and, under current
-//     policy, its path allowlist against this daemon's configured
-//     AllowedPaths (AdmittedPathAllowlist): every recorded pattern must
-//     still be configured, and the run keeps its recorded paths.
+//     policy, its path allowlist against the project's current allowed
+//     paths (AdmittedPathAllowlist): every recorded pattern must still be
+//     allowed, and the run keeps its recorded paths.
 //   - The start spec against the admission.
 //
 // AuthenticateStart and AuthenticateImport then re-check the invocation's
@@ -68,13 +73,17 @@ type Authority struct {
 	// Blobs serves the approved specification the fallback commit message
 	// derives from; import refuses without it.
 	Blobs *signet.BlobStore
-	// AllowedPaths is this daemon's configured path allowlist. At start and
+	// Projects reads a run's project authority: its repository and allowed
+	// paths as the project's settings hold them now, so an edit reaches the
+	// run's next start or import without a restart (#3209). At start and
 	// import, every pattern a run's resolved paths policy recorded must
-	// appear in it exactly (AdmittedPathAllowlist): a wider edit lets an
-	// in-flight run continue under its own recorded paths, and a narrower
-	// edit that removes a recorded pattern refuses the run until the pattern
-	// is restored. Intake keeps exact equality (ResolvedPathAllowlist).
-	AllowedPaths []string
+	// appear in the project's allowed paths exactly (AdmittedPathAllowlist):
+	// a wider edit lets an in-flight run continue under its own recorded
+	// paths, and a narrower edit that removes a recorded pattern refuses the
+	// run until the pattern is restored. Intake keeps exact equality
+	// (ResolvedPathAllowlist). Required for start and import; terminal
+	// replay reads no current policy and never calls it.
+	Projects engine.ProjectAuthoritySource
 	// CommitAuthors resolves the live GitHub App identity; without it a
 	// production commit-author claim is refused.
 	CommitAuthors CommitAuthorResolver
@@ -225,8 +234,12 @@ func (a Authority) admission(
 			return err
 		}
 		if requireCurrent {
+			var project engine.ProjectAuthority
+			if project, err = a.currentProject(ctx, tx, admission); err != nil {
+				return err
+			}
 			allowedPaths, err = AdmittedPathAllowlist(
-				policy, admission.PolicyDigest, a.AllowedPaths,
+				policy, admission.PolicyDigest, project.AllowedPaths,
 			)
 		} else {
 			allowedPaths, err = recordedPathAllowlist(policy, admission.PolicyDigest)
@@ -242,6 +255,35 @@ func (a Authority) admission(
 			admission.ID, domain.ErrParentKeyMismatch)
 	}
 	return admission, allowedPaths, nil
+}
+
+// currentProject reads the admitted run's project authority in tx and
+// refuses an admission whose base no longer names the project's repository,
+// repository ID, and base ref.
+func (a Authority) currentProject(
+	ctx context.Context, tx *store.ReadTx, admission domain.ExecutionAdmission,
+) (engine.ProjectAuthority, error) {
+	if a.Projects == nil {
+		return engine.ProjectAuthority{}, fmt.Errorf("admission %s: no project authority to check against: %w",
+			admission.ID, engine.ErrProjectSettingsRefused)
+	}
+	run, err := tx.GetRun(ctx, admission.RunID)
+	if err != nil {
+		return engine.ProjectAuthority{}, err
+	}
+	project, err := a.Projects(ctx, tx, run.ProjectID)
+	if err != nil {
+		return engine.ProjectAuthority{}, err
+	}
+	base := admission.Base
+	if base.Repo != project.Repo || base.RepositoryID != project.RepositoryID || base.BaseRef != project.BaseRef {
+		return engine.ProjectAuthority{}, fmt.Errorf(
+			"admission %s base %s#%d@%s, project %q names %s#%d@%s: %w",
+			admission.ID, base.Repo, base.RepositoryID, base.BaseRef,
+			run.ProjectID, project.Repo, project.RepositoryID, project.BaseRef,
+			domain.ErrRepositoryIdentityMismatch)
+	}
+	return project, nil
 }
 
 // requireRunnableConfiguration re-checks, for an unattended admission, that

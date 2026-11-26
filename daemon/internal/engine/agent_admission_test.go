@@ -248,7 +248,6 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 					Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 				},
 				Workspace: "workspace-1", Agents: &selection,
-				WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 				// WithAdmission defaults this set; a directly built admitter
 				// states it.
 				EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
@@ -256,6 +255,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 			now: func() time.Time { return agentTestAt },
 		},
 	}
+	setWriterClass(f.engine, new(domain.BackendFreshVMReadOnlyVolumeHandoff))
 	for name, role := range map[string]domain.RoleName{
 		agentTestWriterAgent: domain.RoleImplementer, agentTestSpecifierAgent: domain.RoleSpecifier,
 	} {

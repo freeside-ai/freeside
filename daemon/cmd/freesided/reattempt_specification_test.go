@@ -100,8 +100,8 @@ func newFailedSpecification(t *testing.T) failedSpecification {
 				BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 			},
 			Workspace: "workspace-retry", AuthIdentityID: &identity,
-			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		}, func() time.Time { return now }),
+		wardedSubmitProject(),
 		engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
 			PromptPackageDigest: promptDigest,

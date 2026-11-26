@@ -218,12 +218,15 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			// another agent.
 			AuthIdentityID: nil,
 			Agents:         &agents,
-			// The scenario composes no cordon, so its writers run warded
-			// on its fake stage driver.
-			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		},
+		// The scenario composes no cordon, so its writers run warded on its
+		// fake stage driver.
+		ProjectAuthority: engine.FixedProjectAuthority(engine.ProjectAuthority{
+			Repo: scenarioRepo, RepositoryID: scenarioRepositoryID, BaseRef: scenarioBaseRef,
+			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		}),
 		AdmissionNow: now,
-		Derive: func(context.Context, domain.InvocationID) (string, domain.BaseRevision, error) {
+		Derive: func(context.Context, domain.InvocationID, engine.ProjectAuthority) (string, domain.BaseRevision, error) {
 			return "scenario-workspace", domain.BaseRevision{
 				Repo: scenarioRepo, RepositoryID: scenarioRepositoryID,
 				BaseRef: scenarioBaseRef, BaseSHA: world.BaseSHA,

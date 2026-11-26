@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -23,15 +24,19 @@ func recordTipObservation(t *testing.T, st *store.Store, observation domain.Repo
 	}
 }
 
-// The derived base is the tip the tip watch stored for the configured
-// repository and branch, read on every attempt, and an attempt with no such
-// tip holds as input_unavailable instead of starting anywhere.
+// The derived base is the tip the tip watch stored for the task's project's
+// repository and branch, read on every attempt. An attempt with no such tip
+// holds as input_unavailable instead of starting anywhere, and one whose
+// stored tip names another branch (a project's base_ref edit the tip watch
+// hasn't followed) holds as a repository identity mismatch.
 func TestClaudeAdmissionDerivationReadsTheStoredTip(t *testing.T) {
 	t.Parallel()
 	st := storetest.Open(t, t.TempDir()+"/freesided.db", store.Options{})
 	t.Cleanup(func() { _ = st.Close() })
-	cfg := ClaudeDriverConfig{Repo: "owner/repo", RepositoryID: 7, BaseRef: "main"}
-	derive := claudeAdmissionDerivation(st, cfg)
+	project := engine.ProjectAuthority{Repo: "owner/repo", RepositoryID: 7, BaseRef: "main"}
+	derive := func(ctx context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
+		return claudeAdmissionDerivation(st)(ctx, id, project)
+	}
 
 	if _, _, err := derive(t.Context(), "inv-1"); !errors.Is(err, exec.ErrInputUnavailable) {
 		t.Fatalf("no stored tip: err = %v, want ErrInputUnavailable", err)
@@ -42,8 +47,8 @@ func TestClaudeAdmissionDerivationReadsTheStoredTip(t *testing.T) {
 		RepositoryID: 7, Repository: "owner/repo", Branch: "release",
 		TipSHA: "1111111111111111111111111111111111111111", ObservedAt: observed,
 	})
-	if _, _, err := derive(t.Context(), "inv-1"); !errors.Is(err, exec.ErrInputUnavailable) {
-		t.Fatalf("tip of another branch: err = %v, want ErrInputUnavailable", err)
+	if _, _, err := derive(t.Context(), "inv-1"); !errors.Is(err, domain.ErrRepositoryIdentityMismatch) {
+		t.Fatalf("tip of another branch: err = %v, want ErrRepositoryIdentityMismatch", err)
 	}
 
 	for _, sha := range []string{"2222222222222222222222222222222222222222", "3333333333333333333333333333333333333333"} {
@@ -57,6 +62,33 @@ func TestClaudeAdmissionDerivationReadsTheStoredTip(t *testing.T) {
 		want := domain.BaseRevision{Repo: "owner/repo", RepositoryID: 7, BaseRef: "main", BaseSHA: sha}
 		if base != want || workspace != claude.WorkspaceFor("inv-1") {
 			t.Fatalf("derived %q at %+v, want %q at %+v", workspace, base, claude.WorkspaceFor("inv-1"), want)
+		}
+	}
+}
+
+// Each task derives its base from its own project's repository: with two
+// projects' tips stored, a task of one is never based on the other's.
+func TestClaudeAdmissionDerivationReadsTheTasksProject(t *testing.T) {
+	t.Parallel()
+	st := storetest.Open(t, t.TempDir()+"/freesided.db", store.Options{})
+	t.Cleanup(func() { _ = st.Close() })
+	observed := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	projects := map[string]engine.ProjectAuthority{
+		"1111111111111111111111111111111111111111": {ProjectID: "project-a", Repo: "owner/a", RepositoryID: 7, BaseRef: "main"},
+		"2222222222222222222222222222222222222222": {ProjectID: "project-b", Repo: "owner/b", RepositoryID: 8, BaseRef: "trunk"},
+	}
+	for sha, project := range projects {
+		recordTipObservation(t, st, domain.RepositoryTipObservation{
+			RepositoryID: project.RepositoryID, Repository: project.Repo, Branch: project.BaseRef,
+			TipSHA: sha, ObservedAt: observed,
+		})
+	}
+	derive := claudeAdmissionDerivation(st)
+	for sha, project := range projects {
+		_, base, err := derive(t.Context(), "inv-1", project)
+		want := domain.BaseRevision{Repo: project.Repo, RepositoryID: project.RepositoryID, BaseRef: project.BaseRef, BaseSHA: sha}
+		if err != nil || base != want {
+			t.Fatalf("%s derives (%+v, %v), want %+v", project.ProjectID, base, err, want)
 		}
 	}
 }
@@ -117,7 +149,7 @@ func TestStartupRepositoryTip(t *testing.T) {
 			if got := stored(t, st); got.Branch != "main" || got.TipSHA != remote || got.UpkeepTipSHA != stale {
 				t.Fatalf("stored %+v, want main at %s with upkeep still at %s", got, remote, stale)
 			}
-			if derived, err := storedRepositoryTip(t.Context(), st, cfg); err != nil || derived != want {
+			if derived, err := storedRepositoryTip(t.Context(), st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef); err != nil || derived != want {
 				t.Fatalf("admission derives %+v, %v, want the tip start stored", derived, err)
 			}
 		})
@@ -144,7 +176,7 @@ func TestStartupRepositoryTip(t *testing.T) {
 		if _, err := startupRepositoryTip(t.Context(), st, cfg, observe, now, logger); !errors.Is(err, failure) {
 			t.Fatalf("start = %v, want the read failure", err)
 		}
-		if _, err := storedRepositoryTip(t.Context(), st, cfg); !errors.Is(err, exec.ErrInputUnavailable) {
+		if _, err := storedRepositoryTip(t.Context(), st, cfg.Repo, cfg.RepositoryID, cfg.BaseRef); !errors.Is(err, exec.ErrInputUnavailable) {
 			t.Fatalf("after a failed start the stored tip = %v, want none", err)
 		}
 	})

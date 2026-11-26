@@ -85,12 +85,9 @@ func checkRunSettings(instanceRecord domain.InstanceSettingsRecord, projectRecor
 	if err := CheckInstanceSettings(instance); err != nil {
 		return RunSettings{}, fmt.Errorf("instance settings: %w", err)
 	}
-	project, err := projectRecord.Settings()
+	project, err := checkProjectRecord(projectRecord)
 	if err != nil {
 		return RunSettings{}, err
-	}
-	if err := CheckProjectSettings(project); err != nil {
-		return RunSettings{}, fmt.Errorf("project %q settings: %w", projectRecord.ProjectID, err)
 	}
 	stop, stall, err := instance.Timeouts.Durations()
 	if err != nil {
@@ -101,6 +98,23 @@ func checkRunSettings(instanceRecord domain.InstanceSettingsRecord, projectRecor
 		ProjectID: projectRecord.ProjectID, Project: project, ProjectRevision: projectRecord.Revision,
 		WriterStopTimeout: stop, WriterStallInterval: stall,
 	}, nil
+}
+
+// checkProjectRecord is the project half of the settings gate on a folded
+// record: it refuses a record that lacks a required section, naming it, and
+// re-checks every section against current policy (CheckProjectSettings).
+// The run settings loader and the per-task project authority
+// (StoredProjectAuthority) share it, so a start and a gate refuse the same
+// records.
+func checkProjectRecord(record domain.ProjectSettingsRecord) (domain.ProjectSettings, error) {
+	project, err := record.Settings()
+	if err != nil {
+		return domain.ProjectSettings{}, err
+	}
+	if err := CheckProjectSettings(project); err != nil {
+		return domain.ProjectSettings{}, fmt.Errorf("project %q settings: %w", record.ProjectID, err)
+	}
+	return project, nil
 }
 
 // RunLaunch is what composing the Claude driver needs beyond the stored

@@ -168,7 +168,7 @@ func TestActiveResourceCheckFailureStartsNothing(t *testing.T) {
 			check.FailureClass = &tc.class
 			reconciler, _, reads := checkFailureReconciler(t, st, &check, map[int64]string{100: "FAIL"}, nil)
 			if tc.handBack {
-				reconciler.handBackLabel = handBackTestLabel
+				reconciler.handBackLabels = staticHandBackLabel(handBackTestLabel)
 				reconciler.mergeBase = func(context.Context, string, string, string) (string, error) {
 					return handBackTestMergeBase, nil
 				}

@@ -15,6 +15,11 @@ import (
 
 const handBackTestLabel = "needs rework"
 
+// staticHandBackLabel names label for every project.
+func staticHandBackLabel(label string) publish.HandBackLabelLookup {
+	return func(context.Context, *store.ReadTx, domain.ProjectID) (string, error) { return label, nil }
+}
+
 // handBackTestMergeBase is the merge base the fake forge reports for the
 // handed-back head: not the base the last review used, as after a rebase.
 var handBackTestMergeBase = strings.Repeat("e", 40)
@@ -37,7 +42,7 @@ func handBackReconciler(st *store.Store, labels []string, comment bool) (*Active
 		observed.Labels = labels
 		return observed, nil
 	}
-	reconciler.handBackLabel = handBackTestLabel
+	reconciler.handBackLabels = staticHandBackLabel(handBackTestLabel)
 	var reads []string
 	reconciler.mergeBase = func(_ context.Context, repo, baseRef, head string) (string, error) {
 		reads = append(reads, repo+" "+baseRef+"..."+head)
@@ -92,6 +97,34 @@ func TestActiveResourceStartsHandBackCycle(t *testing.T) {
 	}
 	if len(*reads) != 1 {
 		t.Fatalf("a pass with no cycle due read the merge base again: %q", *reads)
+	}
+}
+
+// TestActiveResourceHandBackReadsTheRunsProjectLabel: the label that marks
+// a hand-back is the one the run's project names (#3209). While only another
+// project names the label on the pull request, its head change is an
+// ordinary one: no hand-back cycle starts and no merge base is read.
+func TestActiveResourceHandBackReadsTheRunsProjectLabel(t *testing.T) {
+	t.Parallel()
+	st := schedTestStore(t)
+	item := reentryReadyItem(t, st, "run-hand-back-other-project")
+	armActiveTestSchedules(t, st, item)
+	activateExternalTestProfile(t, st, activeResourceTestTime.Add(-time.Hour), externalTestMaintainer())
+	reconciler, reads := handBackReconciler(st, []string{handBackTestLabel}, true)
+	reconciler.handBackLabels = func(_ context.Context, _ *store.ReadTx, project domain.ProjectID) (string, error) {
+		if project == "project-other" {
+			return handBackTestLabel, nil
+		}
+		return "", nil
+	}
+
+	reconcileClean(t, reconciler, "first pass")
+	reconcileClean(t, reconciler, "second pass")
+	if successor, _ := readReentry(t, st, *item.Subject.RunID); successor != nil && successor.HandsBack() {
+		t.Fatalf("cycle = %+v; want no hand-back for a label only another project names", successor)
+	}
+	if len(*reads) != 0 {
+		t.Fatalf("merge-base reads = %q, want none", *reads)
 	}
 }
 
