@@ -131,8 +131,9 @@ func ValidRunID(runID string) bool { return plainRunID(runID) }
 // RunID alone, so a restarted daemon can rebuild it (#3468).
 type layout struct {
 	// runRoot is RUN_ROOT, the only place the rules reopen: the worktree,
-	// the CLI's config directory, TMPDIR, and mise's state directory.
-	runRoot, worktree, config, tmp, miseState string
+	// the CLI's config directory, TMPDIR, mise's state directory, and the
+	// per-launch tools directory holding the commit-plan shim.
+	runRoot, worktree, config, tmp, miseState, tools string
 	// ctl sits outside runRoot, under a protected root, so the launch can
 	// neither read nor write it.
 	ctl, rules, tag, control, transcript, stderr string
@@ -157,7 +158,7 @@ func layoutFor(runsRoot, runID string) layout {
 	return layout{
 		runRoot: runRoot, worktree: filepath.Join(runRoot, "worktree"),
 		config: filepath.Join(runRoot, "config"), tmp: filepath.Join(runRoot, "tmp"),
-		miseState: filepath.Join(runRoot, "mise-state"), ctl: ctl,
+		miseState: filepath.Join(runRoot, "mise-state"), tools: filepath.Join(runRoot, "tools"), ctl: ctl,
 		rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
 		control: filepath.Join(ctl, "control"), transcript: filepath.Join(ctl, "transcript"),
 		stderr: filepath.Join(ctl, "stderr"), ended: filepath.Join(ctl, "ended.json"),
@@ -181,9 +182,12 @@ func layoutFor(runsRoot, runID string) layout {
 // and cache directories stay the owner's, so a tool one run installs stays
 // shared with later runs.
 func launchEnv(cfg Config, l layout) []string {
+	pathEntries := make([]string, 0, len(cfg.Path)+1)
+	pathEntries = append(pathEntries, l.tools)
+	pathEntries = append(pathEntries, cfg.Path...)
 	return []string{
 		"HOME=" + cfg.Home,
-		"PATH=" + strings.Join(cfg.Path, ":"),
+		"PATH=" + strings.Join(pathEntries, ":"),
 		"TMPDIR=" + l.tmp,
 		"CLAUDE_CONFIG_DIR=" + l.config,
 		"MISE_STATE_DIR=" + l.miseState,
@@ -371,10 +375,13 @@ func (b *Backend) prepare(l layout) error {
 	if err := os.Mkdir(filepath.Dir(l.runRoot), 0o700); err != nil {
 		return fmt.Errorf("cordon: claim launch directory: %w", err)
 	}
-	for _, dir := range []string{l.runRoot, l.config, l.tmp, l.miseState, l.ctl} {
+	for _, dir := range []string{l.runRoot, l.config, l.tmp, l.miseState, l.tools, l.ctl} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			return fmt.Errorf("cordon: create %s: %w", dir, err)
 		}
+	}
+	if err := writeCommitPlanShim(l.tools, b.daemonPath); err != nil {
+		return err
 	}
 	files := []struct {
 		path string
@@ -451,6 +458,34 @@ func writeExclusive(path string, body []byte) error {
 		return fmt.Errorf("cordon: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// writeCommitPlanShim places an executable freeside-commit-plan wrapper in the
+// launch's tools directory that execs the daemon binary's commit-plan verb.
+// Holding ForkLock for reading across write+close prevents a parallel fork in
+// the same process from inheriting the write descriptor (ETXTBSY on Linux).
+func writeCommitPlanShim(toolsDir, daemonPath string) error {
+	path := filepath.Join(toolsDir, "freeside-commit-plan")
+	body := fmt.Sprintf("#!/bin/sh\nexec %s commit-plan \"$@\"\n", shellSingleQuote(daemonPath))
+	syscall.ForkLock.RLock()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700) //nolint:gosec // G302,G304: executable shim inside the launch's own tools directory
+	if err != nil {
+		syscall.ForkLock.RUnlock()
+		return fmt.Errorf("cordon: create %s: %w", path, err)
+	}
+	_, err = io.WriteString(f, body)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return fmt.Errorf("cordon: write %s: %w", path, err)
+	}
+	return nil
+}
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // awaitMember waits for the canary to read as a member. sandbox-exec

@@ -7236,7 +7236,12 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   the preference rule and the file rule together refuse that write. Every
   path but `Path`'s entries is given resolved, and every field enters the
   configuration digest.
-- **A launch's `PATH` finds the version managers' tools.** It is the
+- **A launch's `PATH` finds the version managers' tools.** It starts with the
+  launch's own `run/tools` directory, where `prepare` writes an executable
+  `freeside-commit-plan` shim that execs `freesided commit-plan` (leaving
+  `cordon.LaunchPath`, `Config.Path`, and the configuration digest unchanged;
+  if the daemon binary sits inside a path denied to the launch, the shim fails
+  and the writer carries on without it). After `run/tools`, `PATH` is the
   pinned CLI's directory, then `/opt/homebrew/bin`,
   `/opt/homebrew/opt/rustup/bin`, `~/.cargo/bin`, `~/.local/bin`, and
   `~/.local/share/mise/shims` under the run account's home, then
@@ -8360,6 +8365,9 @@ untrusted data at handoff.
   a temporary directory using `export.DefaultOptions()`, runs the importer's
   intake and commit-plan checks without writing to the worktree or `.git`, and
   removes its temporary directory before exiting.
+- **Delivery to writers.** Every cordoned launch gets `freeside-commit-plan` on
+  its `PATH` through its per-launch `run/tools` shim (`exec <freesided>
+  commit-plan "$@"`).
 
 ### Output And Exit Codes
 
