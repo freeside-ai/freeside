@@ -2413,6 +2413,27 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	cordonedLaunchFact := domain.CordonedLaunchHold{
+		Hosts: []domain.CordonedLaunchHost{
+			{
+				HostID:        domain.DaemonHostID,
+				Conditions:    []domain.ExecutionHostCondition{domain.ExecutionHostCordonedCountFull},
+				CordonedCount: &domain.CordonedLaunchCount{Running: 2, Limit: 2},
+			},
+			{
+				HostID:     "mac-studio",
+				Conditions: []domain.ExecutionHostCondition{domain.ExecutionHostNoDesktopSession},
+			},
+		},
+		Ahead: 1,
+	}
+	cordonedLaunchHold := domain.RunHoldObservation{
+		RunID: "run-2", InvocationID: &obsInvocationID,
+		Reason:          domain.HoldCordonedLaunchCap,
+		CordonedLaunch:  &cordonedLaunchFact,
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+	}
 	runObservation := domain.RunObservation{
 		RunID:      "run-1",
 		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
@@ -3063,6 +3084,8 @@ func TestGolden(t *testing.T) {
 		{"run_hold_observation_quota_window", quotaWindowHold},
 		{"run_hold_observation_quota_window_offers", quotaWindowHoldOffers},
 		{"run_hold_observation_machine_capacity", machineCapacityHold},
+		{"cordoned_launch_hold", cordonedLaunchFact},
+		{"run_hold_observation_cordoned_launch", cordonedLaunchHold},
 		{"run_hold_span", holdSpan},
 		{"run_hold_span_open", openHoldSpan},
 		{"run_clocks", runClocks},

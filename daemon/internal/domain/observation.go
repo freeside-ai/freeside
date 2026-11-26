@@ -299,8 +299,8 @@ const (
 	HoldUpdateDrain RunHoldReason = "update_drain"
 	// HoldCordonedLaunchCap: the instance's cap on concurrent cordoned
 	// launches is reached or unset, or an older task's cordoned launch waits
-	// ahead of it (plan §5.4, issue #3471). The hold carries no numbers;
-	// `freesided settings show` gives the cap.
+	// ahead of it (plan §5.4, issue #3471). The hold's CordonedLaunchHold
+	// names each host considered, what closes it, and the launches ahead.
 	HoldCordonedLaunchCap RunHoldReason = "cordoned_launch_cap"
 )
 
@@ -891,6 +891,11 @@ type RunHoldObservation struct {
 	// on; it is present exactly beside that reason (nil renders explicit
 	// null). The reason is new with the field, so no older row lacks it.
 	MachineCapacity *MachineCapacityHold `json:"machine_capacity"`
+	// CordonedLaunch names the hosts a cordoned_launch_cap hold was
+	// considered for and the launches ahead; it appears only beside that
+	// reason (nil renders explicit null). It is optional there, because holds
+	// recorded before it existed carry none.
+	CordonedLaunch *CordonedLaunchHold `json:"cordoned_launch"`
 	// FirstObservedAt is the UTC instant the current cause was first
 	// observed; LastObservedAt the most recent.
 	FirstObservedAt time.Time `json:"first_observed_at"`
@@ -949,6 +954,15 @@ func (h RunHoldObservation) Validate() error {
 	}
 	if h.MachineCapacity != nil {
 		if err := h.MachineCapacity.Validate(); err != nil {
+			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
+		}
+	}
+	if h.CordonedLaunch != nil {
+		if h.Reason != HoldCordonedLaunchCap {
+			return fmt.Errorf("run hold observation %s carries a cordoned_launch fact beside reason %q: %w",
+				h.RunID, h.Reason, ErrHoldDetailMismatch)
+		}
+		if err := h.CordonedLaunch.Validate(); err != nil {
 			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
 		}
 	}

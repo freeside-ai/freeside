@@ -1,0 +1,22 @@
+{
+  "hosts": [
+    {
+      "host_id": "daemon",
+      "conditions": [
+        "cordoned_count_full"
+      ],
+      "cordoned_count": {
+        "running": 2,
+        "limit": 2
+      }
+    },
+    {
+      "host_id": "mac-studio",
+      "conditions": [
+        "no_desktop_session"
+      ],
+      "cordoned_count": null
+    }
+  ],
+  "ahead": 1
+}

@@ -700,6 +700,7 @@ var (
 	ErrInvalidExecutionHost          = errors.New("execution host record is invalid")
 	ErrExecutionHostExists           = errors.New("an execution host with this id or name already exists")
 	ErrDaemonHostRemoval             = errors.New("the daemon's own execution host cannot be removed")
+	ErrInvalidCordonedLaunchHold     = errors.New("cordoned launch hold names no host, or repeats or misorders one")
 )
 
 // ErrInvalidWorkHoursPeriod refuses a work-hours period outside 1 to
