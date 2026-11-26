@@ -821,8 +821,9 @@ func TestConformanceFollowerStopsOnClose(t *testing.T) {
 // TestConformanceFollowerRetriesAnOverranAdapterProof pins #3574: an
 // adapter proof that ran out its budget is retried alone, after 5, 10, and
 // 20 minutes, and no more; a retry that passes, or another pass's adapter
-// proof, ends the series; a scheduled round whose adapter proof ran out of
-// time does not fail and starts a series; and Close stops a waiting retry.
+// proof, ends the series and runs AfterProof; a scheduled round whose
+// adapter proof ran out of time does not fail and starts a series; and
+// Close stops a waiting retry.
 func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 	t.Parallel()
 	image := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("d", 64))
@@ -831,11 +832,12 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 	// start, and answers each with the next of results, then an overrun. want
 	// is the image a retry must prove, image when unset.
 	type retries struct {
-		mu      sync.Mutex
-		start   time.Time
-		want    domain.ImageRef
-		ran     []time.Duration
-		results []error
+		mu          sync.Mutex
+		start       time.Time
+		want        domain.ImageRef
+		ran         []time.Duration
+		results     []error
+		afterProofs int
 	}
 	compose := func(t *testing.T, ward *fakeWard, prove func(context.Context, domain.ImageRef) error, r *retries) *conformanceFollower {
 		r.start = time.Now()
@@ -857,16 +859,22 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 				r.results = r.results[1:]
 				return result
 			},
+			AfterProof: func(context.Context) {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				r.afterProofs++
+			},
 		})
 		t.Cleanup(func() { _ = follower.Close(context.Background()) })
 		return follower
 	}
-	check := func(t *testing.T, r *retries, wantRan []time.Duration) {
+	check := func(t *testing.T, r *retries, wantRan []time.Duration, wantAfterProofs int) {
 		t.Helper()
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if !slices.Equal(r.ran, wantRan) {
-			t.Fatalf("retries ran at %v, want %v", r.ran, wantRan)
+		if !slices.Equal(r.ran, wantRan) || r.afterProofs != wantAfterProofs {
+			t.Fatalf("retries ran at %v with %d AfterProof calls, want %v and %d",
+				r.ran, r.afterProofs, wantRan, wantAfterProofs)
 		}
 	}
 
@@ -877,7 +885,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 			follower := compose(t, newFakeWard(image), refuseProof(t), r)
 			follower.retryAdapterProof(image)
 			time.Sleep(24 * time.Hour)
-			check(t, r, []time.Duration{5 * time.Minute, 15 * time.Minute, 35 * time.Minute})
+			check(t, r, []time.Duration{5 * time.Minute, 15 * time.Minute, 35 * time.Minute}, 0)
 		})
 	})
 	t.Run("a retry that passes ends the series", func(t *testing.T) {
@@ -887,7 +895,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 			follower := compose(t, newFakeWard(image), refuseProof(t), r)
 			follower.retryAdapterProof(image)
 			time.Sleep(24 * time.Hour)
-			check(t, r, []time.Duration{5 * time.Minute, 15 * time.Minute})
+			check(t, r, []time.Duration{5 * time.Minute, 15 * time.Minute}, 1)
 		})
 	})
 	// The other pass's adapter proof returned nil: it passed or failed on its
@@ -904,7 +912,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 			follower.retryAdapterProof(image)
 			follower.request(other)
 			time.Sleep(24 * time.Hour)
-			check(t, r, nil)
+			check(t, r, nil, 1)
 		})
 	})
 	t.Run("a pass after a spent series starts its own", func(t *testing.T) {
@@ -926,7 +934,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 			check(t, r, []time.Duration{
 				5 * time.Minute, 15 * time.Minute, 35 * time.Minute,
 				time.Hour + 5*time.Minute, time.Hour + 15*time.Minute, time.Hour + 35*time.Minute,
-			})
+			}, 0)
 		})
 	})
 	t.Run("a scheduled round whose adapter proof ran out of time starts a series", func(t *testing.T) {
@@ -945,7 +953,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 				t.Fatal("the scheduled round recorded the overrun as a failed pass")
 			}
 			time.Sleep(24 * time.Hour)
-			check(t, r, []time.Duration{5 * time.Minute})
+			check(t, r, []time.Duration{5 * time.Minute}, 1)
 		})
 	})
 	// A budget kill can leave an *exec.ExitError under the overrun, which
@@ -972,7 +980,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 				t.Fatalf("scheduled round ran %d passes, want 1: the overrun reran the suite", passes)
 			}
 			time.Sleep(24 * time.Hour)
-			check(t, r, []time.Duration{5 * time.Minute})
+			check(t, r, []time.Duration{5 * time.Minute}, 1)
 		})
 	})
 	t.Run("a scheduled in-pass retry's adapter proof settles", func(t *testing.T) {
@@ -1001,7 +1009,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 				t.Fatal("the scheduled round left the in-pass retry's overrun recorded as a failed pass")
 			}
 			time.Sleep(24 * time.Hour)
-			check(t, r, []time.Duration{followerRetryBackoff + 5*time.Minute})
+			check(t, r, []time.Duration{followerRetryBackoff + 5*time.Minute}, 1)
 		})
 	})
 	// A scheduled pass that returns nil ran its adapter proof to an end on
@@ -1020,7 +1028,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 				t.Fatalf("scheduled round = %v, want it to pass", err)
 			}
 			time.Sleep(24 * time.Hour)
-			check(t, r, nil)
+			check(t, r, nil, 1)
 		})
 	})
 	// A pass the memory budget refuses for good runs no adapter proof, so it
@@ -1040,7 +1048,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 				t.Fatal("the scheduled round recorded a pass refused for good as a failed pass")
 			}
 			time.Sleep(24 * time.Hour)
-			check(t, r, []time.Duration{5 * time.Minute})
+			check(t, r, []time.Duration{5 * time.Minute}, 1)
 		})
 	})
 	t.Run("Close stops a waiting retry", func(t *testing.T) {
@@ -1054,7 +1062,7 @@ func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
 			}
 			follower.retryAdapterProof(image)
 			time.Sleep(24 * time.Hour)
-			check(t, r, nil)
+			check(t, r, nil, 0)
 		})
 	})
 }

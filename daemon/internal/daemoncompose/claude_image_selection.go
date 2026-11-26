@@ -256,6 +256,10 @@ type followerConfig struct {
 	// ProveAdapter reruns the adapter proof alone in an image whose suite
 	// proof stands, waiting for memory (runAdapterProofRetry).
 	ProveAdapter func(context.Context, domain.ImageRef) error
+	// AfterProof, when set, runs after an adapter proof that may have passed:
+	// the gate recheck that lifts a start's launch-coverage hold
+	// (agentSelectionGate.recheck).
+	AfterProof func(context.Context)
 	// Start is the image the start proved or would have, which the first
 	// scheduled pass keeps when no attempt has selected an image yet.
 	Start  domain.ImageRef
@@ -388,7 +392,7 @@ func (f *conformanceFollower) pass(image domain.ImageRef) {
 			f.cfg.Logger.Warn("conformance recorded for the selected writer image, but its adapter proof ran out its budget",
 				"image", image, "error", err)
 			f.endAdapterRetries()
-			f.settleAdapterProof(image, err)
+			f.settleAdapterProof(f.ctx, image, err)
 		}
 	case err != nil:
 		// A pass Close cancelled did not fail; it says nothing of the image.
@@ -400,7 +404,7 @@ func (f *conformanceFollower) pass(image domain.ImageRef) {
 	default:
 		f.clearFailure(image)
 		f.cfg.Logger.Info("conformance recorded for the selected writer image", "image", image)
-		f.settleAdapterProof(image, nil)
+		f.settleAdapterProof(f.ctx, image, nil)
 	}
 }
 
@@ -468,20 +472,24 @@ func (f *conformanceFollower) adapterRetry(image domain.ImageRef, epoch int, wai
 			"conformance pass or a restart", "image", image, "error", err)
 		return
 	}
-	f.settleAdapterProof(image, err)
+	f.settleAdapterProof(f.ctx, image, err)
 }
 
 // settleAdapterProof acts on an adapter proof's outcome. err is nil when the
 // proof passed, failed on its merits, or found no subscription that could
-// run it (proveAdapterOnCandidates), which ends the retry series: a retry
-// would meet the same subscriptions, since they do not depend on the image.
-// An overrun schedules the next retry. The caller holds passMu.
-func (f *conformanceFollower) settleAdapterProof(image domain.ImageRef, err error) {
+// run it (proveAdapterOnCandidates), which ends the retry series and runs
+// AfterProof: a retry would meet the same subscriptions, since they do not
+// depend on the image. An overrun schedules the next retry. The caller
+// holds passMu.
+func (f *conformanceFollower) settleAdapterProof(ctx context.Context, image domain.ImageRef, err error) {
 	if adapterProofOverran(err) {
 		f.retryAdapterProof(image)
 		return
 	}
 	f.endAdapterRetries()
+	if f.cfg.AfterProof != nil {
+		f.cfg.AfterProof(ctx)
+	}
 }
 
 // endAdapterRetries ends the retry series: a waiting retry does not run, and
@@ -621,7 +629,7 @@ func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	}
 	if adapterRan && ctx.Err() == nil {
 		f.endAdapterRetries()
-		f.settleAdapterProof(adapterImage, adapterErr)
+		f.settleAdapterProof(ctx, adapterImage, adapterErr)
 	}
 	if len(failedPasses) > 0 {
 		if len(f.cfg.Ledger.ProvenImages()) == 0 {

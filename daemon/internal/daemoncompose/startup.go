@@ -487,8 +487,9 @@ func ComposeClaudeWorkflow(
 	}
 	late.Workflow = workflow
 	// Before any loop admits: report why selection is not active, if it
-	// is not.
-	if err := ActivateAgentSelection(ctx, st, claudeWiring.selectionFailure, startupNow(cfg.Now)); err != nil {
+	// is not. The gate's current failure, not the one composition saw, so
+	// an adapter proof retry that lifted it already can't reopen its item.
+	if err := ActivateAgentSelection(ctx, st, claudeWiring.selectionGate.current(), startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("activate agent selection: %w", err)
 	}
 	// The same for the judgment roles: name each one the lineup cannot

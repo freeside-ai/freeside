@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
@@ -410,30 +411,89 @@ func retiredOpenWork(ctx context.Context, tx *store.ReadTx) ([]retiredWork, erro
 
 // AgentSelectionGate holds every lineup admission while selection is not
 // active: a writer role failed its startup check, or a retired identity still
-// owns open work. The role check is fixed for the daemon's run; a marked
-// generation is not a failure of it (CheckWriterRoles), so it holds nothing
-// here and re-enrollment needs no restart. The retired work is read again on
-// each admission, so the gate opens once that work is
+// owns open work. The role check is fixed for the daemon's run, except that
+// a launch-coverage failure lifts once a later adapter proof passes
+// (agentSelectionGate.recheck); this function's gate is never rechecked. A
+// marked generation is not a failure of the role check (CheckWriterRoles),
+// so it holds nothing here and re-enrollment needs no restart. The retired
+// work is read again on each admission, so the gate opens once that work is
 // closed; the item activation raised stays open until the next start.
 func AgentSelectionGate(st *store.Store, failure *RoleAdmissionError) func(context.Context) error {
-	return func(ctx context.Context) error {
-		if failure != nil {
-			return failure
-		}
-		var work []retiredWork
-		if err := st.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			work, err = retiredOpenWork(ctx, tx)
-			return err
-		}); err != nil {
-			return fmt.Errorf("read retired identities: %w", err)
-		}
-		if len(work) != 0 {
-			return fmt.Errorf("auth identity %s, task %s: %w",
-				work[0].Identity, work[0].Tasks[0].ID, ErrRetiredIdentityOwnsWork)
-		}
+	return newAgentSelectionGate(st, failure).admit
+}
+
+// agentSelectionGate is AgentSelectionGate's gate, holding the start's
+// writer-role failure where recheck can clear it.
+type agentSelectionGate struct {
+	st      *store.Store
+	failure atomic.Pointer[RoleAdmissionError]
+}
+
+func newAgentSelectionGate(st *store.Store, failure *RoleAdmissionError) *agentSelectionGate {
+	gate := &agentSelectionGate{st: st}
+	gate.failure.Store(failure)
+	return gate
+}
+
+// admit is the gate every lineup admission passes (engine.AgentSelection.Gate).
+func (g *agentSelectionGate) admit(ctx context.Context) error {
+	if failure := g.failure.Load(); failure != nil {
+		return failure
+	}
+	var work []retiredWork
+	if err := g.st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		work, err = retiredOpenWork(ctx, tx)
+		return err
+	}); err != nil {
+		return fmt.Errorf("read retired identities: %w", err)
+	}
+	if len(work) != 0 {
+		return fmt.Errorf("auth identity %s, task %s: %w",
+			work[0].Identity, work[0].Tasks[0].ID, ErrRetiredIdentityOwnsWork)
+	}
+	return nil
+}
+
+// current is the writer-role failure the gate holds now, nil once none does.
+func (g *agentSelectionGate) current() *RoleAdmissionError {
+	return g.failure.Load()
+}
+
+// recheck lifts a start-time writer-role failure that a later adapter proof
+// can clear: a launch-coverage refusal (domain.AdmissionCheckAgentLaunchCoverage),
+// which the start's proof leaves when it fails or runs out its budget. It
+// re-checks by running check, the five admission steps for every writer
+// role against current store state (CheckWriterRoles, the check a start
+// runs), and lifts the failure only when check passes every role. It never
+// trusts the new adapter record alone. Then it resolves the writer-role
+// agent_selection_inactive items, leaving a retired identity's, and only
+// once they are resolved opens the gate. A failure of any other kind, a
+// check that still fails, or a store error keeps the gate closed.
+func (g *agentSelectionGate) recheck(
+	ctx context.Context, check func(context.Context) *RoleAdmissionError, now time.Time,
+) error {
+	failure := g.failure.Load()
+	if failure == nil || !launchCoverageRefusal(failure) {
 		return nil
 	}
+	if check(ctx) != nil {
+		return nil
+	}
+	if err := convergeHealthItems(ctx, g.st, agentSelectionItemKind, nil, func(cause string) bool {
+		return strings.HasPrefix(cause, retiredCausePrefix)
+	}, now); err != nil {
+		return fmt.Errorf("resolve the writer-role items: %w", err)
+	}
+	g.failure.CompareAndSwap(failure, nil)
+	return nil
+}
+
+// launchCoverageRefusal reports whether err is an admission refusal at the
+// launch-coverage step.
+func launchCoverageRefusal(err error) bool {
+	var refusal *engine.AgentAdmissionRefusal
+	return errors.As(err, &refusal) && refusal.Refusal.Check == domain.AdmissionCheckAgentLaunchCoverage
 }
 
 func startupNow(now func() time.Time) time.Time {
@@ -483,9 +543,14 @@ func ActivateAgentSelection(
 
 // roleItemCloses tells the operator what clears a writer role's item. The
 // start reruns the adapter conformance proof, so a proof that failed only
-// because load killed it needs nothing but that start.
+// because load killed it needs nothing but that start. A launch-coverage
+// failure also closes without one, when a later adapter proof passes and
+// the writer-role check passes with it (agentSelectionGate.recheck),
+// including the daemon's own retry of a proof that ran out its budget.
 const roleItemCloses = "This item closes on the next start whose writer-role check passes; that start reruns " +
-	"the adapter conformance proof, so a proof that load killed needs only the start."
+	"the adapter conformance proof, so a proof that load killed needs only the start. A failed adapter " +
+	"conformance check also closes, without a start, once a later adapter proof passes, including the " +
+	"daemon's retry of a proof that ran out its budget."
 
 // IsWriterRoleItem reports whether id names a writer role's agent-selection
 // item, which the next start whose writer-role check passes closes. A

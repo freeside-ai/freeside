@@ -705,9 +705,9 @@ type ClaudeComposition struct {
 	reviewRecovery                  func(context.Context) error
 	ReviewConfigurationDigest       domain.Digest
 	shadowReviewConfigurationDigest domain.Digest
-	// selectionFailure names the writer role that failed its startup
-	// admission check; while set, the admission gate holds every attempt.
-	selectionFailure           *RoleAdmissionError
+	// selectionGate holds the writer role that failed its startup admission
+	// check; while it holds one, it refuses every attempt.
+	selectionGate              *agentSelectionGate
 	shadowReviewRate           float64
 	reviewHostInstructions     engine.ReviewHostInstructions
 	ContainerBin               string
@@ -1261,11 +1261,12 @@ func composeClaudeDriver(
 	// prompt this daemon runs it on; until then the gate holds every attempt.
 	// A marked generation is left to each attempt's admission.
 	agents.AttemptBudget = backend.HandoffTimeout()
-	selectionFailure := CheckWriterRoles(ctx, st, *agents, map[domain.RoleName]domain.Digest{
+	writerPrompts := map[domain.RoleName]domain.Digest{
 		domain.RoleSpecifier: specificationPromptPackage, domain.RoleImplementer: promptPackage,
 		domain.RoleRemediator: remediationPromptPackage,
-	}, utcNow())
-	agents.Gate = AgentSelectionGate(st, selectionFailure)
+	}
+	selectionGate := newAgentSelectionGate(st, CheckWriterRoles(ctx, st, *agents, writerPrompts, utcNow()))
+	agents.Gate = selectionGate.admit
 	env := engine.AdmissionEnvironment{
 		OperatingMode:             cfg.OperatingMode,
 		CredentialMode:            domain.CredentialSubscriptionContained,
@@ -1302,6 +1303,15 @@ func composeClaudeDriver(
 		ProveAdapter: func(runCtx context.Context, image domain.ImageRef) error {
 			return runAdapterProofRetry(runCtx, st, backend, cfg, conformanceLeaser, work, image)
 		},
+		// agents is the selection the gate guards, fixed once composed; the
+		// recheck runs the start's writer-role check again on it.
+		AfterProof: func(runCtx context.Context) {
+			if err := selectionGate.recheck(runCtx, func(checkCtx context.Context) *RoleAdmissionError {
+				return CheckWriterRoles(checkCtx, st, *agents, writerPrompts, utcNow())
+			}, utcNow()); err != nil {
+				logger.Warn("recheck the writer roles after an adapter proof", "error", err)
+			}
+		},
 		Start:  startImage,
 		Now:    time.Now,
 		Logger: logger.With("subsystem", "writer_image_conformance"),
@@ -1324,7 +1334,7 @@ func composeClaudeDriver(
 		work:   work,
 		driver: driver, Backend: backend, authority: authority,
 		hostVerification:       hostVerification,
-		selectionFailure:       selectionFailure,
+		selectionGate:          selectionGate,
 		FollowUpFiler:          posters.filer,
 		IssueCommentDispatcher: posters.comments,
 		ReviewReplier:          reviewReplier,

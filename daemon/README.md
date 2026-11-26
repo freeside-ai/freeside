@@ -5778,7 +5778,10 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    whose start-up checks pass; Acknowledge leaves it open. A writer role's
    `agent_selection_inactive` card closes the same way, at the next start
    whose writer-role check passes, which reruns the adapter conformance
-   proof. A start whose adapter proof ran out its 3-minute budget on every
+   proof. A card for a failed adapter conformance check (launch coverage)
+   also closes without a start: when a later adapter proof passes, the
+   daemon reruns the writer-role check and lifts the hold if it passes. A
+   start whose adapter proof ran out its 3-minute budget on every
    subscription still starts, and the daemon retries that proof alone,
    under its own memory reservation, after 5, 10, and 20 minutes; after
    that the hold stays until the next scheduled conformance pass or a
