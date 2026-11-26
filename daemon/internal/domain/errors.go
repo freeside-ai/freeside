@@ -684,6 +684,14 @@ var (
 	ErrWardedWithoutProjectImage = errors.New("the warded writer class needs a project image, and the project has none")
 )
 
+// Execution host errors (issue #2162).
+var (
+	ErrInvalidExecutionHostCondition = errors.New("unknown execution host condition")
+	ErrInvalidExecutionHost          = errors.New("execution host record is invalid")
+	ErrExecutionHostExists           = errors.New("an execution host with this id or name already exists")
+	ErrDaemonHostRemoval             = errors.New("the daemon's own execution host cannot be removed")
+)
+
 // ErrInvalidWorkHoursPeriod refuses a work-hours period outside 1 to
 // MaxWorkHoursDays days or without a time zone (issue #3241).
 var ErrInvalidWorkHoursPeriod = errors.New("invalid work hours period")

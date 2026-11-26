@@ -362,6 +362,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["RestartBlockerKind"] = append(valids["RestartBlockerKind"], v.valid)
 	}
 	invalids["RestartBlockerKind"] = RestartBlockerKind("").valid
+	for _, v := range AllExecutionHostConditions {
+		valids["ExecutionHostCondition"] = append(valids["ExecutionHostCondition"], v.valid)
+	}
+	invalids["ExecutionHostCondition"] = ExecutionHostCondition("").valid
 	for _, v := range AllSupersessionKinds {
 		valids["SupersessionKind"] = append(valids["SupersessionKind"], v.valid)
 	}

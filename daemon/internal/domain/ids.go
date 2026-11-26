@@ -30,7 +30,14 @@ type (
 	RequirementKey      string
 	WaiverID            string
 	IntakeOccurrenceID  string
+	ExecutionHostID     string
 )
+
+// DaemonHostID names the execution host the daemon itself runs on, whichever
+// machine that is (plan §5.7 Execution Hosts). It is a fixed value, not one
+// the daemon assigns, so its record exists from the migration that creates
+// the host table and a later migration can name it in a default.
+const DaemonHostID ExecutionHostID = "daemon"
 
 // Digest is a content address (e.g. "sha256:..."); artifacts, specs, recipes,
 // and resolved policy are all digest-addressed (plan §5.9, §5.12, §5.15).

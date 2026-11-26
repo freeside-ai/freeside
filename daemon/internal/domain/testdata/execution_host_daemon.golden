@@ -1,0 +1,11 @@
+{
+  "id": "daemon",
+  "name": "daemon",
+  "run_account": {
+    "name": null,
+    "daemon_owner": true
+  },
+  "reach": null,
+  "cordoned_count_override": null,
+  "conditions": []
+}
