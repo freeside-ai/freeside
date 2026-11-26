@@ -47,13 +47,27 @@ func submittedTaskLines(t *testing.T, dbPath string, result submitResult) ([]dom
 
 // lineLessFingerprint is the fingerprint a CLI submission that declared
 // smallestWorkUnit was digested over before the task-lines field existed.
-func lineLessFingerprint(t *testing.T, project domain.ProjectID, result submitResult) []byte {
+// It hashes the -policy file's policy digest (the request identity's policy),
+// not the layer-overlaid stored policy digest.
+func lineLessFingerprint(t *testing.T, project domain.ProjectID, policyPath string, result submitResult) []byte {
 	t.Helper()
+	policyFile, err := readSubmissionFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []domain.PolicyKey
+	if err := json.Unmarshal(policyFile.body, &keys); err != nil {
+		t.Fatal(err)
+	}
+	filePolicyDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	fingerprint, err := json.Marshal(struct {
 		Project                                            domain.ProjectID
 		Source, Policy, Publication, WorkUnit, Composition domain.Digest
 	}{
-		project, result.SourceDigest, result.SpecificationPolicyDigest, result.PublicationDigest,
+		project, result.SourceDigest, filePolicyDigest, result.PublicationDigest,
 		submissionBytes([]byte(smallestWorkUnit)).digest, "",
 	})
 	if err != nil {
@@ -125,7 +139,7 @@ func TestSubmitCommandRecordsTaskLines(t *testing.T) {
 	// The fingerprint covers the lines in canonical role order under their
 	// wire names; a change to either strands every recorded submission that
 	// carries a line.
-	lineLess := lineLessFingerprint(t, cfg.ProjectID, first)
+	lineLess := lineLessFingerprint(t, cfg.ProjectID, policyPath, first)
 	pinned := string(lineLess[:len(lineLess)-1]) +
 		`,"TaskLines":[{"role":"implementer","agent":"claude-b"},{"role":"reviewer","agent":"codex"}]}`
 	if got, want := recordedRequestDigest(t, cfg.DBPath, cfg.SubmissionID), domain.Digest(contentaddr.Sum([]byte(pinned))); got != want {
@@ -202,7 +216,7 @@ func TestSubmitFingerprintWithoutLinesIsUnchanged(t *testing.T) {
 	if lines, _ := submittedTaskLines(t, cfg.DBPath, result); len(lines) != 0 {
 		t.Fatalf("line-less submission recorded %+v", lines)
 	}
-	want := domain.Digest(contentaddr.Sum(lineLessFingerprint(t, cfg.ProjectID, result)))
+	want := domain.Digest(contentaddr.Sum(lineLessFingerprint(t, cfg.ProjectID, policyPath, result)))
 	recorded := recordedManualSubmission(t, cfg.DBPath, cfg.SubmissionID)
 	if recorded.RequestDigest != want || recorded.TaskLines != nil {
 		t.Fatalf("recorded submission = %+v, want request digest %s and no lines", recorded, want)

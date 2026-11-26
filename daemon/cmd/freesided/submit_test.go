@@ -731,8 +731,8 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if resolved.Digest != first.SpecificationPolicyDigest || len(resolved.Keys) != 7 {
-			t.Errorf("resolved policy = %#v, want the run-bound submitted policy", resolved)
+		if resolved.Digest != first.SpecificationPolicyDigest || len(resolved.Keys) != 7+len(domain.AllWorkflowPolicyKeys) {
+			t.Errorf("resolved policy = %#v, want the run-bound submitted policy with workflow layers", resolved)
 		}
 		artifact, err := tx.GetArtifact(ctx, first.SourceArtifactID)
 		if err != nil {
@@ -989,7 +989,20 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 	}
 
 	// The declaration joins the run-id derivation by the digest of its
-	// canonical form and by nothing else.
+	// canonical form and by nothing else; the run id stays derived from the
+	// submitted file's policy digest rather than the layer-overlaid stored one.
+	policyFile, err := readSubmissionFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fileKeys []domain.PolicyKey
+	if err := json.Unmarshal(policyFile.body, &fileKeys); err != nil {
+		t.Fatal(err)
+	}
+	filePolicyDigest, err := (domain.ResolvedPolicy{Keys: fileKeys}).ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	boundIssue := 443
 	canonical, err := json.Marshal(submittedWorkUnit{
 		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR, BoundIssue: &boundIssue,
@@ -999,7 +1012,7 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := engine.ManualSubmissionRunID("cli:"+declared.SubmissionID, cfg.ProjectID, declared.SourceDigest,
-		declared.SpecificationPolicyDigest, declared.PublicationDigest, submissionBytes(canonical).digest); declared.RunID != want {
+		filePolicyDigest, declared.PublicationDigest, submissionBytes(canonical).digest); declared.RunID != want {
 		t.Fatalf("declared run id = %q, want %q", declared.RunID, want)
 	}
 

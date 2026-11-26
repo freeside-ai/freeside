@@ -33,6 +33,9 @@ import (
 // freesided submit (plan §5.12, §10): registers the task source and
 // resolved policy as digest-addressed artifacts, creates its pre-approval
 // specification run, and reserves the future implementation identity.
+// For new work, the daemon overlays the Workflow settings pane's keys from
+// the store's layers onto the -policy file's keys before storing the run's
+// policy; the run identity stays derived from the file's keys.
 // Registration only: execution preconditions stay with the dispatch gates,
 // so a submission is durable intent even while the daemon is stopped or held.
 
@@ -59,6 +62,11 @@ spec_digest and spec_artifact_id fields are source_digest and
 source_artifact_id; policy_digest and policy_artifact_id are
 specification_policy_digest and specification_policy_artifact_id. No deprecated
 digest or artifact aliases are emitted.
+
+specification_policy_digest and specification_policy_artifact_id name the
+stored policy (the -policy file with the Workflow settings pane's keys
+overlaid from the store's layers), which can differ from the file's digest
+used to derive the run identity.
 
 source_issue is the issue the pull request will reference: the publication
 file's source_issue, which must equal a task source that is exactly one GitHub
@@ -121,7 +129,7 @@ func runSubmitMain(args []string) {
 	configureSubmitUsage(flags)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
 	taskPath := flags.String("task", "", "task source file (required)")
-	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
+	policyPath := flags.String("policy", "", "base per-run policy-key JSON array (required); keys the Workflow settings pane owns resolve from the store's layers for new work")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required); "+
 		"a task that is exactly one GitHub issue URL needs source_issue set to that URL")
 	compositionPath := flags.String("composition-manifest", "", "passing production-composition manifest bound to the submitted inputs "+
@@ -444,6 +452,10 @@ type submissionFile struct {
 
 // submitApplyRequest is the validated, journaled input crossing the private
 // control socket. File paths stay in the client; the daemon receives bytes.
+// PolicyBody, PolicyDigest, Keys, and ResolvedPolicy carry the -policy file's
+// policy, from which the run identity is derived; applyLaunchSubmission
+// overlays the store's workflow policy layers on Keys to build the stored
+// policy.
 type submitApplyRequest struct {
 	SubmissionID          string
 	ProjectID             domain.ProjectID
@@ -730,6 +742,12 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		// publication while this request was being validated.
 		return runSubmitCommand(ctx, submitCommandConfig{DBPath: cfg.DBPath, RetrySubmissionID: cfg.SubmissionID})
 	}
+	// Warn after the journal-convergence retry so each pane-owned key prints
+	// once per submit invocation, while keeping keys intact on the wire so the
+	// run identity stays derived from the file.
+	for _, line := range workflowPolicyFileWarnings(keys) {
+		_, _ = fmt.Fprintln(os.Stderr, line)
+	}
 
 	req := submitApplyRequest{
 		SubmissionID: cfg.SubmissionID, ProjectID: cfg.ProjectID,
@@ -772,6 +790,24 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	return result, replacementError(result)
 }
 
+// workflowPolicyFileWarnings returns one stderr warning line for each key in
+// keys that the Workflow settings pane owns. The submit path keeps the file's
+// keys on the wire so the run identity stays with the file, while the daemon
+// resolves those six keys from the store's layers for new work.
+func workflowPolicyFileWarnings(keys []domain.PolicyKey) []string {
+	var warnings []string
+	for _, key := range keys {
+		if !domain.IsWorkflowPolicyKey(key.Key) {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"freesided: warning: -policy sets %s=%q, but the Workflow settings pane decides that key for new work, so the file's value is ignored; set it in the Workflow pane instead",
+			key.Key, key.Value,
+		))
+	}
+	return warnings
+}
+
 // replacementError reports a replacement whose cleanup failed after the new
 // task committed. applyLaunchSubmission returns that outcome in the result,
 // as /tasks/abandon does, so the control route still carries the new task.
@@ -806,7 +842,6 @@ func applyLaunchSubmission(
 	}
 	cfg := submitCommandConfig{SubmissionID: req.SubmissionID, ProjectID: req.ProjectID}
 	spec := submissionFile{digest: req.SpecDigest, body: req.SpecBody}
-	policy := submissionFile{digest: req.PolicyDigest, body: req.PolicyBody}
 	publication := req.Publication
 	publicationDigest := req.PublicationDigest
 	workUnit := req.WorkUnit
@@ -828,11 +863,6 @@ func applyLaunchSubmission(
 	}
 	specArtifact, err := engine.SubmissionArtifact(
 		domain.ArtifactKindSpecification, spec.digest, domain.EvidenceMediaTextMarkdown, int64(len(spec.body)))
-	if err != nil {
-		return submitResult{}, fmt.Errorf("submit: %w", err)
-	}
-	policyArtifact, err := engine.SubmissionArtifact(
-		domain.ArtifactKindPolicy, policy.digest, domain.EvidenceMediaApplicationJSON, int64(len(policy.body)))
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
@@ -903,16 +933,15 @@ func applyLaunchSubmission(
 	if _, err := blobs.Put(spec.digest, bytes.NewReader(spec.body)); err != nil {
 		return submitResult{}, fmt.Errorf("submit: store specification bytes: %w", err)
 	}
-	if _, err := blobs.Put(policy.digest, bytes.NewReader(policy.body)); err != nil {
-		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
-	}
 	var (
-		submitted engine.SpecificationRun
-		replaced  *abandonResult
+		submitted      engine.SpecificationRun
+		policyArtifact domain.Artifact
+		replaced       *abandonResult
 	)
 	lookupComplete := errors.New("submission lookup complete")
 	err = st.Write(ctx, func(tx *store.WriteTx) error {
 		replaced = nil
+		policyArtifact = domain.Artifact{}
 		replay := false
 		if original, err := tx.GetManualSubmission(ctx, manual.Identity); err == nil {
 			if !original.SameRequest(*manual) {
@@ -941,6 +970,32 @@ func applyLaunchSubmission(
 		if err := engine.RegisterSubmissionArtifact(ctx, tx, specArtifact); err != nil {
 			return err
 		}
+		// Resolve the Workflow settings pane's keys inside this transaction so
+		// new work sees the current store layers and a replay keeps the stored
+		// run's immutable policy.
+		policyKeys, err := engine.ResolveRunWorkflowPolicyKeys(
+			ctx, &tx.ReadTx, cfg.ProjectID, req.Keys, specificationRunID,
+		)
+		if err != nil {
+			return fmt.Errorf("resolve workflow policy: %w", err)
+		}
+		storedPolicy, err := domain.NewResolvedPolicy(specificationRunID, policyKeys)
+		if err != nil {
+			return fmt.Errorf("resolve stored policy: %w", err)
+		}
+		policyBytes, err := json.Marshal(storedPolicy.Keys)
+		if err != nil {
+			return fmt.Errorf("encode stored policy: %w", err)
+		}
+		if _, err := blobs.Put(storedPolicy.Digest, bytes.NewReader(policyBytes)); err != nil {
+			return fmt.Errorf("store policy bytes: %w", err)
+		}
+		policyArtifact, err = engine.SubmissionArtifact(
+			domain.ArtifactKindPolicy, storedPolicy.Digest, domain.EvidenceMediaApplicationJSON, int64(len(policyBytes)),
+		)
+		if err != nil {
+			return err
+		}
 		if err := engine.RegisterSubmissionArtifact(ctx, tx, policyArtifact); err != nil {
 			return err
 		}
@@ -949,7 +1004,7 @@ func applyLaunchSubmission(
 			ManualSubmission:   manual,
 			SpecificationRunID: specificationRunID, ImplementationRunID: implementationRunID,
 			ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID, SourceBytes: spec.body,
-			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
+			PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: storedPolicy, Publication: publication,
 			PublicationDigest: publicationDigest,
 			WorkUnit:          workUnit, CampaignID: campaignID, AttemptNumber: 1,
 		}, gate)
@@ -1146,6 +1201,10 @@ func recordSubmittedTaskLines(
 	return nil
 }
 
+// validateSubmitApply checks the prepared request that crossed the control
+// socket. PolicyDigest, Keys, ResolvedPolicy, and ImplementationRunID all
+// check against the -policy file's keys; the daemon overlays the Workflow
+// settings pane's keys afterward when storing the run's policy.
 func validateSubmitApply(req submitApplyRequest) error {
 	// The request crossed the control socket, so its lines are checked again
 	// here and must already be in the canonical form the fingerprint digests.
