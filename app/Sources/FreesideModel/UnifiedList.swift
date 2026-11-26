@@ -48,6 +48,23 @@ package struct UnifiedRow: Identifiable {
         }
     }
 
+    /// The task's open decisions other than the one the row shows (#3670):
+    /// the items held under it past the first, by their live status, the
+    /// filter `UnifiedList.openItems(inTask:)` gives the task page's count.
+    /// A scoped item's row stands for nothing else, so it reads 0.
+    package var otherOpenDecisionCount: Int {
+        switch content {
+        case .task(_, let openItems): openItems.dropFirst().filter { $0.item.status == .open }.count
+        case .item: 0
+        }
+    }
+
+    /// The words VoiceOver reads for the row's `+N` mark, such as
+    /// `2 more decisions`.
+    package static func moreDecisionsSpoken(_ count: Int) -> String {
+        count == 1 ? "1 more decision" : "\(count) more decisions"
+    }
+
     package var taskSnapshot: Components.Schemas.TaskSnapshot? {
         if case .task(let snapshot, _) = content { snapshot } else { nil }
     }

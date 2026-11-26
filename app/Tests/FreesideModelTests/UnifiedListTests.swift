@@ -72,6 +72,28 @@ import Testing
         #expect(list.working.isEmpty)
     }
 
+    /// #3670: a task's row counts its open decisions other than the one it
+    /// shows, by live status, and a scoped item's row counts none.
+    @Test func aTaskRowCountsItsOtherOpenDecisions() {
+        var concluded = taskItem("concluded", task: "several", created: 5)
+        concluded.item.status = .resolved
+        let list = UnifiedList(
+            open: [
+                taskItem("alone", task: "one", created: 40),
+                taskItem("newer", task: "two", created: 30), taskItem("older", task: "two", created: 20),
+                taskItem("first", task: "several", created: 15), taskItem("second", task: "several", created: 10),
+                taskItem("third", task: "several", created: 8), concluded,
+                projectItem("scoped", project: "freeside"),
+            ],
+            closed: [], tasks: [task("one"), task("two"), task("several")], projectFilter: nil)
+
+        let counts = Dictionary(uniqueKeysWithValues: list.needsYou.map { ($0.id, $0.otherOpenDecisionCount) })
+        #expect(
+            counts == [.task("one"): 0, .task("two"): 1, .task("several"): 2, .item("scoped"): 0])
+        #expect(UnifiedRow.moreDecisionsSpoken(1) == "1 more decision")
+        #expect(UnifiedRow.moreDecisionsSpoken(2) == "2 more decisions")
+    }
+
     @Test func eachSubjectThatNamesAHeldTaskJoinsIt() {
         var batch = runItem("batch", task: "task-a")
         batch.item.subject = .proposal_batch(
