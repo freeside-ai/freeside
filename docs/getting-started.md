@@ -122,11 +122,10 @@ needs. The roadmap's
 [operations and onboarding section](plan.md#10-operations-and-onboarding)
 describes the intended experience; this section is what you can run today.
 
-A real workflow, called the production exercise, runs under
-`freesided deputy`: a separate daemon that executes the run while the
-installed daemon keeps running without a driver. You prepare its inputs by
-hand. Start with a small repository and a narrowly scoped task whose expected
-change you can review.
+A real run goes to the installed daemon, which executes once its settings
+are stored and execution is turned on. You prepare its inputs by hand. Start
+with a small repository and a narrowly scoped task whose expected change you
+can review.
 
 The real run needs a clean Freeside checkout. Run `git status --short`; it
 should print nothing. If it lists
@@ -155,26 +154,35 @@ Prepare these pieces in order, using the linked instructions:
    image from the prepared base image. The
    [daemon guide](../daemon/README.md#operational-commands) explains the
    required inputs and approval sequence; the bare command name here is not a
-   complete onboarding invocation.
-4. **Submission and supervision.** Write the deputy's settings file, as
-   [Run Real Work With The Deputy](../daemon/README.md#run-real-work-with-the-deputy)
-   describes, then follow the
-   [production walkthrough and recovery guide](production-walkthrough.md).
-   Start the run, then submit the task from a second terminal:
+   complete onboarding invocation. Run it on the installed daemon's
+   database with that daemon stopped, since it refuses a database a daemon
+   holds.
+4. **Settings, execution, and submission.** Store the run's settings on the
+   installed daemon, turn on its `execution` switch and the project's
+   `enabled` switch, restart it on them, and submit the task, as
+   [Run The Installed Daemon From Its Settings](../daemon/README.md#run-the-installed-daemon-from-its-settings)
+   describes in order. Restart it on the settings, wait until `execution
+   status` reports `"executes":true`, and only then submit:
 
    ```sh
-   freesided deputy -root /path/to/root
-   freesided submit -db /path/to/root/daemon/freeside.db --require-composition \
+   DB="$HOME/Library/Application Support/Freeside/daemon/freeside.db"
+   freesided execution resume -db "$DB"
+   freesided execution status -db "$DB"   # repeat until "executes":true
+   freesided submit -db "$DB" \
      -project <project> -task /path/to/task.md -policy /path/to/resolved-policy-keys.json \
      -publication /path/to/publication.json -work-unit /path/to/work-unit.json
    ```
 
 Keep a paired client open to approve or revise the specification. This path
 runs real agents and can publish a pull request to the configured repository.
-The deputy keeps serving after publication so the paired clients can work
-with the result. `freesided inspect task` reads the task's record, the proof
-of the run. End the deputy deliberately with Ctrl-C, as the runbook describes;
-closing its terminal is an interruption, not normal completion.
+`freesided inspect task -db "$DB" -task <task-id>` reads the task's record,
+the proof of the run.
+
+To run an unreleased build instead, as exit runs do, use the deputy: the
+attended run described in
+[Run An Unreleased Build With The Deputy](../daemon/README.md#run-an-unreleased-build-with-the-deputy)
+and operated with the
+[production walkthrough and recovery guide](production-walkthrough.md).
 
 ## Connect an iPhone
 

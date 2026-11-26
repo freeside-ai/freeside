@@ -1,12 +1,16 @@
 # Production Walkthrough And Recovery
 
-A real-work run is `freesided deputy -root <root>`: one process that takes the
+Real work runs on the installed `prod` daemon, from its stored settings
+([Run The Installed Daemon From Its Settings](../daemon/README.md#run-the-installed-daemon-from-its-settings)).
+This runbook covers the deputy, the attended run of an unreleased build that
+exit runs use. `freesided deputy -root <root>` is one process that takes the
 production rig lease, adopts the agent tree, runs the composition preflight,
 and serves the run's daemon until you stop it. Its settings, start-up order,
 and what it writes are in the daemon guide,
-[Run Real Work With The Deputy](../daemon/README.md#run-real-work-with-the-deputy).
-This runbook covers operating one: starting it, submitting work, reading the
-proof, ending it, and recovering when something goes wrong.
+[Run An Unreleased Build With The Deputy](../daemon/README.md#run-an-unreleased-build-with-the-deputy).
+This runbook covers operating one: pausing `prod`, starting the deputy,
+submitting work, reading the proof, ending it, resuming `prod`, and
+recovering when something goes wrong.
 
 The deputy has no automatic deadline and reads no stdin. It keeps serving the
 same database, state root, and listener to the paired Mac and iPhone after
@@ -24,7 +28,11 @@ An exit run is this runbook from start to finish. The exit-run skill
 whether a step counts, and what to record; each step's procedure is in the
 section it links.
 
-1. Write the real run's settings and inputs
+1. Pause `prod` when it executes, before any command that takes the App
+   authority: the pre-spend checks, the first `exit-root.sh` pass, or the
+   deputy
+   ([Pause Execution For A Deputy Run](../daemon/README.md#pause-execution-for-a-deputy-run)).
+2. Write the real run's settings and inputs
    ([The Inputs And What Refuses Them](#the-inputs-and-what-refuses-them)),
    with the writer lineup chosen under
    [Choose The Real Run's Writers](#choose-the-real-runs-writers), then run
@@ -32,14 +40,14 @@ section it links.
    `bash scripts/exit-root.sh --template <dir>` can stand the root up from
    a pass directory of the operator's own
    ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
-2. Stand up a fresh root for the fixture pass with `bash
+3. Stand up a fresh root for the fixture pass with `bash
    scripts/exit-root.sh --pass fixture` on the build the real run will use
    and run the pass, then any seeded pass the exit contract names that needs
    no device ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
-3. Prepare the operator's devices
+4. Prepare the operator's devices
    ([Prepare The Operator's Devices](#prepare-the-operators-devices)),
    then run any seeded pass the operator checks on a device.
-4. Enroll the reviewer when the real root's review store doesn't exist yet
+5. Enroll the reviewer when the real root's review store doesn't exist yet
    ([Enroll The Reviewer Before The First Start](#enroll-the-reviewer-before-the-first-start)),
    then start the deputy on the real root, pair both clients, set up and test
    the iPhone's notifications when a gate names one, and resolve a retained
@@ -47,18 +55,20 @@ section it links.
    ([Start And Verify](#start-and-verify)). When the exit contract routes,
    set the routing policy and read it back once the deputy's self-check
    has passed, before the submit (same section).
-5. Submit the target from the CLI ([Start And Verify](#start-and-verify)),
+6. Submit the target from the CLI ([Start And Verify](#start-and-verify)),
    or, in client-target mode, the visibility seed and then the composer's
    task ([Submit A New Task From A Client](#submit-a-new-task-from-a-client)).
-6. Follow the task record through the specification approval to
+7. Follow the task record through the specification approval to
    publication ([Start And Verify](#start-and-verify)); a client-composed
    task follows [The Exercise](#the-exercise).
-7. Decide the closure card, walk through the ready card, and merge
+8. Decide the closure card, walk through the ready card, and merge
    ([Walk Through, Merge, And Raise The Alerts](#walk-through-merge-and-raise-the-alerts)).
-8. Wait for the completion fact and raise the alerts (same section).
-9. Apply the record checks to the final task record
-   ([Start And Verify](#start-and-verify)).
-10. End the deputy ([Complete Deliberately](#complete-deliberately)).
+9. Wait for the completion fact and raise the alerts (same section).
+10. Apply the record checks to the final task record
+    ([Start And Verify](#start-and-verify)).
+11. End the deputy ([Complete Deliberately](#complete-deliberately)).
+12. Resume `prod` once the last deputy pass has ended and released its lease
+    ([Pause Execution For A Deputy Run](../daemon/README.md#pause-execution-for-a-deputy-run)).
 
 ## Start And Verify
 
@@ -76,12 +86,17 @@ the approved default-branch commit, set `prompts.prompt_package` to
 The daemon admits the content digest of these exact bytes; a workspace copy is
 never prompt authority.
 
-The production daemon keeps running during the run (#2080). It must run
-without a driver, which the installed LaunchAgent does: it passes no
-`-driver`. A driverless `prod` never opens the App authority's files, so the
-run stays their only writer
+The production daemon keeps running during the run (#2080), but without
+execution. The installed `prod` executes real work when its stored settings
+turn execution on, so pause it before the first command that takes the App
+authority and resume it after the deputy ends
+([Pause Execution For A Deputy Run](../daemon/README.md#pause-execution-for-a-deputy-run)).
+A paused `prod` serves without a driver and never opens the App authority's
+files, so the run stays their only writer
 ([plan §10](plan.md#environments-prod-dev-and-ephemeral)). Both sides check
-this. Preflight's `prod_execution` check reads `prod`'s execution mode over
+this. Beside an executing `prod`, the deputy's start refuses on the App
+authority writer lock and names `freesided execution pause`. Preflight's
+`prod_execution` check reads `prod`'s execution mode over
 its control socket and fails when `prod` reports a driver or advertises a
 socket that does not report its mode, so the installed app must include
 #2080; an older installed build fails the check. A stopped `prod` passes it,
@@ -398,7 +413,7 @@ with the deputy still serving:
 One table per mode. Each row names the input, where it lives, and the check
 that refuses it, so a missing input fails at a known point instead of during
 the run. The daemon guide's settings table
-([Run Real Work With The Deputy](../daemon/README.md#run-real-work-with-the-deputy))
+([Run An Unreleased Build With The Deputy](../daemon/README.md#run-an-unreleased-build-with-the-deputy))
 is the authority for the settings, and it changes. The pre-spend record's
 `inputs` checks apply `submit`'s refusals to the files
 ([Run The Pre-Spend Checks Before A Launch](../daemon/README.md#run-the-pre-spend-checks-before-a-launch)).
@@ -776,8 +791,11 @@ operator's devices need what this list names. Each item says how to check it
 and how to fix it. The app's commands are the operator's to run
 ([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
 
-- **`prod` runs driverless** from an installed app that includes #2080, and
-  the App authority lives in its directories. Confirm it runs with the app's
+- **`prod` runs without execution** from an installed app that includes
+  #2080, and the App authority lives in its directories. `freesided
+  execution status` reports `"executes":false` once the pause has released
+  ([Pause Execution For A Deputy Run](../daemon/README.md#pause-execution-for-a-deputy-run)).
+  Confirm it runs with the app's
   `daemon status` command in [Start And Verify](#start-and-verify): a
   stopped `prod` passes preflight's `prod_execution` check, so only that
   read catches it. Leave it running; the deputy never stops or restarts it.
@@ -1015,11 +1033,15 @@ it:
 freesided rig recover -state-root <that-root>/daemon -confirm
 ```
 
-A stale lease also keeps `prod` from starting with a driver; the driverless
-installed daemon starts and keeps running, and recovery does not need it
-stopped. `rig recover` rejects a live holder, a locked database, a live
-listener, or resources that cannot be cleaned, and it never kills a stored
-PID. Never delete a rig manifest by hand or clear the gate while the daemon
+A stale lease also keeps `prod` from executing: a `prod` that starts while
+the manifest exists serves without a driver under the blocking
+`rig_lease_present` card, and recovery does not need it stopped. After
+`rig recover`, and once no deputy runs, `freesided execution resume -db
+<prod-db>` restarts it on its settings
+([Pause Execution For A Deputy Run](../daemon/README.md#pause-execution-for-a-deputy-run)).
+`rig recover` rejects a live holder, a locked database, a live listener,
+or resources that cannot be cleaned, and it never kills a stored PID.
+Never delete a rig manifest by hand or clear the gate while the daemon
 or recorded resources remain live.
 
 Recovery first removes exactly the manifest-recorded containers, then

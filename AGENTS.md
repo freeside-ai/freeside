@@ -312,9 +312,11 @@ when the lander hands it back (`needs-rework`) or the owner asks
 Operator
 tools that are not checks live with their component: installers in
 app/README.md, image builds in images/README.md, the real unattended run in
-daemon/README.md (Run Real Work With The Deputy), and the API linter pin in
-api/README.md. `prompts/` and `policy/` are not yet initialized. Lint,
-format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and
+daemon/README.md (Run The Installed Daemon From Its Settings), the attended
+run of an unreleased build in daemon/README.md (Run An Unreleased Build
+With The Deputy), and the API linter pin in api/README.md. `prompts/` and
+`policy/` are not yet initialized. Lint, format, and CI follow the
+daemon's pattern, `daemon/.golangci.yml` and
 `.github/workflows/daemon-ci.yml` (Linux runs build, test, vet, and lint;
 macOS runs build and test); each new component adds its own on that pattern
 in its first PR, registers its steps in `scripts/check.sh`, and registers
