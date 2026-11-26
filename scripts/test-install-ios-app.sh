@@ -346,6 +346,19 @@ assert_rc 0
 assert_contains "signing team: OVERRIDE12"
 assert_file_contains "$CASE_DIR/xcodebuild-args" "DEVELOPMENT_TEAM=OVERRIDE12"
 
+begin_case "a malformed FREESIDE_IOS_TEAM_ID is rejected before device resolution or build" team-override-invalid
+for bad_team in "abcde12345" "ABCDE1234" " ABCDE12345"; do
+    rm -f "$CASE_DIR/xcodebuild-args" "$CASE_DIR/devicectl-calls"
+    export FREESIDE_IOS_TEAM_ID="$bad_team"
+    run_installer --device Ashpool
+    assert_rc 1
+    assert_contains "FREESIDE_IOS_TEAM_ID must be a 10-character Team ID of capital"
+    assert_contains "letters and digits"
+    assert_contains "got '$bad_team'."
+    assert_absent "$CASE_DIR/xcodebuild-args"
+    assert_absent "$CASE_DIR/devicectl-calls"
+done
+
 # --- Build invocation ------------------------------------------------------
 
 begin_case "the build targets the resolved device with automatic signing" build-invocation
