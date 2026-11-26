@@ -7004,7 +7004,9 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   services; read, write, or connect to a Unix socket under a protected
   root; write `/Library/Freeside`, a verification job's `freeside-verify-`
   directories, the global preference domain, or the keychain preferences
-  that name the default keychain and search list; bind a reserved port; or
+  that name the default keychain and search list; bind a reserved port;
+  ask authd for an authorization right, so a refused keychain add fails at
+  once instead of asking authd for a login-keychain prompt; or
   signal or attach to a process outside its own sandbox. Nor can it rename
   any directory above a denied path, or remove or rename anything in
   another project, since a rename moves a denied path out from under its

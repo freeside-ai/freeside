@@ -92,6 +92,14 @@
 ;; it. Its xpc service isn't needed, so it stays denied.
 (deny mach-lookup
   (global-name "com.apple.securityd.xpc"))
+;; No authorization right. A keychain add the file rule refuses doesn't
+;; fail: Security.framework asks authd for a login-keychain prompt and
+;; waits. The prompt would run outside this file, on the owner's screen, and
+;; can offer "Reset To Defaults", which replaces the login keychain. authd
+;; checks this operation against its client, so the add fails at once with
+;; the authorization denied. authd stays reachable for everything else
+;; (#3611).
+(deny authorization-right-obtain)
 ;; The account's default keychain and keychain search list. A launch that
 ;; made its own keychain the default would receive the owner's next saved
 ;; credential. Security.framework writes the file itself, and cfprefsd writes
