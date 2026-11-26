@@ -535,6 +535,9 @@ lists only the names resolved against it. All under `daemon/`:
   or ended lost, and which run's directory is removed),
   `internal/daemoncompose/cordon_backend.go` (builds the cordon's
   configuration and chooses which proof its backend declares from),
+  `internal/daemoncompose/cordon_proofs.go` (runs each host's suite, binds
+  each record to the host whose suite wrote it, and sets the host's proof
+  condition),
   `internal/daemoncompose/cordon_gate.go` (reads the setup token a
   cordoned launch runs with for the admission's own generation, decides
   when a launch requires the class's proof, keeps a shutdown from

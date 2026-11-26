@@ -7228,6 +7228,19 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   stands. Its failure withdraws the declaration and records `failed`, not
   `superseded`, which the store would read as a re-proof under way, so only
   a new full pass declares again.
+- **Each host is proved on its own.** Every record names the execution host
+  whose suite wrote it: the daemon binds the host through the recorder it
+  hands the suite, never the suite itself, and the store refuses a record
+  that names a host or names one it doesn't hold. Admission reads only the
+  admission's host's records, so a pass on one host admits nothing on
+  another. `internal/daemoncompose/cordon_proofs.go` holds a suite per
+  host: it runs the full pass when the host joins, on the doctor schedule,
+  and before a job when the host's configuration digest changed since its
+  last pass, and the pre-job probe runs on the job's own host. After each
+  full pass and each failed probe it sets `proof_not_current` on the host
+  exactly when the host's newest cordoned record isn't a pass, writing only
+  when that changes; a recheck under way leaves it as it is until the pass
+  ends. Only the daemon's host is composed until #3625.
 - **What the suite touches.** It reads the account's secret paths only to
   see whether they open, and prints nothing a probe read; the environment
   check names variables, never values. Its signal, launchd, and app
@@ -7322,10 +7335,12 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   database and `confstr`, never `HOME` or `TMPDIR`; the reserved ports are
   the macOS verification executor's. The full pass runs at every start,
   with no restore from an earlier record, and again after the ward's on
-  every scheduled doctor pass. A passed pass logs its configuration
-  digest, the value `freesided doctor -cordon-configuration-digest` takes.
-  A failed pass logs why and leaves the class undeclared; only a record
-  the store didn't take stops startup or the scheduled pass.
+  every scheduled doctor pass, each recorded against the daemon's host. A
+  passed pass logs its configuration digest, the value
+  `freesided doctor -cordon-configuration-digest` takes. A failed pass
+  logs why and leaves the class undeclared; only a record the store didn't
+  take, or a proof condition it couldn't write, stops startup or the
+  scheduled pass.
 
 The darwin tests launch the test binary as the fake agent, under the real
 rule file, with a fake home under the test's directory; no default test

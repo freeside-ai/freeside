@@ -1384,7 +1384,8 @@ func composeClaudeDriver(
 		selectImage:                     selectImage,
 		bindImageUpkeep:                 bindImageUpkeep,
 		// The cordon's pass follows the ward's; it returns only a record
-		// the store didn't take, so a failed pass never stops the daemon.
+		// the store didn't take or a proof condition it couldn't write, so
+		// a failed pass never stops the daemon.
 		runConformance: func(runCtx context.Context) error {
 			return errors.Join(follower.runScheduled(runCtx), cordonBackend.RunScheduled(runCtx))
 		},

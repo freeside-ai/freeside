@@ -3,7 +3,6 @@ package daemoncompose
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	osexec "os/exec"
@@ -208,25 +207,26 @@ func resolveExisting(name, path string) (string, error) {
 // proveCordon runs the suite's full pass.
 func proveCordon(ctx context.Context, suite *cordon.Suite) error { return suite.Full(ctx) }
 
-// ComposedCordon is the cordoned launch backend with its attached suite.
+// ComposedCordon is the cordoned launch backend with the runner that proves
+// it on each host.
 type ComposedCordon struct {
 	Backend *cordon.Backend
-	suite   *cordon.Suite
-	prove   func(context.Context, *cordon.Suite) error
-	logger  *slog.Logger
+	proofs  *cordonProofs
 }
 
 // ComposeCordonBackend builds the backend from config, attaches its suite
-// with a store-backed recorder, and runs the full pass through prove
-// (proveCordon outside tests). There is no restore: every start
-// proves the class again, because the pass is cheap and a record from an
-// earlier start says nothing about this host's state now. A failed pass
-// leaves the backend declaring nothing and logs why; startup goes on, and
-// unattended admission refuses the class. A record the store didn't take
-// fails startup, since the durable state is then unknown.
+// with the runner's recorder for the daemon's host, and adds it to the
+// runner, which runs the full pass through prove (proveCordon outside
+// tests). There is no restore: every start proves the class again, because
+// the pass is cheap and a record from an earlier start says nothing about
+// this host's state now. A failed pass leaves the backend declaring nothing
+// and logs why; startup goes on, and unattended admission refuses the class.
+// A record the store didn't take fails startup, since the durable state is
+// then unknown.
 //
 // Tier A: it chooses which proof the backend declares from. The only
-// declaration it allows is the one the suite's own recorded pass publishes.
+// declaration it allows is the one the suite's own recorded pass publishes,
+// recorded against the daemon's host.
 func ComposeCordonBackend(
 	ctx context.Context, st *store.Store, config cordon.Config, seeder cordon.Seeder, logger *slog.Logger,
 	prove func(context.Context, *cordon.Suite) error,
@@ -235,25 +235,37 @@ func ComposeCordonBackend(
 	if err != nil {
 		return nil, fmt.Errorf("configure the cordon: %w", err)
 	}
-	suite, err := cordon.NewSuite(backend, cordon.WithConformanceRecorder(StoreConformanceRecorder{Store: st, Host: domain.DaemonHostID}))
+	proofs := newCordonProofs(st, logger)
+	suite, err := cordon.NewSuite(backend, cordon.WithConformanceRecorder(proofs.Recorder(domain.DaemonHostID)))
 	if err != nil {
 		return nil, fmt.Errorf("configure the cordon: %w", err)
 	}
-	composed := &ComposedCordon{Backend: backend, suite: suite, prove: prove, logger: logger}
-	if err := composed.runPass(ctx); err != nil {
+	if err := proofs.Add(ctx, domain.DaemonHostID, provingSuite{suite: suite, prove: prove},
+		backend.ConfigurationDigest); err != nil {
 		return nil, fmt.Errorf("run the cordon's conformance pass: %w", err)
 	}
-	return composed, nil
+	return &ComposedCordon{Backend: backend, proofs: proofs}, nil
 }
 
-// RunScheduled runs the full pass again, as the scheduled doctor pass
-// does after the ward's. It returns only a record the store didn't take;
-// a failed pass leaves the class undeclared without stopping the daemon.
+// provingSuite runs a suite's full pass through prove, the composition's
+// test seam, and its probe directly.
+type provingSuite struct {
+	suite *cordon.Suite
+	prove func(context.Context, *cordon.Suite) error
+}
+
+func (s provingSuite) Full(ctx context.Context) error           { return s.prove(ctx, s.suite) }
+func (s provingSuite) ProbeBeforeJob(ctx context.Context) error { return s.suite.ProbeBeforeJob(ctx) }
+
+// RunScheduled runs the full pass again on every host, as the scheduled
+// doctor pass does after the ward's. It returns only a record the store
+// didn't take or a proof condition it couldn't write; a failed pass leaves
+// the class undeclared on its host without stopping the daemon.
 func (c *ComposedCordon) RunScheduled(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
-	return c.runPass(ctx)
+	return c.proofs.RunScheduled(ctx)
 }
 
 // ConfigurationDigest is the composed backend's, or empty when no cordon
@@ -263,28 +275,6 @@ func (c *ComposedCordon) ConfigurationDigest() domain.Digest {
 		return ""
 	}
 	return c.Backend.ConfigurationDigest()
-}
-
-func (c *ComposedCordon) runPass(ctx context.Context) error {
-	err := c.prove(ctx, c.suite)
-	switch {
-	case err == nil:
-		// The digest is what `freesided doctor -cordon-configuration-digest`
-		// takes, so the log is where an operator finds it.
-		if c.logger != nil {
-			c.logger.Info("the cordoned class is proven", "configuration_digest", c.Backend.ConfigurationDigest())
-		}
-		return nil
-	case errors.Is(err, cordon.ErrConformanceRecord):
-		return err
-	case ctx.Err() != nil:
-		return ctx.Err()
-	}
-	if c.logger != nil {
-		c.logger.Warn("the cordoned class declares nothing; unattended admission refuses it until a pass succeeds",
-			"configuration_digest", c.Backend.ConfigurationDigest(), "reason", err.Error())
-	}
-	return nil
 }
 
 // composeConfiguredCordon composes the cordon cfg.Cordon names, or none
