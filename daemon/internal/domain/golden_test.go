@@ -2727,6 +2727,23 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// An extra host with every optional value set and two conditions; the
+	// daemon's host fixture below renders each absent value as null.
+	hostAccount := "runner"
+	hostOverride := 2
+	executionHost := domain.ExecutionHost{
+		ID: "host-1", Name: "studio",
+		RunAccount: domain.HostRunAccount{Name: &hostAccount, DaemonOwner: false},
+		Reach: &domain.HostReach{
+			Address: "studio.local", HostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKeyFixture",
+		},
+		CordonedCountOverride: &hostOverride,
+		Conditions: []domain.HostObservedCondition{
+			{Condition: domain.ExecutionHostUnreachable, Since: ts},
+			{Condition: domain.ExecutionHostMemoryPressure, Since: ts.Add(time.Minute)},
+		},
+	}
+
 	cases := []struct {
 		name  string
 		value any
@@ -2829,6 +2846,12 @@ func TestGolden(t *testing.T) {
 				{Kind: domain.RestartBlockerCredentialLease, Count: 1},
 			},
 			AsOf: ts.Add(time.Minute),
+		}},
+		{"execution_host", executionHost},
+		{"execution_host_daemon", domain.ExecutionHost{
+			ID: domain.DaemonHostID, Name: "daemon",
+			RunAccount: domain.HostRunAccount{DaemonOwner: true},
+			Conditions: []domain.HostObservedCondition{},
 		}},
 		{"update_drain_transition", domain.UpdateDrainTransition{
 			State:      domain.UpdateDrainDraining,

@@ -1,0 +1,1 @@
+[{"id":"daemon","name":"daemon","run_account":{"name":null,"daemon_owner":true},"conditions":[]},{"id":"host-1","name":"studio","run_account":{"name":"runner","daemon_owner":false},"conditions":[{"condition":"no_desktop_session","since":"2026-11-26T09:00:00Z"}]}]

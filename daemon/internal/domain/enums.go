@@ -2964,6 +2964,8 @@ const (
 	// DaemonFeatureQuestionOptionAnswers is question_answers on an
 	// agent_question answer.
 	DaemonFeatureQuestionOptionAnswers DaemonFeature = "question_option_answers"
+	// DaemonFeatureExecutionHosts is the GET /execution-hosts read.
+	DaemonFeatureExecutionHosts DaemonFeature = "execution_hosts"
 )
 
 // AllDaemonFeatures lists every feature this build serves; it is the single
@@ -2972,11 +2974,13 @@ var AllDaemonFeatures = []DaemonFeature{
 	DaemonFeatureParkedTaskMove,
 	DaemonFeatureWorkHours,
 	DaemonFeatureQuestionOptionAnswers,
+	DaemonFeatureExecutionHosts,
 }
 
 func (f DaemonFeature) valid() bool {
 	switch f {
-	case DaemonFeatureParkedTaskMove, DaemonFeatureWorkHours, DaemonFeatureQuestionOptionAnswers:
+	case DaemonFeatureParkedTaskMove, DaemonFeatureWorkHours, DaemonFeatureQuestionOptionAnswers,
+		DaemonFeatureExecutionHosts:
 		return true
 	default:
 		return false

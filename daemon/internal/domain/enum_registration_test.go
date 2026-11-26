@@ -26,6 +26,7 @@ const (
 
 var enumRegistrationExemptions = map[string]string{
 	"UnboundBackendConfigurationDigest": "Digest sentinel, not an enum member",
+	"DaemonHostID":                      "the daemon's fixed host id, not an enum member",
 }
 
 type enumRegistration struct {

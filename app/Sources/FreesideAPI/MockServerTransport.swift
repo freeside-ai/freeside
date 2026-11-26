@@ -94,6 +94,8 @@ public struct MockServerTransport: ClientTransport {
             return try Self.json(status: .ok, body: await server.serverRevision(after: after))
         case "getRestartReadiness":
             return try Self.json(status: .ok, body: await server.restartReadiness())
+        case "listExecutionHosts":
+            return try Self.json(status: .ok, body: await server.listExecutionHosts())
         case "getWorkHours":
             let query: MockWorkHours.Request
             do {

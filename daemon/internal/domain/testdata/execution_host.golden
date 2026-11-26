@@ -1,0 +1,23 @@
+{
+  "id": "host-1",
+  "name": "studio",
+  "run_account": {
+    "name": "runner",
+    "daemon_owner": false
+  },
+  "reach": {
+    "address": "studio.local",
+    "host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKeyFixture"
+  },
+  "cordoned_count_override": 2,
+  "conditions": [
+    {
+      "condition": "unreachable",
+      "since": "2026-01-02T03:04:05Z"
+    },
+    {
+      "condition": "memory_pressure",
+      "since": "2026-01-02T03:05:05Z"
+    }
+  ]
+}

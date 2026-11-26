@@ -91,6 +91,22 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /restart-readiness`.
     /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
     func getRestartReadiness(_ input: Operations.getRestartReadiness.Input) async throws -> Operations.getRestartReadiness.Output
+    /// List the execution hosts
+    ///
+    /// Lists every execution host (plan §5.7): its id, name, the account
+    /// its runs execute as, and the conditions that close it to new
+    /// launches. The daemon's own host, id `daemon`, is always present. A
+    /// partial fetch, like `GET /devices`: hosts are not in the bootstrap
+    /// snapshot, and this read never marks the whole cache current. A
+    /// change to a host or its conditions moves the server revision, so a
+    /// client reads the list again when the revision moves. The response
+    /// carries no address, host key, or count override. The read changes
+    /// no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /execution-hosts`.
+    /// - Remark: Generated from `#/paths//execution-hosts/get(listExecutionHosts)`.
+    func listExecutionHosts(_ input: Operations.listExecutionHosts.Input) async throws -> Operations.listExecutionHosts.Output
     /// How runs' time divided over the days of a period
     ///
     /// Divides every run's elapsed time into four classes and adds it to
@@ -589,6 +605,24 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//restart-readiness/get(getRestartReadiness)`.
     public func getRestartReadiness(headers: Operations.getRestartReadiness.Input.Headers = .init()) async throws -> Operations.getRestartReadiness.Output {
         try await getRestartReadiness(Operations.getRestartReadiness.Input(headers: headers))
+    }
+    /// List the execution hosts
+    ///
+    /// Lists every execution host (plan §5.7): its id, name, the account
+    /// its runs execute as, and the conditions that close it to new
+    /// launches. The daemon's own host, id `daemon`, is always present. A
+    /// partial fetch, like `GET /devices`: hosts are not in the bootstrap
+    /// snapshot, and this read never marks the whole cache current. A
+    /// change to a host or its conditions moves the server revision, so a
+    /// client reads the list again when the revision moves. The response
+    /// carries no address, host key, or count override. The read changes
+    /// no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /execution-hosts`.
+    /// - Remark: Generated from `#/paths//execution-hosts/get(listExecutionHosts)`.
+    public func listExecutionHosts(headers: Operations.listExecutionHosts.Input.Headers = .init()) async throws -> Operations.listExecutionHosts.Output {
+        try await listExecutionHosts(Operations.listExecutionHosts.Input(headers: headers))
     }
     /// How runs' time divided over the days of a period
     ///
@@ -8746,6 +8780,123 @@ public enum Components {
                 case count
             }
         }
+        /// A machine that runs the daemon's cordoned launches (plan §5.7, mirrors domain.ExecutionHost without its reach and count override).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExecutionHost`.
+        public struct ExecutionHost: Codable, Hashable, Sendable {
+            /// The host's stable identifier. The daemon's own host is `daemon`.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionHost/id`.
+            public var id: Swift.String
+            /// The operator's name for the host, unique among hosts.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionHost/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ExecutionHost/run_account`.
+            public var run_account: Components.Schemas.ExecutionHostRunAccount
+            /// Each condition the host is in, once each, in the order ExecutionHostCondition lists its members. Empty when nothing closes the host.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionHost/conditions`.
+            public var conditions: [Components.Schemas.ExecutionHostObservedCondition]
+            /// Creates a new `ExecutionHost`.
+            ///
+            /// - Parameters:
+            ///   - id: The host's stable identifier. The daemon's own host is `daemon`.
+            ///   - name: The operator's name for the host, unique among hosts.
+            ///   - run_account:
+            ///   - conditions: Each condition the host is in, once each, in the order ExecutionHostCondition lists its members. Empty when nothing closes the host.
+            public init(
+                id: Swift.String,
+                name: Swift.String,
+                run_account: Components.Schemas.ExecutionHostRunAccount,
+                conditions: [Components.Schemas.ExecutionHostObservedCondition]
+            ) {
+                self.id = id
+                self.name = name
+                self.run_account = run_account
+                self.conditions = conditions
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case run_account
+                case conditions
+            }
+        }
+        /// The account a host's runs execute as. The daemon's own host runs as the daemon owner and names no account; every other host names it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExecutionHostRunAccount`.
+        public struct ExecutionHostRunAccount: Codable, Hashable, Sendable {
+            /// The account's login, or null on the daemon's own host.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionHostRunAccount/name`.
+            public var name: Swift.String?
+            /// Whether the account is the daemon owner's. The Simulator and desktop-control settings apply only where it isn't.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionHostRunAccount/daemon_owner`.
+            public var daemon_owner: Swift.Bool
+            /// Creates a new `ExecutionHostRunAccount`.
+            ///
+            /// - Parameters:
+            ///   - name: The account's login, or null on the daemon's own host.
+            ///   - daemon_owner: Whether the account is the daemon owner's. The Simulator and desktop-control settings apply only where it isn't.
+            public init(
+                name: Swift.String? = nil,
+                daemon_owner: Swift.Bool
+            ) {
+                self.name = name
+                self.daemon_owner = daemon_owner
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case daemon_owner
+            }
+        }
+        /// One condition a host is in and when it began.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExecutionHostObservedCondition`.
+        public struct ExecutionHostObservedCondition: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ExecutionHostObservedCondition/condition`.
+            public var condition: Components.Schemas.ExecutionHostCondition
+            /// - Remark: Generated from `#/components/schemas/ExecutionHostObservedCondition/since`.
+            public var since: Foundation.Date
+            /// Creates a new `ExecutionHostObservedCondition`.
+            ///
+            /// - Parameters:
+            ///   - condition:
+            ///   - since:
+            public init(
+                condition: Components.Schemas.ExecutionHostCondition,
+                since: Foundation.Date
+            ) {
+                self.condition = condition
+                self.since = since
+            }
+            public enum CodingKeys: String, CodingKey {
+                case condition
+                case since
+            }
+        }
+        /// A condition that closes an execution host to new launches (mirrors domain.ExecutionHostCondition). no_desktop_session, unreachable, proof_not_current (a failed or lapsed proof), other_build (a build other than the daemon's), and lost (declared lost) close it to every new launch; cordoned_count_full, memory_pressure (pressure that isn't normal), and no_desktop_control close it to some work. Widening it is a contract change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExecutionHostCondition`.
+        @frozen public enum ExecutionHostCondition: String, Codable, Hashable, Sendable, CaseIterable {
+            case no_desktop_session = "no_desktop_session"
+            case unreachable = "unreachable"
+            case proof_not_current = "proof_not_current"
+            case other_build = "other_build"
+            case lost = "lost"
+            case cordoned_count_full = "cordoned_count_full"
+            case memory_pressure = "memory_pressure"
+            case no_desktop_control = "no_desktop_control"
+            case unknown = "unknown"
+        }
         /// A kind of running work a daemon restart would cut short (mirrors domain.RestartBlockerKind). execution_launch and review_launch are admissions that still hold their slot; verification_job, image_build, probe, proof_pass (a ward proof pass), and publication are work in progress in the running daemon; credential_lease is a held auth-store mutation lease, such as an enrollment or a token refresh, that no counted launch holds. Widening it is a contract change.
         ///
         ///
@@ -11489,7 +11640,7 @@ public enum Components {
                 case started_at
             }
         }
-        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read. `question_option_answers`: `question_answers` on an agent_question answer.
+        /// A feature a daemon build may serve, named in `/health`'s `features` so an app can turn off what an older daemon lacks. A name is registered here once, by the unit that adds an app-visible surface a newer app would otherwise send to a daemon that refuses it. `parked_task_move`: the `move_parked_task` command (plan §4, quota park). `work_hours`: the `GET /work-hours` read. `question_option_answers`: `question_answers` on an agent_question answer. `execution_hosts`: the `GET /execution-hosts` read.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/DaemonFeature`.
@@ -11497,6 +11648,7 @@ public enum Components {
             case parked_task_move = "parked_task_move"
             case work_hours = "work_hours"
             case question_option_answers = "question_option_answers"
+            case execution_hosts = "execution_hosts"
             case unknown = "unknown"
         }
         /// The pairing exchange's input: the short-lived code read off the daemon host and the human label the new device will carry.
@@ -19298,6 +19450,127 @@ public enum Operations {
             /// - Throws: An error if `self` is not `.ok`.
             /// - SeeAlso: `.ok`.
             public var ok: Operations.getRestartReadiness.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// List the execution hosts
+    ///
+    /// Lists every execution host (plan §5.7): its id, name, the account
+    /// its runs execute as, and the conditions that close it to new
+    /// launches. The daemon's own host, id `daemon`, is always present. A
+    /// partial fetch, like `GET /devices`: hosts are not in the bootstrap
+    /// snapshot, and this read never marks the whole cache current. A
+    /// change to a host or its conditions moves the server revision, so a
+    /// client reads the list again when the revision moves. The response
+    /// carries no address, host key, or count override. The read changes
+    /// no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /execution-hosts`.
+    /// - Remark: Generated from `#/paths//execution-hosts/get(listExecutionHosts)`.
+    public enum listExecutionHosts {
+        public static let id: Swift.String = "listExecutionHosts"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/execution-hosts/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.listExecutionHosts.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.listExecutionHosts.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.listExecutionHosts.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            public init(headers: Operations.listExecutionHosts.Input.Headers = .init()) {
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/execution-hosts/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/execution-hosts/GET/responses/200/content/application\/json`.
+                    case json([Components.Schemas.ExecutionHost])
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: [Components.Schemas.ExecutionHost] {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.listExecutionHosts.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.listExecutionHosts.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Every execution host, ordered by id.
+            ///
+            /// - Remark: Generated from `#/paths//execution-hosts/get(listExecutionHosts)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.listExecutionHosts.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.listExecutionHosts.Output.Ok {
                 get throws {
                     switch self {
                     case let .ok(response):

@@ -79,6 +79,8 @@
 //   - unattended.go   the unattended-operation state an operator moves
 //   - update_drain.go the update drain that holds new launches for a restart
 //   - restart_readiness.go what a restart waits on, by blocker kind
+//   - execution_host.go the hosts that run cordoned launches: name, run
+//     account, reach, and the conditions that close one (§5.7)
 //   - workflow.go     resolved workflow-definition initiators (§5.12)
 //   - run.go          run/stage/attempt and invocation identities (§5.3)
 //   - observation.go  run observations: milestones, holds, invocation
