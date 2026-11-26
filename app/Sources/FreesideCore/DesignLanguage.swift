@@ -990,6 +990,9 @@ struct Notice: View {
         /// False while the action cannot run. The button stays in place in
         /// the cut every disabled control takes.
         var isEnabled = true
+        /// True while an enclosing panel's keyboard highlight rests on this
+        /// button, drawing the panel's outer accent ring.
+        var isHighlighted = false
         let handler: () -> Void
     }
 
@@ -1020,6 +1023,13 @@ struct Notice: View {
                     .buttonStyle(FreesideActionButtonStyle(tone: tone.actionTone, expands: false))
                     .disabled(!action.isEnabled)
                     .accessibilityLabel(action.accessibilityLabel ?? action.label)
+                    .overlay {
+                        if action.isHighlighted {
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.accentBorder, lineWidth: 1)
+                                .padding(-2)
+                        }
+                    }
                     .padding(.top, 2)
             }
         }
