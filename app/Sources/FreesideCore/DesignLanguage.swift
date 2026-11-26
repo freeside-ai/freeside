@@ -2049,20 +2049,38 @@ struct CapacityGaugeStyle: GaugeStyle {
     let level: UsageDisplay.WindowCapacity.Level
 
     func makeBody(configuration: Configuration) -> some View {
+        MeterTrack(
+            fraction: configuration.value,
+            fill: level == .usedUp ? nil : (level == .low ? Color.waxText : Color.accentText)
+        )
+        .overlay {
+            if level == .usedUp {
+                Capsule().strokeBorder(Color.waxText, lineWidth: 1.5)
+            }
+        }
+    }
+}
+
+/// The Usage meter's track (R32), shared so every meter and bar drawn on
+/// it stays one shape: a 10pt capsule on ground-3, filled from the left
+/// to `fraction` of its width. A nil `fill` draws the empty track. It is
+/// a plain view, not a `Gauge` or `ProgressView`, so `ImageRenderer` draws
+/// it; the caller supplies any accessibility.
+struct MeterTrack: View {
+    /// 0...1 of the track's width.
+    let fraction: Double
+    let fill: Color?
+
+    var body: some View {
         Capsule()
             .fill(Color.ground3)
             .overlay(alignment: .leading) {
-                if level != .usedUp {
+                if let fill {
                     GeometryReader { proxy in
                         Capsule()
-                            .fill(level == .low ? Color.waxText : Color.accentText)
-                            .frame(width: proxy.size.width * configuration.value)
+                            .fill(fill)
+                            .frame(width: proxy.size.width * fraction)
                     }
-                }
-            }
-            .overlay {
-                if level == .usedUp {
-                    Capsule().strokeBorder(Color.waxText, lineWidth: 1.5)
                 }
             }
             .frame(height: 10)

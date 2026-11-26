@@ -70,6 +70,19 @@ package struct WorkStatus {
         }
     }
 
+    /// The scale every row's bar shares: the largest count across all
+    /// groups, held ones included, or 0 when nothing is counted.
+    package var largestCount: Int {
+        groups.map(\.count).max() ?? 0
+    }
+
+    /// How much of the track a count fills against the tab's largest
+    /// count: 0 when the largest is 0, so an all-zero tab draws empty
+    /// tracks rather than dividing by zero.
+    package static func barFraction(_ count: Int, largest: Int) -> Double {
+        largest > 0 ? Double(count) / Double(largest) : 0
+    }
+
     /// The position of a task with no open item: nil for a finished,
     /// stopped, or abandoned task, which isn't counted. It reads
     /// `TaskDisplay.isActive`, as the list's Working section does, not
