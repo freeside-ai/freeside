@@ -181,6 +181,11 @@ print_logs() {
 }
 
 cleanup() {
+  # Print logs before stopping runs so a cancel or early failure that
+  # reaches this trap dumps buffered output even if stopping blocks.
+  if [[ -z "$logs_printed" ]] && ((${#run_logs[@]} > 0)); then
+    print_logs
+  fi
   if ((${#run_pids[@]} > 0)); then
     local pid
     for pid in "${run_pids[@]}"; do
@@ -188,9 +193,6 @@ cleanup() {
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     done
-  fi
-  if [[ -z "$logs_printed" ]] && ((${#run_logs[@]} > 0)); then
-    print_logs
   fi
   if [[ -n "$harness_pid" ]] && kill -0 "$harness_pid" 2>/dev/null; then
     kill "$harness_pid" 2>/dev/null || true
