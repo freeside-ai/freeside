@@ -105,6 +105,11 @@ func transientExternalFailure(err error) bool {
 		}
 		return true
 	}
+	// Matched at this level, not with errors.As, so a joined error is
+	// transient only when every cause is.
+	if _, ok := err.(*reproveRuntimeFailure); ok { //nolint:errorlint // matched per level, see above
+		return true
+	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if cause := wrapped.Unwrap(); cause != nil {
 			return transientExternalFailure(cause)

@@ -254,7 +254,9 @@ func newClaudeScheduler(
 			// Each pass starts usage collection without waiting for it (plan
 			// §10). A collection failure shows only as its pool's refresh
 			// status, so it stays out of the consumption: a failed doctor
-			// pass stops the daemon.
+			// pass stops the daemon, unless its failure is transient (a
+			// runtime-command re-prove failure among them), which retries
+			// at the next fire.
 			if collectErr := collectUsage(ctx); collectErr != nil && ctx.Err() == nil {
 				upkeepLogger.Warn("scheduled usage collection did not start", "error", collectErr)
 			}

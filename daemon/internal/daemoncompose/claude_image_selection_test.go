@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 const (
@@ -938,6 +940,82 @@ func TestConformanceFollowerScheduledFailureClosesOnlyItsImage(t *testing.T) {
 	}
 	if retired := ward.retiredImages(); !slices.Equal(retired, []domain.ImageRef{a}) {
 		t.Fatalf("retired %v, want the unselected %s", retired, a)
+	}
+}
+
+// A scheduled re-proof that failed only because a runtime command exited
+// nonzero runs once more after followerRetryBackoff. A retry that passes
+// leaves the round passing; one that fails the same way is marked transient
+// for the doctor's failure tracker. A real conformance regression is not
+// retried or marked, even when an exit caused it, and neither is an exit
+// joined with any other failure.
+func TestConformanceFollowerScheduledRetriesARuntimeCommandFailure(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("a", 64))
+	runtimeFailure := fmt.Errorf("conformance: credential seed did not stop: %w",
+		fmt.Errorf("container inspect: %w", &osexec.ExitError{}))
+	regression := &ward.ConformanceFailure{
+		Backend: ward.BackendName, Check: ward.CheckCredentialContainment,
+		Reason: "credential seed did not stop", Err: &osexec.ExitError{},
+	}
+	for name, tc := range map[string]struct {
+		results    []error
+		wantPasses int
+		wantWait   time.Duration
+		wantMarked bool
+		wantProven bool
+	}{
+		"retry passes": {
+			results: []error{runtimeFailure, nil}, wantPasses: 2, wantWait: followerRetryBackoff, wantProven: true,
+		},
+		"retry fails the same way": {
+			results: []error{runtimeFailure, runtimeFailure}, wantPasses: 2, wantWait: followerRetryBackoff,
+			wantMarked: true,
+		},
+		"conformance regression": {results: []error{regression}, wantPasses: 1},
+		"exit joined with a failed conformance write": {
+			results: []error{errors.Join(runtimeFailure,
+				errors.New("record backend conformance: database is locked"))},
+			wantPasses: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ward := newFakeWard(image)
+				passes := 0
+				follower := testFollower(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+					if passes == len(tc.results) {
+						t.Errorf("unexpected pass %d of %s", passes+1, proved)
+						return errors.New("unexpected pass")
+					}
+					err := tc.results[passes]
+					passes++
+					ward.publish(proved, err == nil)
+					return err
+				}, time.Now, image)
+				follower.noteSelected(image)
+
+				began := time.Now()
+				err := follower.runScheduled(t.Context())
+				if waited := time.Since(began); waited != tc.wantWait {
+					t.Errorf("round waited %v, want %v", waited, tc.wantWait)
+				}
+				if passes != tc.wantPasses {
+					t.Errorf("round ran %d passes, want %d", passes, tc.wantPasses)
+				}
+				if proven := slices.Contains(ward.ProvenImages(), string(image)); proven != tc.wantProven {
+					t.Errorf("image proven = %t, want %t", proven, tc.wantProven)
+				}
+				if (err == nil) != tc.wantProven {
+					t.Fatalf("round = %v, want an error only when the image is left unproven", err)
+				}
+				var marked *reproveRuntimeFailure
+				if errors.As(err, &marked) != tc.wantMarked {
+					t.Fatalf("round = %v, want marked as a runtime-command failure: %t", err, tc.wantMarked)
+				}
+			})
+		})
 	}
 }
 
