@@ -1134,7 +1134,7 @@ import Testing
         #expect(model.isSubmittable(.snooze))
 
         guard let facts = model.proposalFacts else { return }
-        await model.submitTaskProposalRevision(
+        let claimed = await model.submitTaskProposalRevision(
             .init(
                 intent: facts.intent,
                 expected_cost_units: 20,
@@ -1142,8 +1142,40 @@ import Testing
                     component_count: 2, declared_path_count: facts.scope.declared_path_count,
                     touches_control_plane: true)))
 
+        #expect(claimed)
         #expect(model.appliedRecord?.action == .start_with_changes)
         #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func supersededTaskProposalRefusesASecondRevision() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
+        await model.validate()
+        let facts = try #require(model.proposalFacts)
+        let revision = Components.Schemas.TaskProposalRevisionInput(
+            intent: facts.intent,
+            expected_cost_units: 20,
+            scope: .init(
+                component_count: 2, declared_path_count: facts.scope.declared_path_count,
+                touches_control_plane: true))
+        let firstClaimed = await model.submitTaskProposalRevision(revision)
+        #expect(firstClaimed)
+        let before = await server.snapshot(itemID: "item-task_proposal")
+        let submitCommands = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                await submitCommands.increment()
+            }
+        }
+
+        let claimed = await model.submitTaskProposalRevision(revision)
+
+        #expect(!claimed)
+        #expect(model.pendingCommand == nil)
+        #expect(model.submissionError == nil)
+        #expect(await submitCommands.count == 0)
+        #expect(await server.snapshot(itemID: "item-task_proposal") == before)
     }
 
     @Test func effectProposalRendersAuthenticatedFactsAndSubmitsTypedRevision() async throws {
@@ -1163,14 +1195,43 @@ import Testing
             #expect(model.isSubmittable(action))
         }
 
-        await model.submitEffectProposalRevision(
+        let claimed = await model.submitEffectProposalRevision(
             .init(source_issue_closure: .init(resolves: !closure.resolves)))
 
+        #expect(claimed)
         #expect(model.appliedRecord?.action == .approve_with_changes)
         // Revising and approving are one command: the item is superseded and
         // the replacement the mock creates is already decided, so no new open
         // item waits in the inbox.
         #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func supersededEffectProposalRefusesASecondRevision() async throws {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-effect_proposal")
+        await model.validate()
+        let facts = try #require(model.effectProposalFacts)
+        let closure = try #require(facts.source_issue_closure?.value1)
+        let revision = Components.Schemas.EffectProposalRevisionInput(
+            source_issue_closure: .init(resolves: !closure.resolves))
+        let firstClaimed = await model.submitEffectProposalRevision(revision)
+        #expect(firstClaimed)
+        let before = await server.snapshot(itemID: "item-effect_proposal")
+        let submitCommands = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                await submitCommands.increment()
+            }
+        }
+
+        let claimed = await model.submitEffectProposalRevision(revision)
+
+        #expect(!claimed)
+        #expect(model.pendingCommand == nil)
+        #expect(model.submissionError == nil)
+        #expect(await submitCommands.count == 0)
+        #expect(await server.snapshot(itemID: "item-effect_proposal") == before)
     }
 
     @Test func recommendedEffectProposalLoadsRecommendedProvenance() async throws {
@@ -1215,11 +1276,37 @@ import Testing
         let model = DecisionModel(store: store, itemID: "item-effect_proposal")
         await model.validate()
 
-        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+        let claimed = await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
 
+        #expect(claimed)
         #expect(model.appliedRecord?.action == .snooze)
         #expect(model.snapshot == nil)
         #expect(model.validation == .validated)
+    }
+
+    @Test func snoozedProposalRefusesASecondSnooze() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-task_proposal")
+        await model.validate()
+        let until = Date(timeIntervalSince1970: 1_786_506_245)
+        let firstClaimed = await model.snooze(until: until)
+        #expect(firstClaimed)
+        let before = await server.snapshot(itemID: "item-task_proposal")
+        let submitCommands = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                await submitCommands.increment()
+            }
+        }
+
+        let claimed = await model.snooze(until: until.addingTimeInterval(3600))
+
+        #expect(!claimed)
+        #expect(model.pendingCommand == nil)
+        #expect(model.submissionError == nil)
+        #expect(await submitCommands.count == 0)
+        #expect(await server.snapshot(itemID: "item-task_proposal") == before)
     }
 
     @Test func staleEffectProposalFactsAreDroppedAndActionsStayDisabled() async {

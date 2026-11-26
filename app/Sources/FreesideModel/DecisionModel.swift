@@ -717,20 +717,38 @@ public final class DecisionModel {
         }
     }
 
+    /// Submits a task-proposal revision. Returns `true` when the model
+    /// claimed the item's pending-command slot for the submission, and
+    /// `false` when the guard or pending-command ledger refused it.
+    @discardableResult
     public func submitTaskProposalRevision(
         _ revision: Components.Schemas.TaskProposalRevisionInput
-    ) async {
+    ) async -> Bool {
+        let generationBefore = submissionClaimGeneration
         await submit(.start_with_changes, revision: revision)
+        return submissionClaimGeneration != generationBefore
     }
 
+    /// Submits an effect-proposal revision. Returns `true` when the model
+    /// claimed the item's pending-command slot for the submission, and
+    /// `false` when the guard or pending-command ledger refused it.
+    @discardableResult
     public func submitEffectProposalRevision(
         _ revision: Components.Schemas.EffectProposalRevisionInput
-    ) async {
+    ) async -> Bool {
+        let generationBefore = submissionClaimGeneration
         await submit(.approve_with_changes, effectRevision: revision)
+        return submissionClaimGeneration != generationBefore
     }
 
-    public func snooze(until: Date) async {
+    /// Snoozes the proposal until `until`. Returns `true` when the model
+    /// claimed the item's pending-command slot for the submission, and
+    /// `false` when the guard or pending-command ledger refused it.
+    @discardableResult
+    public func snooze(until: Date) async -> Bool {
+        let generationBefore = submissionClaimGeneration
         await submit(.snooze, snoozeUntil: until)
+        return submissionClaimGeneration != generationBefore
     }
 
     /// Whether Discuss on this item may carry attachments: only a spec
