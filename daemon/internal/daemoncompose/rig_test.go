@@ -366,7 +366,7 @@ func TestRunClaudeConformanceNeedsAnObservedTip(t *testing.T) {
 	err := runClaudeConformance(t.Context(), st, nil, nil, ClaudeDriverConfig{
 		Repo: "owner/repo", RepositoryID: 7, BaseRef: "main",
 		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: seedRoot,
-	}, nil, daemonWorkRunner{}, "", false)
+	}, nil, daemonWorkRunner{}, "ghcr.io/owner/agent:latest", false)
 	if !errors.Is(err, exec.ErrInputUnavailable) {
 		t.Fatalf("conformance with no stored tip = %v, want ErrInputUnavailable", err)
 	}
