@@ -1358,6 +1358,12 @@ func TestGolden(t *testing.T) {
 			RecipeDigest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		}
 	})
+	// The host-bound (v9) variant: the settings-bound admission naming the
+	// host its launch runs on.
+	executionHostAdmission := domaintest.ExecutionAdmission(func(in *domain.ExecutionAdmissionInput) {
+		in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+		in.ExecutionHostID = domain.DaemonHostID
+	})
 
 	// The provider_registry variant: the profile is the only field that
 	// differs from the base admission. The declared registry set is not a
@@ -3000,6 +3006,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_no_hydration", noHydrationAdmission},
 		{"execution_admission_settings_revisions", settingsAdmission},
 		{"execution_admission_recipe_binding", recipeBindingAdmission},
+		{"execution_admission_execution_host", executionHostAdmission},
 		{"project_readiness_not_ready", notReady},
 		{"project_readiness_file_settings", ready},
 		{"execution_admission_agent_explicit_model", selectedClaudeAdmission},

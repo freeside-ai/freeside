@@ -3,6 +3,8 @@ package domain_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -446,6 +448,52 @@ func TestAdmissionSettingsRevisionsEncoding(t *testing.T) {
 		if _, err := domain.NewExecutionAdmission(bad); !errors.Is(err, domain.ErrNonPositive) {
 			t.Errorf("revisions %+v: NewExecutionAdmission() = %v, want ErrNonPositive", pair, err)
 		}
+	}
+}
+
+// A recorded host is a bound fact: it moves the identity onto the v9 label
+// over every earlier one. An admission written before hosts existed keeps
+// its bytes and id and reads as the daemon's host; the v8 golden is such a
+// body.
+func TestAdmissionExecutionHostEncoding(t *testing.T) {
+	t.Parallel()
+	in := admissionInput()
+	in.RecipeBinding = new(admissionRecipeBinding())
+	unset := mustAdmission(t, in)
+	in.ExecutionHostID = "mac-studio"
+	bound := mustAdmission(t, in)
+	if bound.ID == unset.ID {
+		t.Fatal("execution host did not change the admission identity")
+	}
+	if got := bound.Host(); got != "mac-studio" {
+		t.Fatalf("Host() = %q, want mac-studio", got)
+	}
+	unsetBody, err := json.Marshal(unset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unsetBody), "execution_host_id") {
+		t.Fatalf("unset execution host reached the body: %s", unsetBody)
+	}
+
+	stored, err := os.ReadFile(filepath.Join("testdata", "execution_admission_recipe_binding.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded domain.ExecutionAdmission
+	if err := json.Unmarshal(stored, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("stored admission Validate() = %v", err)
+	}
+	if got := decoded.Host(); got != domain.DaemonHostID {
+		t.Fatalf("stored admission Host() = %q, want %q", got, domain.DaemonHostID)
+	}
+	edited := decoded
+	edited.ExecutionHostID = domain.DaemonHostID
+	if err := edited.Validate(); !errors.Is(err, domain.ErrAdmissionInconsistent) {
+		t.Fatalf("host added to a stored body: Validate() = %v, want ErrAdmissionInconsistent", err)
 	}
 }
 

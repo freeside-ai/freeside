@@ -23,6 +23,7 @@ const (
 	admissionHydrationEncodingVersion          = "freeside.execution.admission/v6"
 	admissionSettingsEncodingVersion           = "freeside.execution.admission/v7"
 	admissionRecipeBindingEncodingVersion      = "freeside.execution.admission/v8"
+	admissionExecutionHostEncodingVersion      = "freeside.execution.admission/v9"
 )
 
 // SettingsRevisions names the stored instance and project settings revisions
@@ -271,7 +272,24 @@ type ExecutionAdmission struct {
 	// doesn't change it. It vouches for no approval: each use re-checks its
 	// digest against the currently approved recipes.
 	RecipeBinding *RecipeBinding `json:"recipe_binding,omitempty"`
-	AdmittedAt    time.Time      `json:"admitted_at"`
+	// ExecutionHostID names the host the launch runs on (plan §5.7
+	// Placement); a set value selects the v9 encoding. It is empty on every
+	// admission written before it existed, which keep their bytes and id.
+	// Read it through Host, never directly, so an empty value reads as the
+	// daemon's host.
+	ExecutionHostID ExecutionHostID `json:"execution_host_id,omitempty"`
+	AdmittedAt      time.Time       `json:"admitted_at"`
+}
+
+// Host returns the host the admission's launch runs on. An admission with no
+// recorded host reads as the daemon's: every launch admitted before admission
+// chose a host ran on the daemon's host, so the value is a fact about the
+// record, not a guess from current state.
+func (a ExecutionAdmission) Host() ExecutionHostID {
+	if a.ExecutionHostID == "" {
+		return DaemonHostID
+	}
+	return a.ExecutionHostID
 }
 
 // AdmissionAgentBinding is what §5.4 admission step 5 snapshots beyond the
@@ -527,6 +545,7 @@ type ExecutionAdmissionInput struct {
 	WorkspaceHydration         WorkspaceHydration
 	SettingsRevisions          *SettingsRevisions
 	RecipeBinding              *RecipeBinding
+	ExecutionHostID            ExecutionHostID
 	AdmittedAt                 time.Time
 }
 
@@ -569,6 +588,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		WorkspaceHydration:         in.WorkspaceHydration,
 		SettingsRevisions:          clonePtr(in.SettingsRevisions),
 		RecipeBinding:              clonePtr(in.RecipeBinding),
+		ExecutionHostID:            in.ExecutionHostID,
 		AdmittedAt:                 in.AdmittedAt.UTC(),
 	}
 	id, err := a.ComputeID()
@@ -613,6 +633,7 @@ type canonicalAdmission struct {
 	WorkspaceHydration         WorkspaceHydration      `json:"workspace_hydration,omitempty"`
 	SettingsRevisions          *SettingsRevisions      `json:"settings_revisions,omitempty"`
 	RecipeBinding              *RecipeBinding          `json:"recipe_binding,omitempty"`
+	ExecutionHostID            ExecutionHostID         `json:"execution_host_id,omitempty"`
 	AdmittedAt                 time.Time               `json:"admitted_at"`
 }
 
@@ -652,6 +673,11 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	if a.RecipeBinding != nil {
 		version = admissionRecipeBindingEncodingVersion
 	}
+	// Checked after v8 so an admission that names its host always carries
+	// the v9 label; one without keeps the label and id it had.
+	if a.ExecutionHostID != "" {
+		version = admissionExecutionHostEncodingVersion
+	}
 	body, err := json.Marshal(canonicalAdmission{
 		Version:                    version,
 		InvocationID:               a.InvocationID,
@@ -679,6 +705,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		WorkspaceHydration:         a.WorkspaceHydration,
 		SettingsRevisions:          a.SettingsRevisions,
 		RecipeBinding:              a.RecipeBinding,
+		ExecutionHostID:            a.ExecutionHostID,
 		AdmittedAt:                 a.AdmittedAt,
 	})
 	if err != nil {
