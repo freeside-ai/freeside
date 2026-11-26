@@ -2354,6 +2354,31 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         coordinator.startReachabilityMonitoring(source: source)
         #expect(starts == 2)
     }
+
+    @Test func failedFirstRefreshRecordsLastAttemptWhileKeepingLastUpdatedNil() async throws {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        #expect(coordinator.lastAttemptAt == nil)
+        #expect(coordinator.lastUpdatedAt == nil)
+        #expect(coordinator.store.loadState == .idle)
+
+        await server.setBeforeRespond { _ in throw MockOutage() }
+        await coordinator.refresh()
+
+        let failedAttempt = try #require(coordinator.lastAttemptAt)
+        #expect(coordinator.lastUpdatedAt == nil)
+        #expect(coordinator.store.loadState == .idle)
+        #expect(coordinator.store.freshness == .unreachable)
+
+        await server.setBeforeRespond(nil)
+        await coordinator.refresh()
+
+        let recoveredAttempt = try #require(coordinator.lastAttemptAt)
+        #expect(recoveredAttempt >= failedAttempt)
+        #expect(coordinator.lastUpdatedAt != nil)
+        #expect(coordinator.store.loadState == .loaded)
+        #expect(coordinator.store.freshness == .fresh)
+    }
 }
 
 private struct MockOutage: Error {}
