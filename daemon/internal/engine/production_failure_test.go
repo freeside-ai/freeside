@@ -1010,7 +1010,7 @@ func TestImplementationRetryNeedsACampaign(t *testing.T) {
 	}
 	for campaign, want := range map[domain.CampaignID]bool{"": false, "campaign-1": true} {
 		run := domain.Run{ID: "run-1", ProjectID: "project-1", CampaignID: campaign}
-		item, err := productionFailureItem(run, terminal, time.Unix(0, 0).UTC(), facts, nil, nil, nil)
+		item, err := productionFailureItem(run, terminal, time.Unix(0, 0).UTC(), facts, nil, nil, nil, true)
 		if err != nil {
 			t.Fatalf("campaign %q: %v", campaign, err)
 		}

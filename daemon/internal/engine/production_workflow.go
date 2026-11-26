@@ -1696,7 +1696,11 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 				}
 			}
 			if parked == nil && rerun == "" {
-				if facts != nil && e.admission != nil {
+				stopped, err := runTaskHasStop(ctx, &tx.ReadTx, run.ID)
+				if err != nil {
+					return err
+				}
+				if !stopped && facts != nil && e.admission != nil {
 					policy, policyErr := tx.GetResolvedPolicy(ctx, run.ID)
 					admission, admissionErr := tx.GetExecutionAdmissionRecord(ctx, terminal.InvocationID)
 					if policyErr != nil {
@@ -1723,7 +1727,7 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 				// retry reattempts the run from its start, which a failed
 				// remediation round must not discard its reviewed work for.
 				var offers []domain.AlternateAgentOffer
-				if selection := e.agentSelection(); selection != nil && facts != nil && role == domain.RoleImplementer {
+				if selection := e.agentSelection(); !stopped && selection != nil && facts != nil && role == domain.RoleImplementer {
 					offers, err = selection.alternateAgentOffers(ctx, &tx.ReadTx, alternateAgentFailure{
 						taskID: run.TaskID, role: role, cause: facts.Cause, invocationID: terminal.InvocationID,
 					}, createdAt)
@@ -1731,7 +1735,7 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 						return err
 					}
 				}
-				item, err := productionFailureItem(run, terminal, createdAt, facts, offers, names, claims)
+				item, err := productionFailureItem(run, terminal, createdAt, facts, offers, names, claims, !stopped)
 				if err != nil {
 					return err
 				}
@@ -1967,7 +1971,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 func productionFailureItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, offers []domain.AlternateAgentOffer,
-	displayNames *domain.DisplayNames, claims []domain.AgentClaim,
+	displayNames *domain.DisplayNames, claims []domain.AgentClaim, retryCanStart bool,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Unattended %s stage ended %q without an accepted result.",
@@ -1979,7 +1983,7 @@ func productionFailureItem(
 	// An operator feedback card gets Retry from its own reconciler, which
 	// first checks the feedback lineage. Retry starts a campaign attempt, so
 	// a run outside a campaign can't take one.
-	if facts != nil && facts.OffersSameAgentRetry() && run.CampaignID != "" &&
+	if retryCanStart && facts != nil && facts.OffersSameAgentRetry() && run.CampaignID != "" &&
 		!domain.HasOperatorFeedbackInvocationPrefix(terminal.InvocationID) {
 		actions = append([]domain.Action{domain.ActionRetry}, actions...)
 	}
@@ -2013,7 +2017,7 @@ func productionDeliveryRefusalItem(
 	run domain.Run, terminal productionTerminalRecord, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
 ) (domain.AttentionItem, error) {
-	item, err := productionFailureItem(run, terminal, createdAt, facts, nil, displayNames, nil)
+	item, err := productionFailureItem(run, terminal, createdAt, facts, nil, displayNames, nil, false)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}

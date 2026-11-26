@@ -160,6 +160,23 @@ func requireTaskNotCancelled(ctx context.Context, tx *store.ReadTx, runID domain
 	return nil
 }
 
+// runTaskHasStop reports whether run's task has a Stop in any state. A run
+// with no task has no Stop.
+func runTaskHasStop(ctx context.Context, tx *store.ReadTx, runID domain.RunID) (bool, error) {
+	run, err := tx.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if run.TaskID == "" {
+		return false, nil
+	}
+	task, err := tx.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return false, err
+	}
+	return task.Cancellation != nil, nil
+}
+
 // workflowAdvancementFenced is a no-more-work outcome. Callers still preserve
 // observation; only the cancellation coordinator may request provider Stop.
 func workflowAdvancementFenced(err error) bool {

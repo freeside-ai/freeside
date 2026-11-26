@@ -3544,17 +3544,21 @@ func (e *Engine) recordSpecificationFailureWithCause(
 		if err != nil {
 			return err
 		}
+		stopped, err := runTaskHasStop(ctx, &tx.ReadTx, run.ID)
+		if err != nil {
+			return err
+		}
 		// Only a card that could offer Retry reads the chain for its budget.
-		withinBudget := false
-		if facts != nil && facts.OffersSameAgentRetry() {
-			withinBudget, err = specificationRetryWithinBudget(ctx, &tx.ReadTx, request)
+		retryCanStart := false
+		if !stopped && facts != nil && facts.OffersSameAgentRetry() {
+			retryCanStart, err = specificationRetryWithinBudget(ctx, &tx.ReadTx, request)
 			if err != nil {
 				return err
 			}
 		}
 		item, err := specificationFailureItem(run,
 			specificationFailureItemID(request.InvocationID), status, summary,
-			createdAt, facts, interpretationFacts, names, claims, withinBudget)
+			createdAt, facts, interpretationFacts, names, claims, retryCanStart)
 		if err != nil {
 			return err
 		}
@@ -3649,7 +3653,7 @@ func validSpecificationRevisionFailureDecisionSet(actions []domain.Action) bool 
 func specificationFailureItem(
 	run domain.Run, id domain.ItemID, status exec.Status, summary string, createdAt time.Time,
 	facts *domain.ExecutionFailureFacts, interpretation *domain.InterpretationFailureFacts,
-	displayNames *domain.DisplayNames, claims []domain.AgentClaim, retryWithinBudget bool,
+	displayNames *domain.DisplayNames, claims []domain.AgentClaim, retryCanStart bool,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Specification ended %q without an accepted specification.", status)
@@ -3657,7 +3661,7 @@ func specificationFailureItem(
 		reason += " Driver summary: " + summary
 	}
 	actions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
-	if facts != nil && facts.OffersSameAgentRetry() && retryWithinBudget {
+	if facts != nil && facts.OffersSameAgentRetry() && retryCanStart {
 		actions = append([]domain.Action{domain.ActionRetry}, actions...)
 	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{

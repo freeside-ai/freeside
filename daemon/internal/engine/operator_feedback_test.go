@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -1711,5 +1712,292 @@ func specificationQuestionFacts(invocationID domain.InvocationID) *domain.AgentQ
 	return &domain.AgentQuestionFacts{
 		Stage: domain.StageNameSpecification, InvocationID: invocationID,
 		Decisions: decisionsFixture(),
+	}
+}
+
+// TestOfferOperatorFeedbackRetrySkipsStoppedTask: a reconcile pass adds no
+// Retry to an open operator feedback failure card whose task has a Stop, while
+// an identical card with no Stop still receives Retry.
+func TestOfferOperatorFeedbackRetrySkipsStoppedTask(t *testing.T) {
+	t.Parallel()
+	for _, stopped := range []bool{true, false} {
+		name := "without stop"
+		if stopped {
+			name = "with stop"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			f := newSpecificationFixture(t, false, 4)
+			runID := domain.RunID("run-feedback-stop-offer")
+			sourceInvID := productionInvocationID(runID)
+			feedbackInvID := operatorFeedbackInvocationID("return-offer")
+			feedbackStageID := operatorFeedbackStageID(feedbackInvID)
+			headSHA := strings.Repeat("2", 40)
+			baseSHA := strings.Repeat("1", 40)
+			inputArtID := operatorFeedbackArtifactID("return-offer")
+			inputDigest := domain.Digest("sha256:" + strings.Repeat("b", 64))
+			readyID := domain.ProductionReadyItemID(runID)
+			decidedAt := f.now.Add(time.Second)
+
+			sourceInv, err := domain.NewAgentInvocation(sourceInvID, []domain.ArtifactID{f.source.ID}, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceInputDigest, err := sourceInv.ComputeInputDigest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			feedbackInv, err := domain.NewAgentInvocation(feedbackInvID, []domain.ArtifactID{f.source.ID, inputArtID}, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			feedbackInputDigest, err := feedbackInv.ComputeInputDigest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			intentPayload, err := json.Marshal(domain.OperatorFeedbackInvocationIntent{
+				Version:             domain.OperatorFeedbackInvocationIntentVersion,
+				InvocationID:        feedbackInvID,
+				RunID:               runID,
+				StageID:             feedbackStageID,
+				CommandID:           "return-offer",
+				ItemID:              readyID,
+				SourceInvocationID:  sourceInvID,
+				InputArtifactID:     inputArtID,
+				InputArtifactDigest: inputDigest,
+				BaseSHA:             baseSHA,
+				HeadSHA:             headSHA,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			readyItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID: readyID, ProjectID: "project-1",
+				Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+				Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+				Reason:            "ready for review",
+				RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionStop},
+				PRHeadSHA:         headSHA,
+				PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 7},
+				ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
+				Status: domain.StatusOpen,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			returnCmd, err := domain.NewCommand(domain.CommandInput{
+				CommandID: "return-offer", DeviceID: "device-1", ItemID: readyID,
+				ItemVersion: 1, PRHeadSHA: headSHA, Action: domain.ActionReturnToAgent,
+				Message: "fix the wording",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failureCard, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID: domain.ExecutionFailureItemID(feedbackInvID), ProjectID: "project-1",
+				Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+				Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+				Reason:            "feedback failed",
+				RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+				ExecutionFailure: &domain.ExecutionFailureFacts{
+					Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+					Stage: domain.StageNameImplementation, InvocationID: feedbackInvID,
+				},
+				ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identityID := domain.AuthIdentityID("auth-1")
+			pubInvID := domain.ProductionPublicationInvocationID(runID)
+			pubIdentity, err := publish.DeriveIdentity(publish.IdentityInput{
+				Repo: "owner/repo", BaseRef: "refs/heads/main", SourceHeadSHA: headSHA,
+				ArtifactDigests: []domain.Digest{"sha256:ready-artifact"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pubIntentPayload, err := (publish.Intent{
+				FormatVersion: publish.IntentFormatCurrent,
+				Identity:      pubIdentity.Digest(), InvocationID: pubInvID,
+				Branch: pubIdentity.BranchName(), Repo: "owner/repo",
+				BaseRef: "refs/heads/main", SourceHeadSHA: headSHA,
+				AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("ef", 32)),
+				ProducingInvocationID: sourceInvID, ReservationRunID: runID,
+			}).Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pubIntentKey, err := publish.IntentKey(pubInvID, publish.IntentKindPublication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pubOutcomePayload, err := (publish.Outcome{
+				Identity: pubIdentity.Digest(), Repo: "owner/repo", BaseRef: "refs/heads/main",
+				HeadSHA: headSHA, Branch: pubIdentity.BranchName(), PRNumber: 7, EvidenceEligible: true,
+			}).Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			readyBinding := domain.ReadyItemPRBinding{
+				ItemID: readyID, RunID: runID, ProducingInvocationID: sourceInvID,
+				PublicationInvocationID: pubInvID, PublicationIdentity: pubIdentity.Digest(),
+				Repo: "owner/repo", RepositoryID: 1, PRNumber: 7,
+				BaseRef: "refs/heads/main", HeadSHA: headSHA, RecordedAt: *f.now,
+			}
+			if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+				task, err := tx.GetOrCreateTask(ctx, "project-1", domain.SpecificationSource{
+					Kind: domain.SpecificationSourceIssueSubject,
+					IssueSubject: &domain.IssueSubjectRef{
+						Repo: "owner/repo", RepositoryID: 1, IssueNumber: 77,
+					},
+				})
+				if err != nil {
+					return err
+				}
+				run := domain.Run{
+					ID: runID, TaskID: task.ID, ProjectID: "project-1",
+					SpecDigest: f.source.Digest, PolicyDigest: f.policyArt.Digest,
+					Stages: []domain.Stage{
+						{
+							ID: productionStageID(runID), RunID: runID, Name: productionStageName,
+							Attempts: []domain.Attempt{{ID: attemptIDFor(sourceInvID), StageID: productionStageID(runID), Number: 1, InvocationID: sourceInvID}},
+						},
+						{
+							ID: feedbackStageID, RunID: runID, Name: productionStageName,
+							Attempts: []domain.Attempt{{ID: attemptIDFor(feedbackInvID), StageID: feedbackStageID, Number: 1, InvocationID: feedbackInvID}},
+						},
+					},
+				}
+				if err := tx.PutRun(ctx, run); err != nil {
+					return err
+				}
+				for _, inv := range []domain.AgentInvocation{sourceInv, feedbackInv} {
+					if err := tx.PutAgentInvocation(ctx, inv); err != nil {
+						return err
+					}
+				}
+				for _, adm := range []struct {
+					inv    domain.InvocationID
+					stage  domain.StageID
+					digest domain.Digest
+				}{
+					{sourceInvID, productionStageID(runID), sourceInputDigest},
+					{feedbackInvID, feedbackStageID, feedbackInputDigest},
+				} {
+					admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+						InvocationID: adm.inv, RunID: runID, StageID: adm.stage, AttemptID: attemptIDFor(adm.inv),
+						Backend: "fresh_vm_read_only_volume_handoff", Capabilities: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+						OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
+						EgressProfile: domain.EgressProviderOnly,
+						ImageRef:      domain.ImageRef("agent@sha256:" + strings.Repeat("a", 64)),
+						SpecDigest:    run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: adm.digest,
+						Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: baseSHA},
+						Workspace: "workspace-1", AuthIdentityID: &identityID, AdmittedAt: *f.now,
+					})
+					if err != nil {
+						return err
+					}
+					if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
+						return err
+					}
+					if adm.inv == sourceInvID {
+						exportRec, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+							InvocationID: sourceInvID, AdmissionID: admission.ID,
+							ObservedBaseSHA: baseSHA, HeadSHA: headSHA,
+							ManifestDigest: "sha256:ready-manifest", RecordedAt: *f.now,
+						})
+						if err != nil {
+							return err
+						}
+						if err := tx.RecordExecutionExport(ctx, exportRec); err != nil {
+							return err
+						}
+					}
+					if adm.inv == feedbackInvID {
+						if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+							InvocationID: feedbackInvID, AdmissionID: admission.ID,
+							Status: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+							Summary: "feedback launch failed", RecordedAt: f.now.Add(time.Second),
+						}); err != nil {
+							return err
+						}
+					}
+				}
+				if _, _, err := tx.EnqueueOutbox(ctx, pubIntentKey, publish.IntentKindPublication, pubIntentPayload); err != nil {
+					return err
+				}
+				if err := tx.MarkOutboxDispatched(ctx, pubIntentKey); err != nil {
+					return err
+				}
+				if _, _, err := tx.RecordInbox(ctx, publish.OutcomeKey(pubIdentity), publish.IntentKindOutcome, pubOutcomePayload); err != nil {
+					return err
+				}
+				if err := tx.PutAttentionItem(ctx, readyItem); err != nil {
+					return err
+				}
+				if err := tx.PutCommand(ctx, returnCmd); err != nil {
+					return err
+				}
+				readyItem, err = readyItem.ConcludeByCommand(domain.StatusSuperseded, decidedAt, domain.ConclusionDecision{
+					CommandID: returnCmd.CommandID, Action: returnCmd.Action,
+					DeviceID: returnCmd.DeviceID, DeviceDisplayName: "Operator Mac",
+				})
+				if err != nil {
+					return err
+				}
+				readyItem.ItemVersion++
+				if err := tx.PutAttentionItem(ctx, readyItem); err != nil {
+					return err
+				}
+				if err := tx.PutArtifact(ctx, domain.Artifact{
+					ID: inputArtID, Type: domain.ArtifactKindEvidence, Digest: inputDigest,
+					Provenance: domain.Provenance{
+						ProducerClass: domain.ProducerDaemon, ProducerInvocationID: sourceInvID,
+						HeadBinding: domain.HeadBound, SourceHeadSHA: headSHA,
+						SensitivityClass: domain.SensitivityNormal,
+					},
+					Metadata: domain.EvidenceMetadata{
+						MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1,
+						CreatedAt: *f.now, Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+					},
+				}); err != nil {
+					return err
+				}
+				if _, _, err := tx.EnqueueOutbox(ctx, string(feedbackInvID), KindOperatorFeedbackInvocationRequested, intentPayload); err != nil {
+					return err
+				}
+				return tx.PutAttentionItem(ctx, failureCard)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				return tx.RecordReadyItemPRBinding(ctx, readyBinding)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if stopped {
+				stopRunTask(t, f.store, runID)
+			}
+			e := f.newEngine(t, f.newDriver(t))
+			if _, err := e.reconcileOperatorFeedbackRetries(ctx); err != nil {
+				t.Fatalf("reconcileOperatorFeedbackRetries: %v", err)
+			}
+			got, _ := f.item(t, failureCard.ID)
+			if stopped {
+				want := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+				if !slices.Equal(got.RequestedDecision, want) || got.ItemVersion != 1 {
+					t.Fatalf("stopped feedback card = actions %v version %d, want %v version 1",
+						got.RequestedDecision, got.ItemVersion, want)
+				}
+				return
+			}
+			want := []domain.Action{domain.ActionRetry, domain.ActionDiscuss, domain.ActionStop}
+			if !slices.Equal(got.RequestedDecision, want) || got.ItemVersion != 2 {
+				t.Fatalf("unstopped feedback card = actions %v version %d, want %v version 2",
+					got.RequestedDecision, got.ItemVersion, want)
+			}
+		})
 	}
 }
