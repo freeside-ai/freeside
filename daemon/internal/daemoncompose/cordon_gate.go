@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/cordon"
+	"github.com/freeside-ai/freeside/daemon/internal/cordonhost"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -22,7 +23,8 @@ import (
 )
 
 // cordonLauncher is what cordonGate uses of *cordon.Backend, so a test can
-// fake it.
+// fake it, and what a host launcher's client offers in the backend's place,
+// so an operation added here can't be left off the protocol.
 type cordonLauncher interface {
 	Launch(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
 	Export(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
@@ -63,7 +65,11 @@ type cordonGate struct {
 	detaching atomic.Bool
 }
 
-var _ stage.CordonGate = (*cordonGate)(nil)
+var (
+	_ stage.CordonGate = (*cordonGate)(nil)
+	_ cordonLauncher   = (*cordon.Backend)(nil)
+	_ cordonLauncher   = (*cordonhost.Client)(nil)
+)
 
 // newCordonGate is the port over a composed cordon. It reads each
 // admission from st and each token through readToken.

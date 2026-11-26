@@ -120,6 +120,11 @@ func plainRunID(runID string) bool {
 	return runIDPattern.MatchString(runID) && !strings.Contains(runID, "..")
 }
 
+// ValidRunID reports whether runID is one plain path component, the rule
+// every run ID a launch, a recovery, or a host launcher's staging path takes
+// is held to.
+func ValidRunID(runID string) bool { return plainRunID(runID) }
+
 // layout is a launch's directories. Every path follows from RunsRoot and
 // RunID alone, so a restarted daemon can rebuild it (#3468).
 type layout struct {

@@ -539,10 +539,14 @@ lists only the names resolved against it. All under `daemon/`:
   cordoned launch runs with for the admission's own generation, decides
   when a launch requires the class's proof, keeps a shutdown from
   canceling a run, and screens a failed run's transcript before it is
-  kept), and
+  kept), `internal/cordonhost/` (the host launcher and its client: the
+  protocol that carries a launch's token and its end report, the install
+  check that refuses to serve from an install the run account could
+  change, the seed it stages, and the conformance records that cross back
+  to the daemon), and
   `cmd/freesided/cordon.go` (the probe verb a probe launch runs, the
-  supervise verb that runs every launch, and the flags the configuration
-  comes from).
+  supervise verb that runs every launch, the serve verb a host launcher
+  runs, and the flags the configuration comes from).
 - **Rig cleanup namespace:** `internal/wardname/` (the one definition of
   the runtime names rig cleanup and stale recovery may act on),
   `internal/daemonlock/rig.go` (admits a bound name only through those

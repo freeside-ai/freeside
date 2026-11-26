@@ -7319,6 +7319,53 @@ cd daemon && FREESIDE_CORDON_CREDENTIAL_LIVE_TEST=1 \
   go test ./internal/cordon -run LiveCredential -v
 ```
 
+#### Serve Cordoned Launches From A Host
+
+`freesided cordon serve` is the host launcher (`internal/cordonhost`, #3623):
+it serves a cordoned backend and its suite on a Unix socket to a client on
+the same machine, which has the backend's operations behind the stage
+driver's port. Nothing reaches it over a network yet (#3625), and a launch
+behind it can't export (#3624): `Export` and a recovery that would export
+answer `cordonhost.ErrExportUnsupported`. The protocol and its rules are in
+`internal/cordonhost`'s doc comments; the decision record is
+`devlog/2026-11-26-0409-cordon-host-launcher.md`.
+
+The fleet repository installs this layout on each host; Freeside installs
+nothing there:
+
+- **A root-owned binary.** The daemon's build, at a path such as
+  `/opt/freeside/bin/freesided`, owned by root and not writable by the run
+  account, nor is any directory above it, with links resolved or not.
+- **A root-owned LaunchAgent plist** in `/Library/LaunchAgents`, under the
+  same ownership rule. It sets `LimitLoadToSessionType` to `Aqua`, so it
+  runs only in the run account's desktop session; `KeepAlive`; and
+  `AbandonProcessGroup` to `true`, so launchd leaves each run's supervisor
+  running when it stops or restarts the launcher. Its program arguments
+  are `cordon serve`, `-control-root`, `-socket`, `-launch-agent-plist`
+  naming the plist itself, and the cordon flags the daemon takes
+  (`-cordon-agent-cli` and the rest, under Composition above).
+- **A control root** the run account owns, such as
+  `~/Library/Application Support/Freeside/launcher`. It is a protected
+  root, so no run reaches it; the launcher keeps its runs under
+  `cordon-runs/` and the seeds a client sends under `seeds/` there.
+- **The socket** inside the control root or another `-cordon-protected-root`,
+  with a path under 104 bytes. The launcher creates it with mode 0600,
+  replacing only a socket an earlier launcher left at that path.
+
+The launcher refuses to serve, naming the path, when it runs as root, when
+its binary or plist or a directory above either isn't root-owned or is
+writable by the run account, or when its socket sits outside every
+protected root. Its suite also proves a run can't connect to the socket
+or write the binary or plist. Any process holding the screen-recording or
+accessibility approval refuses every cordoned launch, and launchd charges
+a LaunchAgent's approvals to the launcher, so grant neither to it. The
+launcher holds no forge credential: each launch's base arrives from the
+client as a tar of the daemon's own seed, `.git` included. A client that
+disconnects mid-launch leaves the run running; only its cancellation
+cancels it, and a restarted launcher recovers the run. The restart test
+kills the launcher directly, not through `launchctl`, so what launchd does
+to a stopped job's processes is #3625's live test to show.
+
 ## External Review Replies
 
 With the Claude driver, the daemon checks recorded external-review outcomes
