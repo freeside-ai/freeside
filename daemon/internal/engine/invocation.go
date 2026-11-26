@@ -58,6 +58,9 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return 0, fmt.Errorf("refresh unattended health before dispatch: %w", err)
 		}
 	}
+	if e.dispatchHeld() {
+		return 0, nil
+	}
 	var (
 		pending              []store.QueueEntry
 		pendingProduction    []store.QueueEntry

@@ -178,6 +178,10 @@ type ClaudeWorkflow struct {
 	ClaudeWiring *ClaudeComposition
 	Workflow     *engine.Engine
 	ImageUpkeep  *engine.ImageUpkeep
+	// SettleDiscovery closes Workflow's dispatch hold. The startup model
+	// discovery calls it once its pass settles; until then the engine
+	// dispatches no invocation (#3447). It is safe to call more than once.
+	SettleDiscovery func()
 }
 
 // ComposeClaudeWorkflow builds the Claude driver and the engine around it,
@@ -472,7 +476,12 @@ func ComposeClaudeWorkflow(
 		}
 	}
 	production.ReadinessGate = claudeWiring.ReadinessGate()
-	workflow, err = engine.New(st, attention, stageDriver, production.Options()...)
+	// Dispatch waits for the startup model discovery, so its probes never
+	// run beside a task's first launch (#3447).
+	discoveryHold := make(chan struct{})
+	settleDiscovery := sync.OnceFunc(func() { close(discoveryHold) })
+	workflow, err = engine.New(st, attention, stageDriver,
+		append(production.Options(), engine.WithDispatchHold(discoveryHold))...)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +520,9 @@ func ComposeClaudeWorkflow(
 	if err := convergeStageIntentItems(ctx, st, recovery.Quarantined, startupNow(cfg.Now)); err != nil {
 		return nil, fmt.Errorf("report quarantined stage intents: %w", err)
 	}
-	return &ClaudeWorkflow{ClaudeWiring: claudeWiring, Workflow: workflow, ImageUpkeep: imageUpkeep}, nil
+	return &ClaudeWorkflow{
+		ClaudeWiring: claudeWiring, Workflow: workflow, ImageUpkeep: imageUpkeep, SettleDiscovery: settleDiscovery,
+	}, nil
 }
 
 // ClaudeLoops holds the Claude composition's background loops between

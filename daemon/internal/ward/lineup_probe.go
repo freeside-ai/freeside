@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -610,6 +612,98 @@ func (r *lineupProbeRun) teardown(ctx context.Context) error {
 	}
 	return errors.Join(errs...)
 }
+
+// RecoverLineupProbeNetworks deletes the lineup probe networks a stale rig
+// recorded and a killed probe left behind (#3447). No journal owns a probe's
+// network: the rig manifest's write-ahead name is the only record, so this
+// re-checks, from one fresh listing, that each present network is the one
+// that name's probe made. A recorded name must parse as a probe network, and
+// the network must show its labels, exactly one run label naming that name's
+// owner slice, and exactly one ownership label, 32 hex digits, starting with
+// that slice. Teardown then goes through teardownNetwork under that observed
+// label, which re-lists and proves the network gone. Every present probe
+// network is checked before any is deleted, so one that fails the check
+// refuses the call and nothing is deleted. Names that don't parse are left to
+// their own recovery.
+//
+// The caller holds the stale rig and database locks, has proved no runtime
+// CLI process is active, and has already deleted the recorded containers, so
+// no probe container still holds a network.
+func RecoverLineupProbeNetworks(ctx context.Context, rt Runtime, recorded []string) error {
+	if rt == nil {
+		return fmt.Errorf("%w: runtime is required", ErrInvalidConfig)
+	}
+	probeSlices := map[string]string{}
+	for _, name := range recorded {
+		if slice, ok := wardname.LineupProbeNetworkSlice(name); ok {
+			probeSlices[name] = slice
+		}
+	}
+	if len(probeSlices) == 0 {
+		return nil
+	}
+	networks, err := rt.ListNetworks(ctx)
+	if err != nil {
+		return fmt.Errorf("list networks for lineup probe recovery: %w", err)
+	}
+	owners := map[string]Label{}
+	var refusals []error
+	for name, slice := range probeSlices {
+		candidate, found, err := uniqueNetwork(networks, name)
+		if err != nil {
+			refusals = append(refusals, err)
+			continue
+		}
+		if !found {
+			continue
+		}
+		owner, err := lineupProbeNetworkOwner(candidate, slice)
+		if err != nil {
+			refusals = append(refusals, err)
+			continue
+		}
+		owners[name] = owner
+	}
+	if len(refusals) > 0 {
+		return errors.Join(refusals...)
+	}
+	ops := newRuntimeOps(rt, Config{}.withDefaults())
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(owners)) {
+		errs = append(errs, ops.teardownNetwork(ctx, name, objectClaim{attempted: true, owned: true}, owners[name]))
+	}
+	return errors.Join(errs...)
+}
+
+// lineupProbeNetworkOwner returns the ownership label that binds a listed
+// network to the probe whose owner slice named it, or an error naming the
+// network when its labels don't.
+func lineupProbeNetworkOwner(network NetworkSummary, slice string) (Label, error) {
+	if !network.LabelsObserved {
+		return Label{}, fmt.Errorf("lineup probe network %q shows no labels; not deleting", network.Name)
+	}
+	var runs, owners []Label
+	for _, label := range network.Labels {
+		switch label.Key {
+		case labelKey:
+			runs = append(runs, label)
+		case ownershipLabelKey:
+			owners = append(owners, label)
+		}
+	}
+	if len(runs) != 1 || runs[0].Value != "lineup-probe-"+slice {
+		return Label{}, fmt.Errorf("lineup probe network %q carries no run label for its slice; not deleting", network.Name)
+	}
+	if len(owners) != 1 || !ownershipTokenFormat.MatchString(owners[0].Value) ||
+		!strings.HasPrefix(owners[0].Value, slice) {
+		return Label{}, fmt.Errorf("lineup probe network %q carries no ownership label for its slice; not deleting", network.Name)
+	}
+	return owners[0], nil
+}
+
+// ownershipTokenFormat is newOwnershipLabel's value: 16 random bytes in
+// lowercase hex.
+var ownershipTokenFormat = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // LineupProbeUsage is what the call reported spending. A nil field is one
 // the CLI did not report.

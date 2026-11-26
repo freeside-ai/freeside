@@ -1224,6 +1224,10 @@ func TestReleaseDeputyLeaseProvesTheRigClear(t *testing.T) {
 			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("release: %v, want error %q", err, tc.wantErr)
 			}
+			if clear := "`freesided rig recover -state-root " + paths.StateRoot + " -confirm`"; tc.leftVolume &&
+				!strings.Contains(err.Error(), clear) {
+				t.Fatalf("release refusal %v names no %s", err, clear)
+			}
 			for _, path := range []string{paths.Manifest, paths.Acquisition} {
 				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("%s survives the release: %v", path, err)

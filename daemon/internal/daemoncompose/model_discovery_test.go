@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,5 +109,76 @@ func TestModelCatalogRefreshDiscoversEachEnabledClaudeEnrollment(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "model discovery failed") || !strings.Contains(logs.String(), "enroll-claude") {
 		t.Fatalf("logs = %s", logs.String())
+	}
+}
+
+// TestModelCatalogRefreshSettlesTheDispatchHold: the engine's dispatch waits
+// for the startup discovery (#3447), so the hold stays open while a probe
+// runs and closes on every way the pass ends: all targets done, targets
+// unreadable, or its context ended. The drain wait is
+// TestModelDiscoveryWaitsOutAnUpdateDrain's.
+func TestModelCatalogRefreshSettlesTheDispatchHold(t *testing.T) {
+	t.Parallel()
+	token, err := ward.NewSetupToken([]byte(authAddTestToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		closeStore bool
+		cancel     bool
+	}{
+		"all targets done":   {},
+		"targets unreadable": {closeStore: true},
+		"context ended":      {cancel: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			seedUsageEnrollment(t, st, "auth-claude", "enroll-claude", "pool-claude",
+				domain.HarnessClientClaudeCode, time.Now().UTC().Add(-time.Hour))
+			hold := make(chan struct{})
+			held := func() bool {
+				select {
+				case <-hold:
+					return false
+				default:
+					return true
+				}
+			}
+			discovered := false
+			refresh := modelCatalogRefresh{
+				store: st,
+				readToken: func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
+					return token, nil
+				},
+				discover: func(context.Context, string, ward.SetupToken) (ward.ModelReport, error) {
+					discovered = true
+					if !held() {
+						t.Error("the dispatch hold closed before the probe ran")
+					}
+					return discoveredReport("opus"), nil
+				},
+				image: modelDiscoveryTestImage, now: time.Now, logger: slog.New(slog.DiscardHandler),
+				settled: sync.OnceFunc(func() { close(hold) }),
+			}
+			ctx := t.Context()
+			if tc.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			if tc.closeStore {
+				if err := st.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			refresh.run(ctx)
+			if held() {
+				t.Fatal("the pass ended with the dispatch hold open")
+			}
+			if wantProbe := !tc.closeStore && !tc.cancel; discovered != wantProbe {
+				t.Fatalf("probe ran = %v, want %v", discovered, wantProbe)
+			}
+		})
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/internal/wardname"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -45,6 +46,23 @@ type fakeRigHost struct {
 	probed         []string
 	migrates       []bool // the migrate argument of each review-journal recovery
 	recoverReviews func(context.Context, string, daemonlock.RigManifest) error
+	reapedProbes   []string
+	reapErr        error
+}
+
+// ReapLineupProbeNetworks deletes each present network of the lineup probe
+// shape, as the real reap does for one whose labels bind it to its name.
+func (h *fakeRigHost) ReapLineupProbeNetworks(_ context.Context, _ string, networks []string) error {
+	if h.reapErr != nil {
+		return h.reapErr
+	}
+	for _, name := range networks {
+		if _, ok := wardname.LineupProbeNetworkSlice(name); ok && h.networks[name] {
+			h.reapedProbes = append(h.reapedProbes, name)
+			delete(h.networks, name)
+		}
+	}
+	return nil
 }
 
 func (h *fakeRigHost) RecoverReviewResources(
@@ -503,7 +521,7 @@ func assertVolumeResiduePreservesGlobalGate(
 	err = runRigRecover(t.Context(), []string{
 		"-state-root", stateRoot, "-container-bin", "container-test", "-confirm",
 	}, ioDiscard{}, ioDiscard{}, host)
-	if err == nil || !strings.Contains(err.Error(), "recover their owning journal first") {
+	if err == nil || !strings.Contains(err.Error(), "`container-test volume delete "+residualVolume+"`") {
 		t.Fatalf("recovery over persistent runtime residue = %v", err)
 	}
 	if _, err := daemonlock.ReadRigManifest(stateRoot); err != nil {
@@ -638,7 +656,7 @@ func TestRigCleanupReapsPreflightCredentialObserver(t *testing.T) {
 
 	stranded := &fakeRigHost{containers: map[string]bool{observer: true}}
 	if err := requireRigResourcesAbsent(
-		context.Background(), stranded, "container-test", manifest.Resources,
+		context.Background(), stranded, "container-test", manifest.Resources, clearByHand("container-test"),
 	); err == nil || !strings.Contains(err.Error(), observer) {
 		t.Fatalf("absence proof error = %v, want it to name the stranded observer %q", err, observer)
 	}
@@ -716,7 +734,7 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	err = runRigRecover(context.Background(), []string{
 		"-state-root", stateRoot, "-container-bin", "container-test", "-confirm",
 	}, ioDiscard{}, ioDiscard{}, host)
-	if err == nil || !strings.Contains(err.Error(), "recover their owning journal first") {
+	if err == nil || !strings.Contains(err.Error(), "`container-test volume delete "+recordedVolume+"`") {
 		t.Fatalf("persistent-volume recovery error = %v", err)
 	}
 	if _, err := daemonlock.ReadRigManifest(stateRoot); err != nil {
@@ -826,6 +844,130 @@ func TestRigRecoverJournalsAfterContainersAndBeforeRelease(t *testing.T) {
 	}
 	if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("gate remains after recovery: %v", err)
+	}
+}
+
+// staleRigWithNetworks leaves an abandoned lease whose manifest records the
+// given containers and networks.
+func staleRigWithNetworks(t *testing.T, containers, networks []string) string {
+	t.Helper()
+	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
+		Owner:     daemonlock.RigOwner{User: "operator", Host: "host", PID: os.Getpid()},
+		StateRoot: stateRoot, DatabasePath: databasePath,
+		ListenAddress: "127.0.0.1:8677", SeedRoot: seedRoot,
+		LeaseRoot: filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemonlock.BindRigRuntimeResources(stateRoot, lease.Token(), containers, nil, networks); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Abandon(); err != nil {
+		t.Fatal(err)
+	}
+	return stateRoot
+}
+
+// TestRigRecoverReapsRecordedLineupProbeNetworks is #3447's F8: a killed
+// lineup probe leaves its network, which no journal owns. Recovery reaps it
+// and closes the lease, opening the review journal only for a recorded
+// network the reap leaves.
+//
+//nolint:paralleltest // Serial: staleRigWithNetworks sets HOME with t.Setenv through rigCommandRoots.
+func TestRigRecoverReapsRecordedLineupProbeNetworks(t *testing.T) {
+	slice := strings.Repeat("a", 12)
+	probeContainer := wardname.BareName(wardname.LineupProbePrefix, slice)
+	probeNetwork := wardname.Name(wardname.LineupProbePrefix, slice, wardname.Egress)
+	reviewNetwork := wardname.Name(wardname.ReviewPrefix, "review-"+strings.Repeat("b", 24), wardname.Egress)
+	for name, tc := range map[string]struct {
+		reviewLeft  bool
+		wantJournal bool
+	}{
+		"only the probe network remains":     {},
+		"a review network remains beside it": {reviewLeft: true, wantJournal: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stateRoot := staleRigWithNetworks(t, []string{probeContainer}, []string{probeNetwork, reviewNetwork})
+			host := &fakeRigHost{
+				containers: map[string]bool{probeContainer: true},
+				networks:   map[string]bool{probeNetwork: true, reviewNetwork: tc.reviewLeft},
+			}
+			host.recoverReviews = func(context.Context, string, daemonlock.RigManifest) error {
+				if host.networks[probeNetwork] {
+					t.Fatal("review journal ran before the probe network was reaped")
+				}
+				delete(host.networks, reviewNetwork)
+				return nil
+			}
+			if err := runRigRecover(t.Context(), []string{
+				"-state-root", stateRoot, "-container-bin", "container-test", "-confirm",
+			}, ioDiscard{}, ioDiscard{}, host); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(host.deleted, []string{probeContainer}) ||
+				!slices.Equal(host.reapedProbes, []string{probeNetwork}) {
+				t.Fatalf("deleted %v and reaped %v, want the probe container and network", host.deleted, host.reapedProbes)
+			}
+			if journal := len(host.migrates) > 0; journal != tc.wantJournal {
+				t.Fatalf("review journal opened = %v, want %v", journal, tc.wantJournal)
+			}
+			if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("recovery left the lease: %v", err)
+			}
+		})
+	}
+
+	// A refused reap still lets the review journal recover its own network,
+	// keeps the lease, and names both the refusal and the hand delete.
+	t.Run("a refused reap", func(t *testing.T) {
+		stateRoot := staleRigWithNetworks(t, []string{probeContainer}, []string{probeNetwork, reviewNetwork})
+		refusal := errors.New("injected label refusal")
+		host := &fakeRigHost{
+			containers: map[string]bool{probeContainer: true},
+			networks:   map[string]bool{probeNetwork: true, reviewNetwork: true},
+			reapErr:    refusal,
+		}
+		host.recoverReviews = func(context.Context, string, daemonlock.RigManifest) error {
+			delete(host.networks, reviewNetwork)
+			return nil
+		}
+		err := runRigRecover(t.Context(), []string{
+			"-state-root", stateRoot, "-container-bin", "container-test", "-confirm",
+		}, ioDiscard{}, ioDiscard{}, host)
+		if !errors.Is(err, refusal) ||
+			!strings.Contains(err.Error(), "`container-test network delete "+probeNetwork+"`") {
+			t.Fatalf("recover = %v, want the refusal and the hand delete of %s", err, probeNetwork)
+		}
+		if len(host.migrates) == 0 || host.networks[reviewNetwork] {
+			t.Fatal("a refused reap held back the review journal")
+		}
+		if _, err := daemonlock.ReadRigManifest(stateRoot); err != nil {
+			t.Fatalf("a refused reap released the lease: %v", err)
+		}
+	})
+}
+
+// TestRigCleanupRefusalNamesRigRecover pins the advice a held rig's cleanup
+// gives when a recorded resource survives it: rig recover clears it once the
+// hold ends.
+//
+//nolint:paralleltest // Serial: acquireBoundRig sets HOME with t.Setenv through rigCommandRoots.
+func TestRigCleanupRefusalNamesRigRecover(t *testing.T) {
+	stateRoot, lease, tokenFile, _ := acquireBoundRig(t, "inv-implement")
+	t.Cleanup(func() { _ = lease.Close() })
+	manifest, err := daemonlock.ReadRigManifest(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := &fakeRigHost{volumes: map[string]bool{manifest.Resources.Volumes[0]: true}}
+	err = runRigCleanup(context.Background(), []string{
+		"-state-root", stateRoot, "-token-file", tokenFile, "-container-bin", "container-test",
+	}, ioDiscard{}, ioDiscard{}, host)
+	if want := "`freesided rig recover -state-root " + stateRoot + " -confirm`"; err == nil ||
+		!strings.Contains(err.Error(), want) {
+		t.Fatalf("cleanup refusal = %v, want it to name %s", err, want)
 	}
 }
 
