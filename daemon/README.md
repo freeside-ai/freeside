@@ -930,6 +930,24 @@ member of its `AllX` slice. Existing CHECK lists stay, and widening one
 still takes a rebuild. Decision record:
 `devlog/2026-11-07-1113-enum-columns-go-validation.md`.
 
+**Store each fact once in a new table.** A table a migration creates gives
+each fact one plain column and keeps no JSON body beside them:
+`0149_cordoned_run_settings.sql` (`task_writer_classes`) is the worked
+example. A field kept in both a body and a column needs a decode check
+that the two match, and Tier B units already remove those checks
+(AGENTS.md, Assurance Tiers); `0142_settings_revisions.sql` and
+`0146_project_readiness.sql` show the shape to avoid, a body that repeats
+the project id and revisions its columns hold. A JSON column may still
+hold a value that has no columns of its own, such as a list or an
+aggregate's embedded children, as long as no field in it is also a
+column. A content-addressed record, whose id or digest is computed from
+its body bytes, keeps the body; its fields aren't copied into columns by
+hand, and a lookup column comes from the body through one write path or a
+non-key SQLite generated column (a primary key can't be generated). A
+Tier A gate that rebuilds an id or checks a chain stays as it is
+(AGENTS.md, Worked Examples). Existing tables keep their shape. Decision
+record: `devlog/2026-11-25-2231-store-once-new-tables.md`.
+
 **Renumber at rebase when another migration took your number.** Two branches
 can both take the next number; the one that lands second renames behind the
 other:
