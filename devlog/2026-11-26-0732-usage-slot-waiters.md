@@ -36,6 +36,9 @@ would need an API change and stays out of scope.
   serves every project and the row counts them all, so under a project
   filter the list could show fewer tasks than the row named, or none. A
   work status count keeps the filter because it is counted under it.
+- **`unsupported` draws faint, not wax.** Nothing failed: the provider
+  reports no usage for the plan. Wax stays for readings that can't be
+  trusted.
 
 ## Revisit When
 

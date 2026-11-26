@@ -351,7 +351,8 @@ package enum UsageDisplay {
 
     /// The pool band's trailing line: the collector's last attempt, or
     /// that the readings went stale, which outranks it. Wax marks a line
-    /// that says the readings can't be trusted as current.
+    /// that says the readings can't be trusted as current; `unsupported`
+    /// isn't one, since nothing failed: the provider reports no usage.
     package struct AttemptLine: Equatable, Sendable {
         package let text: String
         package let isWax: Bool
@@ -375,7 +376,7 @@ package enum UsageDisplay {
         switch attempt.status {
         case .succeeded: return .init(text: "read \(time(attempt.at))", isWax: false, instant: attempt.at)
         case .failed: return .init(text: "refresh failed \(time(attempt.at))", isWax: true, instant: attempt.at)
-        case .unsupported: return .init(text: "unsupported \(time(attempt.at))", isWax: true, instant: attempt.at)
+        case .unsupported: return .init(text: "unsupported \(time(attempt.at))", isWax: false, instant: attempt.at)
         case .unknown: return .init(text: "unrecognized reading \(time(attempt.at))", isWax: true, instant: attempt.at)
         }
     }

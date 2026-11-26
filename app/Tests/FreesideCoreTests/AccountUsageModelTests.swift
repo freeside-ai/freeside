@@ -589,7 +589,8 @@ import Testing
         pool.last_attempt = .init(value1: .init(status: .failed, at: at, detail: "timed out"))
         #expect(line() == .init(text: "refresh failed Aug 12, 1:40 AM", isWax: true, instant: at))
         pool.last_attempt = .init(value1: .init(status: .unsupported, at: at, detail: ""))
-        #expect(line() == .init(text: "unsupported Aug 12, 1:40 AM", isWax: true, instant: at))
+        // Nothing failed: the provider reports no usage, so it isn't wax.
+        #expect(line() == .init(text: "unsupported Aug 12, 1:40 AM", isWax: false, instant: at))
         // A stale reading outranks the attempt.
         pool.windows = [reading("seven_day", percent: 10, staleAt: Self.base)]
         #expect(line() == .init(text: "stale since Aug 12, 2:40 AM", isWax: true, instant: Self.base))
