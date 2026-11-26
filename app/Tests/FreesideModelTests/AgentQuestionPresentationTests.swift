@@ -150,3 +150,51 @@ extension AgentQuestionPresentationTests {
         #expect(presentation.previousNote(presentation.choices(picked: [0: .other, 1: .other])) == nil)
     }
 }
+
+extension AgentQuestionPresentationTests {
+    @Test func pickProgressCountsChoicesAndNamesTheFirstUnansweredQuestion() throws {
+        let presentation = try #require(AgentQuestionPresentation(AttentionFixtures.longQuestion().item))
+        #expect(
+            presentation.pickProgress([:])
+                == .init(count: "0 of 2 choices selected", prompt: "Choose an answer to question 1 to continue."))
+        #expect(
+            presentation.pickProgress([0: .option("Rewrite rows in place")])
+                == .init(count: "1 of 2 choices selected", prompt: "Choose an answer to question 2 to continue."))
+        #expect(
+            presentation.pickProgress([1: .other])
+                == .init(count: "1 of 2 choices selected", prompt: "Choose an answer to question 1 to continue."))
+        // Once every decision is answered the line goes, exactly when an
+        // answer can be sent.
+        let all: [Int: AgentQuestionPresentation.Choice] = [0: .option("Rewrite rows in place"), 1: .other]
+        #expect(presentation.pickProgress(all) == nil)
+        #expect(presentation.answers(all) != nil)
+        #expect(presentation.questionKeyword(at: 1) == "Agent question 2 of 2")
+    }
+
+    @Test func aStaleOptionLabelIsNotAnAnswer() throws {
+        let presentation = try #require(AgentQuestionPresentation(AttentionFixtures.longQuestion().item))
+        // The first decision's label, picked for the second: no option there
+        // carries it, so the second still needs an answer.
+        let stale: [Int: AgentQuestionPresentation.Choice] = [
+            0: .option("Rewrite rows in place"), 1: .option("Rewrite rows in place"),
+        ]
+        #expect(presentation.isAnswered(0, stale))
+        #expect(!presentation.isAnswered(1, stale))
+        #expect(presentation.pickProgress(stale)?.prompt == "Choose an answer to question 2 to continue.")
+        #expect(presentation.answers(stale) == nil)
+    }
+
+    @Test func aOneDecisionOrPrefilledQuestionHasNoProgressLine() throws {
+        let one = try #require(AgentQuestionPresentation(AttentionFixtures.fixture(type: .agent_question).item))
+        #expect(one.decisions.count == 1)
+        #expect(one.pickProgress([:]) == nil)
+        #expect(one.questionKeyword(at: 0) == nil)
+
+        // Earlier answers count as choices (#3443).
+        let previous = try #require(
+            AgentQuestionPresentation(AttentionFixtures.previouslyAnsweredQuestion().item))
+        let choices = previous.choices(picked: [:])
+        #expect(previous.decisions.indices.allSatisfy { previous.isAnswered($0, choices) })
+        #expect(previous.pickProgress(choices) == nil)
+    }
+}

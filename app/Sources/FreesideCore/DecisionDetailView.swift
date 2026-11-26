@@ -1767,8 +1767,8 @@ struct DecisionDetailView: View {
                 VStack(alignment: .leading, spacing: CardScale.sectionGap) {
                     VStack(alignment: .leading, spacing: CardScale.headGap) {
                         if index > 0 || !eyebrowLabelsLead {
-                            sectionTitle(
-                                "Agent question",
+                            questionKeywordLine(
+                                item, presentation: presentation, index: index,
                                 unverified: index == 0 ? register : register.withoutInfo)
                         }
                         VStack(alignment: .leading, spacing: CardScale.contextGap) {
@@ -1801,6 +1801,90 @@ struct DecisionDetailView: View {
                 .padding(.top, index == 0 && leadFollowsEyebrow ? CardScale.headGap - CardScale.sectionGap : 0)
             }
         }
+    }
+
+    /// A later decision's keyword: numbered on a question that asks several,
+    /// with the decision's state trailing it where the card lets the
+    /// operator pick (#3672). Question 1's number and state draw on the
+    /// eyebrow, which labels it. The row has no info control, so VoiceOver
+    /// reads it as one heading: the number, the register, and the state.
+    @ViewBuilder
+    private func questionKeywordLine(
+        _ item: Components.Schemas.AttentionItem,
+        presentation: AgentQuestionPresentation,
+        index: Int,
+        unverified: UnverifiedRegister
+    ) -> some View {
+        let title = presentation.questionKeyword(at: index) ?? "Agent question"
+        if index > 0, offersQuestionOptionChoice(item), presentation.decisions.count > 1 {
+            // The state trails the keyword while the line holds both and
+            // drops under it at a text size where it does not.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    sectionTitle(title, unverified: unverified)
+                    Spacer(minLength: 0)
+                    questionState(presentation, index: index)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    sectionTitle(title, unverified: unverified)
+                    questionState(presentation, index: index)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+        } else {
+            sectionTitle(title, unverified: unverified)
+        }
+    }
+
+    /// Whether the card's choices answer one decision, by the rule an
+    /// answer applies, so no decision reads answered that an answer would
+    /// leave out (an earlier answer counts, #3443).
+    private func questionIsAnswered(_ presentation: AgentQuestionPresentation, index: Int) -> Bool {
+        presentation.isAnswered(index, presentation.choices(picked: questionChoices))
+    }
+
+    /// A decision's state: `Answered` quietly, or `Needs an answer` in the
+    /// accent at the strong keyword weight.
+    private func questionState(_ presentation: AgentQuestionPresentation, index: Int) -> some View {
+        let answered = questionIsAnswered(presentation, index: index)
+        return KeywordLabel(
+            text: answered ? AgentQuestionPresentation.answeredLabel : AgentQuestionPresentation.unansweredLabel,
+            color: answered ? .inkDim : .accentText, isStrong: !answered)
+    }
+
+    /// What the card's picks still lack before an answer can go, or nil
+    /// where the card offers no pick or nothing is missing. The progress
+    /// line and the answer buttons' hint both read it.
+    private func questionPickProgress(
+        _ item: Components.Schemas.AttentionItem
+    ) -> AgentQuestionPresentation.PickProgress? {
+        guard offersQuestionOptionChoice(item), let presentation = AgentQuestionPresentation(item) else {
+            return nil
+        }
+        return presentation.pickProgress(presentation.choices(picked: questionChoices))
+    }
+
+    /// The line above the answer actions while a decision is unpicked: the
+    /// count in the mono, then which question to answer next (#3672).
+    private func questionPickProgressLine(_ progress: AgentQuestionPresentation.PickProgress) -> some View {
+        let count = Text(progress.count)
+            .font(FreesideFont.monoValue)
+            .foregroundStyle(Color.ink)
+        let prompt = Text(progress.prompt)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(Color.inkDim)
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                count
+                prompt
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                count
+                prompt.fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     /// One alternative the agent enumerated, drawn as a quote (R5) so the
@@ -3244,8 +3328,11 @@ struct DecisionDetailView: View {
         accessibilityLayout: Bool
     ) -> some View {
         let eyebrow = DecisionCardComposition.eyebrow(for: item)
+        // On a question of several decisions the eyebrow labels question 1,
+        // so it carries that number. The inbox row keeps the type's name.
+        let questionKeyword = AgentQuestionPresentation(item)?.questionKeyword(at: 0)
         return CardEyebrow(
-            keyword: eyebrow.keyword,
+            keyword: questionKeyword ?? eyebrow.keyword,
             carriesInfo: eyebrow.carriesInfo,
             rendersInteractiveControls: register.rendersInteractiveControls
         ) {
@@ -3303,6 +3390,18 @@ struct DecisionDetailView: View {
             }
             if AttentionDisplay.showsLifecycleBadge(item.status) {
                 StatusBadge(status: item.status)
+            }
+            // The eyebrow labels question 1, so its state trails it here. It
+            // stays apart from the eyebrow, whose info control is its own
+            // element, so it names the question it speaks for.
+            if offersQuestionOptionChoice(item), let presentation = AgentQuestionPresentation(item),
+                presentation.decisions.count > 1
+            {
+                let state =
+                    questionIsAnswered(presentation, index: 0)
+                    ? AgentQuestionPresentation.answeredLabel : AgentQuestionPresentation.unansweredLabel
+                questionState(presentation, index: 0)
+                    .accessibilityLabel("Question 1, \(state.lowercased())")
             }
         }
     }
@@ -4470,6 +4569,14 @@ struct DecisionDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Why the answer actions are disabled, while they are for want
+            // of a pick (#3672).
+            if (ranking.principal + ranking.overflow).contains(where: Self.answersQuestion),
+                let progress = questionPickProgress(item)
+            {
+                questionPickProgressLine(progress)
+            }
+
             if !ranking.principal.isEmpty {
                 // Keyed by position: requested_decision does not enforce
                 // uniqueness, and duplicate identities may not drop a button.
@@ -4612,7 +4719,15 @@ struct DecisionDetailView: View {
         .buttonStyle(FreesideActionButtonStyle(tone: tone))
         .disabled(
             !model.actionsEnabled || !model.isSubmittable(action)
-                || !actionInputReady(action, item: item))
+                || !actionInputReady(action, item: item)
+        )
+        // The reason the progress line gives, spoken on the disabled button.
+        .accessibilityHint(
+            Self.answersQuestion(action) ? questionPickProgress(item)?.prompt ?? "" : "")
+    }
+
+    private static func answersQuestion(_ action: Components.Schemas.Action) -> Bool {
+        action == .answer_and_retry || action == .answer_without_retry
     }
 
     @ViewBuilder

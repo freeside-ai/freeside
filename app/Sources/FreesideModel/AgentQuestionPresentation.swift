@@ -142,18 +142,69 @@ public struct AgentQuestionPresentation: Equatable, Sendable {
     /// as no choice, so a stale selection never reaches the daemon.
     public func answers(_ choices: [Int: Choice]) -> [Components.Schemas.QuestionAnswer]? {
         var answers: [Components.Schemas.QuestionAnswer] = []
-        for (index, decision) in decisions.enumerated() {
-            switch choices[index] {
-            case .option(let label)?:
-                guard decision.options.contains(where: { $0.label == label }) else { return nil }
-                answers.append(.init(decision_index: index, option_label: label))
-            case .other?:
-                answers.append(.init(decision_index: index, option_label: nil))
-            case nil:
-                return nil
-            }
+        for index in decisions.indices {
+            guard let answer = answer(at: index, choices) else { return nil }
+            answers.append(answer)
         }
         return answers.isEmpty ? nil : answers
+    }
+
+    /// The answer one decision's choice makes, or nil when it has none: no
+    /// choice, a label the decision no longer offers, or an index past the
+    /// decisions. `answers` and `isAnswered` both read it, so the card never
+    /// calls a decision answered that an answer would not send.
+    func answer(at index: Int, _ choices: [Int: Choice]) -> Components.Schemas.QuestionAnswer? {
+        guard decisions.indices.contains(index) else { return nil }
+        switch choices[index] {
+        case .option(let label)?:
+            guard decisions[index].options.contains(where: { $0.label == label }) else { return nil }
+            return .init(decision_index: index, option_label: label)
+        case .other?:
+            return .init(decision_index: index, option_label: nil)
+        case nil:
+            return nil
+        }
+    }
+
+    /// Whether the choices answer the decision at `index`, by the rule
+    /// `answers` applies.
+    public func isAnswered(_ index: Int, _ choices: [Int: Choice]) -> Bool {
+        answer(at: index, choices) != nil
+    }
+
+    /// The keyword over one decision of a question that asks several:
+    /// `Agent question 2 of 3`. A one-decision question keeps its plain
+    /// keyword, so this is nil there.
+    public func questionKeyword(at index: Int) -> String? {
+        guard decisions.count > 1 else { return nil }
+        return "Agent question \(index + 1) of \(decisions.count)"
+    }
+
+    /// The state a decision's keyword line trails where the card lets the
+    /// operator pick.
+    public static let answeredLabel = "Answered"
+    public static let unansweredLabel = "Needs an answer"
+
+    /// What a question of several decisions still needs before an answer can
+    /// go: a count and a sentence naming the first unanswered decision.
+    public struct PickProgress: Equatable, Sendable {
+        /// `1 of 2 choices selected`.
+        public let count: String
+        /// `Choose an answer to question 2 to continue.`
+        public let prompt: String
+    }
+
+    /// The progress line above the answer actions, or nil when there is
+    /// nothing to explain: a one-decision question, whose disabled answer
+    /// has one obvious cause, or every decision answered.
+    public func pickProgress(_ choices: [Int: Choice]) -> PickProgress? {
+        guard decisions.count > 1,
+            let firstUnanswered = decisions.indices.first(where: { !isAnswered($0, choices) })
+        else { return nil }
+        let answered = decisions.indices.filter { isAnswered($0, choices) }.count
+        return PickProgress(
+            count: "\(answered) of \(decisions.count) choices selected",
+            prompt: "Choose an answer to question \(firstUnanswered + 1) to continue.")
     }
 
     /// Whether the answers leave a decision to the note, which the daemon
