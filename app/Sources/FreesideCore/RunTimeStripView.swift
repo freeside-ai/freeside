@@ -3,10 +3,10 @@ import SwiftUI
 
 /// Where a run's time went, to scale (#3233): one bar cut into agent
 /// working, waiting on you, held (#3237), and everything else, with the
-/// elapsed time and each kind's total under it. The bar keeps true scale,
-/// so a short segment can be thin; the totals, each segment's own
-/// accessible button, and the caption a selected segment shows carry what
-/// the eye can't.
+/// elapsed time and, under it, each kind's total that shows as more than
+/// `0m`. The bar keeps true scale, so a short segment can be thin; the
+/// totals, each segment's own accessible button, and the caption a
+/// selected segment shows carry what the eye can't.
 struct RunTimeStripView: View {
     let strip: RunTimeStrip.Strip
     /// Brings the milestones rail to a segment. Nil (a screenshot) leaves
@@ -59,7 +59,7 @@ struct RunTimeStripView: View {
                     .accessibilityHidden(true)
             }
             WrappingHStack(horizontalSpacing: 14, verticalSpacing: 4) {
-                ForEach(RunTimeStrip.Kind.allCases, id: \.self) { kind in
+                ForEach(Self.legendKinds(strip, locale: locale), id: \.self) { kind in
                     legendEntry(kind)
                 }
             }
@@ -154,6 +154,28 @@ struct RunTimeStripView: View {
         case .held: "Held"
         case .other: "Other"
         }
+    }
+
+    /// The kinds the legend names: each whose total shows as more than
+    /// `0m`, judged on the text the legend draws, so a kind under half a
+    /// minute is left out too. With none, `Other` stays, so the legend is
+    /// never empty. The spoken summary still names every kind.
+    static func legendKinds(_ strip: RunTimeStrip.Strip, locale: Locale) -> [RunTimeStrip.Kind] {
+        legendKinds(locale: locale, total: strip.total)
+    }
+
+    /// The legend rule over any strip's totals, so the run and task strips
+    /// leave out the same kinds.
+    static func legendKinds(
+        locale: Locale, total: (RunTimeStrip.Kind) -> TimeInterval
+    ) -> [RunTimeStrip.Kind] {
+        let kinds = RunTimeStrip.Kind.allCases.filter { showsTime(total($0), locale: locale) }
+        return kinds.isEmpty ? [.other] : kinds
+    }
+
+    /// Whether a legend total draws as anything but `0m`.
+    static func showsTime(_ total: TimeInterval, locale: Locale) -> Bool {
+        duration(total, locale: locale) != duration(0, locale: locale)
     }
 
     /// Hours and minutes, `3h 50m`, or spelled out for a spoken label.
