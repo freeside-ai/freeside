@@ -311,9 +311,14 @@ if [[ -n "$clone_failed" ]]; then
 fi
 echo "cloned app/.build $shards times in $((SECONDS - clone_start))s" >&2
 
+# Redirected to a file, the test process's stdout is block-buffered, so a
+# stopped run would lose its unflushed tail (including the hung test's
+# `started` line); CoreFoundation reads NSUnbufferedIO=YES at startup and
+# unbuffers it.
 echo "$(date +%T) starting: swift test ${main_args[*]}" >&2
 (
   cd "$repo_root/app" &&
+    NSUnbufferedIO=YES \
     FREESIDE_CONVERGENCE_URL="$api_url" \
     FREESIDE_CONVERGENCE_CONTROL_URL="$control_url" \
     swift test "${main_args[@]}"
@@ -342,7 +347,7 @@ for ((i = 0; i < shards; i++)); do
     if [[ -n "$selector" ]]; then
       export FREESIDE_SCREENSHOT_SHARD="$selector"
     fi
-    swift test "${shard_args[@]}"
+    NSUnbufferedIO=YES swift test "${shard_args[@]}"
   ) >"$workdir/shard-$i.log" 2>&1 &
   run_pids+=($!)
   run_logs+=("$workdir/shard-$i.log")
