@@ -53,16 +53,24 @@ type CheckRecoverRequest struct {
 }
 
 // Check runs one check launch and returns once no process from it is
-// alive, as Launch does: it seeds the worktree as a writer's is seeded and
-// starts the launch's supervisor, which runs the command under the rule
-// file with the worktree as its working directory, the launch's
-// environment, stdin on /dev/null, and no descriptor 3. Every ending runs
+// alive, as Launch does. It refuses while the launching program holds an
+// approval, as Launch does, before it claims anything. It seeds the
+// worktree as a writer's is seeded and starts the launch's supervisor,
+// which runs the command under the rule file with the worktree as its
+// working directory, the launch's environment, stdin on /dev/null, and no
+// descriptor 3. Every ending runs
 // the run-end proof, and a result comes back only once the end record
 // exists; a check whose end can't be proven returns a *BlockedError.
 // Canceling ctx cancels the run and keeps waiting for its end; the stall
 // limit ends a silent command as it ends a silent agent.
 func (b *Backend) Check(ctx context.Context, req CheckRequest) (CheckResult, error) {
 	if err := req.validate(); err != nil {
+		return CheckResult{}, err
+	}
+	// As for a writer, whatever RequireProof says: an approval the
+	// launching program holds reaches a check's command as it reaches an
+	// agent.
+	if err := b.approvalRefusal(); err != nil {
 		return CheckResult{}, err
 	}
 	if req.RequireProof {
