@@ -38,18 +38,32 @@ struct UnattendedGatePresentationTests {
         #expect(gate.chipLabel == "Stopped")
     }
 
-    @Test func aBlockingFindingNamesItselfAndCountsTheOtherStops() {
-        let gate = make([
-            .init(
-                kind: .blocking_system_health, item_id: "finding-a", command_id: nil,
-                since: Self.now.addingTimeInterval(-30 * 60)),
-            .init(kind: .blocking_system_health, item_id: "finding-b", command_id: nil, since: nil),
-        ])
+    /// The header is the pane's one statement of admission (#3678): a stop
+    /// by blocking findings counts them and points at the rows below, and
+    /// counts only the stops of another kind as other stops. The daemon
+    /// lists blocking stops in no time order, so the age is the oldest's.
+    @Test func aBlockingStopCountsTheBlockingFindingsBelow() {
+        let first = Components.Schemas.UnattendedStop(
+            kind: .blocking_system_health, item_id: "finding-a", command_id: nil,
+            since: Self.now.addingTimeInterval(-30 * 60))
+        let older = Components.Schemas.UnattendedStop(
+            kind: .blocking_system_health, item_id: "finding-b", command_id: nil,
+            since: Self.now.addingTimeInterval(-2 * 3_600))
+        let drain = Components.Schemas.UnattendedStop(
+            kind: .update_drain, item_id: nil, command_id: nil, since: Self.now.addingTimeInterval(-86_400))
+
+        #expect(make([first]).line == "Stopped 30m ago by 1 blocking finding below.")
+        #expect(make([first, older]).line == "Stopped 2h ago by 2 blocking findings below.")
         #expect(
-            gate
+            make([first, drain])
                 == .init(
                     chip: .stopped, isWax: true,
-                    line: "Stopped by a system health finding 30m ago. 1 other stop is in force."))
+                    line: "Stopped 30m ago by 1 blocking finding below. 1 other stop is in force."))
+        #expect(
+            make([first], age: SyncCoordinator.stalenessThreshold + 1)
+                == .init(
+                    chip: .stopped, isWax: false,
+                    line: "At the last successful refresh, stopped 30m ago by 1 blocking finding below."))
     }
 
     @Test func aNonCurrentSnapshotReportsTheLastKnownStateInNeutral() {

@@ -6,6 +6,9 @@ import SwiftUI
 /// bootstrap snapshot and freshness as the standing stopped indicator
 /// (`UnattendedStoppedPresentation`), so the two never disagree, and like
 /// the indicator it reports a non-current snapshot as the last known state.
+/// It is the pane's one statement of admission (#3678): a stop by blocking
+/// findings counts the snapshot's blocking stops, one per open blocking
+/// finding, and points at the rows below rather than restating them.
 struct UnattendedGatePresentation: Equatable {
     enum Chip: Equatable {
         case open
@@ -52,21 +55,33 @@ struct UnattendedGatePresentation: Equatable {
                     ? "New unattended work is admitted."
                     : "At the last successful refresh, new unattended work was admitted.")
         }
-        let cause =
-            switch stop.cause {
-            case .operatorStop: " by operator decision"
-            case .blockingFinding: " by a system health finding"
-            case .unspecified: ""
-            }
-        let age = operation.stops.first?.since.map {
-            " " + AttentionDisplay.relativeRowTime($0, now: now) + " ago"
+        let lead = stop.isCurrent ? "Stopped" : "At the last successful refresh, stopped"
+        func age(_ since: Date?) -> String {
+            since.map { " " + AttentionDisplay.relativeRowTime($0, now: now) + " ago" } ?? ""
         }
-        var line =
-            (stop.isCurrent ? "Stopped" : "At the last successful refresh, stopped") + cause + (age ?? "") + "."
-        if stop.additionalStops == 1 {
+        var line: String
+        let otherStops: Int
+        switch stop.cause {
+        case .blockingFinding:
+            // One stop per open blocking finding, so the count names the
+            // rows below that stop admission; the other stops are the rest.
+            // The daemon lists blocking stops in no time order, so the age
+            // is the oldest one's: how long the findings have held admission.
+            let blocking = operation.stops.filter { $0.kind == .blocking_system_health }
+            let findings = blocking.count == 1 ? "finding" : "findings"
+            line = lead + age(blocking.compactMap(\.since).min()) + " by \(blocking.count) blocking \(findings) below."
+            otherStops = operation.stops.count - blocking.count
+        case .operatorStop:
+            line = lead + " by operator decision" + age(operation.stops.first?.since) + "."
+            otherStops = stop.additionalStops
+        case .unspecified:
+            line = lead + age(operation.stops.first?.since) + "."
+            otherStops = stop.additionalStops
+        }
+        if otherStops == 1 {
             line += " 1 other stop is in force."
-        } else if stop.additionalStops > 1 {
-            line += " \(stop.additionalStops) other stops are in force."
+        } else if otherStops > 1 {
+            line += " \(otherStops) other stops are in force."
         }
         return .init(chip: .stopped, isWax: stop.isCurrent, line: line)
     }
