@@ -113,10 +113,6 @@ func cordonRunsRoot(stateDir string) (string, error) {
 // the daemon's state directory, which the backend denies to every launch.
 const cordonScanDir = "cordon-scan"
 
-// cordonSystemPath follows the agent CLI's own directory in a launch's
-// PATH.
-var cordonSystemPath = []string{"/usr/bin", "/bin", "/usr/sbin", "/sbin"}
-
 // DaemonDir is one of the daemon's configured directories, which the
 // cordon denies to every launch, with the flag that names it.
 type DaemonDir struct{ Flag, Path string }
@@ -168,12 +164,6 @@ func CordonConfig(
 					"or a launch could read the database", cfg.Database)
 		}
 	}
-	path := []string{filepath.Dir(cli)}
-	for _, dir := range cordonSystemPath {
-		if !slices.Contains(path, dir) {
-			path = append(path, dir)
-		}
-	}
 	ports := slices.Clone(reservedPorts)
 	slices.Sort(ports)
 	return cordon.Config{
@@ -187,7 +177,7 @@ func CordonConfig(
 		ReservedPorts:     slices.Compact(ports),
 		AgentCLI:          cli,
 		AgentCLISHA256:    cfg.AgentCLISHA256,
-		Path:              path,
+		Path:              cordon.LaunchPath(filepath.Dir(cli), account.Home),
 		StallLimit:        cfg.StallLimit,
 		EndGrace:          cfg.EndGrace,
 		EndProofTimeout:   cfg.EndProofTimeout,
