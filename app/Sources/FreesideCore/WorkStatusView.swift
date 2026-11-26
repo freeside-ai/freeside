@@ -95,15 +95,23 @@ struct WorkStatusView: View {
             .padding(.vertical, 40)
             .frame(maxWidth: .infinity)
         } else {
+            let largest = status.largestCount
             VStack(alignment: .leading, spacing: 16) {
+                let unheld = Self.unheld(status.groups)
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Self.unheld(status.groups)) { row($0) }
+                    ForEach(unheld) { group in
+                        row(group, largest: largest)
+                            // The one row the operator owes stands apart:
+                            // 18pt to the next row, the usual 6 plus 12.
+                            // Alone, it keeps the Held head's usual 16.
+                            .padding(.bottom, group.position == .waitingOnYou && unheld.count > 1 ? 12 : 0)
+                    }
                 }
                 let held = Self.held(status.groups)
                 if !held.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         ListSectionHead(title: "Held", count: held.reduce(0) { $0 + $1.count })
-                        ForEach(held) { row($0) }
+                        ForEach(held) { row($0, largest: largest) }
                     }
                 }
             }
@@ -153,21 +161,56 @@ struct WorkStatusView: View {
         groups.filter { if case .held = $0.position { true } else { false } }
     }
 
-    /// The label and its count as text; VoiceOver reads both.
-    private func row(_ group: WorkStatus.Group) -> some View {
-        let isSelected = selected == group.position
-        return Button {
+    private func row(_ group: WorkStatus.Group, largest: Int) -> some View {
+        WorkStatusRow(group: group, largest: largest, isSelected: selected == group.position) {
             onSelect(group.position)
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(group.label)
-                    .font(FreesideFont.rowTitle)
-                    .foregroundStyle(Color.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                Text("\(group.count)")
-                    .font(FreesideFont.monoValue)
-                    .foregroundStyle(Color.ink)
+        }
+    }
+}
+
+/// One position's row: the label, its bar, and its count as text.
+/// VoiceOver reads the label and the count; the bar only repeats the
+/// count. Every row's track starts and ends at the same x, so the bars
+/// compare on the tab's one scale (`NameTrackCountLayout`). From xxxLarge
+/// the bar takes a line of its own under the name and count, as Over
+/// Time's day rows draw it, so a wrapped name never squeezes the track.
+///
+/// Its own view, not a method on `WorkStatusView`, so it reads the text
+/// size from the environment when `screenshotContent` draws the tab
+/// outside that view's body.
+private struct WorkStatusRow: View {
+    let group: WorkStatus.Group
+    /// The tab's scale: `WorkStatus.largestCount`.
+    let largest: Int
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Button(action: onSelect) {
+            Group {
+                if SidebarRowSurface.stacksHeader(at: dynamicTypeSize) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            label
+                            Spacer(minLength: 8)
+                            count
+                        }
+                        bar.padding(.leading, -shift)
+                    }
+                } else {
+                    NameTrackCountLayout(shift: shift) {
+                        label
+                        bar
+                        // A hidden 000 holds the column at three digits'
+                        // width at every text size; a longer count runs
+                        // into the gap before it rather than truncating.
+                        Text(verbatim: "000")
+                            .font(FreesideFont.monoValue)
+                            .hidden()
+                            .overlay(alignment: .trailing) { count.fixedSize() }
+                    }
+                }
             }
             .modifier(SidebarRowSurface(isSelected: isSelected))
             .contentShape(Rectangle())
@@ -178,5 +221,89 @@ struct WorkStatusView: View {
         .accessibilityLabel("\(group.label), \(group.count)")
         .accessibilityHint("Shows these tasks in the list")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    /// The selected row's content starts further right; its track reaches
+    /// back by as much, so it lines up with the others.
+    private var shift: CGFloat {
+        isSelected ? SidebarRowSurface.selectedInsetGiven : 0
+    }
+
+    private var bar: some View {
+        MeterTrack(fraction: WorkStatus.barFraction(group.count, largest: largest), fill: Self.barColor(group.position))
+            .accessibilityHidden(true)
+    }
+
+    private var label: some View {
+        Text(group.label)
+            .font(FreesideFont.rowTitle)
+            .foregroundStyle(Color.ink)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var count: some View {
+        Text("\(group.count)")
+            .font(FreesideFont.monoValue)
+            .foregroundStyle(Color.ink)
+    }
+
+    /// The accent for the row the operator owes, water for a stage, as the
+    /// agent's working time is, and the neutral held time takes for work
+    /// that waits on neither.
+    private static func barColor(_ position: WorkStatus.Position) -> Color {
+        switch position {
+        case .waitingOnYou: .accentText
+        case .stage: .waterText
+        case .notStarted, .held: RunTimeStripView.color(.held)
+        }
+    }
+}
+
+/// A Work Status row's name, track, and count, side by side. The name
+/// takes half the row, capped at the frame's 190pt column, and wraps
+/// inside it; the count takes its ideal width at the trailing edge, on
+/// the name's first baseline; the track fills between them, centred on
+/// the row. Every row in the tab is offered the same width, so every
+/// track starts and ends at the same x. A width, not the platform, sets
+/// the column, so a narrow Mac column and the iPhone get the same room
+/// for the track. `shift` is how much further right this row's content
+/// starts (the selected row's); the name column narrows by as much, so
+/// the track still starts where the others do.
+private struct NameTrackCountLayout: Layout {
+    let shift: CGFloat
+
+    private static let nameShare: CGFloat = 0.5
+    private static let nameCap: CGFloat = 190
+    private static let spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? (Self.nameCap / Self.nameShare - shift)
+        return CGSize(width: width, height: columns(width: width, subviews: subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columns = columns(width: bounds.width, subviews: subviews)
+        let nameProposal = ProposedViewSize(width: columns.name, height: nil)
+        let name = subviews[0].dimensions(in: nameProposal)
+        let count = subviews[2].dimensions(in: .unspecified)
+        let nameTop = bounds.midY - name.height / 2
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: nameTop), anchor: .topLeading, proposal: nameProposal)
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + columns.name + Self.spacing, y: bounds.midY), anchor: .leading,
+            proposal: ProposedViewSize(width: columns.track, height: nil))
+        subviews[2].place(
+            at: CGPoint(x: bounds.maxX, y: nameTop + name[.firstTextBaseline] - count[.firstTextBaseline]),
+            anchor: .topTrailing, proposal: .unspecified)
+    }
+
+    private func columns(width: CGFloat, subviews: Subviews) -> (name: CGFloat, track: CGFloat, height: CGFloat) {
+        let name = max(0, min(Self.nameCap, (width + shift) * Self.nameShare) - shift)
+        let count = subviews[2].sizeThatFits(.unspecified)
+        let track = max(0, width - name - count.width - 2 * Self.spacing)
+        let height = max(
+            subviews[0].sizeThatFits(ProposedViewSize(width: name, height: nil)).height,
+            subviews[1].sizeThatFits(ProposedViewSize(width: track, height: nil)).height,
+            count.height)
+        return (name, track, height)
     }
 }

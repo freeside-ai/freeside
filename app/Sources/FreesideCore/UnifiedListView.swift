@@ -841,6 +841,9 @@ struct SidebarRowSurface: ViewModifier {
     #endif
     /// The gap between a row's lines, as the frames draw it.
     static let lineGap: CGFloat = 5
+    /// How much of its leading inset the selected row gives to its bar, so
+    /// its content starts this much further right than an unselected row's.
+    static let selectedInsetGiven: CGFloat = 2
 
     /// From xxxLarge the chips leave the keyword's line for one of their own.
     static func stacksHeader(at dynamicTypeSize: DynamicTypeSize) -> Bool {
@@ -859,7 +862,7 @@ struct SidebarRowSurface: ViewModifier {
                 content
                     .padding(.vertical, Self.padding.height)
                     // The selected row gives 2pt of its inset to the bar.
-                    .padding(.leading, Self.padding.width - (isSelected ? 2 : 0))
+                    .padding(.leading, Self.padding.width - (isSelected ? Self.selectedInsetGiven : 0))
                     .padding(.trailing, Self.padding.width)
                     .frame(maxWidth: .infinity, alignment: .leading))
         }
