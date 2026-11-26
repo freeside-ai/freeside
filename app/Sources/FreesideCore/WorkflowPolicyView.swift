@@ -3,11 +3,12 @@ import SwiftUI
 
 /// Settings' Workflow pane on both platforms (`SettingsPaneView`): the
 /// per-effect gates and the follow-up filing caps (plan §3.2), read from
-/// sync and changed as a saved command. General holds what every project
-/// inherits; each project the daemon serves follows with its own rows,
-/// which show the value that wins (the project's, else general's, else the
-/// default) and where it came from. A project row its own layer sets offers
-/// a reset to general. Each control saves at once.
+/// sync and changed as a saved command. General lists every setting, with
+/// the value that wins (general's, else the default) and where it came
+/// from. Each project the daemon serves lists only the settings its own
+/// layer overrides, each with a reset to general, then how many follow
+/// general and a menu that overrides one more. Each row's line says what
+/// its value does today. Each control saves at once.
 struct WorkflowPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -43,20 +44,88 @@ struct WorkflowPolicyView: View {
             }
             ForEach(model.sections, id: \.self) { section in
                 SettingsSection(keyword: Self.keyword(section)) {
-                    SettingsGroup(elements: model.settings(in: section), id: \.key) { setting in
-                        row(setting, in: section)
+                    if let project = section.projectID {
+                        projectSection(project)
+                    } else {
+                        SettingsGroup(elements: model.settings(in: section), id: \.key) { setting in
+                            row(setting, in: section)
+                        }
                     }
                 }
             }
-            // Until autonomous dispatch (#3150), only the closure gate
-            // changes what a task does; the other two are stored and
-            // resolved so a task created now carries them.
-            Text(
-                "Only the closure gate changes what a task does today. Filing and comment gates apply once tasks can act on their own."
-            )
+        }
+    }
+
+    /// A project's overrides, then the count that follows general and the
+    /// menu that adds an override, which go once every setting is
+    /// overridden.
+    @ViewBuilder private func projectSection(_ project: String) -> some View {
+        let overrides = model.overrides(projectID: project)
+        if !overrides.isEmpty {
+            SettingsGroup(elements: overrides, id: \.key) { setting in
+                row(setting, in: .project(project))
+            }
+        }
+        if let line = Self.followingGeneralLine(
+            following: model.followingGeneralCount(projectID: project), overridden: overrides.count)
+        {
+            // The control drops under the line where both don't fit on one.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    followingGeneral(line)
+                    Spacer(minLength: 0)
+                    overrideMenu(project)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    followingGeneral(line)
+                    overrideMenu(project)
+                }
+            }
+        }
+    }
+
+    private func followingGeneral(_ line: String) -> some View {
+        Text(line)
             .font(FreesideFont.cardBody)
-            .foregroundStyle(Color.inkFaint)
+            .foregroundStyle(Color.inkDim)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func overrideMenu(_ project: String) -> some View {
+        let choices = model.overridable(projectID: project)
+        if !choices.isEmpty {
+            let label = SettingsPopupLabel(text: "Override a Setting")
+            Group {
+                if rendersInteractiveControls {
+                    Menu {
+                        ForEach(choices, id: \.key) { setting in
+                            Button(Self.label(setting.key)) {
+                                Task { await model.addOverride(setting.key, projectID: project) }
+                            }
+                        }
+                    } label: {
+                        label
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .accessibilityLabel("Override a setting for \(project)")
+                } else {
+                    label
+                }
+            }
+            .disabled(!model.canEdit)
+        }
+    }
+
+    /// The line under a project's overrides: how many of its settings
+    /// follow general, or nil once it overrides every one.
+    static func followingGeneralLine(following: Int, overridden: Int) -> String? {
+        switch (following, overridden) {
+        case (0, _): nil
+        case (let count, 0): "All \(count) settings follow General."
+        case (1, _): "The other setting follows General."
+        case (let count, _): "The other \(count) settings follow General."
         }
     }
 
@@ -134,8 +203,8 @@ struct WorkflowPolicyView: View {
         }
     }
 
-    /// The row's dim line: the winning value, its layer, and who set it
-    /// when.
+    /// The row's dim line: the winning value, its layer, who set it when,
+    /// and what the value does today where that isn't plain from the row.
     private func line(
         _ setting: Components.Schemas.WorkflowPolicySetting, in section: WorkflowPolicySection
     )
@@ -148,7 +217,30 @@ struct WorkflowPolicyView: View {
         if let setAt = setting.set_at {
             parts.append(FreesideFormat.shortTime(setAt, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone))
         }
+        if let clause = Self.todayClause(setting) {
+            parts.append(clause)
+        }
         return parts.joined(separator: " · ")
+    }
+
+    /// What an off gate does today, which its title alone misstates: the
+    /// daemon still opens a filing's card while gates.follow_up_filing is
+    /// off, because filing without one waits on the trust profile accepting
+    /// the repository's audited issues workflows
+    /// (daemon/internal/engine/follow_up_filing.go), and it approves an
+    /// eligible comment by policy while gates.issue_comment is off
+    /// (daemon/internal/engine/issue_comment_proposal.go). An on gate, the
+    /// closure gate, and a cap do what the row says.
+    static func todayClause(_ setting: Components.Schemas.WorkflowPolicySetting) -> String? {
+        guard setting.value != "true" else { return nil }
+        switch setting.key {
+        case .gates_period_follow_up_filing:
+            return "a filing still asks you today; off takes effect once tasks can file on their own"
+        case .gates_period_issue_comment: return "an eligible comment is approved without asking you"
+        case .gates_period_source_issue_closure, .follow_up_filing_period_max_per_day,
+            .follow_up_filing_period_max_per_run, .follow_up_filing_period_max_depth, .unknown:
+            return nil
+        }
     }
 
     static func isGate(_ key: Components.Schemas.WorkflowPolicyKey) -> Bool {
@@ -175,7 +267,7 @@ struct WorkflowPolicyView: View {
     /// A gate reads as the path it takes; a cap as its number.
     static func valueText(_ setting: Components.Schemas.WorkflowPolicySetting) -> String {
         guard isGate(setting.key) else { return setting.value }
-        return setting.value == "true" ? "Ask first" : "Autonomous"
+        return setting.value == "true" ? "Ask first" : "Off"
     }
 
     static func originText(
