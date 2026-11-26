@@ -326,6 +326,120 @@
             #expect(model.readiness == nil)
             #expect(await health.lastURL == devURL)
         }
+
+        @Test func unreachableAndStoppedPublishStartFailureAndHealthyClearsIt() async {
+            let service = FakeDaemonService(status: .enabled)
+            let health = ScriptedDaemonHealth([
+                .failure,
+                .health(DaemonHealth(version: "1.0.0", startedAt: Date(timeIntervalSince1970: 1_725_184_800))),
+            ])
+            let expected = DaemonStartFailure(
+                message: #"listen "100.64.0.1:7331": bind: address already in use"#,
+                loggedAt: Date(timeIntervalSince1970: 1_725_184_790),
+                logURL: URL(fileURLWithPath: "/tmp/freesided.log"))
+            let model = DaemonMenuModel(
+                service: service,
+                healthChecker: health,
+                daemonURL: prodDaemonURL,
+                registerOnFirstRun: false,
+                readReadiness: { nil },
+                readStartFailure: { expected })
+
+            await model.refresh()
+            #expect(model.state == .unreachable)
+            #expect(model.startFailure == expected)
+
+            await model.refresh()
+            guard case .running = model.state else {
+                Issue.record("expected .running after healthy poll")
+                return
+            }
+            #expect(model.startFailure == nil)
+
+            service.status = .notRegistered
+            await model.refresh()
+            #expect(model.state == .stopped)
+            #expect(model.startFailure == expected)
+
+            service.status = .requiresApproval
+            await model.refresh()
+            #expect(model.state == .needsApproval)
+            #expect(model.startFailure == nil)
+
+            service.status = .notFound
+            await model.refresh()
+            #expect(model.state == .unavailable)
+            #expect(model.startFailure == nil)
+        }
+
+        @Test func hostDaemonStatusMapsEveryMenuState() {
+            let failure = DaemonStartFailure(
+                message: "bind: address already in use",
+                loggedAt: Date(timeIntervalSince1970: 1_725_184_790),
+                logURL: URL(fileURLWithPath: "/tmp/freesided.log"))
+            #expect(
+                HostDaemonStatus(state: .stopped, startFailure: failure)
+                    == HostDaemonStatus(headline: "The daemon is stopped", failure: failure))
+            #expect(
+                HostDaemonStatus(state: .needsApproval, startFailure: failure)
+                    == HostDaemonStatus(
+                        headline: "The daemon is waiting for Login Items approval", failure: nil))
+            #expect(
+                HostDaemonStatus(state: .unavailable, startFailure: failure)
+                    == HostDaemonStatus(
+                        headline: "The daemon's LaunchAgent is unavailable", failure: nil))
+            #expect(
+                HostDaemonStatus(state: .unreachable, startFailure: failure)
+                    == HostDaemonStatus(headline: "The daemon isn't answering", failure: failure))
+            let health = DaemonHealth(version: "1.0.0", startedAt: Date(timeIntervalSince1970: 1_725_184_800))
+            #expect(HostDaemonStatus(state: .running(health, restartObserved: false), startFailure: failure) == nil)
+            #expect(HostDaemonStatus(state: .checking, startFailure: failure) == nil)
+            #expect(HostDaemonStatus(state: .unsupervised, startFailure: failure) == nil)
+        }
+
+        @Test func hostDaemonStatusAppliesOnlyToTheLocalSupervisedDeployment() throws {
+            let localURL = try #require(URL(string: "http://127.0.0.1:7331"))
+            let failure = DaemonStartFailure(
+                message: "bind: address already in use",
+                loggedAt: Date(timeIntervalSince1970: 1_725_184_790),
+                logURL: URL(fileURLWithPath: "/tmp/freesided.log"))
+            let expected = HostDaemonStatus(headline: "The daemon is stopped", failure: failure)
+
+            #expect(
+                HostDaemonStatus.forConnectedDeployment(
+                    state: .stopped, startFailure: failure,
+                    connectedURL: localURL, localDaemonURL: localURL) == expected)
+
+            let remoteURL = try #require(URL(string: "http://100.64.0.9:7331"))
+            #expect(
+                HostDaemonStatus.forConnectedDeployment(
+                    state: .stopped, startFailure: failure,
+                    connectedURL: remoteURL, localDaemonURL: localURL) == nil)
+
+            let otherPortURL = try #require(URL(string: "http://127.0.0.1:7332"))
+            #expect(
+                HostDaemonStatus.forConnectedDeployment(
+                    state: .stopped, startFailure: failure,
+                    connectedURL: otherPortURL, localDaemonURL: localURL) == nil)
+
+            #expect(
+                HostDaemonStatus.forConnectedDeployment(
+                    state: .stopped, startFailure: failure,
+                    connectedURL: nil, localDaemonURL: localURL) == nil)
+
+            let localNamed = try #require(URL(string: "http://localhost:7331"))
+            let variantURL = try #require(URL(string: "HTTP://LOCALHOST:7331/"))
+            #expect(
+                HostDaemonStatus.forConnectedDeployment(
+                    state: .stopped, startFailure: failure,
+                    connectedURL: variantURL, localDaemonURL: localNamed) == expected)
+
+            let trailingSlashLoopback = try #require(URL(string: "http://127.0.0.1:7331/"))
+            #expect(
+                HostDaemonStatus.forConnectedDeployment(
+                    state: .stopped, startFailure: failure,
+                    connectedURL: trailingSlashLoopback, localDaemonURL: localURL) == expected)
+        }
     }
 
     @MainActor
