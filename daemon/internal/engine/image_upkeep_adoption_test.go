@@ -197,15 +197,21 @@ func TestImageUpkeepAdoptsAChangedRecipe(t *testing.T) {
 		t.Fatalf("hold after the new image = %#v, want none", hold)
 	}
 
+	run := seedRunPolicy(t, h.st, domain.Run{
+		ID: "run-recipes", ProjectID: adoptionProject, SpecDigest: agentTestDigest("4"),
+	}, nil)
 	for _, test := range []struct {
 		repositoryID int64
 		want         bool
 	}{{42, true}, {7, false}} {
 		w := &productionPublicationWorkflow{
-			store: h.st, repositoryID: test.repositoryID,
+			store: h.st,
+			projectAuthority: FixedProjectAuthority(ProjectAuthority{
+				ProjectID: adoptionProject, RepositoryID: test.repositoryID,
+			}),
 			operatorRecipes: map[domain.Digest]bool{verify.RecipeDigest([]byte(upkeepRecipe)): true},
 		}
-		recipes, err := w.recipes(context.Background())
+		recipes, err := w.recipes(context.Background(), run.ID)
 		if err != nil {
 			t.Fatal(err)
 		}

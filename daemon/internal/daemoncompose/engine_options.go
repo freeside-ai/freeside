@@ -34,11 +34,14 @@ type ProductionEngine struct {
 	Bound ward.LaunchBound
 	// Backend, AdmissionFloor, Admission, and AdmissionNow together make
 	// engine.WithAdmission.
-	Backend            exec.RunnerBackend
-	AdmissionFloor     []exec.Capability
-	Admission          engine.AdmissionEnvironment
-	AdmissionNow       func() time.Time
-	Derive             engine.AdmissionDerivation
+	Backend        exec.RunnerBackend
+	AdmissionFloor []exec.Capability
+	Admission      engine.AdmissionEnvironment
+	AdmissionNow   func() time.Time
+	Derive         engine.AdmissionDerivation
+	// ProjectAuthority is where the admission and publication gates read
+	// a task's project authority (#3209).
+	ProjectAuthority   engine.ProjectAuthoritySource
 	DeliveryValidation func(context.Context, exec.StartSpec) error
 	Specification      engine.SpecificationConfig
 	Cancellation       engine.TaskCancellationRuntime
@@ -76,6 +79,7 @@ func (p ProductionEngine) Options() []engine.Option {
 		engine.WithMachineCapacity(p.Bound),
 		engine.WithAdmission(p.Backend, p.AdmissionFloor, p.Admission, p.AdmissionNow),
 		engine.WithAdmissionDerivation(p.Derive),
+		engine.WithProjectAuthority(p.ProjectAuthority),
 	}
 	if p.Cordon != nil {
 		options = append(options, engine.WithCordonedWriters(p.Cordon))

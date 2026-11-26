@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -409,14 +410,33 @@ func TestHandBackCommentGapWaitsOutFreesidesOwnLabel(t *testing.T) {
 		t.Fatalf("gap = %#v, want none while the label is Freeside's to remove", gap)
 	}
 
+	// The label is the one the run's project names at the pass (#3209):
+	// while it names none, another project's label never reaches this pull
+	// request.
+	var project domain.ProjectID
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(p.ctx, p.runID)
+		project = run.ProjectID
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[domain.ProjectID]string{"project-other": "other rework"}
 	transport := &removalTransport{}
 	remover, err := publish.NewHandBackLabelRemover(p.store, transport, &http.Client{Transport: transport},
-		"https://api.example.test", "needs rework")
+		"https://api.example.test", func(_ context.Context, _ *store.ReadTx, project domain.ProjectID) (string, error) {
+			return labels[project], nil
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := remover.Pass(p.ctx); err != nil || len(transport.requests) != 1 {
-		t.Fatalf("remover pass = %v, requests %q; want one removal", err, transport.requests)
+	if err := remover.Pass(p.ctx); err != nil || len(transport.requests) != 0 {
+		t.Fatalf("remover pass with no label for %s = %v, requests %q; want none", project, err, transport.requests)
+	}
+	labels[project] = "needs rework"
+	if err := remover.Pass(p.ctx); err != nil || len(transport.requests) != 1 ||
+		!strings.HasSuffix(transport.requests[0], "/labels/needs%20rework") {
+		t.Fatalf("remover pass = %v, requests %q; want one removal of the project's label", err, transport.requests)
 	}
 	gap := p.commentGap(t, remediated.HeadSHA)
 	if gap == nil || gap.HeadSHA != remediated.HeadSHA || gap.Repo != ready.PRReference.Repo ||

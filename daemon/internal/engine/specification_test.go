@@ -487,7 +487,6 @@ func (f specificationFixture) newEngineWithTransitionHook(
 				BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 			},
 			Workspace: "workspace-1", AuthIdentityID: &identity,
-			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		}, func() time.Time { return *f.now }),
 		WithSpecification(SpecificationConfig{
 			Fetcher: fetcher, Blobs: f.blobs, Now: func() time.Time { return *f.now },
@@ -512,6 +511,7 @@ func (f specificationFixture) newEngineWithTransitionHook(
 	if err != nil {
 		t.Fatal(err)
 	}
+	setWriterClass(engine, new(domain.BackendFreshVMReadOnlyVolumeHandoff))
 	return engine
 }
 

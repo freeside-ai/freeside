@@ -26,6 +26,9 @@
 //   - admission.go, agent_admission.go
 //     the per-stage admission environment and runner capability floor, and
 //     the agent admission refusal
+//   - project_authority.go what a task's project's current settings grant
+//     it, which the admission, publication, and hand-back gates read per
+//     task (#3209)
 //   - project_readiness_gate.go the gate that refuses new work for a project
 //     that is not ready, applied where submissions and re-entries write it
 //     (#3205)

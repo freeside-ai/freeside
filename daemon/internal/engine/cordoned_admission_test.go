@@ -22,7 +22,7 @@ func (f inputFilesFixture) composeCordon(caps ...exec.Capability) {
 
 // setProjectWriterClass stands in for the project's writer_class setting.
 func (f inputFilesFixture) setProjectWriterClass(class *domain.RunnerBackendClass) {
-	f.engine.admission.environment.WriterClass = class
+	setWriterClass(f.engine, class)
 }
 
 func (f inputFilesFixture) requireTaskWarded(t *testing.T) {
@@ -362,7 +362,7 @@ func TestReadmissionKeepsACordonedAdmissionsClass(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.engine.admission.cordonConfigurationDigest = reconfigured
-	c.engine.admission.environment.WriterClass = new(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	setWriterClass(c.engine, new(domain.BackendFreshVMReadOnlyVolumeHandoff))
 	if started, err := c.engine.dispatchPendingInvocations(ctx); err != nil || started != 0 {
 		t.Fatalf("dispatch = %d, %v; want the pass to continue with nothing started", started, err)
 	}
@@ -377,7 +377,7 @@ func TestReadmissionKeepsACordonedAdmissionsClass(t *testing.T) {
 	}
 
 	c.engine.admission.cordonConfigurationDigest = c.cordon.ConfigurationDigest()
-	c.engine.admission.environment.WriterClass = nil
+	setWriterClass(c.engine, nil)
 	if started, err := c.engine.dispatchPendingInvocations(ctx); err != nil || started != 1 {
 		t.Fatalf("dispatch = %d, %v; want the attempt started", started, err)
 	}

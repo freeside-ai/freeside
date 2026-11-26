@@ -260,6 +260,14 @@ var holdClasses = []holdClass{
 		sentinel: domain.ErrRepositoryIdentityMismatch, action: holdActionPassMutablePolicy,
 		reason: domain.HoldAdmissionPolicyRefused, check: domain.AdmissionCheckRepositoryIdentityMismatch,
 	},
+	// A project whose settings grant its tasks nothing (no record, a record
+	// current policy refuses, or one naming another repository) holds like
+	// the gates that read them. The vocabulary has no check for it, so it
+	// names none (#3209).
+	{
+		sentinel: ErrProjectSettingsRefused, action: holdActionPassMutablePolicy,
+		reason: domain.HoldAdmissionPolicyRefused,
+	},
 	{
 		sentinel: domain.ErrPathBoundaryMismatch, action: holdActionPassMutablePolicy,
 		reason: domain.HoldAdmissionPolicyRefused, check: domain.AdmissionCheckPathBoundaryMismatch,

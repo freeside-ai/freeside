@@ -42,13 +42,15 @@ type ActiveResourceReconciler struct {
 	// as review (#3127). Optional: without it no conversation comment becomes
 	// an external finding.
 	appBotIdentity appBotIdentitySource
-	// handBackLabel is the label the landing batch puts on a pull request it
-	// hands back for rework (issue #3160). Empty turns hand-back intake off.
-	// The label is a trigger, not an authority: the store re-proves the
-	// cycle from its own records when it seals one.
-	handBackLabel string
+	// handBackLabels names, per project, the label the landing batch puts on
+	// a pull request it hands back for rework (issue #3160), read in the
+	// observation's transaction from the run's project (#3209). Nil, or a
+	// project that names none, turns hand-back intake off. The label is a
+	// trigger, not an authority: the store re-proves the cycle from its own
+	// records when it seals one.
+	handBackLabels publish.HandBackLabelLookup
 	// mergeBase reads a head's merge base with the target branch, the base a
-	// hand-back cycle reviews against. Required when handBackLabel is set.
+	// hand-back cycle reviews against. Required when handBackLabels is set.
 	mergeBase func(ctx context.Context, repo, baseRef, head string) (string, error)
 	// readinessGate is the project readiness gate the three re-entry cycles
 	// apply before they start (#3205); nil checks nothing. A refused start
@@ -1258,6 +1260,9 @@ func (r ActiveResourceReconciler) observeReadyResource(
 		// concluded ready item whose pull request was last seen open, so a
 		// hand-back after readiness ended still reaches the run.
 		handBackWatch bool
+		// handBackLabel is the run's project's hand-back label, empty for a
+		// held resource or a project that names none.
+		handBackLabel string
 	)
 	if held && !completionOnly {
 		return activeResourceObservation{}, errors.New("a held resource is observed for completion only")
@@ -1280,6 +1285,15 @@ func (r ActiveResourceReconciler) observeReadyResource(
 		if err != nil {
 			return err
 		}
+		if !held && r.handBackLabels != nil {
+			run, err := tx.GetRun(ctx, binding.RunID)
+			if err != nil {
+				return err
+			}
+			if handBackLabel, err = r.handBackLabels(ctx, tx, run.ProjectID); err != nil {
+				return err
+			}
+		}
 		if completionOnly {
 			state, err := loadCompletionRecoveryState(ctx, tx, binding)
 			if err != nil {
@@ -1287,7 +1301,7 @@ func (r ActiveResourceReconciler) observeReadyResource(
 			}
 			declaration, unitBinding = state.declaration, state.binding
 			completed, foreclosure = state.completed, state.foreclosure
-			if !held && r.handBackLabel != "" {
+			if handBackLabel != "" {
 				if handBackWatch, err = publishedPullOpen(ctx, tx, binding); err != nil {
 					return err
 				}
@@ -1412,7 +1426,7 @@ func (r ActiveResourceReconciler) observeReadyResource(
 	// it never blocks the pull/issue facts; on success, unchanged activity
 	// (a 304 across all sub-resources) yields nothing to record.
 	observation.boundOpen = !completionOnly && exact && pullFact.State == domain.PullRequestOpen
-	observation.handBack = r.handBackLabel != "" && !held && slices.Contains(observed.Labels, r.handBackLabel) &&
+	observation.handBack = handBackLabel != "" && slices.Contains(observed.Labels, handBackLabel) &&
 		pullFact.State == domain.PullRequestOpen && !pullFact.Merged && pullFact.BaseRef == binding.BaseRef &&
 		(handBackWatch || !completionOnly)
 	// A conversation comment binds to the head the pass observed. That is the

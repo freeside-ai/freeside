@@ -611,10 +611,11 @@ func TestCapabilityRetryHoldsWhenItsRunNowResolvesTheCordon(t *testing.T) {
 		BackendName: string(domain.BackendCordonedHostProcess),
 		Caps:        exec.NewCapabilitySet(domain.CordonedCapabilities()...),
 	}
+	var restartBase domain.BaseRevision
 	restarted := openUnattendedFixtureWith(t, root, false, testIdentity, testPoolLimit,
 		func(env *engine.AdmissionEnvironment) {
 			env.EnforceableEgressProfiles = []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressProviderWebRead}
-			env.WriterClass = nil
+			restartBase = env.Base
 		},
 		func(st *store.Store, blobs *signet.BlobStore) []engine.Option {
 			fetcher, err := specify.NewFetcher(st, blobs, nil)
@@ -627,6 +628,11 @@ func TestCapabilityRetryHoldsWhenItsRunNowResolvesTheCordon(t *testing.T) {
 					PromptPackageDigest: capabilityRetrySpecificationPrompt,
 				}),
 				engine.WithCordonedWriters(cordon),
+				// The project names no writer class, so its writers now
+				// resolve to the cordon.
+				engine.WithProjectAuthority(engine.FixedProjectAuthority(engine.ProjectAuthority{
+					Repo: restartBase.Repo, RepositoryID: restartBase.RepositoryID, BaseRef: restartBase.BaseRef,
+				})),
 			}
 		})
 	for pass := range 2 {

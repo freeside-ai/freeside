@@ -135,12 +135,12 @@ type ProductionPublicationConfig struct {
 	Transport        PublicationTransport
 	Publisher        *publish.Publisher
 	Artifacts        ArtifactStore
-	ApprovedRecipes  map[domain.Digest]bool
-	// RepositoryID is the daemon's one repository. The recipes image-policy
-	// adoptions approved for it join ApprovedRecipes wherever the workflow
-	// gates verification or evidence. Zero means no adoption applies.
-	RepositoryID int64
-	NewRoom      func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
+	// ApprovedRecipes is the operator's recipe set. Each task's project
+	// adds its own approved recipe and its repository's adopted recipes
+	// (productionPublicationWorkflow.recipes), so no project's recipe
+	// belongs here.
+	ApprovedRecipes map[domain.Digest]bool
+	NewRoom         func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
 	// NewBoundRoom supplies concrete task-bound ownership for production.
 	// NewRoom remains the isolated test/attended factory.
 	NewBoundRoom func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
@@ -298,12 +298,12 @@ type productionPublicationWorkflow struct {
 	transport        PublicationTransport
 	publisher        *publish.Publisher
 	artifacts        ArtifactStore
-	// operatorRecipes is the operator's approved-recipe set. Wherever an
-	// image's recipe or recipe-bearing evidence is gated, read the set
-	// through recipes or recipesIn, which add the repository's adopted
-	// recipes; an item or artifact with no such evidence may pass it as is.
+	// operatorRecipes is the operator's approved-recipe set, which carries
+	// no project's recipe. Wherever an image's recipe or recipe-bearing
+	// evidence is gated, read the task's set through recipes, which adds the
+	// task's project's recipe and its repository's adopted recipes; an item
+	// or artifact with no such evidence may pass it as is.
 	operatorRecipes         map[domain.Digest]bool
-	repositoryID            int64
 	newRoom                 func(domain.ProjectImage, ward.ContainerSize) (ProductionVerificationRoom, error)
 	newBoundRoom            func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
 	proveVerificationAbsent func(context.Context, domain.Run, domain.InvocationID) error
@@ -321,6 +321,11 @@ type productionPublicationWorkflow struct {
 	// readiness re-entry a moved head starts applies. engine.New sets it;
 	// nil checks nothing.
 	readinessGate ProjectReadinessGate
+	// projectAuthority reads a task's project authority for the publish
+	// gate's repository check (requireProjectRepository) and the task's
+	// recipe set (recipes). engine.New sets it from WithProjectAuthority;
+	// nil checks no repository and adds no project's recipe.
+	projectAuthority ProjectAuthoritySource
 	// hostVerificationRoom admits a verification job onto the host executor
 	// and builds its room (Engine.admitHostVerificationRoom). engine.New sets
 	// it; nil admits nothing.
@@ -515,8 +520,8 @@ func newProductionPublicationWorkflow(
 		store: st, attention: attention, workDir: workDir,
 		verifyScratchDir: verifyScratchDir, unremovedScratch: unremovedScratch,
 		transport: cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
-		operatorRecipes: mapsClone(cfg.ApprovedRecipes), repositoryID: cfg.RepositoryID,
-		newRoom: cfg.NewRoom, reviewSource: cfg.ReviewSource,
+		operatorRecipes: mapsClone(cfg.ApprovedRecipes),
+		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
 		reviewAdmitter:                    cfg.ReviewAdmission,
 		newBoundRoom:                      cfg.NewBoundRoom,
 		proveVerificationAbsent:           cfg.ProveVerificationAbsent,
@@ -552,41 +557,52 @@ func newProductionPublicationWorkflow(
 	}, nil
 }
 
-// recipes is the recipe set the workflow gates verification and evidence
-// against (plan §5.7, Project-image upkeep): the operator's set plus the
-// digests image-policy adoptions approved for the daemon's repository. It
-// is read for each decision because an approve is recorded while the
-// daemon runs. The map is the caller's to keep.
-func (w *productionPublicationWorkflow) recipes(ctx context.Context) (map[domain.Digest]bool, error) {
+// recipes is the recipe set the workflow gates a task's verification and
+// evidence against (plan §5.7, Project-image upkeep): the operator's set,
+// plus the recipe the run's project approves now, plus the digests
+// image-policy adoptions approved for that project's repository. It is read
+// for each decision, so a recipe edit or an adoption recorded while the
+// daemon runs reaches the task's next gate, and a task never passes on
+// another project's recipe (#3209). The run, not the task row, names the
+// project. A project whose settings grant it nothing holds the task, as
+// at the publish gate's repository check. Without a project authority
+// source (a composition that serves no project) the set is the
+// operator's. The map is the caller's to keep.
+func (w *productionPublicationWorkflow) recipes(ctx context.Context, runID domain.RunID) (map[domain.Digest]bool, error) {
 	// A pure constructor test omits persistence, as displayNames allows; it
-	// has no adoptions to add.
-	if w.store == nil {
+	// has no project to add.
+	if w.store == nil || w.projectAuthority == nil {
 		return mapsClone(w.operatorRecipes), nil
 	}
 	var recipes map[domain.Digest]bool
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		recipes, err = w.recipesIn(ctx, tx)
-		return err
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("read run %s for its recipes: %w", runID, err)
+		}
+		project, err := w.projectAuthority(ctx, tx, run.ProjectID)
+		if errors.Is(err, ErrProjectSettingsRefused) {
+			return productionPublicationRetryableError(fmt.Errorf("project %q authority: %w", run.ProjectID, err))
+		}
+		if err != nil {
+			return fmt.Errorf("project %q authority: %w", run.ProjectID, err)
+		}
+		adoptions, err := tx.ListImagePolicyAdoptions(ctx, project.RepositoryID)
+		if err != nil {
+			return fmt.Errorf("read the repository's adopted recipes: %w", err)
+		}
+		recipes = mapsClone(w.operatorRecipes)
+		if project.ApprovedRecipe != "" {
+			recipes[project.ApprovedRecipe] = true
+		}
+		for _, adoption := range adoptions {
+			if adoption.RecipeDigest != nil {
+				recipes[*adoption.RecipeDigest] = true
+			}
+		}
+		return nil
 	})
 	return recipes, err
-}
-
-// recipesIn is recipes inside the caller's transaction.
-func (w *productionPublicationWorkflow) recipesIn(
-	ctx context.Context, tx *store.ReadTx,
-) (map[domain.Digest]bool, error) {
-	adoptions, err := tx.ListImagePolicyAdoptions(ctx, w.repositoryID)
-	if err != nil {
-		return nil, fmt.Errorf("read the repository's adopted recipes: %w", err)
-	}
-	recipes := mapsClone(w.operatorRecipes)
-	for _, adoption := range adoptions {
-		if adoption.RecipeDigest != nil {
-			recipes[*adoption.RecipeDigest] = true
-		}
-	}
-	return recipes, nil
 }
 
 func mapsClone[K comparable, V any](in map[K]V) map[K]V {
@@ -1159,6 +1175,37 @@ type productionBinding struct {
 	evaluatedSHA string
 }
 
+// requireProjectRepository is the publish gate's repository check (#3209):
+// a task publishes only to its own project's current repository. It
+// compares the admitted base with the repository, repository ID, and base
+// ref the run's project names now, so a task of one project can't publish
+// to another's repository, and a repository edit holds an in-flight task at
+// its next publication. A refusal, or a project whose settings grant it
+// nothing, is retryable: the task holds under the environment hold and a
+// corrected setting releases it, with no publisher call in between.
+func (w *productionPublicationWorkflow) requireProjectRepository(
+	ctx context.Context, tx *store.ReadTx, run domain.Run, base domain.BaseRevision,
+) error {
+	if w.projectAuthority == nil {
+		return nil
+	}
+	project, err := w.projectAuthority(ctx, tx, run.ProjectID)
+	if errors.Is(err, ErrProjectSettingsRefused) {
+		return productionPublicationRetryableError(fmt.Errorf("project %q authority: %w", run.ProjectID, err))
+	}
+	if err != nil {
+		return fmt.Errorf("project %q authority: %w", run.ProjectID, err)
+	}
+	if !project.sameRepository(base) {
+		return productionPublicationRetryableError(fmt.Errorf(
+			"run %s was admitted at %s#%d@%s, project %q names %s#%d@%s: %w",
+			run.ID, base.Repo, base.RepositoryID, base.BaseRef,
+			run.ProjectID, project.Repo, project.RepositoryID, project.BaseRef,
+			domain.ErrRepositoryIdentityMismatch))
+	}
+	return nil
+}
+
 func (w *productionPublicationWorkflow) loadBinding(
 	ctx context.Context, task productionPublicationTask,
 ) (productionBinding, error) {
@@ -1180,6 +1227,9 @@ func (w *productionPublicationWorkflow) loadBinding(
 		}
 		binding.admission, err = tx.GetExecutionAdmissionRecord(ctx, task.ProducingInvocationID)
 		if err != nil {
+			return err
+		}
+		if err := w.requireProjectRepository(ctx, tx, binding.run, binding.admission.Base); err != nil {
 			return err
 		}
 		binding.export, err = tx.GetExecutionExportRecord(ctx, task.ProducingInvocationID)
@@ -1775,7 +1825,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 		}
 		published, outcomeFound, err := w.loadPublicationOutcome(
-			ctx, task, candidate, w.convergePublicationOutcome,
+			ctx, task, candidate, w.outcomeConverger(task),
 		)
 		if err != nil {
 			if isDurablePublicationConflict(err) {
@@ -1799,7 +1849,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 		}
 	}
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -1956,7 +2006,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return derefOutcome(heldCandidate), err
 	}
 	if published, found, err := w.loadPublicationOutcome(
-		ctx, task, candidate, w.convergePublicationOutcome,
+		ctx, task, candidate, w.outcomeConverger(task),
 	); err != nil {
 		if isDurablePublicationConflict(err) {
 			return w.holdBlockedTask(
@@ -2374,7 +2424,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		// proofs, which is what lets it complete after its recipe is revoked
 		// (issue #527, decision 2); the verdict it reports was evaluated in
 		// memory above, independent of the recipe gate.
-		recipes, err := w.recipes(ctx)
+		recipes, err := w.recipes(ctx, task.RunID)
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -2503,7 +2553,7 @@ func (w *productionPublicationWorkflow) hasCompatibleReadyItem(
 	readiness productionReadiness,
 	yieldHistory domain.ReviewYieldHistory,
 ) (bool, error) {
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return false, err
 	}
@@ -3123,7 +3173,7 @@ func (w *productionPublicationWorkflow) readyItem(
 	readiness productionReadiness,
 	yieldHistory domain.ReviewYieldHistory,
 ) (domain.AttentionItem, error) {
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
@@ -3214,7 +3264,7 @@ func (w *productionPublicationWorkflow) blockedItem(
 	artifacts []domain.Artifact,
 	reason string,
 ) (domain.AttentionItem, error) {
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return domain.AttentionItem{}, err
 	}
@@ -3385,7 +3435,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		return nil, fmt.Errorf("production blocked item %q has no reason contract: %w",
 			current.ID, domain.ErrParentKeyMismatch)
 	}
-	historicalRecipes, err := w.recipes(ctx)
+	historicalRecipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return nil, err
 	}
@@ -3450,7 +3500,7 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 	actions []domain.Action,
 	facts *domain.PublishBlockFacts,
 ) (productionTaskOutcome, error) {
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}

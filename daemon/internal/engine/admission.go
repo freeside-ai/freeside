@@ -100,15 +100,12 @@ type AdmissionEnvironment struct {
 	// BackupEncryptionWaiver records the §5.7 Phase 1A.2 exception when the
 	// operator has one; the store re-gates it against their configuration.
 	BackupEncryptionWaiver *domain.BackupEncryptionWaiver
-	// SettingsRevisions names the stored settings revisions the daemon was
-	// composed from, recorded on every admission; nil for a composition from
-	// a settings file.
-	SettingsRevisions *domain.SettingsRevisions
-	// WriterClass is the project's writer_class setting, nil when unset.
-	// With the task's own requirement it resolves the class an implementer
-	// or remediator attempt runs on (domain.ResolveWriterClass); unset
-	// resolves to the cordon (plan §5.7, Cordoned Runs).
-	WriterClass *domain.RunnerBackendClass
+	// InstanceSettingsRevision is the stored instance settings revision the
+	// daemon was composed from; 0 for a composition from a settings file or
+	// flags. Every admission records it with the project settings revision
+	// its own project authority read (ProjectAuthority.SettingsRevision).
+	// The project's writer class comes from that same read, not from here.
+	InstanceSettingsRevision int
 }
 
 // clone detaches the environment from the caller's pointers.
@@ -126,14 +123,6 @@ func (e AdmissionEnvironment) clone() AdmissionEnvironment {
 	if e.BackupEncryptionWaiver != nil {
 		waiver := *e.BackupEncryptionWaiver
 		e.BackupEncryptionWaiver = &waiver
-	}
-	if e.SettingsRevisions != nil {
-		revisions := *e.SettingsRevisions
-		e.SettingsRevisions = &revisions
-	}
-	if e.WriterClass != nil {
-		class := *e.WriterClass
-		e.WriterClass = &class
 	}
 	return e
 }
@@ -285,8 +274,9 @@ func (a *admitter) runningConfigurationDigest(class string, image domain.ImageRe
 }
 
 // writerClass resolves the class an implementer or remediator attempt of
-// run runs on: the task's requirement, else the project's setting, else the
-// cordon (domain.ResolveWriterClass). The run's first writer admission
+// run runs on: the task's requirement, else the project's setting (project,
+// read with the admission's project authority), else the cordon
+// (domain.ResolveWriterClass). The run's first writer admission
 // fixes it: a later writer admission whose resolved class differs is
 // refused with ErrWriterClassChanged and raises one notice on the run, so
 // a remediation never runs on another containment than the candidate it
@@ -294,7 +284,9 @@ func (a *admitter) runningConfigurationDigest(class string, image domain.ImageRe
 //
 // An admission counts as cordoned only when it names the cordon's class;
 // every other one was placed on the admitter's ward backend.
-func (e *Engine) writerClass(ctx context.Context, run domain.Run) (domain.RunnerBackendClass, error) {
+func (e *Engine) writerClass(
+	ctx context.Context, run domain.Run, project *domain.RunnerBackendClass,
+) (domain.RunnerBackendClass, error) {
 	var (
 		requirement *domain.TaskWriterClass
 		admissions  []domain.ExecutionAdmission
@@ -311,7 +303,7 @@ func (e *Engine) writerClass(ctx context.Context, run domain.Run) (domain.Runner
 	}); err != nil {
 		return "", fmt.Errorf("read run %s writer class: %w", run.ID, err)
 	}
-	resolved, err := domain.ResolveWriterClass(e.admission.environment.WriterClass, requirement)
+	resolved, err := domain.ResolveWriterClass(project, requirement)
 	if err != nil {
 		return "", err
 	}
@@ -506,7 +498,8 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 
 // AdmissionDerivation derives the per-attempt half of the admission
 // environment: the workspace reference, and the base a run with none
-// recorded would start at. The static AdmissionEnvironment cannot carry
+// recorded would start at. project is the run's project authority, read for
+// this admission, whose repository and base ref the derived base must name. The static AdmissionEnvironment cannot carry
 // either once more than one run flows through a daemon (each handoff owns its
 // workspace volume, and the trusted base tip moves while the daemon runs),
 // and the composition, not the engine, knows the ward's workspace naming
@@ -522,7 +515,9 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 // at that base when its candidate was written there
 // (handoffConflictTipAdmission). Each of those tips is read from an
 // immutable record too, so every attempt derives the same base.
-type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
+type AdmissionDerivation func(
+	ctx context.Context, invocationID domain.InvocationID, project ProjectAuthority,
+) (workspace string, base domain.BaseRevision, err error)
 
 // WithAdmissionDerivation configures per-attempt workspace and base
 // derivation. The derived values replace the environment's Workspace and
@@ -653,6 +648,11 @@ func writerEgressRefusal(
 // before any of the three exceptions replaced its commit. recordAttempt
 // records it on a run that has none, and refuses the admission if the run
 // recorded a different one in the meantime.
+//
+// The run's project authority is read once per admission: the derived
+// base, the repository check, the writer class, and the recorded project
+// settings revision all come from that one read, so the revision an
+// admission records names the values that admitted it.
 func (e *Engine) admitAttempt(
 	ctx context.Context, binding invocationBinding, stage domain.Stage, invocationID domain.InvocationID,
 ) (domain.ExecutionAdmission, domain.BaseRevision, bool, error) {
@@ -660,10 +660,15 @@ func (e *Engine) admitAttempt(
 		return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, nil
 	}
 	env := e.admission.environment
+	project, err := e.projectAuthority(ctx, binding.run.ProjectID)
+	if err != nil {
+		return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, fmt.Errorf(
+			"admit invocation %q: %w", invocationID, err)
+	}
 	// The run's base comes first: the image is selected for it, so a run
 	// admitted before the tip moved keeps an image that serves its own base.
 	if e.derive != nil {
-		workspace, tip, err := e.derive(ctx, invocationID)
+		workspace, tip, err := e.derive(ctx, invocationID, project)
 		if err != nil {
 			return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, fmt.Errorf(
 				"admit invocation %q: derive environment: %w", invocationID, err)
@@ -675,8 +680,18 @@ func (e *Engine) admitAttempt(
 		return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, fmt.Errorf(
 			"admit invocation %q: %w", invocationID, err)
 	}
+	// A run of one project is never admitted against another's repository,
+	// and a repository edit holds its in-flight runs here until it is
+	// undone or the run is stopped.
+	if e.projectAuthoritySource != nil && !project.sameRepository(base) {
+		return domain.ExecutionAdmission{}, domain.BaseRevision{}, false, fmt.Errorf(
+			"admit invocation %q: run %s base %s#%d@%s, project %q names %s#%d@%s: %w",
+			invocationID, binding.run.ID, base.Repo, base.RepositoryID, base.BaseRef,
+			binding.run.ProjectID, project.Repo, project.RepositoryID, project.BaseRef,
+			domain.ErrRepositoryIdentityMismatch)
+	}
 	env.Base = base
-	admission, admitted, err := e.admitAttemptIn(ctx, env, binding, stage, invocationID)
+	admission, admitted, err := e.admitAttemptIn(ctx, env, project, binding, stage, invocationID)
 	return admission, base, admitted, err
 }
 
@@ -733,10 +748,10 @@ func runHasAttempt(run domain.Run) bool {
 var errRunBaseRecorded = errors.New("run recorded another base since this admission read it")
 
 // admitAttemptIn admits one attempt under env, whose Workspace and Base are
-// already the attempt's own.
+// already the attempt's own, and project, the run's project authority.
 func (e *Engine) admitAttemptIn(
-	ctx context.Context, env AdmissionEnvironment, binding invocationBinding, stage domain.Stage,
-	invocationID domain.InvocationID,
+	ctx context.Context, env AdmissionEnvironment, project ProjectAuthority, binding invocationBinding,
+	stage domain.Stage, invocationID domain.InvocationID,
 ) (domain.ExecutionAdmission, bool, error) {
 	// Only the implementer and the remediator have a writer class; the
 	// specifier and clean verification run on the ward. A cordoned writer
@@ -744,7 +759,7 @@ func (e *Engine) admitAttemptIn(
 	cordoned := false
 	if role, ok := wardRole(binding.run, stage, invocationID); ok &&
 		(role == domain.RoleImplementer || role == domain.RoleRemediator) {
-		class, err := e.writerClass(ctx, binding.run)
+		class, err := e.writerClass(ctx, binding.run, project.WriterClass)
 		if err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 		}
@@ -1066,6 +1081,10 @@ func (e *Engine) admitAttemptIn(
 	if agent != nil {
 		agentBinding = &agent.binding
 	}
+	settings, err := admissionSettingsRevisions(env.InstanceSettingsRevision, project.SettingsRevision)
+	if err != nil {
+		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID:               invocationID,
 		RunID:                      binding.run.ID,
@@ -1090,7 +1109,7 @@ func (e *Engine) admitAttemptIn(
 		BackupEncryptionWaiver:     env.BackupEncryptionWaiver,
 		AgentBinding:               agentBinding,
 		WorkspaceHydration:         hydration,
-		SettingsRevisions:          env.SettingsRevisions,
+		SettingsRevisions:          settings,
 		AdmittedAt:                 admittedAt,
 	})
 	if err != nil {
@@ -1562,4 +1581,19 @@ func handoffConflictTipAdmission(
 		return nil
 	})
 	return base, atTip, err
+}
+
+// admissionSettingsRevisions is the settings revisions an admission records:
+// nil when both are 0, for a composition from a settings file or flags.
+// Any other pair must be whole; a half-set one names settings no store ever
+// held together and refuses the admission.
+func admissionSettingsRevisions(instance, project int) (*domain.SettingsRevisions, error) {
+	if instance == 0 && project == 0 {
+		return nil, nil
+	}
+	revisions := domain.SettingsRevisions{Instance: instance, Project: project}
+	if err := revisions.Validate(); err != nil {
+		return nil, err
+	}
+	return &revisions, nil
 }

@@ -100,16 +100,18 @@ func TestDispatchHoldReasonCoversEveryHoldClass(t *testing.T) {
 
 // TestAdmissionRefusalDetailCoversEveryAdmissionClass: every row the hold
 // records as admission_policy_refused names its own check and no agent or
-// launch, the unserved base alone names none, and an error of any other
-// reason has no detail.
+// launch, the unserved base and a refused project's settings alone name
+// none, and an error of any other reason has no detail.
 func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
 	t.Parallel()
 	for _, class := range holdClasses {
 		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", class.sentinel)
 		detail := admissionRefusalDetail(wrapped)
-		// An unserved base has no check in the vocabulary, so its hold
-		// carries none rather than a check that would name another cause.
-		if class.reason != domain.HoldAdmissionPolicyRefused || errors.Is(class.sentinel, ErrProjectImageUnserved) {
+		// An unserved base and a refused project's settings have no check
+		// in the vocabulary, so their holds carry none rather than a check
+		// that would name another cause.
+		if class.reason != domain.HoldAdmissionPolicyRefused || errors.Is(class.sentinel, ErrProjectImageUnserved) ||
+			errors.Is(class.sentinel, ErrProjectSettingsRefused) {
 			if class.check != "" {
 				t.Errorf("%v: reason %q names check %q", class.sentinel, class.reason, class.check)
 			}

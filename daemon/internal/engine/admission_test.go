@@ -676,7 +676,6 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 					BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 				},
 				Workspace: "workspace-1", AuthIdentityID: &identity,
-				WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 				// WithAdmission defaults this set; a directly built admitter
 				// states it.
 				EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly},
@@ -690,6 +689,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		}, nil),
 		invocation: invocation, conversation: conversation,
 	}
+	setWriterClass(e, new(domain.BackendFreshVMReadOnlyVolumeHandoff))
 	admission, _, admitted, err := e.admitAttempt(
 		ctx, binding, domain.Stage{ID: "stage-1"}, invocation.ID,
 	)

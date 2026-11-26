@@ -25,21 +25,58 @@ import (
 // verb, so the running daemon runs the same dispatch.
 const settingsRoute = "/settings"
 
-// settingsTakeEffect is what a set or import says about when its change
-// applies. The installed daemon reads the records only at start until the
-// project gates read them live (#3209).
+// settingsTakeEffect is when a section the installed daemon composes from at
+// start applies: every instance section but the cordoned launch cap, and
+// the project's agent_image and enabled.
 const settingsTakeEffect = "at the daemon's next start"
 
-// cordonedLaunchesTakeEffect is when a set of the cordoned launch cap
-// applies: the admitting transaction reads it from the stored record on
-// each admission (#3471).
-const cordonedLaunchesTakeEffect = "at the next admission"
+// nextAdmissionTakeEffect is when a section the admitting transaction reads
+// applies: the cordoned launch cap (#3471) and the project's writer class,
+// which each admission resolves from the project's current record (#3209).
+const nextAdmissionTakeEffect = "at the next admission"
+
+// nextGateTakeEffect is when a section the path, publish, recipe, and
+// hand-back gates read per task applies (#3209).
+const nextGateTakeEffect = "at each task's next gate"
+
+// repositoryTakeEffect is nextGateTakeEffect for the repository, whose tip
+// watch and readiness still follow the composed project until a restart, so
+// until then an edit holds new admissions with a repository mismatch.
+const repositoryTakeEffect = nextGateTakeEffect + "; the tip watch and readiness follow at the daemon's next start"
+
+// recipeTakeEffect is nextGateTakeEffect for the approved recipe. Readiness
+// and the writer-image check still read the composed project's recipe until
+// a restart, so until then new work still starts on the old recipe's image,
+// and the recipe gate blocks it at publication.
+const recipeTakeEffect = nextGateTakeEffect + "; work on an image built from the old recipe blocks at publication, " +
+	"and readiness follows at the daemon's next start"
 
 // settingsSetTakesEffect is when a set of the named section applies.
 func settingsSetTakesEffect(project domain.ProjectID, section string) string {
-	if project == "" && section == string(domain.InstanceSectionCordonedLaunches) {
-		return cordonedLaunchesTakeEffect
+	if project == "" {
+		if section == string(domain.InstanceSectionCordonedLaunches) {
+			return nextAdmissionTakeEffect
+		}
+		return settingsTakeEffect
 	}
+	return projectSectionTakesEffect(domain.ProjectSettingsSection(section))
+}
+
+// projectSectionTakesEffect is when a change to a project section applies.
+func projectSectionTakesEffect(section domain.ProjectSettingsSection) string {
+	switch section {
+	case domain.ProjectSectionAllowedPaths, domain.ProjectSectionHandBackLabel:
+		return nextGateTakeEffect
+	case domain.ProjectSectionRepository:
+		return repositoryTakeEffect
+	case domain.ProjectSectionApprovedRecipe:
+		return recipeTakeEffect
+	case domain.ProjectSectionWriterClass:
+		return nextAdmissionTakeEffect
+	case domain.ProjectSectionAgentImage, domain.ProjectSectionEnabled:
+		return settingsTakeEffect
+	}
+	// An unknown section is refused before its revision is written.
 	return settingsTakeEffect
 }
 
@@ -264,11 +301,42 @@ func settingsSetBy() (string, error) {
 // settingsImportResult reports the revisions an import wrote and the file's
 // keys that have no stored section.
 type settingsImportResult struct {
-	InstanceRevision int              `json:"instance_revision"`
-	Project          domain.ProjectID `json:"project"`
-	ProjectRevision  int              `json:"project_revision"`
-	NotImported      []string         `json:"not_imported"`
-	TakesEffect      string           `json:"takes_effect"`
+	InstanceRevision int                   `json:"instance_revision"`
+	Project          domain.ProjectID      `json:"project"`
+	ProjectRevision  int                   `json:"project_revision"`
+	NotImported      []string              `json:"not_imported"`
+	TakesEffect      settingsImportEffects `json:"takes_effect"`
+}
+
+// settingsImportEffects is when an import's sections apply: every instance
+// section the file carries at the daemon's next start, and each project
+// section as a set of it would.
+type settingsImportEffects struct {
+	Instance string                  `json:"instance"`
+	Project  []settingsSectionEffect `json:"project"`
+}
+
+type settingsSectionEffect struct {
+	Section     domain.ProjectSettingsSection `json:"section"`
+	TakesEffect string                        `json:"takes_effect"`
+}
+
+// importEffects lists, in section order, when each project section project
+// sets applies.
+func importEffects(project domain.ProjectSettings) (settingsImportEffects, error) {
+	effects := settingsImportEffects{Instance: settingsTakeEffect, Project: []settingsSectionEffect{}}
+	for _, section := range domain.AllProjectSettingsSections {
+		value, err := project.SectionValue(section)
+		if err != nil {
+			return settingsImportEffects{}, err
+		}
+		if value != nil {
+			effects.Project = append(effects.Project, settingsSectionEffect{
+				Section: section, TakesEffect: projectSectionTakesEffect(section),
+			})
+		}
+	}
+	return effects, nil
 }
 
 // runSettingsImportCommand turns a deputy settings file into the instance
@@ -324,8 +392,12 @@ func runSettingsImportCommand(ctx context.Context, args []string, stdout, stderr
 	if err != nil {
 		return err
 	}
+	effects, err := importEffects(run.Project)
+	if err != nil {
+		return err
+	}
 	result := settingsImportResult{
-		Project: run.ProjectID, NotImported: loaded.keysNotImported(), TakesEffect: settingsTakeEffect,
+		Project: run.ProjectID, NotImported: loaded.keysNotImported(), TakesEffect: effects,
 	}
 	if err := handle.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		var err error

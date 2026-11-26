@@ -158,16 +158,17 @@ func (tx *ReadTx) ListImagePolicyAdoptions(
 }
 
 // EffectiveApprovedRecipes returns the recipe set one repository's evidence
-// is gated against: the operator's approved recipes plus the digests that
-// repository's adoptions approved. The map is the caller's to keep.
+// is gated against: the recipe base (the operator's approved recipes and
+// every stored project's recipe) plus the digests that repository's
+// adoptions approved. The map is the caller's to keep.
 func (tx *ReadTx) EffectiveApprovedRecipes(ctx context.Context, repositoryID int64) (map[domain.Digest]bool, error) {
 	adoptions, err := tx.imagePolicyAdoptions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return tx.recipesWith(adoptions, func(a domain.ImagePolicyAdoption) bool {
+	return tx.recipesWith(ctx, adoptions, func(a domain.ImagePolicyAdoption) bool {
 		return a.RepositoryID == repositoryID
-	}), nil
+	})
 }
 
 // AdoptedRegistryHosts returns the registry hosts one repository's adoptions
@@ -186,7 +187,7 @@ func (tx *ReadTx) AdoptedRegistryHosts(ctx context.Context, repositoryID int64) 
 }
 
 // storeRecipeSet is the recipe set a boundary that knows only the artifact
-// row gates against: the operator's set plus every digest adopted in this
+// row gates against: the recipe base plus every digest adopted in this
 // store. An artifact carries no repository, so the per-repository rule is
 // enforced where evidence gains authority (gateEvidence, and the consumers
 // of EffectiveApprovedRecipes); this boundary stays the anti-forgery gate, so
@@ -198,20 +199,46 @@ func (tx *ReadTx) storeRecipeSet(ctx context.Context) (map[domain.Digest]bool, e
 		return nil, err
 	}
 	if len(adoptions) == 0 {
-		return tx.approvedRecipes, nil
+		return tx.recipeBase(ctx)
 	}
-	return tx.recipesWith(adoptions, func(domain.ImagePolicyAdoption) bool { return true }), nil
+	return tx.recipesWith(ctx, adoptions, func(domain.ImagePolicyAdoption) bool { return true })
 }
 
-// recipesWith returns a copy of the operator's set plus the adopted digests
-// of the selected adoptions that the transaction's recipe scope admits.
-func (tx *ReadTx) recipesWith(
-	adoptions []domain.ImagePolicyAdoption, selected func(domain.ImagePolicyAdoption) bool,
-) map[domain.Digest]bool {
+// recipeBase is the set every effective recipe set starts from: the
+// operator's set plus every stored project's current recipe that the
+// transaction's recipe scope admits (storedProjectRecipes), read once per
+// transaction. The returned map is read-only.
+func (tx *ReadTx) recipeBase(ctx context.Context) (map[domain.Digest]bool, error) {
+	if tx.baseRecipes != nil {
+		return tx.baseRecipes, nil
+	}
+	projects, err := tx.storedProjectRecipes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the stored projects' recipes: %w", err)
+	}
 	recipes := maps.Clone(tx.approvedRecipes)
 	if recipes == nil {
 		recipes = map[domain.Digest]bool{}
 	}
+	for recipe := range projects {
+		if tx.recipeScope == nil || tx.recipeScope[recipe] {
+			recipes[recipe] = true
+		}
+	}
+	tx.baseRecipes = recipes
+	return recipes, nil
+}
+
+// recipesWith returns a copy of the recipe base plus the adopted digests of
+// the selected adoptions that the transaction's recipe scope admits.
+func (tx *ReadTx) recipesWith(
+	ctx context.Context, adoptions []domain.ImagePolicyAdoption, selected func(domain.ImagePolicyAdoption) bool,
+) (map[domain.Digest]bool, error) {
+	base, err := tx.recipeBase(ctx)
+	if err != nil {
+		return nil, err
+	}
+	recipes := maps.Clone(base)
 	for _, adoption := range adoptions {
 		if adoption.RecipeDigest == nil || !selected(adoption) {
 			continue
@@ -221,7 +248,7 @@ func (tx *ReadTx) recipesWith(
 		}
 		recipes[*adoption.RecipeDigest] = true
 	}
-	return recipes
+	return recipes, nil
 }
 
 // imagePolicyAdoptions loads and gates every adoption once per transaction.

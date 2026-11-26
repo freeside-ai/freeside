@@ -59,7 +59,7 @@ func newCordonedImplementer(t *testing.T) cordonedImplementer {
 	// proof of its configuration.
 	engine.admission.environment.OperatingMode = domain.ModeUnattended
 	engine.admission.environment.ReviewConfigurationDigest = "sha256:review-config"
-	engine.admission.environment.WriterClass = nil
+	setWriterClass(engine, nil)
 	seedUnattendedAdmissionTrust(t, f.store, engine.admission.environment.Base)
 	cordon := execfake.RunnerBackend{
 		BackendName: string(domain.BackendCordonedHostProcess),

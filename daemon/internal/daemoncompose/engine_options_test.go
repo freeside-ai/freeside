@@ -25,9 +25,9 @@ func (stubClaudeUsageSink) ClaudeUsageCaptured(
 // each optional part adds exactly one option only when set.
 func TestProductionEngineOptionsInstallOptionalPartsOnlyWhenSet(t *testing.T) {
 	t.Parallel()
-	// Lock, capacity, admission, derivation, delivery validation,
-	// specification, cancellation, publication.
-	const required = 8
+	// Lock, capacity, admission, derivation, project authority, delivery
+	// validation, specification, cancellation, publication.
+	const required = 9
 	if got := len(ProductionEngine{}.Options()); got != required {
 		t.Fatalf("options with no optional part = %d, want %d", got, required)
 	}

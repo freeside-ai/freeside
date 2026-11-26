@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -33,7 +34,8 @@ func newLabelHarness(t *testing.T, status int) (replyBindingFixture, *labelBound
 	t.Helper()
 	f := seedReplyBinding(t, "feat/test-labels", strings.Repeat("1", 40), strings.Repeat("a", 40))
 	b := &labelBoundary{status: status}
-	r, err := NewHandBackLabelRemover(f.st, b, &http.Client{Transport: b}, "https://api.example.test", "needs rework")
+	r, err := NewHandBackLabelRemover(f.st, b, &http.Client{Transport: b}, "https://api.example.test",
+		func(context.Context, *store.ReadTx, domain.ProjectID) (string, error) { return "needs rework", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,7 @@ func TestHandBackLabelRemoval(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusOK, http.StatusNotFound} {
 		f, b, r := newLabelHarness(t, status)
-		if err := r.removeFor(context.Background(), f.binding); err != nil {
+		if err := r.removeFor(context.Background(), f.binding, "needs rework"); err != nil {
 			t.Fatalf("status %d: %v", status, err)
 		}
 		if len(b.requests) != 1 || b.requests[0] != "DELETE /repos/owner/repo/issues/450/labels/needs%20rework" {
@@ -85,7 +87,7 @@ func TestHandBackLabelRemoval(t *testing.T) {
 func TestHandBackLabelRemovalRefused(t *testing.T) {
 	t.Parallel()
 	f, b, r := newLabelHarness(t, http.StatusForbidden)
-	if err := r.removeFor(context.Background(), f.binding); err == nil {
+	if err := r.removeFor(context.Background(), f.binding, "needs rework"); err == nil {
 		t.Fatal("a refused removal succeeded")
 	}
 	if len(b.requests) != 1 || removalRecorded(t, f) {

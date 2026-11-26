@@ -111,6 +111,10 @@ type Engine struct {
 	// derive supplies the per-attempt workspace and base when configured
 	// (see WithAdmissionDerivation); nil keeps the static environment.
 	derive AdmissionDerivation
+	// projectAuthoritySource reads a task's project authority for the
+	// admission and publication gates (WithProjectAuthority); nil admits
+	// through the static environment alone.
+	projectAuthoritySource ProjectAuthoritySource
 	// selectImage supplies the per-attempt writer image when configured (see
 	// WithAdmissionImageSelection); nil keeps the environment's ImageRef.
 	selectImage ImageSelection
@@ -320,6 +324,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		e.productionPublication.feedbackAdmission = e.admission
 		e.productionPublication.hostVerificationRoom = e.admitHostVerificationRoom
 		e.productionPublication.readinessGate = e.readinessGate
+		e.productionPublication.projectAuthority = e.projectAuthoritySource
 		if e.inference.SupportsSite(inference.AdjudicatorSiteID) {
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,

@@ -60,30 +60,34 @@ func HandBackLabelBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest,
 // from the store on every pass: the run's current ready item, read through
 // the store's gates (store.HandBackReadyBinding). Removing a label is
 // idempotent, so it records each removal after the forge confirms it and
-// sends again after a crash. It removes only the label it was configured with
-// and never touches any other, the owner's approval label included.
+// sends again after a crash. It removes only the label the run's project
+// names now (#3209) and never touches any other, the owner's approval label
+// included.
 type HandBackLabelRemover struct {
-	store *store.Store
-	forge *forge
-	label string
+	store  *store.Store
+	forge  *forge
+	labels HandBackLabelLookup
 	// projects runs each project's removals apart, so one repository's
 	// stalled GitHub call holds up only its own pull requests (#3215).
 	projects keyedrun.Group[domain.ProjectID]
 }
 
+// HandBackLabelLookup returns the hand-back label project's current settings
+// name, read in the caller's transaction, or "" when they name none, which
+// leaves that project's pull requests alone. publish can't import the
+// engine's project authority, so the composition adapts it to this.
+type HandBackLabelLookup func(ctx context.Context, tx *store.ReadTx, project domain.ProjectID) (string, error)
+
 // NewHandBackLabelRemover wires the remover. tokens must mint only
 // HandBackLabelPermissions (HandBackLabelTokenSource).
 func NewHandBackLabelRemover(
-	s *store.Store, tokens TokenSource, client *http.Client, baseURL, label string,
+	s *store.Store, tokens TokenSource, client *http.Client, baseURL string, labels HandBackLabelLookup,
 ) (*HandBackLabelRemover, error) {
-	if s == nil || tokens == nil || client == nil || strings.TrimSpace(baseURL) == "" {
+	if s == nil || tokens == nil || client == nil || strings.TrimSpace(baseURL) == "" || labels == nil {
 		return nil, errors.New("hand-back label: nil or empty dependency")
 	}
-	if err := ValidateLabelName(label); err != nil {
-		return nil, fmt.Errorf("hand-back label: %w", err)
-	}
 	return &HandBackLabelRemover{
-		store: s, forge: newForge(tokens, client, strings.TrimRight(baseURL, "/")), label: label,
+		store: s, forge: newForge(tokens, client, strings.TrimRight(baseURL, "/")), labels: labels,
 	}, nil
 }
 
@@ -157,9 +161,15 @@ func (r *HandBackLabelRemover) removeEach(
 	return err
 }
 
+// remove takes the label off the pull request of runID's current ready item
+// when a hand-back cycle made it ready and no removal is recorded. The label
+// is the one the run's project names in the same read, resolved only once
+// the run is due, so a project with no label, or whose settings fail, holds
+// up nothing but its own due runs.
 func (r *HandBackLabelRemover) remove(ctx context.Context, runID domain.RunID) error {
 	var (
 		ready domain.ReadyItemPRBinding
+		label string
 		due   bool
 	)
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -168,26 +178,37 @@ func (r *HandBackLabelRemover) remove(ctx context.Context, runID domain.RunID) e
 			return err
 		}
 		_, err = tx.GetOutbox(ctx, HandBackLabelRemovalKey(ready.ItemID))
-		if errors.Is(err, store.ErrNotFound) {
+		if !errors.Is(err, store.ErrNotFound) {
+			due = false
+			return err
+		}
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if label, err = r.labels(ctx, tx, run.ProjectID); err != nil {
+			return err
+		}
+		if label == "" {
+			due = false
 			return nil
 		}
-		due = false
-		return err
+		return ValidateLabelName(label)
 	}); err != nil || !due {
 		return err
 	}
-	return r.removeFor(ctx, ready)
+	return r.removeFor(ctx, ready, label)
 }
 
-// removeFor takes the label off ready's pull request and records that it is
+// removeFor takes label off ready's pull request and records that it is
 // gone. The caller has proved through the store that a hand-back cycle made
 // ready current.
-func (r *HandBackLabelRemover) removeFor(ctx context.Context, ready domain.ReadyItemPRBinding) error {
+func (r *HandBackLabelRemover) removeFor(ctx context.Context, ready domain.ReadyItemPRBinding, label string) error {
 	repo, err := parseRepo(ready.Repo)
 	if err != nil {
 		return err
 	}
-	if err := r.forge.removeLabel(ctx, repo, ready.PRNumber, r.label); err != nil {
+	if err := r.forge.removeLabel(ctx, repo, ready.PRNumber, label); err != nil {
 		return err
 	}
 	payload, err := json.Marshal(handBackLabelRemoval{

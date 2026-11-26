@@ -951,7 +951,6 @@ func (p *productionPublicationHarness) newEngineForMode(
 			HostPath: "/nonexistent/production-publication-claude-md",
 		},
 		AuthIdentityID: &identity,
-		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 	}
 	if p.agents != nil {
 		// The lineup names the identity each writer runs under.
@@ -962,8 +961,9 @@ func (p *productionPublicationHarness) newEngineForMode(
 			productionPublicationBackend(t), nil,
 			environment, func() time.Time { return fakePublicationTime },
 		),
+		wardedProject(domain.BaseRevision{Repo: fakePublicationRepo, RepositoryID: p.profile.RepositoryID, BaseRef: "main"}),
 		engine.WithAdmissionDerivation(func(
-			_ context.Context, _ domain.InvocationID,
+			_ context.Context, _ domain.InvocationID, _ engine.ProjectAuthority,
 		) (string, domain.BaseRevision, error) {
 			return "freeside-handoff-production-publication-ws", domain.BaseRevision{
 				Repo: fakePublicationRepo, RepositoryID: p.profile.RepositoryID,

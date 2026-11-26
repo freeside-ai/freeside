@@ -452,7 +452,7 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	ward := newFakeWard(pointed.ImageRef)
 	follower := testFollower(t, ward, refuseProof(t), time.Now, pointed.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: selectorBaseInputs("5", nil), follower: follower,
 	}
 
@@ -493,7 +493,7 @@ func TestClaudeImageSelectorProvesTheSelectedImage(t *testing.T) {
 	suite := newFakeSuite(ward)
 	follower := testFollower(t, ward, suite.prove, time.Now, stale.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
@@ -541,7 +541,7 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 		return nil
 	}, time.Now, other.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: selectorBaseInputs("5", nil), follower: follower,
 	}
 	task := domain.TaskID("task-repair")
@@ -586,7 +586,7 @@ func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
 	suite := newFakeSuite(ward)
 	follower := testFollower(t, ward, suite.prove, clock.Now, stale.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
@@ -730,7 +730,7 @@ func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
 	suite := newFakeSuite(ward)
 	follower := testFollower(t, ward, suite.prove, clock.Now, pointed.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: selectorBaseInputs("2", nil), follower: follower,
 	}
 
@@ -817,7 +817,7 @@ func TestClaudeImageSelectorAdmitsAProvenImageWhileAnotherProves(t *testing.T) {
 		suite := newFakeSuite(ward)
 		follower := testFollower(t, ward, suite.prove, time.Now, rebuilt.ImageRef)
 		selector := &claudeImageSelector{
-			store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+			store:   st,
 			backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 		}
 		if _, err := selectAfterFetch(t, selector, "", at(olderBase), nil); !unproved(err) {
@@ -839,7 +839,7 @@ func TestClaudeImageSelectorAdmitsAProvenImageWhileAnotherProves(t *testing.T) {
 		ward := newFakeWard(older.ImageRef, rebuilt.ImageRef)
 		follower := testFollower(t, ward, refuseProof(t), time.Now, rebuilt.ImageRef)
 		selector := &claudeImageSelector{
-			store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+			store:   st,
 			backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 		}
 		for range 3 {
@@ -1123,7 +1123,7 @@ func TestClaudeImageSelectorProvesARetiredImageAgain(t *testing.T) {
 	suite := newFakeSuite(ward)
 	follower := testFollower(t, ward, suite.prove, time.Now, rebuilt.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 	}
 	if _, err := selectAfterFetch(t, selector, "", at(newerBase), nil); err != nil {
@@ -1206,7 +1206,7 @@ func TestClaudeImageSelectorSelectsAtEachRunsBase(t *testing.T) {
 		return nil
 	}, time.Now, rebuilt.ImageRef)
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID,
+		store:   st,
 		backend: ward, base: newBaseInputsMemo(inputs.observe, slog.New(slog.DiscardHandler)), follower: follower,
 	}
 	at := func(sha string) domain.BaseRevision {
@@ -1336,7 +1336,7 @@ func TestClaudeImageSelectorFetchesTheBaseOutsideTheSelection(t *testing.T) {
 	follower := testFollower(t, ward, refuseProof(t), time.Now, pointed.ImageRef)
 	stall := newStallingBaseInputs(map[string]string{selectorBase: "2"})
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, backend: ward, follower: follower,
+		store: st, backend: ward, follower: follower,
 		base: closeAtCleanup(t, newBaseInputsMemo(stall.observe, slog.New(slog.DiscardHandler))),
 	}
 	selectWithin := func() (domain.ImageRef, error) {
@@ -1410,7 +1410,7 @@ func TestClaudeImageSelectorBacksOffAFailedFetch(t *testing.T) {
 	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 	memo.now = func() time.Time { return now }
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, backend: ward, follower: follower,
+		store: st, backend: ward, follower: follower,
 		base: memo,
 	}
 	selectAt := func() error {
@@ -1516,7 +1516,7 @@ func TestClaudeImageSelectorReportsABaseOffItsBranch(t *testing.T) {
 	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
 	memo.now = func() time.Time { return now }
 	selector := &claudeImageSelector{
-		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, backend: ward, follower: follower,
+		store: st, backend: ward, follower: follower,
 		base: memo,
 	}
 

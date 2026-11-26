@@ -47,7 +47,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 		if !compatible {
 			return fmt.Errorf("ready item disappeared during finalized recovery: %w", store.ErrNotFound)
 		}
-		return w.convergePublicationOutcome(ctx, candidate, identity, outcome)
+		return w.convergePublicationOutcome(ctx, task, candidate, identity, outcome)
 	})
 	if err != nil {
 		return publish.Result{}, err
@@ -61,13 +61,21 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 	return published, nil
 }
 
+// outcomeConverger is convergePublicationOutcome for task's recipe set.
+func (w *productionPublicationWorkflow) outcomeConverger(task productionPublicationTask) publish.OutcomeVerifier {
+	return func(ctx context.Context, candidate publish.Candidate, identity publish.Identity, outcome publish.Outcome) error {
+		return w.convergePublicationOutcome(ctx, task, candidate, identity, outcome)
+	}
+}
+
 func (w *productionPublicationWorkflow) convergePublicationOutcome(
 	ctx context.Context,
+	task productionPublicationTask,
 	candidate publish.Candidate,
 	identity publish.Identity,
 	outcome publish.Outcome,
 ) error {
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return err
 	}
@@ -203,7 +211,7 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 	if err := w.validatePublicationOutcomeAuthorization(ctx, candidate, intent.AuthorizationID); err != nil {
 		return publish.Result{}, false, err
 	}
-	outcomeRecipes, err := w.recipes(ctx)
+	outcomeRecipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return publish.Result{}, false, err
 	}

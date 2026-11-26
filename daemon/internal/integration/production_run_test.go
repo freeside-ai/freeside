@@ -101,7 +101,8 @@ func openProductionFixture(t *testing.T) *workflowFixture {
 	}
 	workflow, err := engine.New(st, attention, driver,
 		engine.WithAdmission(backend, nil, admissionEnvironment(), func() time.Time { return admittedAt }),
-		engine.WithAdmissionDerivation(func(_ context.Context, invocationID domain.InvocationID) (string, domain.BaseRevision, error) {
+		wardedProject(derivedBase),
+		engine.WithAdmissionDerivation(func(_ context.Context, invocationID domain.InvocationID, _ engine.ProjectAuthority) (string, domain.BaseRevision, error) {
 			return "freeside-handoff-" + string(invocationID) + "-ws", derivedBase, nil
 		}),
 	)
@@ -135,8 +136,9 @@ func unattendedProductionOptionsForIdentity(
 			backend, []exec.Capability{exec.CapPostExitExport}, env,
 			func() time.Time { return admittedAt },
 		),
+		wardedProject(derivedBase),
 		engine.WithAdmissionDerivation(func(
-			_ context.Context, invocationID domain.InvocationID,
+			_ context.Context, invocationID domain.InvocationID, _ engine.ProjectAuthority,
 		) (string, domain.BaseRevision, error) {
 			return "freeside-handoff-" + string(invocationID) + "-ws", derivedBase, nil
 		}),

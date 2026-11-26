@@ -79,7 +79,7 @@ func TestAdmissionRecordsTheComposedSettingsRevisions(t *testing.T) {
 	floor := []exec.Capability{exec.CapPostExitExport}
 	var composed *domain.SettingsRevisions
 	f := openAdmittingFixtureWith(t, declared, floor, domain.NewCapabilitySnapshot(floor...),
-		func(st *store.Store) engine.AdmissionEnvironment {
+		func(st *store.Store) (engine.AdmissionEnvironment, engine.ProjectAuthoritySource) {
 			storeRunSettings(t, st)
 			settings, err := daemoncompose.LoadRunSettings(ctx, st, settingsProject)
 			if err != nil {
@@ -88,8 +88,15 @@ func TestAdmissionRecordsTheComposedSettingsRevisions(t *testing.T) {
 			cfg := daemoncompose.NewClaudeDriverConfig(settings, daemoncompose.RunLaunch{})
 			composed = cfg.SettingsRevisions
 			env := admissionEnvironment()
-			env.SettingsRevisions = cfg.SettingsRevisions
-			return env
+			env.InstanceSettingsRevision = cfg.SettingsRevisions.Instance
+			// The fixture's run is not of the stored project, so the
+			// project revision reaches admission through a fixed authority;
+			// the stored lookup's own revision is tested in daemoncompose.
+			return env, engine.FixedProjectAuthority(engine.ProjectAuthority{
+				SettingsRevision: cfg.SettingsRevisions.Project,
+				Repo:             env.Base.Repo, RepositoryID: env.Base.RepositoryID, BaseRef: env.Base.BaseRef,
+				WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
+			})
 		})
 	want := domain.SettingsRevisions{Instance: 8, Project: 4}
 	if composed == nil || *composed != want {

@@ -294,8 +294,10 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if err != nil {
 			return nil, fmt.Errorf("read the execution settings: %w", err)
 		}
+		// The store reads evidence under every stored project's recipe; the
+		// publication lane keeps cfg.ApprovedRecipes, the operator's set, and
+		// adds each task's own project's recipe per task (#3209).
 		storeOptions = storedStoreOptions(storeOptions, switches.recipes)
-		cfg.ApprovedRecipes = maps.Clone(storeOptions.ApprovedRecipes)
 	}
 	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
 		blobs, storeOptions.ApprovedRecipes,

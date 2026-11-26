@@ -52,9 +52,22 @@ func admissionEnvironment() engine.AdmissionEnvironment {
 			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 		},
 		Workspace:      "freeside-handoff-run-235-ws",
-		WriterClass:    new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		AuthIdentityID: &identity,
 	}
+}
+
+// wardedProject is a fixture's project authority: every task's project
+// names base's repository, and its writers run warded, on the fixture's fake
+// backend.
+func wardedProject(base domain.BaseRevision) engine.Option {
+	return engine.WithProjectAuthority(wardedProjectSource(base))
+}
+
+func wardedProjectSource(base domain.BaseRevision) engine.ProjectAuthoritySource {
+	return engine.FixedProjectAuthority(engine.ProjectAuthority{
+		Repo: base.Repo, RepositoryID: base.RepositoryID, BaseRef: base.BaseRef,
+		WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
+	})
 }
 
 // openAdmittingFixture is openWorkflowFixture with a runner backend to admit
@@ -68,18 +81,21 @@ func openAdmittingFixture(
 ) *workflowFixture {
 	t.Helper()
 	return openAdmittingFixtureWith(t, declared, engineFloor, storeFloor,
-		func(*store.Store) engine.AdmissionEnvironment { return admissionEnvironment() })
+		func(*store.Store) (engine.AdmissionEnvironment, engine.ProjectAuthoritySource) {
+			env := admissionEnvironment()
+			return env, wardedProjectSource(env.Base)
+		})
 }
 
 // openAdmittingFixtureWith is openAdmittingFixture with the admission
-// environment built from the opened store, for a test that composes it from
-// stored state.
+// environment and project authority built from the opened store, for a test
+// that composes them from stored state.
 func openAdmittingFixtureWith(
 	t *testing.T,
 	declared []exec.Capability,
 	engineFloor []exec.Capability,
 	storeFloor domain.CapabilitySnapshot,
-	environment func(*store.Store) engine.AdmissionEnvironment,
+	environment func(*store.Store) (engine.AdmissionEnvironment, engine.ProjectAuthoritySource),
 ) *workflowFixture {
 	t.Helper()
 	ctx := context.Background()
@@ -106,8 +122,10 @@ func openAdmittingFixtureWith(
 	backend := fake.RunnerBackend{
 		BackendName: "fake_runner", Caps: exec.NewCapabilitySet(declared...),
 	}
+	env, projects := environment(st)
 	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(backend, engineFloor, environment(st), func() time.Time { return admittedAt }))
+		engine.WithAdmission(backend, engineFloor, env, func() time.Time { return admittedAt }),
+		engine.WithProjectAuthority(projects))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -260,7 +278,8 @@ func TestAdmissionConfigurationIsDetached(t *testing.T) {
 	workflow, err := engine.New(st, attention, driver,
 		engine.WithAdmission(
 			fake.RunnerBackend{BackendName: "fake_runner", Caps: exec.NewCapabilitySet(floor...)},
-			floor, env, func() time.Time { return admittedAt }))
+			floor, env, func() time.Time { return admittedAt }),
+		wardedProject(env.Base))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -334,7 +353,8 @@ func TestDispatchReplayReusesThePersistedAdmission(t *testing.T) {
 	replayed, err := engine.New(f.store, f.signet, f.driver,
 		engine.WithAdmission(
 			fake.RunnerBackend{BackendName: "fake_runner", Caps: exec.NewCapabilitySet(exec.CapPostExitExport)},
-			floor, admissionEnvironment(), func() time.Time { return later }))
+			floor, admissionEnvironment(), func() time.Time { return later }),
+		wardedProject(admissionEnvironment().Base))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -449,7 +469,8 @@ func TestReplayUnderADegradedBackendUsesTheRecord(t *testing.T) {
 	degraded, err := engine.New(f.store, f.signet, f.driver,
 		engine.WithAdmission(
 			fake.RunnerBackend{BackendName: "fake_runner", Caps: exec.NewCapabilitySet(exec.CapPostExitExport)},
-			floor, admissionEnvironment(), func() time.Time { return admittedAt.Add(time.Hour) }))
+			floor, admissionEnvironment(), func() time.Time { return admittedAt.Add(time.Hour) }),
+		wardedProject(admissionEnvironment().Base))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
@@ -743,6 +764,7 @@ func TestReviewConfigurationMismatchRefusesAdmissionBeforeStarting(t *testing.T)
 			backend, []exec.Capability{exec.CapPostExitExport}, env,
 			func() time.Time { return admittedAt },
 		),
+		wardedProject(env.Base),
 		engine.WithUnattendedHealthRefresh(refreshHealth),
 	)
 	if err != nil {
@@ -901,7 +923,8 @@ func TestAdmissionAndAttemptShareOneTransaction(t *testing.T) {
 			[]exec.Capability{exec.CapPostExitExport},
 			admissionEnvironment(),
 			func() time.Time { return admittedAt.Add(time.Hour) },
-		))
+		),
+		wardedProject(admissionEnvironment().Base))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

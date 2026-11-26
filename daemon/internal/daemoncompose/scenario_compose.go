@@ -218,12 +218,15 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			// another agent.
 			AuthIdentityID: nil,
 			Agents:         &agents,
-			// The scenario composes no cordon, so its writers run warded
-			// on its fake stage driver.
-			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		},
+		// The scenario composes no cordon, so its writers run warded on its
+		// fake stage driver.
+		ProjectAuthority: engine.FixedProjectAuthority(engine.ProjectAuthority{
+			Repo: scenarioRepo, RepositoryID: scenarioRepositoryID, BaseRef: scenarioBaseRef,
+			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		}),
 		AdmissionNow: now,
-		Derive: func(context.Context, domain.InvocationID) (string, domain.BaseRevision, error) {
+		Derive: func(context.Context, domain.InvocationID, engine.ProjectAuthority) (string, domain.BaseRevision, error) {
 			return "scenario-workspace", domain.BaseRevision{
 				Repo: scenarioRepo, RepositoryID: scenarioRepositoryID,
 				BaseRef: scenarioBaseRef, BaseSHA: world.BaseSHA,
@@ -261,11 +264,7 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			WorkDir:          filepath.Join(world.Dir, "publication"),
 			VerifyScratchDir: filepath.Join(world.Dir, "verify-scratch"),
 			Transport:        transport, Publisher: publisher, Artifacts: blobs,
-			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(ScenarioRecipe): true},
-			// The scenario approves its one recipe above and records no
-			// image-policy adoption, so no adoption's recipes can apply. A
-			// scenario that seeds an adoption must set scenarioRepositoryID.
-			RepositoryID:                   0,
+			ApprovedRecipes:                map[domain.Digest]bool{verify.RecipeDigest(ScenarioRecipe): true},
 			RemediationPromptPackageDigest: digests["remediation"],
 			ReviewSource:                   reviews,
 			ReviewAdmission:                fake.AdmitReview,

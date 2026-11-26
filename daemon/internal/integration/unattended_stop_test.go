@@ -150,8 +150,11 @@ func openUnattendedFixtureWith(
 	if err != nil {
 		t.Fatalf("fake.NewStageDriverAt: %v", err)
 	}
+	// compose's options follow, so a caller's own project authority
+	// replaces the warded default.
 	options := []engine.Option{
 		engine.WithAdmission(backend, floor, env, func() time.Time { return admittedAt }),
+		wardedProject(env.Base),
 	}
 	if compose != nil {
 		options = append(options, compose(st, blobs)...)

@@ -42,7 +42,8 @@ type ReadTx struct {
 	// Options.ApprovedRecipes), carried on every transaction so a Get can
 	// re-derive an evidence artifact's publish_eligibility instead of trusting
 	// the decoded row. It is one input to the effective set a boundary gates
-	// against; the other is the store's image-policy adoptions (storeRecipeSet,
+	// against; the others are the stored projects' current recipes
+	// (recipeBase) and the store's image-policy adoptions (storeRecipeSet,
 	// EffectiveApprovedRecipes). Read-only.
 	approvedRecipes map[domain.Digest]bool
 	// recipeScope, when set by ReadWithRecipeScope, limits which adopted
@@ -51,6 +52,9 @@ type ReadTx struct {
 	// adoptions memoizes the gated image-policy adoptions (nil until first
 	// read; see imagePolicyAdoptions).
 	adoptions *[]domain.ImagePolicyAdoption
+	// baseRecipes memoizes approvedRecipes plus every stored project's
+	// current recipe (nil until first read; see recipeBase).
+	baseRecipes map[domain.Digest]bool
 	// admissionPolicy is the execution-admission half of that boundary policy
 	// (see Options.AdmissionFloors), carried the same way so a reconstructed
 	// admission is re-gated against the floor policy states now. Read-only.
@@ -213,8 +217,8 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 }
 
 // ReadWithRecipeScope runs a read under only the requested recipes that the
-// store also approves, through the operator's set or an image-policy
-// adoption. An empty scope approves no configured or adopted recipe. The
+// store also approves, through the operator's set, a stored project's
+// recipe, or an image-policy adoption. An empty scope approves no configured or adopted recipe. The
 // compiled effect-proposal recipe remains approved, as it is for every store
 // open. Restriction happens before reconstruction and affects only this
 // transaction, never the store's policy or another concurrent reader.

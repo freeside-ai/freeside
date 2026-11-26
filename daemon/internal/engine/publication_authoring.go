@@ -193,7 +193,7 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 	if err != nil {
 		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageVisibility, err)
 	}
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return inference.PublicationAuthorInput{}, err
 	}

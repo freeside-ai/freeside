@@ -19,7 +19,7 @@ func testTip(sha string) domain.BaseRevision {
 // deriveTip makes e derive *tip for every attempt, as the composition does
 // from the stored tip observation.
 func deriveTip(e *Engine, tip *domain.BaseRevision) {
-	e.derive = func(_ context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
+	e.derive = func(_ context.Context, id domain.InvocationID, _ ProjectAuthority) (string, domain.BaseRevision, error) {
 		return "workspace-" + string(id), *tip, nil
 	}
 }
@@ -240,7 +240,7 @@ func TestAHeldRunFollowsTheTipUntilItsFirstAdmission(t *testing.T) {
 	h := newSelectionHoldFixture(t)
 	var tip domain.BaseRevision
 	tipErr := exec.ErrInputUnavailable
-	h.engine.derive = func(_ context.Context, id domain.InvocationID) (string, domain.BaseRevision, error) {
+	h.engine.derive = func(_ context.Context, id domain.InvocationID, _ ProjectAuthority) (string, domain.BaseRevision, error) {
 		return "workspace-" + string(id), tip, tipErr
 	}
 	var selectedFor []domain.BaseRevision

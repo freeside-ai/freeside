@@ -613,14 +613,14 @@ type provenImages interface {
 }
 
 // claudeImageSelector selects each writer attempt's image from the pointer
-// and the repository's recorded images.
+// and the recorded images of the run's base repository. The base is the one
+// admission already checked against the task's project (#3209), so the
+// selector holds no repository of its own.
 type claudeImageSelector struct {
-	store        *store.Store
-	repo         string
-	repositoryID int64
-	backend      provenImages
-	base         *baseInputsMemo
-	follower     *conformanceFollower
+	store    *store.Store
+	backend  provenImages
+	base     *baseInputsMemo
+	follower *conformanceFollower
 
 	// pendingMu guards pending, image upkeep's lookup. Upkeep is composed
 	// after the driver, so it is bound late (bindImageUpkeep); unbound, a
@@ -667,7 +667,7 @@ func (s *claudeImageSelector) selectImage(
 		err      error
 	)
 	if repair != nil {
-		selected, found, err = s.repairImage(ctx, *repair)
+		selected, found, err = s.repairImage(ctx, base, *repair)
 		if err != nil {
 			return "", err
 		}
@@ -676,7 +676,7 @@ func (s *claudeImageSelector) selectImage(
 				repair.MeasuredFromImageID, repair.ID, engine.ErrProjectImageUnserved)
 		}
 	} else {
-		selected, found, err = selectRecordedImage(ctx, s.store, s.repo, s.repositoryID, base,
+		selected, found, err = selectRecordedImage(ctx, s.store, base.Repo, base.RepositoryID, base,
 			imageRefs(proven), s.base)
 		if err != nil {
 			return "", err
@@ -724,7 +724,7 @@ func imageRefs(images []string) []domain.ImageRef {
 // repairImage returns the pointed-to image when it is the one refusal was
 // measured from, and found false otherwise.
 func (s *claudeImageSelector) repairImage(
-	ctx context.Context, refusal domain.ImageUpkeepRefusal,
+	ctx context.Context, base domain.BaseRevision, refusal domain.ImageUpkeepRefusal,
 ) (domain.ProjectImage, bool, error) {
 	var (
 		pointed domain.ProjectImage
@@ -732,7 +732,7 @@ func (s *claudeImageSelector) repairImage(
 	)
 	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		_, pointed, found, err = tx.GetAdmittedImagePointer(ctx, s.repositoryID, domain.HarnessClientClaudeCode)
+		_, pointed, found, err = tx.GetAdmittedImagePointer(ctx, base.RepositoryID, domain.HarnessClientClaudeCode)
 		return err
 	}); err != nil {
 		return domain.ProjectImage{}, false, fmt.Errorf("read admitted image pointer: %w", err)
@@ -740,10 +740,10 @@ func (s *claudeImageSelector) repairImage(
 	if !found || pointed.ID != refusal.MeasuredFromImageID {
 		return domain.ProjectImage{}, false, nil
 	}
-	if pointed.Repository != s.repo {
+	if pointed.Repository != base.Repo {
 		return domain.ProjectImage{}, false, fmt.Errorf(
-			"admitted image repository %q disagrees with configured %q: %w",
-			pointed.Repository, s.repo, domain.ErrRepositoryIdentityMismatch)
+			"admitted image repository %q disagrees with the run's %q: %w",
+			pointed.Repository, base.Repo, domain.ErrRepositoryIdentityMismatch)
 	}
 	return pointed, true, nil
 }

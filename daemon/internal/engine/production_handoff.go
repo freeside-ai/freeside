@@ -448,7 +448,7 @@ func (w *productionPublicationWorkflow) recordHandoffStop(
 	mergeSHA, account string,
 	createdAt time.Time,
 ) ([]domain.Artifact, error) {
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return nil, err
 	}

@@ -273,6 +273,9 @@ func (w *productionPublicationWorkflow) loadReentryBinding(
 		if err != nil {
 			return err
 		}
+		if err := w.requireProjectRepository(ctx, tx, binding.run, binding.admission.Base); err != nil {
+			return err
+		}
 		binding.resolvedPolicy, err = tx.GetResolvedPolicy(ctx, task.RunID)
 		if err != nil {
 			return err
@@ -466,7 +469,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	}
 	// New readiness needs a still-approved recipe; an item that is already
 	// durably ready finishes without re-deriving its proofs (issue #527).
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -707,7 +710,7 @@ func (w *productionPublicationWorkflow) stopReentryCycle(
 		return productionTaskOutcome{}, err
 	}
 	reference := pull.reference()
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -890,7 +893,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		}
 		binding = bound
 	}
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}

@@ -467,6 +467,17 @@
     "refusal_hold_reason": true
   },
   {
+    "case": "the project's settings grant its tasks no authority",
+    "hold_reason": "admission_policy_refused",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": false,
+    "unattended_dispatch_refusal": true,
+    "mutable_admission_policy_refusal": true,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
     "case": "resolved run policy's declared paths disagree with the configured containment boundary",
     "hold_reason": "admission_policy_refused",
     "admission_refusal": {

@@ -25,6 +25,15 @@ import (
 
 type submitSpecificationBackend struct{}
 
+// wardedSubmitProject is the specification fixtures' project authority:
+// owner/repo, whose writers run warded on the fake backend.
+func wardedSubmitProject() engine.Option {
+	return engine.WithProjectAuthority(engine.FixedProjectAuthority(engine.ProjectAuthority{
+		Repo: "owner/repo", RepositoryID: 1, BaseRef: "refs/heads/main",
+		WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
+	}))
+}
+
 func (submitSpecificationBackend) Name() string { return "submit-specification-test" }
 
 func (submitSpecificationBackend) Capabilities() exec.CapabilitySet {
@@ -263,7 +272,6 @@ func testSubmitCommandSpecificationDigest(
 			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 		},
 		Workspace: "workspace-submit", AuthIdentityID: &identity,
-		WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 	}
 	if preallocateRetry {
 		retryRunID, err := engine.ProductionAttemptRunID(submitted.CampaignID, 2)
@@ -303,6 +311,7 @@ func testSubmitCommandSpecificationDigest(
 	retryWorkflow, err := engine.New(st, attention, driver,
 		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport},
 			workflowAdmission, func() time.Time { return now }),
+		wardedSubmitProject(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -359,6 +368,7 @@ func testSubmitCommandSpecificationDigest(
 	withoutSelectedProfile, err := engine.New(st, attention, driver,
 		engine.WithAdmission(submitSpecificationBackend{}, []exec.Capability{exec.CapPostExitExport},
 			restrictedAdmission, func() time.Time { return now }),
+		wardedSubmitProject(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -517,8 +527,8 @@ func approveSubmittedSpecification(t *testing.T, acceptedBody string) approvedSu
 				BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
 			},
 			Workspace: "workspace-submit", AuthIdentityID: &identity,
-			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		}, func() time.Time { return now }),
+		wardedSubmitProject(),
 		engine.WithSpecification(engine.SpecificationConfig{
 			Fetcher: fetcher, Blobs: blobs, Now: func() time.Time { return now },
 			PromptPackageDigest: promptDigest,

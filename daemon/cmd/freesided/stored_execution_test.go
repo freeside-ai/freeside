@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -367,9 +368,9 @@ func TestInstalledDaemonReadsItsEvidenceWithoutADriver(t *testing.T) {
 // names no composition input, so what could differ is the store's recipe
 // policy. Served, the daemon approves the recipe the project's settings
 // record, as a deputy approves its settings file's; stopped, the direct read
-// approves what -approved-recipe names, as on a deputy root, and its note
-// says where the installed root keeps the recipe. A test cannot compose a
-// real driver, so the run and its evidence are written directly.
+// approves it too, since every read approves each stored project's current
+// recipe (#3209), and a flag naming it changes nothing. A test cannot
+// compose a real driver, so the run and its evidence are written directly.
 func TestInstalledDaemonInspectsARunAsTheDeputyDoes(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -404,25 +405,19 @@ func TestInstalledDaemonInspectsARunAsTheDeputyDoes(t *testing.T) {
 		t.Fatalf("served item = %+v, want the evidence read under the settings' recipe", item)
 	}
 
-	var stdout, stderr bytes.Buffer
-	if err := runInspectCommand(ctx, args, &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	if note := stderr.String(); !strings.Contains(note, "freesided settings show -project") {
-		t.Fatalf("stopped-root stderr = %q, want the note to name the installed root's recipe", note)
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if err := runInspectCommand(ctx, append(args, "-approved-recipe", string(recipe)), &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	var direct taskRecord
-	if err := strictjson.Decode(stdout.Bytes(), &direct, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(comparableRecord(t, direct), comparableRecord(t, served)) || stderr.Len() != 0 {
-		t.Fatalf("stopped-root record differs from the served one, or stderr = %q\ndirect: %s\nserved: %s",
-			stderr.String(), comparableRecord(t, direct), comparableRecord(t, served))
+	for _, direct := range [][]string{args, append(slices.Clone(args), "-approved-recipe", string(recipe))} {
+		var stdout, stderr bytes.Buffer
+		if err := runInspectCommand(ctx, direct, &stdout, &stderr); err != nil {
+			t.Fatal(err)
+		}
+		var record taskRecord
+		if err := strictjson.Decode(stdout.Bytes(), &record, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(comparableRecord(t, record), comparableRecord(t, served)) || stderr.Len() != 0 {
+			t.Fatalf("stopped-root read %v differs from the served one, or stderr = %q\ndirect: %s\nserved: %s",
+				direct[len(args):], stderr.String(), comparableRecord(t, record), comparableRecord(t, served))
+		}
 	}
 }
 
