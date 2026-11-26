@@ -581,6 +581,9 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				return fmt.Errorf("submit command %q: %w", command.CommandID,
 					&StaleVersionError{CommandID: command.CommandID, Replacement: item, Snapshot: snap})
 			}
+			if err := requireFailureRetryTaskNotStopped(ctx, tx, command, item); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
 			// Revalidate a referenced action surface (never trusting the client's
 			// copy) and stamp the daemon-authored decision evidence — the
 			// accepted surface digest and the item's recommendation — onto the
@@ -852,6 +855,39 @@ func validateFailureRetry(command domain.Command, item domain.AttentionItem) err
 	}
 	if !domain.IsOperatorFeedbackExecutionFailureItemID(item.ID) && !facts.OffersSameAgentRetry() {
 		return fmt.Errorf("authenticate failure retry: %w", domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// requireFailureRetryTaskNotStopped re-checks the task's cancellation on every
+// new retry command against an execution_failure card (#3566). Any Stop state
+// (requested, confirmed, or failed_to_stop) fences new starts on the task, so
+// accepting a retry would resolve the card with nothing able to run. A run
+// with no task has no Stop.
+func requireFailureRetryTaskNotStopped(
+	ctx context.Context, tx *store.WriteTx, command domain.Command, item domain.AttentionItem,
+) error {
+	if command.Action != domain.ActionRetry &&
+		command.Action != domain.ActionRetryWithCapability &&
+		command.Action != domain.ActionRetryWithAlternateAgent {
+		return nil
+	}
+	if item.Type != domain.AttentionExecutionFailure || item.Subject.RunID == nil {
+		return nil
+	}
+	run, err := tx.GetRun(ctx, *item.Subject.RunID)
+	if err != nil {
+		return err
+	}
+	if run.TaskID == "" {
+		return nil
+	}
+	task, err := tx.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return err
+	}
+	if task.Cancellation != nil {
+		return ErrTaskStopped
 	}
 	return nil
 }

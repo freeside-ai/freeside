@@ -33,7 +33,9 @@ func (e *Engine) reconcileFailureRetries(ctx context.Context) (int, error) {
 		}
 		made, err := e.reconcileFailureRetry(ctx, command)
 		// A closed or canceled task starts nothing, and its replay has
-		// nothing left to start.
+		// nothing left to start. Signet refuses a retry on a stopped
+		// task, so the cancellation skip covers a Stop that arrived after
+		// the retry was accepted and any command an older daemon accepted.
 		if errors.Is(err, store.ErrTaskWorkflowClosed) || errors.Is(err, store.ErrTaskCancellationFenced) {
 			continue
 		}

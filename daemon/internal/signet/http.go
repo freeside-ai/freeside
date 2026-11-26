@@ -1191,6 +1191,8 @@ func isCommandAuthorityRejection(err error) bool {
 		// The offer or park the client acted on no longer holds: the agent
 		// stopped qualifying, or the parked attempt started or closed.
 		ErrAlternateAgentNotQualified, ErrTaskNotParked,
+		// The task has a Stop, so no retry on its failure cards can start.
+		ErrTaskStopped,
 		ErrProposalSnoozed,
 		ErrImagePolicyAdoptionStale,
 		domain.ErrReviewConfigAdoptionIneffective,
