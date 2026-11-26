@@ -6105,15 +6105,7 @@
                             .init(label: "Caller", value: "Store reconstruction"),
                             .init(label: "Current gate", value: "Approved recipe set"),
                         ]))
-            case .review_diminishing_returns:
-                return .init(
-                    diminishingYield: .init(
-                        rounds: [
-                            .init(number: 1, newFindings: 4, recurringFindings: 0),
-                            .init(number: 2, newFindings: 1, recurringFindings: 2),
-                            .init(number: 3, newFindings: 0, recurringFindings: 3),
-                        ]))
-            case .spec_approval, .review_contradiction, .review_configuration,
+            case .spec_approval, .review_contradiction, .review_diminishing_returns, .review_configuration,
                 .finding_adjudication, .agent_question, .publish_blocked,
                 .task_proposal, .effect_proposal, .system_health, .blocked, .unknown:
                 return .init()

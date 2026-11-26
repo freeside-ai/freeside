@@ -1474,7 +1474,6 @@ struct DecisionGraphicPresentations: Equatable {
     var comparison: DecisionComparisonPresentation?
     var changeSummary: DecisionChangeSummaryPresentation?
     var attemptTimings: DecisionFactPresentation?
-    var diminishingYield: DecisionYieldPresentation?
     var prominentClaimIndex: Int?
 
     init(
@@ -1482,14 +1481,12 @@ struct DecisionGraphicPresentations: Equatable {
         comparison: DecisionComparisonPresentation? = nil,
         changeSummary: DecisionChangeSummaryPresentation? = nil,
         attemptTimings: DecisionFactPresentation? = nil,
-        diminishingYield: DecisionYieldPresentation? = nil,
         prominentClaimIndex: Int? = nil
     ) {
         self.stageRail = stageRail
         self.comparison = comparison
         self.changeSummary = changeSummary
         self.attemptTimings = attemptTimings
-        self.diminishingYield = diminishingYield
         self.prominentClaimIndex = prominentClaimIndex
     }
 }
@@ -1754,16 +1751,46 @@ struct DecisionYieldPresentation: Equatable {
         var id: Int { number }
         var total: Int { newFindings + recurringFindings }
         var text: String {
-            "Round \(number): \(newFindings) new, \(recurringFindings) recurring"
+            total == 0
+                ? "Round \(number): no findings"
+                : "Round \(number): \(newFindings) new, \(recurringFindings) recurring"
         }
     }
 
+    /// A round's two bar fills, each a fraction of the card's scale.
+    struct BarFill: Equatable {
+        let new: Double
+        let recurring: Double
+    }
+
     let rounds: [Round]
-    let summary: String
+    /// Every round's counts in order, the value behind the "Review yield"
+    /// label, so the bars' colors are never the only signal.
+    let accessibilityValue: String
+
+    /// Bars draw from two rounds on, since one round has nothing to compare
+    /// against, and only when some round has findings, so the legend keys a
+    /// fill that is drawn.
+    var drawsBars: Bool {
+        rounds.count >= 2 && rounds.contains { $0.total > 0 }
+    }
+
+    /// A round draws a bar only where bars draw and it has findings; a
+    /// round with none reads "no findings" instead.
+    func drawsBar(_ round: Round) -> Bool { drawsBars && round.total > 0 }
+
+    /// One scale per card: the largest round's total, never below 1.
+    var scale: Int { max(rounds.map(\.total).max() ?? 0, 1) }
+
+    func barFill(_ round: Round) -> BarFill {
+        .init(
+            new: Double(round.newFindings) / Double(scale),
+            recurring: Double(round.recurringFindings) / Double(scale))
+    }
 
     init(rounds: [Round]) {
         self.rounds = rounds
-        summary = "Review yield: " + rounds.map(\.text).joined(separator: "; ") + "."
+        accessibilityValue = rounds.map(\.text).joined(separator: "; ") + "."
     }
 
     init?(_ item: Components.Schemas.AttentionItem) {
@@ -1996,7 +2023,6 @@ struct DecisionYieldChartModuleView: View {
     @ScaledMetric(relativeTo: .caption) private var legendSwatch: CGFloat = 8
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let presentation: DecisionYieldPresentation
-    var showsBars = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
@@ -2005,17 +2031,18 @@ struct DecisionYieldChartModuleView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(presentation.summary))
+        .accessibilityLabel(Text("Review yield"))
+        .accessibilityValue(Text(presentation.accessibilityValue))
     }
 
     private static let title = "Review Yield"
 
     /// One row a round (frame 5.2): the round on the left, its counts on
     /// the right in the two fills' colors, and, where bars draw, one capsule
-    /// beneath scaled against the busiest round.
+    /// beneath on the card's one scale. A round with no findings reads so
+    /// and draws no bar.
     @ViewBuilder
     private var rounds: some View {
-        let busiest = max(presentation.rounds.map(\.total).max() ?? 1, 1)
         ForEach(presentation.rounds) { round in
             VStack(alignment: .leading, spacing: 5) {
                 // The counts drop under the round at accessibility sizes
@@ -2029,25 +2056,20 @@ struct DecisionYieldChartModuleView: View {
                         .font(FreesideFont.factLabel)
                         .foregroundStyle(Color.ink)
                     if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
-                    Text(
-                        "\(Text("\(round.newFindings) new").foregroundStyle(Color.accentText)) · \(Text("\(round.recurringFindings) recurring").foregroundStyle(Color.waxText))"
-                    )
-                    .font(FreesideFont.monoValue)
-                    .foregroundStyle(Color.inkDim)
+                    counts(round)
+                        .font(FreesideFont.monoValue)
+                        .foregroundStyle(Color.inkDim)
                 }
-                if showsBars {
+                if presentation.drawsBar(round) {
+                    let fill = presentation.barFill(round)
                     GeometryReader { geometry in
                         HStack(spacing: 0) {
                             Rectangle()
                                 .fill(Color.accentBorder)
-                                .frame(
-                                    width: geometry.size.width
-                                        * CGFloat(round.newFindings) / CGFloat(busiest))
+                                .frame(width: geometry.size.width * fill.new)
                             Rectangle()
                                 .fill(Color.waxText)
-                                .frame(
-                                    width: geometry.size.width
-                                        * CGFloat(round.recurringFindings) / CGFloat(busiest))
+                                .frame(width: geometry.size.width * fill.recurring)
                         }
                         .clipShape(Capsule())
                     }
@@ -2057,12 +2079,20 @@ struct DecisionYieldChartModuleView: View {
         }
         // The bars carry two fills with no other key; the legend names
         // them where they render.
-        if showsBars {
+        if presentation.drawsBars {
             HStack(spacing: 16) {
                 legendToken(color: .accentBorder, text: "new findings")
                 legendToken(color: .waxText, text: "recurring")
             }
         }
+    }
+
+    private func counts(_ round: DecisionYieldPresentation.Round) -> Text {
+        round.total == 0
+            ? Text("no findings")
+            : Text(
+                "\(Text("\(round.newFindings) new").foregroundStyle(Color.accentText)) · \(Text("\(round.recurringFindings) recurring").foregroundStyle(Color.waxText))"
+            )
     }
 
     private func legendToken(color: Color, text: String) -> some View {

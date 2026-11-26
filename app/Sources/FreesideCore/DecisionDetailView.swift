@@ -1043,7 +1043,7 @@ struct DecisionDetailView: View {
                     timeZone: .current
                 ).folded.isEmpty,
             hasReviewYield: places(.yieldChart, in: composition.foldedModules)
-                && (graphics.diminishingYield != nil || DecisionYieldPresentation(item) != nil),
+                && DecisionYieldPresentation(item) != nil,
             hasOutcomes: places(.outcomes, in: composition.foldedModules) && outcomes(item) != nil,
             readingRows: Self.readingRows(item, unavailable: actionRanking(item).unavailable),
             hasFactBlock: places(.factBlock, in: composition.supportingModules) && drawsFactBlock,
@@ -1281,10 +1281,8 @@ struct DecisionDetailView: View {
                     rendersInteractiveControls: rendersInteractiveControls)
             }
         case .yieldChart:
-            if let presentation = graphics.diminishingYield ?? DecisionYieldPresentation(item) {
-                DecisionYieldChartModuleView(
-                    presentation: presentation,
-                    showsBars: graphics.diminishingYield != nil)
+            if let presentation = DecisionYieldPresentation(item) {
+                DecisionYieldChartModuleView(presentation: presentation)
             }
         case .outcomes:
             if let presentation = outcomes(item) {
