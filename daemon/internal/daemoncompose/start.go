@@ -435,6 +435,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		claudeWiring          *ClaudeComposition
 		imageUpkeep           *engine.ImageUpkeep
 		scenarioWiring        *ScenarioComposition
+		settleDiscovery       func()
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 		late                  = &StartupBindings{}
@@ -475,6 +476,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 			return nil, composeErr(err)
 		}
 		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
+		settleDiscovery = claude.SettleDiscovery
 	} else if cfg.Scenario != nil {
 		var parts ScenarioParts
 		parts, err = newScenarioParts(st, attention, blobs, lock, bound, running, cfg)
@@ -616,7 +618,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		}
 	}
 
-	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, localBackups, running, logger)
+	d.startServing(parent, ctx, cfg, st, attention, workflow, claudeWiring, settleDiscovery, localBackups, running, logger)
 	defer func() {
 		if !success {
 			if stop != nil {
@@ -1045,8 +1047,8 @@ func reserveIntegrityProbe(
 // later reports through ComponentExited.
 func (d *Daemon) startServing(
 	parent, ctx context.Context, cfg StartOptions, st *store.Store, attention *signet.Service,
-	workflow *engine.Engine, claudeWiring *ClaudeComposition, localBackups *store.LocalBackupProducer,
-	running *engine.RunningWork, logger *slog.Logger,
+	workflow *engine.Engine, claudeWiring *ClaudeComposition, settleDiscovery func(),
+	localBackups *store.LocalBackupProducer, running *engine.RunningWork, logger *slog.Logger,
 ) {
 	// Usage collection starts before the control socket serves and the
 	// scheduler runs, either of which can trigger it. It only observes and
@@ -1058,12 +1060,13 @@ func (d *Daemon) startServing(
 	})
 	// Model discovery observes like usage collection: it runs once in the
 	// background, one container at a time, and nothing it meets stops the
-	// daemon.
+	// daemon. The Claude workflow's dispatch waits until it settles.
 	if claudeWiring != nil {
 		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.ContainerBin,
 			cfg.ClaudeModelDiscoverer, cfg.CodexModelDiscoverer, logger)
 		refresh.running = running
 		refresh.work = claudeWiring.work
+		refresh.settled = settleDiscovery
 		d.Go(func() {
 			refresh.run(ctx)
 		})

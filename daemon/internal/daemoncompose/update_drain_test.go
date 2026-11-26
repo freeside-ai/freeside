@@ -112,7 +112,8 @@ func (w *signalWriter) Write(p []byte) (int, error) {
 
 // TestModelDiscoveryWaitsOutAnUpdateDrain: discovery runs once per start, so
 // under a drain it waits rather than skip, starts its probe once the drain
-// lifts, and gives up when its context ends.
+// lifts, and gives up when its context ends. Its first wait settles the
+// dispatch hold, since the drain holds launches too (#3447).
 func TestModelDiscoveryWaitsOutAnUpdateDrain(t *testing.T) {
 	t.Parallel()
 	st, drain := newDrainTestStore(t)
@@ -121,7 +122,11 @@ func TestModelDiscoveryWaitsOutAnUpdateDrain(t *testing.T) {
 	}
 	waiting := &signalWriter{want: "model discovery waits", seen: make(chan struct{})}
 	running := engine.NewRunningWork()
-	refresh := modelCatalogRefresh{store: st, logger: slog.New(slog.NewTextHandler(waiting, nil)), running: running}
+	hold := make(chan struct{})
+	refresh := modelCatalogRefresh{
+		store: st, logger: slog.New(slog.NewTextHandler(waiting, nil)), running: running,
+		settled: sync.OnceFunc(func() { close(hold) }),
+	}
 	type begun struct {
 		end func()
 		ok  bool
@@ -134,6 +139,11 @@ func TestModelDiscoveryWaitsOutAnUpdateDrain(t *testing.T) {
 	<-waiting.seen
 	if counts := running.Counts(); len(counts) != 0 {
 		t.Fatalf("a waiting probe counted %v", counts)
+	}
+	select {
+	case <-hold:
+	default:
+		t.Fatal("a probe waiting on the drain kept the dispatch hold")
 	}
 	if _, err := drain.Cancel(t.Context()); err != nil {
 		t.Fatal(err)

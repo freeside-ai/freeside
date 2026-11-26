@@ -68,6 +68,17 @@ type modelCatalogRefresh struct {
 	// work reserves each target's memory (plan §5.4); its zero value
 	// reserves nothing.
 	work daemonWorkRunner
+	// settled closes the engine's dispatch hold (#3447); nil closes nothing.
+	// run calls it when its pass ends, or sooner when the pass first waits on
+	// an update drain or an execution pause, since no launch starts then
+	// either.
+	settled func()
+}
+
+func (r modelCatalogRefresh) settle() {
+	if r.settled != nil {
+		r.settled()
+	}
 }
 
 // probeSize is the size of each probe container: the token reader and the
@@ -128,7 +139,9 @@ type modelCatalogTarget struct {
 // run discovers each enrollment in turn, one container at a time. A failure
 // keeps the enrollment's last catalog and logs one warning: a missing
 // catalog blocks a selection, never the daemon, so run returns nothing.
+// Every return settles the dispatch hold.
 func (r modelCatalogRefresh) run(ctx context.Context) {
+	defer r.settle()
 	targets, err := r.targets(ctx)
 	if err != nil {
 		r.logger.Warn("model discovery skipped: enrollments not read", "error", err)
@@ -197,6 +210,9 @@ func (r modelCatalogRefresh) beginProbe(ctx context.Context, target modelCatalog
 			return nil, false
 		}
 		if !waiting {
+			// The drain or pause holds every launch too, so dispatch need
+			// not wait out this one.
+			r.settle()
 			r.logger.Info("model discovery waits while an update drain or an execution pause is in force",
 				"enrollment", target.enrollment, "generation", target.generation)
 			waiting = true

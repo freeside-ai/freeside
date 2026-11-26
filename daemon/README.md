@@ -3607,7 +3607,11 @@ which models and effort levels it can run: one more contained call in
 `-agent-image` that sends the control protocol's `initialize` request instead
 of a prompt, so no turn runs. Every daemon start repeats the discovery for
 each enabled Claude setup-token enrollment, one container at a time in the
-background. `freesided auth list` prints the result per enrollment as
+background. A driver's engine starts no invocation until that pass ends, or
+until it first waits on an update drain or an execution pause, which hold
+launches too, so a discovery probe never runs beside a task's first launch
+(#3447); the daemon logs `invocation dispatch waits for startup model
+discovery` once while it waits. `freesided auth list` prints the result per enrollment as
 `model_catalog` (the CLI build, when it was observed, and each model's id,
 resolved model, display name, and effort levels), or null before the first
 discovery succeeds. A failed discovery keeps the last catalog: `auth add`
