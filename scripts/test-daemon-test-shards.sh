@@ -638,6 +638,7 @@ class Coverage(unittest.TestCase):
         needs['daemon']['result'] = 'success'
         needs['commit-messages'] = {'result': 'success'}
         needs['migration-history'] = {'result': 'success'}
+        needs['blame-ignore-revs'] = {'result': 'success'}
         needs['tier-a-paths'] = {'result': 'success'}
         needs['credential-literals'] = {'result': 'success'}
         needs['recipe-selectors'] = {'result': 'success'}
@@ -648,11 +649,13 @@ class Coverage(unittest.TestCase):
         for bad in ('skipped', 'failure', 'cancelled', 'unknown'):
             self.assertNotEqual(result(dict(needs, daemon={'result': bad})), 0)
             self.assertNotEqual(result(dict(needs, **{'migration-history': {'result': bad}})), 0)
+            self.assertNotEqual(result(dict(needs, **{'blame-ignore-revs': {'result': bad}})), 0)
             self.assertNotEqual(result(dict(needs, **{'tier-a-paths': {'result': bad}})), 0)
             self.assertNotEqual(result(dict(needs, **{'credential-literals': {'result': bad}})), 0)
             self.assertNotEqual(result(dict(needs, **{'recipe-selectors': {'result': bad}})), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'daemon'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'migration-history'}), 0)
+        self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'blame-ignore-revs'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'tier-a-paths'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'credential-literals'}), 0)
         self.assertNotEqual(result({k: v for k, v in needs.items() if k != 'recipe-selectors'}), 0)

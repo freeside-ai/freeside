@@ -1,0 +1,30 @@
+name: blame ignore revs
+
+on:
+  # Run on every PR through pull-request.yml and report through required.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blame-ignore-revs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check .git-blame-ignore-revs entries against PR head history
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --no-tags --unshallow origin "$HEAD_SHA"
+          else
+            git fetch --no-tags origin "$HEAD_SHA"
+          fi
+          bash scripts/check-blame-ignore-revs.sh "$HEAD_SHA"
