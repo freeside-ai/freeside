@@ -41,13 +41,19 @@ type ProjectImageBuilder interface {
 // candidate whose dependency change stays within the project's policy, and
 // lets image upkeep rebuild one at the default-branch tip. The builder must
 // record what it builds in the store both read. Share one value per daemon:
-// its gate is what keeps two builds from running at once.
+// its gate is what bounds how many builds run at once.
 type ProjectImageRebuild struct {
 	Builder ProjectImageBuilder
 	Inputs  projectimage.BuildInputs
-	// Timeout bounds one build with its proofs. Zero means
+	// Timeout bounds one build with its proofs, leaving out the time it
+	// waits for the builder VM's turn another build holds. Zero means
 	// defaultProjectImageRebuildTimeout.
 	Timeout time.Duration
+	// BuildLimit is the most builds, upkeep's and the lane's together, that
+	// run at once (the image_builds instance setting). Zero means one. The
+	// builder VM is still one per host: each build takes its turn on it
+	// (projectimage), so a stop never ends another build's builder.
+	BuildLimit int
 	// Memory reserves image upkeep's builds (plan §5.4). The lane's build
 	// runs under its task's verification reservation instead. Nil reserves
 	// nothing.
@@ -109,14 +115,16 @@ func (r *ProjectImageRebuild) laneBuildUnproven(id domain.InvocationID) bool {
 // proveLaneBuildGone proves gone what a lane build under the verification
 // reservation id may have left: it stops the builder VM and proves it
 // stopped, and deletes the build's probes, which carry id's label
-// (RecoverBuild). The caller holds the build gate, so the stop never ends
-// another daemon build. An error wraps
+// (RecoverBuild). The caller holds a build slot. The stop runs under the
+// builder VM's turn, so it never ends another build's builder, and the lane
+// never waits for that turn: one another build holds fails the proof with
+// errProjectImageBuilderBusy, for a later try. An error wraps
 // projectimage.ErrContainerAbsenceUnproven.
 func (r *ProjectImageRebuild) proveLaneBuildGone(ctx context.Context, id domain.InvocationID) error {
 	if r.RecoverBuild == nil {
 		return fmt.Errorf("%w: no build recovery is composed", projectimage.ErrContainerAbsenceUnproven)
 	}
-	if err := r.RecoverBuild(ctx, id); err != nil {
+	if err := r.RecoverBuild(projectimage.WithTurnBusy(ctx, laneTurnBusy), id); err != nil {
 		return err
 	}
 	r.laneMu.Lock()
@@ -126,11 +134,11 @@ func (r *ProjectImageRebuild) proveLaneBuildGone(ctx context.Context, id domain.
 }
 
 // proveLaneBuildGoneOutsideGate is proveLaneBuildGone for a caller that does
-// not hold the build gate. A gate another build holds is no proof: it
-// returns errProjectImageBuilderBusy, and the reservation stays held for a
-// later try.
+// not hold a build slot. It takes one, so the proof counts as build work;
+// with none free it returns errProjectImageBuilderBusy, and the reservation
+// stays held for a later try.
 func (r *ProjectImageRebuild) proveLaneBuildGoneOutsideGate(ctx context.Context, id domain.InvocationID) error {
-	if !r.gate.tryAcquire() {
+	if !r.gate.tryAcquire(r.BuildLimit) {
 		return errProjectImageBuilderBusy
 	}
 	defer r.gate.release()
@@ -141,28 +149,84 @@ func (r *ProjectImageRebuild) proveLaneBuildGoneOutsideGate(ctx context.Context,
 // runs of a project whose verification the same lane already bounds.
 const defaultProjectImageRebuildTimeout = time.Hour
 
+// laneTurnBusy is the lane's answer to a builder VM turn another build
+// holds: give up, so the task stays queued, because the lane never waits on
+// another build.
+func laneTurnBusy() (func(), error) { return nil, errProjectImageBuilderBusy }
+
+// errBuildBoundExceeded is the cause a build's bound cancels it with.
+var errBuildBoundExceeded = errors.New("the project-image build bound is exceeded")
+
+// buildBound cancels a build once its own work has run for the timeout. A
+// wait for the builder VM's turn pauses it, so a build that waited behind
+// another's never spends its bound there and is refused for it.
+type buildBound struct {
+	mu        sync.Mutex
+	timer     *time.Timer
+	remaining time.Duration
+	since     time.Time
+	paused    bool
+}
+
+func startBuildBound(timeout time.Duration, cancel context.CancelCauseFunc) *buildBound {
+	return &buildBound{
+		timer:     time.AfterFunc(timeout, func() { cancel(errBuildBoundExceeded) }),
+		remaining: timeout, since: time.Now(),
+	}
+}
+
+// pause is a projectimage.TurnBusy that waits: it stops the bound's clock
+// until the returned resume. A bound that already fired stays fired.
+func (b *buildBound) pause() (func(), error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.paused && b.timer.Stop() {
+		b.paused = true
+		b.remaining -= time.Since(b.since)
+	}
+	return b.resume, nil
+}
+
+func (b *buildBound) resume() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.paused {
+		b.paused = false
+		b.since = time.Now()
+		b.timer.Reset(b.remaining)
+	}
+}
+
+func (b *buildBound) stop() { b.timer.Stop() }
+
 // build runs one build under the rebuild's time bound. The builder's proofs
 // run the candidate's own verification commands with no bound of their own,
-// and a build holds the daemon's one build gate and its task's run, so an
-// unbounded build would let one candidate stop every other rebuild and image
-// upkeep for good.
+// and a build holds a build slot and its task's run, so an unbounded build
+// would let one candidate stop every other rebuild and image upkeep for good.
 //
 // The bound ends the build's work. The builder then cleans up under a context
 // it detaches from this one, so a container runtime that stalls there is not
-// bounded here (#1806).
+// bounded here (#1806). A wait for the builder VM's turn is not the build's
+// work: busy answers a turn another build holds (projectimage.TurnBusy),
+// and nil waits with the bound paused.
 //
 // timedOut reports that the bound ended the build. A build the caller's own
 // context ended is not one: err is then that context's error.
 func (r *ProjectImageRebuild) build(
-	ctx context.Context, request projectimage.Request,
+	ctx context.Context, request projectimage.Request, busy projectimage.TurnBusy,
 ) (image domain.ProjectImage, timedOut bool, err error) {
 	timeout := r.Timeout
 	if timeout == 0 {
 		timeout = defaultProjectImageRebuildTimeout
 	}
-	bounded, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	image, err = r.Builder.Build(bounded, request)
+	bounded, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	bound := startBuildBound(timeout, cancel)
+	defer bound.stop()
+	if busy == nil {
+		busy = bound.pause
+	}
+	image, err = r.Builder.Build(projectimage.WithTurnBusy(bounded, busy), request)
 	if err == nil {
 		return image, false, nil
 	}
@@ -173,7 +237,7 @@ func (r *ProjectImageRebuild) build(
 	if cause := ctx.Err(); cause != nil {
 		return domain.ProjectImage{}, false, errors.Join(cause, containersUnproven(err))
 	}
-	if errors.Is(bounded.Err(), context.DeadlineExceeded) {
+	if errors.Is(context.Cause(bounded), errBuildBoundExceeded) {
 		return domain.ProjectImage{}, true, errors.Join(fmt.Errorf(
 			"the build and its proofs did not finish within %s", timeout), containersUnproven(err))
 	}
@@ -191,10 +255,13 @@ func containersUnproven(err error) error {
 }
 
 // reserveBuild reserves memory for one image upkeep build, waiting in the
-// memory order (DaemonMemory.Wait). Upkeep holds only the build gate, which
-// no release waits on: the lane only tries it. The build runs one VM at a
-// time, the recipe-read room at the verification size, then the builder VM,
-// then each probe, so it reserves the larger size once.
+// memory order (DaemonMemory.Wait). Upkeep holds only a build slot, which
+// no release waits on: the lane only tries the gate. The build runs one VM
+// at a time, the recipe-read room at the verification size, then the
+// builder VM, then each probe, so it reserves the larger size once. That
+// holds at any build limit: each build keeps its own reservation, and only
+// the build holding the builder VM's turn runs the builder, so concurrent
+// builds' VMs never exceed their reservations together.
 func (r *ProjectImageRebuild) reserveBuild(ctx context.Context, keys []domain.PolicyKey) (DaemonReservation, error) {
 	if r.Memory == nil {
 		return DaemonReservation{}, nil
@@ -228,8 +295,11 @@ func BuildReservationSize(keys []domain.PolicyKey) (ward.ContainerSize, error) {
 // (DaemonMemory.ListLeft), by an earlier process or by a build that could not
 // prove its containers gone, once RecoverBuild proves them gone, and keeps
 // one it cannot prove, logged. A start runs it before upkeep can build, and
-// upkeep runs it under the build gate before it reserves. A reservation the lane's builds run under is a verification
-// reservation and never one of these.
+// upkeep runs it holding a build slot before it reserves. Its builder stop
+// waits for the builder VM's turn, so it never ends a build running beside
+// it, and a build that holds its reservation is never listed left. A
+// reservation the lane's builds run under is a verification reservation and
+// never one of these.
 func (r *ProjectImageRebuild) RecoverLeftBuilds(ctx context.Context) error {
 	open, err := r.Memory.ListLeft(ctx)
 	if err != nil {
@@ -637,9 +707,10 @@ func (w *productionPublicationWorkflow) recordedRebuild(
 	return domain.ProjectImage{}, false, nil
 }
 
-// rebuildUnderGate builds only when the builder is free, and looks again
-// under the gate for an image another build recorded since the first look.
-// A busy builder is retryable: the lane moves on to other work.
+// rebuildUnderGate builds only when a build slot is free, and looks again
+// under it for an image another build recorded since the first look. A busy
+// builder, every slot held or the builder VM's turn another build's, is
+// retryable: the lane moves on to other work.
 func (w *productionPublicationWorkflow) rebuildUnderGate(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -647,7 +718,7 @@ func (w *productionPublicationWorkflow) rebuildUnderGate(
 	checkoutDir, verifiedSHA string,
 	head domain.ProjectImageBaseInputs,
 ) (domain.ProjectImage, *rebuildRefusal, error) {
-	if !w.rebuild.gate.tryAcquire() {
+	if !w.rebuild.gate.tryAcquire(w.rebuild.BuildLimit) {
 		return domain.ProjectImage{}, nil, fmt.Errorf("rebuild project image at %s: %w",
 			verifiedSHA, productionPublicationRetryableError(errProjectImageBuilderBusy))
 	}
@@ -692,9 +763,12 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 	// The recipe read, the build, and its probes run one VM at a time, none
 	// larger than the verification size, so they run under the task's
 	// verification reservation, under the same invocation, and release it
-	// once every container they started is proved gone. A build refused for
-	// memory waits under the task's machine_capacity hold as its
-	// verification job does, in the task's place in the order.
+	// once every container they started is proved gone. The builder VM runs
+	// at projectimage.BuilderSize, the verification default, and policy may
+	// raise the verification size but never lower it, so the reservation
+	// covers the builder at any build limit. A build refused for memory
+	// waits under the task's machine_capacity hold as its verification job
+	// does, in the task's place in the order.
 	end, err := w.reserveVerification(ctx, task, binding)
 	if err != nil {
 		return domain.ProjectImage{}, nil, err
@@ -703,8 +777,8 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 	var roomErr error
 	defer func() {
 		// A build an earlier pass of this task could not prove gone left its
-		// mark; this pass holds the gate, so it proves those containers gone
-		// here before the release.
+		// mark; this pass holds a build slot, so it proves those containers
+		// gone here before the release.
 		if !errors.Is(roomErr, projectimage.ErrContainerAbsenceUnproven) &&
 			w.rebuild.laneBuildUnproven(task.verificationInvocationID()) {
 			roomErr = errors.Join(roomErr,
@@ -724,7 +798,7 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 	if err != nil {
 		return refuse(err)
 	}
-	built, timedOut, err := w.rebuild.build(reserved, request)
+	built, timedOut, err := w.rebuild.build(reserved, request, laneTurnBusy)
 	roomErr = err
 	if timedOut || errors.Is(err, projectimage.ErrProofFailed) ||
 		errors.Is(err, projectimage.ErrInstallFailed) || errors.Is(err, projectimage.ErrInvalidRequest) {

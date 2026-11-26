@@ -32,9 +32,9 @@ import (
 type ImageUpkeep struct {
 	Store *store.Store
 	// Rebuild is the daemon's one ProjectImageRebuild, shared with the
-	// publication lane so their builds take one gate. Nil means the daemon
-	// is not configured to rebuild, which a pass that needs a build records
-	// as a host fault.
+	// publication lane and every repository's upkeep so their builds take
+	// one gate. Nil means the daemon is not configured to rebuild, which a
+	// pass that needs a build records as a host fault.
 	Rebuild      *ProjectImageRebuild
 	RepositoryID int64
 	// ReadTip reads the repository's default-branch tip.
@@ -88,6 +88,11 @@ type ImageUpkeep struct {
 	// reached, which PendingResolution reads.
 	settledMu sync.Mutex
 	settled   *imageUpkeepOutcome
+	// pointerTurn lets one of this repository's passes build at a time, at
+	// any build limit: the tip trigger's and the doctor's schedule's passes
+	// both rebuild one pointer, and the second re-checks the pointer the
+	// first advanced instead of building the same image again.
+	pointerTurn projectImageBuildGate
 }
 
 // imageUpkeepHarness is the agent base upkeep keeps. Claude Code is the only
@@ -408,8 +413,8 @@ func (u *ImageUpkeep) recordedServing(
 	return domain.ProjectImage{}, false, nil
 }
 
-// rebuild builds the pointed-to image again at the tip under the shared
-// gate. It returns the image to advance to, or, with a nil image, the
+// rebuild builds the pointed-to image again at the tip under a slot of the
+// shared gate. It returns the image to advance to, or, with a nil image, the
 // outcome that ends the pass: a refusal, or none when another pass moved the
 // pointer. A non-nil adopted builds a new image from the tip's recipe, which
 // must hash to adopted, instead of the image's own.
@@ -421,10 +426,17 @@ func (u *ImageUpkeep) rebuild(
 	tip domain.ProjectImageBaseInputs,
 	adopted *domain.Digest,
 ) (*domain.ProjectImage, imageUpkeepOutcome, error) {
+	// Taken first and held through the build, so a pass waits behind
+	// another of this repository holding nothing a build slot or a release
+	// needs.
+	if err := u.pointerTurn.acquire(ctx, 1); err != nil {
+		return nil, imageUpkeepOutcome{}, err
+	}
+	defer u.pointerTurn.release()
 	// A reservation an earlier process or pass left goes first, so its
 	// memory is not counted twice; its proof stops the builder, so it runs
-	// under the gate.
-	if err := u.Rebuild.gate.acquire(ctx); err != nil {
+	// holding a slot, and its stop takes the builder VM's turn.
+	if err := u.Rebuild.gate.acquire(ctx, u.Rebuild.BuildLimit); err != nil {
 		return nil, imageUpkeepOutcome{}, err
 	}
 	err := u.Rebuild.RecoverLeftBuilds(ctx)
@@ -447,11 +459,11 @@ func (u *ImageUpkeep) rebuild(
 			u.Logger.Error("image upkeep: release the build's memory reservation", "reservation", reservation.ID(), "error", err)
 		}
 	}()
-	if err := u.Rebuild.gate.acquire(ctx); err != nil {
+	if err := u.Rebuild.gate.acquire(ctx, u.Rebuild.BuildLimit); err != nil {
 		return nil, imageUpkeepOutcome{}, err
 	}
 	defer u.Rebuild.gate.release()
-	// Checked once the gate is held, so a drain requested while this pass
+	// Checked once the slot is held, so a drain requested while this pass
 	// waited for it still holds the build. The pass settles nothing, so the
 	// next trigger after the lift, the new build's start among them,
 	// measures the tip again (issue #3104).
@@ -510,7 +522,7 @@ func (u *ImageUpkeep) rebuild(
 		}
 		return refuse(projectimage.ClassifyUpkeepBuildFailure(err), err)
 	}
-	built, timedOut, err := u.Rebuild.build(ctx, request)
+	built, timedOut, err := u.Rebuild.build(ctx, request, nil)
 	absence = containersUnproven(err)
 	if timedOut {
 		return refuse(domain.ImageUpkeepRefusalHostFault, err)
