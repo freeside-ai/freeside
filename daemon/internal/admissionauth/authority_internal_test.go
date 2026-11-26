@@ -5,6 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -737,6 +742,47 @@ func TestRunnableConfigurationReadsTheAdmissionsClass(t *testing.T) {
 		}
 		if !tc.starts && !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
 			t.Fatalf("%s admission bound to the other class's digest = %v, want a mismatch", tc.class, err)
+		}
+	}
+}
+
+// TestCommitAuthorFailureClassifiesUnreachableGitHub: a commit-author check
+// that couldn't reach GitHub wraps stage.ErrAuthorityUnavailable, so the
+// stage driver holds a restarted intent instead of quarantining it (#3381),
+// and every other failure stays a plain refusal. Resolve and Revalidate
+// classify alike.
+func TestCommitAuthorFailureClassifiesUnreachableGitHub(t *testing.T) {
+	t.Parallel()
+	transport := &url.Error{
+		Op: "Get", URL: "https://api.github.com/users/app%5Bbot%5D",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+	}
+	cases := []struct {
+		name        string
+		err         error
+		unavailable bool
+	}{
+		{"transport failure", fmt.Errorf("resolve App bot identity: %w", transport), true},
+		{"deadline", fmt.Errorf("resolve App bot identity: %w", context.DeadlineExceeded), true},
+		{"server error", &publish.APIError{Status: http.StatusServiceUnavailable}, true},
+		{"rate limited", &publish.APIError{Status: http.StatusTooManyRequests}, true},
+		{"identity mismatch", fmt.Errorf("%w: %w", publish.ErrAppBotIdentityMismatch, transport), false},
+		{"forbidden", &publish.APIError{Status: http.StatusForbidden}, false},
+		{"not found", &publish.APIError{Status: http.StatusNotFound}, false},
+		{"unclassified", errors.New("decode response"), false},
+	}
+	for _, tc := range cases {
+		for _, revalidate := range []bool{false, true} {
+			authority := Authority{CommitAuthors: fixedProductionCommitAuthorResolver{err: tc.err}}
+			err := authority.authenticateProductionCommitAuthorClaim(
+				t.Context(), "owner/repo", engine.ProductionCommitAuthor{}, revalidate,
+			)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("%s (revalidate %t) = %v, want the resolver's failure", tc.name, revalidate, err)
+			}
+			if got := errors.Is(err, stage.ErrAuthorityUnavailable); got != tc.unavailable {
+				t.Errorf("%s (revalidate %t) unavailable = %t, want %t", tc.name, revalidate, got, tc.unavailable)
+			}
 		}
 	}
 }
