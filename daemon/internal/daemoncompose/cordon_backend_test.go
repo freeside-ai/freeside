@@ -89,8 +89,8 @@ func TestCordonConfigProtectsTheStateDirectory(t *testing.T) {
 	if !slices.Equal(got.ReservedPorts, []int{47000, 47004}) {
 		t.Errorf("ReservedPorts = %v, want sorted and unique", got.ReservedPorts)
 	}
-	if got.Path[0] != filepath.Dir(cfg.AgentCLI) {
-		t.Errorf("Path = %q, want the agent CLI's directory first", got.Path)
+	if want := cordon.LaunchPath(filepath.Dir(cfg.AgentCLI), account.Home); !slices.Equal(got.Path, want) {
+		t.Errorf("Path = %q, want the launch PATH %q", got.Path, want)
 	}
 	if _, err := cordon.New(got, refusingSeeder{}); err != nil {
 		t.Fatalf("the composed configuration doesn't validate: %v", err)

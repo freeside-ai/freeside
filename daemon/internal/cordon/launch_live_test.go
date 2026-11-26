@@ -202,6 +202,29 @@ func TestLiveLaunchInstallsAMiseTool(t *testing.T) {
 	runProbeLaunch(t, f.backend(t), "mise", []string{probeLine("allow", "mise", mise)})
 }
 
+// TestLiveLaunchRunsTheManagersTools runs go, uv, and cargo by name in a
+// launch on the launch PATH, which finds them in the managers' directories
+// the fleet repository installs them in. Each first runs by name outside
+// any launch, with only the home and the same PATH set, as in a launch,
+// and a tool that fails there is skipped.
+func TestLiveLaunchRunsTheManagersTools(t *testing.T) {
+	t.Parallel()
+	requireLive(t)
+	f := liveFixture(t)
+	f.cfg.Path = LaunchPath(filepath.Dir(f.cfg.AgentCLI), f.cfg.Home)
+	var probes []string
+	for _, tool := range [][]string{{"go", "version"}, {"uv", "--version"}, {"cargo", "--version"}} {
+		control := []string{"/usr/bin/env", "-i", "HOME=" + f.cfg.Home, "PATH=" + strings.Join(f.cfg.Path, ":")}
+		if unconfined(t, slices.Concat(control, tool)...) {
+			probes = append(probes, probeLine(slices.Concat([]string{"allow", "run"}, tool)...))
+		}
+	}
+	if len(probes) == 0 {
+		t.Skip("none of go, uv, and cargo runs on the launch PATH outside a launch")
+	}
+	runProbeLaunch(t, f.backend(t), "managers", probes)
+}
+
 // TestLiveLaunchKeepsMiseTrustInTheRun runs a plain mise install in a
 // launch's worktree, with mise's state directory left as the launch sets
 // it. mise trusts the worktree's config by itself, and that trust must stay

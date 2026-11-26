@@ -338,18 +338,25 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 
 // TestLaunchEnvironmentIsTheFixedList shows the daemon's own environment
 // never reaches a launch: the canary gets the fixed list, and the agent the
-// fixed list plus the name of its token's descriptor.
+// fixed list plus the name of its token's descriptor. The PATH is the
+// launch PATH, spelled out so a change to the list fails here. Each process
+// starts sandbox-exec by absolute path, and sandbox-exec starts the canary
+// and the agent by absolute path, so neither resolves through that PATH.
 func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 	t.Setenv("FREESIDE_CORDON_DAEMON_ONLY", "leak")
 	cfg := testConfig(t)
+	cfg.Path = LaunchPath(filepath.Dir(cfg.AgentCLI), cfg.Home)
 	synctest.Test(t, func(t *testing.T) {
 		l := &fakeLauncher{host: newFakeHost(), script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
 		if _, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-env")); err != nil {
 			t.Fatalf("Launch: %v", err)
 		}
 		lay := layoutFor(cfg.RunsRoot, "run-env")
+		path := "PATH=" + filepath.Dir(cfg.AgentCLI) + ":/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:" +
+			cfg.Home + "/.cargo/bin:" + cfg.Home + "/.local/bin:" + cfg.Home + "/.local/share/mise/shims:" +
+			"/usr/bin:/bin:/usr/sbin:/sbin"
 		want := []string{
-			"HOME=" + cfg.Home, "PATH=/usr/bin:/bin", "TMPDIR=" + lay.tmp, "CLAUDE_CONFIG_DIR=" + lay.config,
+			"HOME=" + cfg.Home, path, "TMPDIR=" + lay.tmp, "CLAUDE_CONFIG_DIR=" + lay.config,
 			"MISE_STATE_DIR=" + lay.miseState, "DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		}
@@ -362,7 +369,27 @@ func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 		if agent := l.specs[1]; !slices.Equal(agent.env, append(want, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3")) {
 			t.Fatalf("agent env = %q, want the fixed list and the token's descriptor", agent.env)
 		}
+		for i, program := range []string{"/bin/cat", cfg.AgentCLI} {
+			if got := confinedProgram(t, l.specs[i].argv); got != program {
+				t.Errorf("process %d's argv %q confines %q, want %q", i, l.specs[i].argv, got, program)
+			}
+		}
 	})
+}
+
+// confinedProgram returns the program argv has sandbox-exec start, after
+// the rule file and its parameters, and fails the test unless argv starts
+// sandbox-exec by absolute path.
+func confinedProgram(t *testing.T, argv []string) string {
+	t.Helper()
+	if len(argv) < 4 || argv[0] != "/usr/bin/sandbox-exec" || argv[1] != "-f" {
+		t.Fatalf("argv %q doesn't start sandbox-exec by absolute path with a rule file", argv)
+	}
+	i := 3
+	for i+1 < len(argv) && argv[i] == "-D" {
+		i += 2
+	}
+	return argv[i]
 }
 
 // TestLaunchHandsTheTokenToTheAgentAlone shows the token reaches the agent
