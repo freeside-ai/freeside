@@ -143,7 +143,7 @@ func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := armTrustedConfigJobs(context.Background(), sched, cfg); err != nil {
+		if err := armTrustedConfigJobs(context.Background(), sched, cfg, nil); err != nil {
 			t.Fatal(err)
 		}
 		return readScheduleRow(t, st, imageUpkeepScheduleID)

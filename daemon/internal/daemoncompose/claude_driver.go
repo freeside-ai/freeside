@@ -726,7 +726,10 @@ type ClaudeComposition struct {
 	// an attended composition, which runs no project image.
 	selectImage     engine.ImageSelection
 	bindImageUpkeep func(func(context.Context, int64) (*domain.ImageUpkeepHold, error))
-	runConformance  func(context.Context) error
+	// agentBaseBump handles the agent_base_bump schedule, nil when no
+	// project takes its task; ComposeClaudeWorkflow sets it beside upkeep.
+	agentBaseBump  *agentBaseBump
+	runConformance func(context.Context) error
 	// hostVerification is the macOS verification executor, nil when none
 	// is configured.
 	hostVerification *macverify.Backend

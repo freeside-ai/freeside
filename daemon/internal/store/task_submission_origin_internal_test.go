@@ -81,7 +81,7 @@ func TestDaemonSubmissionRequiresRepairRefusal(t *testing.T) {
 	foreign := originTestRefusal(t, domain.ImageUpkeepRefusalRepair, 42)
 	submission := func(source domain.Digest) domain.TaskSubmission {
 		return domain.TaskSubmission{
-			CommandID: "daemon-cmd-1", Origin: domain.TaskSubmissionOriginDaemon, ProjectID: "proj-1",
+			CommandID: domain.ImageUpkeepSubmissionIdentity(repair.ID), Origin: domain.TaskSubmissionOriginDaemon, ProjectID: "proj-1",
 			SourceDigest: source, TaskID: taskID, SpecificationRunID: runID,
 			Name: domain.DisplayName{Text: "Repair the npm lockfile", Source: domain.DisplayNameSourceName},
 		}
@@ -113,6 +113,15 @@ func TestDaemonSubmissionRequiresRepairRefusal(t *testing.T) {
 		}
 	}
 
+	// The command ID's namespace says which kind of source the row names, so
+	// a daemon command outside both namespaces is refused even when its
+	// source is a repair refusal.
+	outside := submission(repair.ID)
+	outside.CommandID = "daemon-cmd-1"
+	if err := put(outside); !errors.Is(err, ErrDaemonSubmissionUnsourced) {
+		t.Fatalf("command outside the daemon namespaces: put = %v, want ErrDaemonSubmissionUnsourced", err)
+	}
+
 	want := submission(repair.ID)
 	if err := put(want); err != nil {
 		t.Fatalf("repair refusal: put = %v", err)
@@ -139,5 +148,104 @@ func TestDaemonSubmissionRequiresRepairRefusal(t *testing.T) {
 	}
 	if _, err := read(); !errors.Is(err, ErrRowInconsistent) || !errors.Is(err, ErrDaemonSubmissionUnsourced) {
 		t.Fatalf("read without its refusal: err = %v, want ErrRowInconsistent", err)
+	}
+}
+
+// TestDaemonSubmissionRequiresBumpOccurrence: an agent-base bump submission
+// names the agent_base_bump occurrence that opened it and carries the
+// daemon's fixed task text, so the store refuses one naming any other
+// occurrence or text, and fails closed on a stored one whose occurrence is
+// gone.
+func TestDaemonSubmissionRequiresBumpOccurrence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openProjectImageStore(t)
+	taskID, runID := seedOriginTestTarget(t, ctx, st)
+	nominal := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	interval := int64(7 * 24 * 60 * 60)
+	for _, kind := range []domain.ScheduleKind{domain.ScheduleAgentBaseBump, domain.ScheduleDoctor} {
+		id := domain.ScheduleID("schedule-" + string(kind))
+		schedule, err := domain.NewSchedule(domain.ScheduleInput{
+			ID: id, ProjectID: "project-system", Kind: kind,
+			Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+			CreatedAt: nominal.Add(-time.Hour), IntervalSeconds: &interval,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutSchedule(ctx, schedule) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+			_, err := tx.CreatePendingScheduleOccurrence(ctx, domain.ScheduleOccurrence{
+				ScheduleID: id, Generation: 1, NominalFireAt: nominal,
+				Status: domain.OccurrencePending, CreatedAt: nominal,
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bump := domain.ScheduleID("schedule-" + string(domain.ScheduleAgentBaseBump))
+	submission := func(scheduleID domain.ScheduleID, generation int64, source domain.Digest) domain.TaskSubmission {
+		return domain.TaskSubmission{
+			CommandID: domain.AgentBaseBumpSubmissionIdentity(scheduleID, generation, nominal),
+			Origin:    domain.TaskSubmissionOriginDaemon, ProjectID: "proj-1",
+			SourceDigest: source, TaskID: taskID, SpecificationRunID: runID,
+			Name: domain.DisplayName{Text: domain.AgentBaseBumpTaskName, Source: domain.DisplayNameSourceName},
+		}
+	}
+	put := func(s domain.TaskSubmission) error {
+		return st.Write(ctx, func(tx *WriteTx) error { return tx.PutTaskSubmission(ctx, s) })
+	}
+	fixed := domain.AgentBaseBumpSourceDigest()
+	for name, s := range map[string]domain.TaskSubmission{
+		"unrecorded occurrence":     submission(bump, 2, fixed),
+		"another kind's occurrence": submission("schedule-"+domain.ScheduleID(domain.ScheduleDoctor), 1, fixed),
+		"other task text":           submission(bump, 1, domain.Digest("sha256:"+strings.Repeat("0", 64))),
+	} {
+		if err := put(s); !errors.Is(err, ErrDaemonSubmissionUnsourced) {
+			t.Fatalf("%s: put = %v, want ErrDaemonSubmissionUnsourced", name, err)
+		}
+	}
+
+	want := submission(bump, 1, fixed)
+	if err := put(want); err != nil {
+		t.Fatalf("bump occurrence: put = %v", err)
+	}
+	list := func(project domain.ProjectID) ([]domain.TaskSubmission, error) {
+		var got []domain.TaskSubmission
+		err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			got, err = tx.ListAgentBaseBumpSubmissions(ctx, project)
+			return err
+		})
+		return got, err
+	}
+	if got, err := list("proj-1"); err != nil || len(got) != 1 || got[0].CommandID != want.CommandID {
+		t.Fatalf("list = %+v err=%v, want the bump submission", got, err)
+	}
+	if got, err := list("proj-2"); err != nil || len(got) != 0 {
+		t.Fatalf("another project's list = %+v err=%v, want none", got, err)
+	}
+
+	// A row keeps the text of the build that wrote it: one an earlier build
+	// worded differently still decodes, so rewording the text never strands
+	// a recorded bump.
+	earlier := domain.Digest("sha256:" + strings.Repeat("1", 64))
+	if _, err := st.db.ExecContext(ctx, `UPDATE task_submission_commands SET body = replace(body, ?, ?)
+		WHERE command_id = ?`, string(fixed), string(earlier), want.CommandID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := list("proj-1"); err != nil || len(got) != 1 || got[0].SourceDigest != earlier {
+		t.Fatalf("list of an earlier build's bump = %+v err=%v, want it decoded", got, err)
+	}
+
+	// The occurrence is the authority, re-read on decode.
+	if _, err := st.db.ExecContext(ctx, `DELETE FROM schedule_occurrences WHERE schedule_id = ?`, bump); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := list("proj-1"); !errors.Is(err, ErrRowInconsistent) || !errors.Is(err, ErrDaemonSubmissionUnsourced) {
+		t.Fatalf("list without its occurrence: err = %v, want ErrRowInconsistent", err)
 	}
 }

@@ -485,7 +485,7 @@ func (s *Scheduler) validateFireAuthority(ctx context.Context, schedule domain.S
 		// active epoch, and durable intent revision before event construction.
 		// That authority document, not a workflow run, owns installation intent.
 		return nil
-	case domain.ScheduleDoctor, domain.ScheduleJanitor, domain.ScheduleImageUpkeep:
+	case domain.ScheduleDoctor, domain.ScheduleJanitor, domain.ScheduleImageUpkeep, domain.ScheduleAgentBaseBump:
 		// These permanent jobs are armed only from daemon-owned trusted
 		// configuration and deliberately have no per-run authority.
 		return nil

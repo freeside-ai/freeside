@@ -286,6 +286,111 @@ func (s *Service) SubmitImageRepairTask(
 	return submission, nil
 }
 
+// SubmitAgentBaseBumpTask submits the task one agent_base_bump schedule
+// occurrence opens (plan §5.7, Agent-base upkeep): the daemon's fixed task
+// text (domain.AgentBaseBumpTaskSource), with a daemon origin and no device.
+// Its command ID is domain.AgentBaseBumpSubmissionIdentity of the
+// occurrence, which the store's daemon-origin gate re-checks on write and
+// read, so submitting the same occurrence again returns the recorded
+// submission. While another bump task of the project is open
+// (OpenAgentBaseBumpTask) it returns that task's submission and writes
+// nothing, so one bump is in flight at a time. The check runs in the
+// submit's write transaction. A project with no configured submission
+// policy is store.ErrNotFound from the submitter.
+func (s *Service) SubmitAgentBaseBumpTask(
+	ctx context.Context, projectID domain.ProjectID, occurrence domain.ScheduleEvent,
+) (domain.TaskSubmission, error) {
+	if s.blobs == nil || s.taskSubmitter == nil {
+		return domain.TaskSubmission{}, fmt.Errorf("submit agent base bump task: %w", ErrTaskSubmissionUnavailable)
+	}
+	commandID := domain.AgentBaseBumpSubmissionIdentity(
+		occurrence.ScheduleID, occurrence.Generation, occurrence.NominalFireAt)
+	source := domain.AgentBaseBumpTaskSource()
+	sourceDigest := domain.AgentBaseBumpSourceDigest()
+	requestBytes, err := json.Marshal(struct {
+		Origin    domain.TaskSubmissionOrigin
+		ProjectID domain.ProjectID
+		CommandID string
+	}{domain.TaskSubmissionOriginDaemon, projectID, commandID})
+	if err != nil {
+		return domain.TaskSubmission{}, err
+	}
+	requestDigest := domain.Digest(contentaddr.Sum(requestBytes))
+	if _, err := s.blobs.Put(sourceDigest, bytes.NewReader(source)); err != nil {
+		return domain.TaskSubmission{}, fmt.Errorf("submit agent base bump task store source: %w", err)
+	}
+	var submission domain.TaskSubmission
+	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
+		if recorded, getErr := tx.GetTaskSubmission(ctx, commandID); getErr == nil {
+			original, err := tx.TaskSubmissionRequestDigest(ctx, commandID)
+			if err != nil {
+				return err
+			}
+			// The recorded source is the text of the build that wrote it,
+			// which a later build may word differently, so a replay
+			// compares the request and not the text.
+			if recorded.Origin != domain.TaskSubmissionOriginDaemon || recorded.ProjectID != projectID ||
+				original != requestDigest {
+				return fmt.Errorf("submit agent base bump task %q: %w", commandID, store.ErrImmutableConflict)
+			}
+			submission = recorded
+			return errReplay
+		} else if !errors.Is(getErr, store.ErrNotFound) {
+			return getErr
+		}
+		open, found, err := OpenAgentBaseBumpTask(ctx, &tx.ReadTx, projectID)
+		if err != nil {
+			return err
+		}
+		if found {
+			submission = open
+			return errReplay
+		}
+		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
+			CommandID: commandID, Origin: domain.TaskSubmissionOriginDaemon, RequestDigest: requestDigest,
+			ProjectID: projectID, Source: source, SourceDigest: sourceDigest,
+			OperatorName: domain.AgentBaseBumpTaskName,
+		})
+		if err != nil {
+			return err
+		}
+		submission = domain.TaskSubmission{
+			CommandID: commandID, Origin: domain.TaskSubmissionOriginDaemon, ProjectID: projectID,
+			SourceDigest: sourceDigest, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
+			Name: outcome.Name,
+		}
+		return tx.PutTaskSubmissionRequest(ctx, submission, requestDigest)
+	})
+	if err != nil && !errors.Is(err, errReplay) {
+		return domain.TaskSubmission{}, err
+	}
+	return submission, nil
+}
+
+// OpenAgentBaseBumpTask finds the project's open agent-base bump task: the
+// first bump submission whose task has no cancellation (requested or
+// confirmed) and whose current episode has no completion or abandonment. A
+// closed task no longer counts, so a bump that merged, or one a person
+// cancelled, lets the next occurrence open another.
+func OpenAgentBaseBumpTask(
+	ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID,
+) (domain.TaskSubmission, bool, error) {
+	submissions, err := tx.ListAgentBaseBumpSubmissions(ctx, projectID)
+	if err != nil {
+		return domain.TaskSubmission{}, false, err
+	}
+	for _, submission := range submissions {
+		task, err := tx.GetTask(ctx, submission.TaskID)
+		if err != nil {
+			return domain.TaskSubmission{}, false, err
+		}
+		if task.Cancellation == nil && task.DisplayLifecycle(nil) == nil {
+			return submission, true, nil
+		}
+	}
+	return domain.TaskSubmission{}, false, nil
+}
+
 // ImageRepairTask is an open maintenance task and the refusal it was
 // opened for.
 type ImageRepairTask struct {

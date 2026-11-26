@@ -40,5 +40,12 @@
       "attended_dev": true,
       "unattended": true
     }
+  },
+  {
+    "kind": "agent_base_bump",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
   }
 ]

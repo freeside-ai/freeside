@@ -22,10 +22,11 @@ type TaskSubmissionOrigin string
 const (
 	// TaskSubmissionOriginDevice: a paired client submitted the task.
 	TaskSubmissionOriginDevice TaskSubmissionOrigin = "device"
-	// TaskSubmissionOriginDaemon: project-image upkeep submitted a
-	// maintenance task for a repair-class refusal (plan §5.7, Project-image
-	// upkeep). Its source is the refusal record, which the store requires to
-	// exist on every write and decode.
+	// TaskSubmissionOriginDaemon: the daemon submitted the task: project-image
+	// upkeep's maintenance task for a repair-class refusal, or the agent-base
+	// bump task (plan §5.7). Its command ID's namespace names which, and the
+	// store re-checks the source that kind names (the bump's text only on
+	// write).
 	TaskSubmissionOriginDaemon TaskSubmissionOrigin = "daemon"
 )
 
@@ -46,7 +47,7 @@ func (o TaskSubmissionOrigin) valid() bool {
 // it on the record makes a second submission for the same refusal converge on
 // the first.
 func ImageUpkeepSubmissionIdentity(refusalID Digest) string {
-	return "daemon:image-upkeep:" + string(refusalID)
+	return imageUpkeepSubmissionPrefix + string(refusalID)
 }
 
 // TaskSubmission is the durable, immutable record of one accepted submit_task
@@ -66,8 +67,9 @@ func ImageUpkeepSubmissionIdentity(refusalID Digest) string {
 // so it is not carried in the body.
 //
 // Origin says who submitted it. A device submission names its DeviceID; a
-// daemon one (project-image upkeep's maintenance task) names none, and its
-// SourceDigest is the refusal record that caused it.
+// daemon one names none. A maintenance task's SourceDigest is the refusal
+// record that caused it, and a bump task's is the digest of its fixed text
+// (AgentBaseBumpSourceDigest).
 //
 // TaskLines are the per-role agent choices the command carried, in canonical
 // order: the record admission holds a submit_task line to (plan §5.4). A
@@ -102,8 +104,9 @@ func (s TaskSubmission) Validate() error {
 	if (s.Origin == TaskSubmissionOriginDevice) != (s.DeviceID != nil) {
 		return fmt.Errorf("task submission %s origin %q: %w", s.CommandID, s.Origin, ErrTaskSubmissionOriginMismatch)
 	}
-	// The daemon: namespace is the daemon's own (ImageUpkeepSubmissionIdentity),
-	// so a device cannot claim a command ID the daemon will submit under.
+	// The daemon: namespace is the daemon's own (ImageUpkeepSubmissionIdentity,
+	// AgentBaseBumpSubmissionIdentity), so a device cannot claim a command ID
+	// the daemon will submit under.
 	if s.Origin == TaskSubmissionOriginDevice && strings.HasPrefix(s.CommandID, "daemon:") {
 		return fmt.Errorf("task submission %s uses the daemon namespace: %w", s.CommandID, ErrTaskSubmissionOriginMismatch)
 	}

@@ -40,7 +40,7 @@ func validScheduleInput(kind ScheduleKind) ScheduleInput {
 		}
 		in.IntervalSeconds = ptr(int64(2))
 		in.ExpiresAt = ptr(ts.Add(10 * time.Minute))
-	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
+	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep, ScheduleAgentBaseBump:
 		in.Subject = ScheduleSubject{Type: ScheduleSubjectTrustedConfig}
 		in.IntervalSeconds = ptr(int64(30))
 	}
@@ -73,7 +73,7 @@ func TestScheduleKindContract(t *testing.T) {
 		SchedulePRChecksDeadline: true, ScheduleReviewWaitThreshold: true,
 	}
 	trusted := map[ScheduleKind]bool{
-		ScheduleDoctor: true, ScheduleJanitor: true, ScheduleImageUpkeep: true,
+		ScheduleDoctor: true, ScheduleJanitor: true, ScheduleImageUpkeep: true, ScheduleAgentBaseBump: true,
 	}
 	for _, kind := range AllScheduleKinds {
 		if kind.OneShot() != oneShot[kind] {

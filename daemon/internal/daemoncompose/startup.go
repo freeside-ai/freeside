@@ -400,6 +400,7 @@ func ComposeClaudeWorkflow(
 	if claudeWiring.bindImageUpkeep != nil {
 		claudeWiring.bindImageUpkeep(upkeeps.pendingResolution)
 	}
+	claudeWiring.agentBaseBump = composeAgentBaseBump(st, attention, cfg, claudeWiring, upkeeps)
 	production.Publication = engine.ProductionPublicationConfig{
 		WorkDir: filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 		// The state dir, not the seed root: the cordon denies writes under
@@ -566,7 +567,7 @@ func ComposeClaudeLoops(
 		return nil, err
 	}
 	claudeSched.SetLogger(cfg.Logger)
-	if err := armTrustedConfigJobs(parent, claudeSched, cfg); err != nil {
+	if err := armTrustedConfigJobs(parent, claudeSched, cfg, claudeWiring); err != nil {
 		return nil, err
 	}
 	upkeepTrigger = newImageUpkeepTrigger(upkeeps.all()...)

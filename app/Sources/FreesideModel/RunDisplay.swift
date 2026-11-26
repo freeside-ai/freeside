@@ -653,6 +653,7 @@ package enum RunDisplay {
         case .doctor: "Doctor"
         case .janitor: "Janitor"
         case .image_upkeep: "Image upkeep"
+        case .agent_base_bump: "Agent base bump"
         case .unknown: "Unknown"
         }
     }

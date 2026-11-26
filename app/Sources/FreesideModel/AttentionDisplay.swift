@@ -1753,7 +1753,7 @@ package enum AttentionDisplay {
             return .init("Checks", "Not confirmed after \(duration) · \(ago)")
         case .review_wait_threshold:
             return .init("Review", "None after \(duration) · \(ago)")
-        case .installation_poll, .doctor, .janitor, .image_upkeep:
+        case .installation_poll, .doctor, .janitor, .image_upkeep, .agent_base_bump:
             return nil
         case .unknown:
             return nil
@@ -1764,7 +1764,7 @@ package enum AttentionDisplay {
         switch kind {
         case .pr_checks_deadline: return "Checks Deadline Elapsed"
         case .review_wait_threshold: return "Review Deadline Elapsed"
-        case .installation_poll, .doctor, .janitor, .image_upkeep: return nil
+        case .installation_poll, .doctor, .janitor, .image_upkeep, .agent_base_bump: return nil
         case .unknown: return nil
         }
     }

@@ -8542,6 +8542,7 @@ public enum Components {
             case doctor = "doctor"
             case janitor = "janitor"
             case image_upkeep = "image_upkeep"
+            case agent_base_bump = "agent_base_bump"
             case unknown = "unknown"
         }
         /// One publication deadline that elapsed on an open ready_for_final_review item (mirrors domain.ElapsedDeadline). armed_at is the nominal deadline minus deadline_seconds, so a re-armed schedule generation records the same deadline. kind is pr_checks_deadline or review_wait_threshold. elapsed_at is the instant the daemon's scheduler handled the fire, never before armed_at plus deadline_seconds.
@@ -11727,7 +11728,7 @@ public enum Components {
                 case decision_evidence
             }
         }
-        /// Who recorded a task submission (mirrors domain.TaskSubmissionOrigin). device is a paired device's submit_task command. daemon is project-image upkeep's repair task, which the daemon accepts only against a recorded repair-class upkeep refusal for the project's repository and re-checks whenever it reads the record back. Widening it is a contract change.
+        /// Who recorded a task submission (mirrors domain.TaskSubmissionOrigin). device is a paired device's submit_task command. daemon is a task the daemon opened itself: project-image upkeep's repair task, which it accepts only against a recorded repair-class upkeep refusal for the project's repository, or the agent-base bump task, which it accepts only against a recorded agent_base_bump schedule occurrence, and against its fixed text when first recorded. It re-checks the refusal or the occurrence whenever it reads the record back. Widening it is a contract change.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskSubmissionOrigin`.

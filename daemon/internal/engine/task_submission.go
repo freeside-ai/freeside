@@ -40,9 +40,8 @@ type TaskSubmitter struct {
 // NewTaskSubmitter builds the injected submitter. A nil initiator refuses every
 // project (client submission unavailable); the daemon composition supplies one
 // over the configured initiators. gate is the daemon's project readiness
-// gate, nil to check nothing; a daemon-origin submission, the image-repair
-// task, passes it when writer_image is the only failed check
-// (waiveWriterImage).
+// gate, nil to check nothing; the image-repair task passes it when
+// writer_image is the only failed check (waiveWriterImage).
 func NewTaskSubmitter(
 	blobs *signet.BlobStore, initiator func(domain.ProjectID) (ManualInitiator, bool), gate ProjectReadinessGate,
 ) *TaskSubmitter {
@@ -167,7 +166,9 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 		DeclaredPaths:       domain.CanonicalDeclaredPaths(resolvedPolicy),
 	}
 	gate := t.gate
-	if in.Origin == domain.TaskSubmissionOriginDaemon {
+	// Only the image-repair task is opened because the image cannot be
+	// built; the agent-base bump task needs a working image like any task.
+	if in.Origin == domain.TaskSubmissionOriginDaemon && domain.IsImageUpkeepSubmission(in.CommandID) {
 		gate = waiveWriterImage(gate)
 	}
 	submitted, err := SubmitSpecificationRunTx(ctx, tx, SpecificationRunSpec{
@@ -223,7 +224,8 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 // submissionIdentity is the manual-submission identity a command's task is
 // keyed by. A device command is namespaced under client:, so no client can
 // name another origin's task. A daemon command ID is already the daemon's own
-// identity (domain.ImageUpkeepSubmissionIdentity), so it is used as it stands.
+// identity (domain.ImageUpkeepSubmissionIdentity,
+// domain.AgentBaseBumpSubmissionIdentity), so it is used as it stands.
 func submissionIdentity(origin domain.TaskSubmissionOrigin, commandID string) (string, error) {
 	switch origin {
 	case domain.TaskSubmissionOriginDevice:

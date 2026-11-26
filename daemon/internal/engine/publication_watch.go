@@ -41,7 +41,7 @@ func PublicationWatchDeadline(kind domain.ScheduleKind) (time.Duration, bool) {
 		return DefaultPRChecksDeadline, true
 	case domain.ScheduleReviewWaitThreshold:
 		return DefaultReviewWaitThreshold, true
-	case domain.ScheduleInstallationPoll, domain.ScheduleDoctor, domain.ScheduleJanitor, domain.ScheduleImageUpkeep:
+	case domain.ScheduleInstallationPoll, domain.ScheduleDoctor, domain.ScheduleJanitor, domain.ScheduleImageUpkeep, domain.ScheduleAgentBaseBump:
 	}
 	return 0, false
 }
