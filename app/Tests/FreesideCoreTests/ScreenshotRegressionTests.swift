@@ -4298,14 +4298,14 @@
                     name: "task-proposal-revision-sheet",
                     width: 480,
                     view: AnyView(
-                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in true }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
                     name: "task-proposal-revision-sheet-phone",
                     width: 390,
                     view: AnyView(
-                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in true }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
@@ -4313,7 +4313,7 @@
                     width: 480,
                     colorScheme: .dark,
                     view: AnyView(
-                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in true }
                             .screenshotContent())))
             surfaces.append(
                 Surface(
@@ -4321,7 +4321,7 @@
                     width: 390,
                     colorScheme: .dark,
                     view: AnyView(
-                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in }
+                        TaskProposalRevisionSheet(facts: taskProposalFacts) { _ in true }
                             .screenshotContent())))
 
             // The effect-proposal edit sheet: one control for whether the PR
@@ -4342,7 +4342,7 @@
                         width: width,
                         colorScheme: scheme,
                         view: AnyView(
-                            EffectProposalRevisionSheet(facts: effectProposalFacts) { _ in }
+                            EffectProposalRevisionSheet(facts: effectProposalFacts) { _ in true }
                                 .screenshotContent())))
             }
 
@@ -4483,7 +4483,7 @@
                         TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
-                        ) { _ in }
+                        ) { _ in true }
                         .screenshotContent())))
             surfaces.append(
                 Surface(
@@ -4493,7 +4493,7 @@
                         TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
-                        ) { _ in }
+                        ) { _ in true }
                         .screenshotContent())))
             surfaces.append(
                 Surface(
@@ -4504,7 +4504,7 @@
                         TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
-                        ) { _ in }
+                        ) { _ in true }
                         .screenshotContent())))
             surfaces.append(
                 Surface(
@@ -4515,7 +4515,7 @@
                         TaskProposalSnoozeSheet(
                             now: screenshotNow,
                             screenshotTimeZone: screenshotTimeZone
-                        ) { _ in }
+                        ) { _ in true }
                         .screenshotContent())))
             if let selected = inbox.first?.item {
                 let bannerDetail = DecisionDetailView(
