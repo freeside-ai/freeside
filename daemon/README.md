@@ -2477,7 +2477,11 @@ At each start, restart recovery gives every stage intent in
 `<state dir>/claude-driver` its first adoption attempt, and one intent's
 failure never costs the others theirs (#386). An operational retry, or a
 refusal under mutable admission policy, holds the intent: the engine's later
-passes retry it with no item. Any other failure quarantines that intent for
+passes retry it with no item. A re-check against current policy that
+couldn't reach GitHub (a transport failure, a timeout, or a 408, 429, or 5xx
+answer) is an operational retry, and recovery runs that re-check without
+holding the driver's lock (#3381). A 403, secondary rate limits included,
+is a refusal. Any other failure quarantines that intent for
 the life of the process and the daemon starts anyway. Three classes do:
 
 - **Unreadable:** the file could not be stat'ed, read, or decoded, or is not

@@ -3,6 +3,7 @@ package stage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -444,5 +445,81 @@ func TestRestartCurrentCheckRefusalIsBoundToItsPhase(t *testing.T) {
 	d.mu.Unlock()
 	if check.state != currentCheckPassed || check.phase != phaseExported {
 		t.Fatalf("check after the phase moved = %+v, want passed for the exported phase", check)
+	}
+}
+
+// TestRestartCurrentCheckRetriesAnUnreachableAuthority: while the authority
+// can't be reached, Inspect keeps a held restarted intent running and
+// launches no recovery; once the authority answers, a later Inspect
+// recovers it (#3381).
+func TestRestartCurrentCheckRetriesAnUnreachableAuthority(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	launched := countRecoveryLaunches(d)
+	orphan(t, d, phaseRunning, nil)
+	d.authority = stubAuthority{startErr: fmt.Errorf("resolve App bot identity: %w", ErrAuthorityUnavailable)}
+
+	if err := reconcileHeld(t, ctx, d); !errors.Is(err, ErrRecoveryRetryable) {
+		t.Fatalf("held error = %v, want retryable", err)
+	}
+	for range 3 {
+		if status, err := inspectChecked(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
+			t.Fatalf("Inspect while the authority is unreachable = %+v, %v; want running", status, err)
+		}
+	}
+	if got := launched.Load(); got != 0 {
+		t.Fatalf("recoveries launched while the authority is unreachable = %d, want none", got)
+	}
+
+	// inspectChecked waited for the last check, so no check reads the
+	// authority while it is replaced.
+	d.authority = stubAuthority{}
+	if status, err := inspectRecovered(t, ctx, d, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect once the authority answers = %+v, %v; want running", status, err)
+	}
+	if got := launched.Load(); got != 1 {
+		t.Fatalf("recoveries launched once the authority answers = %d, want 1", got)
+	}
+}
+
+// TestReconcileCurrentCheckHoldsNoDriverLock: while startup Reconcile's
+// current-policy check of one intent hangs, an Inspect of another
+// invocation still answers, because the check runs off the driver's lock
+// (#3381).
+func TestReconcileCurrentCheckHoldsNoDriverLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	launched := countRecoveryLaunches(d)
+	orphan(t, d, phaseRunning, nil)
+	authority := &stallingStartAuthority{id: testInvoke, reached: make(chan struct{}), release: make(chan struct{})}
+	d.authority = authority
+	release := sync.OnceFunc(func() { close(authority.release) })
+	t.Cleanup(release)
+
+	type outcome struct {
+		report RecoveryReport
+		err    error
+	}
+	reconciled := make(chan outcome, 1)
+	go func() {
+		report, err := d.Reconcile(ctx, nil)
+		reconciled <- outcome{report, err}
+	}()
+	<-authority.reached
+	returnsWithin(t, "another invocation's Inspect", func() {
+		if _, err := d.Inspect(ctx, quarantineSecond); !errors.Is(err, exec.ErrUnknownInvocation) {
+			t.Errorf("Inspect of another invocation = %v, want unknown", err)
+		}
+	})
+
+	release()
+	got := <-reconciled
+	if got.err != nil || len(got.report.Held) != 0 || len(got.report.Quarantined) != 0 {
+		t.Fatalf("Reconcile = %+v, %v; want a clean pass", got.report, got.err)
+	}
+	if n := launched.Load(); n != 1 {
+		t.Fatalf("recoveries launched after the check = %d, want 1", n)
 	}
 }

@@ -430,16 +430,26 @@ type OutcomeRecorder interface {
 	) (domain.ExportRejection, bool, error)
 }
 
+// ErrAuthorityUnavailable marks an AdmissionAuthority failure to reach the
+// current authority it checks (GitHub, today): the verdict is unknown, not a
+// refusal. The driver's restart re-check retries such a failure as
+// ErrRecoveryRetryable and never treats it as a pass.
+var ErrAuthorityUnavailable = errors.New("stage admission authority is unavailable")
+
 // AdmissionAuthority authenticates a reconstructed record against its durable
 // admission, requires current conformance before work can start or resume,
 // and derives the exact import policy bound to that admission's trust profile.
 // A private driver-state file is not an authority for any of those decisions.
 type AdmissionAuthority interface {
 	AuthenticateAdmission(context.Context, domain.InvocationID, exec.StartSpec) error
+	// AuthenticateStart requires current conformance and policy before work
+	// starts or resumes. A failure to reach the authority it checks wraps
+	// ErrAuthorityUnavailable.
 	AuthenticateStart(context.Context, domain.InvocationID, exec.StartSpec) error
 	// AuthenticateImport requires current admission and import policy for a
 	// handoff already authenticated as released by Gate. It grants no authority
 	// to start or resume a provider and does not require its old launch proof.
+	// A failure to reach the authority it checks wraps ErrAuthorityUnavailable.
 	AuthenticateImport(context.Context, domain.InvocationID, exec.StartSpec) error
 	// ImportOptions applies current import policy only after Gate authenticates
 	// the released handoff. It does not authorize provider execution.

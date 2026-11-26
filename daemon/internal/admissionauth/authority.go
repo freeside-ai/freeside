@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"reflect"
 	"slices"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -902,6 +905,12 @@ func (a Authority) authenticateProductionCommitAuthorClaim(
 		resolved, err = a.CommitAuthors.Resolve(ctx, repo)
 	}
 	if err != nil {
+		if commitAuthorUnavailable(err) {
+			return fmt.Errorf(
+				"authenticate production commit author: %w: %w",
+				stage.ErrAuthorityUnavailable, err,
+			)
+		}
 		return fmt.Errorf(
 			"authenticate production commit author: %w", err,
 		)
@@ -913,6 +922,28 @@ func (a Authority) authenticateProductionCommitAuthorClaim(
 		)
 	}
 	return nil
+}
+
+// commitAuthorUnavailable reports whether a resolver failure means GitHub
+// couldn't be reached, so the commit author's verdict is unknown rather than
+// refused: a transport failure, a timeout, or a 408, 429, or 5xx answer. An
+// identity mismatch is always a refusal, whatever else it wraps. A 403,
+// secondary rate limits included, stays a refusal too: a permanent one (a
+// suspended App, say) would otherwise retry without a bound and never raise
+// the quarantine's health item. Any other failure is a refusal, so this
+// classifies only what it names.
+func commitAuthorUnavailable(err error) bool {
+	if errors.Is(err, publish.ErrAppBotIdentityMismatch) {
+		return false
+	}
+	var apiErr *publish.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == http.StatusRequestTimeout ||
+			apiErr.Status == http.StatusTooManyRequests ||
+			apiErr.Status >= http.StatusInternalServerError
+	}
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr)
 }
 
 func (a Authority) importTrustProfile(
