@@ -90,6 +90,23 @@ func Name(prefix, id, role string) string { return prefix + id + "-" + role }
 // one container (the preflight credential observer and the lineup probe).
 func BareName(prefix, id string) string { return prefix + id }
 
+// LineupProbeNetworkSlice is the inverse of the lineup probe's network name,
+// Name(LineupProbePrefix, slice, Egress): it returns the owner slice when name
+// is exactly that shape. Rig recovery uses it to pick the probe networks out
+// of a manifest; the slice binds the network to its labels, it proves nothing
+// on its own.
+func LineupProbeNetworkSlice(name string) (slice string, ok bool) {
+	rest, ok := strings.CutPrefix(name, LineupProbePrefix)
+	if !ok {
+		return "", false
+	}
+	slice, ok = strings.CutSuffix(rest, "-"+Egress)
+	if !ok || !ownerSliceFormat.MatchString(slice) {
+		return "", false
+	}
+	return slice, true
+}
+
 // IDShape is a run-ID or owner-slice shape: a literal lead followed by
 // exactly HexDigits lowercase hex digits.
 type IDShape struct {
@@ -114,6 +131,8 @@ var (
 	preJobRunID = IDShape{HexDigits: 16}
 	// ownerSlice is the first 12 hex digits of a fresh ownership label.
 	ownerSlice = IDShape{HexDigits: 12}
+
+	ownerSliceFormat = regexp.MustCompile("^" + ownerSlice.pattern() + "$")
 )
 
 // Shape is one prefix and run-ID shape with the roles each resource class

@@ -627,3 +627,87 @@ func TestReviewSnapshotProbeCredential(t *testing.T) {
 		t.Fatal("a Claude reviewer accepted a Codex auth mode")
 	}
 }
+
+// TestRecoverLineupProbeNetworks pins the rig-recovery reap of a killed
+// probe's network: it deletes a recorded probe network only when the
+// network's labels bind it to the slice its name carries, refuses otherwise
+// without deleting anything, and leaves every other recorded name alone.
+func TestRecoverLineupProbeNetworks(t *testing.T) {
+	t.Parallel()
+	const slice = "0123456789ab"
+	probe := lineupProbeNetworkName(slice)
+	other := lineupProbeNetworkName("ba9876543210")
+	review := "freeside-review-review-" + strings.Repeat("a", 24) + "-egress"
+	owner := Label{Key: ownershipLabelKey, Value: slice + strings.Repeat("c", 20)}
+	probeLabels := append(runLabels("lineup-probe-"+slice), owner)
+	for name, tc := range map[string]struct {
+		labels       []Label
+		hideLabels   bool
+		wantRefusal  bool
+		wantDeletion bool
+	}{
+		"labeled probe network": {labels: probeLabels, wantDeletion: true},
+		"labels unobserved":     {labels: probeLabels, hideLabels: true, wantRefusal: true},
+		"run label missing":     {labels: []Label{owner}, wantRefusal: true},
+		"run label for another slice": {
+			labels: append(runLabels("lineup-probe-ba9876543210"), owner), wantRefusal: true,
+		},
+		"ownership label missing": {labels: runLabels("lineup-probe-" + slice), wantRefusal: true},
+		"ownership label for another slice": {
+			labels:      append(runLabels("lineup-probe-"+slice), Label{Key: ownershipLabelKey, Value: strings.Repeat("d", 32)}),
+			wantRefusal: true,
+		},
+		"two ownership labels": {
+			labels:      append(slices.Clone(probeLabels), Label{Key: ownershipLabelKey, Value: slice + strings.Repeat("e", 20)}),
+			wantRefusal: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rt := newFakeRuntime(t)
+			rt.nets[probe] = &fakeNetwork{labels: tc.labels, created: "2026-11-25T00:00:00Z"}
+			rt.nets[review] = &fakeNetwork{labels: runLabels("review"), created: "2026-11-25T00:00:00Z"}
+			if tc.hideLabels {
+				rt.onListNetworks = func(out []NetworkSummary) ([]NetworkSummary, error) {
+					for i := range out {
+						out[i].Labels, out[i].LabelsObserved = nil, false
+					}
+					return out, nil
+				}
+			}
+			// other is recorded but absent: nothing to do for it.
+			err := RecoverLineupProbeNetworks(t.Context(), rt, []string{review, probe, other})
+			if tc.wantRefusal {
+				if err == nil || !strings.Contains(err.Error(), probe) {
+					t.Fatalf("recover error = %v, want a refusal naming %q", err, probe)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			_, present := rt.nets[probe]
+			if present == tc.wantDeletion {
+				t.Fatalf("probe network present after recovery = %v, want %v", present, !tc.wantDeletion)
+			}
+			if _, ok := rt.nets[review]; !ok {
+				t.Fatal("recovery deleted a recorded network outside the lineup probe shape")
+			}
+			for _, call := range rt.calls {
+				if strings.HasPrefix(call, "delete-network ") && call != "delete-network "+probe {
+					t.Fatalf("recovery ran %q", call)
+				}
+			}
+		})
+	}
+}
+
+func TestRecoverLineupProbeNetworksIgnoresOtherNames(t *testing.T) {
+	t.Parallel()
+	rt := newFakeRuntime(t)
+	review := "freeside-review-review-" + strings.Repeat("a", 24) + "-egress"
+	if err := RecoverLineupProbeNetworks(t.Context(), rt, []string{review}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.calls) != 0 {
+		t.Fatalf("recovery with no probe network touched the runtime: %v", rt.calls)
+	}
+}

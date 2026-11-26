@@ -100,3 +100,24 @@ func TestRigPatternsQuoteLiterals(t *testing.T) {
 		t.Errorf("pattern %q refuses the literal role", got)
 	}
 }
+
+func TestLineupProbeNetworkSliceInvertsTheProbeName(t *testing.T) {
+	t.Parallel()
+	slice := "0123456789ab"
+	if got, ok := LineupProbeNetworkSlice(Name(LineupProbePrefix, slice, Egress)); !ok || got != slice {
+		t.Fatalf("LineupProbeNetworkSlice(probe network) = %q, %v; want %q, true", got, ok, slice)
+	}
+	for _, name := range []string{
+		BareName(LineupProbePrefix, slice),               // the probe's container
+		Name(LineupProbePrefix, "0123456789a", Egress),   // short slice
+		Name(LineupProbePrefix, "0123456789abc", Egress), // long slice
+		Name(LineupProbePrefix, "0123456789AB", Egress),  // uppercase hex
+		Name(LineupProbePrefix, slice, Workspace),        // another role
+		Name(ReviewPrefix, "review-"+strings.Repeat("a", 24), Egress),
+		Name(PreflightCredentialPrefix, slice, Egress),
+	} {
+		if got, ok := LineupProbeNetworkSlice(name); ok {
+			t.Errorf("LineupProbeNetworkSlice(%q) = %q, true; want false", name, got)
+		}
+	}
+}
