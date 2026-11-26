@@ -1273,22 +1273,35 @@ import Testing
     }
 
     /// #3376: a task with an open decision leads with the washed waiting
-    /// chip and its stage, aged from the oldest decision. The count goes:
-    /// the cards are on the page.
+    /// chip and its stage, aged from the oldest decision. #3670 reverses
+    /// #3376's removal of the count: two or more open decisions are
+    /// counted in the chip, and one is not, since it is the card itself.
     @Test func aWaitingStatusLineLeadsWithTheWaitingAndStageChips() {
         // The page builds its position at the task's current stage, as
         // `TaskPageView.position(_:)` does.
         let page = TaskStageFixtures.page(.review)
         let review = TaskDisplay.CurrentStage(stage: .review, round: "Round 1")
-        let open = [question("newest", hoursOld: 1), question("oldest", hoursOld: 6)]
-        let line = TaskTimelinePresentation.statusLine(
-            page.task,
-            position: TaskDisplay.position(page.task, runs: page.runs, history: page.history, stage: review),
-            stage: review, openItems: open.map(\.item), completion: nil, now: now, locale: locale,
-            timeZone: timeZone)
+        let line = { (open: [Components.Schemas.AttentionItemSnapshot]) in
+            TaskTimelinePresentation.statusLine(
+                page.task,
+                position: TaskDisplay.position(page.task, runs: page.runs, history: page.history, stage: review),
+                stage: review, openItems: open.map(\.item), completion: nil, now: now, locale: locale,
+                timeZone: timeZone)
+        }
+
+        let several = line([question("newest", hoursOld: 1), question("oldest", hoursOld: 6)])
         #expect(
-            line == .init(state: "Waiting on You", cut: .attention, stage: "Review · Round 1", remaining: "for 6h"))
-        #expect(line.spoken == "Waiting on You, Review · Round 1, for 6h")
+            several
+                == .init(
+                    state: "Waiting on You", cut: .attention, stage: "Review · Round 1", remaining: "for 6h",
+                    decisions: "2 decisions"))
+        #expect(several.chipLabel == "Waiting on You · 2 decisions")
+        #expect(several.spoken == "Waiting on You, 2 decisions, Review · Round 1, for 6h")
+
+        let one = line([question("only", hoursOld: 6)])
+        #expect(one.decisions == nil)
+        #expect(one.chipLabel == "Waiting on You")
+        #expect(one.spoken == "Waiting on You, Review · Round 1, for 6h")
     }
 
     /// #3376: a working task reads its row's keyword and stage, and names

@@ -26,7 +26,7 @@ struct PageHeader<Detail: View>: View {
     private var statusLine: some View {
         WrappingHStack(horizontalSpacing: 7, verticalSpacing: 6) {
             StateChip(
-                label: status.state, cut: status.cut, fill: status.cut == .attention ? .accentWash : nil)
+                label: status.chipLabel, cut: status.cut, fill: status.cut == .attention ? .accentWash : nil)
             if let stage = status.stage {
                 StateChip(label: stage, color: .waterText, fill: .waterWash)
             }
@@ -101,8 +101,8 @@ struct PinnedRowButtonFrame: ViewModifier {
     }
 }
 
-/// An open item that doesn't lead the page: its ask on one line and its type
-/// chip. Choosing it swaps which card leads.
+/// An open item that doesn't lead the page: its ask on one line, its type
+/// chip, and a chevron. Choosing it swaps which card leads.
 struct OneLineItemRow: View {
     let ask: String
     let type: String
@@ -119,6 +119,12 @@ struct OneLineItemRow: View {
                 Spacer(minLength: 0)
                 StateChip(label: type, cut: .attention)
                     .fixedSize()
+                // Current Run's lead-line chevron (#3670): the row opens a
+                // card, so it reads as the link it is.
+                Text("\u{203A}")
+                    .font(FreesideFont.noticeAction)
+                    .foregroundStyle(Color.accentText)
+                    .accessibilityHidden(true)
             }
             .padding(.vertical, 9)
             .padding(.horizontal, 14)

@@ -411,6 +411,11 @@ struct TaskPageView: View {
             let others = openItems.filter { $0.item.id != leadingItemID }
             if !others.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
+                    // Only under a seated card (#3670): a page that seats
+                    // none has nothing these rows are "also" beside.
+                    if leadingCard != nil {
+                        ListSectionHead(title: "Also waiting", count: others.count)
+                    }
                     ForEach(others, id: \.item.id) { other in
                         OneLineItemRow(
                             ask: AttentionDisplay.ask(other.item),
@@ -2808,15 +2813,25 @@ enum TaskTimelinePresentation {
         /// once finished, or when the position names none.
         let stage: String?
         let remaining: String?
+        /// How many decisions the task owes, such as `3 decisions` (#3670);
+        /// nil unless two or more are open, since one is the card itself.
+        var decisions: String? = nil
+
+        /// The state chip's text: the state, then the count when there is
+        /// one, so the head says how many decisions wait before a scroll.
+        var chipLabel: String {
+            decisions.map { "\(state) · \($0)" } ?? state
+        }
 
         /// The one sentence VoiceOver reads for the line.
         var spoken: String {
-            [state, stage, remaining].compactMap { $0 }.joined(separator: ", ")
+            [state, decisions, stage, remaining].compactMap { $0 }.joined(separator: ", ")
         }
     }
 
-    /// The header's status line. The open decisions are cards on the page
-    /// and the run's agent and pool are Current Run's, so neither repeats
+    /// The header's status line. A task waiting on two or more decisions
+    /// counts them in its state chip (#3670, reversing #3376's removal);
+    /// the run's agent and pool are Current Run's, so they don't repeat
     /// here. No resume time reaches the client, so a parked task says what
     /// parked it and not until when.
     static func statusLine(
@@ -2828,7 +2843,9 @@ enum TaskTimelinePresentation {
         let phase = TaskDisplay.isActive(task) ? TaskDisplay.currentPhaseAndRound(position) : nil
         if let oldest = openItems.compactMap(\.created_at).min() {
             let age = AttentionDisplay.relativeRowTime(oldest, now: now)
-            return StatusLine(state: "Waiting on You", cut: .attention, stage: phase, remaining: "for \(age)")
+            return StatusLine(
+                state: "Waiting on You", cut: .attention, stage: phase, remaining: "for \(age)",
+                decisions: openItems.count >= 2 ? "\(openItems.count) decisions" : nil)
         }
         if TaskDisplay.isActive(task) {
             let row = TaskDisplay.workingRow(task, position: position, stage: stage)
