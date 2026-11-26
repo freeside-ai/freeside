@@ -347,8 +347,9 @@ import Testing
 
     /// Acceptance (#3456): each ended lifecycle has its outcome and a live
     /// task none; attempts submitted for one issue share a context line and
-    /// read as look-alikes by that issue even when their names differ, and
-    /// a task with no issue draws no context line.
+    /// read as look-alikes by that issue even when their names differ; a
+    /// look-alike's context line ends with its short id (#3671), and a task
+    /// with neither an issue nor a look-alike draws no context line.
     @Test func issueRetriesShowTheirOutcomeAndShareTheirIssue() {
         #expect(
             [.finished, .stopped, .abandoned, .active].map { TaskDisplay.outcome(task("t", lifecycle: $0).task) }
@@ -356,11 +357,21 @@ import Testing
 
         var retries = TaskFixtures.issueRetries()
         retries[0].task.display_names.task = .init(text: "An earlier agent name", source: .agent)
-        #expect(retries.map { TaskDisplay.finishedContext($0.task) } == Array(repeating: "freeside · #80", count: 3))
+        #expect(
+            retries.map { TaskDisplay.finishedContext($0.task, showsIdentifier: false) }
+                == Array(repeating: "freeside · #80", count: 3))
+        #expect(
+            retries.map { TaskDisplay.finishedContext($0.task, showsIdentifier: true) }
+                == retries.map { "freeside · #80 · \(ShortIdentifier.short($0.task.id))" })
         var other = task("task-other", lifecycle: .finished)
         other.task.source = nil
         other.task.issue = nil
-        #expect(TaskDisplay.finishedContext(other.task) == nil)
+        #expect(TaskDisplay.finishedContext(other.task, showsIdentifier: false) == nil)
+        other.task.id = "task-01JC4XQ2ZB8M5N7P9R3T6V8W0Y"
+        #expect(
+            TaskDisplay.finishedContext(other.task, showsIdentifier: true)
+                == "\(TaskDisplay.projectName(other.task)) · task-01JC4XQ2…")
+        other.task.id = "task-other"
         #expect(TaskDisplay.ambiguousTaskIDs(retries + [other]) == Set(retries.map(\.task.id)))
 
         let list = UnifiedList(open: [], closed: [], tasks: retries, projectFilter: nil)

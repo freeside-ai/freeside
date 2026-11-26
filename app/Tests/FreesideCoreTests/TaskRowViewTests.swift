@@ -183,7 +183,8 @@ import Testing
     /// Acceptance (#3456, #3671): a Finished task row draws its outcome's
     /// lifecycle glyph and speaks the outcome word, adding the recorded
     /// status only when it says more; an issue-backed row names its issue,
-    /// and an item row does neither.
+    /// a look-alike's context line ends with its short id, which the row
+    /// speaks once, and an item row does none of these.
     @Test @MainActor func finishedRowsDrawAndSpeakTheirOutcome() throws {
         let retries = TaskFixtures.issueRetries().map(\.task)
         let rows = retries.map {
@@ -191,10 +192,17 @@ import Testing
         }
         #expect(rows.map(\.glyph) == ["minus.circle", "stop.circle", "checkmark.circle"])
         #expect(rows.map(\.spokenStatus) == [["Abandoned"], ["Stopped"], ["Finished"]])
-        #expect(rows.map(\.context) == Array(repeating: "freeside · #80", count: 3))
+        #expect(rows.map(\.context) == retries.map { "freeside · #80 · \(ShortIdentifier.short($0.id))" })
+        let now = try #require(retries.map(\.last_activity_at).max()).addingTimeInterval(60)
+        for (row, task) in zip(rows, retries) {
+            let label = row.spokenLabel(at: now)
+            #expect(label.components(separatedBy: ShortIdentifier.short(task.id)).count == 2, "\(label)")
+            #expect(label.contains("created "), "\(label)")
+        }
 
         let failed = FinishedRowView(subject: .task(retries[1], status: "Execution Failed", showsIdentifier: false))
         #expect(failed.spokenStatus == ["Stopped", "Execution Failed"])
+        #expect(failed.context == "freeside · #80")
         let legacy = try #require(TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.legacyTaskID }).task
         #expect(FinishedRowView(subject: .task(legacy, status: "Finished", showsIdentifier: false)).context == nil)
         let item = FinishedRowView(subject: .item(AttentionFixtures.fixture(type: .agent_question).item))
