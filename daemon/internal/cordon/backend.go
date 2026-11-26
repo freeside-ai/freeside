@@ -33,6 +33,10 @@ type Backend struct {
 	newHost         func() (hostProcesses, error)
 	start           func(processSpec) (process, error)
 	startSupervisor func(supervisorSpec) (supervisorProcess, error)
+	// facts reads the approvals the program that starts runs holds
+	// (hostfacts.go). New sets the real reader, and only this package's
+	// tests replace it.
+	facts func() (HostFacts, error)
 
 	// detached closes once Detach runs.
 	detached   chan struct{}
@@ -77,7 +81,7 @@ func New(cfg Config, seeder Seeder) (*Backend, error) {
 		cfg: cfg, rules: RenderRules(cfg), seeder: seeder,
 		daemonPath: daemonPath, daemonDigest: daemonDigest,
 		newHost: newHostProcesses, start: startExec, startSupervisor: startSupervisorExec,
-		detached: make(chan struct{}),
+		facts: hostFactsReader, detached: make(chan struct{}),
 	}, nil
 }
 

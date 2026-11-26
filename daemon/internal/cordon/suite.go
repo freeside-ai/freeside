@@ -273,10 +273,14 @@ func (s *Suite) ProbeBeforeJob(ctx context.Context) error {
 	return err
 }
 
-// preconditions are the checks outside any launch: nothing secret in what
-// a launch can read of the daemon, the CLI's own sandbox off, the rule file
+// preconditions are the checks outside any launch: the launching program
+// holds no approval that would reach the run, nothing secret in what a
+// launch can read of the daemon, the CLI's own sandbox off, the rule file
 // its digest, and the CLI its pin.
 func (s *Suite) preconditions() error {
+	if err := s.b.approvalRefusal(); err != nil {
+		return err
+	}
 	var names []string
 	for _, kv := range s.environ() {
 		name, value, _ := strings.Cut(kv, "=")

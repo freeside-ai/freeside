@@ -256,6 +256,7 @@ func (s fakeSupervisor) wait() int { return <-s }
 // useFakes makes b run on l: its host, its process starter, and an
 // in-process supervisor.
 func useFakes(b *Backend, l *fakeLauncher) {
+	b.facts = func() (HostFacts, error) { return HostFacts{}, nil }
 	b.newHost = func() (hostProcesses, error) { return l.host, nil }
 	b.start = l.start
 	b.startSupervisor = l.startSupervisor(b)

@@ -251,6 +251,11 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	if err := req.validate(); err != nil {
 		return LaunchResult{}, err
 	}
+	// Whatever RequireProof says: an approval the launching program holds
+	// reaches the run whether or not a pass declared the class.
+	if err := b.approvalRefusal(); err != nil {
+		return LaunchResult{}, err
+	}
 	if req.RequireProof {
 		suite := b.suite.Load()
 		if suite == nil {
