@@ -194,6 +194,11 @@
 #                          concurrent slices the screenshot regression
 #                          matrix renders as; default the smaller of the
 #                          core count and 2, and 1 runs it whole
+#   CONVERGENCE_TEST_TIMEOUT
+#                          with CONVERGENCE_ALL_TESTS, seconds before
+#                          run-convergence.sh stops stalled swift test runs,
+#                          prints their process tree and logs, and exits 1
+#                          (default 1200)
 #
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
