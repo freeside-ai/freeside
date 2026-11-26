@@ -554,13 +554,15 @@ import Testing
         let task = TaskHistoryFixtures.snapshot(history).task
         let entries = TaskTimelinePresentation.entries(history, task: task)
         #expect(history.events.last?.kind == .task_created)
-        // An active task's Current Run leads; the Runs section's rows
-        // follow, one per run; the event rail follows them and ends at the
-        // task's creation; every earlier campaign follows it.
+        // An active task's Current Run leads; the runs section's rows
+        // follow, one per run but Current Run's (#3681); the event rail
+        // follows them and ends at the task's creation; every earlier
+        // campaign follows it.
         let current = TaskTimelinePresentation.currentRunSection(task, timeline: history, runTimelines: [:])
         let runs = history.sections.flatMap(\.runs)
         let leading: [TaskTimelinePresentation.Entry] =
-            (current.map { [.run($0.run.run_id)] } ?? []) + runs.map { .runsRow($0.run_id) }
+            (current.map { [.run($0.run.run_id)] } ?? [])
+            + runs.filter { $0.run_id != current?.run.run_id }.map { .runsRow($0.run_id) }
         #expect(Array(entries.prefix(leading.count)) == leading)
         let rows = TaskTimelinePresentation.rows(history)
         #expect(Array(entries.dropFirst(leading.count).prefix(rows.count)) == rows.map { .row($0.label) })
@@ -568,9 +570,11 @@ import Testing
         #expect(
             entries.dropFirst(leading.count + rows.count).allSatisfy { if case .row = $0 { false } else { true } })
         // Every run is drawn as a card at most once, in Current Run or in
-        // its campaign's fold, and every run has a Runs row (#3455), so
-        // every run stays reachable.
+        // its campaign's fold, and every run but Current Run's has a runs
+        // section row (#3455, #3681), so every run stays reachable.
         let drawn = entries.compactMap { if case .run(let id) = $0 { id } else { nil } }
+        let listed = entries.compactMap { if case .runsRow(let id) = $0 { id } else { nil } }
+        #expect(Set(listed + (current.map { [$0.run.run_id] } ?? [])) == Set(runs.map(\.run_id)))
         #expect(Set(drawn).count == drawn.count)
         #expect(Set(drawn).isSubset(of: runs.map(\.run_id)))
         #expect(TaskHistoryFixtures.snapshot(history).task.run_ids.count == runs.count)
@@ -754,12 +758,12 @@ import Testing
         let task = TaskHistoryFixtures.snapshot(timeline).task
 
         // Current Run leads with the current campaign's current run; the
-        // Runs section lists every run; the rail follows; the earlier
-        // campaign folds below it.
+        // runs section lists every other run (#3681); the rail follows;
+        // the earlier campaign folds below it.
         #expect(
             TaskTimelinePresentation.entries(timeline, task: task) == [
                 .run("run-1"),
-                .runsRow("run-1"), .runsRow("run-2"), .runsRow("run-0"),
+                .runsRow("run-2"), .runsRow("run-0"),
                 .row("Task created"),
                 .row("Specification approved"),
                 .section(campaignID: nil),
@@ -775,7 +779,7 @@ import Testing
         #expect(
             TaskTimelinePresentation.entries(reversed, task: task) == [
                 .run("run-0"),
-                .runsRow("run-0"), .runsRow("run-2"), .runsRow("run-1"),
+                .runsRow("run-2"), .runsRow("run-1"),
                 .row("Specification approved"),
                 .row("Task created"),
                 .section(campaignID: "campaign-a"),
