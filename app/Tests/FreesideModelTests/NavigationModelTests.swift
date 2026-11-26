@@ -194,6 +194,24 @@ import Testing
         #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
     }
 
+    /// The Usage pane's slot row leaves Settings and asks the root once
+    /// for the list narrowed to the pool's slot waiters; the task route
+    /// stays for the root to settle.
+    @Test func theSlotRowLeavesSettingsAndAsksForItsWaitersOnce() {
+        let navigation = launch(selection: TaskFixtures.retryTaskID)
+        navigation.pushSettingsPane(.usage)
+        #expect(navigation.slotWaitersRequest == nil)
+
+        navigation.showSlotWaiters(pool: "pool-a")
+        #expect(navigation.slotWaitersRequest == "pool-a")
+        #expect(navigation.settingsRoute.isEmpty)
+        #expect(navigation.settingsPane == .usage)
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+
+        navigation.consumeSlotWaitersRequest()
+        #expect(navigation.slotWaitersRequest == nil)
+    }
+
     @Test func aRouteLeavesTheSettingsPath() {
         let navigation = launch()
         navigation.pushSettingsPane(.devices)
@@ -1024,10 +1042,10 @@ import Testing
     @Test func workStatusSurvivesRepairAndSelectsNoRow() {
         let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
         store.selectProjectFilter(WorkStatusFixtures.otherProject)
-        store.selectPositionFilter(.notStarted)
+        store.selectNarrowing(.position(.notStarted))
         let list = UnifiedList(
             open: WorkStatusFixtures.openItems(), closed: [], tasks: WorkStatusFixtures.tasks(),
-            projectFilter: store.projectID, positionFilter: store.positionFilter)
+            projectFilter: store.projectID, narrowing: store.narrowing)
         let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
         navigation.route(to: .workStatus)
         navigation.repairSelection(in: list)

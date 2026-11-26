@@ -126,21 +126,49 @@ package struct UnifiedList {
     private let taskIDsByItemID: [String: String]
     private let rowIDs: Set<UnifiedSelection>
 
+    /// What the list's one narrowing slot holds: a work status count
+    /// (`WorkStatus`), or the tasks waiting for a slot on a usage pool, which
+    /// the Usage pane's row opens. One slot holds either, so choosing one
+    /// replaces the other.
+    package enum Narrowing: Hashable, Sendable {
+        case position(WorkStatus.Position)
+        /// The tasks with a run whose `hold_usage_pool` names `pool`: the
+        /// pool is at its limit of parallel runs. It names the pool, not a
+        /// task set, so each build reads the synced runs again and a task
+        /// leaves once its last such hold clears.
+        case waitingForSlot(pool: String)
+
+        /// The filter line's words.
+        package var label: String {
+            switch self {
+            case .position(let position): position.label
+            case .waitingForSlot(let pool): "Waiting for a slot on \(pool)"
+            }
+        }
+
+        /// The count Work Status draws as selected, if the slot holds one.
+        package var position: WorkStatus.Position? {
+            if case .position(let position) = self { position } else { nil }
+        }
+    }
+
     /// `open` is newest first (`InboxStore.openSnapshots`), which orders Needs
     /// you; `open` and `closed` are unfiltered, so a filtered-out task keeps
     /// its items from reading as scoped rows. System health findings never
     /// reach the list, open or closed: the inbox holds decisions about work,
     /// and findings about the daemon have Settings' System Health pane
-    /// (`SystemHealthFindings`). A `positionFilter` keeps only the task rows
-    /// a work status count holds (`WorkStatus`): no scoped item and no
-    /// Finished row, except `keptTaskID`'s row, which it keeps wherever the
-    /// task now sits (`Filters`).
+    /// (`SystemHealthFindings`). A `narrowing` keeps only the task rows a
+    /// work status count holds (`WorkStatus`), or those with a run in `runs`
+    /// waiting for a slot on its pool, one row per task: no scoped item and
+    /// no Finished row, except `keptTaskID`'s row, which it keeps wherever
+    /// the task now sits (`Filters`). Only a slot narrowing reads `runs`.
     package init(
         open allOpen: [Components.Schemas.AttentionItemSnapshot],
         closed allClosed: [Components.Schemas.AttentionItemSnapshot],
         tasks: [Components.Schemas.TaskSnapshot],
+        runs: [Components.Schemas.RunSnapshot] = [],
         projectFilter: String?,
-        positionFilter: WorkStatus.Position? = nil,
+        narrowing: Narrowing? = nil,
         keeping keptTaskID: String? = nil
     ) {
         // Before the project filter's options are read, so a project whose
@@ -154,8 +182,20 @@ package struct UnifiedList {
         let keepsTask = { (task: Components.Schemas.Task) in
             projectFilter == nil || task.project_id == projectFilter
         }
-        let passesPosition = { (task: Components.Schemas.Task, position: WorkStatus.Position?) in
-            positionFilter == nil || task.id == keptTaskID || (position != nil && position == positionFilter)
+        let slotWaiterTaskIDs: Set<String> =
+            if case .waitingForSlot(let pool) = narrowing {
+                Set(runs.filter { $0.run.hold_usage_pool == pool }.map(\.run.task_id))
+            } else {
+                []
+            }
+        // `position` is nil for a Finished row.
+        let passesNarrowing = { (task: Components.Schemas.Task, position: WorkStatus.Position?) in
+            guard let narrowing, task.id != keptTaskID else { return true }
+            guard let position else { return false }
+            return switch narrowing {
+            case .position(let filter): position == filter
+            case .waitingForSlot: slotWaiterTaskIDs.contains(task.id)
+            }
         }
 
         var itemsByTaskID: [String: [Components.Schemas.AttentionItemSnapshot]] = [:]
@@ -173,10 +213,10 @@ package struct UnifiedList {
         needsYou = needsYouOrder.compactMap { content in
             switch content {
             case .task(let task, _):
-                keepsTask(task.task) && passesPosition(task.task, .waitingOnYou)
+                keepsTask(task.task) && passesNarrowing(task.task, .waitingOnYou)
                     ? UnifiedRow(content: .task(task, openItems: itemsByTaskID[task.task.id] ?? [])) : nil
             case .item(let snapshot):
-                positionFilter == nil && Self.keeps(snapshot.item, projectFilter: projectFilter)
+                narrowing == nil && Self.keeps(snapshot.item, projectFilter: projectFilter)
                     ? UnifiedRow(content: content) : nil
             }
         }
@@ -185,14 +225,14 @@ package struct UnifiedList {
             itemsByTaskID[$0.task.id] == nil && keepsTask($0.task)
         }
         working = quietTasks.filter {
-            TaskDisplay.isActive($0.task) && passesPosition($0.task, WorkStatus.position(ofQuiet: $0.task))
+            TaskDisplay.isActive($0.task) && passesNarrowing($0.task, WorkStatus.position(ofQuiet: $0.task))
         }
         .map { UnifiedRow(content: .task($0, openItems: [])) }
 
-        let finishedTasks = quietTasks.filter { !TaskDisplay.isActive($0.task) && passesPosition($0.task, nil) }
+        let finishedTasks = quietTasks.filter { !TaskDisplay.isActive($0.task) && passesNarrowing($0.task, nil) }
             .map { (instant: $0.task.last_activity_at, row: UnifiedRow(content: .task($0, openItems: []))) }
         let closedScoped = closed.filter {
-            positionFilter == nil && heldTaskID($0.item) == nil && Self.keeps($0.item, projectFilter: projectFilter)
+            narrowing == nil && heldTaskID($0.item) == nil && Self.keeps($0.item, projectFilter: projectFilter)
         }.map {
             (
                 instant: $0.item.decided_at ?? $0.item.created_at ?? .distantPast,
@@ -239,51 +279,53 @@ package struct UnifiedList {
         return item.project_id == projectFilter
     }
 
-    /// The list's filters. `keptTaskID` is the selected task the position
-    /// filter showed, whose row stays while it's selected even after the
-    /// task moves to another position, so a stage change or a new card
-    /// never drops the filter or closes the page the operator is reading.
+    /// The list's filters. `keptTaskID` is the selected task the narrowing
+    /// showed, whose row stays while it's selected even after the task
+    /// moves to another position or its hold clears, so a stage change or
+    /// a new card never drops the filter or closes the page the operator is
+    /// reading.
     package struct Filters: Equatable, Sendable {
         package var projectID: String?
-        package var position: WorkStatus.Position?
+        package var narrowing: Narrowing?
         package var keptTaskID: String?
 
-        package init(projectID: String?, position: WorkStatus.Position?, keptTaskID: String? = nil) {
+        package init(projectID: String?, narrowing: Narrowing?, keptTaskID: String? = nil) {
             self.projectID = projectID
-            self.position = position
+            self.narrowing = narrowing
             self.keptTaskID = keptTaskID
         }
     }
 
     /// The filters after the selection moves to `selection`. A row the list
-    /// shows keeps them, and under a position filter becomes the kept task.
-    /// A route to a row they hide drops them so the operator sees what they
-    /// opened: the position filter alone when that shows the row, else both.
-    /// A row no filter shows yet (a link ahead of its row) leaves them be.
+    /// shows keeps them, and under a narrowing becomes the kept task. A
+    /// route to a row they hide drops them so the operator sees what they
+    /// opened: the narrowing alone when that shows the row, else both. A row
+    /// no filter shows yet (a link ahead of its row) leaves them be.
     package static func filters(
         _ current: Filters, showing selection: UnifiedSelection?,
         open: [Components.Schemas.AttentionItemSnapshot],
         closed: [Components.Schemas.AttentionItemSnapshot],
-        tasks: [Components.Schemas.TaskSnapshot]
+        tasks: [Components.Schemas.TaskSnapshot],
+        runs: [Components.Schemas.RunSnapshot] = []
     ) -> Filters {
-        let list = { (projectID: String?, position: WorkStatus.Position?, kept: String?) in
+        let list = { (projectID: String?, narrowing: Narrowing?, kept: String?) in
             UnifiedList(
-                open: open, closed: closed, tasks: tasks, projectFilter: projectID, positionFilter: position,
-                keeping: kept)
+                open: open, closed: closed, tasks: tasks, runs: runs, projectFilter: projectID,
+                narrowing: narrowing, keeping: kept)
         }
         guard let selection else {
-            return Filters(projectID: current.projectID, position: current.position)
+            return Filters(projectID: current.projectID, narrowing: current.narrowing)
         }
-        if list(current.projectID, current.position, current.keptTaskID).holds(selection) {
+        if list(current.projectID, current.narrowing, current.keptTaskID).holds(selection) {
             var kept: String? = nil
-            if current.position != nil, case .task(let taskID) = selection { kept = taskID }
-            return Filters(projectID: current.projectID, position: current.position, keptTaskID: kept)
+            if current.narrowing != nil, case .task(let taskID) = selection { kept = taskID }
+            return Filters(projectID: current.projectID, narrowing: current.narrowing, keptTaskID: kept)
         }
-        if current.position != nil, list(current.projectID, nil, nil).holds(selection) {
-            return Filters(projectID: current.projectID, position: nil)
+        if current.narrowing != nil, list(current.projectID, nil, nil).holds(selection) {
+            return Filters(projectID: current.projectID, narrowing: nil)
         }
         if list(nil, nil, nil).holds(selection) {
-            return Filters(projectID: nil, position: nil)
+            return Filters(projectID: nil, narrowing: nil)
         }
         return current
     }
@@ -342,12 +384,12 @@ package struct UnifiedList {
 extension SyncCoordinator {
     package var unifiedList: UnifiedList {
         UnifiedList(
-            open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks,
-            projectFilter: store.projectID, positionFilter: store.positionFilter, keeping: store.keptTaskID)
+            open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks, runs: runs,
+            projectFilter: store.projectID, narrowing: store.narrowing, keeping: store.keptTaskID)
     }
 
     /// The work status counts under the project filter, whatever the
-    /// position filter.
+    /// narrowing.
     package var workStatus: WorkStatus {
         WorkStatus(open: store.openSnapshots, tasks: tasks, projectFilter: store.projectID)
     }

@@ -16,6 +16,8 @@ struct AccountUsageView: View {
     @Environment(\.pinnedNow) private var pinnedNow
     let model: AccountUsageModel
     let client: SettingsClient
+    /// Shows the list narrowed to the tasks waiting for a slot on a pool.
+    var openSlotWaiters: (String) -> Void = { _ in }
     /// The pools whose Collectors fold is open. Nothing persists it: the
     /// fold opens closed.
     @State private var openCollectors: Set<String> = []
@@ -128,11 +130,12 @@ struct AccountUsageView: View {
     // MARK: Pool
 
     /// One pool: the band, a capacity block (R32) per window the record
-    /// names, and the foot with its collectors and Refresh.
+    /// names, the runs waiting for a slot on it, and the foot with its
+    /// collectors and Refresh.
     private func poolCard(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> some View {
         let windows = UsageDisplay.windows(pool)
         let detail = pool.last_attempt?.value1.detail ?? ""
-        let parkedRuns = model.parkedRuns(on: pool.id)
+        let slotWaiters = UsageDisplay.slotWaitersLine(count: model.slotWaiters(on: pool.id))
         return VStack(alignment: .leading, spacing: 0) {
             band(pool, now: now)
             VStack(alignment: .leading, spacing: 14) {
@@ -148,8 +151,10 @@ struct AccountUsageView: View {
                         capacity: capacity,
                         resetLine: capacity.resetsAt.map {
                             UsageDisplay.resetLine(to: $0, now: now, locale: locale, timeZone: timeZone)
-                        },
-                        parked: UsageDisplay.parkedClause(count: parkedRuns, level: capacity.level))
+                        })
+                }
+                if let slotWaiters {
+                    slotWaitersRow(slotWaiters, pool: pool.id)
                 }
                 foot(pool, now: now)
             }
@@ -210,6 +215,37 @@ struct AccountUsageView: View {
         } else {
             text
         }
+    }
+
+    /// The runs the pool holds back because every slot is in use, set off
+    /// from the windows by a rule: a link to their tasks, and why they
+    /// wait, which drops under the link where the two don't fit one line.
+    private func slotWaitersRow(_ line: String, pool: String) -> some View {
+        let link = Button {
+            openSlotWaiters(pool)
+        } label: {
+            FreesideLink(title: line, face: FreesideFont.noticeAction)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .buttonStyle(.plain)
+        .freesideFocusRing(cornerRadius: 4)
+        // Every card can have one, so the spoken label names the pool.
+        .accessibilityLabel("\(line) on \(pool)")
+        let reason = dimLine("Every slot of this pool is in use.")
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                link
+                reason
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                link
+                reason
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 12)
+        .overlay(alignment: .top) { Color.rule.frame(height: 1) }
     }
 
     // MARK: Collectors

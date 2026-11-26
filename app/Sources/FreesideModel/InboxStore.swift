@@ -122,12 +122,17 @@ public final class InboxStore {
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     public private(set) var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     public var projectID: String?
-    /// The work status count the list is narrowed to, if any. Nothing
-    /// persists it: a relaunch starts with the whole list.
-    package private(set) var positionFilter: WorkStatus.Position?
-    /// The selected task whose row the position filter keeps after it
-    /// moves (`UnifiedList.Filters`).
+    /// What the list is narrowed to, if anything: a work status count or a
+    /// pool's slot waiters, in one slot so either replaces the other.
+    /// Nothing persists it: a relaunch starts with the whole list.
+    package private(set) var narrowing: UnifiedList.Narrowing?
+    /// The selected task whose row the narrowing keeps after it moves
+    /// (`UnifiedList.Filters`).
     package private(set) var keptTaskID: String?
+
+    /// The work status count the list is narrowed to, for Work Status to
+    /// draw as selected; nil under any other narrowing.
+    package var positionFilter: WorkStatus.Position? { narrowing?.position }
     private var pendingLaunchProjectID: String?
 
     /// The project ids the tasks name, so a filter on a project that holds
@@ -456,7 +461,7 @@ public final class InboxStore {
         serverOrder = []
         statusAtOrderRebuild = [:]
         projectID = nil
-        positionFilter = nil
+        narrowing = nil
         keptTaskID = nil
         removalVersionFloors = [:]
         // A local mark clear vouched for an open the previous epoch's daemon
@@ -511,15 +516,19 @@ public final class InboxStore {
         self.projectID = projectID
     }
 
-    /// A new count starts with no kept row.
-    package func selectPositionFilter(_ position: WorkStatus.Position?) {
-        positionFilter = position
+    /// A new narrowing starts with no kept row. A slot narrowing also drops
+    /// the project filter: a pool serves every project and the Usage row
+    /// counts them all, so the list shows every task the count names. A
+    /// work status count is drawn under the project filter and keeps it.
+    package func selectNarrowing(_ narrowing: UnifiedList.Narrowing?) {
+        self.narrowing = narrowing
         keptTaskID = nil
+        if case .waitingForSlot = narrowing, projectID != nil { selectProjectFilter(nil) }
     }
 
     package func applyListFilters(_ filters: UnifiedList.Filters) {
         if filters.projectID != projectID { selectProjectFilter(filters.projectID) }
-        if filters.position != positionFilter { selectPositionFilter(filters.position) }
+        if filters.narrowing != narrowing { selectNarrowing(filters.narrowing) }
         if filters.keptTaskID != keptTaskID { keptTaskID = filters.keptTaskID }
     }
 

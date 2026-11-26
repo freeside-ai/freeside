@@ -230,6 +230,13 @@ public struct FreesideRootView: View {
             technicalDetailsRequest = technicalDetailsRequest?.retained(
                 for: navigation.attentionSelection)
         }
+        // Initial too: on the Mac the request can open a closed main window,
+        // whose root is built with the request already set.
+        .onChange(of: navigation.slotWaitersRequest, initial: true) { _, pool in
+            guard let pool else { return }
+            navigation.consumeSlotWaitersRequest()
+            chooseNarrowing(.waitingForSlot(pool: pool), coordinator: coordinator)
+        }
         .onChange(of: coordinator.store.openSnapshots.map(\.item.id)) {
             // A finding is no row of the list, so it leaves the inbox clear.
             if coordinator.hasNeedsYouRows {
@@ -585,7 +592,8 @@ public struct FreesideRootView: View {
                                     SettingsPaneView(
                                         page: page, sync: sync, flowPreferences: flowPreferences,
                                         host: SettingsHost.line(session.serverURL),
-                                        openFinding: navigation.openFinding)
+                                        openFinding: navigation.openFinding,
+                                        openSlotWaiters: navigation.showSlotWaiters(pool:))
                                 }
                                 .background(Color.ground)
                                 // The list's load ends when a pane covers it, and
@@ -815,17 +823,17 @@ public struct FreesideRootView: View {
         WorkStatusView(
             status: coordinator.workStatus, projectID: coordinator.store.projectID,
             selected: coordinator.store.positionFilter,
-            onSelect: { choosePosition($0, coordinator: coordinator) },
+            onSelect: { chooseNarrowing(.position($0), coordinator: coordinator) },
             hours: workHoursModels.model(for: coordinator),
             onOpenTask: { navigation.route(to: .task($0)) }, topMargin: topMargin)
     }
 
-    /// A count narrows the list to its tasks, with Working open when they
-    /// sit there. The Mac keeps the view beside the filtered sidebar; the
-    /// iPhone pops back to the list.
-    private func choosePosition(_ position: WorkStatus.Position, coordinator: SyncCoordinator) {
-        coordinator.store.selectPositionFilter(position)
-        if position != .waitingOnYou { listPreferences.workingExpanded = true }
+    /// A count, or the Usage pane's slot row, narrows the list to its tasks,
+    /// with Working open when they may sit there. The Mac keeps the view
+    /// beside the filtered sidebar; the iPhone pops back to the list.
+    private func chooseNarrowing(_ narrowing: UnifiedList.Narrowing, coordinator: SyncCoordinator) {
+        coordinator.store.selectNarrowing(narrowing)
+        if narrowing != .position(.waitingOnYou) { listPreferences.workingExpanded = true }
         #if os(iOS)
             navigation.setPath([])
         #else
@@ -890,8 +898,8 @@ public struct FreesideRootView: View {
             listPreferences.workingExpanded = true
             navigation.route(to: .task(taskID))
         } else {
-            // Working shows every active task only without a position filter.
-            coordinator.store.selectPositionFilter(nil)
+            // Working shows every active task only without a narrowing.
+            coordinator.store.selectNarrowing(nil)
             showWorking()
         }
     }

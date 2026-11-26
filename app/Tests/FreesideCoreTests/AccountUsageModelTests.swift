@@ -595,9 +595,9 @@ import Testing
         #expect(line() == .init(text: "stale since Aug 12, 2:40 AM", isWax: true, instant: Self.base))
     }
 
-    // MARK: Parked runs (#2583)
+    // MARK: Slot waiters (#2583, #3677)
 
-    @Test func theParkedCountIsTheSyncedRunsWhoseHoldNamesThePool() {
+    @Test func theSlotWaitersAreTheSyncedRunsWhoseHoldNamesThePool() {
         let defaults = RunFixtures.defaultRuns()
         // The defaults hold one run for another reason and the rest not at
         // all; neither names a pool, so neither counts.
@@ -608,18 +608,15 @@ import Testing
                 ParkedRunFixtures.run("run-parked-1", on: "pool-a"),
                 ParkedRunFixtures.run("run-parked-2", on: "pool-a"),
             ]
-        #expect(UsageDisplay.parkedRuns(on: "pool-a", in: runs) == 2)
-        #expect(UsageDisplay.parkedRuns(on: "pool-b", in: runs) == 0)
-        #expect(UsageDisplay.parkedRuns(on: "pool-a", in: defaults) == 0)
+        #expect(UsageDisplay.slotWaiters(on: "pool-a", in: runs) == 2)
+        #expect(UsageDisplay.slotWaiters(on: "pool-b", in: runs) == 0)
+        #expect(UsageDisplay.slotWaiters(on: "pool-a", in: defaults) == 0)
     }
 
-    @Test func theParkedClauseIsOnlyOnAUsedUpWindowWithARunParked() {
-        #expect(UsageDisplay.parkedClause(count: 2, level: .usedUp) == "2 runs parked")
-        #expect(UsageDisplay.parkedClause(count: 1, level: .usedUp) == "1 run parked")
-        #expect(UsageDisplay.parkedClause(count: 0, level: .usedUp) == nil)
-        for level: UsageDisplay.WindowCapacity.Level in [.fine, .low, .noReading] {
-            #expect(UsageDisplay.parkedClause(count: 2, level: level) == nil)
-        }
+    @Test func theSlotRowShowsWheneverARunWaits() {
+        #expect(UsageDisplay.slotWaitersLine(count: 2) == "2 runs waiting for a slot")
+        #expect(UsageDisplay.slotWaitersLine(count: 1) == "1 run waiting for a slot")
+        #expect(UsageDisplay.slotWaitersLine(count: 0) == nil)
     }
 
     @Test func theModelCountsTheRunsSyncAdopted() async {
@@ -629,8 +626,8 @@ import Testing
         ]
         let model = AccountUsageModel(
             coordinator: await coordinator(MockServer(runs: RunFixtures.defaultRuns() + parked)))
-        #expect(model.parkedRuns(on: UsageFixtures.readingPoolID) == 2)
-        #expect(model.parkedRuns(on: UsageFixtures.unsupportedPoolID) == 0)
+        #expect(model.slotWaiters(on: UsageFixtures.readingPoolID) == 2)
+        #expect(model.slotWaiters(on: UsageFixtures.unsupportedPoolID) == 0)
     }
 
     // MARK: Helpers

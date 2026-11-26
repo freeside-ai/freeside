@@ -246,7 +246,8 @@ private func showMainWindow(_ openWindow: OpenWindowAction) {
 }
 
 /// The Settings window, with a seated finding card's Task link showing the
-/// task page in the main window.
+/// task page in the main window, and the Usage pane's slot row the main
+/// window's list narrowed to a pool's slot waiters.
 private struct FreesideSettings: View {
     let session: AppSession
     let navigation: NavigationModel
@@ -261,6 +262,10 @@ private struct FreesideSettings: View {
             launchInputs: launchInputs,
             openTask: { taskID in
                 navigation.route(to: .task(taskID))
+                showMainWindow(openWindow)
+            },
+            openSlotWaiters: { pool in
+                navigation.showSlotWaiters(pool: pool)
                 showMainWindow(openWindow)
             },
             pairDevice: { openWindow(id: PairDeviceWindow.id) })

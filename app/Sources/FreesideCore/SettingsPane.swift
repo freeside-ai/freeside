@@ -442,6 +442,8 @@ struct SettingsPaneView: View {
     #endif
     /// Opens a System Health finding's card.
     var openFinding: (String) -> Void = { _ in }
+    /// Shows the list narrowed to the tasks waiting for a slot on a pool.
+    var openSlotWaiters: (String) -> Void = { _ in }
     /// Where the System Health pane keeps its History fold's state.
     var listDefaults: UserDefaults = .standard
     var rendersInteractiveControls = true
@@ -484,7 +486,7 @@ struct SettingsPaneView: View {
             }
         case .usage:
             if let sync {
-                AccountUsageView(model: sync.usage, client: client)
+                AccountUsageView(model: sync.usage, client: client, openSlotWaiters: openSlotWaiters)
                     .padding(SettingsPaneInsets.grammar(client))
             } else {
                 unpaired

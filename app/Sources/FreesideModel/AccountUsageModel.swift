@@ -53,9 +53,9 @@ package final class AccountUsageModel {
 
     package var pools: [Components.Schemas.UsagePoolSnapshot] { coordinator.usagePools }
 
-    /// The synced runs parked on `pool` (`UsageDisplay.parkedRuns`).
-    package func parkedRuns(on pool: String) -> Int {
-        UsageDisplay.parkedRuns(on: pool, in: coordinator.runs)
+    /// The synced runs waiting for a slot on `pool` (`UsageDisplay.slotWaiters`).
+    package func slotWaiters(on pool: String) -> Int {
+        UsageDisplay.slotWaiters(on: pool, in: coordinator.runs)
     }
 
     package var pending: PendingUsageCommand? { coordinator.pendingUsageCommand }
@@ -302,20 +302,22 @@ package enum UsageDisplay {
             resetsAt: reading.resets_at)
     }
 
-    /// The runs parked on `pool`: those whose hold names it. The daemon sets
-    /// `hold_usage_pool` only beside `usage_pool_exhausted` and only while
-    /// the hold is live, so the field alone says the run is parked now; no
-    /// reason, lifecycle, or timeline check is added. A hold names a pool,
-    /// not a window, so every used-up window of the pool shares the count.
-    package static func parkedRuns(on pool: String, in runs: [Components.Schemas.RunSnapshot]) -> Int {
+    /// The runs waiting for a slot on `pool`: those whose hold names it.
+    /// The daemon sets `hold_usage_pool` only beside `usage_pool_exhausted`,
+    /// which says the pool is at its limit of parallel runs, and only while
+    /// the hold is live, so the field alone says the run waits now; no
+    /// reason, lifecycle, or timeline check is added. The count says
+    /// nothing about the pool's windows: a run waiting for a window to
+    /// reset holds `quota_window_exhausted`, whose pool sync doesn't carry.
+    package static func slotWaiters(on pool: String, in runs: [Components.Schemas.RunSnapshot]) -> Int {
         runs.count { $0.run.hold_usage_pool == pool }
     }
 
-    /// The parked clause on a window's reset line (`2 runs parked`, `1 run
-    /// parked`), or nil when the window isn't used up or nothing is parked.
-    package static func parkedClause(count: Int, level: WindowCapacity.Level) -> String? {
-        guard level == .usedUp, count > 0 else { return nil }
-        return count == 1 ? "1 run parked" : "\(count) runs parked"
+    /// The pool's slot row (`2 runs waiting for a slot`, `1 run waiting for
+    /// a slot`), or nil when no run waits, whatever the windows read.
+    package static func slotWaitersLine(count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1 ? "1 run waiting for a slot" : "\(count) runs waiting for a slot"
     }
 
     /// The reset in words: a countdown under a day (`Resets in 41m`), the
