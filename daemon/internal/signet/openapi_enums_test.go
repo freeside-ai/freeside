@@ -151,6 +151,7 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"UnattendedAdmission":         enumStrings(domain.AllUnattendedAdmissions),
 		"UnattendedStopKind":          enumStrings(domain.AllUnattendedStopKinds),
 		"RestartBlockerKind":          enumStrings(domain.AllRestartBlockerKinds),
+		"ExecutionHostCondition":      enumStrings(domain.AllExecutionHostConditions),
 		"WorkUnitCompatibility":       enumStrings(domain.AllWorkUnitCompatibilities),
 
 		// Signet-owned wire vocabulary for the transcript read.

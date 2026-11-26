@@ -101,6 +101,8 @@ public actor MockServer {
     /// The days `getWorkHours` serves, by project (MockWorkHours).
     private var workHoursFixtures: [String: [Components.Schemas.WorkHoursDay]] = [:]
     private var workHoursHoldHistorySince = RunFixtures.screenshotInstant.addingTimeInterval(-30 * 86_400)
+    /// The hosts `listExecutionHosts` serves, ordered by id.
+    private var executionHosts: [Components.Schemas.ExecutionHost] = [MockServer.daemonHost]
     private var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
@@ -497,6 +499,24 @@ public actor MockServer {
     ) {
         workHoursFixtures[project] = days
         if let holdHistorySince { workHoursHoldHistorySince = holdHistorySince }
+    }
+
+    /// The daemon's own execution host as its migration seeds it: id and name
+    /// `daemon`, run as the daemon owner, in no condition.
+    public static let daemonHost = Components.Schemas.ExecutionHost(
+        id: "daemon", name: "daemon", run_account: .init(daemon_owner: true), conditions: [])
+
+    /// Replaces the execution hosts under the next revision, as a host write
+    /// moves the daemon's revision. The daemon always lists its own host, so
+    /// a fixture keeps `daemonHost` unless it means to model a daemon that
+    /// lost it.
+    public func setExecutionHosts(_ hosts: [Components.Schemas.ExecutionHost]) {
+        revision += 1
+        executionHosts = hosts.sorted { $0.id < $1.id }
+    }
+
+    func listExecutionHosts() -> [Components.Schemas.ExecutionHost] {
+        executionHosts
     }
 
     /// The work hours for `request` at the fixture clock, or nil for a

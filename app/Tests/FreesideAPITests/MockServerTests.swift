@@ -88,6 +88,22 @@ import Testing
         #expect(try await !client.getRestartReadiness().ok.body.json.ready)
     }
 
+    /// The mock lists the daemon's own host by default, as a fresh daemon
+    /// does, and a host change moves the revision.
+    @Test func executionHostsListTheDaemonHostAndMoveTheRevision() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        #expect(try await client.listExecutionHosts().ok.body.json == [MockServer.daemonHost])
+
+        let before = try await client.getSyncRevision().ok.body.json.revision
+        let studio = Components.Schemas.ExecutionHost(
+            id: "host-1", name: "studio", run_account: .init(name: "runner", daemon_owner: false),
+            conditions: [.init(condition: .unreachable, since: RunFixtures.screenshotInstant)])
+        await server.setExecutionHosts([studio, MockServer.daemonHost])
+        #expect(try await client.listExecutionHosts().ok.body.json == [MockServer.daemonHost, studio])
+        #expect(try await client.getSyncRevision().ok.body.json.revision > before)
+    }
+
     @Test func bootstrapCarriesEveryUsagePoolAndTheRoutingPolicy() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)

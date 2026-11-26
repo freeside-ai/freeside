@@ -55,6 +55,7 @@ extension Components.Schemas.CheckFailureClass: UnknownTolerantEnum {}
 extension Components.Schemas.ScheduleStatus: UnknownTolerantEnum {}
 extension Components.Schemas.ScheduleResolutionReason: UnknownTolerantEnum {}
 extension Components.Schemas.ScheduleSubjectType: UnknownTolerantEnum {}
+extension Components.Schemas.ExecutionHostCondition: UnknownTolerantEnum {}
 extension Components.Schemas.RestartBlockerKind: UnknownTolerantEnum {}
 extension Components.Schemas.AlternateAgentQualification: UnknownTolerantEnum {}
 extension Components.Schemas.TaskSubmissionOrigin: UnknownTolerantEnum {}
@@ -176,6 +177,7 @@ public enum TolerantEnums {
         Components.Schemas.ScheduleStatus.self,
         Components.Schemas.ScheduleResolutionReason.self,
         Components.Schemas.ScheduleSubjectType.self,
+        Components.Schemas.ExecutionHostCondition.self,
         Components.Schemas.RestartBlockerKind.self,
         Components.Schemas.AlternateAgentQualification.self,
         Components.Schemas.TaskSubmissionOrigin.self,

@@ -102,6 +102,11 @@ tags:
     description: >
       Whether the daemon can restart now without cutting short running work,
       so an update can wait for that work instead of canceling it.
+  - name: hosts
+    description: >
+      The execution hosts that run the daemon's cordoned launches (plan §5.7
+      Execution Hosts), read surface. The daemon's own host is always
+      among them.
   - name: attention
     description: Attention items and their deliveries, read surface (plan §4).
   - name: runs
@@ -271,6 +276,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RestartReadiness"
+
+  /execution-hosts:
+    get:
+      operationId: listExecutionHosts
+      tags: [hosts]
+      summary: List the execution hosts
+      description: |
+        Lists every execution host (plan §5.7): its id, name, the account
+        its runs execute as, and the conditions that close it to new
+        launches. The daemon's own host, id `daemon`, is always present. A
+        partial fetch, like `GET /devices`: hosts are not in the bootstrap
+        snapshot, and this read never marks the whole cache current. A
+        change to a host or its conditions moves the server revision, so a
+        client reads the list again when the revision moves. The response
+        carries no address, host key, or count override. The read changes
+        no state.
+      responses:
+        "200":
+          description: Every execution host, ordered by id.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ExecutionHost"
 
   /work-hours:
     get:
@@ -5707,6 +5737,83 @@ components:
           type: integer
           minimum: 1
 
+    ExecutionHost:
+      type: object
+      description: >
+        A machine that runs the daemon's cordoned launches (plan §5.7,
+        mirrors domain.ExecutionHost without its reach and count override).
+      required: [id, name, run_account, conditions]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          description: >
+            The host's stable identifier. The daemon's own host is `daemon`.
+        name:
+          type: string
+          minLength: 1
+          description: The operator's name for the host, unique among hosts.
+        run_account:
+          $ref: "#/components/schemas/ExecutionHostRunAccount"
+        conditions:
+          type: array
+          description: >
+            Each condition the host is in, once each, in the order
+            ExecutionHostCondition lists its members. Empty when nothing
+            closes the host.
+          items:
+            $ref: "#/components/schemas/ExecutionHostObservedCondition"
+
+    ExecutionHostRunAccount:
+      type: object
+      description: >
+        The account a host's runs execute as. The daemon's own host runs as
+        the daemon owner and names no account; every other host names it.
+      required: [name, daemon_owner]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The account's login, or null on the daemon's own host.
+        daemon_owner:
+          type: boolean
+          description: >
+            Whether the account is the daemon owner's. The Simulator and
+            desktop-control settings apply only where it isn't.
+
+    ExecutionHostObservedCondition:
+      type: object
+      description: One condition a host is in and when it began.
+      required: [condition, since]
+      properties:
+        condition:
+          $ref: "#/components/schemas/ExecutionHostCondition"
+        since:
+          type: string
+          format: date-time
+
+    ExecutionHostCondition:
+      type: string
+      description: >
+        A condition that closes an execution host to new launches (mirrors
+        domain.ExecutionHostCondition). no_desktop_session, unreachable,
+        proof_not_current (a failed or lapsed proof), other_build (a build
+        other than the daemon's), and lost (declared lost) close it to every
+        new launch; cordoned_count_full, memory_pressure (pressure that
+        isn't normal), and no_desktop_control close it to some work.
+        Widening it is a contract change.
+      enum:
+        - no_desktop_session
+        - unreachable
+        - proof_not_current
+        - other_build
+        - lost
+        - cordoned_count_full
+        - memory_pressure
+        - no_desktop_control
+        - unknown
+
     RestartBlockerKind:
       type: string
       description: >
@@ -7184,7 +7291,7 @@ components:
 
     DaemonFeature:
       type: string
-      enum: [parked_task_move, work_hours, question_option_answers, unknown]
+      enum: [parked_task_move, work_hours, question_option_answers, execution_hosts, unknown]
       description: >
         A feature a daemon build may serve, named in `/health`'s `features`
         so an app can turn off what an older daemon lacks. A name is
@@ -7193,7 +7300,7 @@ components:
         `parked_task_move`: the `move_parked_task` command (plan §4, quota
         park). `work_hours`: the `GET /work-hours` read.
         `question_option_answers`: `question_answers` on an agent_question
-        answer.
+        answer. `execution_hosts`: the `GET /execution-hosts` read.
 
     PairingRequest:
       type: object

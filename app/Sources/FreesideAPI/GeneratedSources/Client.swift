@@ -404,6 +404,77 @@ public struct Client: APIProtocol {
             }
         )
     }
+    /// List the execution hosts
+    ///
+    /// Lists every execution host (plan §5.7): its id, name, the account
+    /// its runs execute as, and the conditions that close it to new
+    /// launches. The daemon's own host, id `daemon`, is always present. A
+    /// partial fetch, like `GET /devices`: hosts are not in the bootstrap
+    /// snapshot, and this read never marks the whole cache current. A
+    /// change to a host or its conditions moves the server revision, so a
+    /// client reads the list again when the revision moves. The response
+    /// carries no address, host key, or count override. The read changes
+    /// no state.
+    ///
+    ///
+    /// - Remark: HTTP `GET /execution-hosts`.
+    /// - Remark: Generated from `#/paths//execution-hosts/get(listExecutionHosts)`.
+    public func listExecutionHosts(_ input: Operations.listExecutionHosts.Input) async throws -> Operations.listExecutionHosts.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.listExecutionHosts.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/execution-hosts",
+                    parameters: []
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .get
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                return (request, nil)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.listExecutionHosts.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            [Components.Schemas.ExecutionHost].self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(body: body))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
     /// How runs' time divided over the days of a period
     ///
     /// Divides every run's elapsed time into four classes and adds it to
