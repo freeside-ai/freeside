@@ -11,3 +11,9 @@ func HTTPRoutePatterns() []string {
 	}
 	return patterns
 }
+
+// EmbeddedOpenAPISpec returns the embedded api/openapi.yaml bytes so the
+// external test package can verify them byte for byte against the repo spec.
+func EmbeddedOpenAPISpec() []byte {
+	return embeddedOpenAPISpec
+}

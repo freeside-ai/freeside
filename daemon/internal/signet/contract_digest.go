@@ -2,12 +2,6 @@
 
 package signet
 
-// APIContractDigest identifies the api/openapi.yaml this daemon was built
-// from: "sha256:" plus the lowercase hex SHA-256 of the spec's exact
-// bytes. The daemon reports it on GET /health to name its contract.
-// Regenerate with scripts/api-contract-digest.sh --write.
-const APIContractDigest = "sha256:70483d92c77855f9b2f5d8b2a933e678768a8098e1295fbbb1fd7e0394fd49cc"
-
 // APIContractCompatibilityLevel is the spec's x-compatibility-level: the
 // count of changes that broke apps built before them. The daemon reports
 // it on GET /health so a newer app can tell this daemon is too old for it.
