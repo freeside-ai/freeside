@@ -313,6 +313,90 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 	}
 }
 
+// TestTaskStopPreventsAcceptedAlternateAgentRetry: a Stop recorded after an
+// alternate-agent retry is accepted fences attempt allocation without failing
+// Engine.Reconcile.
+func TestTaskStopPreventsAcceptedAlternateAgentRetry(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	main := newAlternateAgentIdentity("claude-main", "acct-alternate-0001")
+	second := newAlternateAgentIdentity("claude-second", "acct-alternate-0002")
+	f, selection := openAlternateAgentFixture(t, main, second)
+	failure := driveImplementationFailure(t, f, capabilityRetryManifest(t), fake.StageScript{
+		Outcome: fake.OutcomeFail,
+		Result: exec.StageResult{
+			Summary: "The provider refused the agent's credential.", Cause: domain.FailureCauseCredentialExpired,
+		},
+	})
+	card := failure.card
+	operator := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
+		signet.WithClock(func() time.Time { return admittedAt.Add(time.Minute) }),
+		signet.WithAlternateAgentRetrier(selection.AcceptAlternateAgentRetryTx))
+	if _, err := operator.Submit(ctx, signet.ClientCommand{
+		CommandID: alternateRetryCommandID, DeviceID: deviceA, ExpectedEntityVersion: card.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: card.Item.ID, Action: domain.ActionRetryWithAlternateAgent,
+			ItemVersion:          card.Item.ItemVersion,
+			AlternateAgentChoice: &signet.AlternateAgentChoice{EnrollmentID: second.enrollment.ID},
+		},
+	}); err != nil {
+		t.Fatalf("submit retry_with_alternate_agent: %v", err)
+	}
+	state, err := f.store.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(ctx, capabilityRetryRunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.StopTask(ctx, domain.StopTaskRequest{
+			CommandID: "command-stop-alternate-retry", DeviceID: deviceA,
+			TaskID: task.ID, ProjectID: task.ProjectID,
+			ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+		}, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatalf("stop task: %v", err)
+	}
+
+	retryInvocation := productionInvocationForRun(failure.retryRunID)
+	f.driver.Script(retryInvocation, fake.StageScript{
+		Outcome: fake.OutcomeFail,
+		Result:  exec.StageResult{Summary: "The retry ran under the chosen agent."},
+	})
+	pass, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("reconcile accepted alternate-agent retry after Stop: %v", err)
+	}
+	if pass.InvocationsStarted != 0 {
+		t.Fatalf("reconcile pass started %d invocations after Stop, want 0", pass.InvocationsStarted)
+	}
+	if _, started := f.driver.StartSpec(retryInvocation); started {
+		t.Fatal("accepted alternate-agent retry started after Stop")
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		latest, err := tx.LatestProductionAttempt(ctx, failure.campaignID)
+		if err != nil {
+			return err
+		}
+		if latest.AttemptNumber != 1 {
+			t.Fatalf("accepted alternate-agent retry allocated attempt %d after Stop", latest.AttemptNumber)
+		}
+		if _, err := tx.GetRun(ctx, failure.retryRunID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("retry run exists after Stop: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // assertForgedRetriesRefused writes, in turn, the retry attempt the
 // operator's command asked for, but citing a record its decision did not
 // make or retrying another invocation. Each is refused as a parent-key
