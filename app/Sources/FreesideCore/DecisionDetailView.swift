@@ -885,7 +885,7 @@ struct DecisionDetailView: View {
                 }
                 if hasReviewingAction {
                     if reviewingLeads {
-                        reviewingAction(item)
+                        reviewingAction(item, accessibilityLayout: modules.accessibilityLayout)
                     }
                     cardModules(composition.controlGroupModules, modules)
                 }
@@ -893,6 +893,7 @@ struct DecisionDetailView: View {
                     actionRegion(
                         item,
                         stackedLayout: stackedLayout,
+                        accessibilityLayout: modules.accessibilityLayout,
                         includesReviewing: !hasReviewingAction || !reviewingLeads,
                         register: modules.register.at(.actionRegion)
                     )
@@ -905,6 +906,7 @@ struct DecisionDetailView: View {
                     actions(
                         item,
                         stackedLayout: stackedLayout,
+                        accessibilityLayout: modules.accessibilityLayout,
                         includesReviewing: !hasReviewingAction || !reviewingLeads)
                 #endif
             }
@@ -1121,6 +1123,7 @@ struct DecisionDetailView: View {
         private func actionRegion(
             _ item: Components.Schemas.AttentionItem,
             stackedLayout: Bool,
+            accessibilityLayout: Bool,
             includesReviewing: Bool,
             register: UnverifiedRegister
         ) -> some View {
@@ -1147,6 +1150,7 @@ struct DecisionDetailView: View {
                 actions(
                     item,
                     stackedLayout: stackedLayout,
+                    accessibilityLayout: accessibilityLayout,
                     includesReviewing: includesReviewing)
             }
         }
@@ -4548,6 +4552,7 @@ struct DecisionDetailView: View {
     private func actions(
         _ item: Components.Schemas.AttentionItem,
         stackedLayout: Bool,
+        accessibilityLayout: Bool,
         includesReviewing: Bool
     ) -> some View {
         let ranking = actionRanking(item)
@@ -4596,8 +4601,11 @@ struct DecisionDetailView: View {
             }
 
             if includesReviewing, let reviewing = ranking.reviewing {
-                actionButton(
-                    reviewing, item: item, tone: filledAction == reviewing ? .primary : .secondary)
+                reviewingActionRow(
+                    reviewing,
+                    item: item,
+                    tone: filledAction == reviewing ? .primary : .secondary,
+                    accessibilityLayout: accessibilityLayout)
             }
 
             overflowMenu(ranking.overflow, item: item)
@@ -4628,15 +4636,45 @@ struct DecisionDetailView: View {
     }
 
     @ViewBuilder
-    private func reviewingAction(_ item: Components.Schemas.AttentionItem) -> some View {
+    private func reviewingAction(
+        _ item: Components.Schemas.AttentionItem,
+        accessibilityLayout: Bool
+    ) -> some View {
         let ranking = actionRanking(item)
         if let reviewing = ranking.reviewing {
-            actionButton(
+            reviewingActionRow(
                 reviewing,
                 item: item,
                 tone: DecisionCardComposition.filledAction(
                     for: item, ranking: ranking, holdsPick: holdsPick(item)) == reviewing
-                    ? .primary : .secondary)
+                    ? .primary : .secondary,
+                accessibilityLayout: accessibilityLayout)
+        }
+    }
+
+    @ViewBuilder
+    private func reviewingActionRow(
+        _ reviewing: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem,
+        tone: FreesideActionButtonStyle.Tone,
+        accessibilityLayout: Bool
+    ) -> some View {
+        if reviewing == .open_pr,
+            let link = DecisionCardComposition.copyablePullRequestLink(item)
+        {
+            if accessibilityLayout {
+                VStack(alignment: .leading, spacing: CardScale.controlGap) {
+                    actionButton(reviewing, item: item, tone: tone)
+                    PullRequestLinkCopyButton(link: link, expands: true)
+                }
+            } else {
+                HStack(spacing: CardScale.controlGap) {
+                    actionButton(reviewing, item: item, tone: tone)
+                    PullRequestLinkCopyButton(link: link, expands: false)
+                }
+            }
+        } else {
+            actionButton(reviewing, item: item, tone: tone)
         }
     }
 
@@ -5337,6 +5375,42 @@ private struct DecisionReasonLine: View {
             .fixedSize(horizontal: false, vertical: true)
             .proseMeasure()
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Outlined copy control beside View PR on a final-review card. Writes the
+/// exact pull request URL View PR opens, announces the copy, and shows a brief
+/// checkmark confirmation without sending any client command or depending on
+/// `DecisionModel.actionsEnabled`.
+private struct PullRequestLinkCopyButton: View {
+    let link: String
+    var expands = false
+
+    @State private var copied = false
+    @State private var copyGeneration = 0
+
+    var body: some View {
+        Button {
+            Clipboard.copy(link)
+            AccessibilityNotification.Announcement("Pull request link copied").post()
+            copied = true
+            copyGeneration += 1
+        } label: {
+            ZStack {
+                // Keep the button width stable when the glyph swaps to checkmark.
+                Image(systemName: "doc.on.doc").hidden()
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            }
+        }
+        .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: expands))
+        .accessibilityLabel("Copy pull request link")
+        .help("Copy pull request link")
+        .task(id: copyGeneration) {
+            guard copyGeneration > 0 else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            copied = false
+        }
     }
 }
 
