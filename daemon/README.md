@@ -8341,3 +8341,77 @@ retry needs atomic cap-checked admission, and cancellation forbids it. No client
 cancellation state. The mock also stays pending unless a test explicitly seeds
 acknowledgement evidence. See [the plan](../docs/plan.md#59-durability-effectively-once)
 for admission/publication ordering, late results, and restart reconciliation.
+
+## Commit-Plan Validator
+
+`freeside-commit-plan validate [-base <rev>]` (and the equivalent
+`freesided commit-plan validate [-base <rev>]` verb, which opens no database
+and reads no daemon state) checks the workspace's `.freeside-commit-plan.json`
+against its derived change set using `importer.CheckCommitPlan`. It is a
+convenience for writers and operators that grants no authority and is not on
+the Tier A list; `importer.Import` still verifies every commit plan as
+untrusted data at handoff.
+
+- **Base commit.** By default the command resolves `refs/freeside/import-base`,
+  which `publish.Transport` sets in every seeded checkout and which survives
+  the writer's own local commits. Pass `-base <rev>` to compare against another
+  commit.
+- **Read-only on the workspace.** The command exports the repository root into
+  a temporary directory using `export.DefaultOptions()`, runs the importer's
+  intake and commit-plan checks without writing to the worktree or `.git`, and
+  removes its temporary directory before exiting.
+
+### Output And Exit Codes
+
+On exit `0` or `1`, stdout carries one JSON object (`freeside.commit-plan-check/v1`):
+
+```json
+{"version":"freeside.commit-plan-check/v1","ok":false,"base_sha":"...","problems":[{"code":"github_close_directive","group":1,"message":"commit message contains a forbidden GitHub issue-closing phrase"}]}
+```
+
+Each entry in `problems` has a stable `code`, optional 1-based `group` and
+`path`, and a fixed `message` (or, for `handoff_refused`, the importer's intake
+error message). The output never repeats file bytes or matched secret text.
+
+- **Exit 0:** `ok` is `true` and `problems` is `[]`; `Import` under default
+  policy with plans honored would honor the plan (or accept an empty workspace
+  with no plan file).
+- **Exit 1:** `ok` is `false` and `problems` lists why it would not.
+- **Exit 2:** The check could not run (usage error, not in a git repository,
+  unresolvable base, export failure, or operational git error). One line goes
+  to stderr and nothing to stdout.
+
+### Problem Codes
+
+Every code is registered in `importer.AllPlanProblemCodes` and pinned by
+`TestPlanProblemCodeTokens`:
+
+- **Lifecycle and intake:** `plan_missing`, `no_changes` (a plan file is
+  present with no changes relative to base), `handoff_refused`.
+- **Plan structure:** `plan_invalid_utf8`, `plan_invalid_json`,
+  `plan_trailing_data`, `plan_version_not_first`, `plan_version_unsupported`,
+  `plan_groups_invalid`, `plan_groups_empty`, `plan_group_cap_exceeded`,
+  `plan_path_cap_exceeded`, `plan_group_invalid`, `plan_group_name_empty`,
+  `plan_group_discriminator`, `plan_group_remainder_invalid`,
+  `plan_group_paths_invalid`, `plan_path_invalid`, `plan_path_reserved`,
+  `plan_path_git_metadata`, `plan_path_not_in_changes`, `plan_path_duplicated`,
+  `plan_path_uncovered` (lists every uncovered changed path up to
+  `importer.MaxReportedUncoveredPaths`, 50, followed by an omission count),
+  `plan_intermediate_tree_collision`, `plan_intermediate_tree_file_directory`.
+- **Commit-message screening:** `message_over_cap`, `message_empty`,
+  `message_control`, `github_close_directive`, `github_skip_directive`,
+  `github_spoofed_trailer`.
+- **Blocking import findings:** `non_regular_change`, `invalid_path_entry`,
+  `blob_omitted`, `automation_control_path`, `reviewer_instruction_path`,
+  `git_metadata_path`, `verification_recipe_path`, `prompts_policy_path`,
+  `egress_trust_path`, `materiality_rules_path`, `allowlist_violation`,
+  `size_violation`, `path_collision`, `secret`, `secret_scan_skipped`,
+  `commit_plan_secret`.
+
+### Limits
+
+`validate` checks against the importer's default policy with commit plans
+honored (`plan_preferred`). A project's stricter path allowlist or protected
+path rules, a refusal specific to one writer class's export (such as the
+cordon's hard-link refusal), or a later verification or publication gate can
+still stop a handoff the validator passed.
