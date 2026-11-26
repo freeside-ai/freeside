@@ -1,10 +1,41 @@
 import Foundation
 import FreesideAPI
 import FreesideTestSupport
+import HTTPTypes
+import OpenAPIRuntime
 import Testing
 
 @testable import FreesideCore
 @testable import FreesideModel
+
+#if os(macOS)
+    /// Records each request's base URL under a lock and forwards it to the
+    /// mock server so the full pairing exchange runs through middleware.
+    private final class RecordingForwardingTransport: ClientTransport, @unchecked Sendable {
+        private let base: MockServerTransport
+        private let lock = NSLock()
+        private var storedURLs: [URL] = []
+
+        init(server: MockServer) {
+            self.base = MockServerTransport(server: server)
+        }
+
+        var baseURLs: [URL] {
+            lock.withLock { storedURLs }
+        }
+
+        func send(
+            _ request: HTTPRequest,
+            body: HTTPBody?,
+            baseURL: URL,
+            operationID: String
+        ) async throws -> (HTTPResponse, HTTPBody?) {
+            lock.withLock { storedURLs.append(baseURL) }
+            return try await base.send(
+                request, body: body, baseURL: baseURL, operationID: operationID)
+        }
+    }
+#endif
 
 private struct StoreRefused: Error {}
 
@@ -119,6 +150,31 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(model.facts != nil)
         #expect(await model.pair() != nil)
     }
+
+    #if os(macOS)
+        @Test func pairingPreviewAndPairDialLoopbackForThisMacsTailscaleAddress() async throws {
+            let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+            let recorder = RecordingForwardingTransport(server: server)
+            let credentials = InMemoryCredentialStore()
+            let tailnetURL = try #require(URL(string: "http://100.64.0.7:8677"))
+            let loopbackURL = try #require(URL(string: "http://127.0.0.1:8677"))
+            let client = APIClientFactory.live(
+                serverURL: tailnetURL,
+                transport: recorder,
+                localAddresses: { ["100.64.0.7"] }
+            )
+            let model = PairingModel(client: client, credentials: credentials)
+            model.pairingCode = "483911"
+            model.displayName = "Studio Mac"
+
+            await model.refreshFacts()
+            #expect(model.facts == MockServer.pairingFacts)
+
+            let credential = try #require(await model.pair())
+            #expect(try credentials.load() == credential)
+            #expect(recorder.baseURLs == [loopbackURL, loopbackURL])
+        }
+    #endif
 
     @Test func pairingStoresTheCredentialAndReturnsIt() async throws {
         let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
