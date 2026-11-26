@@ -425,7 +425,7 @@ import Testing
     @Test func spendUsesAttentionCardWording() throws {
         let active = RunFixtures.defaultRuns()[0].run
         let cost = try #require(active.billable_cost_so_far?.value1)
-        #expect(RunDisplay.spendLine(active) == "USD 8.5 across 1 invocation, still accruing")
+        #expect(RunDisplay.spendLine(active) == "USD 8.50 across 1 invocation, still accruing")
         #expect(RunDisplay.spendLine(active) == AttentionDisplay.costSoFar(cost))
         #expect(RunDisplay.spendLine(RunFixtures.completedRun().run) == "USD 23.75 across 2 invocations")
         var absent = active
