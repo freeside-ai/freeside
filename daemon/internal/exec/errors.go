@@ -67,4 +67,10 @@ var (
 	// process start. The outbox intent remains pending for a later healthy
 	// reconcile pass; this operating-state refusal must not stop the daemon.
 	ErrPreJobRefused = errors.New("backend pre-job gate refused dispatch")
+	// ErrStartHostUnsupported: the start names no execution host where its
+	// class needs one, or a host this driver has no stage gate for. A driver
+	// refuses it before anything runs. It holds only its own invocation: an
+	// attempt admitted before hosts were recorded can't start on this build,
+	// and the operator stops its task.
+	ErrStartHostUnsupported = errors.New("start names no execution host this driver can gate")
 )

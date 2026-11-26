@@ -105,6 +105,7 @@ func cordoning(t *testing.T, a domain.ExecutionAdmission) domain.ExecutionAdmiss
 	t.Helper()
 	a.Backend = string(domain.BackendCordonedHostProcess)
 	a.EgressProfile = domain.EgressHostOpen
+	a.ExecutionHostID = domain.DaemonHostID
 	id, err := a.ComputeID()
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +189,28 @@ func TestStartSpecFromAdmissionCarriesRunnerClass(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := exec.StartSpecFromAdmission(tc.admission).RunnerClass; got != tc.want {
 				t.Fatalf("spec runner_class = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The stage driver refuses a start by its host, so the conversion copies the
+// admission's own field rather than its Host() reading: an admission recorded
+// before hosts keeps an unset host, and its journaled spec stays equal to the
+// one its intent was saved with, which start authority compares exactly.
+func TestStartSpecFromAdmissionCarriesExecutionHost(t *testing.T) {
+	identity := domain.AuthIdentityID("auth-1")
+	legacy := fullAdmission(t, &identity, domain.EgressProviderOnly, agentBinding())
+	for name, tc := range map[string]struct {
+		admission domain.ExecutionAdmission
+		want      domain.ExecutionHostID
+	}{
+		"recorded before hosts": {legacy, ""},
+		"on the daemon's host":  {cordoning(t, legacy), domain.DaemonHostID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := exec.StartSpecFromAdmission(tc.admission).ExecutionHostID; got != tc.want {
+				t.Fatalf("spec execution_host_id = %q, want %q", got, tc.want)
 			}
 		})
 	}

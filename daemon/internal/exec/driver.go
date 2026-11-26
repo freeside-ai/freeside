@@ -131,6 +131,13 @@ type StartSpec struct {
 	// ward. Unset means the warded class; omitempty keeps every journaled
 	// warded spec byte-identical to the one its admission renders.
 	RunnerClass domain.RunnerBackendClass `json:"runner_class,omitempty"`
+	// ExecutionHostID is the host the admission named, copied raw, so it
+	// decides which machine the launch and its token go to. It is unset for
+	// an admission recorded before hosts existed, whose launch ran on the
+	// daemon's host; omitempty, and the raw copy rather than
+	// ExecutionAdmission.Host, keep every journaled spec byte-identical to
+	// the one its admission renders.
+	ExecutionHostID domain.ExecutionHostID `json:"execution_host_id,omitempty"`
 }
 
 // StartSpecFromAdmission renders the durable admission record as the spec its
@@ -154,6 +161,7 @@ func StartSpecFromAdmission(a domain.ExecutionAdmission) StartSpec {
 		AdmissionID:        a.ID,
 		StageInputs:        cloneStageInputSnapshot(a.StageInputs),
 		WorkspaceHydration: a.WorkspaceHydration,
+		ExecutionHostID:    a.ExecutionHostID,
 	}
 	if a.AuthIdentityID != nil {
 		spec.AuthIdentityID = *a.AuthIdentityID

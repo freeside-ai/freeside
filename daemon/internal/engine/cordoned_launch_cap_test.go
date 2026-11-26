@@ -138,8 +138,9 @@ func TestCordonedDispatchWaitsForACapAndReservesNoMemory(t *testing.T) {
 	if !started {
 		t.Fatal("a cordoned dispatch under the cap did not start beside a full memory budget")
 	}
-	if spec.RunnerClass != domain.BackendCordonedHostProcess {
-		t.Fatalf("started with runner class %q, want the cordon", spec.RunnerClass)
+	if spec.RunnerClass != domain.BackendCordonedHostProcess || spec.ExecutionHostID != domain.DaemonHostID {
+		t.Fatalf("started with runner class %q on host %q, want the cordon on the daemon's host",
+			spec.RunnerClass, spec.ExecutionHostID)
 	}
 	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
 		admission, err := tx.GetExecutionAdmissionRecord(ctx, id)

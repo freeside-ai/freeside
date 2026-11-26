@@ -150,6 +150,13 @@ var holdClasses = []holdClass{
 		sentinel: ErrWriterClassChanged, action: holdActionInvocation,
 		reason: domain.HoldBackendNotConformant,
 	},
+	// A start the driver refuses for its host holds only itself, so an
+	// attempt admitted before hosts were recorded never holds back the
+	// dispatch queued behind it.
+	{
+		sentinel: exec.ErrStartHostUnsupported, action: holdActionInvocation,
+		reason: domain.HoldBackendNotConformant,
+	},
 	{
 		sentinel: store.ErrBackendNotConformant, action: holdActionPassMutablePolicy,
 		reason: domain.HoldBackendNotConformant,

@@ -603,9 +603,10 @@ lists only the names resolved against it. All under `daemon/`:
   `internal/claudeinference/probe.go` (hand the setup token to the host
   judgment CLI on its own pipe, never its environment),
   `internal/exec/capability.go`, and the `CredentialMode`,
-  `EgressProfile`, and `RunnerClass` fields in `internal/exec/driver.go`
-  (the last decides whether a start runs in the ward or as a cordoned
-  host process). The alternate-agent
+  `EgressProfile`, `RunnerClass`, and `ExecutionHostID` fields in
+  `internal/exec/driver.go` (`RunnerClass` decides whether a start runs in
+  the ward or as a cordoned host process, and `ExecutionHostID` which host
+  it runs on). The alternate-agent
   retry, which lets an operator choose another agent's credential after a
   failure, joins them: `internal/domain/alternate_agent_retry.go`
   (the rule an alternate must meet), `internal/engine/alternate_agent.go`
