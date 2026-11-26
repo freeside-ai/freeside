@@ -97,6 +97,8 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 				id := seedStopTask(t, f.store)
 				seedUsageEnrollment(t, f.store, operatorAt.Add(-time.Hour))
 				seedLineEnrollments(t, f.store)
+				seedWriterPrerequisites(t, f.store)
+				seedCordonedWriter(t, f.store, "run-writer", "writer-1")
 				blobs, err := signet.NewBlobStore(t.TempDir())
 				if err != nil {
 					t.Fatal(err)
@@ -104,7 +106,8 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
 					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
 					signet.WithRoutingPolicySetter(engineRoutingPolicySetter), withOperatorCatalog,
-					signet.WithParkedTaskMover(fakeParkedTaskMover), signet.WithWorkflowPolicySetter(engineWorkflowPolicySetter))
+					signet.WithParkedTaskMover(fakeParkedTaskMover), signet.WithWorkflowPolicySetter(engineWorkflowPolicySetter),
+					signet.WithWriterMessages(func() signet.WriterMessageSender { return &fakeWriterSender{} }))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {
 					case domain.CommandKindDecision:
@@ -126,6 +129,8 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 					case domain.CommandKindSetWorkflowPolicy:
 						return workflowCommand("shared", domain.WorkflowPolicyScopeGeneral, nil,
 							domain.WorkflowGateIssueComment, new("true"), nil)
+					case domain.CommandKindSendWriterMessage:
+						return writerMessageCommand("shared", "run-writer", "writer-1", "hello")
 					}
 					t.Fatal("unknown kind")
 					return signet.ClientCommand{}

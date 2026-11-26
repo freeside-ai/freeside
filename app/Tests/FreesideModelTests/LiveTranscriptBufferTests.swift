@@ -82,6 +82,6 @@ import Testing
     ) -> Components.Schemas.InvocationTranscript {
         .init(
             run_id: "run-1", invocation_id: "inv-1", availability: availability, transcript: nil,
-            live: live.map { .init(value1: $0) }, prompt: nil)
+            live: live.map { .init(value1: $0) }, prompt: nil, operator_messages: [])
     }
 }

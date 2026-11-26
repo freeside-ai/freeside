@@ -986,7 +986,7 @@ public actor MockServer {
             else { return nil }
             return resultsByCommandID[command.command_id]
         case .stop_task, .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy,
-            .move_parked_task, .set_workflow_policy:
+            .move_parked_task, .set_workflow_policy, .send_writer_message:
             // Active-device authority is required even for Stop and operator
             // command replay; the daemon gates the device before its replay read.
             return nil
@@ -1840,7 +1840,7 @@ public actor MockServer {
         switch payload {
         case .move_parked_task: .parked_task_move
         case .stop_task, .submit_task, .decision, .refresh_usage, .reassign_collector, .change_task_line,
-            .set_routing_policy, .set_workflow_policy:
+            .set_routing_policy, .set_workflow_policy, .send_writer_message:
             nil
         }
     }
@@ -1884,6 +1884,11 @@ public actor MockServer {
             return try submitSetWorkflowPolicyCommand(command, payload)
         case .move_parked_task(let payload):
             return try submitMoveParkedTaskCommand(command, payload)
+        case .send_writer_message:
+            // The mock runs no writer, so it answers as a daemon with no
+            // driver does: refused before anything is recorded.
+            throw OperatorCommandRejectedError(
+                commandID: command.command_id, reason: "writer messages are not available")
         }
     }
 

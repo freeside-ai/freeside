@@ -207,7 +207,7 @@ func (in ClientCommand) operatorArmOnly() bool {
 	for _, arm := range []any{
 		in.Payload, in.StopTask, in.SubmitTask,
 		in.RefreshUsage, in.ReassignCollector, in.ChangeTaskLine, in.SetRoutingPolicy, in.MoveParkedTask,
-		in.SetWorkflowPolicy,
+		in.SetWorkflowPolicy, in.SendWriterMessage,
 	} {
 		if !reflect.ValueOf(arm).IsZero() {
 			set++

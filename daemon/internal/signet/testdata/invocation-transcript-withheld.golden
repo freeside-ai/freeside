@@ -4,5 +4,6 @@
   "availability": "withheld",
   "transcript": null,
   "live": null,
-  "prompt": null
+  "prompt": null,
+  "operator_messages": []
 }

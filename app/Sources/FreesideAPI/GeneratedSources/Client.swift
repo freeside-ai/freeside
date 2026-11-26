@@ -2069,6 +2069,14 @@ public struct Client: APIProtocol {
     /// their own answers, such as 409 for a stale expected_revision and 404
     /// for an unknown task. The same command can succeed once the daemon
     /// has a tree.
+    /// A send_writer_message carries neither envelope field either. It
+    /// records no receipt: the operator message it records is its result,
+    /// and a replay returns that record as it stands, settled or not.
+    /// Text that is empty, not UTF-8, or over 8 KiB, an invocation that
+    /// isn't a cordoned writer of the run, and a daemon with no driver are
+    /// 400 and record nothing; an unknown run, or an invocation with no
+    /// admission for it, is 404. A run that refuses the message is still
+    /// 200, with the record refused and its reason.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

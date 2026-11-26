@@ -113,6 +113,22 @@ public enum CommandResultTrust {
                 && record.key == payload.key && record.value == payload.value
                 && record.expected_revision == payload.expected_revision
                 && record.revision == (record.recorded ? expected + 1 : expected)
+        case .send_writer_message(let payload):
+            // The record echoes the message under the sending device, and its
+            // settled fields match its state: settled_at exactly when it
+            // settled, a refusal exactly when it was refused. A state this
+            // build doesn't know constrains neither.
+            guard case .send_writer_message(let record) = result.record else { return false }
+            let settledFieldsMatch: Bool
+            switch record.state {
+            case .recorded: settledFieldsMatch = record.settled_at == nil && record.refusal == nil
+            case .delivered: settledFieldsMatch = record.settled_at != nil && record.refusal == nil
+            case .refused: settledFieldsMatch = record.settled_at != nil && record.refusal != nil
+            case .unknown: settledFieldsMatch = true
+            }
+            return record.command_id == command.command_id && record.sender == "device:" + command.device_id
+                && record.run_id == payload.run_id && record.invocation_id == payload.invocation_id
+                && record.text == payload.text && record.ordinal >= 1 && settledFieldsMatch
         }
     }
 

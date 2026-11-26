@@ -362,6 +362,14 @@ public protocol APIProtocol: Sendable {
     /// their own answers, such as 409 for a stale expected_revision and 404
     /// for an unknown task. The same command can succeed once the daemon
     /// has a tree.
+    /// A send_writer_message carries neither envelope field either. It
+    /// records no receipt: the operator message it records is its result,
+    /// and a replay returns that record as it stands, settled or not.
+    /// Text that is empty, not UTF-8, or over 8 KiB, an invocation that
+    /// isn't a cordoned writer of the run, and a daemon with no driver are
+    /// 400 and record nothing; an unknown run, or an invocation with no
+    /// admission for it, is 404. A run that refuses the message is still
+    /// 200, with the record refused and its reason.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -991,6 +999,14 @@ extension APIProtocol {
     /// their own answers, such as 409 for a stale expected_revision and 404
     /// for an unknown task. The same command can succeed once the daemon
     /// has a tree.
+    /// A send_writer_message carries neither envelope field either. It
+    /// records no receipt: the operator message it records is its result,
+    /// and a replay returns that record as it stands, settled or not.
+    /// Text that is empty, not UTF-8, or over 8 KiB, an invocation that
+    /// isn't a cordoned writer of the run, and a daemon with no driver are
+    /// 400 and record nothing; an unknown run, or an invocation with no
+    /// admission for it, is 404. A run that refuses the message is still
+    /// 200, with the record refused and its reason.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -6732,7 +6748,7 @@ public enum Components {
             case withheld = "withheld"
             case unknown = "unknown"
         }
-        /// One writer invocation's transcript and prompt. All of it is agent context, never verified evidence: the transcript is the agent CLI's stream, and the prompt is the text the daemon rendered for the writer. For an ended writer, the client fetches the transcript's bytes by digest from GET /attachments/{digest}. For a running writer, `live` carries its records directly.
+        /// One writer invocation's transcript, prompt, and operator messages. None of it is verified evidence. The transcript and prompt are agent context: the transcript is the agent CLI's stream, and the prompt is the text the daemon rendered for the writer. The operator messages are what operators sent the writer. For an ended writer, the client fetches the transcript's bytes by digest from GET /attachments/{digest}. For a running writer, `live` carries its records directly.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/InvocationTranscript`.
@@ -6800,6 +6816,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/InvocationTranscript/prompt`.
             public var prompt: Swift.String?
+            /// The messages operators sent this invocation, in ordinal order, whatever availability is. They are the operator's own input, apart from the agent's transcript: the transcript's credential scan never reads them, and a withheld transcript withholds none.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationTranscript/operator_messages`.
+            public var operator_messages: [Components.Schemas.OperatorMessage]
             /// Creates a new `InvocationTranscript`.
             ///
             /// - Parameters:
@@ -6809,13 +6830,15 @@ public enum Components {
             ///   - transcript: The invocation's agent-transcript claim, served only when availability is available; null when the invocation recorded none or the blob store no longer holds its bytes.
             ///   - live: A running writer's scanned records, served only when availability is live; null otherwise.
             ///   - prompt: The prompt the writer received, read from the stage driver's record and re-checked against the invocation's admission; null when none is held or the record fails that check.
+            ///   - operator_messages: The messages operators sent this invocation, in ordinal order, whatever availability is. They are the operator's own input, apart from the agent's transcript: the transcript's credential scan never reads them, and a withheld transcript withholds none.
             public init(
                 run_id: Swift.String,
                 invocation_id: Swift.String,
                 availability: Components.Schemas.InvocationTranscriptAvailability,
                 transcript: Components.Schemas.InvocationTranscript.transcriptPayload? = nil,
                 live: Components.Schemas.InvocationTranscript.livePayload? = nil,
-                prompt: Swift.String? = nil
+                prompt: Swift.String? = nil,
+                operator_messages: [Components.Schemas.OperatorMessage]
             ) {
                 self.run_id = run_id
                 self.invocation_id = invocation_id
@@ -6823,6 +6846,7 @@ public enum Components {
                 self.transcript = transcript
                 self.live = live
                 self.prompt = prompt
+                self.operator_messages = operator_messages
             }
             public enum CodingKeys: String, CodingKey {
                 case run_id
@@ -6831,6 +6855,7 @@ public enum Components {
                 case transcript
                 case live
                 case prompt
+                case operator_messages
             }
         }
         /// A running writer's complete transcript records in the byte range [start, end) of its transcript, read while it runs. The daemon holds a bounded window in memory only and stores none of it. Unverified and inert: a client renders it as text, never follows a link or loads an image from it, and drops it once an answer stops being live.
@@ -9130,7 +9155,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, and set_workflow_policy. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes. The daemon rejects an unknown field anywhere in a request, including inside the schemas that responses also use (AlternateAgentChoice, AlternativeChoice, TaskLineSelection, TaskProposalScope), which leave additionalProperties open only so that a client tolerates fields a newer daemon adds to responses.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy, and send_writer_message. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes. The daemon rejects an unknown field anywhere in a request, including inside the schemas that responses also use (AlternateAgentChoice, AlternativeChoice, TaskLineSelection, TaskProposalScope), which leave additionalProperties open only so that a client tolerates fields a newer daemon adds to responses.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
@@ -9144,7 +9169,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy, send_writer_message). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
@@ -9187,6 +9212,8 @@ public enum Components {
                 case reassign_collector(Components.Schemas.ReassignCollectorPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/RefreshUsagePayload`.
                 case refresh_usage(Components.Schemas.RefreshUsagePayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SendWriterMessagePayload`.
+                case send_writer_message(Components.Schemas.SendWriterMessagePayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SetRoutingPolicyPayload`.
                 case set_routing_policy(Components.Schemas.SetRoutingPolicyPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SetWorkflowPolicyPayload`.
@@ -9215,6 +9242,8 @@ public enum Components {
                         self = .reassign_collector(try .init(from: decoder))
                     case "refresh_usage":
                         self = .refresh_usage(try .init(from: decoder))
+                    case "send_writer_message":
+                        self = .send_writer_message(try .init(from: decoder))
                     case "set_routing_policy":
                         self = .set_routing_policy(try .init(from: decoder))
                     case "set_workflow_policy":
@@ -9243,6 +9272,8 @@ public enum Components {
                         try value.encode(to: encoder)
                     case let .refresh_usage(value):
                         try value.encode(to: encoder)
+                    case let .send_writer_message(value):
+                        try value.encode(to: encoder)
                     case let .set_routing_policy(value):
                         try value.encode(to: encoder)
                     case let .set_workflow_policy(value):
@@ -9261,7 +9292,7 @@ public enum Components {
             /// - Parameters:
             ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy, move_parked_task, set_workflow_policy, send_writer_message). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///   - expected_bindings: Required for decision; forbidden for every other kind. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
@@ -9634,6 +9665,76 @@ public enum Components {
                     "task_id",
                     "role",
                     "selection"
+                ])
+            }
+        }
+        /// Send an operator's message to a running writer invocation of a run: one the run records as a writer, admitted to run as a cordoned host process. The daemon refuses, and records nothing, text that is empty or only whitespace, not UTF-8, or over 8 KiB, a command_id over 256 bytes, an invocation that isn't such a writer of the run, and a daemon with no driver to offer it through. Otherwise it records the message with sender device:<device_id>, offers it to the run, and answers with the record as settled, or as recorded when the offer didn't answer. Forbids the envelope's expected_entity_version and expected_bindings.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/SendWriterMessagePayload`.
+        public struct SendWriterMessagePayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SendWriterMessagePayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case send_writer_message = "send_writer_message"
+            }
+            /// - Remark: Generated from `#/components/schemas/SendWriterMessagePayload/kind`.
+            public var kind: Components.Schemas.SendWriterMessagePayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/SendWriterMessagePayload/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/SendWriterMessagePayload/invocation_id`.
+            public var invocation_id: Swift.String
+            /// The message, UTF-8 of at most 8192 bytes. maxLength counts characters, so the daemon's byte bound is the stricter one.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/SendWriterMessagePayload/text`.
+            public var text: Swift.String
+            /// Creates a new `SendWriterMessagePayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - run_id:
+            ///   - invocation_id:
+            ///   - text: The message, UTF-8 of at most 8192 bytes. maxLength counts characters, so the daemon's byte bound is the stricter one.
+            public init(
+                kind: Components.Schemas.SendWriterMessagePayload.kindPayload,
+                run_id: Swift.String,
+                invocation_id: Swift.String,
+                text: Swift.String
+            ) {
+                self.kind = kind
+                self.run_id = run_id
+                self.invocation_id = invocation_id
+                self.text = text
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case run_id
+                case invocation_id
+                case text
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.SendWriterMessagePayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.run_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .run_id
+                )
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.text = try container.decode(
+                    Swift.String.self,
+                    forKey: .text
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "run_id",
+                    "invocation_id",
+                    "text"
                 ])
             }
         }
@@ -10109,6 +10210,226 @@ public enum Components {
                 case expected_revision
                 case recorded
                 case policy
+            }
+        }
+        /// Where an operator's message stands. recorded: the daemon recorded it and its offer hasn't answered; the next daemon start offers it again under the same ordinal, and the run never writes it to the writer twice. delivered: the run's supervisor took it for the writer's input, never that the writer read it. That is at most once: a writer that exits before reading its input never sees it, and neither does one whose supervisor dies after the take. refused: it never reached the writer, for the record's refusal.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/OperatorMessageState`.
+        @frozen public enum OperatorMessageState: String, Codable, Hashable, Sendable, CaseIterable {
+            case recorded = "recorded"
+            case delivered = "delivered"
+            case refused = "refused"
+            case unknown = "unknown"
+        }
+        /// Why a message settled refused. run_ended: the writer's run had ended. input_closed: the writer's turn ended with nothing waiting, which closes its input for good. not_streamed: the writer reads no streamed input, as with a run an older daemon started. not_taken: the run's supervisor didn't take it in time, so the daemon withdrew it. not_started: the writer hadn't started. delivery_unknown: a restart found the run's files gone, so nothing says whether the supervisor took it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/OperatorMessageRefusal`.
+        @frozen public enum OperatorMessageRefusal: String, Codable, Hashable, Sendable, CaseIterable {
+            case run_ended = "run_ended"
+            case input_closed = "input_closed"
+            case not_streamed = "not_streamed"
+            case not_taken = "not_taken"
+            case not_started = "not_started"
+            case delivery_unknown = "delivery_unknown"
+            case unknown = "unknown"
+        }
+        /// The record of one message an operator sent to a writer invocation. It is the operator's own input, never agent output, and never verified evidence. ordinal orders the invocation's messages from 1. settled_at is set exactly when state isn't recorded, and refusal exactly when it is refused.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/OperatorMessage`.
+        public struct OperatorMessage: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/command_id`.
+            public var command_id: Swift.String
+            /// Who sent it: device:<device_id> for a paired client, or cli:<account> for the daemon's shell verb.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/sender`.
+            public var sender: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/text`.
+            public var text: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/ordinal`.
+            public var ordinal: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/state`.
+            public var state: Components.Schemas.OperatorMessageState
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/settled_at`.
+            public var settled_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/refusal`.
+            public struct refusalPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/OperatorMessage/refusal/value1`.
+                public var value1: Components.Schemas.OperatorMessageRefusal
+                /// Creates a new `refusalPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.OperatorMessageRefusal) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/OperatorMessage/refusal`.
+            public var refusal: Components.Schemas.OperatorMessage.refusalPayload?
+            /// Creates a new `OperatorMessage`.
+            ///
+            /// - Parameters:
+            ///   - command_id:
+            ///   - sender: Who sent it: device:<device_id> for a paired client, or cli:<account> for the daemon's shell verb.
+            ///   - run_id:
+            ///   - invocation_id:
+            ///   - text:
+            ///   - ordinal:
+            ///   - recorded_at:
+            ///   - state:
+            ///   - settled_at:
+            ///   - refusal:
+            public init(
+                command_id: Swift.String,
+                sender: Swift.String,
+                run_id: Swift.String,
+                invocation_id: Swift.String,
+                text: Swift.String,
+                ordinal: Swift.Int64,
+                recorded_at: Foundation.Date,
+                state: Components.Schemas.OperatorMessageState,
+                settled_at: Foundation.Date? = nil,
+                refusal: Components.Schemas.OperatorMessage.refusalPayload? = nil
+            ) {
+                self.command_id = command_id
+                self.sender = sender
+                self.run_id = run_id
+                self.invocation_id = invocation_id
+                self.text = text
+                self.ordinal = ordinal
+                self.recorded_at = recorded_at
+                self.state = state
+                self.settled_at = settled_at
+                self.refusal = refusal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case command_id
+                case sender
+                case run_id
+                case invocation_id
+                case text
+                case ordinal
+                case recorded_at
+                case state
+                case settled_at
+                case refusal
+            }
+        }
+        /// A send_writer_message command's result: the message's record as it stands. The record is the command's only receipt, so a retry of the same command_id returns the record as it stands then, which may have settled since.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord`.
+        public struct OperatorMessageRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case send_writer_message = "send_writer_message"
+            }
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/kind`.
+            public var kind: Components.Schemas.OperatorMessageRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/sender`.
+            public var sender: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/run_id`.
+            public var run_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/text`.
+            public var text: Swift.String
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/ordinal`.
+            public var ordinal: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/state`.
+            public var state: Components.Schemas.OperatorMessageState
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/settled_at`.
+            public var settled_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/refusal`.
+            public struct refusalPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/refusal/value1`.
+                public var value1: Components.Schemas.OperatorMessageRefusal
+                /// Creates a new `refusalPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.OperatorMessageRefusal) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/OperatorMessageRecord/refusal`.
+            public var refusal: Components.Schemas.OperatorMessageRecord.refusalPayload?
+            /// Creates a new `OperatorMessageRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - sender:
+            ///   - run_id:
+            ///   - invocation_id:
+            ///   - text:
+            ///   - ordinal:
+            ///   - recorded_at:
+            ///   - state:
+            ///   - settled_at:
+            ///   - refusal:
+            public init(
+                kind: Components.Schemas.OperatorMessageRecord.kindPayload,
+                command_id: Swift.String,
+                sender: Swift.String,
+                run_id: Swift.String,
+                invocation_id: Swift.String,
+                text: Swift.String,
+                ordinal: Swift.Int64,
+                recorded_at: Foundation.Date,
+                state: Components.Schemas.OperatorMessageState,
+                settled_at: Foundation.Date? = nil,
+                refusal: Components.Schemas.OperatorMessageRecord.refusalPayload? = nil
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.sender = sender
+                self.run_id = run_id
+                self.invocation_id = invocation_id
+                self.text = text
+                self.ordinal = ordinal
+                self.recorded_at = recorded_at
+                self.state = state
+                self.settled_at = settled_at
+                self.refusal = refusal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case sender
+                case run_id
+                case invocation_id
+                case text
+                case ordinal
+                case recorded_at
+                case state
+                case settled_at
+                case refusal
             }
         }
         /// The receipt of a workflow setting change: the request as accepted, whether it recorded a new revision, and the workflow policy revision current after it. recorded false means the layer already held the value, and revision is then the one the request expected.
@@ -11502,6 +11823,8 @@ public enum Components {
                 case reassign_collector(Components.Schemas.CollectorReassignmentRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/UsageRefreshRecord`.
                 case refresh_usage(Components.Schemas.UsageRefreshRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/OperatorMessageRecord`.
+                case send_writer_message(Components.Schemas.OperatorMessageRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/RoutingPolicyChangeRecord`.
                 case set_routing_policy(Components.Schemas.RoutingPolicyChangeRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/WorkflowPolicyChangeRecord`.
@@ -11530,6 +11853,8 @@ public enum Components {
                         self = .reassign_collector(try .init(from: decoder))
                     case "refresh_usage":
                         self = .refresh_usage(try .init(from: decoder))
+                    case "send_writer_message":
+                        self = .send_writer_message(try .init(from: decoder))
                     case "set_routing_policy":
                         self = .set_routing_policy(try .init(from: decoder))
                     case "set_workflow_policy":
@@ -11557,6 +11882,8 @@ public enum Components {
                     case let .reassign_collector(value):
                         try value.encode(to: encoder)
                     case let .refresh_usage(value):
+                        try value.encode(to: encoder)
+                    case let .send_writer_message(value):
                         try value.encode(to: encoder)
                     case let .set_routing_policy(value):
                         try value.encode(to: encoder)
@@ -22506,6 +22833,14 @@ public enum Operations {
     /// their own answers, such as 409 for a stale expected_revision and 404
     /// for an unknown task. The same command can succeed once the daemon
     /// has a tree.
+    /// A send_writer_message carries neither envelope field either. It
+    /// records no receipt: the operator message it records is its result,
+    /// and a replay returns that record as it stands, settled or not.
+    /// Text that is empty, not UTF-8, or over 8 KiB, an invocation that
+    /// isn't a cordoned writer of the run, and a daemon with no driver are
+    /// 400 and record nothing; an unknown run, or an invocation with no
+    /// admission for it, is 404. A run that refuses the message is still
+    /// 200, with the record refused and its reason.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

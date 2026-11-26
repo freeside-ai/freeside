@@ -10,5 +10,31 @@
     "omitted_before": false,
     "unreadable_records": 1
   },
-  "prompt": "Implement the approved work item."
+  "prompt": "Implement the approved work item.",
+  "operator_messages": [
+    {
+      "command_id": "cmd-message-1",
+      "sender": "device:device-569",
+      "run_id": "run-570",
+      "invocation_id": "writer-570",
+      "text": "The failing test is in the lexer, not the parser.",
+      "ordinal": 1,
+      "recorded_at": "2026-11-26T17:00:00Z",
+      "state": "delivered",
+      "settled_at": "2026-11-26T17:00:02Z",
+      "refusal": null
+    },
+    {
+      "command_id": "cmd-message-2",
+      "sender": "device:device-569",
+      "run_id": "run-570",
+      "invocation_id": "writer-570",
+      "text": "Also run the fuzz corpus before you finish.",
+      "ordinal": 2,
+      "recorded_at": "2026-11-26T17:01:00Z",
+      "state": "refused",
+      "settled_at": "2026-11-26T17:01:02Z",
+      "refusal": "not_taken"
+    }
+  ]
 }

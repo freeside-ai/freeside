@@ -170,22 +170,9 @@ func (f corpusFixture) seedAdmissionWithPolicy(
 	invocation domain.InvocationID, policyDigest domain.Digest,
 ) domain.ExecutionAdmission {
 	t.Helper()
-	identityID := domain.AuthIdentityID("auth-1")
-	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID: invocation, RunID: runID, StageID: stageID, AttemptID: attemptID,
-		Backend:        "fresh_vm_read_only_volume_handoff",
-		Capabilities:   domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		OperatingMode:  domain.ModeAttendedDev,
-		CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile:  domain.EgressProviderOnly,
-		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     "sha256:spec", PolicyDigest: policyDigest, InputDigest: "sha256:input",
-		Base: domain.BaseRevision{
-			Repo: "owner/repo", RepositoryID: corpusRepositoryID, BaseRef: "refs/heads/main", BaseSHA: corpusBaseSHA,
-		},
-		Workspace: "ws-1", AuthIdentityID: &identityID,
-		AdmittedAt: f.at,
-	})
+	input := corpusAdmissionInput(runID, stageID, attemptID, invocation, f.at)
+	input.PolicyDigest = policyDigest
+	admission, err := domain.NewExecutionAdmission(input)
 	if err != nil {
 		t.Fatalf("NewExecutionAdmission: %v", err)
 	}
@@ -193,6 +180,30 @@ func (f corpusFixture) seedAdmissionWithPolicy(
 		return tx.RecordExecutionAdmission(context.Background(), admission)
 	})
 	return admission
+}
+
+// corpusAdmissionInput is an attended-dev admission of one attempt to the
+// warded backend, under the corpus policy label.
+func corpusAdmissionInput(
+	runID domain.RunID, stageID domain.StageID, attemptID domain.AttemptID, invocation domain.InvocationID,
+	at time.Time,
+) domain.ExecutionAdmissionInput {
+	identityID := domain.AuthIdentityID("auth-1")
+	return domain.ExecutionAdmissionInput{
+		InvocationID: invocation, RunID: runID, StageID: stageID, AttemptID: attemptID,
+		Backend:        "fresh_vm_read_only_volume_handoff",
+		Capabilities:   domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: corpusRepositoryID, BaseRef: "refs/heads/main", BaseSHA: corpusBaseSHA,
+		},
+		Workspace: "ws-1", AuthIdentityID: &identityID,
+		AdmittedAt: at,
+	}
 }
 
 func (f corpusFixture) seedExport(t *testing.T, admission domain.ExecutionAdmission) {

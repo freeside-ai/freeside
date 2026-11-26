@@ -1740,7 +1740,7 @@ enum MockContractValidation {
                 guard trimmed.unicodeScalars.count <= 60 else { throw malformed("name exceeds 60 characters") }
             }
         case .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy, .move_parked_task,
-            .set_workflow_policy:
+            .set_workflow_policy, .send_writer_message:
             // An operator command binds to no entity version (api/openapi.yaml).
             guard command.expected_entity_version == nil, command.expected_bindings == nil else {
                 throw malformed("operator command must not carry expected_entity_version or expected_bindings")
@@ -1768,6 +1768,10 @@ enum MockContractValidation {
             case .set_workflow_policy(let payload):
                 guard (payload.expected_revision ?? 1) >= 1 else { throw malformed("non-positive expected_revision") }
                 if let reason = workflowPolicyChangeFault(payload) { throw malformed(reason) }
+            case .send_writer_message(let payload):
+                guard !payload.run_id.isEmpty, !payload.invocation_id.isEmpty else {
+                    throw malformed("empty run or invocation")
+                }
             case .decision, .stop_task, .submit_task:
                 break
             }

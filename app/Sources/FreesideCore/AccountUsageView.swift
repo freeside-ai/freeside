@@ -378,7 +378,7 @@ struct AccountUsageView: View {
         case .refresh_usage(let payload): "the refresh of \(payload.pool)"
         case .reassign_collector(let payload): "making \(payload.enrollment_id) the collector for \(payload.pool)"
         case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy, .move_parked_task,
-            .set_workflow_policy:
+            .set_workflow_policy, .send_writer_message:
             "the usage command"
         }
     }

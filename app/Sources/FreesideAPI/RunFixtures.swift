@@ -625,7 +625,7 @@ public enum RunFixtures {
             omitted_before: false, unreadable_records: 0)
         return .init(
             run_id: runID, invocation_id: invocationID, availability: .live, transcript: nil,
-            live: .init(value1: live), prompt: writerPrompt)
+            live: .init(value1: live), prompt: writerPrompt, operator_messages: [])
     }
 
     /// A running writer's answer once a credential rule matched its
@@ -635,7 +635,7 @@ public enum RunFixtures {
     ) -> Components.Schemas.InvocationTranscript {
         .init(
             run_id: runID, invocation_id: invocationID, availability: .withheld, transcript: nil, live: nil,
-            prompt: writerPrompt)
+            prompt: writerPrompt, operator_messages: [])
     }
 
     /// Runs that kept no transcript: the failed oriole run, so the mock
@@ -659,7 +659,7 @@ public enum RunFixtures {
         guard ended, !transcriptlessRunIDs.contains(runID) else {
             return .init(
                 run_id: runID, invocation_id: invocation.invocation_id, availability: .unavailable,
-                transcript: nil, live: nil, prompt: nil)
+                transcript: nil, live: nil, prompt: nil, operator_messages: [])
         }
         let finished = invocation.status == .completed
         let content = finished ? finishedTranscript : failedTranscript
@@ -679,7 +679,8 @@ public enum RunFixtures {
                 availability: .available))
         return .init(
             run_id: runID, invocation_id: invocation.invocation_id, availability: .available,
-            transcript: .init(value1: claim), live: nil, prompt: writerPrompt)
+            transcript: .init(value1: claim), live: nil, prompt: writerPrompt,
+            operator_messages: [])
     }
 
     public static func reviewEvidence(

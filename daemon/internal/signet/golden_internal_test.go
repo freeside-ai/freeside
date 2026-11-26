@@ -2,6 +2,7 @@ package signet
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -314,12 +315,19 @@ func TestSignetWireGoldens(t *testing.T) {
 		},
 		{name: "error-response", value: errorResponse{Message: "fixture error"}},
 		{name: "invocation-transcript", value: invocationTranscriptFixture(t)},
-		{name: "invocation-transcript-live", value: liveInvocationTranscriptFixture()},
+		{name: "invocation-transcript-live", value: liveInvocationTranscriptFixture(t)},
 		{
 			name: "invocation-transcript-withheld",
 			value: InvocationTranscript{
 				RunID: "run-570", InvocationID: "writer-570", Availability: InvocationTranscriptWithheld,
+				OperatorMessages: []domain.OperatorMessage{},
 			},
+		},
+		{
+			name: "writer-message-result",
+			value: normalizeCommandResult(CommandResult{
+				OperatorMessage: &operatorMessageFixtures(t)[0], Revision: 27,
+			}),
 		},
 		{
 			name:  "effect-proposal-facts-verified",
@@ -422,12 +430,44 @@ func invocationTranscriptFixture(t *testing.T) InvocationTranscript {
 	return InvocationTranscript{
 		RunID: "run-569", InvocationID: invocation,
 		Availability: InvocationTranscriptAvailable, Transcript: transcript, Prompt: &prompt,
+		OperatorMessages: []domain.OperatorMessage{},
 	}
+}
+
+// operatorMessageFixtures are two settled messages to writer-570 of
+// run-570: the first delivered, the second refused.
+func operatorMessageFixtures(t *testing.T) []domain.OperatorMessage {
+	t.Helper()
+	recordedAt := time.Date(2026, 11, 26, 17, 0, 0, 0, time.UTC)
+	notTaken := domain.OperatorMessageRefusalNotTaken
+	var out []domain.OperatorMessage
+	for i, step := range []struct {
+		text    string
+		refusal *domain.OperatorMessageRefusal
+	}{
+		{"The failing test is in the lexer, not the parser.", nil},
+		{"Also run the fuzz corpus before you finish.", &notTaken},
+	} {
+		at := recordedAt.Add(time.Duration(i) * time.Minute)
+		m, err := domain.NewOperatorMessage(domain.OperatorMessageRequest{
+			CommandID: fmt.Sprintf("cmd-message-%d", i+1), Sender: "device:device-569",
+			RunID: "run-570", InvocationID: "writer-570", Text: step.text,
+		}, int64(i+1), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m, err = m.Settle(step.refusal, at.Add(2*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // liveInvocationTranscriptFixture is a running writer's answer: two
 // records after an earlier read, one withheld record counted, and a prompt.
-func liveInvocationTranscriptFixture() InvocationTranscript {
+func liveInvocationTranscriptFixture(t *testing.T) InvocationTranscript {
+	t.Helper()
 	prompt := "Implement the approved work item."
 	return InvocationTranscript{
 		RunID: "run-570", InvocationID: "writer-570", Availability: InvocationTranscriptLive,
@@ -436,7 +476,8 @@ func liveInvocationTranscriptFixture() InvocationTranscript {
 			Records:           []byte("{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n"),
 			UnreadableRecords: 1,
 		},
-		Prompt: &prompt,
+		Prompt:           &prompt,
+		OperatorMessages: operatorMessageFixtures(t),
 	}
 }
 
