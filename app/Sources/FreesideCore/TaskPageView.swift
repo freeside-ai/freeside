@@ -2801,7 +2801,7 @@ enum TaskTimelinePresentation {
         let phase = TaskDisplay.isActive(task) ? TaskDisplay.currentPhaseAndRound(position) : nil
         if let oldest = openItems.compactMap(\.created_at).min() {
             let age = AttentionDisplay.relativeRowTime(oldest, now: now)
-            return StatusLine(state: "Waiting on You", cut: .attention, stage: phase, remaining: "since \(age)")
+            return StatusLine(state: "Waiting on You", cut: .attention, stage: phase, remaining: "for \(age)")
         }
         if TaskDisplay.isActive(task) {
             let row = TaskDisplay.workingRow(task, position: position, stage: stage)

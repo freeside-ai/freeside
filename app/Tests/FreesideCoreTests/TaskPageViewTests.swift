@@ -1283,8 +1283,8 @@ import Testing
             stage: review, openItems: open.map(\.item), completion: nil, now: now, locale: locale,
             timeZone: timeZone)
         #expect(
-            line == .init(state: "Waiting on You", cut: .attention, stage: "Review · Round 1", remaining: "since 6h"))
-        #expect(line.spoken == "Waiting on You, Review · Round 1, since 6h")
+            line == .init(state: "Waiting on You", cut: .attention, stage: "Review · Round 1", remaining: "for 6h"))
+        #expect(line.spoken == "Waiting on You, Review · Round 1, for 6h")
     }
 
     /// #3376: a working task reads its row's keyword and stage, and names
