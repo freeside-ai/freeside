@@ -24,7 +24,7 @@ enum EmptyStateGlyph {
 }
 
 /// A pane's empty or unavailable state (R13): its section's glyph, a serif
-/// line, and a dim sans line, centered where its seat puts it.
+/// line, and an optional dim sans line, centered where its seat puts it.
 struct UnavailableStateView: View {
     /// Where an empty state centers. Both center it in the height offered.
     enum Seat {
@@ -40,7 +40,7 @@ struct UnavailableStateView: View {
 
     let glyph: EmptyStateGlyph
     let title: String
-    let description: String
+    let description: String?
     var seat = Seat.pane
 
     var body: some View {
@@ -67,13 +67,13 @@ extension View {
 }
 
 /// The empty state itself (R13): the section's glyph at 28pt in faint ink,
-/// the statement in the serif, and one dim line under it, centered. The
-/// glyph is decoration, and the two lines read to VoiceOver as one element,
+/// the statement in the serif, and an optional dim line under it, centered.
+/// The glyph is decoration, and the lines read to VoiceOver as one element,
 /// the way the system's unavailable view reads its label and description.
 struct EmptyStateBlock: View {
     let glyph: EmptyStateGlyph
     let title: String
-    let description: String
+    let description: String?
 
     @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = screenshotMetricBase(
         28, relativeTo: .body)
@@ -88,9 +88,11 @@ struct EmptyStateBlock: View {
             Text(title)
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)
-            Text(description)
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
+            if let description {
+                Text(description)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            }
         }
         .multilineTextAlignment(.center)
         .accessibilityElement(children: .combine)

@@ -5661,6 +5661,54 @@
                             markdownFindingsDetail.screenshotCard(
                                 markdownFindings, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
             }
+            // The list column's unloaded unreachable state (#3706): Mac sidebar
+            // with LaunchAgent status, start error, and pinned footer; iPhone
+            // list without host status. Drawn last, for the reason given above
+            // (#1698).
+            let unreachableStore = InboxStore(client: client)
+            unreachableStore.freshness = .unreachable
+            let unreachableAttemptAt = screenshotNow.addingTimeInterval(-30)
+            let unreachableHostStatus = HostDaemonStatus(
+                state: .unreachable,
+                startFailure: DaemonStartFailure(
+                    message: #"listen "100.64.0.1:7331": bind: address already in use"#,
+                    loggedAt: screenshotNow.addingTimeInterval(-3 * 60),
+                    logURL: URL(
+                        fileURLWithPath: "/Users/operator/Library/Application Support/Freeside/daemon/freesided.log")))
+            for (device, width) in [("mac", CGFloat(320)), ("iphone", CGFloat(390))] {
+                for (theme, scheme) in [("light", ColorScheme.light), ("dark", ColorScheme.dark)] {
+                    let list = UnifiedListView(
+                        store: unreachableStore,
+                        tasks: [],
+                        navigation: screenshotNavigation(selecting: nil),
+                        preferences: try screenshotListPreferences(),
+                        lastAttemptAt: unreachableAttemptAt)
+                    let view: AnyView =
+                        if device == "mac" {
+                            AnyView(
+                                VStack(spacing: 0) {
+                                    list
+                                    SidebarFooter(
+                                        freshness: .unreachable, lastUpdatedAt: nil, onOpenSettings: {})
+                                }
+                                .frame(minHeight: 640)
+                                .background(Color.sidebarGround)
+                                .environment(\.hostDaemonStatus, unreachableHostStatus))
+                        } else {
+                            AnyView(
+                                list
+                                    .frame(minHeight: 640)
+                                    .background(Color.ground)
+                                    .environment(\.hostDaemonStatus, nil))
+                        }
+                    surfaces.append(
+                        Surface(
+                            name: "unified-list-unreachable-\(device)-\(theme)",
+                            width: width,
+                            colorScheme: scheme,
+                            view: view))
+                }
+            }
             return surfaces
         }
 
