@@ -3088,14 +3088,24 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   project's scope; without it the command works on the instance scope.
 - **The sections.** The instance scope holds `host_tools`, `images`,
   `seed_root`, `prompts`, `agent_tree`, `review`, `judgment`, `timeouts`,
-  `manual_submission_config`, `build`, `macos_verification`, and
-  `cordoned_launches` (`max_concurrent`); a project holds `repository`
-  (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
-  `approved_recipe`, `agent_image`, `hand_back_label`, and
-  `writer_class`. A value takes the fields its `settings.json` key
+  `manual_submission_config`, `build`, `macos_verification`,
+  `cordoned_launches` (`max_concurrent`), and `execution`; a project holds
+  `repository` (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
+  `approved_recipe`, `agent_image`, `hand_back_label`, `writer_class`, and
+  `enabled`. A value takes the fields its `settings.json` key
   has, less the launch-only ones `import` lists below; `agent_image` is
   the file's `images.agent`, and `host_tools.container` is new, because
   `settings.json` doesn't hold it.
+- **Two switches start real work.** The instance's `execution` section
+  and a project's `enabled` section each take `{"enabled": true}` or
+  `{"enabled": false}`, and an unset section reads as off. With both on,
+  for exactly one project, the installed daemon composes its driver (Run
+  The Installed Daemon From Its Settings). `import` never sets either, so
+  an import alone starts no work.
+- **`execution_pause` is not run configuration.** The instance scope
+  also holds the pause that `freesided execution pause` records and
+  `resume` clears (Pause Execution For A Deputy Run). Only those commands
+  write it; `set` refuses the section, with or without `-clear`.
 - **A set checks the value first.** `set` decodes the value strictly into
   the section's shape and checks it against current policy: absolute,
   clean paths, digest-pinned images, a sha256 recipe, explicit allowed
@@ -3105,8 +3115,9 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   differs from the project's `projects` row is refused.
 - **Only an optional section clears.** `-clear` records a revision that
   clears `judgment`, `manual_submission_config`, `macos_verification`,
-  `cordoned_launches`, or a project's `hand_back_label` or
-  `writer_class`; clearing any other section is refused.
+  `cordoned_launches`, `execution`, or a project's `hand_back_label`,
+  `writer_class`, or `enabled`; clearing any other section is refused. A
+  cleared switch reads as off.
 - **`writer_class` picks the class a project's writers run on.** It is
   `cordoned_host_process` (the cordoned run, the default when unset) or
   `fresh_vm_read_only_volume_handoff` (warded); any other class is refused.
@@ -3137,7 +3148,8 @@ launchd `PATH` need not resolve it, so the import stores an absolute path:
 `-container-bin`, or the lookup of `container` on the command's own
 `PATH`, which a running daemon receives, and it refuses a relative one. It refuses
 when the instance or the file's project already has a revision, other than
-an execution pause or a cordoned launch cap, which the file doesn't carry;
+an execution pause, a cordoned launch cap, or a switch, which the file
+doesn't carry;
 change sections with `set` after that. It prints both head revisions, the
 project, `takes_effect`, and `not_imported`: the file's keys a run takes
 from its launch instead of the records, except `repository.base_sha`,
@@ -3147,6 +3159,54 @@ inputs, `writers`, the review and judgment models and efforts, `prod`, and
 `memory_budget_mib`).
 
 ### Run The Installed Daemon From Its Settings
+
+Real work runs here, on the installed `prod` daemon. The deputy is for an
+attended run of an unreleased build, which exit runs use (Run An Unreleased
+Build With The Deputy). To start real work on `prod`, with
+`DB="$HOME/Library/Application Support/Freeside/daemon/freeside.db"` and
+`FreesideMac` standing for
+`"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac"`
+(app/README.md, Control The Supervised Daemon From A Command):
+
+1. **Enroll and onboard with `prod` stopped.** Run `FreesideMac daemon
+   stop`, then `freesided auth add -db "$DB" ...` for each identity a run
+   uses (Enroll An Agent Credential) and `freesided onboard -db "$DB" ...`
+   for the project (Onboard Freeside for this repository), then `FreesideMac
+   daemon start --timeout 30`. Both commands refuse a database a daemon
+   holds. An identity whose volume already exists goes through `freesided
+   auth adopt` instead, which works on the running daemon while it runs no
+   driver (Select Agents Through The Lineup).
+2. **Store the settings.** Run `freesided settings import -db "$DB"
+   -settings <absolute settings.json>` once, from a deputy settings file, or
+   `freesided settings set` for each section (Store Instance And Project
+   Settings). Both work on the running daemon.
+3. **Turn the switches on.**
+
+   ```sh
+   freesided settings set -db "$DB" -section execution -value '{"enabled":true}'
+   freesided settings set -db "$DB" -project <project> -section enabled -value '{"enabled":true}'
+   ```
+
+4. **Restart on the records.** `freesided execution resume -db "$DB"`
+   clears any pause and restarts the driverless `prod`, which runs the start
+   order below. It prints the status JSON with `"restarting":true`.
+5. **Confirm it executes.** `freesided execution status -db "$DB"` prints
+   `"executes":true` once the restarted `prod` composed its driver (the
+   daemon that answers in the first seconds after a resume can be the one
+   about to restart, so read it again if it says `false`), and
+   `freesided inspect health -db "$DB"` lists no blocking `system_health`
+   item. A start that failed prints `"executes":false`, and its card names
+   the condition in the table below and the fix. A blocking
+   `project_not_ready` item means a readiness check failed; repair it, and
+   the next pass clears it.
+6. **Submit work.** A paired client's `submit_task`, when
+   `manual_submission_config` names the project (Configure Client Task
+   Submission); `freesided submit -db "$DB" ...`, which goes through the
+   control socket, with the inputs a deputy submission takes less
+   `--require-composition`, which binds a deputy's launch manifest; or label
+   intake. Each waits for the project's readiness checks to pass.
+7. **Read the run.** `freesided inspect task -db "$DB" -task <task-id>`
+   prints its record (Read A Task's Record).
 
 The installed `prod` daemon, which launchd starts with no `-driver`, runs
 real work from the settings records (#2083). It composes its Claude driver
@@ -3565,8 +3625,9 @@ the routing policy orders the enrollment.
 -client claude_code` under its own identity, `-account`, and
 `-auth-volume`. Any database works, including a scratch one: the volume
 outlives it. Every deputy root after that names the identity and volume in
-`agent_tree.second_writer` (Run Real Work With The Deputy), records the
-identity over that volume at start, and adopts it with no new token. Running
+`agent_tree.second_writer` (Run An Unreleased Build With The Deputy),
+records the identity over that volume at start, and adopts it with no new
+token. Running
 `auth add` on the deputy's own root before its first start works too, since
 it records the same interim facts the deputy checks.
 
@@ -5383,14 +5444,22 @@ at the new head when nothing it covers changed there.
   room under `provider_only` egress can't fetch, and a live adapter
   re-proof; both stay operator steps until agent-base upkeep (#2338).
 
-### Run Real Work With The Deputy
+### Run An Unreleased Build With The Deputy
 
-`freesided deputy -root <state-root>` is the real-work daemon in one
+`freesided deputy -root <state-root>` is the attended run of an unreleased
+build, which exit runs use. Real work otherwise runs on the installed
+daemon (Run The Installed Daemon From Its Settings). The deputy is one
 process: it takes the production rig lease, adopts the agent tree, runs the
 composition preflight, and serves an `ephemeral` daemon that uses `prod`'s
-App authority under that lease (#1583). It is the only real-work launch
-path. Its settings come from one file, not
-flags:
+App authority under that lease (#1583).
+
+A deputy, `freesided prelaunch`, and `freesided onboard` each take the App
+authority writer lock, which an executing `prod` holds, so each refuses
+while `prod` executes and names `freesided execution pause`. Pause `prod`
+before the first of them and resume it after the last deputy ends (Pause
+Execution For A Deputy Run).
+
+The deputy's settings come from one file, not flags:
 
 ```sh
 freesided deputy -root <state-root>
@@ -5728,11 +5797,47 @@ takes `prod`'s database, `<prod-root>/daemon/freeside.db` (the `prod` state
 root is `~/Library/Application Support/Freeside/`):
 
 ```sh
-freesided execution pause -db <prod-root>/daemon/freeside.db
+DB="$HOME/Library/Application Support/Freeside/daemon/freeside.db"
+freesided execution status -db "$DB"
+freesided execution pause -db "$DB"
 freesided deputy -root <state-root>
-# ... the deputy run ...
-freesided execution resume -db <prod-root>/daemon/freeside.db
+# ... the deputy run, and any further passes ...
+freesided execution resume -db "$DB"
+freesided execution status -db "$DB"
 ```
+
+Hand over in this order:
+
+1. **Read whether `prod` executes.** `execution status` prints one JSON
+   line: `pause` (`null`, or `{"state":"requested"}` or
+   `{"state":"released"}`), `readiness` (restart readiness, whose
+   `blockers` list the running work a requested pause waits on),
+   `executes` (whether this `prod` runs a driver, and so may hold the
+   writer lock), and `restarting`. With `"executes":false` and no pause,
+   `prod` holds no lock and needs no pause. An error that no daemon is
+   running means `prod` is stopped; start it first, since the clients use
+   it through the run.
+2. **Pause before the first command that takes the App authority:** an
+   exit run's first `exit-root.sh` pass or `prelaunch`, an `onboard`, or
+   the deputy. `execution pause` prints the status JSON on stdout when it
+   records the pause and at each change, notes on stderr while the
+   restarting `prod` doesn't answer, and returns with status 0 after its
+   last stderr line, `execution pause: released; prod runs without
+   execution`. Interrupting it leaves `prod` finishing the pause.
+3. **Run the deputy.** A gap of over an hour between deputy passes raises
+   the advisory `execution_pause_unused` card (A forgotten pause, below),
+   which is expected during an exit run.
+4. **Resume once the last deputy has ended and released its lease.**
+   Against a running `prod`, `execution resume` prints the status JSON with
+   `"pause":null` and, from a `prod` without execution,
+   `"restarting":true`. With no daemon running it prints `execution resume: cleared the
+   pause; prod runs its gated order at its next start` or `execution
+   resume: no pause was in force`. While a rig lease manifest still exists
+   it warns on stderr that `prod` comes back without execution; resume
+   again once the deputy ends, or after `freesided rig recover` for a stale
+   lease. The following `execution status` reports `"executes":true` once
+   the restarted `prod` composed its driver, when its `execution` switch is
+   on (Run The Installed Daemon From Its Settings).
 
 - **`pause`** records the pause in the instance settings'
   `execution_pause` section and raises an advisory `execution_pause` card.
@@ -6763,7 +6868,7 @@ stop startup: the daemon logs that the executor declares nothing. Under
 under `-run-conformance`; under `attended_dev`, jobs are still admitted.
 Since the digest names the daemon binary, a rebuilt `freesided` needs a fresh
 pass. `freesided deputy` takes the same five values from its
-`macos_verification` setting (Run Real Work With The Deputy).
+`macos_verification` setting (Run An Unreleased Build With The Deputy).
 
 **The pass.** Full refuses off macOS and records nothing there. Otherwise it
 first withdraws the declaration and records a `superseded` marker, so a pass

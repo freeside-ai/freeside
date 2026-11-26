@@ -1,7 +1,9 @@
 # Checkpoint Lists
 
-Templates for the exit run's gate table and its operator checkpoints: five
-on every run, and a sixth when a seeded pass has a row that needs a device.
+Templates for the exit run's gate table and its operator checkpoints: the
+handover from `prod` that opens every run, five more on every run, a sixth
+when a seeded pass has a row that needs a device, and the hand back to
+`prod` that closes a run that paused it.
 SKILL.md says when each is used; this file fixes their shape so every run
 asks the same way. Replace every bracketed placeholder and delete rows the
 contract doesn't need. Send each list as one message and wait for all of
@@ -42,6 +44,29 @@ turned on, and nothing on the Mac listens (SKILL.md, Derive the Exit
 Contract).
 
 The tracker comment repeats this table with a Result column.
+
+## Hand Over From `prod` (Before Preflight)
+
+Sent before Preflight's first `prelaunch` (SKILL.md, Hand Over From
+`prod`). `<prod-db>` is
+`"$HOME/Library/Application Support/Freeside/daemon/freeside.db"`, and
+`<freesided>` is the installed one,
+`"$HOME/Applications/Freeside.app/Contents/Resources/freesided"`.
+
+```markdown
+**Hand the App authority over from `prod`.** The run's first check takes
+the App authority, which an executing `prod` holds. Please do each and
+reply with the output per line.
+
+| # | Device | Action | Report back |
+| --- | --- | --- | --- |
+| 1 | Mac | Run `<freesided> execution status -db <prod-db>` | Its output. |
+| 2 | Mac | Only if row 1 shows `"executes":true`: run `<freesided> execution pause -db <prod-db>` and let it finish; it waits for `prod`'s running work | Its whole output, stdout and stderr. Expected last line: `execution pause: released; prod runs without execution`. |
+| 3 | Mac | Only if you ran row 2: run row 1's command again | Its output. Expected: `"executes":false`, `"pause":{"state":"released"}`. |
+| 4 | Either | Anything that looks wrong | A screenshot. |
+```
+
+SKILL.md (Hand Over From `prod`) says which answers let the run go on.
 
 ## 1. Environment (Before Launch)
 
@@ -187,3 +212,20 @@ parked. The park allocates the next attempt as a new run; `freesided
 follow -run <that run> -until park-ended -timeout <duration>
 -approved-recipe <digest>` waits for its
 admission, which ends the park. On the refused run it holds at once.
+
+## Hand Back To `prod` (Close Out)
+
+Sent once the last deputy pass has ended and released its lease, and only
+when the run paused `prod` or found it paused (SKILL.md, Close Out).
+`<prod-db>` and `<freesided>` are as in Hand Over From `prod`.
+
+```markdown
+**Hand the App authority back to `prod`.** The run's last deputy has
+ended. Please do each and reply with the output per line.
+
+| # | Device | Action | Report back |
+| --- | --- | --- | --- |
+| 1 | Mac | Run `<freesided> execution resume -db <prod-db>` | Its whole output, stdout and stderr. |
+| 2 | Mac | About a minute later, once `prod` has restarted, run `<freesided> execution status -db <prod-db>` | Its output. Expected: `"pause":null`, and `"executes":true` if `prod` executed before the run. |
+| 3 | Either | Anything that looks wrong | A screenshot. |
+```
