@@ -39,6 +39,12 @@ const (
 	followerRetryBackoffCap = time.Hour
 )
 
+// adapterProofRetries bounds one series of adapter-proof retries
+// (conformanceFollower.retryAdapterProof). With followerBackoff the retries
+// wait 5, 10, and 20 minutes, long enough for the load an exit run's own
+// builds and cache fills put on the machine to clear.
+const adapterProofRetries = 3
+
 // baseInputsMemoBases is how many base commits baseInputsMemo keeps. Runs
 // admitted at different tips select at their own bases, but nearly all
 // selections are for the latest tip or a few older runs, so a handful of
@@ -247,6 +253,13 @@ type followerConfig struct {
 	// proof (ward.Backend.RetireConformance).
 	Prove  func(context.Context, domain.ImageRef) error
 	Retire func(context.Context, domain.ImageRef) error
+	// ProveAdapter reruns the adapter proof alone in an image whose suite
+	// proof stands, waiting for memory (runAdapterProofRetry).
+	ProveAdapter func(context.Context, domain.ImageRef) error
+	// AfterProof, when set, runs after an adapter proof that may have passed:
+	// the gate recheck that lifts a start's launch-coverage hold
+	// (agentSelectionGate.recheck).
+	AfterProof func(context.Context)
 	// Start is the image the start proved or would have, which the first
 	// scheduled pass keeps when no attempt has selected an image yet.
 	Start  domain.ImageRef
@@ -281,6 +294,12 @@ type conformanceFollower struct {
 	// any attempt selected one.
 	selected map[domain.ImageRef]struct{}
 	latest   domain.ImageRef
+	// retries counts the adapter-proof retries the current series scheduled,
+	// and retryEpoch names that series' latest one: a waiting retry whose
+	// epoch moved was overtaken, by a later proof or a newer retry, and does
+	// not run.
+	retries    int
+	retryEpoch int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -361,17 +380,125 @@ func (f *conformanceFollower) pass(image domain.ImageRef) {
 	} else {
 		f.cfg.Logger.Info("running conformance for the selected writer image", "image", image)
 	}
-	if err := f.cfg.Prove(f.ctx, image); err != nil {
+	err := f.cfg.Prove(f.ctx, image)
+	switch {
+	case adapterProofOverran(err):
+		// The suite passed and published; only the adapter proof ran out of
+		// time, and its retry, not another suite, follows. The pass's
+		// adapter proof is the adapter's record now, so it starts its own
+		// series.
+		if f.ctx.Err() == nil {
+			f.clearFailure(image)
+			f.cfg.Logger.Warn("conformance recorded for the selected writer image, but its adapter proof ran out its budget",
+				"image", image, "error", err)
+			f.endAdapterRetries()
+			f.settleAdapterProof(f.ctx, image, err)
+		}
+	case err != nil:
 		// A pass Close cancelled did not fail; it says nothing of the image.
 		if f.ctx.Err() == nil {
 			retryAt := f.recordFailure(image)
 			f.cfg.Logger.Warn("conformance for the selected writer image failed",
 				"image", image, "retry_at", retryAt, "error", err)
 		}
+	default:
+		f.clearFailure(image)
+		f.cfg.Logger.Info("conformance recorded for the selected writer image", "image", image)
+		f.settleAdapterProof(f.ctx, image, nil)
+	}
+}
+
+// retryAdapterProof schedules a retry of the adapter proof in image, whose
+// suite proof stands, after followerBackoff of the series' retries; a newer
+// call overtakes a retry still waiting. Past adapterProofRetries it
+// schedules nothing and says writer admission stays held until the next
+// scheduled pass or a restart. The retry runs on the follower's goroutine,
+// never the caller's, so the start that asks for one is not delayed.
+func (f *conformanceFollower) retryAdapterProof(image domain.ImageRef) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ctx.Err() != nil || f.cfg.ProveAdapter == nil {
 		return
 	}
-	f.clearFailure(image)
-	f.cfg.Logger.Info("conformance recorded for the selected writer image", "image", image)
+	f.retryEpoch++
+	f.retries++
+	if f.retries > adapterProofRetries {
+		f.cfg.Logger.Warn("the adapter proof ran out its budget on every retry; writer admission stays held "+
+			"until the next scheduled conformance pass or a restart", "image", image, "retries", adapterProofRetries)
+		return
+	}
+	wait := followerBackoff(f.retries)
+	f.cfg.Logger.Warn("the adapter proof ran out its budget; the daemon retries it after a backoff",
+		"image", image, "retry", f.retries, "max_retries", adapterProofRetries, "wait", wait)
+	f.wg.Add(1)
+	go f.adapterRetry(image, f.retryEpoch, wait)
+}
+
+// adapterRetry is one scheduled adapter-proof retry. It waits, then runs
+// serialized with the other passes unless a proof overtook it meanwhile or
+// image's suite proof is gone, since the next pass on image then runs the
+// adapter proof itself.
+func (f *conformanceFollower) adapterRetry(image domain.ImageRef, epoch int, wait time.Duration) {
+	defer f.wg.Done()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-f.ctx.Done():
+		return
+	}
+	f.passMu.Lock()
+	defer f.passMu.Unlock()
+	f.mu.Lock()
+	overtaken := epoch != f.retryEpoch
+	f.mu.Unlock()
+	if overtaken {
+		return
+	}
+	if !slices.Contains(f.cfg.Ledger.ProvenImages(), string(image)) {
+		f.endAdapterRetries()
+		f.cfg.Logger.Info("adapter proof retry skipped: its image has no published proof, so its next pass proves the adapter",
+			"image", image)
+		return
+	}
+	f.cfg.Logger.Info("retrying the adapter proof", "image", image)
+	err := f.cfg.ProveAdapter(f.ctx, image)
+	if f.ctx.Err() != nil {
+		return
+	}
+	if err != nil && !adapterProofOverran(err) {
+		f.endAdapterRetries()
+		f.cfg.Logger.Warn("adapter proof retry failed; writer admission stays held until the next scheduled "+
+			"conformance pass or a restart", "image", image, "error", err)
+		return
+	}
+	f.settleAdapterProof(f.ctx, image, err)
+}
+
+// settleAdapterProof acts on an adapter proof's outcome. err is nil when the
+// proof passed, failed on its merits, or found no subscription that could
+// run it (proveAdapterOnCandidates), which ends the retry series and runs
+// AfterProof: a retry would meet the same subscriptions, since they do not
+// depend on the image. An overrun schedules the next retry. The caller
+// holds passMu.
+func (f *conformanceFollower) settleAdapterProof(ctx context.Context, image domain.ImageRef, err error) {
+	if adapterProofOverran(err) {
+		f.retryAdapterProof(image)
+		return
+	}
+	f.endAdapterRetries()
+	if f.cfg.AfterProof != nil {
+		f.cfg.AfterProof(ctx)
+	}
+}
+
+// endAdapterRetries ends the retry series: a waiting retry does not run, and
+// the next overrun starts a new series.
+func (f *conformanceFollower) endAdapterRetries() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retries = 0
+	f.retryEpoch++
 }
 
 // failedFor reports whether image's last pass failed.
@@ -439,6 +566,13 @@ func (f *conformanceFollower) pendingFor(image domain.ImageRef) bool {
 // durable marker did not land. A pass whose memory the budget refuses for
 // good runs nothing and leaves the standing proof as it was, so it is
 // skipped, logged.
+//
+// A pass whose suite passed but whose adapter proof ran out its budget is
+// not a failed pass, and reprove does not retry it in the pass: the adapter
+// proof's own retry follows. The round's last adapter proof, an in-pass
+// retry's when one ran, is the adapter's record, so it alone is settled:
+// it ends any retry series, and an overrun starts a new one, so each
+// round's retries are bounded on their own.
 func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	f.passMu.Lock()
 	defer f.passMu.Unlock()
@@ -455,7 +589,12 @@ func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	if latest != "" && (slices.Contains(proven, string(latest)) || f.retryDue(latest)) {
 		reprove = append(reprove, latest)
 	}
-	var errs, failedPasses []error
+	var (
+		errs, failedPasses []error
+		adapterRan         bool
+		adapterImage       domain.ImageRef
+		adapterErr         error
+	)
 	for _, tracked := range f.cfg.Ledger.TrackedImages() {
 		image := domain.ImageRef(tracked)
 		if _, ok := keep[image]; !ok {
@@ -474,9 +613,23 @@ func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 		}
 	}
 	for _, image := range reprove {
-		if err := f.reprove(ctx, image); err != nil {
+		err := f.reprove(ctx, image)
+		switch {
+		case adapterProofOverran(err):
+			f.cfg.Logger.Warn("scheduled conformance pass recorded the image, but its adapter proof ran out its budget",
+				"image", image, "error", err)
+		case reservationRefusedForGood(err):
+			// proveScheduled logged the skip; the pass ran no adapter proof.
+			continue
+		case err != nil:
 			failedPasses = append(failedPasses, fmt.Errorf("re-prove image %s: %w", image, err))
+			continue
 		}
+		adapterRan, adapterImage, adapterErr = true, image, err
+	}
+	if adapterRan && ctx.Err() == nil {
+		f.endAdapterRetries()
+		f.settleAdapterProof(ctx, adapterImage, adapterErr)
 	}
 	if len(failedPasses) > 0 {
 		if len(f.cfg.Ledger.ProvenImages()) == 0 {
@@ -491,13 +644,20 @@ func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 
 // reprove runs image's scheduled pass, and runs it once more after
 // followerRetryBackoff when it failed only because a command exited
-// nonzero. It returns nil when a pass succeeded or the budget refused it
-// for good, and otherwise the last pass's error, marked as a
-// reproveRuntimeFailure when the retry failed that way too. The wait runs
-// under passMu, so follower passes keep waiting behind the scheduled one.
+// nonzero. It returns nil when a pass succeeded, and otherwise the last
+// pass's error: a reservation the budget refused for good, an overran
+// adapter proof (adapterProofOverran), or a failure, marked as a
+// reproveRuntimeFailure when the retry failed on a command too. The wait
+// runs under passMu, so follower passes keep waiting behind the scheduled
+// one.
+//
+// An overran adapter proof is checked before runtimeCommandFailure: its
+// chain keeps the runtime's error, which a budget kill can make an
+// *exec.ExitError, and rerunning the suite would add the load that ran the
+// proof out of time. The follower's adapter-only retry takes it instead.
 func (f *conformanceFollower) reprove(ctx context.Context, image domain.ImageRef) error {
 	err := f.proveScheduled(ctx, image)
-	if err == nil || !runtimeCommandFailure(err) || ctx.Err() != nil {
+	if err == nil || adapterProofOverran(err) || !runtimeCommandFailure(err) || ctx.Err() != nil {
 		return err
 	}
 	f.cfg.Logger.Warn("scheduled conformance pass failed on a runtime command; retrying it once",
@@ -510,24 +670,28 @@ func (f *conformanceFollower) reprove(ctx context.Context, image domain.ImageRef
 	case <-timer.C:
 	}
 	err = f.proveScheduled(ctx, image)
-	if err != nil && runtimeCommandFailure(err) {
+	if err != nil && !adapterProofOverran(err) && runtimeCommandFailure(err) {
 		return &reproveRuntimeFailure{err: err}
 	}
 	return err
 }
 
 // proveScheduled runs one scheduled pass of image and remembers its
-// outcome for the image's backoff.
+// outcome for the image's backoff. A pass whose suite passed but whose
+// adapter proof ran out its budget passed for the backoff, so it clears the
+// image's failure; its error still goes to the caller, which schedules the
+// adapter proof's retry. A pass the budget refuses for good is logged and
+// returned for the caller to skip.
 func (f *conformanceFollower) proveScheduled(ctx context.Context, image domain.ImageRef) error {
 	err := f.cfg.Prove(ctx, image)
-	if err == nil {
+	if err == nil || adapterProofOverran(err) {
 		f.clearFailure(image)
-		return nil
+		return err
 	}
 	if reservationRefusedForGood(err) {
 		f.cfg.Logger.Warn("scheduled conformance pass skipped: the memory budget can never grant it",
 			"image", image, "error", err)
-		return nil
+		return err
 	}
 	if ctx.Err() == nil {
 		f.recordFailure(image)
@@ -591,9 +755,12 @@ func (f *conformanceFollower) retryDueLocked(image domain.ImageRef) bool {
 	return !ok || !f.cfg.Now().Before(failure.retryAt)
 }
 
-// Close stops a pass in flight and waits for it.
+// Close stops a pass or retry in flight and waits for it. It cancels under
+// mu, so no pass or retry starts after it (request, retryAdapterProof).
 func (f *conformanceFollower) Close(ctx context.Context) error {
+	f.mu.Lock()
 	f.cancel()
+	f.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		f.wg.Wait()

@@ -1,6 +1,7 @@
 package daemoncompose
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -305,6 +306,16 @@ func recordConformance(t *testing.T, st *store.Store, ward *fakeWard, image doma
 	}
 }
 
+// errProofFixture is a proof that failed on its merits.
+var errProofFixture = errors.New("the egress probe failed")
+
+// testAdapterProofOverran is the error a proof pass returns when its suite
+// passed and its adapter proof ran out its budget on every subscription.
+func testAdapterProofOverran() error {
+	return fmt.Errorf("adapter proof ran out its budget on every subscription it ran on: %w",
+		&adapterProofOverranError{elapsed: adapterProofBudget, err: errors.New("container start: signal: killed")})
+}
+
 // TestStartClaudeConformance covers the restore-all start: ward restores
 // every image whose configuration's newest row passed, the start's image is
 // the one selection picks among them, and only -run-conformance proves it.
@@ -324,9 +335,13 @@ func TestStartClaudeConformance(t *testing.T) {
 		manifest       string
 		rows           []row
 		runConformance bool
-		wantStart      domain.ImageRef
-		wantProven     []domain.ImageRef
-		wantErr        error
+		// proveErr is what the start's proof returns after its suite
+		// published the image.
+		proveErr    error
+		wantStart   domain.ImageRef
+		wantProven  []domain.ImageRef
+		wantOverran bool
+		wantErr     error
 	}{
 		// The start does not refuse: attempts hold until upkeep acts.
 		"an unserved base starts on the pointed-to image": {
@@ -363,6 +378,17 @@ func TestStartClaudeConformance(t *testing.T) {
 		"an unattended start with no proof fails": {
 			images: []domain.ProjectImage{pointed}, manifest: "2", wantErr: errBackendConformanceUnavailable,
 		},
+		// The suite passed; only the adapter proof ran out of time, which
+		// the follower retries once the daemon has started (#3574).
+		"a start whose adapter proof ran out its budget still starts": {
+			images: []domain.ProjectImage{pointed}, manifest: "2", runConformance: true,
+			proveErr:  testAdapterProofOverran(),
+			wantStart: pointed.ImageRef, wantProven: []domain.ImageRef{pointed.ImageRef}, wantOverran: true,
+		},
+		"a start whose proof failed otherwise fails": {
+			images: []domain.ProjectImage{pointed}, manifest: "2", runConformance: true,
+			proveErr: errProofFixture, wantErr: errProofFixture,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -372,14 +398,14 @@ func TestStartClaudeConformance(t *testing.T) {
 				recordConformance(t, st, ward, r.image, r.outcome)
 			}
 			var proved []domain.ImageRef
-			start, err := startClaudeConformance(t.Context(), st, ward, ClaudeDriverConfig{
+			start, overran, err := startClaudeConformance(t.Context(), st, ward, ClaudeDriverConfig{
 				Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: tc.runConformance,
 				OperatingMode: domain.ModeUnattended,
 			}, selectorBase, selectorBaseInputs(tc.manifest, nil), tc.images[0].ImageRef,
 				func(_ context.Context, image domain.ImageRef) error {
 					proved = append(proved, image)
 					ward.publish(image, true)
-					return nil
+					return tc.proveErr
 				}, slog.New(slog.DiscardHandler))
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
@@ -390,8 +416,8 @@ func TestStartClaudeConformance(t *testing.T) {
 			if err != nil {
 				t.Fatalf("start = %v, want it to succeed", err)
 			}
-			if start != tc.wantStart {
-				t.Fatalf("start image = %s, want %s", start, tc.wantStart)
+			if start != tc.wantStart || overran != tc.wantOverran {
+				t.Fatalf("start = (%s, overran %t), want (%s, overran %t)", start, overran, tc.wantStart, tc.wantOverran)
 			}
 			if got := imageRefs(ward.ProvenImages()); !slices.Equal(got, tc.wantProven) {
 				t.Fatalf("proven images = %v, want %v", got, tc.wantProven)
@@ -406,7 +432,7 @@ func TestStartClaudeConformance(t *testing.T) {
 		t.Parallel()
 		st := selectorStore(t, pointed)
 		failure := errors.New("fetch failed")
-		_, err := startClaudeConformance(t.Context(), st, newFakeWard(), ClaudeDriverConfig{
+		_, _, err := startClaudeConformance(t.Context(), st, newFakeWard(), ClaudeDriverConfig{
 			Repo: selectorRepo, RepositoryID: selectorRepositoryID, RunConformance: true,
 			OperatingMode: domain.ModeUnattended,
 		}, selectorBase, selectorBaseInputs("2", failure), pointed.ImageRef, refuseProof(t),
@@ -425,14 +451,14 @@ func TestStartClaudeConformance(t *testing.T) {
 			Repo: selectorRepo, RepositoryID: selectorRepositoryID, OperatingMode: domain.ModeAttendedDev,
 			AgentImage: pointed.ImageRef,
 		}
-		start, err := startClaudeConformance(t.Context(), st, ward, cfg, selectorBase,
+		start, _, err := startClaudeConformance(t.Context(), st, ward, cfg, selectorBase,
 			selectorBaseInputs("2", nil), pointed.ImageRef, refuseProof(t), slog.New(slog.DiscardHandler))
 		if err != nil || start != pointed.ImageRef || len(ward.ProvenImages()) != 0 {
 			t.Fatalf("attended start = (%s, %v) with proofs %v, want the configured image and no proof",
 				start, err, ward.ProvenImages())
 		}
 		recordConformance(t, st, ward, pointed.ImageRef, domain.ConformancePassed)
-		if _, err := startClaudeConformance(t.Context(), st, ward, cfg, selectorBase,
+		if _, _, err := startClaudeConformance(t.Context(), st, ward, cfg, selectorBase,
 			selectorBaseInputs("2", nil), pointed.ImageRef, refuseProof(t), slog.New(slog.DiscardHandler)); err != nil {
 			t.Fatal(err)
 		}
@@ -790,6 +816,255 @@ func TestConformanceFollowerStopsOnClose(t *testing.T) {
 	if follower.pendingFor(next) {
 		t.Fatal("a closed follower started a pass")
 	}
+}
+
+// TestConformanceFollowerRetriesAnOverranAdapterProof pins #3574: an
+// adapter proof that ran out its budget is retried alone, after 5, 10, and
+// 20 minutes, and no more; a retry that passes, or another pass's adapter
+// proof, ends the series and runs AfterProof; a scheduled round whose
+// adapter proof ran out of time does not fail and starts a series; and
+// Close stops a waiting retry.
+func TestConformanceFollowerRetriesAnOverranAdapterProof(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("d", 64))
+	other := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("e", 64))
+	// retries records when each adapter-proof retry ran, after the bubble's
+	// start, and answers each with the next of results, then an overrun. want
+	// is the image a retry must prove, image when unset.
+	type retries struct {
+		mu          sync.Mutex
+		start       time.Time
+		want        domain.ImageRef
+		ran         []time.Duration
+		results     []error
+		afterProofs int
+	}
+	compose := func(t *testing.T, ward *fakeWard, prove func(context.Context, domain.ImageRef) error, r *retries) *conformanceFollower {
+		r.start = time.Now()
+		follower := newConformanceFollower(followerConfig{
+			Ledger: ward, Prove: prove, Retire: ward.retire, Start: image, Now: time.Now,
+			Logger: slog.New(slog.DiscardHandler),
+			ProveAdapter: func(_ context.Context, got domain.ImageRef) error {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				want := cmp.Or(r.want, image)
+				if got != want {
+					t.Errorf("retried the adapter proof in %s, want %s", got, want)
+				}
+				r.ran = append(r.ran, time.Since(r.start))
+				if len(r.results) == 0 {
+					return testAdapterProofOverran()
+				}
+				result := r.results[0]
+				r.results = r.results[1:]
+				return result
+			},
+			AfterProof: func(context.Context) {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				r.afterProofs++
+			},
+		})
+		t.Cleanup(func() { _ = follower.Close(context.Background()) })
+		return follower
+	}
+	check := func(t *testing.T, r *retries, wantRan []time.Duration, wantAfterProofs int) {
+		t.Helper()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if !slices.Equal(r.ran, wantRan) || r.afterProofs != wantAfterProofs {
+			t.Fatalf("retries ran at %v with %d AfterProof calls, want %v and %d",
+				r.ran, r.afterProofs, wantRan, wantAfterProofs)
+		}
+	}
+
+	t.Run("an overrun backs off and stops at the bound", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{}
+			follower := compose(t, newFakeWard(image), refuseProof(t), r)
+			follower.retryAdapterProof(image)
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{5 * time.Minute, 15 * time.Minute, 35 * time.Minute}, 0)
+		})
+	})
+	t.Run("a retry that passes ends the series", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{results: []error{testAdapterProofOverran(), nil}}
+			follower := compose(t, newFakeWard(image), refuseProof(t), r)
+			follower.retryAdapterProof(image)
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{5 * time.Minute, 15 * time.Minute}, 1)
+		})
+	})
+	// The other pass's adapter proof returned nil: it passed or failed on its
+	// merits, and either way no retry would change it.
+	t.Run("another pass's adapter proof overtakes a waiting retry", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{}
+			ward := newFakeWard(image)
+			follower := compose(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+				ward.publish(proved, true)
+				return nil
+			}, r)
+			follower.retryAdapterProof(image)
+			follower.request(other)
+			time.Sleep(24 * time.Hour)
+			check(t, r, nil, 1)
+		})
+	})
+	t.Run("a pass after a spent series starts its own", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{}
+			ward := newFakeWard(image)
+			follower := compose(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+				ward.publish(proved, true)
+				return testAdapterProofOverran()
+			}, r)
+			follower.retryAdapterProof(image)
+			time.Sleep(time.Hour)
+			r.mu.Lock()
+			r.want = other
+			r.mu.Unlock()
+			follower.request(other)
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{
+				5 * time.Minute, 15 * time.Minute, 35 * time.Minute,
+				time.Hour + 5*time.Minute, time.Hour + 15*time.Minute, time.Hour + 35*time.Minute,
+			}, 0)
+		})
+	})
+	t.Run("a scheduled round whose adapter proof ran out of time starts a series", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{results: []error{nil}}
+			ward := newFakeWard(image)
+			follower := compose(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+				ward.publish(proved, true)
+				return testAdapterProofOverran()
+			}, r)
+			if err := follower.runScheduled(t.Context()); err != nil {
+				t.Fatalf("scheduled round = %v, want an adapter overrun not to fail it", err)
+			}
+			if follower.failedFor(image) {
+				t.Fatal("the scheduled round recorded the overrun as a failed pass")
+			}
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{5 * time.Minute}, 1)
+		})
+	})
+	// A budget kill can leave an *exec.ExitError under the overrun, which
+	// alone would read as a runtime command failure; the overrun takes the
+	// adapter-only retry, never the scheduled pass's rerun of the suite.
+	t.Run("a scheduled overrun over an exit takes the adapter-only retry", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{results: []error{nil}}
+			ward := newFakeWard(image)
+			passes := 0
+			follower := compose(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+				passes++
+				ward.publish(proved, true)
+				return &adapterProofOverranError{
+					elapsed: adapterProofBudget,
+					err:     fmt.Errorf("container start: %w", &osexec.ExitError{}),
+				}
+			}, r)
+			if err := follower.runScheduled(t.Context()); err != nil {
+				t.Fatalf("scheduled round = %v, want an adapter overrun not to fail it", err)
+			}
+			if passes != 1 {
+				t.Fatalf("scheduled round ran %d passes, want 1: the overrun reran the suite", passes)
+			}
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{5 * time.Minute}, 1)
+		})
+	})
+	t.Run("a scheduled in-pass retry's adapter proof settles", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{results: []error{nil}}
+			ward := newFakeWard(image)
+			results := []error{
+				fmt.Errorf("container inspect: %w", &osexec.ExitError{}),
+				testAdapterProofOverran(),
+			}
+			follower := compose(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+				if len(results) == 0 {
+					t.Errorf("unexpected pass of %s", proved)
+					return errors.New("unexpected pass")
+				}
+				err := results[0]
+				results = results[1:]
+				ward.publish(proved, adapterProofOverran(err))
+				return err
+			}, r)
+			if err := follower.runScheduled(t.Context()); err != nil {
+				t.Fatalf("scheduled round = %v, want the in-pass retry's overrun not to fail it", err)
+			}
+			if follower.failedFor(image) {
+				t.Fatal("the scheduled round left the in-pass retry's overrun recorded as a failed pass")
+			}
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{followerRetryBackoff + 5*time.Minute}, 1)
+		})
+	})
+	// A scheduled pass that returns nil ran its adapter proof to an end on
+	// its merits, so it settles: the waiting retry never runs.
+	t.Run("a scheduled pass that passes ends a waiting retry", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{}
+			ward := newFakeWard(image)
+			follower := compose(t, ward, func(_ context.Context, proved domain.ImageRef) error {
+				ward.publish(proved, true)
+				return nil
+			}, r)
+			follower.retryAdapterProof(image)
+			if err := follower.runScheduled(t.Context()); err != nil {
+				t.Fatalf("scheduled round = %v, want it to pass", err)
+			}
+			time.Sleep(24 * time.Hour)
+			check(t, r, nil, 1)
+		})
+	})
+	// A pass the memory budget refuses for good runs no adapter proof, so it
+	// settles nothing and a waiting retry still runs.
+	t.Run("a scheduled pass refused for good leaves a waiting retry", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{results: []error{nil}}
+			follower := compose(t, newFakeWard(image), func(context.Context, domain.ImageRef) error {
+				return fmt.Errorf("reserve proof pass: %w", domain.ErrLaunchNeverFits)
+			}, r)
+			follower.retryAdapterProof(image)
+			if err := follower.runScheduled(t.Context()); err != nil {
+				t.Fatalf("scheduled round = %v, want a pass refused for good skipped", err)
+			}
+			if follower.failedFor(image) {
+				t.Fatal("the scheduled round recorded a pass refused for good as a failed pass")
+			}
+			time.Sleep(24 * time.Hour)
+			check(t, r, []time.Duration{5 * time.Minute}, 1)
+		})
+	})
+	t.Run("Close stops a waiting retry", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			r := &retries{}
+			follower := compose(t, newFakeWard(image), refuseProof(t), r)
+			follower.retryAdapterProof(image)
+			if err := follower.Close(t.Context()); err != nil {
+				t.Fatalf("Close = %v, want the waiting retry stopped", err)
+			}
+			follower.retryAdapterProof(image)
+			time.Sleep(24 * time.Hour)
+			check(t, r, nil, 0)
+		})
+	})
 }
 
 // With a pass for one image blocked, an attempt on another, proven image is

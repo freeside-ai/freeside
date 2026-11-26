@@ -122,3 +122,111 @@ func TestWriterRoleItemSaysWhatClosesIt(t *testing.T) {
 		}
 	}
 }
+
+// testAdmissionRefusal stands in for a CheckRole refusal at check. engine
+// sets a refusal's error itself, so the wrapper gives the text and
+// errors.As still finds the refusal underneath.
+type testAdmissionRefusal struct{ *engine.AgentAdmissionRefusal }
+
+func (r testAdmissionRefusal) Error() string {
+	return "role implementer: refused at " + string(r.Refusal.Check)
+}
+
+func (r testAdmissionRefusal) Unwrap() error { return r.AgentAdmissionRefusal }
+
+// TestAgentSelectionGateRechecksALaunchCoverageHold pins the Tier A gate
+// #3574 adds: a start's writer-role failure lifts only when it was a
+// launch-coverage refusal and the full writer-role check now passes, and
+// lifting it resolves the role's item but not a retired identity's. Any
+// other failure is never rechecked, and a check that still fails keeps the
+// gate closed.
+func TestAgentSelectionGateRechecksALaunchCoverageHold(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	refusal := func(check domain.AdmissionCheck) *RoleAdmissionError {
+		return &RoleAdmissionError{Role: domain.RoleImplementer, Err: testAdmissionRefusal{
+			&engine.AgentAdmissionRefusal{Refusal: domain.AdmissionRefusal{Check: check}},
+		}}
+	}
+	for name, tc := range map[string]struct {
+		failure   *RoleAdmissionError
+		check     *RoleAdmissionError
+		wantCheck bool
+		wantOpen  bool
+	}{
+		"a coverage hold whose check passes lifts": {
+			failure: refusal(domain.AdmissionCheckAgentLaunchCoverage), wantCheck: true, wantOpen: true,
+		},
+		"another check's hold is not rechecked": {
+			failure: refusal(domain.AdmissionCheckAgentPrompt),
+		},
+		"a coverage hold whose check still fails holds": {
+			failure: refusal(domain.AdmissionCheckAgentLaunchCoverage),
+			check:   refusal(domain.AdmissionCheckAgentLaunchCoverage), wantCheck: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			retired := retiredCausePrefix + "identity"
+			if err := convergeHealthItems(ctx, st, agentSelectionItemKind, agentSelectionCauses(map[string]string{
+				retired: "a retired identity owns open work",
+			}), nil, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := ReportRoleFailure(ctx, st, tc.failure, now); err != nil {
+				t.Fatal(err)
+			}
+			gate := newAgentSelectionGate(st, tc.failure)
+			checked := false
+			if err := gate.recheck(ctx, func(context.Context) *RoleAdmissionError {
+				checked = true
+				return tc.check
+			}, now); err != nil {
+				t.Fatal(err)
+			}
+			if checked != tc.wantCheck {
+				t.Fatalf("check ran %t, want %t", checked, tc.wantCheck)
+			}
+			if err := gate.admit(ctx); (err == nil) != tc.wantOpen {
+				t.Fatalf("gate after recheck = %v, want open %t", err, tc.wantOpen)
+			}
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
+				if err != nil {
+					return err
+				}
+				var role, retiredOpen bool
+				for _, item := range items {
+					role = role || IsWriterRoleItem(item.ID)
+					retiredOpen = retiredOpen || strings.HasPrefix(string(item.ID), AgentSelectionItemPrefix+retired)
+				}
+				if role == tc.wantOpen || !retiredOpen {
+					t.Errorf("role item open %t and retired item open %t, want %t and true", role, retiredOpen, !tc.wantOpen)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	// The items must resolve before the gate opens, so a store that refuses
+	// the write keeps it closed.
+	t.Run("a store that refuses the item write holds", func(t *testing.T) {
+		t.Parallel()
+		st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+		failure := refusal(domain.AdmissionCheckAgentLaunchCoverage)
+		gate := newAgentSelectionGate(st, failure)
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gate.recheck(t.Context(), func(context.Context) *RoleAdmissionError { return nil }, now); err == nil {
+			t.Fatal("recheck succeeded on a closed store")
+		}
+		if gate.current() != failure {
+			t.Fatalf("gate holds %v after a refused write, want the start's failure", gate.current())
+		}
+	})
+}

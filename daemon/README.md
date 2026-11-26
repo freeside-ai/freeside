@@ -5778,7 +5778,14 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    whose start-up checks pass; Acknowledge leaves it open. A writer role's
    `agent_selection_inactive` card closes the same way, at the next start
    whose writer-role check passes, which reruns the adapter conformance
-   proof. `scripts/exit-root.sh` starts the deputy once when these cards
+   proof. A card for a failed adapter conformance check (launch coverage)
+   also closes without a start: when a later adapter proof passes, the
+   daemon reruns the writer-role check and lifts the hold if it passes. A
+   start whose adapter proof ran out its 3-minute budget on every
+   subscription still starts, and the daemon retries that proof alone,
+   under its own memory reservation, after 5, 10, and 20 minutes; after
+   that the hold stays until the next scheduled conformance pass or a
+   restart. `scripts/exit-root.sh` starts the deputy once when these cards
    are all that fails prelaunch.
 
 The readiness line goes to stdout once the daemon serves; progress lines go
@@ -6231,7 +6238,11 @@ and leaves no published proof, the doctor pass's failure is transient:
 the doctor still files its blocking `conformance` item, the next doctor
 pass proves the image again, and the daemon stops only after three
 consecutive failed doctor passes. A real conformance failure still stops
-it on the first. The scheduled pass retires every other proof: it
+it on the first. A re-proof whose suite passed but whose adapter proof ran
+out its budget is not a failed re-proof and never runs again in the pass,
+even when the budget's kill exited a command: the adapter proof alone is
+retried after 5, 10, and 20 minutes, from the round's last adapter proof.
+The scheduled pass retires every other proof: it
 records a supersession marker for the image's configuration, so the
 store stops admitting under it and a restart does not restore it, and
 the image proves again when an attempt next selects it or starts on it.
