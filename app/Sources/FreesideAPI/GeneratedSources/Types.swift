@@ -7157,6 +7157,121 @@ public enum Components {
                 case ahead
             }
         }
+        /// The typed fact beside a cordoned_launch_cap hold, mirrored from domain.CordonedLaunchHold (plan §5.7, Placement): each execution host the waiting launch was considered for, with what closes it, and how many older tasks' cordoned launches wait ahead. Either every host is closed or ahead is at least 1. A later reason to wait becomes a host condition here, not a hold reason of its own.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/CordonedLaunchHold`.
+        public struct CordonedLaunchHold: Codable, Hashable, Sendable {
+            /// Each host considered, once each, in id order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchHold/hosts`.
+            public var hosts: [Components.Schemas.CordonedLaunchHost]
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchHold/ahead`.
+            public var ahead: Swift.Int
+            /// Creates a new `CordonedLaunchHold`.
+            ///
+            /// - Parameters:
+            ///   - hosts: Each host considered, once each, in id order.
+            ///   - ahead:
+            public init(
+                hosts: [Components.Schemas.CordonedLaunchHost],
+                ahead: Swift.Int
+            ) {
+                self.hosts = hosts
+                self.ahead = ahead
+            }
+            public enum CodingKeys: String, CodingKey {
+                case hosts
+                case ahead
+            }
+        }
+        /// One execution host a waiting cordoned launch was considered for. The host is named by id; read its name from GET /execution-hosts.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/CordonedLaunchHost`.
+        public struct CordonedLaunchHost: Codable, Hashable, Sendable {
+            /// An ExecutionHost id. The daemon's own host is `daemon`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchHost/host_id`.
+            public var host_id: Swift.String
+            /// What closes the host to this launch, once each, in the order ExecutionHostCondition lists its members. Empty for a host that is open but has older launches ahead.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchHost/conditions`.
+            public var conditions: [Components.Schemas.ExecutionHostCondition]
+            /// The host's cordoned launches; present exactly when conditions include cordoned_count_full.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchHost/cordoned_count`.
+            public struct cordoned_countPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/CordonedLaunchHost/cordoned_count/value1`.
+                public var value1: Components.Schemas.CordonedLaunchCount
+                /// Creates a new `cordoned_countPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.CordonedLaunchCount) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The host's cordoned launches; present exactly when conditions include cordoned_count_full.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchHost/cordoned_count`.
+            public var cordoned_count: Components.Schemas.CordonedLaunchHost.cordoned_countPayload?
+            /// Creates a new `CordonedLaunchHost`.
+            ///
+            /// - Parameters:
+            ///   - host_id: An ExecutionHost id. The daemon's own host is `daemon`.
+            ///   - conditions: What closes the host to this launch, once each, in the order ExecutionHostCondition lists its members. Empty for a host that is open but has older launches ahead.
+            ///   - cordoned_count: The host's cordoned launches; present exactly when conditions include cordoned_count_full.
+            public init(
+                host_id: Swift.String,
+                conditions: [Components.Schemas.ExecutionHostCondition],
+                cordoned_count: Components.Schemas.CordonedLaunchHost.cordoned_countPayload? = nil
+            ) {
+                self.host_id = host_id
+                self.conditions = conditions
+                self.cordoned_count = cordoned_count
+            }
+            public enum CodingKeys: String, CodingKey {
+                case host_id
+                case conditions
+                case cordoned_count
+            }
+        }
+        /// How many cordoned launches a host runs and how many it may, never fewer running than the limit beside a full count. A limit of 0 means no cap is set, so the host takes none.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/CordonedLaunchCount`.
+        public struct CordonedLaunchCount: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchCount/running`.
+            public var running: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/CordonedLaunchCount/limit`.
+            public var limit: Swift.Int
+            /// Creates a new `CordonedLaunchCount`.
+            ///
+            /// - Parameters:
+            ///   - running:
+            ///   - limit:
+            public init(
+                running: Swift.Int,
+                limit: Swift.Int
+            ) {
+                self.running = running
+                self.limit = limit
+            }
+            public enum CodingKeys: String, CodingKey {
+                case running
+                case limit
+            }
+        }
         /// The typed fact beside an image_upkeep_pending hold, mirrored from domain.ImageUpkeepHold: what the run waits on and, past a rebuild, the upkeep refusal record and the item or task that answers it, each by reference.
         ///
         ///
@@ -7834,6 +7949,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunHold/machine_capacity`.
             public var machine_capacity: Components.Schemas.RunHold.machine_capacityPayload?
+            /// The hosts a cordoned_launch_cap hold waits on; null beside every other reason, and on a cordoned_launch_cap hold recorded before the fact existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/cordoned_launch`.
+            public struct cordoned_launchPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunHold/cordoned_launch/value1`.
+                public var value1: Components.Schemas.CordonedLaunchHold
+                /// Creates a new `cordoned_launchPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.CordonedLaunchHold) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The hosts a cordoned_launch_cap hold waits on; null beside every other reason, and on a cordoned_launch_cap hold recorded before the fact existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/cordoned_launch`.
+            public var cordoned_launch: Components.Schemas.RunHold.cordoned_launchPayload?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -7849,6 +7990,7 @@ public enum Components {
             ///   - usage_pool: The full pool of a usage_pool_exhausted hold; present exactly beside that reason and null beside every other. An identity_parallelism hold, which nothing records any more, names no pool.
             ///   - quota_window: The refused window a quota_window_exhausted hold waits on; present exactly beside that reason and null beside every other.
             ///   - machine_capacity: The memory a machine_capacity hold waits on; present exactly beside that reason and null beside every other.
+            ///   - cordoned_launch: The hosts a cordoned_launch_cap hold waits on; null beside every other reason, and on a cordoned_launch_cap hold recorded before the fact existed.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
@@ -7860,6 +8002,7 @@ public enum Components {
                 usage_pool: Swift.String? = nil,
                 quota_window: Components.Schemas.RunHold.quota_windowPayload? = nil,
                 machine_capacity: Components.Schemas.RunHold.machine_capacityPayload? = nil,
+                cordoned_launch: Components.Schemas.RunHold.cordoned_launchPayload? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
@@ -7871,6 +8014,7 @@ public enum Components {
                 self.usage_pool = usage_pool
                 self.quota_window = quota_window
                 self.machine_capacity = machine_capacity
+                self.cordoned_launch = cordoned_launch
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -7883,6 +8027,7 @@ public enum Components {
                 case usage_pool
                 case quota_window
                 case machine_capacity
+                case cordoned_launch
                 case first_observed_at
                 case last_observed_at
             }
@@ -13815,7 +13960,7 @@ public enum Components {
                 case item_id
             }
         }
-        /// What ran one invocation, as its admission recorded it (plan §5.4, §7). Every value is read from the admission record. A field the record does not carry is null and never filled from current configuration: a legacy execution admission has no agent binding; a binding admitted before harness, lineage group, and cost owner were recorded lacks those; a review admission never records credential mode, egress profile, operating mode, or isolation class. Clients render null as unavailable.
+        /// What ran one invocation, as its admission recorded it (plan §5.4, §7). Every value is read from the admission record. A field the record does not carry is null and never filled from current configuration: a legacy execution admission has no agent binding; a binding admitted before harness, lineage group, and cost owner were recorded lacks those; a review admission never records credential mode, egress profile, operating mode, isolation class, or execution host. Clients render null as unavailable. One exception: an execution admission recorded before hosts existed names the daemon's own host, `daemon`, because every launch then ran there.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts`.
@@ -14035,6 +14180,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/isolation_class`.
             public var isolation_class: Swift.String?
+            /// The execution host the launch ran on, an ExecutionHost id. Null on a review admission's facts and on facts a card recorded before hosts existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/execution_host_id`.
+            public var execution_host_id: Swift.String?
             /// Present exactly on a review admission's facts: the reviewer's lineage relation to each writing role, compared against the latest writer admitted at or before the review. A recorded fact, never a gate.
             ///
             ///
@@ -14063,6 +14213,7 @@ public enum Components {
             ///   - egress_profile:
             ///   - operating_mode:
             ///   - isolation_class: The admitting backend, the class `freesided doctor` reports.
+            ///   - execution_host_id: The execution host the launch ran on, an ExecutionHost id. Null on a review admission's facts and on facts a card recorded before hosts existed.
             ///   - independence: Present exactly on a review admission's facts: the reviewer's lineage relation to each writing role, compared against the latest writer admitted at or before the review. A recorded fact, never a gate.
             public init(
                 invocation_id: Swift.String,
@@ -14085,6 +14236,7 @@ public enum Components {
                 egress_profile: Components.Schemas.InvocationAdmissionFacts.egress_profilePayload? = nil,
                 operating_mode: Components.Schemas.InvocationAdmissionFacts.operating_modePayload? = nil,
                 isolation_class: Swift.String? = nil,
+                execution_host_id: Swift.String? = nil,
                 independence: [Components.Schemas.IndependenceEntry]? = nil
             ) {
                 self.invocation_id = invocation_id
@@ -14107,6 +14259,7 @@ public enum Components {
                 self.egress_profile = egress_profile
                 self.operating_mode = operating_mode
                 self.isolation_class = isolation_class
+                self.execution_host_id = execution_host_id
                 self.independence = independence
             }
             public enum CodingKeys: String, CodingKey {
@@ -14130,6 +14283,7 @@ public enum Components {
                 case egress_profile
                 case operating_mode
                 case isolation_class
+                case execution_host_id
                 case independence
             }
         }
