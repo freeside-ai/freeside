@@ -59,6 +59,7 @@ func TestMain(m *testing.M) {
 // fakeAgent is the agent CLI's stand-in.
 //
 //	exit CODE WORDS  print WORDS, if any, then exit with CODE
+//	write FILE LINE  write LINE to ./FILE, print it, and exit 0
 //	idle             sleep until killed (a stand-in outside a launch)
 //	env              print the environment, one variable a line
 //	token            read the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
@@ -89,6 +90,13 @@ func fakeAgent(args []string) int {
 			fmt.Println(strings.Join(args[2:], " "))
 		}
 		return code
+	case "write":
+		if err := os.WriteFile(args[1], []byte(args[2]+"\n"), 0o600); err != nil { //nolint:gosec // G703: a test's own argument, in the run's worktree
+			fmt.Println("FAIL write:", err)
+			return 1
+		}
+		fmt.Println(args[2])
+		return 0
 	case "idle":
 		select {}
 	case "env":

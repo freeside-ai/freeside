@@ -158,41 +158,49 @@ func (b *Backend) Export(ctx context.Context, req ExportRequest) (ExportResult, 
 		return ExportResult{}, fmt.Errorf("cordon: export %s: %w", req.RunID, err)
 	}
 	res := ExportResult{Dir: l.export, Manifest: manifest, BaseSHA: end.BaseSHA}
-	rec := exportRecord{Version: exportRecordVersion, RunID: req.RunID}
-	if rec.Manifest, _, err = digestMember(l.export, export.ManifestFilename); err != nil {
-		return ExportResult{}, err
-	}
-	evidence, err := readMember(l.export, export.EvidenceFilename)
+	digests, err := DigestExportDir(l.export)
 	if err != nil {
 		return ExportResult{}, err
 	}
-	if evidence != nil {
-		res.EvidencePresent, rec.Evidence = true, ptr(contentaddr.Sum(evidence))
+	if digests.Evidence != nil {
+		evidence, err := readMember(l.export, export.EvidenceFilename)
+		if err != nil {
+			return ExportResult{}, err
+		}
+		res.EvidencePresent = true
 		if res.Evidence, err = export.DecodeEvidenceManifest(evidence); err != nil {
 			return ExportResult{}, fmt.Errorf("cordon: decode the exported evidence: %w", err)
 		}
 	}
-	planDigest, planPresent, err := digestMember(l.export, export.CommitPlanFilename)
-	if err != nil {
+	res.CommitPlanPresent = digests.CommitPlan != nil
+	if err := ScanExportDir(ctx, res); err != nil {
 		return ExportResult{}, err
 	}
-	if planPresent {
-		res.CommitPlanPresent, rec.CommitPlan = true, &planDigest
-	}
-	if err := (exportscan.Scanner{}).Scan(ctx, l.export); err != nil {
-		var refusal *ward.OutputScanRefusal
-		if errors.As(err, &refusal) {
-			return ExportResult{}, &ScanRefusalError{Reason: scanRefusalReason(refusal, res)}
-		}
-		return ExportResult{}, fmt.Errorf("cordon: scan the export: %w", err)
-	}
-	if err := syncTree(l.export); err != nil {
+	if err := SyncTree(l.export); err != nil {
 		return ExportResult{}, fmt.Errorf("cordon: make the export durable: %w", err)
+	}
+	rec := exportRecord{
+		Version: exportRecordVersion, RunID: req.RunID,
+		Manifest: digests.Manifest, Evidence: digests.Evidence, CommitPlan: digests.CommitPlan,
 	}
 	if err := writeRecord(l.exportRecord, rec); err != nil {
 		return ExportResult{}, err
 	}
 	return res, nil
+}
+
+// ScanExportDir runs the export credential scan over res.Dir. A match
+// returns a *ScanRefusalError whose reason names the rule and the item,
+// read from res's manifests, never the matched text.
+func ScanExportDir(ctx context.Context, res ExportResult) error {
+	if err := (exportscan.Scanner{}).Scan(ctx, res.Dir); err != nil {
+		var refusal *ward.OutputScanRefusal
+		if errors.As(err, &refusal) {
+			return &ScanRefusalError{Reason: scanRefusalReason(refusal, res)}
+		}
+		return fmt.Errorf("cordon: scan the export: %w", err)
+	}
+	return nil
 }
 
 func (r ExportRequest) validate() error {
@@ -319,9 +327,9 @@ func replaceFile(root *os.Root, name string, body io.Reader) error {
 	return nil
 }
 
-// syncTree makes every file and directory entry under dir durable, children
-// before their parents.
-func syncTree(dir string) error {
+// SyncTree makes every file and directory entry under dir durable, children
+// before their parents, and then dir's own entry in its parent.
+func SyncTree(dir string) error {
 	var dirs []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -409,5 +417,3 @@ func namedWithOthers(names []string) string {
 	}
 	return fmt.Sprintf("%s (and %d more with the same content)", shown, len(names)-1)
 }
-
-func ptr[T any](v T) *T { return &v }

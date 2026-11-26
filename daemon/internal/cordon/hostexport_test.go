@@ -41,3 +41,11 @@ func Worktree(cfg Config, runID string) string { return layoutFor(cfg.RunsRoot, 
 // Transcript is where runID's launch writes the agent's stdout. A client
 // of a launcher reports it only for a failed run.
 func Transcript(cfg Config, runID string) string { return layoutFor(cfg.RunsRoot, runID).transcript }
+
+// RunDir is runID's launch directory under cfg's runs root, which
+// ReleaseFinished removes.
+func RunDir(cfg Config, runID string) string { return layoutFor(cfg.RunsRoot, runID).dir }
+
+// ExportDir is where the backend over cfg's runs root writes runID's
+// export.
+func ExportDir(cfg Config, runID string) string { return layoutFor(cfg.RunsRoot, runID).export }

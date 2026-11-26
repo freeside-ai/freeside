@@ -235,16 +235,64 @@ func (b *Backend) AuthenticateReleasedExport(ctx context.Context, runID, exportD
 	if rec.Version != exportRecordVersion || rec.RunID != runID {
 		return fmt.Errorf("%w: the export record is not %s's", ErrExportUnauthenticated, runID)
 	}
+	return VerifyExportDigests(exportDir, rec.digests())
+}
+
+// ExportDigests are the content addresses of an export directory's three
+// fixed members, nil for an absent optional member. The importer checks
+// every blob against the manifest, so binding the three members binds the
+// whole export.
+type ExportDigests struct {
+	Manifest   string
+	Evidence   *string
+	CommitPlan *string
+}
+
+func (r exportRecord) digests() ExportDigests {
+	return ExportDigests{Manifest: r.Manifest, Evidence: r.Evidence, CommitPlan: r.CommitPlan}
+}
+
+// DigestExportDir digests dir's three fixed members, streaming each. The
+// manifest must be present; every present member must be a regular file.
+func DigestExportDir(dir string) (ExportDigests, error) {
+	var d ExportDigests
+	manifest, present, err := digestMember(dir, export.ManifestFilename)
+	if err != nil {
+		return ExportDigests{}, err
+	}
+	if !present {
+		return ExportDigests{}, fmt.Errorf("cordon: the export has no %s", export.ManifestFilename)
+	}
+	d.Manifest = manifest
+	for _, m := range []struct {
+		name string
+		dst  **string
+	}{{export.EvidenceFilename, &d.Evidence}, {export.CommitPlanFilename, &d.CommitPlan}} {
+		got, present, err := digestMember(dir, m.name)
+		if err != nil {
+			return ExportDigests{}, err
+		}
+		if present {
+			*m.dst = &got
+		}
+	}
+	return d, nil
+}
+
+// VerifyExportDigests accepts dir only when each fixed member is present
+// exactly when want names it, with the digest want names. Every refusal
+// wraps ErrExportUnauthenticated.
+func VerifyExportDigests(dir string, want ExportDigests) error {
 	members := []struct {
 		name string
 		want *string
 	}{
-		{export.ManifestFilename, &rec.Manifest},
-		{export.EvidenceFilename, rec.Evidence},
-		{export.CommitPlanFilename, rec.CommitPlan},
+		{export.ManifestFilename, &want.Manifest},
+		{export.EvidenceFilename, want.Evidence},
+		{export.CommitPlanFilename, want.CommitPlan},
 	}
 	for _, m := range members {
-		got, present, err := digestMember(exportDir, m.name)
+		got, present, err := digestMember(dir, m.name)
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrExportUnauthenticated, err)
 		}

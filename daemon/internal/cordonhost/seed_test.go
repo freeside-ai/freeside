@@ -36,13 +36,13 @@ func TestSeedRoundTripsACheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stream bytes.Buffer
-	if err := writeSeed(&stream, src); err != nil {
+	if err := writeTree(&stream, src); err != nil {
 		t.Fatal(err)
 	}
 	stream.WriteString("after")
 	dst := filepath.Join(t.TempDir(), "dst")
-	if err := readSeed(&stream, dst); err != nil {
-		t.Fatalf("readSeed: %v", err)
+	if err := readTree(&stream, dst, seedRules); err != nil {
+		t.Fatalf("readTree: %v", err)
 	}
 	if rest := stream.String(); rest != "after" {
 		t.Fatalf("the seed read past its end, leaving %q", rest)
@@ -111,7 +111,7 @@ func TestReadSeedRefusesWhatWriteSeedNeverWrites(t *testing.T) {
 			t.Parallel()
 			parent := t.TempDir()
 			dst := filepath.Join(parent, "dst")
-			if err := readSeed(seedOf(t, build), dst); err == nil {
+			if err := readTree(seedOf(t, build), dst, seedRules); err == nil {
 				t.Fatal("the seed was accepted")
 			}
 			entries, err := os.ReadDir(parent)
@@ -125,7 +125,7 @@ func TestReadSeedRefusesWhatWriteSeedNeverWrites(t *testing.T) {
 	}
 	var oversized bytes.Buffer
 	oversized.Write([]byte{0, 1, 0, 1})
-	if err := readSeed(&oversized, filepath.Join(t.TempDir(), "dst")); !errors.Is(err, ErrProtocol) {
+	if err := readTree(&oversized, filepath.Join(t.TempDir(), "dst"), seedRules); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("an oversized chunk = %v, want ErrProtocol", err)
 	}
 }

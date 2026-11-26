@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/cordon"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -17,7 +18,7 @@ func TestFramesCarryOnlyTheirKindsFields(t *testing.T) {
 	good := []frame{
 		{Kind: kindHello, Hello: &helloBody{Build: "b"}},
 		{Kind: kindStarted, RunID: "run-1"},
-		{Kind: kindAuthenticate, RunID: "run-1", Dir: "/x"},
+		{Kind: kindExport, Export: &exportRequestBody{RunID: "run-1"}},
 		{Kind: kindReleaseFinished, RunIDs: []string{"run-1"}},
 		{Kind: kindCancel},
 		{Kind: kindReply, Reply: &replyBody{}},
@@ -34,7 +35,8 @@ func TestFramesCarryOnlyTheirKindsFields(t *testing.T) {
 	bad := []frame{
 		{Kind: "launch_now"},
 		{Kind: kindStarted},
-		{Kind: kindStarted, RunID: "run-1", Dir: "/x"},
+		{Kind: kindStarted, RunID: "run-1", Export: &exportRequestBody{RunID: "run-1"}},
+		{Kind: kindExport, RunID: "run-1"},
 		{Kind: kindCancel, RunID: "run-1"},
 		{Kind: kindReply, Reply: &replyBody{}, Hello: &helloBody{Build: "b"}},
 	}
@@ -90,8 +92,9 @@ func TestReadFrameRefusesOversizedAndUnknownFields(t *testing.T) {
 }
 
 // TestRefusalsCrossAsTheBackendsErrors shows each backend error the gate
-// maps reaches the client as an error that matches the same sentinel or
-// type.
+// maps (cordonPortError in internal/daemoncompose) reaches the client as
+// an error that matches the same sentinel or type, so the gate gives a
+// host's refusal the class it gives a local one.
 func TestRefusalsCrossAsTheBackendsErrors(t *testing.T) {
 	t.Parallel()
 	blocked := &cordon.BlockedError{RunID: "run-1", EndedBy: cordon.EndedByStalled, Err: cordon.ErrRunEndUnproven}
@@ -105,7 +108,22 @@ func TestRefusalsCrossAsTheBackendsErrors(t *testing.T) {
 		"canceled": {fmt.Errorf("%w: %w: run-1", cordon.ErrCanceled, cordon.ErrNotExportable), func(e error) bool {
 			return errors.Is(e, cordon.ErrCanceled) && errors.Is(e, cordon.ErrNotExportable)
 		}},
-		"export":   {ErrExportUnsupported, func(e error) bool { return errors.Is(e, ErrExportUnsupported) }},
+		"worktree replaced": {fmt.Errorf("%w: run/ is not a directory", cordon.ErrWorktreeReplaced), func(e error) bool {
+			return errors.Is(e, cordon.ErrWorktreeReplaced)
+		}},
+		"linked file": {fmt.Errorf("cordon: export run-1: %w", export.ErrLinkedFile), func(e error) bool {
+			return errors.Is(e, export.ErrLinkedFile) && !errors.Is(e, cordon.ErrNotExportable)
+		}},
+		"not exportable": {fmt.Errorf("%w: run-1 stalled", cordon.ErrNotExportable), func(e error) bool {
+			return errors.Is(e, cordon.ErrNotExportable) && !errors.Is(e, cordon.ErrCanceled)
+		}},
+		"no end record": {fmt.Errorf("%w: run-1", cordon.ErrNoEndRecord), func(e error) bool { return errors.Is(e, cordon.ErrNoEndRecord) }},
+		// The host's reason names an item of its export; the client's is
+		// its own sentence.
+		"scan refused": {&cordon.ScanRefusalError{Reason: `worktree file "secret-name" matched credential rule x`}, func(e error) bool {
+			var scan *cordon.ScanRefusalError
+			return errors.As(e, &scan) && errors.Is(e, ward.ErrOutputScanRefused) && !strings.Contains(e.Error(), "secret-name")
+		}},
 		"build":    {ErrBuildMismatch, func(e error) bool { return errors.Is(e, ErrBuildMismatch) }},
 		"record":   {fmt.Errorf("%w: disk", cordon.ErrConformanceRecord), func(e error) bool { return errors.Is(e, cordon.ErrConformanceRecord) }},
 		"internal": {errors.New("anything"), func(e error) bool { return strings.Contains(e.Error(), "anything") }},
@@ -142,6 +160,7 @@ func TestCheckEndRefusesAnImplausibleReport(t *testing.T) {
 	body := &failureBody{Bytes: []byte("transcript")}
 	cases := map[string]struct {
 		end      endBody
+		export   bool
 		recovery bool
 		ok       bool
 	}{
@@ -156,7 +175,11 @@ func TestCheckEndRefusesAnImplausibleReport(t *testing.T) {
 		"canceled with body":    {end: endBody{EndedBy: cordon.EndedByCanceled, Transcript: body}},
 		"recovery lost":         {end: endBody{Outcome: cordon.RecoveryLost, EndedBy: cordon.EndedByLost}, recovery: true, ok: true},
 		"recovery failed":       {end: endBody{Outcome: cordon.RecoveryFailed, EndedBy: cordon.EndedByExited, ExitCode: 1, Transcript: body}, recovery: true, ok: true},
-		"recovery exported":     {end: endBody{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited}, recovery: true},
+		"recovery exported":     {end: endBody{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited}, export: true, recovery: true, ok: true},
+		"exported, no export":   {end: endBody{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited}, recovery: true},
+		"exported nonzero":      {end: endBody{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited, ExitCode: 1}, export: true, recovery: true},
+		"failed with export":    {end: endBody{Outcome: cordon.RecoveryFailed, EndedBy: cordon.EndedByExited, ExitCode: 1}, export: true, recovery: true},
+		"launch with export":    {end: endBody{EndedBy: cordon.EndedByExited}, export: true},
 		"recovery no outcome":   {end: endBody{EndedBy: cordon.EndedByExited}, recovery: true},
 		"recovery failed clean": {end: endBody{Outcome: cordon.RecoveryFailed, EndedBy: cordon.EndedByExited}, recovery: true},
 		"recovery lost body":    {end: endBody{Outcome: cordon.RecoveryLost, EndedBy: cordon.EndedByStalled, Transcript: body}, recovery: true},
@@ -167,7 +190,11 @@ func TestCheckEndRefusesAnImplausibleReport(t *testing.T) {
 	}
 	for name, tc := range cases {
 		end := tc.end
-		_, err := checkEnd(&replyBody{End: &end}, tc.recovery)
+		reply := &replyBody{End: &end}
+		if tc.export {
+			reply.Export = &exportReplyBody{BaseSHA: strings.Repeat("a", 40)}
+		}
+		_, err := checkEnd(reply, tc.recovery)
 		if tc.ok && err != nil {
 			t.Errorf("%s: %v", name, err)
 		}

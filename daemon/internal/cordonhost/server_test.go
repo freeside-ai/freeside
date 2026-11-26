@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -45,6 +46,7 @@ type fakeServed struct {
 	digest  domain.Digest
 	launch  func(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
 	recover func(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
+	export  func(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
 	full    func(context.Context) error
 
 	mu       sync.Mutex
@@ -64,6 +66,11 @@ func (f *fakeServed) RequestCancellation(context.Context, string) error { return
 func (f *fakeServed) Recover(ctx context.Context, req cordon.RecoverRequest) (cordon.RecoveryResult, error) {
 	return f.recover(ctx, req)
 }
+
+func (f *fakeServed) Export(ctx context.Context, req cordon.ExportRequest) (cordon.ExportResult, error) {
+	return f.export(ctx, req)
+}
+
 func (f *fakeServed) ReleaseFinished(context.Context, []string) error { return nil }
 func (f *fakeServed) Detach() {
 	f.mu.Lock()
@@ -167,7 +174,7 @@ func serve(t *testing.T, build string, backend *fakeServed) *testLauncher {
 
 func newTestClient(t *testing.T, socket, build string, seeder cordon.Seeder, rec cordon.ConformanceRecorder) *Client {
 	t.Helper()
-	c, err := NewClient(ClientConfig{Socket: socket, Build: build, Seeder: seeder, Recorder: rec, ScratchRoot: t.TempDir()})
+	c, err := NewClient(ClientConfig{Socket: socket, Build: build, Seeder: seeder, Recorder: rec, ScratchRoot: t.TempDir(), ExportRoot: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,21 +502,23 @@ func TestRecorderGivesUpOnASilentClient(t *testing.T) {
 	})
 }
 
-// TestRecoverCarriesAFailedEndAndRefusesAnExport shows a recovered failure
-// returns its transcript, and a recovery that would export, an export, and
-// an authentication are refused with ErrExportUnsupported.
-func TestRecoverCarriesAFailedEndAndRefusesAnExport(t *testing.T) {
+// TestRecoverCarriesAFailedEndOrAnExport shows a recovered failure returns
+// its transcript, a recovered clean exit returns its export as a receipt
+// the client authenticates on its own, and a refused export crosses as the
+// backend's error with no receipt left.
+func TestRecoverCarriesAFailedEndOrAnExport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	stderr := filepath.Join(dir, "stderr")
 	if err := os.WriteFile(stderr, []byte("stalled\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	exp := exportFixture(t, map[string]string{"README": "the change\n"})
 	backend := &fakeServed{digest: digestOf("config")}
 	backend.recover = func(_ context.Context, req cordon.RecoverRequest) (cordon.RecoveryResult, error) {
 		switch req.RunID {
 		case "run-clean":
-			return cordon.RecoveryResult{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited}, nil
+			return cordon.RecoveryResult{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited, Export: exp}, nil
 		case "run-scanned":
 			return cordon.RecoveryResult{}, &cordon.ScanRefusalError{Reason: "rule x matched item y"}
 		case "run-canceled":
@@ -522,33 +531,87 @@ func TestRecoverCarriesAFailedEndAndRefusesAnExport(t *testing.T) {
 	}
 	s := serve(t, "build", backend)
 	c := newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
-	res, err := c.Recover(t.Context(), cordon.RecoverRequest{RunID: "run-1", Export: cordon.ExportRequest{RunID: "run-1"}})
+	recoverRun := func(runID string) (cordon.RecoveryResult, error) {
+		return c.Recover(t.Context(), cordon.RecoverRequest{RunID: runID, Export: cordon.ExportRequest{RunID: runID}})
+	}
+	res, err := recoverRun("run-1")
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
-	if res.Outcome != cordon.RecoveryFailed || res.EndedBy != cordon.EndedByStalled {
+	if res.Outcome != cordon.RecoveryFailed || res.EndedBy != cordon.EndedByStalled || res.Export.Dir != "" {
 		t.Fatalf("recovered %+v", res)
 	}
 	if got, err := os.ReadFile(res.StderrPath); err != nil || string(got) != "stalled\n" {
 		t.Fatalf("stderr %q, %v", got, err)
 	}
-	if _, err := c.Recover(t.Context(), cordon.RecoverRequest{RunID: "run-clean", Export: cordon.ExportRequest{RunID: "run-clean"}}); !errors.Is(err, ErrExportUnsupported) {
-		t.Fatalf("a clean recovery = %v, want ErrExportUnsupported", err)
+	res, err = recoverRun("run-clean")
+	if err != nil {
+		t.Fatalf("a clean recovery: %v", err)
 	}
-	if _, err := c.Recover(t.Context(), cordon.RecoverRequest{RunID: "run-scanned", Export: cordon.ExportRequest{RunID: "run-scanned"}}); !errors.Is(err, ErrExportUnsupported) {
-		t.Fatalf("a recovery whose export the scan refused = %v, want ErrExportUnsupported", err)
+	want := filepath.Join(c.cfg.ExportRoot, "run-clean", "export")
+	if res.Outcome != cordon.RecoveryExported || res.EndedBy != cordon.EndedByExited || res.Export.Dir != want ||
+		res.Export.BaseSHA != exp.BaseSHA || !reflect.DeepEqual(res.Export.Manifest, exp.Manifest) {
+		t.Fatalf("a clean recovery = %+v", res)
+	}
+	assertSameTree(t, exp.Dir, res.Export.Dir)
+	if err := c.AuthenticateReleasedExport(t.Context(), "run-clean", res.Export.Dir); err != nil {
+		t.Fatalf("AuthenticateReleasedExport: %v", err)
+	}
+	var scan *cordon.ScanRefusalError
+	if _, err := recoverRun("run-scanned"); !errors.As(err, &scan) {
+		t.Fatalf("a recovery whose export the scan refused = %v, want a scan refusal", err)
 	}
 	// A run canceled between its end record's read and its export ended
 	// canceled; it is not an export the launcher refused.
-	_, err = c.Recover(t.Context(), cordon.RecoverRequest{RunID: "run-canceled", Export: cordon.ExportRequest{RunID: "run-canceled"}})
-	if !errors.Is(err, cordon.ErrCanceled) || errors.Is(err, ErrExportUnsupported) {
-		t.Fatalf("a recovery canceled before its export = %v, want ErrCanceled alone", err)
+	if _, err := recoverRun("run-canceled"); !errors.Is(err, cordon.ErrCanceled) {
+		t.Fatalf("a recovery canceled before its export = %v, want ErrCanceled", err)
 	}
-	if _, err := c.Export(t.Context(), cordon.ExportRequest{RunID: "run-1"}); !errors.Is(err, ErrExportUnsupported) {
-		t.Fatalf("Export = %v, want ErrExportUnsupported", err)
+	for _, runID := range []string{"run-1", "run-scanned", "run-canceled"} {
+		if _, err := os.Stat(filepath.Join(c.cfg.ExportRoot, runID, "export")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s left an export: %v", runID, err)
+		}
 	}
-	if err := c.AuthenticateReleasedExport(t.Context(), "run-1", "/x"); !errors.Is(err, ErrExportUnsupported) {
-		t.Fatalf("AuthenticateReleasedExport = %v, want ErrExportUnsupported", err)
+}
+
+// TestServedExportReturnsTheExportOrTheBackendsRefusal shows Export returns
+// a clean run's export, answers a run already exported through Recover, and
+// carries a run with no end record back as ErrNoEndRecord with nothing kept.
+func TestServedExportReturnsTheExportOrTheBackendsRefusal(t *testing.T) {
+	t.Parallel()
+	exp := exportFixture(t, map[string]string{"main.go": "package main\n"})
+	backend := &fakeServed{digest: digestOf("config")}
+	backend.export = func(_ context.Context, req cordon.ExportRequest) (cordon.ExportResult, error) {
+		switch req.RunID {
+		case "run-clean":
+			return exp, nil
+		case "run-again":
+			return cordon.ExportResult{}, fmt.Errorf("%w: run-again", cordon.ErrAlreadyExported)
+		}
+		return cordon.ExportResult{}, fmt.Errorf("%w: %s", cordon.ErrNoEndRecord, req.RunID)
+	}
+	backend.recover = func(_ context.Context, req cordon.RecoverRequest) (cordon.RecoveryResult, error) {
+		if req.RunID != "run-again" {
+			return cordon.RecoveryResult{}, fmt.Errorf("recovered %s", req.RunID)
+		}
+		return cordon.RecoveryResult{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited, Export: exp}, nil
+	}
+	s := serve(t, "build", backend)
+	c := newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
+	for _, runID := range []string{"run-clean", "run-again"} {
+		res, err := c.Export(t.Context(), cordon.ExportRequest{RunID: runID})
+		if err != nil {
+			t.Fatalf("%s: %v", runID, err)
+		}
+		if res.Dir != filepath.Join(c.cfg.ExportRoot, runID, "export") || res.BaseSHA != exp.BaseSHA {
+			t.Fatalf("%s exported %+v", runID, res)
+		}
+		assertSameTree(t, exp.Dir, res.Dir)
+	}
+	if _, err := c.Export(t.Context(), cordon.ExportRequest{RunID: "run-running"}); !errors.Is(err, cordon.ErrNoEndRecord) {
+		t.Fatalf("an export with no end record = %v, want ErrNoEndRecord", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.cfg.ExportRoot, "run-running")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused export left a receipt directory: %v", err)
 	}
 }
 
