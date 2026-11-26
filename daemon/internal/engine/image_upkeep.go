@@ -28,7 +28,10 @@ import (
 // (proposeAdoption), and a host fault is an advisory system_health item the
 // Health hook converges.
 //
-// The daemon serves one repository, so one ImageUpkeep covers it.
+// The daemon runs one ImageUpkeep per repository it serves (#3210), each on
+// its own worker. They share Rebuild, so their builds run under the
+// daemon's build limit and take turns on the host's one builder VM, and
+// one repository's two passes take turns on its pointer (pointerTurn).
 type ImageUpkeep struct {
 	Store *store.Store
 	// Rebuild is the daemon's one ProjectImageRebuild, shared with the

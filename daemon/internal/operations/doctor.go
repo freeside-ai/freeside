@@ -117,6 +117,40 @@ func (d Doctor) ConvergeImageUpkeep(ctx context.Context, fault string) error {
 	return nil
 }
 
+// ConcludeImageUpkeepExcept concludes every open image-upkeep host-fault
+// card filed under a project outside keep. Each repository's upkeep files its
+// card under a project on that repository (#3210), and only that upkeep
+// converges it, so a card filed under a project the daemon no longer serves,
+// or under the scheduler's system project by a daemon from before the cards
+// moved, would otherwise stay open with nothing to conclude it.
+func (d Doctor) ConcludeImageUpkeepExcept(ctx context.Context, keep []domain.ProjectID) error {
+	if d.Attention == nil {
+		return fmt.Errorf("doctor image upkeep: nil dependency")
+	}
+	snapshots, err := d.Attention.ListAttentionItems(ctx)
+	if err != nil {
+		return fmt.Errorf("doctor image upkeep: list items: %w", err)
+	}
+	prefix := doctorItemPrefix + imageUpkeepHostFaultCode + "-"
+	for _, snapshot := range snapshots {
+		item := snapshot.Item
+		if item.Type != domain.AttentionSystemHealth || item.Status != domain.StatusOpen ||
+			slices.Contains(keep, item.ProjectID) || !strings.HasPrefix(string(item.ID), prefix) {
+			continue
+		}
+		item.ItemVersion++
+		item, err = item.ConcludeByDaemon(domain.ConcludedByDaemon, d.now(),
+			"Resolved when the daemon started without keeping this project's image.", nil)
+		if err != nil {
+			return fmt.Errorf("doctor image upkeep: clear item %s: %w", item.ID, err)
+		}
+		if err := d.Attention.PutItem(ctx, item); err != nil {
+			return fmt.Errorf("doctor image upkeep: clear item %s: %w", item.ID, err)
+		}
+	}
+	return nil
+}
+
 // ProjectNotReadyCode names the finding a project's readiness converges.
 const ProjectNotReadyCode = "project_not_ready"
 

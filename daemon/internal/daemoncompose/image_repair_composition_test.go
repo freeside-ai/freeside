@@ -35,11 +35,12 @@ func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
 			return "", nil
 		},
 	} {
-		upkeep, err := composeImageUpkeep(st, signet.NewService(st), nil, cfg,
+		upkeeps, err := composeImageUpkeeps(t.Context(), st, signet.NewService(st), nil, cfg,
 			&ClaudeComposition{selectImage: selection}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		upkeep := upkeeps[0].upkeep
 		submits := upkeep.SubmitMaintenance != nil && upkeep.MaintenancePending != nil
 		if submits != (selection != nil) {
 			t.Fatalf("%s composition submits maintenance = %t", name, submits)

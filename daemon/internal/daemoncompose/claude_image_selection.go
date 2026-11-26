@@ -793,10 +793,10 @@ type claudeImageSelector struct {
 	// after the driver, so it is bound late (bindImageUpkeep); unbound, a
 	// base no image serves has nothing pending.
 	pendingMu sync.Mutex
-	pending   func(context.Context) (*domain.ImageUpkeepHold, error)
+	pending   func(context.Context, int64) (*domain.ImageUpkeepHold, error)
 }
 
-func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*domain.ImageUpkeepHold, error)) {
+func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context, int64) (*domain.ImageUpkeepHold, error)) {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
 	s.pending = pending
@@ -856,7 +856,7 @@ func (s *claudeImageSelector) selectImage(
 		if pending == nil {
 			return "", engine.ErrProjectImageUnserved
 		}
-		hold, err := pending(ctx)
+		hold, err := pending(ctx, base.RepositoryID)
 		if err != nil {
 			return "", fmt.Errorf("read image upkeep's pending resolution: %w", err)
 		}

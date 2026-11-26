@@ -235,7 +235,7 @@ func newClaudeScheduler(
 	wiring *ClaudeComposition,
 	runDoctor func(context.Context) error,
 	collectUsage func(context.Context) error,
-	imageUpkeep *engine.ImageUpkeep,
+	upkeeps imageUpkeeps,
 ) (*scheduler.Scheduler, error) {
 	now := func() time.Time { return time.Now().UTC() }
 	failures := newScheduledFailureTracker(now, cfg.Logger)
@@ -281,12 +281,12 @@ func newClaudeScheduler(
 			// still runs in the configured image, so the failure is logged
 			// and the next fire retries; it does not stop the daemon as a
 			// doctor or janitor failure does. What a person must fix is
-			// recorded as a host fault, which files an item.
-			if err := imageUpkeep.RunScheduled(ctx); err != nil {
+			// recorded as a host fault, which files an item. One
+			// repository's failure never skips another's pass.
+			if err := upkeeps.runScheduled(ctx, upkeepLogger); err != nil {
 				if ctx.Err() != nil {
 					return scheduler.Consumption{}, err
 				}
-				upkeepLogger.Warn("scheduled image upkeep pass failed", "error", err)
 				return scheduler.Consumption{Outcome: domain.OutcomeObserveFailed}, nil
 			}
 			return failures.consumption(domain.ScheduleImageUpkeep, nil)

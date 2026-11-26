@@ -725,7 +725,7 @@ type ClaudeComposition struct {
 	// pending-resolution lookup once upkeep is composed. Both are nil for
 	// an attended composition, which runs no project image.
 	selectImage     engine.ImageSelection
-	bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
+	bindImageUpkeep func(func(context.Context, int64) (*domain.ImageUpkeepHold, error))
 	runConformance  func(context.Context) error
 	// hostVerification is the macOS verification executor, nil when none
 	// is configured.
@@ -741,9 +741,10 @@ type ClaudeComposition struct {
 	// reconciler's tip watch and image upkeep, which feed project-image
 	// upkeep (§5.7).
 	observeRepositoryTip func(ctx context.Context, repo, branch string) (string, error)
-	// fetchTip fetches the configured base branch at tipSHA into dir for
-	// image upkeep and returns the repository ID the checkout carries.
-	fetchTip func(ctx context.Context, tipSHA, dir string) (int64, error)
+	// fetchTip fetches repo's branch at tipSHA into dir for image upkeep
+	// and the readiness check, and returns the repository ID the checkout
+	// carries.
+	fetchTip func(ctx context.Context, repo, branch, tipSHA, dir string) (int64, error)
 	// observePull and observeIssue are the §5.18 completion sweep's
 	// conditional reads through the same reconciler.
 	observePull  pullObserver
@@ -1325,7 +1326,7 @@ func composeClaudeDriver(
 	}
 	var (
 		selectImage     engine.ImageSelection
-		bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
+		bindImageUpkeep func(func(context.Context, int64) (*domain.ImageUpkeepHold, error))
 	)
 	if cfg.OperatingMode == domain.ModeUnattended {
 		selector := &claudeImageSelector{
@@ -1347,8 +1348,8 @@ func composeClaudeDriver(
 		issueReadTokens:        issueReadTokens,
 		openIssues: publish.NewOpenIssueLister(
 			issueReadTokens, &http.Client{Timeout: 30 * time.Second}, DefaultGitHubAPIBase),
-		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (int64, error) {
-			checkout, err := transport.FetchBase(fetchCtx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
+		fetchTip: func(fetchCtx context.Context, repo, branch, tipSHA, dir string) (int64, error) {
+			checkout, err := transport.FetchBase(fetchCtx, repo, branch, tipSHA, dir)
 			if err != nil {
 				return 0, err
 			}
@@ -1424,7 +1425,10 @@ func composeClaudeDriver(
 			agentImage: cfg.AgentImage, approvedRecipe: cfg.ApprovedRecipe,
 			reviewConfigurationDigest: reviewConfigurationDigest,
 			github: projectReadinessGitHub{
-				observeTip: observeRefTip, fetchTip: composition.fetchTip,
+				observeTip: observeRefTip,
+				fetchTip: func(ctx context.Context, tipSHA, dir string) (int64, error) {
+					return composition.fetchTip(ctx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
+				},
 				appBotIdentity: commitAuthors, baseInputs: baseInputs.read,
 			},
 			now: utcNow,

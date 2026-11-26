@@ -435,7 +435,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 	var (
 		workflow              *engine.Engine
 		claudeWiring          *ClaudeComposition
-		imageUpkeep           *engine.ImageUpkeep
+		upkeeps               imageUpkeeps
 		scenarioWiring        *ScenarioComposition
 		settleDiscovery       func()
 		doctorConvergenceLock sync.Mutex
@@ -477,7 +477,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		if err != nil {
 			return nil, composeErr(err)
 		}
-		claudeWiring, workflow, imageUpkeep = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeep
+		claudeWiring, workflow, upkeeps = claude.ClaudeWiring, claude.Workflow, claude.ImageUpkeeps
 		settleDiscovery = claude.SettleDiscovery
 	} else if cfg.Scenario != nil {
 		var parts ScenarioParts
@@ -608,7 +608,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		}
 		fakeSched.SetLogger(cfg.Logger)
 	} else if claudeWiring != nil {
-		loops, err = ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, imageUpkeep,
+		loops, err = ComposeClaudeLoops(parent, st, attention, blobs, claudeStartup, claudeWiring, workflow, upkeeps,
 			runDoctor, d.Usage.CollectAll, late)
 		if err != nil {
 			return nil, composeErr(err)
@@ -641,7 +641,7 @@ func Start(parent context.Context, stop func(), cfg StartOptions) (_ *Daemon, er
 		})
 	}
 	if loops != nil {
-		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, imageUpkeep, loops, &doctorAvailable, logger)
+		d.startClaudeLoops(parent, ctx, cfg, claudeWiring, workflow, loops, &doctorAvailable, logger)
 	}
 	if pausable {
 		waiter := executionPauseWaiter{
@@ -1118,7 +1118,7 @@ func (d *Daemon) startServing(
 // scheduler starts.
 func (d *Daemon) startClaudeLoops(
 	parent, ctx context.Context, cfg StartOptions, claudeWiring *ClaudeComposition, workflow *engine.Engine,
-	imageUpkeep *engine.ImageUpkeep, loops *ClaudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
+	loops *ClaudeLoops, doctorAvailable *atomic.Bool, logger *slog.Logger,
 ) {
 	claudeSched := loops.ClaudeSched
 	activeReconciler := loops.ActiveReconciler
@@ -1194,10 +1194,10 @@ func (d *Daemon) startClaudeLoops(
 		err := intakeReconcilerLoop.Run(ctx, DefaultIntakeInterval, cfg.Logger)
 		d.ComponentExited(parent, ctx, daemonshell.ComponentLabelIntake, err)
 	})
-	// The start and tip-advance triggers: an upgrade's rebuild can take
-	// an hour, so start does not wait for it.
+	// The start and tip-advance triggers, one worker per repository: an
+	// upgrade's rebuild can take an hour, so start does not wait for it.
 	d.Go(func() {
-		upkeepTrigger.Run(ctx, imageUpkeep, logger)
+		upkeepTrigger.Run(ctx, logger)
 	})
 }
 
