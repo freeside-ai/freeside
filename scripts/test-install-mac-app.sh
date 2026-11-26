@@ -691,6 +691,11 @@ drain)
     printf 'drain %s\n' "$action" >>"$STUB_CASE_DIR/install-steps"
     case "${STUB_DRAIN:-absent}" in
     absent)
+        if [[ "$action" == status && -f "$STUB_CASE_DIR/new-daemon-started" &&
+            -z "${STUB_NEW_DAEMON_EXITS:-}" ]]; then
+            printf '{"ready":true,"drain":null,"blockers":[]}\n'
+            exit 0
+        fi
         echo "freesided: drain: no daemon is running on $3; there is nothing to drain" >&2
         exit 1
         ;;
@@ -730,6 +735,9 @@ chmod +x "$STUB_DAEMON"
 # The app executable every stub bundle carries, for the installer's
 # `FreesideMac daemon start|stop`. It records which app ran it (the bundle's
 # marker says old or new client) and fails a start with STUB_APP_START_RC.
+# When the new app runs `daemon start`, it records new-daemon-started; with
+# STUB_NEW_DAEMON_EXITS set (other than "silent"), it also appends a bind error
+# to the tier's freesided.log.
 STUB_APP_EXECUTABLE=$TMP/FreesideMac-stub
 export STUB_APP_EXECUTABLE
 cat >"$STUB_APP_EXECUTABLE" <<'STUB'
@@ -737,9 +745,29 @@ cat >"$STUB_APP_EXECUTABLE" <<'STUB'
 app=old
 grep -Fq 'new client' "$(dirname "$0")/../marker" && app=new
 printf '%s app %s %s\n' "$app" "$1" "$2" >>"$STUB_CASE_DIR/install-steps"
+record_new_daemon_start() {
+    : >"$STUB_CASE_DIR/new-daemon-started"
+    if [[ -n "${STUB_NEW_DAEMON_EXITS:-}" && "$STUB_NEW_DAEMON_EXITS" != silent ]]; then
+        local display_name state_root
+        display_name=$(sed -n 's/^CFBundleDisplayName=//p' "$(dirname "$0")/../Info.plist")
+        state_root="${FREESIDE_MAC_STATE_ROOT:-$HOME/Library/Application Support/${display_name:-Freeside}}"
+        printf 'freesided: listen tcp 100.64.0.1:7331: bind: address already in use\n' \
+            >>"$state_root/daemon/freesided.log"
+    fi
+}
 if [[ "$2" == start && -n "${STUB_APP_START_RC:-}" ]]; then
-    echo "action=start registration=enabled health=unreachable error=timeout"
+    if [[ "$STUB_APP_START_RC" -eq 3 ]]; then
+        echo "action=start registration=requires_approval health=unknown error=login_items_approval_required"
+    else
+        echo "action=start registration=enabled health=unreachable error=timeout"
+    fi
+    if [[ "$app" == new && "$STUB_APP_START_RC" -eq 4 ]]; then
+        record_new_daemon_start
+    fi
     exit "$STUB_APP_START_RC"
+fi
+if [[ "$app" == new && "$2" == start ]]; then
+    record_new_daemon_start
 fi
 echo "action=$2 registration=enabled health=reachable"
 STUB
@@ -799,6 +827,7 @@ begin_case() {
     unset STUB_UNDO_LOCKED
     unset STUB_UNDO_RC
     unset STUB_APP_START_RC
+    unset STUB_NEW_DAEMON_EXITS
     unset FREESIDE_MAC_REOPEN_TIMEOUT
     unset RUN_STATE_ROOT
     echo "case: $CASE"
@@ -859,6 +888,13 @@ assert_contains() {
     case "$OUT" in
     *"$1"*) pass=$((pass + 1)) ;;
     *) report_failure "output does not contain: $1" ;;
+    esac
+}
+
+assert_omits() {
+    case "$OUT" in
+    *"$1"*) report_failure "output unexpectedly contains: $1" ;;
+    *) pass=$((pass + 1)) ;;
     esac
 }
 
@@ -1860,10 +1896,11 @@ else
     report_failure "check-database arguments: $(cat "$CASE_DIR/check-database-args" 2>/dev/null)"
 fi
 if [[ "$(cat "$CASE_DIR/install-steps" 2>/dev/null)" == "$(printf '%s\n' check-database \
-    'drain request' pgrep 'defaults read' 'defaults delete')" ]]; then
+    'drain request' pgrep 'defaults read' 'defaults delete' 'new app daemon start' \
+    'drain status')" ]]; then
     pass=$((pass + 1))
 else
-    report_failure "install steps: $(cat "$CASE_DIR/install-steps" 2>/dev/null), want the check before the drain request and the quit"
+    report_failure "install steps: $(cat "$CASE_DIR/install-steps" 2>/dev/null), want the check before the drain request, quit, and daemon start"
 fi
 assert_file_contains "$daemon_dir/freeside.db" "live database"
 
@@ -1889,14 +1926,22 @@ assert_absent "$destination.install-superseded"
 assert_file_omits "$CASE_DIR/install-steps" "pgrep"
 assert_file_omits "$CASE_DIR/install-steps" "drain"
 
-# A tier with no database yet has nothing to check: the install goes on and
-# says so.
+# A tier with no database yet has nothing to check: the install goes on,
+# starts the new daemon, waits for it to serve, and says so.
 begin_case "tier without a database skips the check and says so" check-database-none
 export STUB_BUILD_SUCCEEDS=true
 run_installer
 assert_rc 0
 assert_contains "skipped the database check: the prod tier has no database yet"
 assert_contains "no update checkpoint: a first install has no previous app to restore"
+assert_contains "the new freesided is serving"
+if [[ "$(cat "$CASE_DIR/install-steps" 2>/dev/null)" == "$(printf '%s\n' \
+    'drain request' pgrep 'defaults read' 'defaults delete' \
+    'new app daemon start' 'drain status')" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "install steps: $(cat "$CASE_DIR/install-steps" 2>/dev/null), want first install to start the daemon and check its status"
+fi
 assert_absent "$CASE_DIR/check-database-args"
 
 # Forget what one install run recorded, so a case can install twice and
@@ -1906,7 +1951,8 @@ reset_case_records() {
     rm -f "$CASE_DIR/install-steps" "$CASE_DIR/defaults-calls" \
         "$CASE_DIR/go-args" "$CASE_DIR/go-goflags" "$CASE_DIR/xcodebuild-called" \
         "$CASE_DIR/codesign-verify-count" "$CASE_DIR/drain-calls" \
-        "$CASE_DIR/drain-status-count" "$CASE_DIR/undo-calls"
+        "$CASE_DIR/drain-status-count" "$CASE_DIR/undo-calls" \
+        "$CASE_DIR/new-daemon-started"
 }
 
 # Install once with the case's daemon, then mark the installed helper as a
@@ -1943,6 +1989,8 @@ assert_contains "freesided is unchanged; leaving the daemon and its registration
 assert_contains "no update checkpoint: the daemon is unchanged and keeps running"
 assert_marker_not_deleted
 assert_absent "$CASE_DIR/drain-calls"
+assert_file_omits "$CASE_DIR/install-steps" "new app daemon start"
+assert_absent "$CASE_DIR/new-daemon-started"
 if cmp -s "$CASE_DIR/installed-freesided" "$destination/Contents/Resources/freesided"; then
     pass=$((pass + 1))
 else
@@ -2103,7 +2151,8 @@ else
 fi
 
 # freesided drain refuses when no daemon holds the database; there is then
-# nothing to drain, and the install goes on as before the drain existed.
+# nothing to drain, and the install goes on, starts the new daemon, and waits
+# for it to serve (#3707).
 begin_case "with no daemon running, a changed install skips the drain wait" drain-absent
 destination=$CASE_DIR/Applications/Freeside.app
 make_recovery_app "$destination"
@@ -2113,8 +2162,121 @@ assert_rc 0
 assert_contains "installed commit: unknown, installed before the commit was recorded"
 assert_contains "no prod daemon is running, so there is nothing to drain"
 assert_contains "no update checkpoint: no prod daemon is running, so no drain marks the update"
-assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete'
+assert_contains "the new freesided is serving"
+assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete' \
+    'new app daemon start' 'drain status'
 assert_contains "installed $destination"
+
+# On the no-daemon path, a new daemon that exits at every start must fail the
+# install with the error it logged during this run (not a stale line from an
+# earlier run), the log path, and the no-checkpoint notice (#3707).
+begin_case "with no daemon running, a new daemon that exits at start fails with its log error" \
+    drain-absent-start-fails
+destination=$CASE_DIR/Applications/Freeside.app
+daemon_dir="$CASE_DIR/home/Library/Application Support/Freeside/daemon"
+log_path="$daemon_dir/freesided.log"
+mkdir -p "$daemon_dir"
+printf 'freesided: stale error from an earlier run\n' >"$log_path"
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_NEW_DAEMON_EXITS=true
+export FREESIDE_MAC_REOPEN_TIMEOUT=1
+run_built_installer --launch
+assert_rc 1
+assert_contains "the new freesided did not serve within 1 seconds"
+assert_contains "freesided: listen tcp 100.64.0.1:7331: bind: address already in use"
+assert_contains "$log_path"
+assert_contains "No update checkpoint was taken, so the previous app was not kept"
+assert_omits "stale error from an earlier run"
+assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete' \
+    'new app daemon start' 'drain status' 'drain status'
+
+# When the new daemon fails to serve without logging a start error during this
+# run, an earlier run's error in freesided.log must not be reported as its cause.
+begin_case "with no daemon running, a silent start failure ignores earlier log lines" \
+    drain-absent-start-fails-silent
+destination=$CASE_DIR/Applications/Freeside.app
+daemon_dir="$CASE_DIR/home/Library/Application Support/Freeside/daemon"
+log_path="$daemon_dir/freesided.log"
+mkdir -p "$daemon_dir"
+printf 'freesided: stale error from an earlier run\n' >"$log_path"
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_NEW_DAEMON_EXITS=silent
+export FREESIDE_MAC_REOPEN_TIMEOUT=1
+run_built_installer
+assert_rc 1
+assert_contains "it logged no 'freesided:' error line during this run"
+assert_contains "$log_path"
+assert_contains "No update checkpoint was taken, so the previous app was not kept"
+assert_omits "stale error from an earlier run"
+
+# Login Items approval (exit 3) fails with the approval instructions and notes
+# that the app itself is installed, rather than falling through to a timeout.
+begin_case "with no daemon running, Login Items approval required fails with instructions" \
+    drain-absent-login-items
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_APP_START_RC=3
+run_built_installer
+assert_rc 1
+assert_contains "$destination is installed"
+assert_contains "Login Items"
+assert_contains "System Settings > General > Login Items"
+assert_contains "Freeside menu"
+assert_omits "did not serve within"
+assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete' \
+    'new app daemon start'
+
+# A daemon start that hits the command's own deadline (exit 4, e.g. waiting out
+# Tailscale) continues to the serve wait, and --launch opens only once it serves.
+begin_case "with no daemon running, daemon start deadline still waits to serve before --launch" \
+    drain-absent-start-deadline
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_APP_START_RC=4
+run_built_installer --launch
+assert_rc 0
+assert_contains "the new freesided is serving"
+assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete' \
+    'new app daemon start' 'drain status' "open $destination"
+
+# Any other non-zero exit from daemon start fails immediately with its output.
+begin_case "with no daemon running, an unexpected daemon start error stops the install" \
+    drain-absent-start-error
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_APP_START_RC=1
+run_built_installer
+assert_rc 1
+assert_contains "FreesideMac daemon start exited 1"
+assert_contains "action=start"
+assert_contains "No update checkpoint was taken, so the previous app was not kept"
+assert_steps 'go build' 'drain request' pgrep 'defaults read' 'defaults delete' \
+    'new app daemon start'
+
+# A first install whose tier daemon is already running elsewhere drains it but
+# takes no checkpoint; if the new build fails to lift that drain in time, the
+# failure must report that the drain stays in force and how to lift it.
+begin_case "first install with a running daemon reports the active drain on serve timeout" \
+    first-install-drained-timeout
+destination=$CASE_DIR/Applications/Freeside.app
+prod_db="$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
+export STUB_BUILD_SUCCEEDS=true
+export STUB_DRAIN=running
+export FREESIDE_MAC_REOPEN_TIMEOUT=1
+drain_statuses "$READY"
+run_built_installer
+assert_rc 1
+assert_contains "no update checkpoint: a first install has no previous app to restore"
+assert_contains "the new freesided did not serve within 1 seconds"
+assert_contains "The update drain is still in force, so the running daemon holds all work"
+assert_contains "\"$destination/Contents/Resources/freesided\" drain -cancel -db \"$prod_db\""
+assert_steps 'go build' 'drain request' 'drain status' 'defaults read' 'defaults delete' \
+    pgrep 'defaults delete' 'new app daemon start' 'drain status' 'drain status'
 
 # A running daemon that cannot drain (older than the drain command, or any
 # other failure) stops the install before the quit, with the installed app

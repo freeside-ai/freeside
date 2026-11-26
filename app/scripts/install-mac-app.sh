@@ -80,7 +80,11 @@
 # starts the new daemon again and says so. A run killed after the swap
 # leaves the checkpoint, and the next run finishes the check or the undo
 # before anything else. No checkpoint is taken for a first install, an
-# unchanged daemon, or a tier with no running daemon.
+# unchanged daemon, or a tier with no running daemon. On the two paths that
+# change the daemon without a checkpoint (a first install and a tier with no
+# running daemon), the installer starts the new daemon itself and waits up to
+# FREESIDE_MAC_REOPEN_TIMEOUT seconds for it to serve, exiting nonzero with
+# its last start error from freesided.log if it does not.
 #
 # Signing identity, in resolution order:
 #   FREESIDE_MAC_SIGNING_IDENTITY  explicit Apple Development identity, by
@@ -100,7 +104,8 @@
 #                             ~/Library/Application Support/<app name>); the
 #                             daemon's state directory is <root>/daemon
 #   FREESIDE_MAC_REOPEN_TIMEOUT  seconds to wait for the new daemon to lift
-#                             the drain before undoing the update (default 300)
+#                             the drain, or to serve when no checkpoint was
+#                             taken (default 300)
 #
 # Requires: macOS, Xcode, jq, and Go unless --daemon-path is given.
 set -euo pipefail
@@ -593,11 +598,14 @@ app_daemon() {
 }
 
 # Whether a daemon answers on the tier's database with no update drain in
-# force: the new build has started and lifted the drain. A failed call (no
-# daemon yet, or one that keeps crashing) is not an answer.
+# force: after a drained swap it has lifted the drain, and on a no-checkpoint
+# start no drain was requested unless a first install found a daemon running
+# elsewhere, which the new build lifts when it starts. Either way, answering
+# with no drain proves the new build is serving; a failed call (no daemon yet,
+# or one that keeps crashing) is not an answer.
 new_daemon_reopened() {
-    local readiness
-    readiness=$("$checkpoint_dir/freesided" drain -db "$db_path" -status 2>/dev/null) || return 1
+    local daemon_bin=$1 readiness
+    readiness=$("$daemon_bin" drain -db "$db_path" -status 2>/dev/null) || return 1
     [[ "$(jq -r 'if type == "object" and has("drain") then .drain == null else false end' \
         <<<"$readiness" 2>/dev/null)" == true ]]
 }
@@ -605,12 +613,69 @@ new_daemon_reopened() {
 # Polls every 5 seconds until the bound. It counts polls rather than reading
 # the clock, so slow status calls stretch the wait instead of skipping polls.
 wait_for_reopen() {
-    local polls=$(((reopen_timeout + 4) / 5)) poll
+    local daemon_bin=$1 polls=$(((reopen_timeout + 4) / 5)) poll
     for ((poll = 0; poll <= polls; poll++)); do
-        new_daemon_reopened && return 0
+        new_daemon_reopened "$daemon_bin" && return 0
         ((poll == polls)) || sleep 5
     done
     return 1
+}
+
+# Start the new daemon and wait for it to serve on no-checkpoint paths that
+# change the daemon (a first install, or an update with no daemon running).
+# Without this, the installer would exit 0 even if the new daemon exits at
+# every start (#3707).
+start_and_wait_for_daemon() {
+    local log_size=0 start_output="" start_rc=0 last_start_error="" error_detail
+    local drain_notice=""
+    if [[ "$drain_requested" == true ]]; then
+        drain_notice="
+  The update drain is still in force, so the running daemon holds all work;
+  lift it with:
+  \"$destination/Contents/Resources/freesided\" drain -cancel -db \"$db_path\""
+    fi
+    # Record the log size before starting so a failure names only an error
+    # written during this run, not a stale line from an earlier one. Use wc -c
+    # rather than stat -f %z because the test suite runs on Linux too.
+    if [[ -f "$stderr_path" ]]; then
+        log_size=$(wc -c <"$stderr_path" | tr -d '[:space:]')
+    fi
+    echo "install-mac-app: starting the new freesided and waiting up to ${reopen_timeout}s for it to serve"
+    start_output=$(app_daemon start 2>&1) || start_rc=$?
+    case "$start_rc" in
+    # 4 is the command's own deadline; a daemon waiting out Tailscale can take
+    # a minute, so continue to the serve wait rather than failing early.
+    0 | 4) ;;
+    3)
+        die "$destination is installed, but the $target daemon needs Login Items
+  approval before macOS will start it; only that approval is missing. Approve
+  Freeside in System Settings > General > Login Items, then start it from the
+  Freeside menu.${drain_notice}"
+        ;;
+    *)
+        die "$destination is installed, but starting the $target daemon failed
+  (FreesideMac daemon start exited $start_rc${start_output:+: $start_output}).
+  No update checkpoint was taken, so the previous app was not kept; fix the
+  problem and install again.${drain_notice}"
+        ;;
+    esac
+    if wait_for_reopen "$destination/Contents/Resources/freesided"; then
+        echo "install-mac-app: the new freesided is serving"
+        return 0
+    fi
+    if [[ -f "$stderr_path" ]]; then
+        last_start_error=$(tail -c +$((log_size + 1)) "$stderr_path" 2>/dev/null |
+            grep '^freesided: ' | tail -n 1 || true)
+    fi
+    if [[ -n "$last_start_error" ]]; then
+        error_detail="last start error: $last_start_error"
+    else
+        error_detail="it logged no 'freesided:' error line during this run"
+    fi
+    die "the new freesided did not serve within $reopen_timeout seconds ($error_detail).
+  See $stderr_path for the daemon log.
+  No update checkpoint was taken, so the previous app was not kept; fix the
+  problem and install again.${drain_notice}"
 }
 
 # Every step from the swap to a resolved update can be repeated from what is
@@ -760,7 +825,7 @@ resolve_pending_update() {
     # may run on a database it created at the empty path, so the undo
     # finishes or refuses instead.
     if [[ -e "$checkpoint_dir/freeside.db" && ! -e "$db_path.update-failed" ]] &&
-        new_daemon_reopened; then
+        new_daemon_reopened "$checkpoint_dir/freesided"; then
         rm -rf "$superseded"
         discard_checkpoint
         echo "install-mac-app: the previous update's new freesided reopened; removed its checkpoint and the previous app"
@@ -1542,6 +1607,10 @@ if [[ -n "$previous_requirement" && "$previous_requirement" != "$new_requirement
     echo "  the device must be re-paired. Previous: $previous_requirement" >&2
 fi
 
+if [[ "$daemon_unchanged" == false && "$checkpoint_taken" == false ]]; then
+    start_and_wait_for_daemon
+fi
+
 # The drained daemon holds all work until the new app re-registers the
 # LaunchAgent and the new build starts and lifts the drain, so a drained
 # install opens the app even without --launch.
@@ -1557,7 +1626,7 @@ fi
 # FREESIDE_MAC_REOPEN_TIMEOUT if a slow migration is expected.
 if [[ "$checkpoint_taken" == true ]]; then
     echo "install-mac-app: waiting up to ${reopen_timeout}s for the new freesided to start and lift the drain"
-    if wait_for_reopen; then
+    if wait_for_reopen "$checkpoint_dir/freesided"; then
         trap - INT TERM
         rm -rf "$superseded"
         discard_checkpoint
