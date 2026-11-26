@@ -7320,11 +7320,29 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   `ctl/transcript` and its stderr to `ctl/stderr`, and both count as activity for the stall
   limit. A launch with a proven end writes `ctl/ended.json` (how it ended,
   its exit code, and the base commit) as its last step; a launch that was
-  blocked or failed before that has none. A conformance probe's launch
-  runs through a supervisor too and records an end with no base commit,
-  which `Export` refuses. Records name no path: every path follows from
+  blocked or failed before that has none. `ctl/request.json`
+  (`freeside.cordon.supervise/v3`) names the launch's kind, `writer`,
+  `check`, or `probe`: only a writer gets the streamed input and the
+  token's pipe, and `Export` refuses any run whose request isn't a
+  writer's with `ErrNotExportable`, a conformance probe's included. No
+  older version's reader is kept, so drain cordoned runs before an update
+  (Drain For An Update); a v1 or v2 request a forced update left is never
+  exported. Records name no path: every path follows from
   `RunsRoot` and the run ID, and every record is read strictly and refused
   when it names another run.
+- **A check launch runs one recipe command.** `Check` runs a
+  `CheckRequest`'s argv, taken from the trusted recipe, in a fresh worktree
+  seeded at its base commit, under the writer's rule file, with the
+  launch's environment, stdin on `/dev/null`, and no token: the request has
+  no token field, and a supervisor holding a pipe on fd 3 refuses a check
+  and starts nothing. Each call is one command in a run of its own. The
+  command's stdout and stderr go to `ctl/transcript` as one stream, and
+  the result, returned only once the end record exists, carries its last
+  `MaxOutputBytes` with `Truncated` set when it wrote more. Cancellation
+  and the stall limit end a check as they end a writer, and
+  `RecoverCheck` finds how one ended after a restart without exporting it.
+  Nothing admits a check yet (#3627). Decision record:
+  `devlog/2026-11-26-0355-cordoned-check-launch.md`.
 - **Export.** `Export` runs only for a launch whose end record says it
   exited with code 0, and only once. It writes the daemon's own evidence
   descriptor (stdout as the transcript, plus the sources the caller names

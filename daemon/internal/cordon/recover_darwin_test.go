@@ -26,8 +26,9 @@ import (
 const daemonStandInArg = "cordon-daemon-stand-in"
 
 // daemonStandIn launches the fake agent as run runID under the
-// configuration at cfgPath and waits for the launch, as the daemon would.
-func daemonStandIn(cfgPath, runID string) int {
+// configuration at cfgPath, as a writer or, with check, as a check's
+// command, and waits for the launch, as the daemon would.
+func daemonStandIn(cfgPath, runID string, check bool) int {
 	body, err := os.ReadFile(cfgPath) //nolint:gosec // G304: the test's own configuration file
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -39,7 +40,11 @@ func daemonStandIn(cfgPath, runID string) int {
 		return 1
 	}
 	b, err := New(cfg, moduleSeeder{})
-	if err == nil {
+	switch {
+	case err != nil:
+	case check:
+		_, err = b.Check(context.Background(), hostCheck(cfg, runID, "spawn", "release"))
+	default:
 		_, err = b.Launch(context.Background(), hostRequest(runID, "", "spawn", "release"))
 	}
 	if err != nil {

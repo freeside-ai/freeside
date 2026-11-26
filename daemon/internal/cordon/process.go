@@ -30,6 +30,10 @@ type processSpec struct {
 	// stdout and stderr receive the process's two output streams. Nil
 	// sends a stream to /dev/null.
 	stdout, stderr io.Writer
+	// mergeStderr gives the process stdout's pipe as its stderr too, so
+	// its two streams arrive at stdout in the order it wrote them; stderr
+	// is then unused.
+	mergeStderr bool
 }
 
 // process is a started process. Tests substitute their own (Backend.start).
@@ -100,7 +104,7 @@ func startExec(spec processSpec) (process, error) {
 		{"stdout", spec.stdout, func(w io.Writer) { cmd.Stdout = w }},
 		{"stderr", spec.stderr, func(w io.Writer) { cmd.Stderr = w }},
 	} {
-		if stream.sink == nil {
+		if stream.sink == nil || (stream.name == "stderr" && spec.mergeStderr) {
 			continue
 		}
 		r, w, err := os.Pipe()
@@ -110,6 +114,9 @@ func startExec(spec processSpec) (process, error) {
 		stream.set(w)
 		childEnds = append(childEnds, w)
 		p.outputs, sinks = append(p.outputs, r), append(sinks, stream.sink)
+	}
+	if spec.mergeStderr {
+		cmd.Stderr = cmd.Stdout
 	}
 	if err := cmd.Start(); err != nil {
 		return fail(err)

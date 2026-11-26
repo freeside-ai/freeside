@@ -202,6 +202,10 @@ func (l *fakeLauncher) start(spec processSpec) (process, error) {
 			return nil, err
 		}
 	}
+	// A merged stderr shares stdout's pipe, as startExec does.
+	if spec.mergeStderr {
+		spec.stderr = spec.stdout
+	}
 	l.specs, l.secrets = append(l.specs, spec), append(l.secrets, secret)
 	if slices.Contains(spec.argv, canaryProgram) {
 		p := &fakeProcess{host: l.host, id: 100, exited: make(chan int, 1)}
@@ -411,8 +415,9 @@ func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 }
 
 // confinedProgram returns the program argv has sandbox-exec start, after
-// the rule file and its parameters, and fails the test unless argv starts
-// sandbox-exec by absolute path.
+// the rule file, its parameters, and the "--" that ends them, and fails the
+// test unless argv starts sandbox-exec by absolute path and ends its
+// options there.
 func confinedProgram(t *testing.T, argv []string) string {
 	t.Helper()
 	if len(argv) < 4 || argv[0] != "/usr/bin/sandbox-exec" || argv[1] != "-f" {
@@ -422,7 +427,10 @@ func confinedProgram(t *testing.T, argv []string) string {
 	for i+1 < len(argv) && argv[i] == "-D" {
 		i += 2
 	}
-	return argv[i]
+	if i+1 >= len(argv) || argv[i] != "--" {
+		t.Fatalf("argv %q doesn't end sandbox-exec's options with --", argv)
+	}
+	return argv[i+1]
 }
 
 // TestLaunchHandsTheTokenToTheAgentAlone shows the token reaches the agent
@@ -742,16 +750,22 @@ func TestLaunchRefusesACallerCLISettings(t *testing.T) {
 }
 
 // TestLaunchesUnderOneConfigurationRunIdenticalRules shows the bytes a
-// launch runs are the configuration's rendered rules, whatever the launch.
+// launch runs are the configuration's rendered rules, whatever the launch,
+// a check's included.
 func TestLaunchesUnderOneConfigurationRunIdenticalRules(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
 	synctest.Test(t, func(t *testing.T) {
 		l := &fakeLauncher{host: newFakeHost(), script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
 		b := fakeBackend(t, cfg, l)
-		for _, id := range []string{"rules-a", "rules-b"} {
-			if _, err := b.Launch(t.Context(), request(id)); err != nil {
-				t.Fatalf("Launch %s: %v", id, err)
+		if _, err := b.Check(t.Context(), checkRequest("rules-check")); err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		for _, id := range []string{"rules-a", "rules-b", "rules-check"} {
+			if id != "rules-check" {
+				if _, err := b.Launch(t.Context(), request(id)); err != nil {
+					t.Fatalf("Launch %s: %v", id, err)
+				}
 			}
 			body, err := os.ReadFile(layoutFor(cfg.RunsRoot, id).rules)
 			if err != nil {

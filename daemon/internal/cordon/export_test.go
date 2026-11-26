@@ -171,6 +171,21 @@ func TestExportRefusesALaunchWithoutACleanProvenEnd(t *testing.T) {
 		{"nonzero exit", func(t *testing.T, cfg Config) *Backend {
 			return launched(t, cfg, "run", agentWriting(1, func(string) {}))
 		}, ErrNotExportable, false},
+		// A clean end whose request a forced update left in the old version.
+		{"foreign request", func(t *testing.T, cfg Config) *Backend {
+			b := launched(t, cfg, "run", agentWriting(0, func(string) {}))
+			l := layoutFor(cfg.RunsRoot, "run")
+			body, err := os.ReadFile(l.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := strings.Replace(string(body), requestVersion, "freeside.cordon.supervise/v1", 1)
+			//nolint:gosec // G703: the test run's own request file under its temporary runs root.
+			if err := os.WriteFile(l.request, []byte(old), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}, ErrNotExportable, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -191,6 +206,39 @@ func TestExportRefusesALaunchWithoutACleanProvenEnd(t *testing.T) {
 			})
 		})
 	}
+	// A request that fails to read isn't a refusal: Recover's caller
+	// retries it, and the retry exports.
+	t.Run("unreadable request", func(t *testing.T) {
+		t.Parallel()
+		cfg := testConfig(t)
+		synctest.Test(t, func(t *testing.T) {
+			b := launched(t, cfg, "run", agentWriting(0, func(string) {}))
+			l := layoutFor(cfg.RunsRoot, "run")
+			body, err := os.ReadFile(l.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(l.request); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(l.request, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Export(t.Context(), exportRequest("run")); err == nil || errors.Is(err, ErrNotExportable) {
+				t.Fatalf("Export over an unreadable request = %v, want a retryable error", err)
+			}
+			if err := os.Remove(l.request); err != nil {
+				t.Fatal(err)
+			}
+			//nolint:gosec // G703: the test run's own request file under its temporary runs root.
+			if err := os.WriteFile(l.request, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.Export(t.Context(), exportRequest("run")); err != nil {
+				t.Fatalf("Export once the request reads: %v", err)
+			}
+		})
+	})
 	t.Run("already exported", func(t *testing.T) {
 		t.Parallel()
 		cfg := testConfig(t)

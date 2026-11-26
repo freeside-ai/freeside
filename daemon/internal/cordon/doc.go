@@ -1,5 +1,5 @@
 // Package cordon runs one cordoned writer launch on the daemon's host
-// (docs/plan.md §5.7, Cordoned Runs; #3466). A launch is the agent CLI
+// (docs/plan.md §5.7, Cordoned Runs; #3466). A writer's launch is the agent CLI
 // started as the daemon's own account under a Seatbelt rule file, with no
 // VM, no second account, and no sudo. The rule file (rules.sb, rendered by
 // RenderRules) allows by default and denies a short list: the owner's
@@ -22,6 +22,15 @@
 // run still ends by the CLI's exit status. Rationale:
 // devlog/2026-11-26-1700-steer-cordoned-writer.md.
 //
+// A launch is one of three kinds, which its supervisor request records: a
+// writer, the agent CLI; a check (check.go), one recipe command run in a
+// fresh worktree with no token and stdin on /dev/null, whose stdout and
+// stderr go to the transcript as one stream; and a probe, the conformance
+// suite's. All three run under the same rule file and end through the same
+// proof. Only a writer gets the streamed input and the token's pipe, and
+// only a writer's run exports. Rationale:
+// devlog/2026-11-26-0355-cordoned-check-launch.md.
+//
 // A launch's directory, <RunsRoot>/<RunID>, holds three parts:
 //
 //	run/       RUN_ROOT, the one place the rules reopen
@@ -31,10 +40,11 @@
 //	  mise-state/ MISE_STATE_DIR, so mise's trust in the worktree's config
 //	             ends with the run (#3601)
 //	ctl/       the rule file, the proof's tag and control, the transcript
-//	           (the agent's stdout), its stderr, the prompt, the inbox and
-//	           its input-closed marker, the supervisor's stderr, and the
-//	           records (record.go): the supervisor's request, the claim,
-//	           the cancellation marker, and the end and export records
+//	           (the agent's stdout, or a check's two streams), its stderr,
+//	           the prompt, the inbox and its input-closed marker, the
+//	           supervisor's stderr, and the records (record.go): the
+//	           supervisor's request, the claim, the cancellation marker,
+//	           and the end and export records
 //	export/    the export's manifests and blobs, once Export runs
 //
 // ctl and export sit under a protected root and outside RUN_ROOT, so the

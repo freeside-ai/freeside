@@ -76,9 +76,37 @@ func readEndRecord(l layout, runID string) (endRecord, error) {
 	return rec, nil
 }
 
-// requestVersion v2 streams the program's input: v1 gave it ctl/prompt
-// as plain stdin.
-const requestVersion = "freeside.cordon.supervise/v2"
+// requestVersion v3 names the launch's kind (launchKind), which decides
+// the program's input and token; v2 named them as two flags, and v1 gave
+// a writer ctl/prompt as plain stdin.
+const requestVersion = "freeside.cordon.supervise/v3"
+
+// launchKind is what a launch runs. It decides what the program gets and
+// whether the run can export: a writer is the agent CLI, which gets its
+// input streamed from ctl/prompt and the inbox (inbox.go) and the token on
+// tokenFD, and only a writer's run exports; a check is one recipe command,
+// which gets neither and whose two output streams go to one transcript; a
+// probe is the conformance suite's, which gets neither either.
+type launchKind string
+
+const (
+	kindWriter launchKind = "writer"
+	kindCheck  launchKind = "check"
+	kindProbe  launchKind = "probe"
+)
+
+// allLaunchKinds lists every valid launchKind; it is the single
+// registration point.
+var allLaunchKinds = []launchKind{kindWriter, kindCheck, kindProbe}
+
+func (k launchKind) valid() bool {
+	switch k {
+	case kindWriter, kindCheck, kindProbe:
+		return true
+	default:
+		return false
+	}
+}
 
 // supervisedProcess is one process a supervisor starts, already confined
 // (confinedArgv) by the daemon that wrote the request.
@@ -91,31 +119,35 @@ type supervisedProcess struct {
 // supervisorRequest is ctl/request.json: everything a supervisor runs, so
 // it needs nothing from the daemon but the run's directory and, for a
 // writer, the token's pipe on tokenFD. The daemon writes it after the seed
-// and before it starts the supervisor.
+// and before it starts the supervisor. No older version's reader is kept: the
+// record is private to this package and its supervisor, the same binary,
+// and an update drains every run first, so a v1 or v2 request left by a
+// forced update fails check and its run is never exported.
 type supervisorRequest struct {
 	Version string `json:"version"`
 	RunID   string `json:"run_id"`
+	// Kind decides whether the program's input is streamed from
+	// ctl/prompt and the inbox, or is /dev/null, whether it gets the
+	// supervisor's tokenFD as its own, and whether the run can export.
+	Kind launchKind `json:"kind"`
 	// Repository, BaseRef, and BaseSHA go into the end record; a probe
 	// launch, which is never exported, has none.
-	Repository string            `json:"repository"`
-	BaseRef    string            `json:"base_ref"`
-	BaseSHA    string            `json:"base_sha"`
-	Canary     supervisedProcess `json:"canary"`
-	Program    supervisedProcess `json:"program"`
-	// Prompt streams the program's input: ctl/prompt as the first message,
-	// then what the daemon leaves in the inbox (inbox.go). Without it the
-	// program's stdin is /dev/null. Secret gives it the supervisor's
-	// tokenFD as its own.
-	Prompt          bool  `json:"prompt"`
-	Secret          bool  `json:"secret"`
-	StallLimit      int64 `json:"stall_limit_ns"`
-	EndGrace        int64 `json:"end_grace_ns"`
-	EndProofTimeout int64 `json:"end_proof_timeout_ns"`
+	Repository      string            `json:"repository"`
+	BaseRef         string            `json:"base_ref"`
+	BaseSHA         string            `json:"base_sha"`
+	Canary          supervisedProcess `json:"canary"`
+	Program         supervisedProcess `json:"program"`
+	StallLimit      int64             `json:"stall_limit_ns"`
+	EndGrace        int64             `json:"end_grace_ns"`
+	EndProofTimeout int64             `json:"end_proof_timeout_ns"`
 }
 
 func (r supervisorRequest) check(runID string) error {
 	if r.Version != requestVersion || r.RunID != runID {
 		return fmt.Errorf("cordon: the supervisor request is not %s's", runID)
+	}
+	if !r.Kind.valid() {
+		return fmt.Errorf("cordon: the supervisor request names an invalid kind %q", r.Kind)
 	}
 	if len(r.Canary.Argv) == 0 || len(r.Program.Argv) == 0 {
 		return errors.New("cordon: the supervisor request names no program")
@@ -124,6 +156,21 @@ func (r supervisorRequest) check(runID string) error {
 		return errors.New("cordon: the supervisor request has a non-positive limit")
 	}
 	return nil
+}
+
+// readRequestKind reads runID's supervisor request and returns its kind.
+// A missing request's error matches os.ErrNotExist, and one that reads but
+// isn't this run's current request matches errMalformedRecord; any other
+// error is a failed read that may not repeat.
+func readRequestKind(l layout, runID string) (launchKind, error) {
+	var req supervisorRequest
+	if err := readRecord(l.request, &req); err != nil {
+		return "", err
+	}
+	if err := req.check(runID); err != nil {
+		return "", fmt.Errorf("%w: %w", errMalformedRecord, err)
+	}
+	return req.Kind, nil
 }
 
 const claimVersion = "freeside.cordon.claim/v1"
@@ -370,6 +417,10 @@ func writeRecord(path string, rec any) error {
 
 // readRecord decodes a record strictly: unknown fields, duplicate names, and
 // trailing data refuse. A missing record's error matches os.ErrNotExist.
+// errMalformedRecord marks a record that was read but can't be used, which
+// reading it again won't change, apart from a failed open or read.
+var errMalformedRecord = errors.New("cordon: malformed record")
+
 func readRecord(path string, rec any) error {
 	f, err := os.Open(path) //nolint:gosec // G304: a path in the launch's own control directory
 	if err != nil {
@@ -381,10 +432,10 @@ func readRecord(path string, rec any) error {
 		return fmt.Errorf("cordon: read %s: %w", path, err)
 	}
 	if len(body) > maxRecordBytes {
-		return fmt.Errorf("cordon: %s exceeds %d bytes", path, maxRecordBytes)
+		return fmt.Errorf("%w: %s exceeds %d bytes", errMalformedRecord, path, maxRecordBytes)
 	}
 	if err := strictjson.Decode(body, rec, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
-		return fmt.Errorf("cordon: decode %s: %w", path, err)
+		return fmt.Errorf("%w: decode %s: %w", errMalformedRecord, path, err)
 	}
 	return nil
 }

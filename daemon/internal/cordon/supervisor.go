@@ -138,8 +138,23 @@ func (s *superviseEnv) run(ctx context.Context, said io.Writer) (int, error) {
 	if err := req.check(s.runID); err != nil {
 		return supervisorFailed, err
 	}
-	if req.Secret != (s.secret != nil) {
-		return supervisorFailed, fmt.Errorf("cordon: the request's secret is %v, but the supervisor holds %v", req.Secret, s.secret != nil)
+	// Only a writer gets the prompt and the token's pipe, and only a check
+	// sends both its streams to the transcript. The pipe the supervisor
+	// holds must be the one the kind takes, checked before the claim, so a
+	// check handed a pipe starts nothing.
+	var writer, oneStream bool
+	switch req.Kind {
+	case kindWriter:
+		writer = true
+	case kindCheck:
+		oneStream = true
+	case kindProbe:
+	}
+	switch {
+	case writer && s.secret == nil:
+		return supervisorFailed, fmt.Errorf("cordon: a %s launch needs the token's pipe, and the supervisor holds none", req.Kind)
+	case !writer && s.secret != nil:
+		return supervisorFailed, fmt.Errorf("cordon: a %s launch takes no token, but the supervisor holds a pipe on descriptor %d", req.Kind, tokenFD)
 	}
 	won, err := claimRun(s.l, s.runID, &claimedProcess{PID: s.self.pid, Start: s.self.start})
 	if err != nil {
@@ -183,7 +198,7 @@ func (s *superviseEnv) run(ctx context.Context, said io.Writer) (int, error) {
 	}
 	spec := processSpec{argv: req.Program.Argv, dir: req.Program.Dir, env: req.Program.Env, secret: s.secret}
 	var input *inputFeed
-	if req.Prompt {
+	if writer {
 		prompt, err := os.ReadFile(s.l.prompt)
 		if err == nil && !utf8.Valid(prompt) {
 			err = errors.New("it is not UTF-8")
@@ -195,7 +210,10 @@ func (s *superviseEnv) run(ctx context.Context, said io.Writer) (int, error) {
 		spec.stdin = input.reader
 	}
 	activity := newActivity()
-	spec.stdout, spec.stderr = activity.to(transcript), activity.to(stderr)
+	// A check's stderr shares its stdout's pipe, so the transcript keeps
+	// the order the command wrote in; ctl/stderr stays, empty, so a run's
+	// files don't depend on its kind.
+	spec.stdout, spec.stderr, spec.mergeStderr = activity.to(transcript), activity.to(stderr), oneStream
 	if input != nil {
 		// The turn-end watch sees every byte, whatever becomes of the
 		// transcript's writes, which never fail (activityStream).
