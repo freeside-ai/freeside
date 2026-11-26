@@ -210,6 +210,12 @@ func (d *Driver) cordonHandoff(ctx context.Context, in intent) (exec.StageResult
 	}
 	exp, err := d.cordon.Export(ctx, req)
 	if err != nil {
+		// A stop that raced the writer's clean exit: the cordon reads the
+		// run as canceled once cancellation was requested, as its recovery
+		// does.
+		if errors.Is(err, ErrCordonCanceled) {
+			return d.cordonCanceledResult(in), nil
+		}
 		var refusal *CordonExportRefusal
 		if errors.As(err, &refusal) {
 			return d.cordonExportRefusedResult(in, refusal), nil
@@ -317,6 +323,11 @@ func (d *Driver) recoverCordoned(ctx context.Context, in intent) error {
 	}
 	recovered, err := d.cordon.Recover(ctx, req)
 	if err != nil {
+		// Cancellation was requested after Recover read a clean end but
+		// before its export: the run ended canceled.
+		if errors.Is(err, ErrCordonCanceled) {
+			return d.commitRecoveredTerminal(in.InvocationID, d.cordonCanceledResult(in))
+		}
 		var refusal *CordonExportRefusal
 		if errors.As(err, &refusal) {
 			return d.commitRecoveredTerminal(in.InvocationID, d.cordonExportRefusedResult(in, refusal))

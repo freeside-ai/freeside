@@ -25,8 +25,15 @@ import (
 var (
 	// ErrNotExportable refuses a launch whose end record says it was
 	// canceled, stalled, lost, or exited nonzero, or that is a probe's: only
-	// a writer's clean exit exports.
+	// a writer's clean exit exports. A canceled launch's refusal also
+	// matches ErrCanceled.
 	ErrNotExportable = errors.New("cordon: the launch did not exit cleanly")
+	// ErrCanceled refuses a launch whose cancellation was requested. The run
+	// ended canceled and never exports, even when its agent exited 0 before
+	// the request landed. It wraps ErrNotExportable, so a caller that only
+	// asks whether the run exports still reads a refusal; a caller that
+	// records how the run ended reads canceled, as Recover does.
+	ErrCanceled = errors.New("cordon: the launch was canceled")
 	// ErrWorktreeReplaced refuses a launch that left run/ or run/worktree
 	// something other than the directory Launch seeded, such as a symlink
 	// to a directory outside the run.
@@ -108,6 +115,11 @@ func (b *Backend) Export(ctx context.Context, req ExportRequest) (ExportResult, 
 	end, err := readEndRecord(l, req.RunID)
 	if err != nil {
 		return ExportResult{}, err
+	}
+	// readEndRecord reads a clean end as canceled once the marker exists, so
+	// this also catches a stop that raced the agent's clean exit.
+	if end.EndedBy == EndedByCanceled {
+		return ExportResult{}, fmt.Errorf("%w: %w: %s", ErrCanceled, ErrNotExportable, req.RunID)
 	}
 	if end.EndedBy != EndedByExited || end.ExitCode != 0 {
 		return ExportResult{}, fmt.Errorf("%w: %s %s with exit code %d", ErrNotExportable, req.RunID, end.EndedBy, end.ExitCode)

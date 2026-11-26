@@ -365,6 +365,8 @@ func TestCordonPortError(t *testing.T) {
 		{"no run", fmt.Errorf("%w: r", cordon.ErrNoRun), stage.ErrCordonNoRun, false},
 		{"scan", &cordon.ScanRefusalError{Reason: "github_token in candidate.txt"}, ward.ErrOutputScanRefused, true},
 		{"worktree replaced", cordon.ErrWorktreeReplaced, cordon.ErrWorktreeReplaced, true},
+		{"not exportable", fmt.Errorf("%w: r stalled", cordon.ErrNotExportable), cordon.ErrNotExportable, true},
+		{"canceled", fmt.Errorf("%w: %w: r", cordon.ErrCanceled, cordon.ErrNotExportable), stage.ErrCordonCanceled, false},
 		{"already exported", cordon.ErrAlreadyExported, cordon.ErrAlreadyExported, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

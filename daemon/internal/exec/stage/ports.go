@@ -181,9 +181,10 @@ type CordonGate interface {
 	// Config.PreJob. Its refusal holds the start (exec.ErrPreJobRefused).
 	PreJob(ctx context.Context, id domain.InvocationID) error
 	Launch(ctx context.Context, launch CordonLaunch) (CordonEnd, error)
-	// Export exports a cleanly ended run. A refusal that would repeat is a
-	// *CordonExportRefusal; any other error is transient, since Recover
-	// exports again.
+	// Export exports a cleanly ended run. A run whose cancellation was
+	// requested returns ErrCordonCanceled, even when its writer exited 0
+	// first. A refusal that would repeat is a *CordonExportRefusal; any
+	// other error is transient, since Recover exports again.
 	Export(ctx context.Context, req CordonExportRequest) (CordonExport, error)
 	// Started reports whether the run's directory exists. A launch claims
 	// it before it starts anything, so false proves nothing ran.
@@ -216,11 +217,17 @@ var (
 	// ErrCordonEndUnproven is a run whose end couldn't be proven: something
 	// it started may still be alive, so only a later Recover may end it.
 	ErrCordonEndUnproven = errors.New("cordon run end unproven")
+	// ErrCordonCanceled is an Export or Recover of a run whose cancellation
+	// was requested, even one whose writer exited 0 before the request
+	// landed. The run ended canceled and nothing exports, so the driver
+	// records it canceled, not failed.
+	ErrCordonCanceled = errors.New("cordon run canceled")
 )
 
 // CordonExportRefusal is an export the cordon refused in a way that will
 // repeat: the credential scan matched, the agent replaced its worktree or
-// hard-linked a file, or the run didn't exit cleanly. Reason becomes an
+// hard-linked a file, or the run didn't exit cleanly. A canceled run is
+// ErrCordonCanceled, not a refusal. Reason becomes an
 // outcome's summary: a scan refusal's names the rule and the item, which
 // can be a worktree path the agent chose, as a warded scan refusal's does;
 // any other is a fixed phrase. Neither carries matched text. Err is the

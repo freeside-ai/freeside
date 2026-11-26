@@ -410,6 +410,10 @@ func cordonPortError(err error) error {
 		return &stage.CordonExportRefusal{Reason: "the writer replaced its worktree", Err: err}
 	case errors.Is(err, export.ErrLinkedFile):
 		return &stage.CordonExportRefusal{Reason: "the worktree holds a hard-linked file", Err: err}
+	// ErrCanceled also matches ErrNotExportable, so it is mapped first: a
+	// canceled run ends canceled, not refused.
+	case errors.Is(err, cordon.ErrCanceled):
+		return fmt.Errorf("%w: %w", stage.ErrCordonCanceled, err)
 	case errors.Is(err, cordon.ErrNotExportable):
 		return &stage.CordonExportRefusal{Reason: "the writer did not exit cleanly", Err: err}
 	}

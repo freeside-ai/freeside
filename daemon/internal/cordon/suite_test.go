@@ -361,8 +361,9 @@ func TestProbeLaunchChecksEffectsBeforeItRemovesTheLaunch(t *testing.T) {
 			if _, err := os.Stat(l.ctl); err != nil {
 				t.Errorf("the launch's directory is gone before the effects: %v", err)
 			}
-			if _, err := b.Export(t.Context(), exportRequest(filepath.Base(l.dir))); !errors.Is(err, ErrNotExportable) {
-				t.Errorf("Export of the probe launch = %v, want ErrNotExportable", err)
+			_, exportErr := b.Export(t.Context(), exportRequest(filepath.Base(l.dir)))
+			if !errors.Is(exportErr, ErrNotExportable) || errors.Is(exportErr, ErrCanceled) {
+				t.Errorf("Export of the probe launch = %v, want ErrNotExportable and not ErrCanceled", exportErr)
 			}
 			return nil
 		})

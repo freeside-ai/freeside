@@ -281,29 +281,44 @@ func TestCordonedWriterEndsThatDontExport(t *testing.T) {
 	body := []byte("the agent's last words\n")
 	evidence := &ward.FailureEvidence{Body: body, Digest: contentaddr.Sum(body)}
 	for _, tc := range []struct {
-		name    string
-		end     CordonEnd
-		status  exec.Status
-		summary string
+		name      string
+		end       CordonEnd
+		exportErr error
+		status    exec.Status
+		summary   string
 	}{
 		{
 			"nonzero",
 			CordonEnd{EndedBy: CordonEndedByExited, ExitCode: 3, Failure: evidence},
+			nil,
 			exec.StatusFailed, "exited with status 3",
 		},
 		{
 			"stalled",
 			CordonEnd{EndedBy: CordonEndedByStalled, ExitCode: -1, Failure: evidence},
+			nil,
 			exec.StatusFailed, "stalled",
 		},
-		{"canceled", CordonEnd{EndedBy: CordonEndedByCanceled, ExitCode: -1}, exec.StatusCanceled, "canceled"},
+		{"canceled", CordonEnd{EndedBy: CordonEndedByCanceled, ExitCode: -1}, nil, exec.StatusCanceled, "canceled"},
+		// A stop that raced the writer's clean exit: Launch saw exited 0, and
+		// the cancellation landed before Export.
+		{
+			"canceled after a clean exit",
+			CordonEnd{EndedBy: CordonEndedByExited},
+			fmt.Errorf("%w: run", ErrCordonCanceled), exec.StatusCanceled, "canceled",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			cordon := &fakeCordon{launchFn: func(context.Context, CordonLaunch) (CordonEnd, error) {
-				return tc.end, nil
-			}}
+			cordon := &fakeCordon{
+				launchFn: func(context.Context, CordonLaunch) (CordonEnd, error) {
+					return tc.end, nil
+				},
+				exportFn: func(CordonExportRequest) (CordonExport, error) {
+					return CordonExport{}, tc.exportErr
+				},
+			}
 			d, base := newCordonDriver(t, cordon, &stubGate{}, newStubExports())
 			if err := startCordoned(t, d, cordonSpec(base)); err != nil {
 				t.Fatal(err)
@@ -409,19 +424,29 @@ func TestCordonedRecovery(t *testing.T) {
 		outcome CordonRecoveryOutcome
 		end     CordonEnd
 		status  domain.ExecutionOutcomeStatus
+		// err is Recover's error in place of an outcome.
+		err error
 	}{
 		// An exported run records its export, not an outcome.
-		{"exported", CordonRecoveryExported, CordonEnd{EndedBy: CordonEndedByExited}, ""},
+		{"exported", CordonRecoveryExported, CordonEnd{EndedBy: CordonEndedByExited}, "", nil},
 		{"failed", CordonRecoveryFailed, CordonEnd{
 			EndedBy: CordonEndedByExited, ExitCode: 2,
 			Failure: &ward.FailureEvidence{Body: body, Digest: contentaddr.Sum(body)},
-		}, domain.ExecutionOutcomeFailed},
+		}, domain.ExecutionOutcomeFailed, nil},
 		{
 			"canceled", CordonRecoveryCanceled,
 			CordonEnd{EndedBy: CordonEndedByCanceled, ExitCode: -1},
-			domain.ExecutionOutcomeCanceled,
+			domain.ExecutionOutcomeCanceled, nil,
 		},
-		{"lost", CordonRecoveryLost, CordonEnd{EndedBy: CordonEndedByLost, ExitCode: -1}, domain.ExecutionOutcomeLost},
+		{"lost", CordonRecoveryLost, CordonEnd{EndedBy: CordonEndedByLost, ExitCode: -1}, domain.ExecutionOutcomeLost, nil},
+		// The cancellation landed between Recover's read of a clean end and
+		// its export.
+		{
+			"canceled before the export", "",
+			CordonEnd{},
+			domain.ExecutionOutcomeCanceled,
+			fmt.Errorf("%w: run", ErrCordonCanceled),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -433,6 +458,9 @@ func TestCordonedRecovery(t *testing.T) {
 			var recovered atomic.Bool
 			cordon.recoverFn = func(req CordonExportRequest) (CordonRecovery, error) {
 				recovered.Store(true)
+				if tc.err != nil {
+					return CordonRecovery{}, tc.err
+				}
 				rec := CordonRecovery{Outcome: tc.outcome, End: tc.end, Reason: "no supervisor recorded its end"}
 				if tc.outcome == CordonRecoveryExported {
 					rec.Export = cordonExport(t, cordon.runsRoot, req.RunID, base)
