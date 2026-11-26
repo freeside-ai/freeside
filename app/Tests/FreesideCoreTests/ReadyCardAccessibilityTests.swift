@@ -141,6 +141,33 @@
             #expect(reads(open, UsageFixtures.staleEnrollmentID))
         }
 
+        /// The folds under an agent's quote read the name of what they hold
+        /// (#3683): the agent summary's report fold on the spec approval
+        /// card, and the claim's source fold on the review dispute card.
+        @Test(arguments: [
+            (Components.Schemas.AttentionType.spec_approval, "Full Report"),
+            (.review_dispute, "Source"),
+        ])
+        func aClosedQuoteFoldReadsWhatItHolds(
+            _ type: Components.Schemas.AttentionType, label: String
+        ) throws {
+            let window = host(AttentionFixtures.fixture(type: type))
+            defer {
+                window.close()
+                setAssistiveClientAttributes(false)
+            }
+            var walk = Walk()
+            try walk.visit(try #require(window.contentView), depth: 0)
+
+            // The fold's toggle speaks its label, then its closed line's
+            // summary when it has one; the open fold's rows are not drawn
+            // while it is closed.
+            #expect(walk.descriptions.contains { $0 == label || $0.hasPrefix("\(label), ") })
+            for retired in ["Source and Original Report", "Source and Supporting Details"] {
+                #expect(!(walk.descriptions + walk.texts).contains { $0.contains(retired) })
+            }
+        }
+
         private func host(
             _ snapshot: Components.Schemas.AttentionItemSnapshot,
             expandedDisclosures: Set<DecisionDisclosure> = [],
