@@ -1549,11 +1549,11 @@ import Testing
             presentation.rounds.map(\.text) == [
                 "Round 1: 2 new, 0 recurring",
                 "Round 2: 1 new, 1 recurring",
-                "Round 3: 0 new, 0 recurring",
+                "Round 3: no findings",
             ])
         #expect(
-            presentation.summary
-                == "Review yield: Round 1: 2 new, 0 recurring; Round 2: 1 new, 1 recurring; Round 3: 0 new, 0 recurring."
+            presentation.accessibilityValue
+                == "Round 1: 2 new, 0 recurring; Round 2: 1 new, 1 recurring; Round 3: no findings."
         )
 
         let diminishing = try #require(
@@ -1566,9 +1566,45 @@ import Testing
                 "Round 3: 0 new, 3 recurring",
             ])
         #expect(
-            diminishing.summary
-                == "Review yield: Round 1: 4 new, 0 recurring; Round 2: 1 new, 2 recurring; Round 3: 0 new, 3 recurring."
+            diminishing.accessibilityValue
+                == "Round 1: 4 new, 0 recurring; Round 2: 1 new, 2 recurring; Round 3: 0 new, 3 recurring."
         )
+    }
+
+    /// Bars draw from the item's own history on both cards that list
+    /// yield, with no injected graphics, on one scale per card: the
+    /// largest round's total. One round, or a history with no findings,
+    /// draws none.
+    @Test func yieldBarsDrawFromTheItemsOwnHistory() throws {
+        let ready = try #require(
+            DecisionYieldPresentation(
+                AttentionFixtures.fixture(type: .ready_for_final_review).item))
+        #expect(ready.drawsBars)
+        #expect(ready.scale == 2)
+        #expect(ready.rounds.map(ready.drawsBar) == [true, true, false])
+
+        let diminishing = try #require(
+            DecisionYieldPresentation(
+                AttentionFixtures.fixture(type: .review_diminishing_returns).item))
+        #expect(diminishing.drawsBars)
+        #expect(diminishing.scale == 4)
+        #expect(
+            diminishing.rounds.map(diminishing.barFill) == [
+                .init(new: 1, recurring: 0),
+                .init(new: 0.25, recurring: 0.5),
+                .init(new: 0, recurring: 0.75),
+            ])
+
+        #expect(
+            !DecisionYieldPresentation(rounds: [
+                .init(number: 1, newFindings: 3, recurringFindings: 1)
+            ]).drawsBars)
+        let empty = DecisionYieldPresentation(rounds: [
+            .init(number: 1, newFindings: 0, recurringFindings: 0),
+            .init(number: 2, newFindings: 0, recurringFindings: 0),
+        ])
+        #expect(!empty.drawsBars)
+        #expect(empty.scale == 1)
     }
 
     /// Frame 7.4: a dispute's positions each draw under an unverified
