@@ -7043,7 +7043,24 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
 - **Configuration.** `Config.Home` must be the account's own home: cfprefsd
   writes the global preferences there for the launch, and on macOS 27 only
   the preference rule and the file rule together refuse that write. Every
-  path is given resolved, and every field enters the configuration digest.
+  path but `Path`'s entries is given resolved, and every field enters the
+  configuration digest.
+- **A launch's `PATH` finds the version managers' tools.** It is the
+  pinned CLI's directory, then `/opt/homebrew/bin`,
+  `/opt/homebrew/opt/rustup/bin`, `~/.cargo/bin`, `~/.local/bin`, and
+  `~/.local/share/mise/shims` under the run account's home, then
+  `/usr/bin`, `/bin`, `/usr/sbin`, and `/sbin` (`cordon.LaunchPath`, the
+  one definition; plan §5.7, Tool versions). The fleet repository installs
+  the managers; a directory a host lacks stays on the list. No entry is
+  resolved, so a rustup upgrade, which moves Homebrew's rustup link,
+  leaves the digest alone, but changing the list changes the digest and
+  takes a new proof. A run can write `~/.cargo/bin`, `~/.local/bin`, and
+  on a shared account `/opt/homebrew/bin`, so a later run finds what an
+  earlier one left there (plan §14). Nothing Freeside starts resolves
+  through this `PATH`: every program started under the launch's
+  environment is named by absolute path, and the supervisor starts with
+  an empty one. A darwin test plants decoys in the home's directories and
+  finds none ran.
 - **The token reaches the CLI alone.** `LaunchRequest.Token` carries the
   enrolled identity's setup token, and a request without one is refused
   before anything is created. The agent reads it from its own pipe on fd 3,
@@ -7264,7 +7281,10 @@ directory and its state directory as the launch sets it, and checks that the
 trust mise records stays in the run's directory: the home's
 `~/.local/state/mise` gains no entry naming the run. A failure names any
 entry it left there, to remove by hand. A second launch runs the installed
-jq offline from the same install directory, under the same checks. It also
+jq offline from the same install directory, under the same checks. It
+runs `go`, `uv`, and `cargo` by name in a launch on the launch `PATH`,
+skipping any that fails by name outside a launch with only the home and
+that `PATH` set. It also
 runs the whole suite (`Suite.Full`, then the pre-job probe) against the real
 home with the real launchd and Simulator host; that writes nothing to the
 home.
