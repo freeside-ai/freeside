@@ -270,3 +270,73 @@ func TestSettingsRecordsRoundTripEverySection(t *testing.T) {
 }
 
 const hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// TestProjectSettingsAppendRefusesAConflictingRecipeSource refuses an append
+// that would leave a project holding both an image and a recipe binding, or
+// a binding and the warded writer class, in either order of writing, and a
+// binding for another repository than the project's binding.
+func TestProjectSettingsAppendRefusesAConflictingRecipeSource(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	image := `"r/a@sha256:` + hex64 + `"`
+	binding := `{"repository":"acme/widgets","repository_id":42,"commit_sha":"` + hex64[:40] +
+		`","recipe_digest":"sha256:` + hex64 + `"}`
+	warded := `"fresh_vm_read_only_volume_handoff"`
+	for name, tc := range map[string]struct {
+		first, second domain.ProjectSettingsSection
+		firstValue    string
+		secondValue   string
+		want          error
+	}{
+		"binding over an image": {
+			domain.ProjectSectionAgentImage, domain.ProjectSectionRecipeBinding, image, binding,
+			domain.ErrProjectRecipeSourceAmbiguous,
+		},
+		"image over a binding": {
+			domain.ProjectSectionRecipeBinding, domain.ProjectSectionAgentImage, binding, image,
+			domain.ErrProjectRecipeSourceAmbiguous,
+		},
+		"warded over a binding": {
+			domain.ProjectSectionRecipeBinding, domain.ProjectSectionWriterClass, binding, warded,
+			domain.ErrWardedWithoutProjectImage,
+		},
+		"binding over warded": {
+			domain.ProjectSectionWriterClass, domain.ProjectSectionRecipeBinding, warded, binding,
+			domain.ErrWardedWithoutProjectImage,
+		},
+	} {
+		s := openSettingsStore(t)
+		if _, err := appendProjectSettings(t, s, "project-a", tc.first, tc.firstValue); err != nil {
+			t.Fatalf("%s: first append: %v", name, err)
+		}
+		if _, err := appendProjectSettings(t, s, "project-a", tc.second, tc.secondValue); !errors.Is(err, tc.want) {
+			t.Errorf("%s: second append = %v, want %v", name, err, tc.want)
+		}
+	}
+
+	// Clearing the image first lets the binding replace it.
+	s := openSettingsStore(t)
+	for _, step := range []struct {
+		section domain.ProjectSettingsSection
+		value   string
+	}{
+		{domain.ProjectSectionAgentImage, image},
+		{domain.ProjectSectionAgentImage, "null"},
+		{domain.ProjectSectionRecipeBinding, binding},
+	} {
+		if _, err := appendProjectSettings(t, s, "project-a", step.section, step.value); err != nil {
+			t.Fatalf("%s %s: %v", step.section, step.value, err)
+		}
+	}
+
+	bound, err := domain.NewProject("project-b", "acme/widgets", 43)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error { return tx.RegisterProject(ctx, bound) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendProjectSettings(t, s, "project-b", domain.ProjectSectionRecipeBinding, binding); !errors.Is(err, store.ErrProjectRepositoryMismatch) {
+		t.Fatalf("binding another repository: %v, want ErrProjectRepositoryMismatch", err)
+	}
+}

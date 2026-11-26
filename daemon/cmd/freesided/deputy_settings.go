@@ -535,7 +535,7 @@ func (s *loadedDeputySettings) runSettings(containerBin string) daemoncompose.Ru
 		},
 		AllowedPaths:   slices.Clone(s.Repository.AllowedPaths),
 		ApprovedRecipe: s.ApprovedRecipe,
-		AgentImage:     domain.ImageRef(s.Images.Agent),
+		AgentImage:     new(domain.ImageRef(s.Images.Agent)),
 	}
 	if s.Repository.HandBackLabel != "" {
 		project.HandBackLabel = new(s.Repository.HandBackLabel)

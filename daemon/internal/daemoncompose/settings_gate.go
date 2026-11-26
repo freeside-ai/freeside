@@ -72,7 +72,8 @@ func RebuildInputs(build domain.BuildSettings) projectimage.BuildInputs {
 // is a valid transport repository and its base ref a branch name, the
 // allowed paths pass engine.ExplicitAllowedPaths (the rule the Claude
 // driver refuses at start), the approved recipe is a sha256 digest, and the
-// hand-back label is a label name. The writer class's only rule is the
+// hand-back label is a label name, and a recipe binding names a valid
+// transport repository. The writer class's only rule is the
 // domain's: it names one of the two writer classes. Each refusal names the
 // field. The
 // repository's binding to the project's projects row is store state, which
@@ -102,6 +103,10 @@ func CheckProjectSettingsSection(settings domain.ProjectSettings, section domain
 		if publish.ValidateLabelName(*settings.HandBackLabel) != nil {
 			return errors.New("hand_back_label is not a label name")
 		}
+	case domain.ProjectSectionRecipeBinding:
+		if publish.ValidateRepository(settings.RecipeBinding.Repository) != nil {
+			return errors.New("recipe_binding.repository is not owner/name")
+		}
 	case domain.ProjectSectionAgentImage, domain.ProjectSectionWriterClass, domain.ProjectSectionEnabled:
 	}
 	return nil
@@ -125,7 +130,19 @@ func CheckInstanceSettings(settings domain.InstanceSettings) error {
 	return nil
 }
 
-// CheckProjectSettings runs the project gate on every section that is set.
+// CheckProjectSettings runs the project gate on every section that is set,
+// then the rules that span sections. It re-checks:
+//   - the domain's cross-section rules (ProjectSettings.Validate): exactly
+//     one of agent_image and recipe_binding, and no warded writer_class
+//     without an image;
+//   - a recipe binding against the repository section: the same repository
+//     and id, so a binding can't carry another repository's recipe;
+//   - a recipe binding's digest against approved_recipe, so no run composes
+//     from a recipe that isn't the project's approved one; this is the
+//     binding's counterpart of the image's recipe check in CheckWriterImage.
+//     The engine still checks the pinned digest at each use against its whole
+//     approved set, which keeps any image-policy adoptions the repository
+//     recorded while it had an image.
 func CheckProjectSettings(settings domain.ProjectSettings) error {
 	for _, section := range domain.AllProjectSettingsSections {
 		value, err := settings.SectionValue(section)
@@ -137,6 +154,19 @@ func CheckProjectSettings(settings domain.ProjectSettings) error {
 		}
 		if err := CheckProjectSettingsSection(settings, section); err != nil {
 			return err
+		}
+	}
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	if binding := settings.RecipeBinding; binding != nil {
+		if binding.Repository != settings.Repository.Repo || binding.RepositoryID != settings.Repository.RepositoryID {
+			return fmt.Errorf("recipe_binding names repository %s (%d), not the project's %s (%d)",
+				binding.Repository, binding.RepositoryID, settings.Repository.Repo, settings.Repository.RepositoryID)
+		}
+		if binding.RecipeDigest != settings.ApprovedRecipe {
+			return fmt.Errorf("recipe_binding binds recipe %s, which is not the approved_recipe %s",
+				binding.RecipeDigest, settings.ApprovedRecipe)
 		}
 	}
 	return nil

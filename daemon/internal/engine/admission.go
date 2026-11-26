@@ -276,7 +276,8 @@ func (a *admitter) runningConfigurationDigest(class string, image domain.ImageRe
 // writerClass resolves the class an implementer or remediator attempt of
 // run runs on: the task's requirement, else the project's setting (project,
 // read with the admission's project authority), else the cordon
-// (domain.ResolveWriterClass). The run's first writer admission
+// (domain.ResolveWriterClass), refusing warded when hasImage is false: a
+// project with a recipe binding has no image for the warded writer. The run's first writer admission
 // fixes it: a later writer admission whose resolved class differs is
 // refused with ErrWriterClassChanged and raises one notice on the run, so
 // a remediation never runs on another containment than the candidate it
@@ -285,7 +286,7 @@ func (a *admitter) runningConfigurationDigest(class string, image domain.ImageRe
 // An admission counts as cordoned only when it names the cordon's class;
 // every other one was placed on the admitter's ward backend.
 func (e *Engine) writerClass(
-	ctx context.Context, run domain.Run, project *domain.RunnerBackendClass,
+	ctx context.Context, run domain.Run, project *domain.RunnerBackendClass, hasImage bool,
 ) (domain.RunnerBackendClass, error) {
 	var (
 		requirement *domain.TaskWriterClass
@@ -303,7 +304,7 @@ func (e *Engine) writerClass(
 	}); err != nil {
 		return "", fmt.Errorf("read run %s writer class: %w", run.ID, err)
 	}
-	resolved, err := domain.ResolveWriterClass(project, requirement)
+	resolved, err := domain.ResolveWriterClass(project, requirement, hasImage)
 	if err != nil {
 		return "", err
 	}
@@ -759,7 +760,7 @@ func (e *Engine) admitAttemptIn(
 	cordoned := false
 	if role, ok := wardRole(binding.run, stage, invocationID); ok &&
 		(role == domain.RoleImplementer || role == domain.RoleRemediator) {
-		class, err := e.writerClass(ctx, binding.run, project.WriterClass)
+		class, err := e.writerClass(ctx, binding.run, project.WriterClass, project.RecipeBinding == nil)
 		if err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 		}
@@ -1110,6 +1111,7 @@ func (e *Engine) admitAttemptIn(
 		AgentBinding:               agentBinding,
 		WorkspaceHydration:         hydration,
 		SettingsRevisions:          settings,
+		RecipeBinding:              project.RecipeBinding,
 		AdmittedAt:                 admittedAt,
 	})
 	if err != nil {

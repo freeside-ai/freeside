@@ -22,14 +22,31 @@ VALUES (?1, ?2, ?3, ?4)
 ON CONFLICT (task_id) DO UPDATE SET class = excluded.class, set_by = excluded.set_by, set_at = excluded.set_at`
 
 // SetTaskWriterClass stores the task's requirement, replacing any earlier
-// one. It refuses a requirement Validate refuses and a task that doesn't
-// exist (ErrNotFound).
+// one. It refuses a requirement Validate refuses, a task that doesn't exist
+// (ErrNotFound), and a task whose project has no project image
+// (domain.ErrWardedWithoutProjectImage): its settings hold a recipe_binding,
+// and the warded writer runs in the project image. A binding set after the
+// requirement isn't caught here; the writer-class resolver refuses that
+// task's writer at admission.
 func (tx *InternalTx) SetTaskWriterClass(ctx context.Context, requirement domain.TaskWriterClass) error {
 	if err := requirement.Validate(); err != nil {
 		return fmt.Errorf("set task writer class: %w", err)
 	}
-	if _, err := tx.GetTask(ctx, requirement.TaskID); err != nil {
+	task, err := tx.GetTask(ctx, requirement.TaskID)
+	if err != nil {
 		return fmt.Errorf("set task %q writer class: %w", requirement.TaskID, err)
+	}
+	settings, err := tx.ProjectSettingsRecord(ctx, task.ProjectID)
+	if err != nil {
+		return fmt.Errorf("set task %q writer class: %w", requirement.TaskID, err)
+	}
+	binding, err := settings.RecipeBinding()
+	if err != nil {
+		return fmt.Errorf("set task %q writer class: %w", requirement.TaskID, err)
+	}
+	if binding != nil {
+		return fmt.Errorf("set task %q writer class %q: project %q: %w",
+			requirement.TaskID, requirement.Class, task.ProjectID, domain.ErrWardedWithoutProjectImage)
 	}
 	if _, err := tx.tx.ExecContext(ctx, setTaskWriterClassSQL, requirement.TaskID, requirement.Class,
 		requirement.SetBy, formatTime(requirement.SetAt)); err != nil {

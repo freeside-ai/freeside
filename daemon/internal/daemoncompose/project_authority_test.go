@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemoncompose"
@@ -97,8 +98,8 @@ func TestStoredProjectAuthorityReadsEachProjectsRecord(t *testing.T) {
 
 // TestStoredProjectAuthorityRefuses: a project the stored settings grant
 // nothing is refused as ErrProjectSettingsRefused, joined with why: it has
-// no record, its record fails the settings gate, or it names a repository
-// other than the project's binding.
+// no record, its record fails the settings gate, it names a repository
+// other than the project's binding, or it has no project image.
 func TestStoredProjectAuthorityRefuses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -132,6 +133,17 @@ func TestStoredProjectAuthorityRefuses(t *testing.T) {
 		if _, err := storedAuthority(t, st, runSettingsProject); !errors.Is(err, engine.ErrProjectSettingsRefused) ||
 			!errors.Is(err, store.ErrProjectRepositoryMismatch) {
 			t.Fatalf("error %v, want ErrProjectSettingsRefused for the binding mismatch", err)
+		}
+	})
+	// A start composes no driver for a no-image project, so no gate grants
+	// its tasks anything under another project's driver either (#3620).
+	t.Run("no project image", func(t *testing.T) {
+		t.Parallel()
+		st := seedRunSettings(t, storedInstanceSections(), storedProjectSections())
+		appendProjectSections(t, st, otherSettingsProject, noImageProjectSections())
+		if _, err := storedAuthority(t, st, otherSettingsProject); !errors.Is(err, engine.ErrProjectSettingsRefused) ||
+			!errors.Is(err, daemoncompose.ErrNoProjectImage) || !strings.Contains(err.Error(), "no agent_image") {
+			t.Fatalf("error %v, want ErrProjectSettingsRefused naming the missing image", err)
 		}
 	})
 }

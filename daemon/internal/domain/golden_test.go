@@ -1349,6 +1349,15 @@ func TestGolden(t *testing.T) {
 	settingsAdmission := domaintest.ExecutionAdmission(func(in *domain.ExecutionAdmissionInput) {
 		in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
 	})
+	// The recipe-bound (v8) variant: a project with no project image pins
+	// its recipe binding by value.
+	recipeBindingAdmission := domaintest.ExecutionAdmission(func(in *domain.ExecutionAdmissionInput) {
+		in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+		in.RecipeBinding = &domain.RecipeBinding{
+			Repository: "owner/repo", RepositoryID: 424242, CommitSHA: strings.Repeat("c", 40),
+			RecipeDigest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		}
+	})
 
 	// The provider_registry variant: the profile is the only field that
 	// differs from the base admission. The declared registry set is not a
@@ -2964,6 +2973,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_agent", selectedAgentAdmission},
 		{"execution_admission_no_hydration", noHydrationAdmission},
 		{"execution_admission_settings_revisions", settingsAdmission},
+		{"execution_admission_recipe_binding", recipeBindingAdmission},
 		{"project_readiness_not_ready", notReady},
 		{"project_readiness_file_settings", ready},
 		{"execution_admission_agent_explicit_model", selectedClaudeAdmission},

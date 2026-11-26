@@ -22,10 +22,14 @@ var ErrProjectRepositoryMismatch = errors.New("project settings name a repositor
 // which the store numbers here, after that project's last. The domain
 // constructor refuses a value its section's rules refuse and a clear of a
 // required section. A repository section is refused when the project's
-// projects row binds it to a different repository id; with no row, the
-// append creates none, because label intake and admission write that
-// binding. It is on InternalTx because project settings are daemon-internal
-// and never synchronized to clients.
+// projects row binds it to a different repository id, and so is a
+// recipe_binding naming another; with no row, the append creates none,
+// because label intake and admission write that binding. An agent_image,
+// recipe_binding, or writer_class revision is refused when the record it
+// would make holds both an image and a binding, or a binding and a warded
+// writer_class (ProjectSettingsRecord.CheckRecipeSource). It is on
+// InternalTx because project settings are daemon-internal and never
+// synchronized to clients.
 func (tx *InternalTx) AppendProjectSettingsRevision(
 	ctx context.Context, in domain.ProjectSettingsInput, setAt time.Time,
 ) (domain.ProjectSettingsRevision, error) {
@@ -51,6 +55,9 @@ func (tx *InternalTx) AppendProjectSettingsRevision(
 			return domain.ProjectSettingsRevision{}, fmt.Errorf("append project %q settings revision: %w", in.ProjectID, err)
 		}
 	}
+	if err := tx.checkRecipeSource(ctx, revision); err != nil {
+		return domain.ProjectSettingsRevision{}, fmt.Errorf("append project %q settings revision: %w", in.ProjectID, err)
+	}
 	body, err := encode(revision)
 	if err != nil {
 		return domain.ProjectSettingsRevision{}, fmt.Errorf("append project %q settings revision: %w", in.ProjectID, err)
@@ -60,6 +67,38 @@ func (tx *InternalTx) AppendProjectSettingsRevision(
 		return domain.ProjectSettingsRevision{}, fmt.Errorf("append project %q settings revision: %w", in.ProjectID, err)
 	}
 	return revision, nil
+}
+
+// checkRecipeSource runs the record's recipe-source rules over the
+// project's revisions with this one appended, when this one changes a
+// section those rules read. A set recipe_binding must also name the
+// project's bound repository.
+func (tx *InternalTx) checkRecipeSource(ctx context.Context, revision domain.ProjectSettingsRevision) error {
+	switch revision.Section {
+	case domain.ProjectSectionAgentImage, domain.ProjectSectionWriterClass:
+	case domain.ProjectSectionRecipeBinding:
+		if !revision.Cleared() {
+			var binding domain.RecipeBinding
+			if err := json.Unmarshal(revision.Value, &binding); err != nil {
+				return err
+			}
+			if err := tx.CheckProjectRepositoryBinding(ctx, revision.ProjectID, binding.RepositoryID); err != nil {
+				return err
+			}
+		}
+	case domain.ProjectSectionRepository, domain.ProjectSectionAllowedPaths, domain.ProjectSectionApprovedRecipe,
+		domain.ProjectSectionHandBackLabel, domain.ProjectSectionEnabled:
+		return nil
+	}
+	revisions, err := tx.ProjectSettingsRevisions(ctx, revision.ProjectID)
+	if err != nil {
+		return err
+	}
+	record, err := domain.NewProjectSettingsRecord(revision.ProjectID, append(revisions, revision))
+	if err != nil {
+		return err
+	}
+	return record.CheckRecipeSource()
 }
 
 // CheckProjectRepositoryBinding refuses a repository id other than the one

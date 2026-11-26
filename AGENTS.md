@@ -805,7 +805,9 @@ lists only the names resolved against it. All under `daemon/`:
   which hold the approved recipe, the allowed paths, and the publication
   repository a run uses: `internal/domain/instance_settings.go` and
   `internal/domain/project_settings.go` (each section's rules and the
-  fold that names a missing section), and
+  fold that names a missing section), `internal/domain/recipe_binding.go`
+  (the recipe binding a no-image project's proofs bind and its
+  admission pins), and
   `internal/store/instance_settings.go` and
   `internal/store/project_settings.go` (the append-only revisions and the
   check of a project's repository against its `projects` binding), and

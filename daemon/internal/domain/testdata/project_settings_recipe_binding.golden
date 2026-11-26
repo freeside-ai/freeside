@@ -1,0 +1,23 @@
+{
+  "repository": {
+    "repo": "acme/widgets",
+    "repository_id": 42,
+    "base_ref": "main"
+  },
+  "allowed_paths": [
+    "src/**"
+  ],
+  "approved_recipe": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "agent_image": null,
+  "recipe_binding": {
+    "repository": "acme/widgets",
+    "repository_id": 42,
+    "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "recipe_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "hand_back_label": "needs-rework",
+  "writer_class": "cordoned_host_process",
+  "enabled": {
+    "enabled": true
+  }
+}

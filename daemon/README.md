@@ -3071,8 +3071,10 @@ freesided task-writer-class -db "$DB" -task "$TASK" \
 freesided task-writer-class -db "$DB" -task "$TASK" -clear
 ```
 
-It refuses a task the store doesn't hold and any other class, and records
-nothing then. The task's record shows the requirement as `writer_class`.
+It refuses a task the store doesn't hold, any other class, and a task
+whose project binds its recipe with no project image, since the warded
+writer runs in that image, and records nothing then. A binding set after
+the requirement is refused at admission, naming the missing image. The task's record shows the requirement as `writer_class`.
 Admission reads it with the project's setting for every implementer and
 remediator attempt (Cordoned Launches, Admission). A run keeps the class of
 its first writer admission: set the requirement before the task's first
@@ -3113,11 +3115,27 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   `manual_submission_config`, `build`, `macos_verification`,
   `cordoned_launches` (`max_concurrent`), and `execution`; a project holds
   `repository` (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
-  `approved_recipe`, `agent_image`, `hand_back_label`, `writer_class`, and
-  `enabled`. A value takes the fields its `settings.json` key
+  `approved_recipe`, `agent_image`, `recipe_binding`, `hand_back_label`,
+  `writer_class`, and `enabled`. A value takes the fields its `settings.json` key
   has, less the launch-only ones `import` lists below; `agent_image` is
   the file's `images.agent`, and `host_tools.container` is new, because
   `settings.json` doesn't hold it.
+- **A project binds its recipe with an image or a recipe binding.** It
+  sets exactly one of `agent_image` and `recipe_binding` (`repository`,
+  `repository_id`, `commit_sha`, `recipe_digest`), the binding for a
+  project with no project image: the recipe read from the repository at
+  the reviewed commit and bound by its digest. A set that would leave both
+  set is refused, and so is a binding with a warded `writer_class`, since
+  the warded writer runs in the project image; to switch, clear one, then
+  set the other. The binding's `repository_id` must match the project's
+  `projects` row, and a run also refuses a binding whose repository is not
+  the `repository` section's or whose `recipe_digest` is not
+  `approved_recipe`. An admission pins the binding by value, and every
+  proof binds its digest, re-checked against the approved recipes at each
+  use. A no-image project doesn't run yet: the installed daemon composes
+  no driver for it and serves driverless under a `project_image` host
+  check, every gate holds its tasks under another project's driver, and a
+  verification refuses before it builds a room (#3627).
 - **Two switches start real work.** The instance's `execution` section
   and a project's `enabled` section each take `{"enabled": true}` or
   `{"enabled": false}`, and an unset section reads as off. With both on,
@@ -3137,9 +3155,11 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   differs from the project's `projects` row is refused.
 - **Only an optional section clears.** `-clear` records a revision that
   clears `judgment`, `manual_submission_config`, `macos_verification`,
-  `cordoned_launches`, `execution`, or a project's `hand_back_label`,
-  `writer_class`, or `enabled`; clearing any other section is refused. A
-  cleared switch reads as off.
+  `cordoned_launches`, `execution`, or a project's `agent_image`,
+  `recipe_binding`, `hand_back_label`, `writer_class`, or `enabled`;
+  clearing any other section is refused. A cleared switch reads as off,
+  and a project left with neither `agent_image` nor `recipe_binding` fails
+  the loader, which names both.
 - **`writer_class` picks the class a project's writers run on.** It is
   `cordoned_host_process` (the cordoned run, the default when unset) or
   `fresh_vm_read_only_volume_handoff` (warded); any other class is refused.

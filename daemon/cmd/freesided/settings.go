@@ -73,7 +73,7 @@ func projectSectionTakesEffect(section domain.ProjectSettingsSection) string {
 		return recipeTakeEffect
 	case domain.ProjectSectionWriterClass:
 		return nextAdmissionTakeEffect
-	case domain.ProjectSectionAgentImage, domain.ProjectSectionEnabled:
+	case domain.ProjectSectionAgentImage, domain.ProjectSectionRecipeBinding, domain.ProjectSectionEnabled:
 		return settingsTakeEffect
 	}
 	// An unknown section is refused before its revision is written.

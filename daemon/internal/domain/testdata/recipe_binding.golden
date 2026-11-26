@@ -1,0 +1,6 @@
+{
+  "repository": "acme/widgets",
+  "repository_id": 42,
+  "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "recipe_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
