@@ -20,13 +20,15 @@
 //     process. The driver applies DSN pragmas in lexicographic order, not
 //     DSN order, so locking_mode may follow journal_mode; the lock holds
 //     from Open either way.
-//   - Domain entities persist as aggregate-root rows: identity and join keys
-//     as real columns (so foreign keys actually enforce), entity_version and
-//     as_of_revision for §5.14 sync, and the domain type's canonical JSON as
-//     the body. Children stay embedded in their root's body (a Run carries
-//     its Stages; a Conversation its Messages), matching Phase 1
-//     whole-snapshot sync. Extracting a field into a column later is an
-//     ordinary migration (json_extract backfill), not an API change.
+//   - The existing domain entities persist as aggregate-root rows: identity
+//     and join keys as real columns (so foreign keys actually enforce),
+//     entity_version and as_of_revision for §5.14 sync, and the domain
+//     type's canonical JSON as the body. Children stay embedded in their
+//     root's body (a Run carries its Stages; a Conversation its Messages),
+//     matching Phase 1 whole-snapshot sync. Extracting a field into a column
+//     later is an ordinary migration (json_extract backfill), not an API
+//     change. A new table doesn't copy this shape: it stores each fact once,
+//     under the rule in daemon/README.md (Adding a Migration).
 //   - Every write happens inside Write or WriteInternal. Write is for
 //     client-visible transactions; its callback receives a WriteTx and it
 //     increments ServerState.revision exactly once at commit. WriteInternal

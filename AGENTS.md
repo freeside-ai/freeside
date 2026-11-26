@@ -362,6 +362,11 @@ unit, never a fix in passing (Monorepo Scope Discipline).
   the contract shapes goldens pin (a package-private persistence format is
   not one). Fixtures double as validation-positive cases. Worked example:
   `daemon/README.md`; shared helper: `daemon/internal/golden`.
+- **New tables:** a table a migration creates stores each fact once, in
+  plain columns, with no JSON body that repeats them. A content-addressed
+  record keeps its body, and its lookup columns are derived from it, never
+  copied by hand. Detail: `daemon/README.md` (Adding a Migration); decision
+  record: `devlog/2026-11-25-2231-store-once-new-tables.md`.
 - **Trust boundaries at reconstruction/persistence:** this covers stored
   authority bits only. A boundary that decodes a row or accepts an exported
   struct carrying a bit that grants authority (`publish_eligible`, recipe
