@@ -518,7 +518,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		}
 		return productionVerificationCheckpoint{}, err
 	}
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return productionVerificationCheckpoint{}, err
 	}

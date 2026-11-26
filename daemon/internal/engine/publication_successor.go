@@ -204,7 +204,7 @@ func (w *productionPublicationWorkflow) bindSuccessorCandidate(ctx context.Conte
 
 func (w *productionPublicationWorkflow) publishCandidate(ctx context.Context, task productionPublicationTask, candidate publish.Candidate, checkout PublicationCheckout) (publish.Result, error) {
 	execution := publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: task.ProducingInvocationID}
-	recipes, err := w.recipes(ctx)
+	recipes, err := w.recipes(ctx, task.RunID)
 	if err != nil {
 		return publish.Result{}, err
 	}

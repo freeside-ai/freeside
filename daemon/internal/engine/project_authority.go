@@ -13,10 +13,10 @@ import (
 // ProjectAuthority is what a project's current settings grant its tasks: the
 // repository a task is admitted, started, imported, and published against,
 // the paths it may change, the recipe its images must be built from, the
-// hand-back label, and the writer class. The path, repository, review, and
-// hand-back gates read it per task from the task's project (#3209), so an
-// edit to a project's settings reaches the task's next gate without a
-// restart.
+// hand-back label, and the writer class. The path, repository, recipe,
+// review, and hand-back gates read it per task from the task's project
+// (#3209), so an edit to a project's settings reaches the task's next gate
+// without a restart.
 type ProjectAuthority struct {
 	ProjectID domain.ProjectID
 	// SettingsRevision is the project settings revision the values came

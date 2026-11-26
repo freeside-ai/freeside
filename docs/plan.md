@@ -7591,9 +7591,9 @@ tasks. One exception always wins: each gate re-checks stored authority
 against current policy, so an edit to authority, such as a project's path
 allowlist, approved recipe, or publication repository, can stop an in-flight
 task at its next gate (Stage 2 of tracker #3201). The gates read a
-project's path allowlist and publication repository from its current
-settings, so such an edit applies with no restart; an approved-recipe edit,
-the per-repository loops a repository edit moves, and readiness still follow
+project's path allowlist, approved recipe, and publication repository from
+its current settings, so such an edit applies with no restart; the
+per-repository loops a repository edit moves, and readiness, still follow
 at the daemon's next start. These
 scopes are not the Workflow settings layers of Section
 [3.2](#32-the-interruption-budget), which resolve a run's workflow policy.

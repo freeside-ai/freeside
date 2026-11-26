@@ -264,11 +264,7 @@ func ComposeScenario(ctx context.Context, parts ScenarioParts) (_ *ScenarioCompo
 			WorkDir:          filepath.Join(world.Dir, "publication"),
 			VerifyScratchDir: filepath.Join(world.Dir, "verify-scratch"),
 			Transport:        transport, Publisher: publisher, Artifacts: blobs,
-			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(ScenarioRecipe): true},
-			// The scenario approves its one recipe above and records no
-			// image-policy adoption, so no adoption's recipes can apply. A
-			// scenario that seeds an adoption must set scenarioRepositoryID.
-			RepositoryID:                   0,
+			ApprovedRecipes:                map[domain.Digest]bool{verify.RecipeDigest(ScenarioRecipe): true},
 			RemediationPromptPackageDigest: digests["remediation"],
 			ReviewSource:                   reviews,
 			ReviewAdmission:                fake.AdmitReview,

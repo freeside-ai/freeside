@@ -1760,18 +1760,22 @@ func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) e
 }
 
 // itemRecipeSet returns the effective recipe set of the item's repository:
-// the operator's set plus that repository's adopted digests, so evidence
-// under a digest adopted for another repository is refused here. With no
-// adoption in the store it is the operator's set, unchanged. An item whose
-// project has no authority row gains no adoption.
+// the recipe base (the operator's set and every stored project's recipe)
+// plus that repository's adopted digests, so evidence under a digest
+// adopted for another repository is refused here. With no adoption in the
+// store it is the recipe base. An item whose project has no authority row
+// gains no adoption.
 func (tx *ReadTx) itemRecipeSet(ctx context.Context, item domain.AttentionItem) (map[domain.Digest]bool, error) {
 	adoptions, err := tx.imagePolicyAdoptions(ctx)
-	if err != nil || len(adoptions) == 0 {
-		return tx.approvedRecipes, err
+	if err != nil {
+		return nil, err
+	}
+	if len(adoptions) == 0 {
+		return tx.recipeBase(ctx)
 	}
 	project, err := tx.GetProject(ctx, item.ProjectID)
 	if errors.Is(err, ErrNotFound) {
-		return tx.approvedRecipes, nil
+		return tx.recipeBase(ctx)
 	}
 	if err != nil {
 		return nil, err

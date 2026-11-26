@@ -812,9 +812,9 @@ lists only the names resolved against it. All under `daemon/`:
   (the stored per-task project authority, which folds a task's project
   record and re-checks it against current policy and the project's
   binding before a gate trusts it), `internal/engine/project_authority.go`
-  (the authority type the path, repository, and writer-class gates read,
-  the fixed authority a file composition serves, and the repository
-  comparison), `cmd/freesided/settings.go` (the operator
+  (the authority type the path, repository, recipe, and writer-class
+  gates read, the fixed authority a file composition serves, and the
+  repository comparison), `cmd/freesided/settings.go` (the operator
   commands that write the records, each set through that gate),
   `internal/daemoncompose/stored_execution.go` (decides from the stored
   switches whether the installed daemon composes a driver, and which

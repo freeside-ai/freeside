@@ -27,7 +27,7 @@ const settingsRoute = "/settings"
 
 // settingsTakeEffect is when a section the installed daemon composes from at
 // start applies: every instance section but the cordoned launch cap, and
-// the project's approved_recipe, agent_image, and enabled.
+// the project's agent_image and enabled.
 const settingsTakeEffect = "at the daemon's next start"
 
 // nextAdmissionTakeEffect is when a section the admitting transaction reads
@@ -35,14 +35,21 @@ const settingsTakeEffect = "at the daemon's next start"
 // which each admission resolves from the project's current record (#3209).
 const nextAdmissionTakeEffect = "at the next admission"
 
-// nextGateTakeEffect is when a section the path, publish, and hand-back
-// gates read per task applies (#3209).
+// nextGateTakeEffect is when a section the path, publish, recipe, and
+// hand-back gates read per task applies (#3209).
 const nextGateTakeEffect = "at each task's next gate"
 
 // repositoryTakeEffect is nextGateTakeEffect for the repository, whose tip
 // watch and readiness still follow the composed project until a restart, so
 // until then an edit holds new admissions with a repository mismatch.
 const repositoryTakeEffect = nextGateTakeEffect + "; the tip watch and readiness follow at the daemon's next start"
+
+// recipeTakeEffect is nextGateTakeEffect for the approved recipe. Readiness
+// and the writer-image check still read the composed project's recipe until
+// a restart, so until then new work still starts on the old recipe's image,
+// and the recipe gate blocks it at publication.
+const recipeTakeEffect = nextGateTakeEffect + "; work on an image built from the old recipe blocks at publication, " +
+	"and readiness follows at the daemon's next start"
 
 // settingsSetTakesEffect is when a set of the named section applies.
 func settingsSetTakesEffect(project domain.ProjectID, section string) string {
@@ -62,9 +69,11 @@ func projectSectionTakesEffect(section domain.ProjectSettingsSection) string {
 		return nextGateTakeEffect
 	case domain.ProjectSectionRepository:
 		return repositoryTakeEffect
+	case domain.ProjectSectionApprovedRecipe:
+		return recipeTakeEffect
 	case domain.ProjectSectionWriterClass:
 		return nextAdmissionTakeEffect
-	case domain.ProjectSectionApprovedRecipe, domain.ProjectSectionAgentImage, domain.ProjectSectionEnabled:
+	case domain.ProjectSectionAgentImage, domain.ProjectSectionEnabled:
 		return settingsTakeEffect
 	}
 	// An unknown section is refused before its revision is written.

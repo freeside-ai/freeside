@@ -29,6 +29,9 @@ var ErrProjectRepositoryMismatch = errors.New("project settings name a repositor
 func (tx *InternalTx) AppendProjectSettingsRevision(
 	ctx context.Context, in domain.ProjectSettingsInput, setAt time.Time,
 ) (domain.ProjectSettingsRevision, error) {
+	// The recipe memo answers for the settings this transaction has read; an
+	// append changes them.
+	tx.baseRecipes = nil
 	var last int
 	if err := tx.tx.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(revision), 0) FROM project_settings_revisions WHERE project_id = ?`,
@@ -108,6 +111,37 @@ func (tx *ReadTx) SettingsProjects(ctx context.Context) ([]domain.ProjectID, err
 		return nil, fmt.Errorf("settings projects: %w", err)
 	}
 	return projects, nil
+}
+
+// storedProjectRecipes returns every stored project's current approved
+// recipe, enabled or not, so evidence recorded under a recipe the operator
+// sets while the daemon runs reads at once (#3209), and a project turned off
+// keeps its evidence readable. A replaced recipe stays in the set the store
+// opened with until the next start, which then drops it, as before. The set
+// grants no task anything: the publication lane gates each task against its
+// own project's recipe. A recipe section that does not read approves
+// nothing, as at the start (readStoredSwitches). A database without the
+// settings table, such as a backup older than it, has none.
+func (tx *ReadTx) storedProjectRecipes(ctx context.Context) (map[domain.Digest]bool, error) {
+	recipes := map[domain.Digest]bool{}
+	exists, err := tx.tableExists(ctx, "project_settings_revisions")
+	if err != nil || !exists {
+		return recipes, err
+	}
+	projects, err := tx.SettingsProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, project := range projects {
+		record, err := tx.ProjectSettingsRecord(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		if recipe, ok, err := record.ApprovedRecipe(); err == nil && ok {
+			recipes[recipe] = true
+		}
+	}
+	return recipes, nil
 }
 
 // ProjectSettingsRecord folds one project's settings revisions into the

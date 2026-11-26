@@ -2,6 +2,8 @@ package integration_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,4 +127,104 @@ func TestPublishGateRefusesAnotherProjectsRepository(t *testing.T) {
 		t.Fatalf("after the project named the admitted repository again: %#v, %v, %d pull requests",
 			result, err, len(p.forge.PullRequests()))
 	}
+}
+
+// recipeAuthority installs a project authority source on p in which the
+// run's project approves the recipe current holds and another project
+// approves the harness's real recipe, so a gate that read the other project,
+// or a union of every project's recipe, would pass where the run's own
+// project's recipe fails.
+func recipeAuthority(p *productionPublicationHarness, current *atomic.Pointer[domain.Digest]) {
+	p.engineOptions = append(p.engineOptions, engine.WithProjectAuthority(func(
+		_ context.Context, _ *store.ReadTx, id domain.ProjectID,
+	) (engine.ProjectAuthority, error) {
+		authority := engine.ProjectAuthority{
+			ProjectID: id, Repo: fakePublicationRepo, RepositoryID: p.profile.RepositoryID, BaseRef: "main",
+			WriterClass: new(domain.BackendFreshVMReadOnlyVolumeHandoff), ApprovedRecipe: p.recipeD,
+		}
+		if id == "project-production-publication" {
+			authority.ApprovedRecipe = *current.Load()
+		}
+		return authority, nil
+	}))
+}
+
+// TestRecipeGateReadsTheRunsProjectRecipe: the publication lane's recipe set
+// is the operator's recipes plus the run's own project's current recipe
+// (#3209). Another project approving the run's recipe never counts, and an
+// edit to the run's project's recipe holds or releases the run at its next
+// recipe gate, with the same engine and no restart.
+func TestRecipeGateReadsTheRunsProjectRecipe(t *testing.T) {
+	t.Parallel()
+	unrelated := productionDigest([]byte("unrelated recipe"))
+	operator := map[domain.Digest]bool{productionDigest([]byte("operator recipe")): true}
+
+	t.Run("another project's recipe never counts", func(t *testing.T) {
+		t.Parallel()
+		p := newProductionPublicationHarness(t, "")
+		var current atomic.Pointer[domain.Digest]
+		current.Store(&unrelated)
+		recipeAuthority(p, &current)
+		p.startAndRecordExport(t)
+		p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{}, true, operator)
+		result, err := p.reconcileLanes()
+		if err != nil || result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
+			t.Fatalf("recipe only another project approves: %#v, %v", result, err)
+		}
+		blocked, err := p.attention.GetAttentionItem(p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(blocked.Item.Reason, "no longer approves") {
+			t.Fatalf("blocked reason = %q, want the recipe refusal", blocked.Item.Reason)
+		}
+		if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
+			t.Fatalf("a recipe only another project approves caused effects: %d/%d", refs, prs)
+		}
+	})
+
+	t.Run("a live edit holds and releases the run", func(t *testing.T) {
+		t.Parallel()
+		p := newProductionPublicationHarness(t, "")
+		var current atomic.Pointer[domain.Digest]
+		current.Store(&p.recipeD)
+		recipeAuthority(p, &current)
+		p.startAndRecordExport(t)
+		var stopped atomic.Bool
+		p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{
+			afterVerification: func() error {
+				if stopped.CompareAndSwap(false, true) {
+					return errors.New("stop after checkpoint")
+				}
+				return nil
+			},
+		}, true, operator)
+		if _, err := p.reconcileLanes(); err == nil {
+			t.Fatal("verification seam did not stop after checkpoint")
+		}
+
+		current.Store(&unrelated)
+		result, err := p.reconcileLanes()
+		if err != nil || result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
+			t.Fatalf("after the project's recipe changed: %#v, %v", result, err)
+		}
+		hold, err := p.attention.GetAttentionItem(p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(hold.Item.Reason, "Restore that approval to recover") {
+			t.Fatalf("hold reason = %q, want the recoverable recipe hold", hold.Item.Reason)
+		}
+		if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
+			t.Fatalf("a changed recipe caused effects: %d/%d", refs, prs)
+		}
+
+		current.Store(&p.recipeD)
+		p.now = p.now.Add(2 * time.Minute)
+		result, err = p.reconcileLanes()
+		if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+			t.Fatalf("after the project's recipe was restored: %#v, %v", result, err)
+		}
+		p.assertReady(t)
+	})
 }

@@ -167,16 +167,17 @@ func exerciseSettingsSetAndShow(t *testing.T, ctx context.Context, dbPath string
 // TestProjectSectionTakesEffect: a set of a project section says when it
 // applies, one row per answer (#3209). allowed_paths stands for the sections
 // the per-task gates read (hand_back_label too), the repository adds that
-// its loops follow at the next start, writer_class applies at the next
-// admission, and agent_image stands for the sections composed at start
-// (approved_recipe and enabled too).
+// its loops follow at the next start, approved_recipe that readiness does,
+// writer_class applies at the next admission, and agent_image stands for
+// the sections composed at start (enabled too).
 func TestProjectSectionTakesEffect(t *testing.T) {
 	t.Parallel()
 	for section, want := range map[domain.ProjectSettingsSection]string{
-		domain.ProjectSectionAllowedPaths: nextGateTakeEffect,
-		domain.ProjectSectionRepository:   repositoryTakeEffect,
-		domain.ProjectSectionWriterClass:  nextAdmissionTakeEffect,
-		domain.ProjectSectionAgentImage:   settingsTakeEffect,
+		domain.ProjectSectionAllowedPaths:   nextGateTakeEffect,
+		domain.ProjectSectionRepository:     repositoryTakeEffect,
+		domain.ProjectSectionApprovedRecipe: recipeTakeEffect,
+		domain.ProjectSectionWriterClass:    nextAdmissionTakeEffect,
+		domain.ProjectSectionAgentImage:     settingsTakeEffect,
 	} {
 		if got := settingsSetTakesEffect("project-widgets", string(section)); got != want {
 			t.Errorf("%s takes effect %q, want %q", section, got, want)

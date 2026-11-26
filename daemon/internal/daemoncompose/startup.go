@@ -404,7 +404,6 @@ func ComposeClaudeWorkflow(
 		Transport:        claudeWiring.publicationTransport,
 		Publisher:        claudeWiring.publisher, Artifacts: blobs,
 		ApprovedRecipes:                 cfg.ApprovedRecipes,
-		RepositoryID:                    cfg.Claude.RepositoryID,
 		RemediationPromptPackageDigest:  claudeWiring.remediationPromptPackage,
 		ReviewSource:                    claudeWiring.reviewSource,
 		ShadowReviewSource:              claudeWiring.shadowReviewSource,

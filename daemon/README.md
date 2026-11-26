@@ -1950,12 +1950,12 @@ Reading the record:
   the record reports that item or section as `unapproved_recipe`, and the
   message names the recipe. A stopped root therefore needs the digests its
   daemon ran with: `approved_recipe` and each `retained_recipes` digest in
-  `<root>/daemon/settings.json` for a deputy root, and each project's
-  `approved_recipe` section (`freesided settings show -project <project>`)
-  for the installed daemon's root, whose running daemon approves those
-  sections' recipes whether or not the project is enabled. A direct read
-  that meets `unapproved_recipe` says so on stderr; stdout stays one JSON
-  line.
+  `<root>/daemon/settings.json` for a deputy root. On the installed
+  daemon's root every read, direct or served, also approves each project's
+  current `approved_recipe` section, enabled or not, so a direct read there
+  needs the flag only for a recipe a project has since replaced. A direct
+  read that meets `unapproved_recipe` says so on stderr; stdout stays one
+  JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
   `freeside-task-record-v23`.
@@ -3150,16 +3150,19 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   cleared, no cordoned launch starts (Bound Container Memory). The
   deputy's `settings.json` has no key for it, so set it with `set`.
 - **Some project sections apply while the daemon runs.** Every `set`
-  prints `takes_effect`. The path, publish, and hand-back gates read the
-  task's project's current record at each gate (#3209), so
-  `allowed_paths`, `repository`, and `hand_back_label` apply at each
-  task's next gate. The tip watch and readiness still follow the
-  repository the daemon started with, so until its next start a
-  `repository` edit holds new admissions with a repository mismatch.
-  `writer_class` and `cordoned_launches` apply at the next admission,
-  which reads them from the store. Every other section, `approved_recipe`,
-  `agent_image`, and `enabled` included, takes effect at the daemon's next
-  start, so `freesided execution resume` restarts it on them.
+  prints `takes_effect`. The path, publish, recipe, and hand-back gates
+  read the task's project's current record at each gate (#3209), so
+  `allowed_paths`, `repository`, `approved_recipe`, and `hand_back_label`
+  apply at each task's next gate. The tip watch and readiness still follow
+  the repository and recipe the daemon started with, so until its next
+  start a `repository` edit holds new admissions with a repository
+  mismatch, and new work still starts on an image of the old recipe,
+  which the recipe gate then blocks at publication; so restart after an
+  `approved_recipe` edit too. `writer_class` and `cordoned_launches` apply
+  at the next admission, which reads them from the store. Every other
+  section, `agent_image` and `enabled` included, takes effect at the
+  daemon's next start, so `freesided execution resume` restarts it on
+  them.
 - **A run re-checks what's stored.** The loader a run composes from folds
   both scopes, refuses a scope that lacks a required section and names it,
   and re-runs every check above against current policy, with the
@@ -3277,8 +3280,11 @@ check here, and the per-project checks are the readiness record's
 (`project_readiness`).
 
 The store opens under the unattended admission floor and approves the
-`approved_recipe` of every project that has settings, enabled or not, so
-evidence a project recorded stays readable after it is turned off. A run's
+current `approved_recipe` of every project that has settings, enabled or
+not, read in each transaction, so evidence a project recorded stays
+readable after it is turned off or its recipe changes while the daemon
+runs. The publication lane gates each task against only its own project's
+recipe (#3209). A run's
 record reads through `freesided inspect task` as a deputy run's does.
 
 The installer can set the daemon's listen address to the Mac's Tailscale
