@@ -350,7 +350,7 @@ func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 		lay := layoutFor(cfg.RunsRoot, "run-env")
 		want := []string{
 			"HOME=" + cfg.Home, "PATH=/usr/bin:/bin", "TMPDIR=" + lay.tmp, "CLAUDE_CONFIG_DIR=" + lay.config,
-			"DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1",
+			"MISE_STATE_DIR=" + lay.miseState, "DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		}
 		if len(l.specs) != 2 {

@@ -281,7 +281,19 @@ func fakeProbe(kind string, args []string) error {
 		}
 		return nil
 	case "mise":
-		return miseInstall(args[0], filepath.Join(os.Getenv("TMPDIR"), "mise"), os.Environ())
+		root := filepath.Join(os.Getenv("TMPDIR"), "mise")
+		project := filepath.Join(root, "project")
+		return miseInstall(args[0], project, append(os.Environ(), isolatedMiseEnv(root, project)...))
+	case "mise-worktree":
+		project, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		env := append(os.Environ(), sharedMiseEnv(args[1])...)
+		if len(args) > 2 && args[2] == "offline" {
+			env = append(env, "MISE_OFFLINE=1")
+		}
+		return miseInstall(args[0], project, env)
 	}
 	return fmt.Errorf("unknown probe %q", kind)
 }
@@ -290,23 +302,34 @@ func fakeProbe(kind string, args []string) error {
 // spike installed (#3596).
 const miseTool, miseToolVersion = "jq", "1.7.1"
 
-// miseInstall installs miseTool with mise into fresh data, cache, state, and
-// config directories under root and runs it. Trust in the project's
-// mise.toml comes from the environment alone, so neither the install nor
-// the trust leaves anything in the real home (#3601).
-func miseInstall(mise, root string, env []string) error {
-	project := filepath.Join(root, "project")
-	if err := os.MkdirAll(project, 0o700); err != nil { //nolint:gosec // G703: the launch's TMPDIR or the test's temporary directory
+// sharedMiseEnv points mise's data, cache, and config directories under
+// root: the directories later runs share, kept out of the owner's real
+// installs, with the owner's global config left out of the install. mise's
+// state directory, which holds its trust, is left to the environment.
+func sharedMiseEnv(root string) []string {
+	return []string{
+		"MISE_DATA_DIR=" + filepath.Join(root, "data"), "MISE_CACHE_DIR=" + filepath.Join(root, "cache"),
+		"MISE_CONFIG_DIR=" + filepath.Join(root, "config"),
+	}
+}
+
+// isolatedMiseEnv puts all of mise's directories under root and trusts
+// project from the environment, so a mise install leaves nothing in the
+// real home.
+func isolatedMiseEnv(root, project string) []string {
+	return append(sharedMiseEnv(root), "MISE_STATE_DIR="+filepath.Join(root, "state"), "MISE_TRUSTED_CONFIG_PATHS="+project)
+}
+
+// miseInstall writes a mise.toml naming miseTool into project, then installs
+// the tool with mise and runs it there under env.
+func miseInstall(mise, project string, env []string) error {
+	if err := os.MkdirAll(project, 0o700); err != nil { //nolint:gosec // G703: the launch's TMPDIR or worktree, or the test's temporary directory
 		return err
 	}
 	config := fmt.Sprintf("[tools]\n%s = %q\n", miseTool, miseToolVersion)
-	if err := os.WriteFile(filepath.Join(project, "mise.toml"), []byte(config), 0o600); err != nil { //nolint:gosec // G703: the launch's TMPDIR or the test's temporary directory
+	if err := os.WriteFile(filepath.Join(project, "mise.toml"), []byte(config), 0o600); err != nil { //nolint:gosec // G703: the launch's TMPDIR or worktree, or the test's temporary directory
 		return err
 	}
-	env = append(slices.Clone(env),
-		"MISE_DATA_DIR="+filepath.Join(root, "data"), "MISE_CACHE_DIR="+filepath.Join(root, "cache"),
-		"MISE_STATE_DIR="+filepath.Join(root, "state"), "MISE_CONFIG_DIR="+filepath.Join(root, "config"),
-		"MISE_TRUSTED_CONFIG_PATHS="+project)
 	run := func(args ...string) ([]byte, error) {
 		cmd := exec.Command(mise, args...) //nolint:gosec // G204: the mise the test found, with fixed arguments
 		cmd.Dir, cmd.Env = project, env
