@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -20,9 +21,9 @@ import (
 // <run-id>`: a process the daemon starts from its own executable, outside
 // the rule file and in a session of its own, that runs one launch to its
 // end. It is the canary's and the agent's parent, so it is the one process
-// that learns the agent's exit status; it copies the agent's output to the
-// launch's files, watches the stall limit, runs the run-end proof, and
-// writes the end record. None of that runs through the daemon, so the
+// that learns the agent's exit status; it feeds the agent's streamed input
+// (inbox.go), copies its output to the launch's files, watches the stall
+// limit, runs the run-end proof, and writes the end record. None of that runs through the daemon, so the
 // launch outlives it. The rule file denies a launch signaling a process
 // that isn't a member and reaching ctl/, so the agent can neither kill its
 // supervisor nor forge its records.
@@ -120,14 +121,16 @@ func (s superviseEnv) supervise(ctx context.Context, stderr io.Writer) int {
 			_ = s.secret.Close()
 		}
 	}()
-	status, err := s.run(ctx)
+	status, err := s.run(ctx, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "cordon supervise %s: %v\n", s.runID, err)
 	}
 	return status
 }
 
-func (s *superviseEnv) run(ctx context.Context) (int, error) {
+// run runs the launch. said is the supervisor's stderr, for what fails
+// without changing how the launch ends.
+func (s *superviseEnv) run(ctx context.Context, said io.Writer) (int, error) {
 	var req supervisorRequest
 	if err := readRecord(s.l.request, &req); err != nil {
 		return supervisorFailed, err
@@ -179,16 +182,25 @@ func (s *superviseEnv) run(ctx context.Context) (int, error) {
 		return supervisorDone, nil
 	}
 	spec := processSpec{argv: req.Program.Argv, dir: req.Program.Dir, env: req.Program.Env, secret: s.secret}
+	var input *inputFeed
 	if req.Prompt {
-		prompt, err := os.Open(s.l.prompt)
-		if err != nil {
-			return s.failWithoutProgram(ctx, target, lim, fmt.Errorf("cordon: open the prompt: %w", err))
+		prompt, err := os.ReadFile(s.l.prompt)
+		if err == nil && !utf8.Valid(prompt) {
+			err = errors.New("it is not UTF-8")
 		}
-		defer func() { _ = prompt.Close() }()
-		spec.stdin = prompt
+		if err != nil {
+			return s.failWithoutProgram(ctx, target, lim, fmt.Errorf("cordon: read the prompt: %w", err))
+		}
+		input = newInputFeed(s.l, s.runID, prompt)
+		spec.stdin = input.reader
 	}
 	activity := newActivity()
 	spec.stdout, spec.stderr = activity.to(transcript), activity.to(stderr)
+	if input != nil {
+		// The turn-end watch sees every byte, whatever becomes of the
+		// transcript's writes, which never fail (activityStream).
+		spec.stdout = io.MultiWriter(input.turnEnds, spec.stdout)
+	}
 	agent, err := s.start(spec)
 	// The program holds the pipe now, or nothing does.
 	if s.secret != nil {
@@ -198,7 +210,15 @@ func (s *superviseEnv) run(ctx context.Context) (int, error) {
 	if err != nil {
 		return s.failWithoutProgram(ctx, target, lim, fmt.Errorf("cordon: start the agent: %w", err))
 	}
+	if input != nil {
+		input.start()
+	}
 	endedBy, exitCode, waitErr := watch(ctx, lim, agent, activity)
+	if input != nil {
+		if err := input.stop(); err != nil {
+			_, _ = fmt.Fprintf(said, "cordon supervise %s: the agent's input: %v\n", s.runID, err)
+		}
+	}
 	// The CLI's exit doesn't end its children (#3463), so every ending
 	// runs the proof, and runs it even though ctx may be canceled.
 	if err := endLaunch(context.WithoutCancel(ctx), s.host, target, lim.endProof); err != nil {

@@ -76,7 +76,9 @@ func readEndRecord(l layout, runID string) (endRecord, error) {
 	return rec, nil
 }
 
-const requestVersion = "freeside.cordon.supervise/v1"
+// requestVersion v2 streams the program's input: v1 gave it ctl/prompt
+// as plain stdin.
+const requestVersion = "freeside.cordon.supervise/v2"
 
 // supervisedProcess is one process a supervisor starts, already confined
 // (confinedArgv) by the daemon that wrote the request.
@@ -100,8 +102,10 @@ type supervisorRequest struct {
 	BaseSHA    string            `json:"base_sha"`
 	Canary     supervisedProcess `json:"canary"`
 	Program    supervisedProcess `json:"program"`
-	// Prompt gives the program ctl/prompt on stdin, and /dev/null without
-	// it. Secret gives it the supervisor's tokenFD as its own.
+	// Prompt streams the program's input: ctl/prompt as the first message,
+	// then what the daemon leaves in the inbox (inbox.go). Without it the
+	// program's stdin is /dev/null. Secret gives it the supervisor's
+	// tokenFD as its own.
 	Prompt          bool  `json:"prompt"`
 	Secret          bool  `json:"secret"`
 	StallLimit      int64 `json:"stall_limit_ns"`

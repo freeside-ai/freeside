@@ -1,8 +1,10 @@
 package cordon
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -294,14 +296,43 @@ func request(id string) LaunchRequest {
 	}
 }
 
+// readFrame reads one line of a streamed launch's input, as the CLI does,
+// and returns the line and its message's text.
+func readFrame(r *bufio.Reader) (line []byte, text string, err error) {
+	line, err = r.ReadBytes('\n')
+	if err != nil {
+		return line, "", err
+	}
+	var frame struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &frame); err != nil {
+		return line, "", err
+	}
+	if frame.Type != "user" || frame.Message.Role != "user" {
+		return line, "", fmt.Errorf("frame %q is not a user message", line)
+	}
+	return line, frame.Message.Content, nil
+}
+
+// firstMessage returns the text of a streamed launch's first message: the
+// prompt.
+func firstMessage(stdin io.Reader) string {
+	_, text, _ := readFrame(bufio.NewReader(stdin))
+	return text
+}
+
 func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
 	synctest.Test(t, func(t *testing.T) {
 		host := newFakeHost()
 		l := &fakeLauncher{host: host, script: func(spec processSpec, p *fakeProcess) {
-			prompt, _ := io.ReadAll(spec.stdin)
-			_, _ = fmt.Fprintf(spec.stdout, "read %q\n", prompt)
+			_, _ = fmt.Fprintf(spec.stdout, "read %q\n", firstMessage(spec.stdin))
 			_, _ = io.WriteString(spec.stderr, "a warning\n")
 			p.exit(3)
 		}}
@@ -330,6 +361,7 @@ func TestLaunchReturnsTheExitStatusOnceNoMemberIsAlive(t *testing.T) {
 		want := append(confinedArgv(cfg, layoutFor(cfg.RunsRoot, "run-1"), cfg.AgentCLI),
 			"--settings",
 			`{"sandbox":{"enabled":false},"attribution":{"commit":"","pr":""},"enabledPlugins":{"agents-md@builtin":false}}`,
+			"--input-format", "stream-json",
 			"-p")
 		if !slices.Equal(agent.argv, want) {
 			t.Fatalf("agent argv = %q, want %q", agent.argv, want)
@@ -402,7 +434,7 @@ func TestLaunchHandsTheTokenToTheAgentAlone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var stdin []byte
 		l := &fakeLauncher{host: newFakeHost(), script: func(spec processSpec, p *fakeProcess) {
-			stdin, _ = io.ReadAll(spec.stdin)
+			stdin, _, _ = readFrame(bufio.NewReader(spec.stdin))
 			p.exit(0)
 		}}
 		if _, err := fakeBackend(t, cfg, l).Launch(t.Context(), request("run-token")); err != nil {
@@ -415,8 +447,8 @@ func TestLaunchHandsTheTokenToTheAgentAlone(t *testing.T) {
 		if string(l.secrets[1]) != fixtureToken {
 			t.Fatalf("the agent's secret is %d bytes, not the request's token", len(l.secrets[1]))
 		}
-		if string(stdin) != "the prompt" {
-			t.Fatalf("the agent's stdin = %q, want the prompt alone", stdin)
+		if want := `{"type":"user","message":{"role":"user","content":"the prompt"}}` + "\n"; string(stdin) != want {
+			t.Fatalf("the agent's stdin = %q, want the prompt alone, as %q", stdin, want)
 		}
 		for _, spec := range l.specs {
 			for _, field := range slices.Concat(spec.argv, spec.env, []string{spec.dir}) {
@@ -678,19 +710,30 @@ func TestLaunchRefusesAClaimedOrMalformedRunID(t *testing.T) {
 
 // TestLaunchRefusesACallerCLISettings shows a launch's caller can't set the
 // agent CLI's settings, which would turn its own sandbox back on or
-// replace the fixed settings.
+// replace the fixed settings, or its input format, which the supervisor
+// writes, nor hand it a prompt that isn't UTF-8.
 func TestLaunchRefusesACallerCLISettings(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t)
 	synctest.Test(t, func(t *testing.T) {
 		l := &fakeLauncher{host: newFakeHost(), script: func(_ processSpec, p *fakeProcess) { p.exit(0) }}
 		b := fakeBackend(t, cfg, l)
-		for i, args := range [][]string{{"--settings", "{}"}, {"-p", `--settings={"sandbox":{"enabled":true}}`}} {
+		for i, args := range [][]string{
+			{"--settings", "{}"},
+			{"-p", `--settings={"sandbox":{"enabled":true}}`},
+			{"--input-format", "text"},
+			{"-p", "--input-format=text"},
+		} {
 			req := request(fmt.Sprintf("run-settings-%d", i))
 			req.Args = args
 			if _, err := b.Launch(t.Context(), req); err == nil {
 				t.Fatalf("Launch with %q succeeded", args)
 			}
+		}
+		req := request("run-settings-prompt")
+		req.Prompt = []byte("not \xff UTF-8")
+		if _, err := b.Launch(t.Context(), req); err == nil {
+			t.Fatal("Launch with a prompt that isn't UTF-8 succeeded")
 		}
 		if len(l.specs) != 0 {
 			t.Fatalf("a refused launch started %d processes", len(l.specs))

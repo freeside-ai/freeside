@@ -38,9 +38,10 @@ func TestMain(m *testing.M) {
 	if len(args) >= len(superviseVerb) && slices.Equal(args[:len(superviseVerb)], superviseVerb) {
 		os.Exit(RunSupervisor(args[len(superviseVerb):]))
 	}
-	// A launch passes the CLI's fixed settings first (cliSettings).
-	if len(args) >= len(cliSettings) && slices.Equal(args[:len(cliSettings)], cliSettings) {
-		args = args[len(cliSettings):]
+	// A launch passes the CLI's fixed settings and input format first
+	// (agentArgs).
+	if fixed := agentArgs(nil); len(args) >= len(fixed) && slices.Equal(args[:len(fixed)], fixed) {
+		args = args[len(fixed):]
 	}
 	// A probe launch runs the staged copy of this binary as the daemon.
 	if len(args) > len(probeVerb) && slices.Equal(args[:len(probeVerb)], probeVerb) {
@@ -62,10 +63,14 @@ func TestMain(m *testing.M) {
 //	env              print the environment, one variable a line
 //	token            read the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
 //	                 names to end of file and print its length and SHA-256,
-//	                 never its bytes; then print stdin
+//	                 never its bytes; then print the first message on stdin
 //	witness          print each argument and each environment variable,
 //	                 one a line, then do what token does
-//	probe            run each probe line from stdin; print ok or FAIL
+//	probe            run each probe line of the first message on stdin;
+//	                 print ok or FAIL
+//	steer            print each message on stdin as "got TEXT", and after
+//	                 one whose text is "end turn" a result record; print eof
+//	                 once stdin closes and exit 0
 //	hop              start a chain of processes that each fork the next and
 //	                 exit at once, appending to ./hops as it goes; exit
 //	spawn THEN       write its own pid to ./agent.pid, start three detached
@@ -103,6 +108,8 @@ func fakeAgent(args []string) int {
 		return readToken()
 	case "probe":
 		return runProbes()
+	case "steer":
+		return steer()
 	case "hop":
 		if err := startHopChain(); err != nil {
 			fmt.Println("FAIL hop:", err)
@@ -158,13 +165,34 @@ func readToken() int {
 		fmt.Println("FAIL token read:", err)
 		return 1
 	}
-	stdin, err := io.ReadAll(os.Stdin)
+	_, prompt, err := readFrame(bufio.NewReader(os.Stdin))
 	if err != nil {
 		fmt.Println("FAIL stdin read:", err)
 		return 1
 	}
-	fmt.Printf("token %d %x\nstdin %q\n", len(token), sha256.Sum256(token), stdin)
+	fmt.Printf("token %d %x\nstdin %q\n", len(token), sha256.Sum256(token), prompt)
 	return 0
+}
+
+// steer stands in for a CLI that runs every message it reads. Its result
+// record puts "type" after another member, as the CLI's does.
+func steer() int {
+	in := bufio.NewReader(os.Stdin)
+	for {
+		_, text, err := readFrame(in)
+		if errors.Is(err, io.EOF) {
+			fmt.Println("eof")
+			return 0
+		}
+		if err != nil {
+			fmt.Println("FAIL stdin read:", err)
+			return 1
+		}
+		fmt.Printf("got %q\n", text)
+		if text == "end turn" {
+			fmt.Println(`{"subtype":"success","type":"result","is_error":false}`)
+		}
+	}
 }
 
 // spawnSurvivors starts the three children #3463 found outlive a CLI: one
@@ -213,7 +241,12 @@ func startHopChain() error {
 // it doesn't. "any" is for a probe whose effect the test checks itself.
 func runProbes() int {
 	status := 0
-	scanner := bufio.NewScanner(os.Stdin)
+	_, lines, err := readFrame(bufio.NewReader(os.Stdin))
+	if err != nil {
+		fmt.Println("FAIL stdin read:", err)
+		return 1
+	}
+	scanner := bufio.NewScanner(strings.NewReader(lines))
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Split(line, "\t")

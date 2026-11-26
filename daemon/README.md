@@ -7084,8 +7084,8 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
 - **The token reaches the CLI alone.** `LaunchRequest.Token` carries the
   enrolled identity's setup token, and a request without one is refused
   before anything is created. The agent reads it from its own pipe on fd 3,
-  named by `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3`; the prompt stays
-  alone on stdin, the canary gets nothing, and the CLI keeps its config in
+  named by `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3`; stdin carries only
+  messages, the canary gets nothing, and the CLI keeps its config in
   the launch's own `run/config`. No argv, environment, transcript, or file
   under the launch's directory holds the token.
 - **A supervisor, not the daemon, runs each launch.** The daemon writes
@@ -7099,6 +7099,24 @@ for admission, `devlog/2026-11-24-1152-admit-cordoned-writers.md`.
   launch outlives a daemon restart. `Detach` makes every waiting `Launch`
   and `Recover` return `ErrDetached` and leaves the runs to their
   supervisors.
+- **An operator's message reaches a running writer.** A launch fixes
+  `--input-format stream-json` after its settings and refuses a caller's
+  own, and the supervisor writes the prompt as the first message.
+  `SendMessage` leaves a message in `ctl/messages/` as
+  `<ordinal>.json`; the supervisor takes it by renaming it to `.taken`,
+  while a turn runs or when one ends, and writes it to the agent's input.
+  The daemon withdraws one nobody took by renaming it to `.refused`, so
+  exactly one rename wins. When a turn ends, which the supervisor reads
+  from a `result` line on stdout, with no message waiting, it writes
+  `ctl/input-closed.json` and closes the input; it does so too when the
+  agent exits. The CLI runs a message it read before the close, and the
+  run still ends by its exit status, so an early or forged `result` only
+  closes the input early. A message is refused once the run ended, its
+  input closed, or nobody took it within 10 seconds; a run launched before
+  the inbox has none and is refused as not streamed. An ordinal offered
+  again settles from its files, so a restarted daemon can offer it again.
+  The input format enters the configuration digest, so the conformance
+  suite must pass again before a launch is unattended.
 - **Recovery adopts a run by its ID.** `Recover` returns an authenticated
   export already written; waits for a supervisor still alive with its
   claimed start time; removes an export directory with no export record

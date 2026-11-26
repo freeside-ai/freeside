@@ -86,12 +86,31 @@ func TestExtractUsageAbsenceIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestExtractUsageUsesLastResultLine(t *testing.T) {
+// TestExtractUsageSumsEachTurnsResult: a streamed writer that took an
+// operator's message ends one turn per result. Token counts are per turn,
+// so they sum; the cost is a running total, so the latest wins. A result
+// with no telemetry leaves the sum unknown, not short.
+func TestExtractUsageSumsEachTurnsResult(t *testing.T) {
 	observedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	body := append(usageFixture(t, "usage_complete.jsonl"),
+	second := "\n" + `{"type":"result","total_cost_usd":0.02,"usage":{"input_tokens":1,"output_tokens":2,` +
+		`"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}` + "\n"
+	body := append(usageFixture(t, "usage_complete.jsonl"), second...)
+	quantities := map[string]int64{}
+	for _, m := range claude.ExtractUsage(body, observedAt) {
+		quantities[m.Metric] = m.Quantity
+	}
+	want := map[string]int64{
+		"total_cost": 20000, "input_tokens": 101, "output_tokens": 52,
+		"cache_creation_input_tokens": 13, "cache_read_input_tokens": 24,
+	}
+	if !reflect.DeepEqual(quantities, want) {
+		t.Fatalf("ExtractUsage() quantities = %v, want %v", quantities, want)
+	}
+
+	body = append(usageFixture(t, "usage_complete.jsonl"),
 		[]byte("\n{\"type\":\"result\",\"result\":\"later without telemetry\"}\n")...)
 	if got := claude.ExtractUsage(body, observedAt); got != nil {
-		t.Fatalf("ExtractUsage() = %#v, want last result's absent telemetry", got)
+		t.Fatalf("ExtractUsage() = %#v, want absent telemetry", got)
 	}
 }
 
