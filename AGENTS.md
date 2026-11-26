@@ -469,6 +469,8 @@ engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
   when most of it is Tier B, apart from the test-only files the next rule
   names. A new Tier A gate's doc comment names what it re-checks, so a
   reviewer can see a path that skips it.
+  `scripts/tier-a-lookup.sh <path>...` (or `--range <base> <head>`)
+  reports which entry, if any, lists a path.
 - **Test-only files don't make a change Tier A by path.** A `_test.go`
   file or a file under a `testdata/` directory doesn't make a change Tier
   A by its path, because Go's ordinary build leaves both out; the rest of
@@ -514,7 +516,8 @@ engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
 `scripts/check-tier-a-paths.sh`, which the `required` check runs on every
 pull request, fails when an entry matches nothing. An entry is a
 backticked path in a bullet; a bare file name resolves against the
-directory named before it in the same bullet. All under `daemon/`:
+directory named before it in the same bullet, and that directory then
+lists only the names resolved against it. All under `daemon/`:
 
 - **Runner containment, egress, and credential volumes:**
   `internal/ward/`, `internal/wardstore/`, `internal/buildproxy/`,
