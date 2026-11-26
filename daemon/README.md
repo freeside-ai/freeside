@@ -2773,12 +2773,18 @@ The instance's `cordoned_launches.max_concurrent` setting (Store Instance
 And Project Settings) caps how many run at once, and **no cordoned launch
 starts until a cap is set.** A cordoned launch counts from its admission
 until its export or outcome is recorded. One over the cap, or with no cap
-set, stays pending under a `cordoned_launch_cap` hold, which names no
-numbers (`freesided settings show` gives the cap) and clears when it
-starts. Free places go to the oldest task first, in an order of their own:
-a launch waiting for a cordoned place never holds back a warded launch
-that fits the budget, and one waiting for memory never holds back a
-cordoned launch under the cap. Usage-pool slots are unchanged.
+set, stays pending under a `cordoned_launch_cap` hold until it starts.
+The hold's `cordoned_launch` fact names each host the launch was
+considered for, what closes it (`cordoned_count_full`, with the running
+count and the cap, 0 when none is set), and how many older launches wait
+ahead. Every launch names the daemon's own host, `daemon`, until
+admission chooses among hosts (#2166); the stage driver refuses a new
+cordoned start that names no host, and any start on another host, and
+that attempt alone holds under `backend_not_conformant`. Free places go
+to the oldest task first, in an order of their own: a launch waiting for
+a cordoned place never holds back a warded launch that fits the budget,
+and one waiting for memory never holds back a cordoned launch under the
+cap. Usage-pool slots are unchanged.
 
 The publication lane advances independent runs at once (#3214). Each pass
 starts each run's pending tasks in that run's own goroutine and doesn't wait

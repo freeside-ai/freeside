@@ -13,6 +13,7 @@ import (
 // earlier migrations' tests at head.
 func rewindConformanceHost(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindLaunchHost(t, ctx, db)
 	for _, statement := range []string{
 		`DROP INDEX backend_conformance_by_host_backend`,
 		`ALTER TABLE backend_conformance_records DROP COLUMN host_id`,

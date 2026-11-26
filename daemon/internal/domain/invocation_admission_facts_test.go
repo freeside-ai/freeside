@@ -94,6 +94,7 @@ func TestInvocationAdmissionFactsValidate(t *testing.T) {
 		{"admission instant not UTC", func(f *domain.InvocationAdmissionFacts) {
 			f.AdmittedAt = f.AdmittedAt.In(time.FixedZone("east", 3600))
 		}},
+		{"empty host", func(f *domain.InvocationAdmissionFacts) { f.ExecutionHostID = new(domain.ExecutionHostID("")) }},
 		{"independence on a writer", func(f *domain.InvocationAdmissionFacts) {
 			f.Independence = []domain.IndependenceEntry{{WritingRole: domain.RoleImplementer, Lineage: domain.LineageMatched}}
 		}},
@@ -108,6 +109,14 @@ func TestInvocationAdmissionFactsValidate(t *testing.T) {
 			}
 		})
 	}
+	t.Run("host on a review", func(t *testing.T) {
+		t.Parallel()
+		facts := domain.AdmittedFactsOfReview(review, nil)
+		facts.ExecutionHostID = new(domain.DaemonHostID)
+		if err := facts.Validate(); !errors.Is(err, domain.ErrAdmissionFactsInconsistent) {
+			t.Fatalf("Validate = %v, want %v", err, domain.ErrAdmissionFactsInconsistent)
+		}
+	})
 	t.Run("review without independence", func(t *testing.T) {
 		t.Parallel()
 		facts := domain.AdmittedFactsOfReview(review, nil)
@@ -116,6 +125,37 @@ func TestInvocationAdmissionFactsValidate(t *testing.T) {
 			t.Fatalf("Validate = %v, want %v", err, domain.ErrAdmissionFactsInconsistent)
 		}
 	})
+}
+
+// TestAdmittedFactsHost pins where facts read a host from: an execution
+// admission's recorded host, the daemon's host for one recorded before
+// hosts existed, and null for a review and for an execution snapshot stored
+// before facts carried a host.
+func TestAdmittedFactsHost(t *testing.T) {
+	t.Parallel()
+	execution, _, _, _, _, _, _, _ := selectionClosure(t)
+	review, _, _, _, _, _, _ := reviewAdmissionClosure(t)
+	if execution.ExecutionHostID != "" {
+		t.Fatalf("fixture admission records host %q, want none", execution.ExecutionHostID)
+	}
+	stored := domain.AdmittedFactsOfExecution(execution, domain.RoleImplementer)
+	if stored.ExecutionHostID == nil || *stored.ExecutionHostID != domain.DaemonHostID {
+		t.Fatalf("stored admission facts host = %v, want %q", stored.ExecutionHostID, domain.DaemonHostID)
+	}
+	hosted := execution
+	hosted.ExecutionHostID = "mac-studio"
+	if facts := domain.AdmittedFactsOfExecution(hosted, domain.RoleImplementer); facts.ExecutionHostID == nil ||
+		*facts.ExecutionHostID != "mac-studio" {
+		t.Fatalf("hosted admission facts host = %v, want mac-studio", facts.ExecutionHostID)
+	}
+	if facts := domain.AdmittedFactsOfReview(review, nil); facts.ExecutionHostID != nil {
+		t.Fatalf("review facts host = %q, want null", *facts.ExecutionHostID)
+	}
+	snapshot := stored
+	snapshot.ExecutionHostID = nil
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("execution facts without a host: Validate = %v", err)
+	}
 }
 
 // TestExecutionFailureAdmittedFacts pins that a failure card's admitted facts

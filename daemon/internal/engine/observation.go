@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -157,13 +158,15 @@ func (e *QuotaWindowExhaustedError) Is(target error) bool { return target == Err
 // beside admission_policy_refused, what image upkeep waits on beside
 // image_upkeep_pending, the full pool beside usage_pool_exhausted, the
 // exhausted window beside quota_window_exhausted, the memory arithmetic
-// beside machine_capacity, and none of them otherwise.
+// beside machine_capacity, the hosts considered beside cordoned_launch_cap,
+// and none of them otherwise.
 type holdDetail struct {
 	refusal         *domain.AdmissionRefusal
 	imageUpkeep     *domain.ImageUpkeepHold
 	usagePool       *domain.UsagePoolID
 	quotaWindow     *domain.QuotaWindowHold
 	machineCapacity *domain.MachineCapacityHold
+	cordonedLaunch  *domain.CordonedLaunchHold
 }
 
 // holdDetailFor derives the detail an error's hold records.
@@ -188,6 +191,11 @@ func holdDetailFor(err error) holdDetail {
 	if errors.As(err, &capacity) {
 		hold := capacity.Hold
 		detail.machineCapacity = &hold
+	}
+	var cordoned *domain.CordonedLaunchCapError
+	if errors.As(err, &cordoned) {
+		hold := cordoned.Hold
+		detail.cordonedLaunch = &hold
 	}
 	return detail
 }
@@ -242,8 +250,8 @@ func (e *Engine) observeInvocation(
 
 // observeRunHold records one paced hold observation for a run. detail is
 // empty except beside admission_policy_refused, image_upkeep_pending,
-// usage_pool_exhausted, quota_window_exhausted, and machine_capacity
-// (holdDetailFor).
+// usage_pool_exhausted, quota_window_exhausted, machine_capacity, and
+// cordoned_launch_cap (holdDetailFor).
 func (e *Engine) observeRunHold(
 	ctx context.Context, runID domain.RunID,
 	invocationID domain.InvocationID, reason domain.RunHoldReason, detail holdDetail,
@@ -285,6 +293,9 @@ func (e *Engine) observeRunHold(
 		if capacity := detail.machineCapacity; capacity != nil {
 			attrs = append(attrs, "reservation_mib", capacity.ReservationMiB,
 				"reserved_mib", capacity.ReservedMiB, "budget_mib", capacity.BudgetMiB, "ahead", capacity.Ahead)
+		}
+		if cordoned := detail.cordonedLaunch; cordoned != nil {
+			attrs = append(attrs, "cordoned_launch", *cordoned)
 		}
 		e.logger.Info("run hold recorded", attrs...)
 	}
@@ -332,6 +343,12 @@ func holdPaceState(reason domain.RunHoldReason, detail holdDetail) string {
 		state += fmt.Sprintf("+%d+%d+%d+%d",
 			capacity.ReservationMiB, capacity.ReservedMiB, capacity.BudgetMiB, capacity.Ahead)
 	}
+	if cordoned := detail.cordonedLaunch; cordoned != nil {
+		// The fact holds only strings, numbers, and lists, so its encoding
+		// can't fail and is the same for the same fact.
+		body, _ := json.Marshal(cordoned)
+		state += "+" + string(body)
+	}
 	return state
 }
 
@@ -345,7 +362,7 @@ func recordRunHold(
 	hold := domain.RunHoldObservation{
 		RunID: runID, Reason: reason, Detail: detail.refusal, ImageUpkeep: detail.imageUpkeep,
 		UsagePool: detail.usagePool, QuotaWindow: detail.quotaWindow, MachineCapacity: detail.machineCapacity,
-		FirstObservedAt: now, LastObservedAt: now,
+		CordonedLaunch: detail.cordonedLaunch, FirstObservedAt: now, LastObservedAt: now,
 	}
 	if invocationID != "" {
 		hold.InvocationID = &invocationID

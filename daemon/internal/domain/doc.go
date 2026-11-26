@@ -120,6 +120,8 @@
 //   - role.go         a role's launch shape, stage, and judgment sites
 //   - launch.go       digest-addressed stage launch specs
 //   - machine_capacity.go launch memory reservations and capacity holds
+//   - cordoned_launch_hold.go the hosts a cordoned_launch_cap hold waits on
+//     and what closes each
 //   - wardless_admission.go wardless admission and its interim launch audit
 //   - failure.go      the failure cause and disposition axes, and the pure disposition rule (§4)
 //   - handoff_check_failure.go the ward check that refused a run, its

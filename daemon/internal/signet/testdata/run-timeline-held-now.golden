@@ -40,6 +40,7 @@
     "usage_pool": null,
     "quota_window": null,
     "machine_capacity": null,
+    "cordoned_launch": null,
     "first_observed_at": "2026-11-16T09:45:00Z",
     "last_observed_at": "2026-11-16T09:50:00Z"
   },

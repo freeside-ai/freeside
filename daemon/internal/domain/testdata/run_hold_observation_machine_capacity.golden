@@ -12,6 +12,7 @@
     "budget_mib": 8192,
     "ahead": 1
   },
+  "cordoned_launch": null,
   "first_observed_at": "2026-01-02T03:05:05Z",
   "last_observed_at": "2026-01-02T03:06:05Z"
 }

@@ -760,10 +760,13 @@ func (d *Driver) StartWithInputs(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// A spec whose class this driver can't run is refused before anything
-	// is probed, bound, or saved.
+	// A spec whose class or host this driver can't run is refused before
+	// anything is probed, bound, or saved.
 	cordoned, err := runnerClassOf(spec)
 	if err != nil {
+		return err
+	}
+	if err := requireStartHost(spec, cordoned); err != nil {
 		return err
 	}
 	if cordoned {

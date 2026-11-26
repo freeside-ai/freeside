@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ const supersedeConfigDigest = domain.Digest("sha256:2222222222222222222222222222
 // configuration.
 type supersedeFixture struct {
 	store *store.Store
+	path  string
 	stale domain.ExecutionAdmission
 	fresh domain.ExecutionAdmission
 }
@@ -80,7 +82,8 @@ func newSupersedeFixture(
 			freshMutate(in)
 		}
 	}).admission
-	s := openWithFixture(t, f, unattendedSupersedeOptions())
+	path := tempDBPath(t)
+	s := openWithFixtureAt(t, path, f, unattendedSupersedeOptions())
 	recordTrustProfileRevision(t, s, profile, admissionEpoch)
 	if freshConformant {
 		seedConformanceFor(t, s, supersedeConfigDigest)
@@ -88,7 +91,7 @@ func newSupersedeFixture(
 	if err := recordAdmission(t, s, f.admission); err != nil {
 		t.Fatalf("record stale admission: %v", err)
 	}
-	return supersedeFixture{store: s, stale: f.admission, fresh: fresh}
+	return supersedeFixture{store: s, path: path, stale: f.admission, fresh: fresh}
 }
 
 func (f supersedeFixture) supersede(t *testing.T) error {
@@ -162,6 +165,55 @@ func TestSupersedeUnstartedExecutionAdmission(t *testing.T) {
 	}
 	if err := recordAdmission(t, f.store, f.stale); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("replay of the superseded admission = %v, want %v", err, store.ErrImmutableConflict)
+	}
+}
+
+// storedHostColumn reads the invocation's execution_host_id column raw: no
+// reader reads it, so only a raw read shows what the store wrote.
+func (f supersedeFixture) storedHostColumn(t *testing.T) string {
+	t.Helper()
+	raw, err := sql.Open("sqlite", f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var host string
+	if err := raw.QueryRowContext(t.Context(),
+		`SELECT execution_host_id FROM execution_admissions WHERE invocation_id = ?`,
+		string(f.stale.InvocationID)).Scan(&host); err != nil {
+		t.Fatal(err)
+	}
+	return host
+}
+
+// TestExecutionAdmissionHostColumn: the store writes the admission body's
+// host to execution_host_id when it records an admission and when it
+// supersedes one, and an admission that names no host gets the daemon's.
+func TestExecutionAdmissionHostColumn(t *testing.T) {
+	t.Parallel()
+	withHost := func(host domain.ExecutionHostID) func(*domain.ExecutionAdmissionInput) {
+		return func(in *domain.ExecutionAdmissionInput) { in.ExecutionHostID = host }
+	}
+	for name, tc := range map[string]struct {
+		stale, fresh             func(*domain.ExecutionAdmissionInput)
+		recorded, afterSupersede domain.ExecutionHostID
+	}{
+		"no host, then a host": {nil, withHost("mac-studio"), domain.DaemonHostID, "mac-studio"},
+		"a host, then none":    {withHost("mac-studio"), nil, "mac-studio", domain.DaemonHostID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newSupersedeFixture(t, tc.stale, tc.fresh, true)
+			if got := f.storedHostColumn(t); got != string(tc.recorded) {
+				t.Fatalf("recorded admission host column = %q, want %q", got, tc.recorded)
+			}
+			if err := f.supersede(t); err != nil {
+				t.Fatalf("supersede: %v", err)
+			}
+			if got := f.storedHostColumn(t); got != string(tc.afterSupersede) {
+				t.Fatalf("superseding admission host column = %q, want %q", got, tc.afterSupersede)
+			}
+		})
 	}
 }
 

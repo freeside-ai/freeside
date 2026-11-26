@@ -131,8 +131,14 @@ func healthyBackupHealthSource() store.BackupHealthSource {
 // identity an admission refers to.
 func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *store.Store {
 	t.Helper()
+	return openWithFixtureAt(t, tempDBPath(t), f, opts)
+}
+
+// openWithFixtureAt is openWithFixture at a path the caller can open raw.
+func openWithFixtureAt(t *testing.T, path string, f admissionFixture, opts store.Options) *store.Store {
+	t.Helper()
 	ctx := context.Background()
-	s := storetest.Open(t, tempDBPath(t), opts)
+	s := storetest.Open(t, path, opts)
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err

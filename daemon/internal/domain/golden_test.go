@@ -1358,6 +1358,12 @@ func TestGolden(t *testing.T) {
 			RecipeDigest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		}
 	})
+	// The host-bound (v9) variant: the settings-bound admission naming the
+	// host its launch runs on.
+	executionHostAdmission := domaintest.ExecutionAdmission(func(in *domain.ExecutionAdmissionInput) {
+		in.SettingsRevisions = &domain.SettingsRevisions{Instance: 3, Project: 2}
+		in.ExecutionHostID = domain.DaemonHostID
+	})
 
 	// The provider_registry variant: the profile is the only field that
 	// differs from the base admission. The declared registry set is not a
@@ -2407,6 +2413,27 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	cordonedLaunchFact := domain.CordonedLaunchHold{
+		Hosts: []domain.CordonedLaunchHost{
+			{
+				HostID:        domain.DaemonHostID,
+				Conditions:    []domain.ExecutionHostCondition{domain.ExecutionHostCordonedCountFull},
+				CordonedCount: &domain.CordonedLaunchCount{Running: 2, Limit: 2},
+			},
+			{
+				HostID:     "mac-studio",
+				Conditions: []domain.ExecutionHostCondition{domain.ExecutionHostNoDesktopSession},
+			},
+		},
+		Ahead: 1,
+	}
+	cordonedLaunchHold := domain.RunHoldObservation{
+		RunID: "run-2", InvocationID: &obsInvocationID,
+		Reason:          domain.HoldCordonedLaunchCap,
+		CordonedLaunch:  &cordonedLaunchFact,
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+	}
 	runObservation := domain.RunObservation{
 		RunID:      "run-1",
 		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
@@ -3000,6 +3027,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_no_hydration", noHydrationAdmission},
 		{"execution_admission_settings_revisions", settingsAdmission},
 		{"execution_admission_recipe_binding", recipeBindingAdmission},
+		{"execution_admission_execution_host", executionHostAdmission},
 		{"project_readiness_not_ready", notReady},
 		{"project_readiness_file_settings", ready},
 		{"execution_admission_agent_explicit_model", selectedClaudeAdmission},
@@ -3056,6 +3084,8 @@ func TestGolden(t *testing.T) {
 		{"run_hold_observation_quota_window", quotaWindowHold},
 		{"run_hold_observation_quota_window_offers", quotaWindowHoldOffers},
 		{"run_hold_observation_machine_capacity", machineCapacityHold},
+		{"cordoned_launch_hold", cordonedLaunchFact},
+		{"run_hold_observation_cordoned_launch", cordonedLaunchHold},
 		{"run_hold_span", holdSpan},
 		{"run_hold_span_open", openHoldSpan},
 		{"run_clocks", runClocks},

@@ -189,6 +189,7 @@ func cordonSpec(base string) exec.StartSpec {
 	spec := testStartSpec()
 	spec.RunnerClass = domain.BackendCordonedHostProcess
 	spec.EgressProfile = domain.EgressHostOpen
+	spec.ExecutionHostID = domain.DaemonHostID
 	spec.Base.BaseSHA = base
 	return spec
 }
@@ -680,23 +681,36 @@ func TestCordonedUnauthenticatedExportIsRefusedForGood(t *testing.T) {
 	}
 }
 
+// TestCordonedStartRefusals: each start is refused with nothing saved or
+// launched, and a start refused for its host says so, before the cordon is
+// touched.
 func TestCordonedStartRefusals(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name   string
-		cordon bool
-		mutate func(*exec.StartSpec)
+		name    string
+		cordon  bool
+		mutate  func(*exec.StartSpec)
+		forHost bool
 	}{
 		{"unknown class", true, func(s *exec.StartSpec) {
 			s.RunnerClass = domain.BackendFreshVMReadOnlyVolumeHandoff
-		}},
-		{"no cordon composed", false, func(*exec.StartSpec) {}},
+		}, false},
+		{"no cordon composed", false, func(*exec.StartSpec) {}, false},
 		{"cordoned under a ward profile", true, func(s *exec.StartSpec) {
 			s.EgressProfile = domain.EgressProviderOnly
-		}},
+		}, false},
 		{"warded under the host profile", true, func(s *exec.StartSpec) {
 			s.RunnerClass = ""
-		}},
+		}, false},
+		{"cordoned with no host", true, func(s *exec.StartSpec) {
+			s.ExecutionHostID = ""
+		}, true},
+		{"cordoned on another host", true, func(s *exec.StartSpec) {
+			s.ExecutionHostID = "mac-studio"
+		}, true},
+		{"warded on another host", true, func(s *exec.StartSpec) {
+			s.RunnerClass, s.EgressProfile, s.ExecutionHostID = "", domain.EgressProviderOnly, "mac-studio"
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -707,14 +721,23 @@ func TestCordonedStartRefusals(t *testing.T) {
 			}
 			spec := cordonSpec(base)
 			tc.mutate(&spec)
-			if err := startCordoned(t, d, spec); !errors.Is(err, ErrUnsupportedStart) {
+			err := startCordoned(t, d, spec)
+			if !errors.Is(err, ErrUnsupportedStart) {
 				t.Fatalf("start = %v, want an unsupported start", err)
+			}
+			if errors.Is(err, exec.ErrStartHostUnsupported) != tc.forHost {
+				t.Fatalf("start = %v, refused for its host = %t, want %t",
+					err, errors.Is(err, exec.ErrStartHostUnsupported), tc.forHost)
 			}
 			if _, err := d.loadIntent(context.Background(), testInvoke); !errors.Is(err, exec.ErrUnknownInvocation) {
 				t.Fatalf("intent after refusal: %v, want none", err)
 			}
-			if launches, _, _, _ := cordon.snapshot(); len(launches) != 0 {
+			launches, _, _, calls := cordon.snapshot()
+			if len(launches) != 0 {
 				t.Fatalf("a refused start launched %d times", len(launches))
+			}
+			if tc.forHost && calls != 0 {
+				t.Fatalf("a start refused for its host made %d cordon calls", calls)
 			}
 		})
 	}

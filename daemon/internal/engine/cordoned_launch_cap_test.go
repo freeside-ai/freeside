@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -103,8 +104,18 @@ func TestCordonedDispatchWaitsForACapAndReservesNoMemory(t *testing.T) {
 	if _, err := engine.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if hold := storedRunHold(t, f.store, runID); hold == nil || hold.Reason != domain.HoldCordonedLaunchCap {
+	hold := storedRunHold(t, f.store, runID)
+	if hold == nil || hold.Reason != domain.HoldCordonedLaunchCap {
 		t.Fatalf("hold = %+v, want cordoned_launch_cap", hold)
+	}
+	// No cap set reads as the daemon's host with a full count of 0.
+	wantFact := domain.CordonedLaunchHold{Hosts: []domain.CordonedLaunchHost{{
+		HostID:        domain.DaemonHostID,
+		Conditions:    []domain.ExecutionHostCondition{domain.ExecutionHostCordonedCountFull},
+		CordonedCount: &domain.CordonedLaunchCount{Running: 0, Limit: 0},
+	}}}
+	if hold.CordonedLaunch == nil || !reflect.DeepEqual(*hold.CordonedLaunch, wantFact) {
+		t.Fatalf("hold fact = %+v, want %+v", hold.CordonedLaunch, wantFact)
 	}
 	if _, started := driver.StartSpec(id); started {
 		t.Fatal("a cordoned dispatch started with no cap set")
@@ -127,8 +138,9 @@ func TestCordonedDispatchWaitsForACapAndReservesNoMemory(t *testing.T) {
 	if !started {
 		t.Fatal("a cordoned dispatch under the cap did not start beside a full memory budget")
 	}
-	if spec.RunnerClass != domain.BackendCordonedHostProcess {
-		t.Fatalf("started with runner class %q, want the cordon", spec.RunnerClass)
+	if spec.RunnerClass != domain.BackendCordonedHostProcess || spec.ExecutionHostID != domain.DaemonHostID {
+		t.Fatalf("started with runner class %q on host %q, want the cordon on the daemon's host",
+			spec.RunnerClass, spec.ExecutionHostID)
 	}
 	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
 		admission, err := tx.GetExecutionAdmissionRecord(ctx, id)

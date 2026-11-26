@@ -16,9 +16,12 @@ import (
 // for an admission on another class or one that names no identity, which
 // takes no pool slot and starts no writer, as the memory gate skips it.
 //
-// It refuses with domain.ErrCordonedLaunchCap when no cap is set, when the
-// cordoned launches already running number the cap, or when an older task's
-// cordoned launch waits ahead of this one. The cap is read from the stored
+// It refuses with a *domain.CordonedLaunchCapError, which matches
+// domain.ErrCordonedLaunchCap, when no cap is set, when the cordoned launches
+// already running number the cap, or when an older task's cordoned launch
+// waits ahead of this one. The error's fact names the admission's host,
+// always the daemon's until admission chooses one (#2166), and the instance
+// cap stands in for that host's limit. The cap is read from the stored
 // record in this transaction, so a set applies from the next admission. A
 // launch counts as running while its admission holds a pool slot and has no
 // recorded export or outcome: a finished cordoned run has no process left on
@@ -58,13 +61,11 @@ func (tx *WriteTx) requireCordonedPlace(
 	if err != nil {
 		return fmt.Errorf("cordoned launch %q cap: %w", admission.InvocationID, err)
 	}
-	if limit == nil {
-		return fmt.Errorf("cordoned launch %q: no cordoned_launches cap is set: %w",
-			admission.InvocationID, domain.ErrCordonedLaunchCap)
-	}
-	if len(running) >= limit.MaxConcurrent {
-		return fmt.Errorf("cordoned launch %q: %d of %d running: %w",
-			admission.InvocationID, len(running), limit.MaxConcurrent, domain.ErrCordonedLaunchCap)
+	// No cap set reads as a full count with a limit of 0: the host takes no
+	// cordoned launch until the operator sets one.
+	maxConcurrent := 0
+	if limit != nil {
+		maxConcurrent = limit.MaxConcurrent
 	}
 	createdAt, err := tx.runTaskCreatedAt(ctx, admission.RunID)
 	if err != nil {
@@ -78,11 +79,35 @@ func (tx *WriteTx) requireCordonedPlace(
 	if err != nil {
 		return fmt.Errorf("cordoned launch %q cap: %w", admission.InvocationID, err)
 	}
+	// The older launches ahead are counted for a full host too, so the fact
+	// says how many wait ahead whichever closes the launch, as the memory
+	// gate's does.
+	if len(running) >= maxConcurrent {
+		return fmt.Errorf("cordoned launch %q: %d of %d running: %w",
+			admission.InvocationID, len(running), maxConcurrent,
+			cordonedCapRefusal(admission, &domain.CordonedLaunchCount{Running: len(running), Limit: maxConcurrent}, ahead))
+	}
 	if ahead > 0 {
 		return fmt.Errorf("cordoned launch %q: %d older cordoned launches wait ahead: %w",
-			admission.InvocationID, ahead, domain.ErrCordonedLaunchCap)
+			admission.InvocationID, ahead, cordonedCapRefusal(admission, nil, ahead))
 	}
 	return nil
+}
+
+// cordonedCapRefusal is the cap's refusal for the one host the launch was
+// considered for, with ahead older launches: full when count is set, open
+// otherwise.
+func cordonedCapRefusal(
+	admission domain.ExecutionAdmission, count *domain.CordonedLaunchCount, ahead int,
+) *domain.CordonedLaunchCapError {
+	host := domain.CordonedLaunchHost{HostID: admission.Host(), Conditions: []domain.ExecutionHostCondition{}}
+	if count != nil {
+		host.Conditions = []domain.ExecutionHostCondition{domain.ExecutionHostCordonedCountFull}
+		host.CordonedCount = count
+	}
+	return &domain.CordonedLaunchCapError{
+		Hold: domain.CordonedLaunchHold{Hosts: []domain.CordonedLaunchHost{host}, Ahead: ahead},
+	}
 }
 
 // runningCordonedLaunches returns every cordoned execution admission that

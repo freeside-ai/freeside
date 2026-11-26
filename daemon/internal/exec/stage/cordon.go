@@ -39,6 +39,27 @@ func runnerClassOf(spec exec.StartSpec) (cordoned bool, err error) {
 	return false, fmt.Errorf("%w: runner class %q has no stage port", ErrUnsupportedStart, spec.RunnerClass)
 }
 
+// requireStartHost refuses a new start this driver can't route to its host:
+// a cordoned start that names no host, and a start of either class that
+// names a host other than the daemon's, with ErrUnsupportedStart and
+// exec.ErrStartHostUnsupported, so the engine holds only that invocation. A
+// warded start with no host runs on the daemon's host, as every warded
+// launch does (plan §5.7 Placement). The driver composes only the daemon's host's gate, so until #3625 composes
+// other hosts' gates, and replaces the daemon-only rule with a lookup of the
+// named host's gate, a launch on any other host has nowhere to go. It runs
+// only for a new start: recovery resumes a journaled intent, which may
+// predate hosts and name none.
+func requireStartHost(spec exec.StartSpec, cordoned bool) error {
+	switch {
+	case cordoned && spec.ExecutionHostID == "":
+		return fmt.Errorf("%w: %w: a cordoned start names none", ErrUnsupportedStart, exec.ErrStartHostUnsupported)
+	case spec.ExecutionHostID != "" && spec.ExecutionHostID != domain.DaemonHostID:
+		return fmt.Errorf("%w: %w: execution host %q has no stage gate",
+			ErrUnsupportedStart, exec.ErrStartHostUnsupported, spec.ExecutionHostID)
+	}
+	return nil
+}
+
 // egressFitsClass reports whether an intent's egress profile is one its
 // runner class can run under.
 func egressFitsClass(cordoned bool, profile domain.EgressProfile) bool {

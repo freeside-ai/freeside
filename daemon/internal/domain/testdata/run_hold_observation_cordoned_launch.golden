@@ -1,0 +1,34 @@
+{
+  "run_id": "run-2",
+  "invocation_id": "inv-1",
+  "reason": "cordoned_launch_cap",
+  "detail": null,
+  "image_upkeep": null,
+  "usage_pool": null,
+  "quota_window": null,
+  "machine_capacity": null,
+  "cordoned_launch": {
+    "hosts": [
+      {
+        "host_id": "daemon",
+        "conditions": [
+          "cordoned_count_full"
+        ],
+        "cordoned_count": {
+          "running": 2,
+          "limit": 2
+        }
+      },
+      {
+        "host_id": "mac-studio",
+        "conditions": [
+          "no_desktop_session"
+        ],
+        "cordoned_count": null
+      }
+    ],
+    "ahead": 1
+  },
+  "first_observed_at": "2026-01-02T03:05:05Z",
+  "last_observed_at": "2026-01-02T03:06:05Z"
+}

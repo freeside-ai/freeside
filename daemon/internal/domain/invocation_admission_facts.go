@@ -47,6 +47,11 @@ type IndependenceEntry struct {
 // lineage group, or cost owner, and a review admission never records the
 // credential mode, egress profile, operating mode, or isolation class.
 //
+// ExecutionHostID is the one exception to that rule: an execution admission
+// recorded before hosts existed reads as the daemon's host
+// (ExecutionAdmission.Host), because every launch then ran there. A review
+// admission records no host, so its facts carry null.
+//
 // Role is the ward role the invocation ran as when its recording names one,
 // and null otherwise. Independence is set exactly on a review admission's
 // facts, one entry per writing role.
@@ -76,8 +81,12 @@ type InvocationAdmissionFacts struct {
 	OperatingMode    *OperatingMode      `json:"operating_mode"`
 	// IsolationClass is the admitting backend's name, the class freesided
 	// doctor reports.
-	IsolationClass *string             `json:"isolation_class"`
-	Independence   []IndependenceEntry `json:"independence"`
+	IsolationClass *string `json:"isolation_class"`
+	// ExecutionHostID is the host an execution admission's launch ran on.
+	// It is null on a review's facts and on facts snapshotted onto a card
+	// before hosts existed.
+	ExecutionHostID *ExecutionHostID    `json:"execution_host_id"`
+	Independence    []IndependenceEntry `json:"independence"`
 }
 
 // AdmittedFactsOfExecution reads an execution admission's facts. role is the
@@ -88,6 +97,7 @@ func AdmittedFactsOfExecution(a ExecutionAdmission, role RoleName) InvocationAdm
 		Role: recorded(role), AdmittedAt: a.AdmittedAt,
 		CredentialMode: recorded(a.CredentialMode), EgressProfile: recorded(a.EgressProfile),
 		OperatingMode: recorded(a.OperatingMode), IsolationClass: recorded(a.Backend),
+		ExecutionHostID: new(a.Host()),
 	}
 	if a.AgentBinding != nil {
 		facts.withBinding(*a.AgentBinding)
@@ -166,6 +176,7 @@ func cloneAdmissionFacts(facts *InvocationAdmissionFacts) *InvocationAdmissionFa
 	cloned.EgressProfile = clonePtr(facts.EgressProfile)
 	cloned.OperatingMode = clonePtr(facts.OperatingMode)
 	cloned.IsolationClass = clonePtr(facts.IsolationClass)
+	cloned.ExecutionHostID = clonePtr(facts.ExecutionHostID)
 	cloned.Independence = slices.Clone(facts.Independence)
 	return &cloned
 }
@@ -177,7 +188,9 @@ func CompareAdmissionFacts(a, b InvocationAdmissionFacts) int {
 
 // Validate reports whether the facts are ones an admission record could
 // carry: identified, of a known kind, with every present enum valid, and
-// independence exactly on a review's facts.
+// independence exactly on a review's facts. A host appears only on an
+// execution's facts, and may be null there, because a card stored before
+// hosts existed holds a snapshot without one.
 func (f InvocationAdmissionFacts) Validate() error {
 	fail := func(field string, value any) error {
 		return fmt.Errorf("invocation %q admission facts %s %v: %w",
@@ -204,6 +217,8 @@ func (f InvocationAdmissionFacts) Validate() error {
 		return fail("egress_profile", *f.EgressProfile)
 	case f.OperatingMode != nil && !f.OperatingMode.valid():
 		return fail("operating_mode", *f.OperatingMode)
+	case f.ExecutionHostID != nil && (f.Kind != AdmissionKindExecution || *f.ExecutionHostID == ""):
+		return fail("execution_host_id", *f.ExecutionHostID)
 	case (f.Kind == AdmissionKindReview) != (f.Independence != nil):
 		return fail("independence", f.Independence)
 	}

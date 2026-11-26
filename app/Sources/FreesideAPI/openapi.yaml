@@ -4665,6 +4665,77 @@ components:
           type: integer
           minimum: 0
 
+    CordonedLaunchHold:
+      type: object
+      description: >
+        The typed fact beside a cordoned_launch_cap hold, mirrored from
+        domain.CordonedLaunchHold (plan §5.7, Placement): each execution host
+        the waiting launch was considered for, with what closes it, and how
+        many older tasks' cordoned launches wait ahead. Either every host is
+        closed or ahead is at least 1. A later reason to wait becomes a host
+        condition here, not a hold reason of its own.
+      required: [hosts, ahead]
+      properties:
+        hosts:
+          type: array
+          minItems: 1
+          description: Each host considered, once each, in id order.
+          items:
+            $ref: "#/components/schemas/CordonedLaunchHost"
+        ahead:
+          type: integer
+          minimum: 0
+      example:
+        hosts:
+          - host_id: "daemon"
+            conditions: ["cordoned_count_full"]
+            cordoned_count:
+              running: 2
+              limit: 2
+        ahead: 0
+
+    CordonedLaunchHost:
+      type: object
+      description: >
+        One execution host a waiting cordoned launch was considered for. The
+        host is named by id; read its name from GET /execution-hosts.
+      required: [host_id, conditions, cordoned_count]
+      properties:
+        host_id:
+          type: string
+          minLength: 1
+          description: An ExecutionHost id. The daemon's own host is `daemon`.
+        conditions:
+          type: array
+          description: >
+            What closes the host to this launch, once each, in the order
+            ExecutionHostCondition lists its members. Empty for a host that is
+            open but has older launches ahead.
+          items:
+            $ref: "#/components/schemas/ExecutionHostCondition"
+        cordoned_count:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CordonedLaunchCount"
+          description: >
+            The host's cordoned launches; present exactly when conditions
+            include cordoned_count_full.
+
+    CordonedLaunchCount:
+      type: object
+      description: >
+        How many cordoned launches a host runs and how many it may, never
+        fewer running than the limit beside a full count. A limit of 0 means
+        no cap is set, so the host takes none.
+      required: [running, limit]
+      properties:
+        running:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 0
+
     ImageUpkeepHold:
       type: object
       description: >
@@ -5010,7 +5081,7 @@ components:
     RunHold:
       type: object
       description: The daemon's current typed hold observation for one run.
-      required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, quota_window, machine_capacity, first_observed_at, last_observed_at]
+      required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, quota_window, machine_capacity, cordoned_launch, first_observed_at, last_observed_at]
       properties:
         run_id:
           type: string
@@ -5059,6 +5130,14 @@ components:
           description: >
             The memory a machine_capacity hold waits on; present exactly
             beside that reason and null beside every other.
+        cordoned_launch:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CordonedLaunchHold"
+          description: >
+            The hosts a cordoned_launch_cap hold waits on; null beside every
+            other reason, and on a cordoned_launch_cap hold recorded before
+            the fact existed.
         first_observed_at:
           type: string
           format: date-time
@@ -8570,8 +8649,10 @@ components:
         legacy execution admission has no agent binding; a binding admitted
         before harness, lineage group, and cost owner were recorded lacks
         those; a review admission never records credential mode, egress
-        profile, operating mode, or isolation class. Clients render null as
-        unavailable.
+        profile, operating mode, isolation class, or execution host. Clients
+        render null as unavailable. One exception: an execution admission
+        recorded before hosts existed names the daemon's own host, `daemon`,
+        because every launch then ran there.
       required:
         - invocation_id
         - kind
@@ -8593,6 +8674,7 @@ components:
         - egress_profile
         - operating_mode
         - isolation_class
+        - execution_host_id
         - independence
       properties:
         invocation_id:
@@ -8679,6 +8761,14 @@ components:
           nullable: true
           minLength: 1
           description: The admitting backend, the class `freesided doctor` reports.
+        execution_host_id:
+          type: string
+          nullable: true
+          minLength: 1
+          description: >
+            The execution host the launch ran on, an ExecutionHost id. Null on
+            a review admission's facts and on facts a card recorded before
+            hosts existed.
         independence:
           type: array
           nullable: true

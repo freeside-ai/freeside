@@ -154,6 +154,17 @@
     "refusal_hold_reason": true
   },
   {
+    "case": "start names no execution host this driver can gate",
+    "hold_reason": "backend_not_conformant",
+    "admission_refusal": null,
+    "invocation_dispatch_hold": true,
+    "unattended_dispatch_refusal": false,
+    "mutable_admission_policy_refusal": false,
+    "operating_gate_hold": "",
+    "cleared_on_start": false,
+    "refusal_hold_reason": true
+  },
+  {
     "case": "backend has no current passed conformance record",
     "hold_reason": "backend_not_conformant",
     "admission_refusal": null,
