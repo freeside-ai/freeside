@@ -8,6 +8,136 @@ import Testing
 @testable import FreesideCore
 @testable import FreesideModel
 
+private struct PreviewTransportOutage: Error {}
+
+/// Scripts a preview failure (transport outage, unexpected status, or bad 200
+/// body) and then switches to the real mock transport for Check Again.
+private final class ScriptedPreviewTransport: ClientTransport, @unchecked Sendable {
+    enum Behavior: Sendable {
+        case failInTransit
+        case respond(status: HTTPResponse.Status, contentType: String?, body: String)
+        case forward(MockServerTransport)
+    }
+
+    private let lock = NSLock()
+    private var behavior: Behavior
+
+    init(_ behavior: Behavior) {
+        self.behavior = behavior
+    }
+
+    func set(_ behavior: Behavior) {
+        lock.withLock { self.behavior = behavior }
+    }
+
+    func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        let current = lock.withLock { behavior }
+        switch current {
+        case .failInTransit:
+            throw PreviewTransportOutage()
+        case .respond(let status, let contentType, let text):
+            var fields = HTTPFields()
+            if let contentType {
+                fields[.contentType] = contentType
+            }
+            return (HTTPResponse(status: status, headerFields: fields), HTTPBody(text))
+        case .forward(let mock):
+            return try await mock.send(
+                request, body: body, baseURL: baseURL, operationID: operationID)
+        }
+    }
+}
+
+/// Runs a hook while `previewPairing` is in flight to observe `.checking` and
+/// edit the code before the daemon answers.
+private struct HookOnPreviewTransport: ClientTransport {
+    let base: MockServerTransport
+    let onInFlight: @Sendable () async -> Void
+
+    func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        if operationID == "previewPairing" {
+            await onInFlight()
+        }
+        return try await base.send(
+            request, body: body, baseURL: baseURL, operationID: operationID)
+    }
+}
+
+/// Holds the model inspected from `HookOnPreviewTransport`.
+@MainActor
+private final class PreviewModelBox {
+    var model: PairingModel?
+    var observedInFlight: [PairingModel.PreviewState] = []
+    var replaceCodeInFlight: String?
+}
+
+/// Holds the first `previewPairing` request until released, then answers per a
+/// scripted behavior while forwarding later requests to the mock server.
+private final class HeldFirstPreviewTransport: ClientTransport, @unchecked Sendable {
+    private let base: MockServerTransport
+    private let firstAnswer: ScriptedPreviewTransport.Behavior
+    private let lock = NSLock()
+    private var heldFirst = false
+    private let arrivedStream: AsyncStream<Void>
+    private let arrivedContinuation: AsyncStream<Void>.Continuation
+    private let releaseStream: AsyncStream<Void>
+    private let releaseContinuation: AsyncStream<Void>.Continuation
+
+    init(base: MockServerTransport, firstAnswer: ScriptedPreviewTransport.Behavior) {
+        self.base = base
+        self.firstAnswer = firstAnswer
+        (self.arrivedStream, self.arrivedContinuation) = AsyncStream.makeStream(of: Void.self)
+        (self.releaseStream, self.releaseContinuation) = AsyncStream.makeStream(of: Void.self)
+    }
+
+    func waitUntilFirstArrived() async {
+        for await _ in arrivedStream {
+            return
+        }
+    }
+
+    func releaseFirst() {
+        releaseContinuation.yield()
+        releaseContinuation.finish()
+    }
+
+    func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        let shouldHold =
+            operationID == "previewPairing"
+            && lock.withLock {
+                if heldFirst { return false }
+                heldFirst = true
+                return true
+            }
+        if shouldHold {
+            arrivedContinuation.yield()
+            arrivedContinuation.finish()
+            for await _ in releaseStream {
+                break
+            }
+            return try await ScriptedPreviewTransport(firstAnswer).send(
+                request, body: body, baseURL: baseURL, operationID: operationID)
+        }
+        return try await base.send(
+            request, body: body, baseURL: baseURL, operationID: operationID)
+    }
+}
+
 #if os(macOS)
     /// Records each request's base URL under a lock and forwards it to the
     /// mock server so the full pairing exchange runs through middleware.
@@ -131,7 +261,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             PairingModel.scopeLabel(facts.granted_scope)
                 == "Full operator control, revocable from the host")
 
-        #expect(!model.codeRefused)
+        #expect(model.preview == .idle)
 
         model.pairingCode = "USEDUP"
         #expect(model.facts == nil)
@@ -139,9 +269,9 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         #expect(model.facts == nil)
         // A refused preview says so (F64), where it once left the screen
         // waiting on host details that never came, and a new code clears it.
-        #expect(model.codeRefused)
+        #expect(model.preview == .refused)
         model.pairingCode = "483912"
-        #expect(!model.codeRefused)
+        #expect(model.preview == .idle)
 
         // The previewed code is still redeemable.
         model.pairingCode = "483911"
@@ -169,12 +299,134 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
 
             await model.refreshFacts()
             #expect(model.facts == MockServer.pairingFacts)
+            #expect(model.preview == .idle)
 
             let credential = try #require(await model.pair())
             #expect(try credentials.load() == credential)
             #expect(recorder.baseURLs == [loopbackURL, loopbackURL])
         }
     #endif
+
+    @Test func previewSurfacesUnreachableAndUnexpectedAnswersAndRecoversOnCheckAgain() async throws {
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let transport = ScriptedPreviewTransport(.failInTransit)
+        let client = APIClientFactory.live(
+            serverURL: try #require(URL(string: "http://127.0.0.1:8677")),
+            transport: transport
+        )
+        let model = PairingModel(client: client, credentials: InMemoryCredentialStore())
+
+        // 1. Transport throws before any response arrives.
+        model.pairingCode = "483911"
+        await model.refreshFacts()
+        #expect(model.facts == nil)
+        #expect(model.preview == .unreachable)
+        let unreachableNotice = try #require(PairingView.previewFailureNotice(for: model.preview))
+        #expect(unreachableNotice.keyword == "Unreachable")
+
+        // 2. Non-200/403 HTTP status.
+        transport.set(.respond(status: .badGateway, contentType: "text/plain", body: "bad gateway"))
+        await model.refreshFacts()
+        #expect(model.facts == nil)
+        #expect(model.preview == .unexpectedAnswer(statusCode: 502))
+        let statusNotice = try #require(PairingView.previewFailureNotice(for: model.preview))
+        #expect(statusNotice.keyword == "Failed")
+        #expect(statusNotice.sentence.contains("HTTP 502"))
+
+        // 3. 200 whose body does not decode as PairingFacts.
+        transport.set(.respond(status: .ok, contentType: "application/json", body: "not-json"))
+        await model.refreshFacts()
+        #expect(model.facts == nil)
+        #expect(model.preview == .unexpectedAnswer(statusCode: 200))
+        let decodeNotice = try #require(PairingView.previewFailureNotice(for: model.preview))
+        #expect(decodeNotice.sentence.contains("HTTP 200"))
+        let nilStatusNotice = try #require(
+            PairingView.previewFailureNotice(for: .unexpectedAnswer(statusCode: nil)))
+        #expect(!nilStatusNotice.sentence.contains("HTTP"))
+
+        // Changing the code clears the failure.
+        model.pairingCode = "483912"
+        #expect(model.preview == .idle)
+
+        // Check Again on the failed code recovers once the daemon answers.
+        model.pairingCode = "483911"
+        transport.set(.failInTransit)
+        await model.refreshFacts()
+        #expect(model.preview == .unreachable)
+        transport.set(.forward(MockServerTransport(server: server)))
+        await model.refreshFacts()
+        #expect(model.facts == MockServer.pairingFacts)
+        #expect(model.preview == .idle)
+    }
+
+    @Test func previewReportsCheckingInFlightAndDropsStaleAnswers() async throws {
+        let server = MockServer(
+            authMode: .enforcing, pairingCodes: ["483911": .valid, "USEDUP": .consumed])
+        let box = PreviewModelBox()
+        let transport = HookOnPreviewTransport(base: MockServerTransport(server: server)) {
+            await MainActor.run {
+                if let model = box.model {
+                    box.observedInFlight.append(model.preview)
+                    if let replacement = box.replaceCodeInFlight {
+                        model.pairingCode = replacement
+                    }
+                }
+            }
+        }
+        let client = APIClientFactory.live(
+            serverURL: try #require(URL(string: "http://127.0.0.1:8677")),
+            transport: transport
+        )
+        let model = PairingModel(client: client, credentials: InMemoryCredentialStore())
+        box.model = model
+
+        model.pairingCode = "483911"
+        await model.refreshFacts()
+        #expect(box.observedInFlight == [.checking])
+        #expect(model.facts == MockServer.pairingFacts)
+        #expect(model.preview == .idle)
+
+        // Editing the code while a preview is in flight clears state and drops
+        // the earlier code's late refusal.
+        box.observedInFlight = []
+        box.replaceCodeInFlight = "483911"
+        model.pairingCode = "USEDUP"
+        await model.refreshFacts()
+        #expect(box.observedInFlight == [.checking])
+        #expect(model.pairingCode == "483911")
+        #expect(model.facts == nil)
+        #expect(model.preview == .idle)
+    }
+
+    @Test func previewDropsStaleSameCodeAnswerAfterNewerRefreshSettles() async throws {
+        // An older preview for the same code (for example, an overlapping
+        // Check Again task) must not overwrite a newer refresh's settled facts.
+        let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
+        let transport = HeldFirstPreviewTransport(
+            base: MockServerTransport(server: server),
+            firstAnswer: .failInTransit
+        )
+        let client = APIClientFactory.live(
+            serverURL: try #require(URL(string: "http://127.0.0.1:8677")),
+            transport: transport
+        )
+        let model = PairingModel(client: client, credentials: InMemoryCredentialStore())
+        model.pairingCode = "483911"
+
+        let staleRefresh = Task { await model.refreshFacts() }
+        await transport.waitUntilFirstArrived()
+        #expect(model.preview == .checking)
+
+        await model.refreshFacts()
+        #expect(model.facts == MockServer.pairingFacts)
+        #expect(model.preview == .idle)
+
+        transport.releaseFirst()
+        await staleRefresh.value
+
+        #expect(model.facts == MockServer.pairingFacts)
+        #expect(model.preview == .idle)
+    }
 
     @Test func pairingStoresTheCredentialAndReturnsIt() async throws {
         let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])

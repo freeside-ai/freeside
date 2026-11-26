@@ -60,6 +60,29 @@ struct PairingView: View {
             + "of every decision made from this device."
     }
 
+    static func previewFailureNotice(
+        for preview: PairingModel.PreviewState
+    ) -> (keyword: String, sentence: String)? {
+        switch preview {
+        case .idle, .checking, .refused:
+            nil
+        case .unreachable:
+            (
+                keyword: "Unreachable",
+                sentence:
+                    "Couldn't reach the daemon to check this code. "
+                    + "Check that it's running and that this device can reach its address."
+            )
+        case .unexpectedAnswer(let statusCode):
+            (
+                keyword: "Failed",
+                sentence: statusCode.map {
+                    "The daemon gave an unexpected answer (HTTP \($0)) when checking this code."
+                } ?? "The daemon gave an unexpected answer when checking this code."
+            )
+        }
+    }
+
     /// The one pairing composition, drawn live and by the screenshot suite.
     /// `now` fixes the clock the expiry row reads; nil lets it tick.
     /// `rendersInteractiveControls` false draws each field as static text,
@@ -127,19 +150,40 @@ struct PairingView: View {
                     FactGroup(spacing: 11) {
                         Self.detailsContent(facts, now: now)
                     }
-                } else if model.codeRefused {
-                    // The daemon refused the preview; without this the screen
-                    // would wait on host details that never come.
-                    Text("This code isn't valid or has expired; run `freesided pairing-code`")
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
                 } else {
-                    Text("Enter a code to see host details")
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
+                    switch model.preview {
+                    case .refused:
+                        // The daemon refused the preview; without this the screen
+                        // would wait on host details that never come.
+                        Text("This code isn't valid or has expired; run `freesided pairing-code`")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                    case .checking:
+                        Text("Checking this code with the daemon")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                    case .unreachable, .unexpectedAnswer:
+                        Text("No host details")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                    case .idle:
+                        Text("Enter a code to see host details")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if model.facts == nil, let failure = Self.previewFailureNotice(for: model.preview) {
+                Notice(
+                    tone: .wax,
+                    keyword: failure.keyword,
+                    sentence: failure.sentence,
+                    action: Notice.Action(label: "Check Again", isEnabled: model.phase != .pairing) {
+                        Task { await model.refreshFacts() }
+                    }
+                )
+            }
             if case .failed(let message) = model.codeRequest {
                 Notice(tone: .wax, keyword: "No code", sentence: message)
                     .accessibilityElement(children: .combine)

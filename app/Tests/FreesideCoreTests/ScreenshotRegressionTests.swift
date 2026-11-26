@@ -1,6 +1,8 @@
 #if os(macOS)
     import AppKit
     import FreesideAPI
+    import HTTPTypes
+    import OpenAPIRuntime
     import SwiftUI
     import Testing
 
@@ -43,6 +45,18 @@
         private struct RefusingPairingCodeSource: PairingCodeSource {
             func mint() async throws(PairingCodeFailure) -> MintedPairingCode {
                 throw .refused(exitStatus: 1)
+            }
+        }
+
+        /// A transport that fails before any response arrives, for the pairing
+        /// screen's unreachable-preview notice.
+        private struct UnreachableTransport: ClientTransport {
+            struct Outage: Error {}
+
+            func send(
+                _ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID: String
+            ) async throws -> (HTTPResponse, HTTPBody?) {
+                throw Outage()
             }
         }
 
@@ -4259,12 +4273,31 @@
             )
             refusedCode.displayName = "Operator's iPhone"
             await refusedCode.refreshFacts()
-            #expect(refusedCode.codeRefused)
+            #expect(refusedCode.preview == .refused)
             surfaces.append(
                 Surface(
                     name: "pairing-refused-code",
                     view: AnyView(
                         PairingView(model: refusedCode) { _ in }.screenshotContent(now: screenshotNow))
+                ))
+            // The preview failed in transit: the facts slot shows no host
+            // details, and a wax notice offers Check Again.
+            let unreachablePairing = PairingModel(
+                client: APIClientFactory.live(
+                    serverURL: try #require(URL(string: "http://127.0.0.1:8677")),
+                    transport: UnreachableTransport()
+                ),
+                credentials: InMemoryCredentialStore(),
+                pairingCode: "483911"
+            )
+            unreachablePairing.displayName = "Operator's Mac"
+            await unreachablePairing.refreshFacts()
+            #expect(unreachablePairing.preview == .unreachable)
+            surfaces.append(
+                Surface(
+                    name: "pairing-unreachable",
+                    view: AnyView(
+                        PairingView(model: unreachablePairing) { _ in }.screenshotContent(now: screenshotNow))
                 ))
             // The Mac pairing with its own daemon: Get Code beside the
             // field, after a request that failed, so the notice draws too.
@@ -5007,7 +5040,7 @@
             }
             for surface in surfaces
             where [
-                "pairing", "freshness-banner-stale", "freshness-banner-incompatible",
+                "pairing", "pairing-unreachable", "freshness-banner-stale", "freshness-banner-incompatible",
             ].contains(surface.name) {
                 surfaces.append(
                     Surface(
