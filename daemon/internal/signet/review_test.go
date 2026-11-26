@@ -682,8 +682,9 @@ func TestRunReviewRemediationLineageFailsClosed(t *testing.T) {
 		}
 	})
 	t.Run("remediation names no finding and no check failure authority", func(t *testing.T) {
-		// Only a check_failure cycle's remediation may name no finding
-		// (issue #3598); one with no authority to admit it proves nothing.
+		// Only a check_failure or handoff_conflict cycle's first
+		// remediation may name no finding (issues #3598 and #3609); one
+		// with no authority to admit it proves nothing.
 		f := newReviewSubjectFixture(t)
 		f.decideRemediation(t, func(intent *domain.RemediationInvocationIntent) {
 			intent.FindingIDs, intent.AdjudicationDigest = nil, ""
