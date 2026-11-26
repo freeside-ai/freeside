@@ -672,7 +672,14 @@
 
         /// The list with its sections held open or shut, one task standing in
         /// Needs you among the scoped items. The canvas frames these match
-        /// are named in the unit's decision note.
+        /// are named in the unit's decision note. The task holds two more
+        /// decisions behind its spec approval, so its row trails `+2`
+        /// (#3670); the default inbox lists spec approval first, so it still
+        /// leads the row.
+        private static let listTaskItemIDs: Set<String> = [
+            "item-spec_approval", "item-review_contradiction", "item-review_configuration",
+        ]
+
         private func unifiedListSurfaces(
             inbox: [Components.Schemas.AttentionItemSnapshot],
             tasks: [Components.Schemas.TaskSnapshot],
@@ -682,7 +689,7 @@
             store.replaceAll(
                 with: inbox.map { snapshot in
                     var snapshot = snapshot
-                    if snapshot.item.id == "item-spec_approval" {
+                    if Self.listTaskItemIDs.contains(snapshot.item.id) {
                         snapshot.item.subject = .task(
                             .init(
                                 subject_type: .task, subject_id: TaskFixtures.retryTaskID,

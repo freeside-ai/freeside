@@ -537,7 +537,8 @@ struct UnifiedListView: View {
                         task: task,
                         context: identifier
                             ? "\(context) · \(TaskDisplay.lookAlikeMarker(task, now: now ?? .now, locale: locale, timeZone: timeZone))"
-                            : context),
+                            : context,
+                        otherDecisions: row.otherOpenDecisionCount),
                     isSelected: isSelected, now: now)
             } else {
                 TaskRowView(
@@ -976,21 +977,22 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
 
     /// The keyword sized to its own height so a long one wraps at the large
     /// text sizes; left flexible, the stacked header truncated it. The
-    /// Agent mark sits beside it where both fit on one line and under it
-    /// otherwise, so a long status wraps at its words, never inside one.
+    /// keyword's marks (Agent, `+N`) sit beside it where they fit on one
+    /// line and under it otherwise, so a long status wraps at its words,
+    /// never inside one.
     private var keywordLine: some View {
         let word = KeywordLabel(text: keyword.text, color: keyword.color, isStrong: keyword.isStrong)
             .fixedSize(horizontal: false, vertical: true)
         return Group {
-            if keyword.marksAgent {
+            if keyword.marksAgent || keyword.moreDecisions > 0 {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         word
-                        KeywordLabel(text: "Agent")
+                        keywordMarks
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         word
-                        KeywordLabel(text: "Agent")
+                        keywordMarks
                     }
                 }
             } else {
@@ -998,6 +1000,27 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
             }
         }
         .accessibilityHidden(!keyword.isSpoken)
+    }
+
+    private var keywordMarks: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if keyword.marksAgent {
+                KeywordLabel(text: "Agent")
+            }
+            if keyword.moreDecisions > 0 {
+                // The attention chip's face and colors without its vertical
+                // padding, so the mark doesn't make the row taller.
+                Text("+\(keyword.moreDecisions)")
+                    .font(FreesideFont.chip)
+                    .foregroundStyle(StateChipCut.attention.text)
+                    .padding(.horizontal, 5)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3).strokeBorder(StateChipCut.attention.border, lineWidth: 1)
+                    )
+                    .fixedSize()
+                    .accessibilityLabel(UnifiedRow.moreDecisionsSpoken(keyword.moreDecisions))
+            }
+        }
     }
 
     @ViewBuilder
@@ -1044,6 +1067,9 @@ struct SidebarRowKeyword {
     /// True draws the word in the keyword's semibold face.
     var isStrong = false
     var marksAgent = false
+    /// The task's other open decisions (#3670), drawn as `+N` beside the
+    /// word; 0 draws nothing.
+    var moreDecisions = 0
     /// False where the row speaks this line elsewhere, in its own order.
     var isSpoken = true
 }
@@ -1064,6 +1090,8 @@ struct InboxRowView: View {
     struct TaskHeading {
         let task: Components.Schemas.Task
         let context: String
+        /// The task's open decisions other than this row's item.
+        var otherDecisions = 0
     }
 
     let item: Components.Schemas.AttentionItem
@@ -1094,7 +1122,9 @@ struct InboxRowView: View {
         // The keyword is the word the decision card's eyebrow uses for this
         // item (R27), so the row and the card it opens name the type alike.
         return SidebarRow(
-            keyword: .init(text: DecisionCardComposition.eyebrow(for: item).keyword),
+            keyword: .init(
+                text: DecisionCardComposition.eyebrow(for: item).keyword,
+                moreDecisions: task?.otherDecisions ?? 0),
             time: time, isSelected: isSelected, showsUnviewedDot: isUnviewed, hasBadges: hasBadges
         ) {
             rowBadges
