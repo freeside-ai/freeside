@@ -53,10 +53,28 @@
             }
         }
 
+        /// The standing stopped notice shown while unattended operation is
+        /// stopped: the in-window indicator's sentence, its action button's
+        /// label, and the open item its action lands on, if any.
+        public struct StoppedNotice: Equatable, Sendable {
+            public let sentence: String
+            public let actionTitle: String
+            public let itemID: String?
+
+            public init(sentence: String, actionTitle: String, itemID: String?) {
+                self.sentence = sentence
+                self.actionTitle = actionTitle
+                self.itemID = itemID
+            }
+        }
+
         public struct Actions {
             public let openApp: () -> Void
             public let showNeedsYou: () -> Void
             public let showSystemHealth: () -> Void
+            /// Opens System Health, seating the stop's item card when one is
+            /// named.
+            public let openStopItem: (String?) -> Void
             public let pairDevice: () -> Void
             public let start: () -> Void
             public let stop: () -> Void
@@ -67,6 +85,7 @@
                 openApp: @escaping () -> Void,
                 showNeedsYou: @escaping () -> Void,
                 showSystemHealth: @escaping () -> Void,
+                openStopItem: @escaping (String?) -> Void,
                 pairDevice: @escaping () -> Void,
                 start: @escaping () -> Void,
                 stop: @escaping () -> Void,
@@ -76,6 +95,7 @@
                 self.openApp = openApp
                 self.showNeedsYou = showNeedsYou
                 self.showSystemHealth = showSystemHealth
+                self.openStopItem = openStopItem
                 self.pairDevice = pairDevice
                 self.start = start
                 self.stop = stop
@@ -92,6 +112,7 @@
             case showSystemHealth
             case pairDevice
             case openApprovalSettings
+            case stopAction
             case control
             case quit
         }
@@ -100,11 +121,11 @@
         let actionError: String?
         let needsYou: NeedsYouCount?
         let systemHealth: SystemHealthCount?
-        /// The standing stopped indicator's message while unattended
-        /// operation is stopped; nil when admission is open or unknown. This
-        /// is the daemon's operating state, not its process state: a running
-        /// daemon can have unattended operation stopped.
-        let unattendedStopped: String?
+        /// The standing stopped notice while unattended operation is stopped;
+        /// nil when admission is open or unknown. This is the daemon's
+        /// operating state, not its process state: a running daemon can have
+        /// unattended operation stopped.
+        let unattendedStopped: StoppedNotice?
         let actions: Actions
         /// The row a screenshot golden shows hovered; the live panel reads
         /// the pointer instead.
@@ -130,7 +151,7 @@
             actionError: String?,
             needsYou: NeedsYouCount?,
             systemHealth: SystemHealthCount? = nil,
-            unattendedStopped: String? = nil,
+            unattendedStopped: StoppedNotice? = nil,
             actions: Actions
         ) {
             self.state = state
@@ -191,7 +212,11 @@
                     }
                 }
                 if let unattendedStopped {
-                    panelNotice(Notice(tone: .wax, keyword: "Stopped", sentence: unattendedStopped))
+                    panelNotice(
+                        Notice(
+                            tone: .wax, keyword: "Stopped", sentence: unattendedStopped.sentence,
+                            action: stopAction(for: unattendedStopped)),
+                        children: .contain)
                 }
                 if let actionError {
                     panelNotice(Notice(tone: .wax, keyword: "Failed", sentence: actionError))
@@ -408,13 +433,24 @@
                     sentence: CompatibilityWords(incompatibility: incompatibility, platform: .mac).notice))
         }
 
-        /// A notice inside the Daemon section, inset to the rows' text edge
-        /// and read by VoiceOver as one element.
-        private func panelNotice(_ notice: Notice) -> some View {
+        /// The stopped notice's action: opens System Health on the stop's
+        /// item when one is open, then dismisses the panel like a row.
+        func stopAction(for notice: StoppedNotice) -> Notice.Action {
+            .init(label: notice.actionTitle, isHighlighted: highlightedRow == .stopAction) {
+                perform { actions.openStopItem(notice.itemID) }
+            }
+        }
+
+        /// A notice inside the Daemon section, inset to the rows' text edge.
+        /// Plain notices combine into one VoiceOver element; a notice carrying
+        /// an action passes `.contain` so VoiceOver reaches its button.
+        private func panelNotice(
+            _ notice: Notice, children: AccessibilityChildBehavior = .combine
+        ) -> some View {
             notice
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: children)
         }
 
         // MARK: Control
@@ -455,7 +491,7 @@
 
         // MARK: Keyboard
 
-        private var keyboardOrder: [Row] {
+        var keyboardOrder: [Row] {
             var order: [Row] = [.openApp]
             if needsYou != nil {
                 order.append(.showNeedsYou)
@@ -468,6 +504,9 @@
             }
             if state == .needsApproval {
                 order.append(.openApprovalSettings)
+            }
+            if unattendedStopped != nil {
+                order.append(.stopAction)
             }
             if control != nil {
                 order.append(.control)
@@ -500,6 +539,9 @@
                 perform(actions.pairDevice)
             case .openApprovalSettings:
                 perform(actions.openApprovalSettings)
+            case .stopAction:
+                guard let unattendedStopped else { return .ignored }
+                perform { actions.openStopItem(unattendedStopped.itemID) }
             case .control:
                 switch control {
                 case .start: actions.start()
