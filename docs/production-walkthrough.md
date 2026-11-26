@@ -427,7 +427,7 @@ is the authority for the settings, and it changes. The pre-spend record's
 | Settings, every key | `<root>/daemon/settings.json`, mode `0600`: prompt packages from the approved default-branch commit, the approved recipe digest | The deputy, before it takes the lease: a missing, unknown, or repeated key (`requireEveryKey`, `daemon/cmd/freesided/deputy_settings.go`), a relative path, an invalid prompt package. A stale package passes every check; only the person preparing the run catches it (run-70 lost its publication to one). |
 | Project | `submit -project`: the settings' `repository.project`, the managed repository's name with no run suffix | `freesided submit`, which requires it; composition preflight refuses a project the launch does not admit |
 | Specification | `submit -task`: a file holding exactly the target's bare canonical issue URL, or a specification file | `freesided submit`, which requires it |
-| Policy | `submit -policy`: the resolved policy keys, including `gates.spec_approval` and `gates.source_issue_closure` | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
+| Policy | `submit -policy`: the base policy keys, including `paths`, `research.allowlist`, and `gates.spec_approval` (the Workflow pane's six keys resolve from the store's layers) | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
 | Publication | `submit -publication`: for a bare-URL target, the client record with `source_issue` set to that same URL ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)) | Composition preflight and `freesided submit` (`submittedSourceReference`, `daemon/cmd/freesided/submit.go`) |
 | Work-unit declaration | `submit -work-unit`: at least `{"completion_criterion": "bound_pr_merged"}` | Composition preflight and `freesided submit` (`errWorkUnitRequired`, same file). A task accepted without one never records completion (#1931). |
 | Writer lineup | The settings' `writers.*` and `judgment.*` keys, chosen under [Choose The Real Run's Writers](#choose-the-real-runs-writers) | The lineup probe, for a model the pinned CLIs don't serve, except the escalated specifier's (#3037). Nothing refuses a weak choice. |
@@ -719,9 +719,10 @@ there, every later pass would hold at publication with `external_conflict`
 (#2339).
 The work-unit declaration is `{"completion_criterion": "bound_pr_merged"}`.
 The policy file names the settings' `allowed_paths` in `paths`, includes
-`https://api.github.com` in `research.allowlist`, sets `gates.spec_approval`
-to `false`, and leaves `gates.source_issue_closure` absent or `false`, so
-neither a specification nor a closure card waits for a person. These are the
+`https://api.github.com` in `research.allowlist`, and sets
+`gates.spec_approval` to `false`. It omits `gates.source_issue_closure`, which
+the Workflow pane decides. With no layer set, its default (`false`) applies,
+so neither a specification nor a closure card waits for a person. These are the
 CLI-mode rows of [The Inputs And What Refuses Them](#the-inputs-and-what-refuses-them),
 so the pass exercises each of them. It leaves `manual_submission_config`
 empty, so in client-target mode the real run's deputy start is the first
@@ -1252,7 +1253,8 @@ carries depends on where the issue lives:
 
 - **An issue in the managed repository:** `Closes #<number>`, or
   `Refs #<number>` when the closure is declined. Under the human closure
-  gate (`gates.source_issue_closure` set to `true` in the policy file), the
+  gate (`gates.source_issue_closure` set to `true` in the app's Workflow
+  settings pane), the
   publisher opens the pull request as a draft carrying `Refs #<number>` and
   holds it there until the closure card is decided. An approval that keeps
   the resolves flag marks it ready with `Closes #<number>`; a decline, or an

@@ -2644,14 +2644,16 @@ Six keys belong to the app's Workflow settings pane, not this file:
 `gates.source_issue_closure`, `follow_up_filing.max_per_day`,
 `follow_up_filing.max_per_run`, and `follow_up_filing.max_depth`. A paired
 client sets each one generally or for one configured project
-(`set_workflow_policy`), and every client and label-intake task resolves it
-when the task is created: the project's value, else the general value, else
-the default (`false` for a gate; 10, 5, and 2 for the caps). The run's
-resolved policy records the winning layer as the key's provenance (`project`,
-`general`, or `preset` for the default), and a run already created keeps its
-policy. A file that still sets one of these keys loads without it, and the
-daemon logs a warning naming the project and key at startup.
-`freesided submit -policy` still reads them from its own file.
+(`set_workflow_policy`), and every task (paired client, label intake, and
+`freesided submit`) resolves it when the task is created: the project's value,
+else the general value, else the default (`false` for a gate; 10, 5, and 2 for
+the caps). The run's resolved policy records the winning layer as the key's
+provenance (`project`, `general`, or `preset` for the default), and a run
+already created keeps its policy. A manual-submission config file that still
+sets one of these keys loads without it, and the daemon logs a warning naming
+the project and key at startup. A `-policy` file passed to `freesided submit`
+that sets one of these keys does not override the store layers for new work,
+and `submit` prints a warning to stderr naming the key and its value.
 
 Changing the file requires a daemon restart and affects only new submissions.
 An explicit manual Retry of a recorded command returns its original result,
@@ -2663,10 +2665,9 @@ submission to the deputy, use the [production walkthrough](../docs/production-wa
 
 The resolved-policy key `gates.source_issue_closure` decides how a published
 pull request references a source issue it can close: a daemon-bound issue
-subject, or a bare issue URL in the target repository. For client and
-label-intake tasks, set it in the app's Workflow settings pane; for
-`freesided submit`, set it in the array that `-policy` reads. Each run stores
-its resolved policy, so a changed value affects only later runs.
+subject, or a bare issue URL in the target repository. Set it in the app's
+Workflow settings pane for every task, including `freesided submit`. Each run
+stores its resolved policy, so a changed value affects only later runs.
 
 | Value | What a closable source gets |
 | --- | --- |
