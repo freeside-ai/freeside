@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/cordon"
+	"github.com/freeside-ai/freeside/daemon/internal/cordonhost"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -411,6 +412,8 @@ func TestCordonPortError(t *testing.T) {
 		{"not streamed", fmt.Errorf("%w: r", cordon.ErrNotStreamed), stage.ErrCordonNotStreamed, false},
 		{"not taken", fmt.Errorf("%w: r", cordon.ErrNotTaken), stage.ErrCordonNotTaken, false},
 		{"not started", fmt.Errorf("%w: r", cordon.ErrNotStarted), stage.ErrCordonNotStarted, false},
+		{"host export refused", fmt.Errorf("%w: too many entries", cordonhost.ErrExportRefused), cordonhost.ErrExportRefused, true},
+		{"host export cut", fmt.Errorf("%w: the export ended mid-chunk", cordonhost.ErrProtocol), cordonhost.ErrProtocol, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

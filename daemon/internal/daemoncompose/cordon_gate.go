@@ -456,6 +456,10 @@ func cordonPortError(err error) error {
 		return fmt.Errorf("%w: %w", stage.ErrCordonCanceled, err)
 	case errors.Is(err, cordon.ErrNotExportable):
 		return &stage.CordonExportRefusal{Reason: "the writer did not exit cleanly", Err: err}
+	// A host's export that the receipt refused for what it holds comes the
+	// same on every ask; one cut short stays retryable.
+	case errors.Is(err, cordonhost.ErrExportRefused):
+		return &stage.CordonExportRefusal{Reason: "the export its host returned failed the receipt's checks", Err: err}
 	}
 	return err
 }

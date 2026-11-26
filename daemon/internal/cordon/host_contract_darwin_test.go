@@ -26,10 +26,11 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/cordon"
 	"github.com/freeside-ai/freeside/daemon/internal/cordonhost"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
 
-// The host launcher's contract suite: the same launch, cancellation, and
-// recovery cases run at the backend seam against *cordon.Backend in this
+// The host launcher's contract suite: the same launch, cancellation,
+// recovery, and export cases run at the backend seam against *cordon.Backend in this
 // process and against a cordonhost.Client talking to a served backend over
 // a Unix socket, so a launch behind the launcher ends, fails, and recovers
 // as a local one does. It sits in this package's tests, not cordonhost's,
@@ -49,16 +50,19 @@ func init() { cordon.RegisterTestVerb(serveVerb, serveForTest) }
 type seam interface {
 	Launch(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
 	Recover(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
+	Export(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
+	AuthenticateReleasedExport(ctx context.Context, runID, dir string) error
 	Detach()
 }
 
-// opener readies a seam over cfg's runs root and returns how to open one;
-// a second open is a restarted daemon's.
-type opener func(t *testing.T, cfg cordon.Config) func() seam
+// opener readies a seam over cfg's runs root, seeding on the daemon's side
+// with seeder, and returns how to open one; a second open is a restarted
+// daemon's.
+type opener func(t *testing.T, cfg cordon.Config, seeder cordon.Seeder) func() seam
 
-func inProcess(t *testing.T, cfg cordon.Config) func() seam {
+func inProcess(t *testing.T, cfg cordon.Config, seeder cordon.Seeder) func() seam {
 	return func() seam {
-		b, err := cordon.New(cfg, moduleSeeder{})
+		b, err := cordon.New(cfg, seeder)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,8 +70,8 @@ func inProcess(t *testing.T, cfg cordon.Config) func() seam {
 	}
 }
 
-func served(t *testing.T, cfg cordon.Config) func() seam {
-	h := newServedHost(t, cfg, moduleSeeder{})
+func served(t *testing.T, cfg cordon.Config, seeder cordon.Seeder) func() seam {
+	h := newServedHost(t, cfg, seeder)
 	return func() seam { return h.client(t, &records{}) }
 }
 
@@ -82,7 +86,7 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 			t.Run("clean exit", func(t *testing.T) {
 				t.Parallel()
 				cfg := cordon.HostConfig(t)
-				got, err := open(t, cfg)().Launch(t.Context(), cordon.HostRequest("clean", "", "spawn", "exit"))
+				got, err := open(t, cfg, moduleSeeder{})().Launch(t.Context(), cordon.HostRequest("clean", "", "spawn", "exit"))
 				if err != nil {
 					t.Fatalf("Launch: %v", err)
 				}
@@ -94,7 +98,7 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 			t.Run("failed exit", func(t *testing.T) {
 				t.Parallel()
 				cfg := cordon.HostConfig(t)
-				got, err := open(t, cfg)().Launch(t.Context(), cordon.HostRequest("failed", "", "exit", "3", "the", "failure"))
+				got, err := open(t, cfg, moduleSeeder{})().Launch(t.Context(), cordon.HostRequest("failed", "", "exit", "3", "the", "failure"))
 				if err != nil {
 					t.Fatalf("Launch: %v", err)
 				}
@@ -106,7 +110,7 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 			t.Run("cancellation", func(t *testing.T) {
 				t.Parallel()
 				cfg := cordon.HostConfig(t)
-				launcher := open(t, cfg)()
+				launcher := open(t, cfg, moduleSeeder{})()
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				go func() {
@@ -126,7 +130,7 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 				t.Parallel()
 				cfg := cordon.HostConfig(t)
 				cfg.StallLimit = 2 * time.Second
-				got, err := open(t, cfg)().Launch(t.Context(), cordon.HostRequest("stalled", "", "spawn", "silent"))
+				got, err := open(t, cfg, moduleSeeder{})().Launch(t.Context(), cordon.HostRequest("stalled", "", "spawn", "silent"))
 				if err != nil {
 					t.Fatalf("Launch: %v", err)
 				}
@@ -138,7 +142,7 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 			t.Run("recovery after detach", func(t *testing.T) {
 				t.Parallel()
 				cfg := cordon.HostConfig(t)
-				seams := open(t, cfg)
+				seams := open(t, cfg, moduleSeeder{})
 				first := seams()
 				launched := make(chan error, 1)
 				go func() {
@@ -157,8 +161,146 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 				requireFailedRecovery(t, got)
 				requireSurvivorsDead(t, cfg, "detached")
 			})
+			t.Run("clean exit exports", func(t *testing.T) {
+				t.Parallel()
+				cfg := cordon.HostConfig(t)
+				base, baseSHA := gitBase(t)
+				s := open(t, cfg, cordon.GitSeeder(base))()
+				// The line is the change the import carries and, printed, a
+				// transcript the importer reads as JSONL.
+				req := cordon.HostRequest("exported", "", "write", "result.json", `{"type":"result"}`)
+				req.BaseSHA = baseSHA
+				if got, err := s.Launch(t.Context(), req); err != nil || got.ExitCode != 0 {
+					t.Fatalf("Launch = %+v, %v", got, err)
+				}
+				res, err := s.Export(t.Context(), cordon.ExportRequestFor("exported"))
+				if err != nil {
+					t.Fatalf("Export: %v", err)
+				}
+				if res.BaseSHA != baseSHA {
+					t.Fatalf("exported from %s, want %s", res.BaseSHA, baseSHA)
+				}
+				if err := s.AuthenticateReleasedExport(t.Context(), "exported", res.Dir); err != nil {
+					t.Fatalf("AuthenticateReleasedExport: %v", err)
+				}
+				// The backend's own export of the worktree, which on the served
+				// seam stays on the launcher's side.
+				want := importedTree(t, base, cordon.ExportDir(cfg, "exported"), baseSHA)
+				if got := importedTree(t, base, res.Dir, baseSHA); got != want {
+					t.Fatalf("imported tree %s, want the in-process export's %s", got, want)
+				}
+			})
+			t.Run("recovery after detach exports", func(t *testing.T) {
+				t.Parallel()
+				cfg := cordon.HostConfig(t)
+				seams := open(t, cfg, moduleSeeder{})
+				first := seams()
+				launched := make(chan error, 1)
+				go func() {
+					_, err := first.Launch(t.Context(), cordon.HostRequest("detached", "", "spawn", "release", "0"))
+					launched <- err
+				}()
+				startedAgent(t, cfg, "detached")
+				first.Detach()
+				if err := <-launched; !errors.Is(err, cordon.ErrDetached) {
+					t.Fatalf("Launch after Detach = %v, want ErrDetached", err)
+				}
+				s := seams()
+				got := recoverReleased(t, s, cfg, "detached")
+				if got.Outcome != cordon.RecoveryExported || got.EndedBy != cordon.EndedByExited || got.Export.Dir == "" {
+					t.Fatalf("Recover = %+v, want an export", got)
+				}
+				if err := s.AuthenticateReleasedExport(t.Context(), "detached", got.Export.Dir); err != nil {
+					t.Fatalf("AuthenticateReleasedExport: %v", err)
+				}
+				requireSurvivorsDead(t, cfg, "detached")
+			})
 		})
 	}
+}
+
+// TestAServedExportWaitsForTheEndAndLastsUntilRelease asks a launcher to
+// export a run still running and a run it never launched: each is refused
+// as the backend's ErrNoEndRecord and the launcher writes no export. Once
+// the run ends clean it exports, and its directory on the launcher and the
+// client's receipt both last until ReleaseFinished removes them.
+func TestAServedExportWaitsForTheEndAndLastsUntilRelease(t *testing.T) {
+	t.Parallel()
+	cfg := cordon.HostConfig(t)
+	h := newServedHost(t, cfg, moduleSeeder{})
+	client := h.client(t, &records{})
+	launched := make(chan error, 1)
+	go func() {
+		got, err := client.Launch(t.Context(), cordon.HostRequest("running", "", "spawn", "release", "0"))
+		if err == nil && got.ExitCode != 0 {
+			err = fmt.Errorf("exit %d", got.ExitCode)
+		}
+		launched <- err
+	}()
+	startedAgent(t, cfg, "running")
+	for _, runID := range []string{"running", "never"} {
+		if _, err := client.Export(t.Context(), cordon.ExportRequestFor(runID)); !errors.Is(err, cordon.ErrNoEndRecord) {
+			t.Fatalf("exporting %s = %v, want ErrNoEndRecord", runID, err)
+		}
+		if _, err := os.Lstat(cordon.ExportDir(cfg, runID)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("a refused export of %s wrote one: %v", runID, err)
+		}
+	}
+	if entries, err := os.ReadDir(h.exports); err != nil || len(entries) != 0 {
+		t.Fatalf("refused exports left %v, %v", entries, err)
+	}
+	if err := os.WriteFile(filepath.Join(cordon.Worktree(cfg, "running"), "release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-launched; err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if _, err := client.Export(t.Context(), cordon.ExportRequestFor("running")); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	receipt := filepath.Join(h.exports, "running")
+	for _, dir := range []string{cordon.RunDir(cfg, "running"), receipt} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("before release: %v", err)
+		}
+	}
+	if err := client.ReleaseFinished(t.Context(), []string{"running"}); err != nil {
+		t.Fatalf("ReleaseFinished: %v", err)
+	}
+	for _, dir := range []string{cordon.RunDir(cfg, "running"), receipt} {
+		if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("after release %s: %v", dir, err)
+		}
+	}
+}
+
+// gitBase is a repository holding one commit, and that commit.
+func gitBase(t *testing.T) (string, string) {
+	t.Helper()
+	base := t.TempDir()
+	cordon.Git(t, base, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(base, "README"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cordon.Git(t, base, "add", "README")
+	cordon.Git(t, base, "commit", "-q", "-m", "base")
+	return base, cordon.Git(t, base, "rev-parse", "HEAD")
+}
+
+// importedTree imports the export in dir into a fresh clone of base and
+// returns the tree the importer committed, which must change something.
+func importedTree(t *testing.T, base, dir, baseSHA string) string {
+	t.Helper()
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	cordon.Git(t, "", "clone", "-q", base, checkout)
+	got, err := importer.Import(t.Context(), dir, checkout, importer.Options{BaseSHA: baseSHA, CommitDate: time.Unix(1_700_000_000, 0)})
+	if err != nil {
+		t.Fatalf("Import %s: %v", dir, err)
+	}
+	if len(got.Changes) == 0 {
+		t.Fatalf("Import %s changed nothing", dir)
+	}
+	return cordon.Git(t, checkout, "rev-parse", got.CommitSHA+"^{tree}")
 }
 
 // TestAServedLaunchSeedsTheExactBaseAndCarriesNoToken launches through the
@@ -422,16 +564,19 @@ type servedHost struct {
 	backend           *cordon.Backend
 	socket            string
 	seedRoot, scratch string
-	clientSeeder      cordon.Seeder
-	log               *syncBuffer
-	ownSeeds          *countingSeeder
+	// exports is every client's ExportRoot, so a fresh client finds the
+	// receipts an earlier one kept.
+	exports      string
+	clientSeeder cordon.Seeder
+	log          *syncBuffer
+	ownSeeds     *countingSeeder
 }
 
 func newServedHost(t *testing.T, cfg cordon.Config, clientSeeder cordon.Seeder, configure ...func(*cordon.Backend)) *servedHost {
 	t.Helper()
 	h := &servedHost{
 		socket: filepath.Join(shortDir(t), "l.sock"), seedRoot: filepath.Join(t.TempDir(), "seeds"),
-		scratch: t.TempDir(), clientSeeder: clientSeeder, log: &syncBuffer{}, ownSeeds: &countingSeeder{},
+		scratch: t.TempDir(), exports: t.TempDir(), clientSeeder: clientSeeder, log: &syncBuffer{}, ownSeeds: &countingSeeder{},
 	}
 	b, err := cordon.New(cfg, h.ownSeeds)
 	if err != nil {
@@ -470,6 +615,7 @@ func (h *servedHost) client(t *testing.T, rec cordon.ConformanceRecorder) *cordo
 	t.Helper()
 	c, err := cordonhost.NewClient(cordonhost.ClientConfig{
 		Socket: h.socket, Build: testBuild, Seeder: h.clientSeeder, Recorder: rec, ScratchRoot: h.scratch,
+		ExportRoot: h.exports,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -482,6 +628,7 @@ func newClient(t *testing.T, socket string, seeder cordon.Seeder, rec cordon.Con
 	t.Helper()
 	c, err := cordonhost.NewClient(cordonhost.ClientConfig{
 		Socket: socket, Build: testBuild, Seeder: seeder, Recorder: rec, ScratchRoot: t.TempDir(),
+		ExportRoot: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)

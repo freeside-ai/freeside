@@ -14,7 +14,6 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/cordon"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -30,6 +29,7 @@ type served interface {
 	Started(context.Context, string) (bool, error)
 	RequestCancellation(context.Context, string) error
 	Recover(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
+	Export(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
 	ReleaseFinished(context.Context, []string) error
 	Detach()
 	HostFacts() (cordon.HostFacts, error)
@@ -62,8 +62,10 @@ type ServerConfig struct {
 // Server serves one backend and its suite to clients on the same host.
 //
 // Tier A: it receives a launch's token and hands it to the backend alone,
-// and reports a run's end only once the backend proved it. A client that
-// disconnects leaves its launch running; only a cancel frame cancels it.
+// reports a run's end only once the backend proved it, and streams an
+// export only once the backend's Export, which refuses a run with no end
+// record, wrote it. A client that disconnects leaves its launch running;
+// only a cancel frame cancels it.
 type Server struct {
 	build    string
 	backend  served
@@ -71,6 +73,12 @@ type Server struct {
 	seedRoot string
 	logger   *slog.Logger
 	awake    *awakeHolder
+	// exporting holds each run whose export or recovery is under way, so
+	// a client that reconnects after a dropped connection waits for the
+	// operation the drop left running rather than racing it: a recovery
+	// removes an export directory with no record, which is what an export
+	// still writing looks like.
+	exporting runLocks
 	// onFrame, when set, sees each frame's kind as the server reads it.
 	// Only this package's tests set it.
 	onFrame func(kind)
@@ -112,7 +120,8 @@ func newServer(build string, backend served, account Account, seedRoot string, l
 	}
 	return &Server{
 		build: build, backend: backend, account: account, seedRoot: seedRoot, logger: logger,
-		awake: &awakeHolder{logger: logger}, conns: map[net.Conn]struct{}{},
+		awake: &awakeHolder{logger: logger}, exporting: runLocks{held: map[string]chan struct{}{}},
+		conns: map[net.Conn]struct{}{},
 	}, nil
 }
 
@@ -208,6 +217,21 @@ func (c *connection) write(f frame) error {
 	return writeFrame(c.conn, f)
 }
 
+// reply writes the operation's reply and, when it names one, the export
+// directory's stream after it, under the write lock, so no record frame
+// lands between them.
+func (c *connection) reply(reply *replyBody, stream string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := writeFrame(c.conn, frame{Kind: kindReply, Reply: reply}); err != nil {
+		return err
+	}
+	if stream == "" {
+		return nil
+	}
+	return writeTree(c.conn, stream)
+}
+
 func (c *connection) leave() { c.goneOnce.Do(func() { close(c.gone) }) }
 
 type connKey struct{}
@@ -279,9 +303,15 @@ func (s *Server) serveConn(conn net.Conn) {
 		return
 	}
 	s.saw(req.Kind)
-	reply := s.handle(c, req)
-	if err := c.write(frame{Kind: kindReply, Reply: reply}); err != nil {
-		s.logger.Info("cordon host: the client left before the reply", "kind", req.Kind, "error", err)
+	if req.Kind == kindRecover || req.Kind == kindExport {
+		// Held through the export's stream, as through a launch.
+		release := s.awake.hold()
+		defer release()
+	}
+	reply, stream := s.handle(c, req)
+	if err := c.reply(reply, stream); err != nil {
+		// A stream cut here ends short at the client, which refuses it.
+		s.logger.Info("cordon host: the client left before the reply ended", "kind", req.Kind, "error", err)
 	}
 }
 
@@ -302,9 +332,11 @@ func (s *Server) hello() *helloBody {
 	return h
 }
 
-// handle runs one request. Every operation but a launch ends when its
-// client leaves; a launch keeps running and only a cancel frame cancels it.
-func (s *Server) handle(c *connection, req frame) *replyBody {
+// handle runs one request and returns its reply and, for a reply that
+// carries an export, the directory to stream after it. Every operation but
+// a launch ends when its client leaves; a launch keeps running and only a
+// cancel frame cancels it.
+func (s *Server) handle(c *connection, req frame) (*replyBody, string) {
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), connKey{}, c))
 	defer cancel()
 	launch := req.Kind == kindLaunch
@@ -314,7 +346,7 @@ func (s *Server) handle(c *connection, req frame) *replyBody {
 		var refusal *replyBody
 		staged, token, refusal = s.receiveLaunch(c.conn, req.Launch)
 		if refusal != nil {
-			return refusal
+			return refusal, ""
 		}
 		defer func() {
 			if err := os.RemoveAll(staged); err != nil {
@@ -325,28 +357,28 @@ func (s *Server) handle(c *connection, req frame) *replyBody {
 	go s.read(c, cancel, launch)
 	switch req.Kind {
 	case kindLaunch:
-		return s.launch(ctx, req.Launch, staged, token)
+		return s.launch(ctx, req.Launch, staged, token), ""
 	case kindRecover:
 		return s.recover(ctx, req.Recover)
+	case kindExport:
+		return s.export(ctx, req.Export)
 	case kindStarted:
 		started, err := s.backend.Started(ctx, req.RunID)
 		if err != nil {
-			return refuse(err)
+			return refuse(err), ""
 		}
-		return &replyBody{Started: &started}
+		return &replyBody{Started: &started}, ""
 	case kindRequestCancellation:
-		return refuse(s.backend.RequestCancellation(ctx, req.RunID))
+		return refuse(s.backend.RequestCancellation(ctx, req.RunID)), ""
 	case kindReleaseFinished:
-		return refuse(s.backend.ReleaseFinished(ctx, req.RunIDs))
-	case kindExport, kindAuthenticate:
-		return refuse(ErrExportUnsupported)
+		return refuse(s.backend.ReleaseFinished(ctx, req.RunIDs)), ""
 	case kindFull:
-		return refuse(s.backend.Full(ctx))
+		return refuse(s.backend.Full(ctx)), ""
 	case kindProbeBeforeJob:
-		return refuse(s.backend.ProbeBeforeJob(ctx))
+		return refuse(s.backend.ProbeBeforeJob(ctx)), ""
 	case kindHello, kindCancel, kindRecord, kindRecorded, kindReply:
 	}
-	return refuse(fmt.Errorf("%w: a %s frame is not a request", ErrProtocol, req.Kind))
+	return refuse(fmt.Errorf("%w: a %s frame is not a request", ErrProtocol, req.Kind)), ""
 }
 
 // read takes the client's frames while its operation runs: a launch's
@@ -405,7 +437,7 @@ func (s *Server) receiveLaunch(r io.Reader, req *launchBody) (string, ward.Setup
 		// either way it is not this connection's to remove.
 		return "", ward.SetupToken{}, refuse(fmt.Errorf("cordonhost: stage %s's seed: %w", req.RunID, err))
 	}
-	if err := readSeed(r, filepath.Join(staged, "tree")); err != nil {
+	if err := readTree(r, filepath.Join(staged, "tree"), seedRules); err != nil {
 		if rmErr := os.RemoveAll(staged); rmErr != nil {
 			s.logger.Warn("cordon host: remove a staged seed", "run", req.RunID, "error", rmErr)
 		}
@@ -433,36 +465,99 @@ func (s *Server) launch(ctx context.Context, req *launchBody, staged string, tok
 	return &replyBody{End: failedEnd(endBody{EndedBy: res.EndedBy, ExitCode: res.ExitCode}, res.TranscriptPath, res.StderrPath)}
 }
 
-func (s *Server) recover(ctx context.Context, req *recoverBody) *replyBody {
-	release := s.awake.hold()
-	defer release()
-	res, err := s.backend.Recover(ctx, cordon.RecoverRequest{RunID: req.RunID, Export: cordon.ExportRequest{
-		RunID: req.RunID, Transcript: req.Transcript, Sources: req.Sources,
-	}})
-	// A run canceled between the end record's read and the export ended
-	// canceled; its refusal crosses as itself, not as an export's.
-	if !errors.Is(err, cordon.ErrCanceled) && exportRefusal(err) {
-		// Only a clean end's export fails these ways, and no export
-		// returns from a launcher yet.
-		return refuse(fmt.Errorf("%w: run %s's export on the launcher: %w", ErrExportUnsupported, req.RunID, err))
-	}
+func (s *Server) recover(ctx context.Context, body *exportRequestBody) (*replyBody, string) {
+	req := body.request()
+	unlock, err := s.exporting.lock(ctx, req.RunID)
 	if err != nil {
-		return refuse(err)
+		return refuse(err), ""
+	}
+	defer unlock()
+	res, err := s.backend.Recover(ctx, cordon.RecoverRequest{RunID: req.RunID, Export: req})
+	if err != nil {
+		return refuse(err), ""
 	}
 	s.logger.Info("cordon host: recovered", "run", req.RunID, "outcome", res.Outcome)
 	if res.Outcome == cordon.RecoveryExported {
-		return refuse(fmt.Errorf("%w: run %s exited cleanly and is exported on the launcher", ErrExportUnsupported, req.RunID))
+		// Only a clean exit exports. A cancellation requested after the
+		// export reads in the backend's end as canceled, but the export
+		// stands, and a client holding its receipt reports it the same way.
+		end := &endBody{Outcome: res.Outcome, EndedBy: cordon.EndedByExited}
+		return &replyBody{End: end, Export: &exportReplyBody{BaseSHA: res.Export.BaseSHA}}, res.Export.Dir
 	}
 	end := endBody{Outcome: res.Outcome, EndedBy: res.EndedBy, ExitCode: res.ExitCode, Reason: boundText(res.Reason)}
-	return &replyBody{End: failedEnd(end, res.TranscriptPath, res.StderrPath)}
+	return &replyBody{End: failedEnd(end, res.TranscriptPath, res.StderrPath)}, ""
 }
 
-// exportRefusal reports whether err is a refusal of the export step a
-// recovery of a clean end runs.
-func exportRefusal(err error) bool {
-	var scan *cordon.ScanRefusalError
-	return errors.As(err, &scan) || errors.Is(err, cordon.ErrWorktreeReplaced) ||
-		errors.Is(err, cordon.ErrNotExportable) || errors.Is(err, export.ErrLinkedFile)
+// export runs the backend's Export, which refuses a run with no end record
+// before it reads anything. A run already exported, or whose export a
+// dropped connection interrupted, is answered by Recover, which
+// authenticates the first and redoes the second; the run has an end
+// record, so Recover doesn't wait. The run's lock covers the export's
+// writing, not the stream that follows the reply: once the record exists,
+// another Export or Recover only reads the export, and a release that
+// removes it mid-stream cuts the stream, which the client asks for again.
+func (s *Server) export(ctx context.Context, body *exportRequestBody) (*replyBody, string) {
+	req := body.request()
+	unlock, err := s.exporting.lock(ctx, req.RunID)
+	if err != nil {
+		return refuse(err), ""
+	}
+	defer unlock()
+	res, err := s.backend.Export(ctx, req)
+	if errors.Is(err, cordon.ErrAlreadyExported) {
+		var rec cordon.RecoveryResult
+		rec, err = s.backend.Recover(ctx, cordon.RecoverRequest{RunID: req.RunID, Export: req})
+		switch {
+		case err != nil:
+		case rec.Outcome == cordon.RecoveryCanceled:
+			err = fmt.Errorf("%w: %w: %s", cordon.ErrCanceled, cordon.ErrNotExportable, req.RunID)
+		case rec.Outcome != cordon.RecoveryExported:
+			err = fmt.Errorf("%w: %s recovered %s", cordon.ErrNotExportable, req.RunID, rec.Outcome)
+		default:
+			res = rec.Export
+		}
+	}
+	if err != nil {
+		s.logger.Warn("cordon host: export refused", "run", req.RunID, "error", err)
+		return refuse(err), ""
+	}
+	s.logger.Info("cordon host: exported", "run", req.RunID)
+	return &replyBody{Export: &exportReplyBody{BaseSHA: res.BaseSHA}}, res.Dir
+}
+
+func (b *exportRequestBody) request() cordon.ExportRequest {
+	return cordon.ExportRequest{RunID: b.RunID, Transcript: b.Transcript, Sources: b.Sources}
+}
+
+// runLocks holds run IDs one at a time.
+type runLocks struct {
+	mu   sync.Mutex
+	held map[string]chan struct{}
+}
+
+// lock waits until runID is free and holds it, or returns ctx's error.
+func (l *runLocks) lock(ctx context.Context, runID string) (func(), error) {
+	for {
+		l.mu.Lock()
+		freed, busy := l.held[runID]
+		if !busy {
+			mine := make(chan struct{})
+			l.held[runID] = mine
+			l.mu.Unlock()
+			return func() {
+				l.mu.Lock()
+				delete(l.held, runID)
+				l.mu.Unlock()
+				close(mine)
+			}, nil
+		}
+		l.mu.Unlock()
+		select {
+		case <-freed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // failedEnd adds a failed end's transcript and stderr, the two files the

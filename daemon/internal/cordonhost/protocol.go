@@ -23,10 +23,6 @@ var (
 	// refusing each other at the hello. The protocol's version is the
 	// build's, so neither reads anything the other sends after it.
 	ErrBuildMismatch = errors.New("cordonhost: the client and the launcher are different builds")
-	// ErrExportUnsupported is the launcher's refusal of an export, a
-	// released export's authentication, and a recovery that would export:
-	// no export returns from a host yet (#3624).
-	ErrExportUnsupported = errors.New("cordonhost: the launcher returns no export yet")
 	// ErrMessageUnsupported is the client's refusal of an operator's
 	// message: the protocol carries none yet (#3702). It wraps
 	// cordon.ErrNotStreamed, so the gate settles the message refused as
@@ -49,7 +45,8 @@ const maxText = 4096
 // kind is a frame's kind. A connection carries one operation: the
 // client's hello and the launcher's, then the client's request, then the
 // launcher's reply, with record and recorded frames between them while the
-// launcher's suite writes a conformance record, and a launch's cancel.
+// launcher's suite writes a conformance record, and a launch's cancel. A
+// reply that carries an export is followed by the export's stream.
 type kind string
 
 const (
@@ -63,7 +60,6 @@ const (
 	kindRecover             kind = "recover"
 	kindReleaseFinished     kind = "release_finished"
 	kindExport              kind = "export"
-	kindAuthenticate        kind = "authenticate_released_export"
 	kindFull                kind = "full"
 	kindProbeBeforeJob      kind = "probe_before_job"
 	kindReply               kind = "reply"
@@ -72,13 +68,13 @@ const (
 // allKinds is the single registration point for kind.
 var allKinds = []kind{
 	kindHello, kindLaunch, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation,
-	kindRecover, kindReleaseFinished, kindExport, kindAuthenticate, kindFull, kindProbeBeforeJob, kindReply,
+	kindRecover, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply,
 }
 
 func (k kind) valid() bool {
 	switch k {
 	case kindHello, kindLaunch, kindCancel, kindRecord, kindRecorded, kindStarted, kindRequestCancellation,
-		kindRecover, kindReleaseFinished, kindExport, kindAuthenticate, kindFull, kindProbeBeforeJob, kindReply:
+		kindRecover, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob, kindReply:
 		return true
 	default:
 		return false
@@ -88,16 +84,16 @@ func (k kind) valid() bool {
 // frame is one message. Each kind carries exactly the fields fieldsOf
 // names; validate refuses any other.
 type frame struct {
-	Kind     kind          `json:"kind"`
-	Hello    *helloBody    `json:"hello,omitempty"`
-	Launch   *launchBody   `json:"launch,omitempty"`
-	Recover  *recoverBody  `json:"recover,omitempty"`
-	RunID    string        `json:"run_id,omitempty"`
-	RunIDs   []string      `json:"run_ids,omitempty"`
-	Dir      string        `json:"dir,omitempty"`
-	Record   *recordBody   `json:"record,omitempty"`
-	Recorded *recordedBody `json:"recorded,omitempty"`
-	Reply    *replyBody    `json:"reply,omitempty"`
+	Kind     kind               `json:"kind"`
+	Hello    *helloBody         `json:"hello,omitempty"`
+	Launch   *launchBody        `json:"launch,omitempty"`
+	Recover  *exportRequestBody `json:"recover,omitempty"`
+	Export   *exportRequestBody `json:"export,omitempty"`
+	RunID    string             `json:"run_id,omitempty"`
+	RunIDs   []string           `json:"run_ids,omitempty"`
+	Record   *recordBody        `json:"record,omitempty"`
+	Recorded *recordedBody      `json:"recorded,omitempty"`
+	Reply    *replyBody         `json:"reply,omitempty"`
 }
 
 // helloBody is each side's first frame. The client's carries its build;
@@ -137,7 +133,9 @@ type launchBody struct {
 	RequireProof bool     `json:"require_proof"`
 }
 
-type recoverBody struct {
+// exportRequestBody is an export's request, and a recovery's, which
+// exports a clean end.
+type exportRequestBody struct {
 	RunID      string                  `json:"run_id"`
 	Transcript export.EvidenceSource   `json:"transcript"`
 	Sources    []export.EvidenceSource `json:"sources"`
@@ -159,11 +157,22 @@ type recordedBody struct {
 	Error string `json:"error"`
 }
 
-// replyBody ends an operation: an error, a run's end, or Started's answer.
+// replyBody ends an operation: an error, a run's end, Started's answer,
+// or an export. An export reply, and a recovery's that exported, carries
+// Export, and the export's stream follows the frame.
 type replyBody struct {
-	Error   *wireError `json:"error,omitempty"`
-	End     *endBody   `json:"end,omitempty"`
-	Started *bool      `json:"started,omitempty"`
+	Error   *wireError       `json:"error,omitempty"`
+	End     *endBody         `json:"end,omitempty"`
+	Started *bool            `json:"started,omitempty"`
+	Export  *exportReplyBody `json:"export,omitempty"`
+}
+
+// exportReplyBody is what the launcher says of an export besides its
+// bytes: the commit the run was seeded from, which the stage driver checks
+// against the run's admission. Everything else the client reads from the
+// bytes it received.
+type exportReplyBody struct {
+	BaseSHA string `json:"base_sha"`
 }
 
 // endBody is a launch's or a recovery's end. Outcome is a recovery's
@@ -192,10 +201,10 @@ func fieldsOf(k kind) []string {
 		return []string{"launch"}
 	case kindRecover:
 		return []string{"recover"}
-	case kindStarted, kindRequestCancellation, kindExport:
+	case kindExport:
+		return []string{"export"}
+	case kindStarted, kindRequestCancellation:
 		return []string{"run_id"}
-	case kindAuthenticate:
-		return []string{"run_id", "dir"}
 	case kindReleaseFinished:
 		return []string{"run_ids"}
 	case kindRecord:
@@ -219,9 +228,9 @@ func (f frame) present() []string {
 		{"hello", f.Hello != nil},
 		{"launch", f.Launch != nil},
 		{"recover", f.Recover != nil},
+		{"export", f.Export != nil},
 		{"run_id", f.RunID != ""},
 		{"run_ids", f.RunIDs != nil},
-		{"dir", f.Dir != ""},
 		{"record", f.Record != nil},
 		{"recorded", f.Recorded != nil},
 		{"reply", f.Reply != nil},
@@ -308,27 +317,33 @@ func readFrame(r io.Reader, lenient bool) (frame, error) {
 type errorCode string
 
 const (
-	codeDetached          errorCode = "detached"
-	codeBlocked           errorCode = "blocked"
-	codeRunEndUnproven    errorCode = "run_end_unproven"
-	codeNoRun             errorCode = "no_run"
-	codeConformance       errorCode = "conformance"
-	codeCanceled          errorCode = "canceled"
-	codeExportUnsupported errorCode = "export_unsupported"
-	codeBuildMismatch     errorCode = "build_mismatch"
-	codeInternal          errorCode = "internal"
+	codeDetached         errorCode = "detached"
+	codeBlocked          errorCode = "blocked"
+	codeRunEndUnproven   errorCode = "run_end_unproven"
+	codeNoRun            errorCode = "no_run"
+	codeConformance      errorCode = "conformance"
+	codeCanceled         errorCode = "canceled"
+	codeWorktreeReplaced errorCode = "worktree_replaced"
+	codeLinkedFile       errorCode = "linked_file"
+	codeNotExportable    errorCode = "not_exportable"
+	codeNoEndRecord      errorCode = "no_end_record"
+	codeScanRefused      errorCode = "scan_refused"
+	codeBuildMismatch    errorCode = "build_mismatch"
+	codeInternal         errorCode = "internal"
 )
 
 // allErrorCodes is the single registration point for errorCode.
 var allErrorCodes = []errorCode{
-	codeDetached, codeBlocked, codeRunEndUnproven, codeNoRun, codeConformance,
-	codeCanceled, codeExportUnsupported, codeBuildMismatch, codeInternal,
+	codeDetached, codeBlocked, codeRunEndUnproven, codeNoRun, codeConformance, codeCanceled,
+	codeWorktreeReplaced, codeLinkedFile, codeNotExportable, codeNoEndRecord, codeScanRefused,
+	codeBuildMismatch, codeInternal,
 }
 
 func (c errorCode) valid() bool {
 	switch c {
-	case codeDetached, codeBlocked, codeRunEndUnproven, codeNoRun, codeConformance,
-		codeCanceled, codeExportUnsupported, codeBuildMismatch, codeInternal:
+	case codeDetached, codeBlocked, codeRunEndUnproven, codeNoRun, codeConformance, codeCanceled,
+		codeWorktreeReplaced, codeLinkedFile, codeNotExportable, codeNoEndRecord, codeScanRefused,
+		codeBuildMismatch, codeInternal:
 		return true
 	default:
 		return false
@@ -350,11 +365,14 @@ type wireError struct {
 }
 
 // encodeError classifies a backend's error for the wire, most specific
-// first: a blocked launch wraps the unproven end.
+// first: a blocked launch wraps the unproven end, and a canceled run's
+// refusal wraps ErrNotExportable. A scan refusal crosses without its
+// reason, which names an item of the export.
 func encodeError(err error) *wireError {
 	w := &wireError{Code: codeInternal, Message: boundText(err.Error())}
 	var blocked *cordon.BlockedError
 	var failed *cordon.ConformanceFailure
+	var scan *cordon.ScanRefusalError
 	switch {
 	case errors.Is(err, cordon.ErrDetached):
 		w.Code = codeDetached
@@ -366,10 +384,18 @@ func encodeError(err error) *wireError {
 		w.Code = codeNoRun
 	case errors.As(err, &failed):
 		w.Code, w.Check, w.Reason = codeConformance, boundText(failed.Check), boundText(failed.Reason)
-	case errors.Is(err, ErrExportUnsupported):
-		w.Code = codeExportUnsupported
+	case errors.As(err, &scan):
+		w.Code, w.Message = codeScanRefused, ""
 	case errors.Is(err, cordon.ErrCanceled):
 		w.Code = codeCanceled
+	case errors.Is(err, cordon.ErrWorktreeReplaced):
+		w.Code = codeWorktreeReplaced
+	case errors.Is(err, export.ErrLinkedFile):
+		w.Code = codeLinkedFile
+	case errors.Is(err, cordon.ErrNotExportable):
+		w.Code = codeNotExportable
+	case errors.Is(err, cordon.ErrNoEndRecord):
+		w.Code = codeNoEndRecord
 	case errors.Is(err, ErrBuildMismatch):
 		w.Code = codeBuildMismatch
 	}
@@ -408,8 +434,18 @@ func decodeError(w *wireError, runID string) error {
 		err = &cordon.ConformanceFailure{Check: w.Check, Reason: w.Reason}
 	case codeCanceled:
 		err = fmt.Errorf("%w: %w: %w", cordon.ErrCanceled, cordon.ErrNotExportable, host)
-	case codeExportUnsupported:
-		err = fmt.Errorf("%w: %w", ErrExportUnsupported, host)
+	case codeWorktreeReplaced:
+		err = fmt.Errorf("%w: %w", cordon.ErrWorktreeReplaced, host)
+	case codeLinkedFile:
+		err = fmt.Errorf("%w: %w", export.ErrLinkedFile, host)
+	case codeNotExportable:
+		err = fmt.Errorf("%w: %w", cordon.ErrNotExportable, host)
+	case codeNoEndRecord:
+		err = fmt.Errorf("%w: %w", cordon.ErrNoEndRecord, host)
+	case codeScanRefused:
+		// The reason is the daemon's own sentence: the host's could name
+		// anything.
+		err = &cordon.ScanRefusalError{Reason: "output scan refused the export on the execution host"}
 	case codeBuildMismatch:
 		err = fmt.Errorf("%w: %w", ErrBuildMismatch, host)
 	case codeInternal:

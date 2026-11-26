@@ -7460,11 +7460,13 @@ cd daemon && FREESIDE_CORDON_CREDENTIAL_LIVE_TEST=1 \
 `freesided cordon serve` is the host launcher (`internal/cordonhost`, #3623):
 it serves a cordoned backend and its suite on a Unix socket to a client on
 the same machine, which has the backend's operations behind the stage
-driver's port. Nothing reaches it over a network yet (#3625), and a launch
-behind it can't export (#3624): `Export` and a recovery that would export
-answer `cordonhost.ErrExportUnsupported`. The protocol and its rules are in
-`internal/cordonhost`'s doc comments; the decision record is
-`devlog/2026-11-26-0409-cordon-host-launcher.md`.
+driver's port. Nothing reaches it over a network yet (#3625). A clean run's
+export returns over the connection, and the client receives it as untrusted
+input under `ClientConfig.ExportRoot`, which the composition sets to the
+stage driver's `CordonRunsRoot`. The protocol and its rules are in
+`internal/cordonhost`'s doc comments; the decision records are
+`devlog/2026-11-26-0409-cordon-host-launcher.md` and
+`devlog/2026-11-26-0848-cordon-host-export.md`.
 
 The fleet repository installs this layout on each host; Freeside installs
 nothing there:

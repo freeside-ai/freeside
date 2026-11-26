@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,6 +31,11 @@ type ClientConfig struct {
 	// ScratchRoot is a private directory the client owns: it seeds under
 	// seeds/ and keeps a failed run's transcript and stderr under runs/.
 	ScratchRoot string
+	// ExportRoot is where the client receives each clean run's export, at
+	// <ExportRoot>/<runID>/export. The stage driver accepts a cordoned
+	// run's released export only at <CordonRunsRoot>/<runID>/export, so the
+	// composition passes the driver's CordonRunsRoot here.
+	ExportRoot string
 }
 
 // Hello is what a launcher says of itself before any request.
@@ -47,7 +53,8 @@ type Hello struct {
 // over a connection of its own.
 //
 // Tier A: it sends a launch's token, once, after the hello, and receives
-// the run's end report, which it checks before the gate reads it.
+// the run's end report, which it checks before the gate reads it, and a
+// clean run's export, which it receives as untrusted input (receipt.go).
 type Client struct {
 	cfg ClientConfig
 
@@ -58,8 +65,9 @@ type Client struct {
 
 // NewClient checks cfg. It connects to nothing until an operation runs.
 func NewClient(cfg ClientConfig) (*Client, error) {
-	if cfg.Socket == "" || cfg.Build == "" || cfg.Seeder == nil || cfg.Recorder == nil || !filepath.IsAbs(cfg.ScratchRoot) {
-		return nil, errors.New("cordonhost: a client needs a socket, a build, a seeder, a recorder, and an absolute scratch root")
+	if cfg.Socket == "" || cfg.Build == "" || cfg.Seeder == nil || cfg.Recorder == nil ||
+		!filepath.IsAbs(cfg.ScratchRoot) || !filepath.IsAbs(cfg.ExportRoot) {
+		return nil, errors.New("cordonhost: a client needs a socket, a build, a seeder, a recorder, and absolute scratch and export roots")
 	}
 	return &Client{cfg: cfg, conns: map[net.Conn]struct{}{}}, nil
 }
@@ -181,7 +189,7 @@ func (cc *clientConn) await(ctx context.Context) (*replyBody, error) {
 				return nil, err
 			}
 		case kindHello, kindLaunch, kindCancel, kindRecorded, kindStarted, kindRequestCancellation, kindRecover,
-			kindReleaseFinished, kindExport, kindAuthenticate, kindFull, kindProbeBeforeJob:
+			kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob:
 			return nil, fmt.Errorf("%w: the launcher sent a %s frame", ErrProtocol, f.Kind)
 		}
 	}
@@ -211,6 +219,12 @@ func (cc *clientConn) keep(ctx context.Context, body *recordBody) error {
 // call runs one request that isn't a launch: the connection closes when
 // ctx ends, which ends the operation on the launcher.
 func (c *Client) call(ctx context.Context, req frame) (*replyBody, error) {
+	return c.callThen(ctx, req, nil)
+}
+
+// callThen is call with then run on the reply before the connection
+// closes, to read a stream that follows it.
+func (c *Client) callThen(ctx context.Context, req frame, then func(io.Reader, *replyBody) error) (*replyBody, error) {
 	cc, err := c.dial(ctx)
 	if err != nil {
 		return nil, err
@@ -224,6 +238,11 @@ func (c *Client) call(ctx context.Context, req frame) (*replyBody, error) {
 	reply, err := cc.await(ctx)
 	if err != nil {
 		return nil, c.ended(ctx, err)
+	}
+	if then != nil {
+		if err := then(cc.conn, reply); err != nil {
+			return nil, c.ended(ctx, err)
+		}
 	}
 	return reply, nil
 }
@@ -240,7 +259,7 @@ func expectEmpty(reply *replyBody, runID string) error {
 	if reply.Error != nil {
 		return decodeError(reply.Error, runID)
 	}
-	if reply.End != nil || reply.Started != nil {
+	if reply.End != nil || reply.Started != nil || reply.Export != nil {
 		return fmt.Errorf("%w: an answer where none belongs", ErrProtocol)
 	}
 	return nil
@@ -332,7 +351,7 @@ func (cc *clientConn) send(req cordon.LaunchRequest, seed string) error {
 	}}); err != nil {
 		return err
 	}
-	return writeSeed(cc.conn, seed)
+	return writeTree(cc.conn, seed)
 }
 
 // closeWrite ends what the client sends on the connection, or closes it
@@ -370,8 +389,8 @@ func (c *Client) seed(ctx context.Context, req cordon.LaunchRequest) (string, er
 
 // checkEnd checks a launcher's report of how a run ended before anything
 // reads it: a known end with a plausible exit status, a launch's never
-// lost and a recovery's never exported, and a failure's transcript only
-// with a failed end, within its bound.
+// lost, an export only with a recovery's clean, exported end, and a
+// failure's transcript only with a failed end, within its bound.
 func checkEnd(reply *replyBody, recovery bool) (*endBody, error) {
 	end := reply.End
 	if end == nil || reply.Started != nil {
@@ -381,10 +400,14 @@ func checkEnd(reply *replyBody, recovery bool) (*endBody, error) {
 		return nil, fmt.Errorf("%w: an end of %q with exit status %d", ErrProtocol, end.EndedBy, end.ExitCode)
 	}
 	switch {
-	case recovery && (!slices.Contains(cordon.AllRecoveryOutcomes, end.Outcome) || end.Outcome == cordon.RecoveryExported):
+	case recovery && !slices.Contains(cordon.AllRecoveryOutcomes, end.Outcome):
 		return nil, fmt.Errorf("%w: a recovery outcome of %q", ErrProtocol, end.Outcome)
 	case !recovery && (end.Outcome != "" || end.EndedBy == cordon.EndedByLost):
 		return nil, fmt.Errorf("%w: a launch that ended %q with outcome %q", ErrProtocol, end.EndedBy, end.Outcome)
+	}
+	exported := recovery && end.Outcome == cordon.RecoveryExported
+	if exported != (reply.Export != nil) || (exported && (end.EndedBy != cordon.EndedByExited || end.ExitCode != 0)) {
+		return nil, fmt.Errorf("%w: an export with an end of %q, exit status %d, outcome %q", ErrProtocol, end.EndedBy, end.ExitCode, end.Outcome)
 	}
 	failed := end.EndedBy == cordon.EndedByStalled || (end.EndedBy == cordon.EndedByExited && end.ExitCode != 0)
 	if recovery && end.Outcome == cordon.RecoveryFailed && !failed {
@@ -449,35 +472,56 @@ func keepFile(path string, body *failureBody) error {
 	return err
 }
 
-// Export is refused until an export returns from a host (#3624).
+// Export returns runID's export, received from the launcher into the
+// client's export root as untrusted input (receipt.go). An export the
+// client already received is returned from its receipt without a
+// connection; a receipt cut short is removed and the launcher asked again.
+// The launcher's refusals return as the backend's own errors.
 func (c *Client) Export(ctx context.Context, req cordon.ExportRequest) (cordon.ExportResult, error) {
 	if !cordon.ValidRunID(req.RunID) {
 		return cordon.ExportResult{}, fmt.Errorf("cordonhost: run id %q is not one plain path component", req.RunID)
 	}
-	reply, err := c.call(ctx, frame{Kind: kindExport, RunID: req.RunID})
+	if res, ok, err := c.received(req.RunID); err != nil || ok {
+		return res, err
+	}
+	_, res, err := c.fetch(ctx, frame{Kind: kindExport, Export: exportRequestOf(req)}, req.RunID, func(reply *replyBody) error {
+		if reply.Error != nil {
+			return decodeError(reply.Error, req.RunID)
+		}
+		if reply.End != nil || reply.Started != nil || reply.Export == nil {
+			return fmt.Errorf("%w: an export reply with no export", ErrProtocol)
+		}
+		return nil
+	})
 	if err != nil {
 		return cordon.ExportResult{}, err
 	}
-	if err := expectEmpty(reply, req.RunID); err != nil {
-		return cordon.ExportResult{}, err
-	}
-	return cordon.ExportResult{}, fmt.Errorf("%w: the launcher accepted an export it can't return", ErrProtocol)
+	return *res, nil
 }
 
-// AuthenticateReleasedExport is refused until an export returns from a
-// host (#3624).
+func exportRequestOf(req cordon.ExportRequest) *exportRequestBody {
+	return &exportRequestBody{RunID: req.RunID, Transcript: req.Transcript, Sources: req.Sources}
+}
+
+// AuthenticateReleasedExport accepts dir only as runID's export in the
+// client's export root, its members matching the receipt record the client
+// wrote when it received them. It asks the launcher nothing.
 func (c *Client) AuthenticateReleasedExport(ctx context.Context, runID, dir string) error {
-	if !cordon.ValidRunID(runID) || dir == "" {
-		return fmt.Errorf("%w: run id %q, directory %q", cordon.ErrExportUnauthenticated, runID, dir)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	reply, err := c.call(ctx, frame{Kind: kindAuthenticate, RunID: runID, Dir: dir})
+	if !cordon.ValidRunID(runID) {
+		return fmt.Errorf("%w: run id %q is not one plain path component", cordon.ErrExportUnauthenticated, runID)
+	}
+	l := c.receipt(runID)
+	if dir != l.export {
+		return fmt.Errorf("%w: %s is not %s's export directory", cordon.ErrExportUnauthenticated, dir, runID)
+	}
+	rec, err := readReceiptRecord(l.record, runID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", cordon.ErrExportUnauthenticated, err)
 	}
-	if err := expectEmpty(reply, runID); err != nil {
-		return err
-	}
-	return fmt.Errorf("%w: the launcher authenticated an export it can't return", ErrProtocol)
+	return cordon.VerifyExportDigests(dir, rec.digests())
 }
 
 // Started reports whether runID's directory exists on the launcher.
@@ -492,7 +536,7 @@ func (c *Client) Started(ctx context.Context, runID string) (bool, error) {
 	if reply.Error != nil {
 		return false, decodeError(reply.Error, runID)
 	}
-	if reply.Started == nil || reply.End != nil {
+	if reply.Started == nil || reply.End != nil || reply.Export != nil {
 		return false, fmt.Errorf("%w: a Started reply with no answer", ErrProtocol)
 	}
 	return *reply.Started, nil
@@ -512,7 +556,9 @@ func (c *Client) RequestCancellation(ctx context.Context, runID string) error {
 
 // Recover finds how runID ended on the launcher, waiting while it runs.
 // Canceling ctx stops the wait and leaves the run running. A run that
-// exited cleanly is refused with ErrExportUnsupported until #3624.
+// exited cleanly returns its export, received as Export receives it, and
+// an export the client already received returns from its receipt without
+// a connection.
 func (c *Client) Recover(ctx context.Context, req cordon.RecoverRequest) (cordon.RecoveryResult, error) {
 	if !cordon.ValidRunID(req.RunID) {
 		return cordon.RecoveryResult{}, fmt.Errorf("cordonhost: run id %q is not one plain path component", req.RunID)
@@ -520,26 +566,36 @@ func (c *Client) Recover(ctx context.Context, req cordon.RecoverRequest) (cordon
 	if req.Export.RunID != req.RunID {
 		return cordon.RecoveryResult{}, fmt.Errorf("cordonhost: recovering %s with %s's export", req.RunID, req.Export.RunID)
 	}
-	reply, err := c.call(ctx, frame{Kind: kindRecover, Recover: &recoverBody{
-		RunID: req.RunID, Transcript: req.Export.Transcript, Sources: req.Export.Sources,
-	}})
+	kept, ok, err := c.received(req.RunID)
 	if err != nil {
 		return cordon.RecoveryResult{}, err
 	}
-	if reply.Error != nil {
-		return cordon.RecoveryResult{}, decodeError(reply.Error, req.RunID)
+	if ok {
+		return cordon.RecoveryResult{Outcome: cordon.RecoveryExported, EndedBy: cordon.EndedByExited, Export: kept}, nil
 	}
-	end, err := checkEnd(reply, true)
+	var end *endBody
+	_, exp, err := c.fetch(ctx, frame{Kind: kindRecover, Recover: exportRequestOf(req.Export)}, req.RunID, func(reply *replyBody) error {
+		if reply.Error != nil {
+			return decodeError(reply.Error, req.RunID)
+		}
+		var err error
+		end, err = checkEnd(reply, true)
+		return err
+	})
 	if err != nil {
 		return cordon.RecoveryResult{}, err
 	}
 	res := cordon.RecoveryResult{Outcome: end.Outcome, EndedBy: end.EndedBy, ExitCode: end.ExitCode, Reason: end.Reason}
+	if exp != nil {
+		res.Export = *exp
+	}
 	res.TranscriptPath, res.StderrPath, err = c.keepFailure(req.RunID, end)
 	return res, err
 }
 
-// ReleaseFinished releases runIDs on the launcher, and then the
-// transcripts the client kept for them.
+// ReleaseFinished releases runIDs on the launcher, which removes each
+// finished run's directory, and then the transcripts and exports the
+// client kept for them.
 func (c *Client) ReleaseFinished(ctx context.Context, runIDs []string) error {
 	if len(runIDs) == 0 {
 		return nil
@@ -558,7 +614,7 @@ func (c *Client) ReleaseFinished(ctx context.Context, runIDs []string) error {
 	}
 	var errs []error
 	for _, id := range runIDs {
-		errs = append(errs, os.RemoveAll(filepath.Join(c.cfg.ScratchRoot, "runs", id)))
+		errs = append(errs, os.RemoveAll(filepath.Join(c.cfg.ScratchRoot, "runs", id)), c.receipt(id).release())
 	}
 	return errors.Join(errs...)
 }
