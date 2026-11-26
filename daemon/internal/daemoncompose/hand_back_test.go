@@ -260,7 +260,7 @@ func TestActiveResourceHandBackRaisesCommentNotice(t *testing.T) {
 	// One notice per ready item and head, in any status: the label put back
 	// on the same head raises no second one.
 	relabeled, _ := handBackReconciler(st, []string{handBackTestLabel}, false)
-	relabeled.handBackGapSeen = reconciler.handBackGapSeen
+	relabeled.projects = reconciler.projects
 	reconcileClean(t, relabeled, "first pass with the label back")
 	reconcileClean(t, relabeled, "second pass with the label back")
 	if notices := handBackNotices(t, st); len(notices) != 1 || notices[0].Status != domain.StatusResolved {

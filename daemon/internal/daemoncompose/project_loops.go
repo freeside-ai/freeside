@@ -131,6 +131,18 @@ func repositoryLoops(
 	return loops, nil
 }
 
+// tipWatches are the served repositories' tip watches, one per repository
+// in loop order.
+func tipWatches(loops []repositoryLoop) []repositoryTipWatch {
+	watches := make([]repositoryTipWatch, 0, len(loops))
+	for _, loop := range loops {
+		watches = append(watches, repositoryTipWatch{
+			Repo: loop.Repo, RepositoryID: loop.RepositoryID, Branch: loop.BaseRef,
+		})
+	}
+	return watches
+}
+
 // bindManualProjects reads the repository each manual-submission project's
 // projects binding names, so repositoryLoops can group the projects by
 // repository. A project with no binding yet keeps a zero repository.

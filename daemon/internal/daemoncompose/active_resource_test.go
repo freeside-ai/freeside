@@ -28,18 +28,36 @@ func reconcileActiveResource(
 
 func activeReadyItem(t *testing.T, st *store.Store) domain.AttentionItem {
 	t.Helper()
+	return activeReadyItemIn(t, st, activeReadyItemSeed{
+		runID: "run-active", itemID: "item-ready-active", project: "project-1", prNumber: 450, head: "cafed00d",
+	})
+}
+
+// activeReadyItemSeed names another run, item, project, pull request, and
+// head for activeReadyItemIn, on the same repository. Two items need
+// different heads, since their publication identity names the head.
+type activeReadyItemSeed struct {
+	runID    domain.RunID
+	itemID   domain.ItemID
+	project  domain.ProjectID
+	prNumber int
+	head     string
+}
+
+func activeReadyItemIn(t *testing.T, st *store.Store, seed activeReadyItemSeed) domain.AttentionItem {
+	t.Helper()
 	ctx := context.Background()
-	runID := domain.RunID("run-active")
-	seedCaptureRun(t, st, runID)
-	authority := seedReadyBindingAuthority(t, st, runID, "cafed00d")
+	runID, prNumber := seed.runID, seed.prNumber
+	seedCaptureRunIn(t, st, runID, seed.project)
+	authority := seedReadyBindingAuthorityFor(t, st, runID, seed.head, prNumber)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: "item-ready-active", ProjectID: "project-1",
+		ID: seed.itemID, ProjectID: seed.project,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: "published and verified", RequestedDecision: []domain.Action{
 			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss,
 		},
-		PRHeadSHA: "cafed00d", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
+		PRHeadSHA: seed.head, PRReference: &domain.PRReference{Repo: "owner/repo", Number: prNumber},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, nil)
@@ -57,7 +75,7 @@ func activeReadyItem(t *testing.T, st *store.Store) domain.AttentionItem {
 			ProducingInvocationID: authority.invocationID, PublicationIdentity: authority.identity,
 			PublicationInvocationID: authority.publicationInvocationID,
 			Repo:                    "owner/repo", RepositoryID: 424242,
-			PRNumber: 450, BaseRef: "main", HeadSHA: item.PRHeadSHA,
+			PRNumber: prNumber, BaseRef: "main", HeadSHA: item.PRHeadSHA,
 			RecordedAt: activeResourceTestTime.Add(-time.Minute),
 		})
 	}); err != nil {

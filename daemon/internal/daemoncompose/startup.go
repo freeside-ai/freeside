@@ -586,9 +586,7 @@ func ComposeClaudeLoops(
 		handBackLabels:   claudeWiring.handBackLabels,
 		mergeBase:        claudeWiring.mergeBase,
 		evictConcluded:   claudeWiring.evictConcluded,
-		tipWatch: repositoryTipWatch{
-			Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,
-		},
+		tipWatches:       tipWatches(upkeeps.loops()),
 		observeTip:       claudeWiring.observeRepositoryTip,
 		upkeepTipAdvance: upkeepTrigger.tipAdvanced,
 		readinessGate:    claudeWiring.ReadinessGate(),

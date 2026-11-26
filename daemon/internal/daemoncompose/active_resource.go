@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/keyedrun"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -71,10 +73,57 @@ type ActiveResourceReconciler struct {
 	readJobLog jobLogReader
 	excerpts   engine.ArtifactStore
 	// evictConcluded drops every conditional-request cache entry owned by a
-	// ready resource after the item leaves the open state. evictedConcluded
-	// records whether the final, post-completion eviction has happened; both
-	// are process-local optimizations.
-	evictConcluded      func(domain.ReadyItemPRBinding, *int)
+	// ready resource after the item leaves the open state.
+	evictConcluded func(domain.ReadyItemPRBinding, *int)
+	// The process-local maps below are a forProject copy's view of its
+	// project's activeResourceProjectState, which documents them.
+	evictedConcluded         map[domain.ItemID]bool
+	observationFailures      map[domain.ItemID]int
+	handBackGapSeen          map[domain.ItemID]string
+	reactionsRefusalReported map[domain.ItemID]bool
+	// projects holds each project's process-local state and runs each
+	// project's items and each repository's tip watch apart. Reconcile
+	// creates it when it is nil; Run creates it before its passes start.
+	projects *activeResourceProjects
+	// tipWatches name the branches whose tips each pass reads whether or not
+	// a bound PR moved them, one per served repository, so a merge made
+	// outside Freeside still reaches that repository's project-image upkeep
+	// (plan §5.7, Project-image upkeep, Triggers). observeTip reads a tip;
+	// upkeepTipAdvance is the tip-advance entry point, which runs inside the
+	// pass and so must hand the tip off and return, not do upkeep's work. No
+	// watches watch nothing; any watch needs both functions.
+	tipWatches       []repositoryTipWatch
+	observeTip       func(ctx context.Context, repo, branch string) (string, error)
+	upkeepTipAdvance func(context.Context, domain.RepositoryTipObservation) error
+	Now              func() time.Time
+}
+
+// repositoryTipWatch is a served repository and the branch tasks run
+// against, which is the tip a project image must stay admissible at.
+type repositoryTipWatch struct {
+	Repo         string
+	RepositoryID int64
+	Branch       string
+}
+
+// activeResourceProjects runs each project's items on its own goroutine and
+// each repository's tip watch on its own, so one project's stalled GitHub
+// call holds up only that project's pull requests and never another
+// project's or repository's (#3210). A project or repository whose previous
+// run has not returned is skipped by the next pass, which never waits on it.
+type activeResourceProjects struct {
+	mu    sync.Mutex
+	state map[domain.ProjectID]*activeResourceProjectState
+	runs  keyedrun.Group[domain.ProjectID]
+	tips  keyedrun.Group[int64]
+}
+
+// activeResourceProjectState is one project's process-local memory across
+// passes. Only that project's run touches it, and keyedrun runs one at a
+// time per project, so it needs no lock of its own.
+type activeResourceProjectState struct {
+	// evictedConcluded records whether the final, post-completion eviction of
+	// a concluded item's caches has happened; a process-local optimization.
 	evictedConcluded    map[domain.ItemID]bool
 	observationFailures map[domain.ItemID]int
 	// handBackGapSeen records, per ready item, the head the last pass saw
@@ -89,25 +138,39 @@ type ActiveResourceReconciler struct {
 	// reactions again or when it leaves the open state. Process-local: a
 	// restart reports a standing refusal once more.
 	reactionsRefusalReported map[domain.ItemID]bool
-	// tipWatch names the branch whose tip each pass reads whether or not a
-	// bound PR moved it, so a merge made outside Freeside still reaches
-	// project-image upkeep (plan §5.7, Project-image upkeep, Triggers).
-	// observeTip reads the tip; upkeepTipAdvance is the tip-advance entry
-	// point, which runs inside the pass and so must hand the tip off and
-	// return, not do upkeep's work. A zero tipWatch watches nothing; a set one
-	// needs both functions.
-	tipWatch         repositoryTipWatch
-	observeTip       func(ctx context.Context, repo, branch string) (string, error)
-	upkeepTipAdvance func(context.Context, domain.RepositoryTipObservation) error
-	Now              func() time.Time
 }
 
-// repositoryTipWatch is the one configured repository and the branch tasks
-// run against, which is the tip a project image must stay admissible at.
-type repositoryTipWatch struct {
-	Repo         string
-	RepositoryID int64
-	Branch       string
+// stateFor returns project's state, creating it on first use.
+func (p *activeResourceProjects) stateFor(project domain.ProjectID) *activeResourceProjectState {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if state, ok := p.state[project]; ok {
+		return state
+	}
+	if p.state == nil {
+		p.state = map[domain.ProjectID]*activeResourceProjectState{}
+	}
+	state := &activeResourceProjectState{
+		evictedConcluded:         map[domain.ItemID]bool{},
+		observationFailures:      map[domain.ItemID]int{},
+		handBackGapSeen:          map[domain.ItemID]string{},
+		reactionsRefusalReported: map[domain.ItemID]bool{},
+	}
+	p.state[project] = state
+	return state
+}
+
+// forProject is the reconciler as one project's run sees it: its own
+// process-local maps. The project's hand-back label is read per observation
+// (handBackLabels), not here.
+func (r *ActiveResourceReconciler) forProject(project domain.ProjectID) *ActiveResourceReconciler {
+	state := r.projects.stateFor(project)
+	scoped := *r
+	scoped.evictedConcluded = state.evictedConcluded
+	scoped.observationFailures = state.observationFailures
+	scoped.handBackGapSeen = state.handBackGapSeen
+	scoped.reactionsRefusalReported = state.reactionsRefusalReported
+	return &scoped
 }
 
 type activeResourceObservation struct {
@@ -324,12 +387,17 @@ func rebaseProofPending(
 	return !task.Dispatched(), nil
 }
 
-// Run performs one startup pass and then re-arms its process-local timer from
-// the pass result. An open ready-for-final-review item selects the
-// operator-active interval; otherwise the background interval applies. A
-// resource failure is reported and isolated to that item; enumeration or
-// transaction failures stop the loop because continuing would silently omit
-// durable work.
+// Run performs one startup pass and then one pass per interval. An open
+// ready-for-final-review item selects the operator-active interval;
+// otherwise the background interval applies. A resource failure is reported
+// and isolated to that item; enumeration or transaction failures stop the
+// loop because continuing would silently omit durable work.
+//
+// Each pass runs on its own goroutine, so a pass waiting on a stalled
+// project never delays the next tick; that pass skips the busy project
+// (#3210). A wake for a new ready item starts a pass at once, and a pass that
+// was already running when the wake arrived starts one more as it returns,
+// since its project may have been skipped by the pass the wake started.
 //
 // This is the GitHub-facing loop, so it is where a recurring credential or
 // rate-limit failure shows up. Reporting it at error severity with a
@@ -353,9 +421,37 @@ func (r ActiveResourceReconciler) Run(
 		"default_interval", defaultInterval,
 		"operator_active_interval", operatorActiveInterval,
 	)
+	if r.projects == nil {
+		r.projects = &activeResourceProjects{}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	// Every pass returns before Run does: cancel runs first, then the wait.
+	var passes sync.WaitGroup
+	defer passes.Wait()
+	defer cancel()
+	type passOutcome struct {
+		// seq is the pass's place in start order, from 1.
+		seq    int
+		result activeResourceReconcileResult
+		err    error
+	}
+	outcomes := make(chan passOutcome)
+	// started counts the passes started; wokeAt is started when the latest
+	// wake arrived, so a pass with seq at or below it was running then.
+	started, wokeAt := 0, 0
+	start := func() {
+		started++
+		seq := started
+		passes.Go(func() {
+			result, err := r.Reconcile(ctx)
+			select {
+			case outcomes <- passOutcome{seq: seq, result: result, err: err}:
+			case <-ctx.Done():
+			}
+		})
+	}
 	operatorActive := false
-	reconcile := func() (time.Duration, error) {
-		result, err := r.Reconcile(ctx)
+	report := func(result activeResourceReconcileResult, err error) error {
 		// Logged before the pass error is handled: noteReactionsRefusal has
 		// already marked these items reported, so dropping them with a failed
 		// pass would silence a standing refusal until the reactions read again.
@@ -367,10 +463,10 @@ func (r ActiveResourceReconciler) Run(
 				// Cancellation mid-pass is shutdown, not a failure: the same
 				// reading the engine and scheduler loops already take. The
 				// select below logs the single stop record.
-				return defaultInterval, nil
+				return nil
 			}
 			logger.Error("active resource pass failed", "error", err)
-			return 0, err
+			return err
 		}
 		for _, failure := range result.Failures {
 			// Isolated per-item failures: the pass converged around them, so
@@ -393,32 +489,46 @@ func (r ActiveResourceReconciler) Run(
 		// operator stops reading, and the records that matter drown in it.
 		logger.Debug("active resource pass complete",
 			"failures", len(result.Failures), "operator_active", result.operatorActive)
-		return activeResourceInterval(
-			result.operatorActive, defaultInterval, operatorActiveInterval,
-		), nil
+		return nil
 	}
-	nextInterval, err := reconcile()
-	if err != nil {
-		return err
+	interval := func() time.Duration {
+		return activeResourceInterval(operatorActive, defaultInterval, operatorActiveInterval)
 	}
-	timer := time.NewTimer(nextInterval)
+	// An unconfigured reconciler has no store to wake it; its first pass
+	// reports the missing configuration as a failed pass.
+	var wakes <-chan struct{}
+	if r.Store != nil {
+		wakes = r.Store.ReadyItemCreated()
+	}
+	start()
+	timer := time.NewTimer(interval())
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info("active resource reconciler stopped")
 			return nil
-		case <-r.Store.ReadyItemCreated():
+		case outcome := <-outcomes:
+			wasActive := operatorActive
+			if err := report(outcome.result, outcome.err); err != nil {
+				return err
+			}
+			if operatorActive != wasActive {
+				resetActiveResourceTimer(timer, interval())
+			}
+			if outcome.seq <= wokeAt {
+				start()
+			}
+			continue
+		case <-wakes:
 			// A new ready item must not wait through an idle interval before it
 			// can engage the operator-active cadence. The store emits only after
 			// commit; reconciliation remains authoritative if this wake is lost.
+			wokeAt = started
 		case <-timer.C:
 		}
-		nextInterval, err = reconcile()
-		if err != nil {
-			return err
-		}
-		resetActiveResourceTimer(timer, nextInterval)
+		start()
+		resetActiveResourceTimer(timer, interval())
 	}
 }
 
@@ -469,11 +579,60 @@ func (r *ActiveResourceReconciler) noteReactionsRefusal(
 		itemID, binding.Repo, binding.PRNumber))
 }
 
+// listAttentionItems lists every attention item with its stored version.
+func (r *ActiveResourceReconciler) listAttentionItems(
+	ctx context.Context,
+) ([]store.Snapshotted[domain.AttentionItem], error) {
+	var snapshots []store.Snapshotted[domain.AttentionItem]
+	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		snapshots, err = tx.ListAttentionItems(ctx)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("list active ready resources: %w", err)
+	}
+	return snapshots, nil
+}
+
+// activeResourceItems are the items a pass observes: every ready item, and
+// every open publication hold that carries a pull request for a run with no
+// ready item. A run with a ready item is observed through that item's
+// binding alone, whatever the ready item's status, so one pull request is
+// never polled twice. A held successor therefore keeps the watch its
+// predecessor's ready item already has, no more: its own held binding is not
+// read.
+func activeResourceItems(snapshots []store.Snapshotted[domain.AttentionItem]) []domain.AttentionItem {
+	readyRuns := make(map[domain.RunID]bool)
+	for _, snapshot := range snapshots {
+		if item := snapshot.Value; item.Type == domain.AttentionReadyForFinalReview && item.Subject.RunID != nil {
+			readyRuns[*item.Subject.RunID] = true
+		}
+	}
+	var observed []domain.AttentionItem
+	for _, snapshot := range snapshots {
+		item := snapshot.Value
+		switch {
+		case item.Type == domain.AttentionReadyForFinalReview:
+		case item.Type == domain.AttentionPublishBlocked && item.Status == domain.StatusOpen &&
+			item.PRReference != nil && item.Subject.RunID != nil && !readyRuns[*item.Subject.RunID]:
+		default:
+			continue
+		}
+		observed = append(observed, item)
+	}
+	return observed
+}
+
 // Reconcile makes one independent pass over every active ready item, and over
 // every open publication hold that carries a pull request for a run with no
-// ready item.
+// ready item, and reads each watched repository's tip. Each project's items
+// and each repository's tip run on their own goroutine; a project or
+// repository whose previous run has not returned is skipped, and the pass
+// waits only for the runs it started (#3210).
 // Per-resource observation failures remain retryable and do not prevent a
-// healthy sibling from converging in the same pass.
+// healthy sibling from converging in the same pass. A project's fatal
+// failure stops that project's run, and the pass returns it joined with any
+// other project's.
 func (r *ActiveResourceReconciler) Reconcile(
 	ctx context.Context,
 ) (activeResourceReconcileResult, error) {
@@ -481,47 +640,80 @@ func (r *ActiveResourceReconciler) Reconcile(
 	if r.Store == nil || r.Pull == nil || r.Now == nil {
 		return result, errors.New("active resource reconciler is not fully configured")
 	}
-	if r.tipWatch != (repositoryTipWatch{}) && (r.observeTip == nil || r.upkeepTipAdvance == nil) {
+	if len(r.tipWatches) != 0 && (r.observeTip == nil || r.upkeepTipAdvance == nil) {
 		return result, errors.New("active resource reconciler tip watch is not fully configured")
 	}
-	var snapshots []store.Snapshotted[domain.AttentionItem]
-	if err := r.Store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		snapshots, err = tx.ListAttentionItems(ctx)
-		return err
-	}); err != nil {
-		return result, fmt.Errorf("list active ready resources: %w", err)
+	if r.projects == nil {
+		r.projects = &activeResourceProjects{}
+	}
+	snapshots, err := r.listAttentionItems(ctx)
+	if err != nil {
+		return result, err
 	}
 	result.Failures = make([]error, 0)
-	if r.tipWatch != (repositoryTipWatch{}) {
-		if err := r.observeRepositoryTip(ctx); err != nil {
-			result.Failures = append(result.Failures,
-				fmt.Errorf("observe repository tip %s %s: %w", r.tipWatch.Repo, r.tipWatch.Branch, err))
-		}
-	}
-	// A run with a ready item is observed through that item's binding alone,
-	// whatever the ready item's status, so one pull request is never polled
-	// twice. A held successor therefore keeps the watch its predecessor's
-	// ready item already has, no more: its own held binding is not read.
-	readyRuns := make(map[domain.RunID]bool)
-	for _, snapshot := range snapshots {
-		if item := snapshot.Value; item.Type == domain.AttentionReadyForFinalReview && item.Subject.RunID != nil {
-			readyRuns[*item.Subject.RunID] = true
-		}
-	}
-	for _, snapshot := range snapshots {
-		item := snapshot.Value
-		if item.Type == domain.AttentionPublishBlocked {
-			if item.Status != domain.StatusOpen || item.PRReference == nil ||
-				item.Subject.RunID == nil || readyRuns[*item.Subject.RunID] {
-				continue
+	observed := activeResourceItems(snapshots)
+	var (
+		mu    sync.Mutex
+		fatal []error
+		done  []<-chan struct{}
+	)
+	for _, watch := range r.tipWatches {
+		done = append(done, r.projects.tips.Go(watch.RepositoryID, func() {
+			if err := r.observeRepositoryTip(ctx, watch); err != nil {
+				mu.Lock()
+				defer mu.Unlock()
+				result.Failures = append(result.Failures,
+					fmt.Errorf("observe repository tip %s %s: %w", watch.Repo, watch.Branch, err))
 			}
+		}))
+	}
+	for _, part := range keyedrun.Partition(observed, func(item domain.AttentionItem) domain.ProjectID {
+		return item.ProjectID
+	}) {
+		project := r.forProject(part.Key)
+		done = append(done, r.projects.runs.Go(part.Key, func() {
+			projectResult, err := project.reconcileProject(ctx, part.Key)
+			mu.Lock()
+			defer mu.Unlock()
+			result.operatorActive = result.operatorActive || projectResult.operatorActive
+			result.Failures = append(result.Failures, projectResult.Failures...)
+			result.Skipped = append(result.Skipped, projectResult.Skipped...)
+			result.reactionsRefused = append(result.reactionsRefused, projectResult.reactionsRefused...)
+			if err != nil {
+				fatal = append(fatal, fmt.Errorf("project %s: %w", part.Key, err))
+			}
+		}))
+	}
+	for _, ch := range done {
+		if ch != nil {
+			<-ch
+		}
+	}
+	return result, errors.Join(fatal...)
+}
+
+// reconcileProject is one project's share of a pass: its ready items and
+// the publication holds the pass observes. r is the project's forProject
+// copy. It lists the items again rather than reading the pass's list, since
+// the project's previous run may have outlived the pass that listed them and
+// written versions that list predates; a convergence that read the older
+// version would refuse it as stale and stop the loop.
+func (r *ActiveResourceReconciler) reconcileProject(
+	ctx context.Context, project domain.ProjectID,
+) (activeResourceReconcileResult, error) {
+	result := activeResourceReconcileResult{}
+	snapshots, err := r.listAttentionItems(ctx)
+	if err != nil {
+		return result, err
+	}
+	items := slices.DeleteFunc(activeResourceItems(snapshots), func(item domain.AttentionItem) bool {
+		return item.ProjectID != project
+	})
+	for _, item := range items {
+		if item.Type == domain.AttentionPublishBlocked {
 			if err := r.reconcileHeldResource(ctx, item, &result); err != nil {
 				return result, err
 			}
-			continue
-		}
-		if item.Type != domain.AttentionReadyForFinalReview {
 			continue
 		}
 		if item.Status != domain.StatusOpen {
@@ -711,8 +903,7 @@ func (r *ActiveResourceReconciler) Reconcile(
 //
 // Each write reads the row and writes it in one transaction and changes only
 // its own fields, so it never overwrites a field another writer set.
-func (r *ActiveResourceReconciler) observeRepositoryTip(ctx context.Context) error {
-	watch := r.tipWatch
+func (r *ActiveResourceReconciler) observeRepositoryTip(ctx context.Context, watch repositoryTipWatch) error {
 	tip, err := r.observeTip(ctx, watch.Repo, watch.Branch)
 	if err != nil {
 		return fmt.Errorf("read tip: %w", err)

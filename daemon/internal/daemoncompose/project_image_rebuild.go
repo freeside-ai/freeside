@@ -80,6 +80,15 @@ type repositoryUpkeep struct {
 // the build limit and the builder VM turn.
 type imageUpkeeps []repositoryUpkeep
 
+// loops lists the upkeeps' loop entries in loop order.
+func (u imageUpkeeps) loops() []repositoryLoop {
+	loops := make([]repositoryLoop, 0, len(u))
+	for _, served := range u {
+		loops = append(loops, served.loop)
+	}
+	return loops
+}
+
 // all lists the upkeeps in loop order.
 func (u imageUpkeeps) all() []*engine.ImageUpkeep {
 	upkeeps := make([]*engine.ImageUpkeep, 0, len(u))

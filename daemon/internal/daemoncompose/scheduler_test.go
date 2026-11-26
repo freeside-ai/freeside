@@ -601,6 +601,12 @@ func TestDeadlineFiredBeforeItsDeadlineRedelivers(t *testing.T) {
 // gates the production flow satisfies by construction.
 func seedCaptureRun(t *testing.T, st *store.Store, runID domain.RunID) {
 	t.Helper()
+	seedCaptureRunIn(t, st, runID, "project-1")
+}
+
+// seedCaptureRunIn is seedCaptureRun under another project.
+func seedCaptureRunIn(t *testing.T, st *store.Store, runID domain.RunID, project domain.ProjectID) {
+	t.Helper()
 	ctx := context.Background()
 	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
 		Key: "driver", Value: "claude",
@@ -611,7 +617,7 @@ func seedCaptureRun(t *testing.T, st *store.Store, runID domain.RunID) {
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutRun(ctx, domain.Run{
-			ID: runID, ProjectID: "project-1",
+			ID: runID, ProjectID: project,
 			SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
 		}); err != nil {
 			return err
@@ -630,6 +636,15 @@ type readyBindingAuthority struct {
 
 func seedReadyBindingAuthority(
 	t *testing.T, st *store.Store, runID domain.RunID, headSHA string,
+) readyBindingAuthority {
+	t.Helper()
+	return seedReadyBindingAuthorityFor(t, st, runID, headSHA, 450)
+}
+
+// seedReadyBindingAuthorityFor is seedReadyBindingAuthority for another pull
+// request number.
+func seedReadyBindingAuthorityFor(
+	t *testing.T, st *store.Store, runID domain.RunID, headSHA string, prNumber int,
 ) readyBindingAuthority {
 	t.Helper()
 	ctx := context.Background()
@@ -685,7 +700,7 @@ func seedReadyBindingAuthority(
 	}
 	outcome := publish.Outcome{
 		Identity: identity.Digest(), Repo: "owner/repo", BaseRef: "main", HeadSHA: headSHA,
-		Branch: identity.BranchName(), PRNumber: 450, EvidenceEligible: true,
+		Branch: identity.BranchName(), PRNumber: prNumber, EvidenceEligible: true,
 	}
 	payload, err := outcome.Encode()
 	if err != nil {

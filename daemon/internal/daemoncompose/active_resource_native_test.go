@@ -546,7 +546,7 @@ func TestActiveResourceReactionsRefusalForgottenWhenItemConcludes(t *testing.T) 
 	if _, err := reconciler.Reconcile(ctx); err != nil {
 		t.Fatalf("pass over the concluded item: %v", err)
 	}
-	if reconciler.reactionsRefusalReported[item.ID] {
+	if reconciler.projects.stateFor(item.ProjectID).reactionsRefusalReported[item.ID] {
 		t.Fatal("the concluded item's refusal record was kept")
 	}
 }
