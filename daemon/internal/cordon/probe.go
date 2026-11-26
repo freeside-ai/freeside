@@ -43,8 +43,13 @@ type probeSpec struct {
 	// Creates are new paths the rules deny creating, in places the account
 	// can write outside the launch.
 	Creates []probeCreate `json:"creates,omitempty"`
-	// Sockets are Unix sockets under a protected root that the suite serves.
+	// Sockets are Unix sockets under a protected root that the suite serves,
+	// and the host launcher's own socket.
 	Sockets []string `json:"sockets,omitempty"`
+	// Unwritable are existing files a run must not write: the host
+	// launcher's binary and its LaunchAgent plist. Their owner and mode
+	// refuse the account, not the rules, so the probe takes either refusal.
+	Unwritable []string `json:"unwritable,omitempty"`
 	// Ports are reserved ports the suite could bind outside the launch.
 	Ports []int `json:"ports,omitempty"`
 	// Services are Mach services the rules deny looking up. Registered says
@@ -101,6 +106,7 @@ type probeCommand struct {
 func checkRead(path string) string         { return "read " + path }
 func checkCreate(path string) string       { return "create " + path }
 func checkConnect(path string) string      { return "connect " + path }
+func checkWrite(path string) string        { return "write " + path }
 func checkBind(port int) string            { return "bind " + strconv.Itoa(port) }
 func checkLookup(name string) string       { return "lookup " + name }
 func checkDenied(op string) string         { return "denied " + op }
@@ -122,6 +128,9 @@ func (s probeSpec) checks() []string {
 	}
 	for _, path := range s.Sockets {
 		checks = append(checks, checkConnect(path))
+	}
+	for _, path := range s.Unwritable {
+		checks = append(checks, checkWrite(path))
 	}
 	for _, port := range s.Ports {
 		checks = append(checks, checkBind(port))
@@ -145,7 +154,7 @@ func (s probeSpec) checks() []string {
 }
 
 func (s probeSpec) validate() error {
-	paths := make([]string, 0, len(s.Reads)+len(s.Creates)+len(s.Sockets))
+	paths := make([]string, 0, len(s.Reads)+len(s.Creates)+len(s.Sockets)+len(s.Unwritable))
 	for _, r := range s.Reads {
 		paths = append(paths, r.Path)
 	}
@@ -153,6 +162,7 @@ func (s probeSpec) validate() error {
 		paths = append(paths, c.Path)
 	}
 	paths = append(paths, s.Sockets...)
+	paths = append(paths, s.Unwritable...)
 	for _, path := range paths {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 			return fmt.Errorf("%q must be a clean absolute path", path)
@@ -254,6 +264,9 @@ func (p *probe) run(s probeSpec) {
 		}
 		p.check(checkConnect(path), p.sandboxRefused(err))
 	}
+	for _, path := range s.Unwritable {
+		p.check(checkWrite(path), p.writeDenied(path))
+	}
 	for _, port := range s.Ports {
 		p.check(checkBind(port), p.bindDenied(port))
 	}
@@ -321,6 +334,23 @@ func (p *probe) createDenied(c probeCreate) error {
 		}
 	}
 	return p.sandboxRefused(err)
+}
+
+// writeDenied opens an existing file for appending and writes nothing. The
+// file's owner and mode refuse the account outside the launch too (the
+// suite's control), so EACCES passes as well as the sandbox's EPERM; a
+// missing file fails, since a run could create it.
+func (p *probe) writeDenied(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: the launcher's own binary or plist, opened and never written
+	if err == nil {
+		_ = f.Close()
+		return errors.New("opened for writing")
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("refused with %w, not a permission refusal", err)
+	}
+	p.detail("refused as expected: %v", err)
+	return nil
 }
 
 // bindDenied tries the port on loopback and on every address.

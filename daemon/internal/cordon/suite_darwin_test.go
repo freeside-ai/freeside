@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -151,7 +152,8 @@ func TestFullProvesEveryDenialInARealLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := &fakeRecorder{}
-	s := testSuite(t, b, WithConformanceRecorder(rec))
+	launcher := Launcher{Socket: serveSocket(t, cfg), Binary: "/bin/ls", Plist: "/etc/hosts"}
+	s := testSuite(t, b, WithConformanceRecorder(rec), WithLauncher(launcher))
 	outside := &fakeOutside{}
 	s.outside = outside
 	if err := s.Full(t.Context()); err != nil {
@@ -183,6 +185,11 @@ func TestFullProvesEveryDenialInARealLaunch(t *testing.T) {
 	for _, domain := range deniedPreferenceDomains {
 		if !slices.Contains(common.spec.checks(), checkPreference(domain)) {
 			t.Errorf("the passes do not probe %s", checkPreference(domain))
+		}
+	}
+	for _, check := range []string{checkConnect(launcher.Socket), checkWrite(launcher.Binary), checkWrite(launcher.Plist)} {
+		if !slices.Contains(common.spec.checks(), check) {
+			t.Errorf("the passes do not probe %s", check)
 		}
 	}
 	left, err := os.ReadDir(cfg.RunsRoot)
@@ -370,5 +377,82 @@ func TestKickstartControlFailsWhenTheJobKeepsItsPid(t *testing.T) {
 	})
 	if len(outside.started) != 1 || len(outside.stopped) != 2 {
 		t.Fatalf("a failed control left jobs: started %v, stopped %v", outside.started, outside.stopped)
+	}
+}
+
+// serveSocket serves a Unix socket standing in for the host launcher's,
+// beside the runs root in the short protected root suiteFixture adds.
+func serveSocket(t *testing.T, cfg Config) string {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(cfg.RunsRoot), "l.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return path
+}
+
+// TestLauncherTargetsNeedTheirControls shows the launcher's targets fail
+// their controls, naming the path, when nothing serves the socket or the
+// account can write or can't find a file, and otherwise join the probe.
+func TestLauncherTargetsNeedTheirControls(t *testing.T) {
+	t.Parallel()
+	cfg := suiteFixture(t)
+	socket := serveSocket(t, cfg)
+	writable := filepath.Join(t.TempDir(), "freesided")
+	if err := os.WriteFile(writable, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct {
+		launcher Launcher
+		check    string
+	}{
+		"served":            {launcher: Launcher{Socket: socket, Binary: "/bin/ls", Plist: "/etc/hosts"}},
+		"socket not served": {launcher: Launcher{Socket: socket + "x", Binary: "/bin/ls", Plist: "/etc/hosts"}, check: checkConnect(socket + "x")},
+		"writable binary":   {launcher: Launcher{Socket: socket, Binary: writable, Plist: "/etc/hosts"}, check: checkWrite(writable)},
+		"missing plist":     {launcher: Launcher{Socket: socket, Binary: "/bin/ls", Plist: writable + ".plist"}, check: checkWrite(writable + ".plist")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b, err := New(cfg, moduleSeeder{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := testSuite(t, b, WithLauncher(tc.launcher))
+			tg := &targets{}
+			err = s.launcherTargets(tg)
+			if tc.check == "" {
+				if err != nil {
+					t.Fatalf("launcherTargets: %v", err)
+				}
+				want := []string{checkConnect(socket), checkWrite("/bin/ls"), checkWrite("/etc/hosts")}
+				if got := tg.spec.checks(); !slices.Equal(got, want) {
+					t.Fatalf("checks %v, want %v", got, want)
+				}
+				return
+			}
+			var f *ConformanceFailure
+			if !errors.As(err, &f) || f.Check != tc.check || !strings.HasPrefix(f.Reason, "control: ") {
+				t.Fatalf("launcherTargets = %v, want a control failure of %q", err, tc.check)
+			}
+		})
+	}
+	b, err := New(cfg, moduleSeeder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSuite(b, WithLauncher(Launcher{Socket: "l.sock", Binary: "/bin/ls", Plist: "/etc/hosts"})); err == nil {
+		t.Fatal("a relative launcher socket was accepted")
 	}
 }
