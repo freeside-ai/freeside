@@ -7203,11 +7203,19 @@ after, and reads it from inside a launch. It makes a keychain inside a
 launch and tries to make it the account's default and put it on the search
 list, then checks both settings are unchanged, restoring them if not. When
 mise is installed, it installs jq with mise inside a launch, into the run's
-own directories. It also runs the whole suite (`Suite.Full`, then the
-pre-job probe) against the real home with the real launchd and Simulator
-host; that writes nothing to the home. The suite's environment check
-fails a pass when the test's environment holds a credential-named
-variable, as an agent harness's may; unset it for the run.
+own directories. It also runs a plain `mise install` in a launch's worktree,
+with mise's install, cache, and config directories under the test's
+directory and its state directory as the launch sets it, and checks that the
+trust mise records stays in the run's directory: the home's
+`~/.local/state/mise` gains no entry naming the run. A failure names any
+entry it left there, to remove by hand. A second launch runs the installed
+jq offline from the same install directory, under the same checks. It also
+runs the whole suite (`Suite.Full`, then the pre-job probe) against the real
+home with the real launchd and Simulator host; that writes nothing to the
+home.
+The suite's environment check fails a pass when the test's environment
+holds a credential-named variable, as an agent harness's may; unset it for
+the run.
 
 ```sh
 FREESIDE_CORDON_LIVE_TEST=1 bash scripts/check.sh daemon test -- ./internal/cordon/... -run Live

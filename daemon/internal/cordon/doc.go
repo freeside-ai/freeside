@@ -20,6 +20,8 @@
 //	  worktree/  the seeded checkout and the agent's working directory
 //	  config/    CLAUDE_CONFIG_DIR, Freeside's, never the owner's
 //	  tmp/       TMPDIR
+//	  mise-state/ MISE_STATE_DIR, so mise's trust in the worktree's config
+//	             ends with the run (#3601)
 //	ctl/       the rule file, the proof's tag and control, the transcript
 //	           (the agent's stdout), its stderr, the prompt, the
 //	           supervisor's stderr, and the records (record.go): the

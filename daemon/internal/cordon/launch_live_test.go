@@ -4,7 +4,9 @@ package cordon
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -189,11 +191,78 @@ func TestLiveLaunchInstallsAMiseTool(t *testing.T) {
 	if err != nil {
 		t.Skipf("mise probe skipped: %v", err)
 	}
-	env := []string{"HOME=" + f.cfg.Home, "PATH=" + strings.Join(f.cfg.Path, ":"), "TMPDIR=" + t.TempDir()}
-	if err := miseInstall(mise, t.TempDir(), env); err != nil {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	env := append([]string{"HOME=" + f.cfg.Home, "PATH=" + strings.Join(f.cfg.Path, ":"), "TMPDIR=" + t.TempDir()},
+		isolatedMiseEnv(root, project)...)
+	if err := miseInstall(mise, project, env); err != nil {
 		t.Skipf("mise probe skipped: it fails outside a launch too: %.500v", err)
 	}
 	runProbeLaunch(t, f.backend(t), "mise", []string{probeLine("allow", "mise", mise)})
+}
+
+// TestLiveLaunchKeepsMiseTrustInTheRun runs a plain mise install in a
+// launch's worktree, with mise's state directory left as the launch sets
+// it. mise trusts the worktree's config by itself, and that trust must stay
+// in the run's directory, not the owner's home, where a later unconfined
+// mise would read the config as trusted (#3601). A second launch then runs
+// the installed tool offline from the same install directory, so the
+// install stays shared between runs. Only the install, cache, and config
+// directories are the test's own; the state directory is the real one a
+// regression would write.
+func TestLiveLaunchKeepsMiseTrustInTheRun(t *testing.T) {
+	t.Parallel()
+	requireLive(t)
+	f := liveFixture(t)
+	mise, err := exec.LookPath("mise")
+	if err != nil {
+		t.Skipf("mise probe skipped: %v", err)
+	}
+	pre := t.TempDir()
+	project := filepath.Join(pre, "project")
+	env := append([]string{"HOME=" + f.cfg.Home, "PATH=" + strings.Join(f.cfg.Path, ":"), "TMPDIR=" + t.TempDir()},
+		isolatedMiseEnv(pre, project)...)
+	if err := miseInstall(mise, project, env); err != nil {
+		t.Skipf("mise probe skipped: it fails outside a launch too: %.500v", err)
+	}
+	shared := t.TempDir()
+	b := f.backend(t)
+	for _, launch := range []struct{ id, mode string }{{"mise-trust", "online"}, {"mise-reuse", "offline"}} {
+		runProbeLaunch(t, b, launch.id, []string{probeLine("allow", "mise-worktree", mise, shared, launch.mode)})
+		run := layoutFor(f.cfg.RunsRoot, launch.id)
+		for _, dir := range []string{"trusted-configs", "tracked-configs"} {
+			if named := miseEntriesUnder(t, filepath.Join(f.cfg.Home, ".local", "state", "mise", dir), run.dir); len(named) > 0 {
+				t.Errorf("launch %s left mise %s in the owner's home naming its run: %q (remove them by hand)", launch.id, dir, named)
+			}
+		}
+		if len(miseEntriesUnder(t, filepath.Join(run.miseState, "trusted-configs"), run.dir)) == 0 {
+			t.Errorf("launch %s: mise recorded no trust in the run's own state directory %s", launch.id, run.miseState)
+		}
+	}
+}
+
+// miseEntriesUnder lists the entries of one of mise's state directories
+// whose link names a path under root. A missing directory has none.
+func miseEntriesUnder(t *testing.T, dir, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var named []string
+	for _, e := range entries {
+		target, err := os.Readlink(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(root, target); err == nil && filepath.IsLocal(rel) {
+			named = append(named, filepath.Join(dir, e.Name())+" -> "+target)
+		}
+	}
+	return named
 }
 
 // TestLiveLaunchCantWriteTheGlobalPreferences writes a test-only key to the

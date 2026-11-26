@@ -120,8 +120,8 @@ func plainRunID(runID string) bool {
 // RunID alone, so a restarted daemon can rebuild it (#3468).
 type layout struct {
 	// runRoot is RUN_ROOT, the only place the rules reopen: the worktree,
-	// the CLI's config directory, and TMPDIR.
-	runRoot, worktree, config, tmp string
+	// the CLI's config directory, TMPDIR, and mise's state directory.
+	runRoot, worktree, config, tmp, miseState string
 	// ctl sits outside runRoot, under a protected root, so the launch can
 	// neither read nor write it.
 	ctl, rules, tag, control, transcript, stderr string
@@ -143,7 +143,8 @@ func layoutFor(runsRoot, runID string) layout {
 	return layout{
 		runRoot: runRoot, worktree: filepath.Join(runRoot, "worktree"),
 		config: filepath.Join(runRoot, "config"), tmp: filepath.Join(runRoot, "tmp"),
-		ctl: ctl, rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
+		miseState: filepath.Join(runRoot, "mise-state"), ctl: ctl,
+		rules: filepath.Join(ctl, "rules.sb"), tag: filepath.Join(ctl, "tag"),
 		control: filepath.Join(ctl, "control"), transcript: filepath.Join(ctl, "transcript"),
 		stderr: filepath.Join(ctl, "stderr"), ended: filepath.Join(ctl, "ended.json"),
 		exportRecord: filepath.Join(ctl, "export.json"), request: filepath.Join(ctl, "request.json"),
@@ -156,12 +157,21 @@ func layoutFor(runsRoot, runID string) layout {
 // launchEnv is the launch's whole environment. Nothing is inherited from
 // the daemon. The four DISABLE variables are the ones the ward sets for the
 // CLI (internal/exec/claude/spec.go).
+//
+// MISE_STATE_DIR is where mise keeps trusted-configs and tracked-configs. A
+// plain mise install trusts the project's config by itself and records it
+// there, so the trust names the run's worktree and is removed with the
+// run's directory instead of staying in the owner's home, where a later
+// unconfined mise would read the config as trusted (#3601). mise's install
+// and cache directories stay the owner's, so a tool one run installs stays
+// shared with later runs.
 func launchEnv(cfg Config, l layout) []string {
 	return []string{
 		"HOME=" + cfg.Home,
 		"PATH=" + strings.Join(cfg.Path, ":"),
 		"TMPDIR=" + l.tmp,
 		"CLAUDE_CONFIG_DIR=" + l.config,
+		"MISE_STATE_DIR=" + l.miseState,
 		"DISABLE_AUTOUPDATER=1",
 		"DISABLE_TELEMETRY=1",
 		"DISABLE_ERROR_REPORTING=1",
@@ -314,7 +324,7 @@ func (b *Backend) prepare(l layout) error {
 	if err := os.Mkdir(filepath.Dir(l.runRoot), 0o700); err != nil {
 		return fmt.Errorf("cordon: claim launch directory: %w", err)
 	}
-	for _, dir := range []string{l.runRoot, l.config, l.tmp, l.ctl} {
+	for _, dir := range []string{l.runRoot, l.config, l.tmp, l.miseState, l.ctl} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			return fmt.Errorf("cordon: create %s: %w", dir, err)
 		}
