@@ -100,6 +100,15 @@ struct FreesideMacApp: App {
             .onChange(of: daemon?.readiness, initial: true) { _, readiness in
                 session.applyReadiness(readiness)
             }
+            .environment(
+                \.hostDaemonStatus,
+                daemon.flatMap {
+                    HostDaemonStatus.forConnectedDeployment(
+                        state: $0.state,
+                        startFailure: $0.startFailure,
+                        connectedURL: session.serverURL,
+                        localDaemonURL: $0.daemonURL)
+                })
         }
         .defaultSize(width: 960, height: 640)
         .commands {

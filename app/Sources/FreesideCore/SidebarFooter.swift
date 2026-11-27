@@ -122,19 +122,34 @@
             freshness: InboxStore.Freshness, lastUpdatedAt: Date?, at now: Date
         ) -> String {
             let updated = LastUpdatedLabel.text(for: lastUpdatedAt, at: now)
-            guard let problem = problem(freshness) else { return updated }
+            guard let problem = freshness.problemLabel else { return updated }
             return "\(problem) · \(updated)"
-        }
-
-        private static func problem(_ freshness: InboxStore.Freshness) -> String? {
-            switch freshness {
-            case .fresh, .unvalidated: nil
-            case .unreachable: "Daemon unreachable"
-            case .syncFailing: "Sync failing"
-            case .incompatible(.appBelowFloor): "App needs an update"
-            case .incompatible(.daemonBelowLevel): "Daemon needs an update"
-            case .unauthenticated: "Device access revoked"
-            }
         }
     }
 #endif
+
+extension InboxStore.Freshness {
+    /// Short failure phrase shared by the Mac sidebar's sync dot and the
+    /// list column's unloaded failure state.
+    var problemLabel: String? {
+        switch self {
+        case .fresh, .unvalidated: nil
+        case .unreachable: "Daemon unreachable"
+        case .syncFailing: "Sync failing"
+        case .incompatible(.appBelowFloor): "App needs an update"
+        case .incompatible(.daemonBelowLevel): "Daemon needs an update"
+        case .unauthenticated: "Device access revoked"
+        }
+    }
+
+    /// Heading for the list column when the first load hasn't landed and sync
+    /// is failing. Keeps the dot's compact hover text unchanged while giving
+    /// `.unreachable` a plain-English title.
+    var firstLoadFailureTitle: String? {
+        switch self {
+        case .fresh, .unvalidated: nil
+        case .unreachable: "Can't reach the daemon"
+        case .syncFailing, .incompatible, .unauthenticated: problemLabel
+        }
+    }
+}

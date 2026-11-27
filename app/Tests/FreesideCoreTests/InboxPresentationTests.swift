@@ -316,4 +316,46 @@ import Testing
         #expect(ProjectFilterPopover.monogram("free_as_bird") == "BI")
         #expect(ProjectFilterPopover.monogram("x") == "X")
     }
+
+    @Test func firstLoadStateNamesFailingSyncAndConnectingInFlight() {
+        let tried = Date(timeIntervalSince1970: 1_795_120_200)
+        #expect(UnifiedListView.firstLoadState(freshness: .unvalidated, lastAttemptAt: nil) == .connecting)
+        #expect(UnifiedListView.firstLoadState(freshness: .fresh, lastAttemptAt: tried) == .connecting)
+        #expect(
+            UnifiedListView.firstLoadState(freshness: .unreachable, lastAttemptAt: tried)
+                == .failing(title: "Can't reach the daemon", lastAttemptAt: tried))
+        #expect(
+            UnifiedListView.firstLoadState(freshness: .unreachable, lastAttemptAt: nil)
+                == .failing(title: "Can't reach the daemon", lastAttemptAt: nil))
+        #expect(
+            UnifiedListView.firstLoadState(freshness: .syncFailing, lastAttemptAt: tried)
+                == .failing(title: "Sync failing", lastAttemptAt: tried))
+        #expect(
+            UnifiedListView.firstLoadState(freshness: .unauthenticated, lastAttemptAt: tried)
+                == .failing(title: "Device access revoked", lastAttemptAt: tried))
+        #expect(
+            UnifiedListView.firstLoadState(
+                freshness: .incompatible(.appBelowFloor(floor: 4, daemonVersion: "1.0.0")),
+                lastAttemptAt: tried)
+                == .failing(title: "App needs an update", lastAttemptAt: tried))
+        #expect(
+            UnifiedListView.firstLoadState(
+                freshness: .incompatible(.daemonBelowLevel(level: 1, daemonVersion: "1.0.0")),
+                lastAttemptAt: tried)
+                == .failing(title: "Daemon needs an update", lastAttemptAt: tried))
+    }
+
+    @Test func firstLoadAttemptDescriptionOmitsTheTimeLineWithoutAStampedAttempt() {
+        let now = Date(timeIntervalSince1970: 1_795_120_230)
+        let tried = Date(timeIntervalSince1970: 1_795_120_200)
+        let locale = Locale(identifier: "en_US_POSIX")
+        let utc = TimeZone.gmt
+        #expect(
+            UnifiedListView.firstLoadAttemptDescription(
+                lastAttemptAt: nil, now: now, locale: locale, timeZone: utc) == nil)
+        #expect(
+            UnifiedListView.firstLoadAttemptDescription(
+                lastAttemptAt: tried, now: now, locale: locale, timeZone: utc)
+                == "Last tried \(FreesideFormat.shortTime(tried, now: now, locale: locale, timeZone: utc))")
+    }
 }

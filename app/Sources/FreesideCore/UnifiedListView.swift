@@ -11,6 +11,34 @@ import SwiftUI
 /// sidebar's foot while everything fits and follow Needs You down once it
 /// doesn't; on iPhone they follow Needs You in one scrolling list.
 struct UnifiedListView: View {
+    /// What the list column draws before the first sync bootstrap lands
+    /// (`.idle` / `.loading`). Keeps the column named and full-height so the
+    /// Mac sidebar footer stays pinned at the bottom.
+    enum FirstLoadState: Equatable {
+        case connecting
+        case failing(title: String, lastAttemptAt: Date?)
+    }
+
+    static func firstLoadState(
+        freshness: InboxStore.Freshness, lastAttemptAt: Date?
+    ) -> FirstLoadState {
+        if let title = freshness.firstLoadFailureTitle {
+            return .failing(title: title, lastAttemptAt: lastAttemptAt)
+        }
+        return .connecting
+    }
+
+    /// The attempt-time line under a first-load failure title, or nil when
+    /// sync has reported a failure before the round stamps its completion
+    /// time (omitting the line instead of claiming it wasn't tried).
+    static func firstLoadAttemptDescription(
+        lastAttemptAt: Date?, now: Date, locale: Locale = .autoupdatingCurrent,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String? {
+        guard let lastAttemptAt else { return nil }
+        return "Last tried \(FreesideFormat.shortTime(lastAttemptAt, now: now, locale: locale, timeZone: timeZone))"
+    }
+
     /// The Needs You count: the rows the filtered list draws. Absent until
     /// the list has loaded, when a zero would read as nothing needing you.
     static func needsYouCount(in list: UnifiedList, store: InboxStore) -> Int? {
@@ -70,11 +98,14 @@ struct UnifiedListView: View {
     /// row reads it, so typing in the composer redraws nothing else.
     var draftStore: NewTaskDraftStore?
     var lastUpdatedAt: Date?
+    var lastAttemptAt: Date?
     var onRefresh: @MainActor () async -> Void = {}
     var onRevealTechnicalDetails: (String) -> Void = { _ in }
     /// The look-alike marker's clock, as the task page's header reads it.
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
+    @Environment(\.pinnedNow) private var pinnedNow
+    @Environment(\.hostDaemonStatus) private var hostDaemonStatus
     @State private var projectFilterPresented = false
     /// How many Finished rows an expanded Finished draws (`FinishedPage`);
     /// collapsing it starts the page over.
@@ -101,7 +132,7 @@ struct UnifiedListView: View {
         Group {
             switch store.loadState {
             case .idle, .loading:
-                ProgressView()
+                firstLoadView
             case .failed(let message):
                 UnavailableStateView(glyph: .inbox, title: "Couldn't load the list", description: message)
             case .loaded:
@@ -166,6 +197,67 @@ struct UnifiedListView: View {
     private func repairSelection(previouslyOpen: Set<String> = []) {
         guard store.loadState == .loaded else { return }
         navigation.repairSelection(in: list, previouslyOpen: previouslyOpen)
+    }
+
+    @ViewBuilder
+    private var firstLoadView: some View {
+        switch Self.firstLoadState(freshness: store.freshness, lastAttemptAt: lastAttemptAt) {
+        case .connecting:
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Connecting to the daemon…")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 40)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failing(let title, let attemptedAt):
+            let now = pinnedNow ?? .now
+            let description = Self.firstLoadAttemptDescription(
+                lastAttemptAt: attemptedAt, now: now, locale: locale, timeZone: timeZone)
+            if let hostStatus = hostDaemonStatus {
+                VStack(spacing: 14) {
+                    EmptyStateBlock(glyph: .inbox, title: title, description: description)
+                    Text(hostStatus.headline)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .multilineTextAlignment(.center)
+                    if let failure = hostStatus.failure {
+                        startFailureDetails(failure, now: now)
+                    }
+                }
+                .emptyStateSeat(.pane)
+            } else {
+                UnavailableStateView(glyph: .inbox, title: title, description: description)
+            }
+        }
+    }
+
+    private func startFailureDetails(_ failure: DaemonStartFailure, now: Date) -> some View {
+        let logged = FreesideFormat.shortTime(
+            failure.loggedAt, now: now, locale: locale, timeZone: timeZone)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(failure.message)
+                .font(FreesideFont.monoValue)
+                .foregroundStyle(Color.ink)
+            Text("Logged \(logged)")
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .exactInstant(failure.loggedAt)
+            Text(failure.logURL.path)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+        }
+        .multilineTextAlignment(.leading)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.ground2, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
     /// The Finished rows an expanded Finished draws: the page, grown to hold

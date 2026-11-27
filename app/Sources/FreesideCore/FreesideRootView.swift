@@ -479,6 +479,7 @@ public struct FreesideRootView: View {
                 freshness: coordinator.store.freshness),
             draftStore: coordinator.newTaskDraft,
             lastUpdatedAt: coordinator.lastUpdatedAt,
+            lastAttemptAt: coordinator.lastAttemptAt,
             onRefresh: coordinator.refresh,
             onRevealTechnicalDetails: revealTechnicalDetails)
     }

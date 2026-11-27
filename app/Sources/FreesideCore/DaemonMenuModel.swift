@@ -98,12 +98,16 @@
     public final class DaemonMenuModel {
         public private(set) var state: DaemonMenuState
         public private(set) var readiness: DaemonReadiness?
+        public private(set) var startFailure: DaemonStartFailure?
         public private(set) var actionError: String?
+        /// The local supervised daemon URL this model monitors, so callers can
+        /// match it against the active session's connected deployment.
+        public let daemonURL: URL
 
         private let service: any DaemonServiceControlling
         private let healthChecker: any DaemonHealthChecking
-        private let daemonURL: URL
         private let readReadiness: () -> DaemonReadiness?
+        private let readStartFailure: () -> DaemonStartFailure?
         private let pollingInterval: Duration
         private let registerOnFirstRun: Bool
         private var lastStartedAt: Date?
@@ -126,13 +130,19 @@
             else {
                 preconditionFailure("the \(environment.rawValue) app has no supervised daemon")
             }
-            let readinessURL = environment.daemonStateDirectory()
+            let stateDirectory = environment.daemonStateDirectory()
+            let readinessURL =
+                stateDirectory
                 .map(DaemonReadinessReader.fileURL(inStateDirectory:))
+            let logURL =
+                stateDirectory
+                .map(DaemonStartFailureReader.fileURL(inStateDirectory:))
             self.init(
                 service: SMAppDaemonService(plistName: plistName),
                 healthChecker: APIDaemonHealthChecker(),
                 daemonURL: daemonURL,
-                readReadiness: { Self.followedReadiness(at: readinessURL, environment: environment) })
+                readReadiness: { Self.followedReadiness(at: readinessURL, environment: environment) },
+                readStartFailure: { logURL.flatMap { DaemonStartFailureReader().read(at: $0) } })
         }
 
         /// The readiness the menu watch hands to pairing: only a file stamped
@@ -150,7 +160,8 @@
             daemonURL: URL,
             pollingInterval: Duration = .seconds(5),
             registerOnFirstRun: Bool = true,
-            readReadiness: @escaping () -> DaemonReadiness?
+            readReadiness: @escaping () -> DaemonReadiness?,
+            readStartFailure: @escaping () -> DaemonStartFailure? = { nil }
         ) {
             self.service = service
             self.healthChecker = healthChecker
@@ -158,6 +169,7 @@
             self.pollingInterval = pollingInterval
             self.registerOnFirstRun = registerOnFirstRun
             self.readReadiness = readReadiness
+            self.readStartFailure = readStartFailure
             state = Self.serviceState(service.status)
         }
 
@@ -218,12 +230,15 @@
             case .notRegistered:
                 clearRecoveredStopError()
                 readiness = nil
+                startFailure = readStartFailure()
                 state = .stopped
             case .requiresApproval:
                 readiness = nil
+                startFailure = nil
                 state = .needsApproval
             case .notFound:
                 readiness = nil
+                startFailure = nil
                 state = .unavailable
             case .enabled:
                 let currentReadiness = readReadiness().flatMap { readiness in
@@ -244,11 +259,13 @@
                         actionError = nil
                         actionErrorKind = nil
                     }
+                    startFailure = nil
                     state = .running(health, restartObserved: restartObserved)
                 } catch {
                     guard generation == refreshGeneration, service.status == .enabled else {
                         return
                     }
+                    startFailure = readStartFailure()
                     state = .unreachable
                 }
             }

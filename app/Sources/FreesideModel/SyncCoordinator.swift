@@ -125,6 +125,10 @@ public final class SyncCoordinator {
     public private(set) var answeredRunTimelineIDs: Set<String> = []
     public private(set) var answeredTaskTimelineIDs: Set<String> = []
     public private(set) var lastUpdatedAt: Date?
+    /// When the most recent refresh round finished, whether it succeeded or
+    /// failed. `lastUpdatedAt` stays the last successful sync, while this lets
+    /// an unloaded list report when it last tried to reach the daemon.
+    public private(set) var lastAttemptAt: Date?
     /// The named features the daemon's `/health` listed at its last answered
     /// compatible read, which opens every refresh round (#1266, #3109). A surface whose feature is missing offers no control and
     /// sends no command, rather than failing on a command the daemon refuses.
@@ -672,6 +676,7 @@ public final class SyncCoordinator {
         let token = UUID()
         let task = Task { @MainActor [weak self] in
             guard let self else { return false }
+            defer { self.lastAttemptAt = .now }
             // The health read runs ahead of the round's reads, not beside
             // them: its compatibility verdict decides whether this round may
             // read or resend anything at all (#3109). That costs one round
