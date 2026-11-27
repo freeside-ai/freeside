@@ -182,15 +182,18 @@ func (r handoffSpecRefusal) Error() string { return r.err.Error() }
 
 func (r handoffSpecRefusal) Unwrap() error { return r.err }
 
-// failureCause classifies an error for the failed outcome it ends in: a
-// refused evidence channel (importer.ErrEvidenceInvalid or
+// failureCause classifies an error for the failed outcome it ends in: a seed
+// refused because the base left its branch (ErrSeedBaseLeftBranch) is
+// base_left_branch, a refused evidence channel (importer.ErrEvidenceInvalid or
 // ErrEvidenceMediaMismatch) is invalid_evidence, and a ward handoff check
-// (ward.ConformanceFailure) is handoff_check with the check's screened
-// record. Every other error returns the empty cause, which the outcome
-// records as unknown. The importer and ward are the daemon's own judgment of
-// the export, so the cause is trusted; the summary keeps naming the entry and
-// the rule.
+// (ward.ConformanceFailure) is handoff_check with the check's screened record.
+// Every other error returns the empty cause, which the outcome records as
+// unknown. Each of these is the daemon's own judgment, so the cause is
+// trusted; the summary keeps naming the entry and the rule.
 func failureCause(err error) (domain.FailureCause, *domain.HandoffCheckFailure) {
+	if errors.Is(err, ErrSeedBaseLeftBranch) {
+		return domain.FailureCauseBaseLeftBranch, nil
+	}
 	if errors.Is(err, importer.ErrEvidenceInvalid) || errors.Is(err, importer.ErrEvidenceMediaMismatch) {
 		return domain.FailureCauseInvalidEvidence, nil
 	}
@@ -1527,6 +1530,11 @@ func (d *Driver) seedBase(ctx context.Context, in intent) error {
 		in.Spec.Base.Repo, in.Spec.Base.BaseRef, in.Spec.Base.BaseSHA, in.Seed,
 	); err != nil {
 		if errors.Is(err, ErrSeedRefused) {
+			if ctx.Err() != nil && errors.Is(err, ErrSeedBaseLeftBranch) {
+				// Transport wraps any canceled rev-parse/merge-base error as
+				// ErrRemoteMissingBase, so a base-left verdict after cancel is untrusted.
+				return fmt.Errorf("fetch exact base: %w: %s", ErrSeedRefused, err.Error())
+			}
 			return fmt.Errorf("fetch exact base: %w", err)
 		}
 		if errors.Is(err, ErrSeedRetryable) || ctx.Err() != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -152,20 +153,46 @@ func TestAdoptRecordedOutcomeKeepsFailureCause(t *testing.T) {
 	}
 }
 
-// TestPipelineClassifiesOnlyTheHandoffRefusal pins the driver's one
-// classifier (#2210): a handoff spec the driver refuses to build for an
-// admitted start records invalid_configuration, and a writer that exits
-// nonzero still records unknown, since its transcript is untrusted text.
-func TestPipelineClassifiesOnlyTheHandoffRefusal(t *testing.T) {
+type cancelThenFailSeeder struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (s cancelThenFailSeeder) FetchBase(_ context.Context, _, _, _, _ string) error {
+	s.cancel()
+	return s.err
+}
+
+func (s cancelThenFailSeeder) FetchBaseWorktree(_ context.Context, _, _, _, _ string) error {
+	s.cancel()
+	return s.err
+}
+
+// TestPipelineFailureCauseClassification pins the driver's pipeline
+// classifiers (#2210, #3515): a refused handoff spec records
+// invalid_configuration, a seed whose base left its branch records
+// base_left_branch (unless the seed's context was canceled, when the transport
+// conflates a canceled ancestry check with a missing base), and another seed
+// refusal (materialization, credentials, access, API refusal) or a writer
+// nonzero exit still records unknown.
+func TestPipelineFailureCauseClassification(t *testing.T) {
 	t.Parallel()
-	refused := func(d *Driver) {
+	refused := func(d *Driver, _ context.CancelFunc) {
 		// The test provider refuses a start with no auth identity.
 		d.provider = testProvider{
 			volumes:            stubVolumes{volume: testAuthVol},
 			handoffInputMutate: func(in *ProviderHandoffInput) { in.Spec.AuthIdentityID = "" },
 		}
 	}
-	writerExit := func(d *Driver) {
+	seedErr := func(err error) func(*Driver, context.CancelFunc) {
+		return func(d *Driver, _ context.CancelFunc) { d.seeder = stubSeeder{err: err} }
+	}
+	canceledSeedErr := func(err error) func(*Driver, context.CancelFunc) {
+		return func(d *Driver, cancel context.CancelFunc) {
+			d.seeder = cancelThenFailSeeder{cancel: cancel, err: err}
+		}
+	}
+	writerExit := func(d *Driver, _ context.CancelFunc) {
 		d.gate = &stubGate{
 			handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) { return nil, ward.ErrWriterFailed },
 			recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
@@ -174,28 +201,112 @@ func TestPipelineClassifiesOnlyTheHandoffRefusal(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name  string
-		setup func(*Driver)
-		want  domain.FailureCause
+		name        string
+		setup       func(*Driver, context.CancelFunc)
+		want        domain.FailureCause
+		wantSummary string
 	}{
-		{"refused handoff spec", refused, domain.FailureCauseInvalidConfiguration},
-		{"writer exit", writerExit, domain.FailureCauseUnknown},
+		{"refused handoff spec", refused, domain.FailureCauseInvalidConfiguration, ""},
+		{
+			"seed base left branch",
+			seedErr(errors.Join(ErrSeedRefused, ErrSeedBaseLeftBranch, errors.New("base absent"))),
+			domain.FailureCauseBaseLeftBranch,
+			"base absent",
+		},
+		{
+			"seed base left branch after cancel",
+			canceledSeedErr(errors.Join(ErrSeedRefused, ErrSeedBaseLeftBranch, errors.New("base absent"))),
+			domain.FailureCauseUnknown,
+			"base absent",
+		},
+		{
+			"seed refused for other reason",
+			seedErr(errors.Join(ErrSeedRefused, errors.New("403 forbidden"))),
+			domain.FailureCauseUnknown,
+			"403 forbidden",
+		},
+		{"writer exit", writerExit, domain.FailureCauseUnknown, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			runCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			outcomes := newStubExports()
+			d := newTestDriver(t, &stubGate{}, outcomes)
+			d.seeder = &recordingSeeder{}
+			in := orphan(t, d, phaseSeeding, nil)
+			tc.setup(d, cancel)
+			d.runPipeline(runCtx, in)
+			got, err := d.Collect(ctx, testInvoke)
+			if err != nil || got.Status != exec.StatusFailed {
+				t.Fatalf("result = %+v, %v; want failed", got, err)
+			}
+			if tc.wantSummary != "" && !strings.Contains(got.Summary, tc.wantSummary) {
+				t.Fatalf("summary = %q, want substring %q", got.Summary, tc.wantSummary)
+			}
+			if outcome := outcomes.outcomes[testInvoke]; outcome.Cause != tc.want {
+				t.Fatalf("recorded cause = %q, want %q", outcome.Cause, tc.want)
+			}
+		})
+	}
+}
+
+// TestStartRefusalCauseClassification pins StartWithInputs's two
+// ErrUnsupportedStart branches (#3515): a prompt refusal stays unknown because
+// RenderPrompt reads ProtectedPaths from the repository's latest trust profile
+// (which an operator can narrow before retrying), while a registry-policy
+// refusal reads only the run's immutable policy artifact and append-only
+// adoptions and records invalid_configuration.
+func TestStartRefusalCauseClassification(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		setup           func(*Driver, *exec.StartSpec)
+		wantResultCause domain.FailureCause
+		wantOutcome     domain.FailureCause
+	}{
+		{
+			name: "prompt refusal stays unknown",
+			setup: func(d *Driver, _ *exec.StartSpec) {
+				d.provider = refusingProvider{
+					testProvider: testProvider{volumes: stubVolumes{volume: testAuthVol}},
+					refusal:      errors.Join(ErrUnsupportedStart, errors.New("prompt exceeds limit")),
+				}
+			},
+			wantResultCause: "",
+			wantOutcome:     domain.FailureCauseUnknown,
+		},
+		{
+			name: "registry policy refusal records invalid_configuration",
+			setup: func(_ *Driver, spec *exec.StartSpec) {
+				spec.EgressProfile = domain.EgressProviderRegistry
+			},
+			wantResultCause: domain.FailureCauseInvalidConfiguration,
+			wantOutcome:     domain.FailureCauseInvalidConfiguration,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			outcomes := newStubExports()
 			d := newTestDriver(t, &stubGate{}, outcomes)
-			d.seeder = &recordingSeeder{}
-			in := orphan(t, d, phaseSeeding, nil)
-			tc.setup(d)
-			d.runPipeline(ctx, in)
-			got, err := d.Collect(ctx, testInvoke)
-			if err != nil || got.Status != exec.StatusFailed {
-				t.Fatalf("result = %+v, %v; want failed", got, err)
+			spec := testStartSpec()
+			tc.setup(d, &spec)
+			inputs := stageInputsWithBodies(
+				t, &spec, []byte("spec"), []byte("prompt"),
+				[]byte(`[{"key":"paths","value":"daemon/**"}]`),
+			)
+			load := func(context.Context) (exec.StageInputs, error) { return inputs, nil }
+			if err := d.StartWithInputs(ctx, testInvoke, spec, load); err != nil {
+				t.Fatalf("StartWithInputs: %v", err)
 			}
-			if outcome := outcomes.outcomes[testInvoke]; outcome.Cause != tc.want {
-				t.Fatalf("recorded cause = %q, want %q", outcome.Cause, tc.want)
+			got, err := d.Collect(ctx, testInvoke)
+			if err != nil || got.Status != exec.StatusFailed || got.Cause != tc.wantResultCause {
+				t.Fatalf("Collect = %+v, %v; want failed with cause %q", got, err, tc.wantResultCause)
+			}
+			if outcome := outcomes.outcomes[testInvoke]; outcome.Cause != tc.wantOutcome {
+				t.Fatalf("recorded outcome cause = %q, want %q", outcome.Cause, tc.wantOutcome)
 			}
 		})
 	}

@@ -220,21 +220,22 @@ func TestProductionInputSourceClassifiesOperationalErrorsOnly(t *testing.T) {
 func TestClassifyTransportSeedError(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name      string
-		err       error
-		retryable bool
-		refused   bool
+		name           string
+		err            error
+		retryable      bool
+		refused        bool
+		baseLeftBranch bool
 	}{
-		{"missing base", publish.ErrRemoteMissingBase, false, true},
-		{"materialization refusal", publish.ErrMaterializationRefused, false, true},
-		{"installation token expiry refusal", publish.ErrTokenExpiry, false, true},
-		{"git auth", &publish.TransportGitError{Refusal: publish.RefusalAuth}, false, true},
-		{"API unauthorized", &publish.APIError{Status: http.StatusUnauthorized}, false, true},
-		{"API forbidden", &publish.APIError{Status: http.StatusForbidden}, false, true},
-		{"API missing", &publish.APIError{Status: http.StatusNotFound}, false, true},
-		{"API rate limit", &publish.APIError{Status: http.StatusTooManyRequests}, true, false},
-		{"API server failure", &publish.APIError{Status: http.StatusInternalServerError}, true, false},
-		{"ambiguous transport failure", errors.New("temporary network failure"), true, false},
+		{"missing base", publish.ErrRemoteMissingBase, false, true, true},
+		{"materialization refusal", publish.ErrMaterializationRefused, false, true, false},
+		{"installation token expiry refusal", publish.ErrTokenExpiry, false, true, false},
+		{"git auth", &publish.TransportGitError{Refusal: publish.RefusalAuth}, false, true, false},
+		{"API unauthorized", &publish.APIError{Status: http.StatusUnauthorized}, false, true, false},
+		{"API forbidden", &publish.APIError{Status: http.StatusForbidden}, false, true, false},
+		{"API missing", &publish.APIError{Status: http.StatusNotFound}, false, true, false},
+		{"API rate limit", &publish.APIError{Status: http.StatusTooManyRequests}, true, false, false},
+		{"API server failure", &publish.APIError{Status: http.StatusInternalServerError}, true, false, false},
+		{"ambiguous transport failure", errors.New("temporary network failure"), true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := classifyTransportSeedError(tc.err)
@@ -245,6 +246,10 @@ func TestClassifyTransportSeedError(t *testing.T) {
 			if got := errors.Is(err, claude.ErrSeedRefused); got != tc.refused {
 				t.Fatalf("classifyTransportSeedError(%v) refused = %v, want %v",
 					tc.err, got, tc.refused)
+			}
+			if got := errors.Is(err, claude.ErrSeedBaseLeftBranch); got != tc.baseLeftBranch {
+				t.Fatalf("classifyTransportSeedError(%v) baseLeftBranch = %v, want %v",
+					tc.err, got, tc.baseLeftBranch)
 			}
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("classified error %v does not retain %v", err, tc.err)
@@ -258,8 +263,13 @@ func TestClassifyTransportSeedError(t *testing.T) {
 		publish.ErrInstallationGrantUntrusted,
 		publish.ErrGrantMismatch,
 	} {
-		if err := classifyTransportSeedError(permanent); !errors.Is(err, claude.ErrSeedRefused) {
+		err := classifyTransportSeedError(permanent)
+		if !errors.Is(err, claude.ErrSeedRefused) {
 			t.Errorf("credential error %v classified as %v, want definitive refusal",
+				permanent, err)
+		}
+		if errors.Is(err, claude.ErrSeedBaseLeftBranch) {
+			t.Errorf("credential error %v classified as %v, want untyped seed refusal",
 				permanent, err)
 		}
 	}

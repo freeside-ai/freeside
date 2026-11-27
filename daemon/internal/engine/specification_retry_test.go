@@ -163,6 +163,36 @@ func TestSpecificationRetryDispatchesToApproval(t *testing.T) {
 	requireRetryRefused(t, f, retryReason, ErrSpecificationNotRetryable)
 }
 
+func TestSpecificationBaseLeftBranchResultWithholdsRetry(t *testing.T) {
+	t.Parallel()
+	f := newSpecificationFixture(t, true, 3)
+	driver := f.newDriver(t)
+	e := f.newEngine(t, driver)
+	f.submit(t)
+	failed := specificationInvocationID("specification-run", 1)
+	driver.Script(failed, execfake.StageScript{
+		Outcome: execfake.OutcomeFail,
+		Result: exec.StageResult{
+			Artifacts: []domain.Digest{},
+			Summary:   "fetch exact base: base left its branch",
+			Cause:     domain.FailureCauseBaseLeftBranch,
+		},
+	})
+	if _, err := e.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	card, _ := f.item(t, specificationFailureItemID(failed))
+	if card.ExecutionFailure == nil ||
+		card.ExecutionFailure.Cause != domain.FailureCauseBaseLeftBranch ||
+		card.ExecutionFailure.RetryOutlook != domain.RetryOutlookWouldRepeat {
+		t.Fatalf("failure card facts = %+v, want base_left_branch / would_repeat", card.ExecutionFailure)
+	}
+	wantDecisions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+	if !slices.Equal(card.RequestedDecision, wantDecisions) {
+		t.Fatalf("requested decisions = %v, want %v", card.RequestedDecision, wantDecisions)
+	}
+}
+
 func TestSpecificationRetryAcceptsCanceledAndLostTerminals(t *testing.T) {
 	t.Parallel()
 	for _, status := range []exec.Status{exec.StatusCanceled, exec.StatusGone} {

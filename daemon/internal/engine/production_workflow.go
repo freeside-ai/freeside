@@ -1855,6 +1855,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 	stage domain.Stage,
 	invocationID domain.InvocationID,
 	summary string,
+	cause domain.FailureCause,
 ) error {
 	terminal := productionTerminalRecord{
 		InvocationID: invocationID,
@@ -1887,7 +1888,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 				AdmissionID:  admission.ID,
 				Status:       domain.ExecutionOutcomeFailed,
 				Summary:      terminal.Summary,
-				Cause:        domain.FailureCauseUnknown,
+				Cause:        cause,
 				RecordedAt:   time.Now().UTC(),
 			}
 			stored, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)
@@ -1916,7 +1917,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		if admissionErr == nil {
 			role, _ := wardRole(current, currentStage, invocationID)
 			facts = &domain.ExecutionFailureFacts{
-				Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+				Outcome: domain.ExecutionOutcomeFailed, Cause: cause,
 				Stage: domain.StageNameImplementation, InvocationID: invocationID,
 				Admitted: admittedFacts(admission, role),
 			}
