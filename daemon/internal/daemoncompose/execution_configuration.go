@@ -112,7 +112,9 @@ func executionStateDiagnostic(state ExecutionState, detail string) (code, reason
 	case ExecutionAuthorityInUse:
 		return "app_authority_in_use", "Agent execution is off: another process, most likely a deputy run, " +
 			"held the App authority when this daemon started. " + executionDriverlessScope +
-			" Once that process ends, run freesided execution resume to restart this daemon with execution."
+			" This daemon restarts with execution on its own once that process lets go, and waits while a " +
+			"production rig lease exists. If no deputy run is running, a stale lease needs " +
+			"freesided rig recover. Run freesided execution resume to retry at once."
 	case ExecutionRigLeasePresent:
 		return "rig_lease_present", "Agent execution is off: a production rig lease existed when this daemon " +
 			"started, so a deputy run holds or held the App authority. " + executionDriverlessScope +

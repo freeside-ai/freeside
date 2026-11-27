@@ -101,6 +101,15 @@ func requireRestartRequested(t *testing.T, h *daemon) {
 	}
 }
 
+func requireNoRestartRequested(t *testing.T, h *daemon, d time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), d)
+	defer cancel()
+	if err := h.Wait(ctx); err != nil {
+		t.Fatalf("daemon wait = %v, want no restart within %s", err, d)
+	}
+}
+
 func closeDaemon(t *testing.T, h *daemon) {
 	t.Helper()
 	if err := h.Close(); err != nil {
@@ -123,7 +132,8 @@ func execution(t *testing.T, dbPath string, action executionPauseAction) (stdout
 // at once with nothing running, and asks for a restart; the restarted prod
 // serves driverless as paused even with the lease gone, holding no lock;
 // resume clears the pause online and asks for a restart again; and the next
-// start runs the gated order, which now finds the lock free.
+// start runs the gated order, starts app_authority_in_use beside a held lock,
+// and asks for a restart on its own once that lock is released.
 func TestExecutionPauseHandsTheAuthorityToADeputy(t *testing.T) {
 	t.Parallel()
 	lease, leaseRoot, _ := acquireTestRig(t)
@@ -158,7 +168,7 @@ func TestExecutionPauseHandsTheAuthorityToADeputy(t *testing.T) {
 	closeDaemon(t, h)
 
 	// The gated order runs again; a "deputy" holding the lock keeps this
-	// start driverless, which is as far as a test without a driver goes.
+	// start driverless, and once it lets go prod asks to restart on its own.
 	deputy, err := publish.AcquireAuthorityWriterLock(p.stateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -167,15 +177,21 @@ func TestExecutionPauseHandsTheAuthorityToADeputy(t *testing.T) {
 	h = p.start(t)
 	defer closeDaemon(t, h)
 	requireOnlyDriverlessCard(t, h, "app_authority_in_use", false)
+	if err := deputy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireRestartRequested(t, h)
+	requireLockFree(t, p.stateDir)
 }
 
 // TestExecutionPauseResumesOffline: with no daemon running, resume clears a
 // released pause and concludes its card, and the next start, still beside a
-// lease, comes back driverless for the lease rather than the pause. pause
-// and status need a running prod.
+// lease, comes back driverless for the lease rather than the pause, and leaves
+// the authority retry off even after the lease is released with the lock free.
+// pause and status need a running prod.
 func TestExecutionPauseResumesOffline(t *testing.T) {
 	t.Parallel()
-	_, leaseRoot, _ := acquireTestRig(t)
+	lease, leaseRoot, _ := acquireTestRig(t)
 	p := newPausableProd(t, leaseRoot)
 	ctx := t.Context()
 	st, err := store.OpenExisting(ctx, p.dbPath, store.Options{})
@@ -207,6 +223,14 @@ func TestExecutionPauseResumesOffline(t *testing.T) {
 	h := p.start(t)
 	defer closeDaemon(t, h)
 	requireOnlyDriverlessCard(t, h, "rig_lease_present", false)
+	// Start arms the authority retry only for app_authority_in_use; releasing
+	// the lease with the lock free must not ask for a restart across a full
+	// waiter tick (executionPauseInterval is 5s).
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireLockFree(t, p.stateDir)
+	requireNoRestartRequested(t, h, 7*time.Second)
 }
 
 // TestExecutionPauseRouteServesOnlyAGatedProd: a prod started without a

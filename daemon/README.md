@@ -5932,9 +5932,12 @@ Hand over in this order:
    `blockers` list the running work a requested pause waits on),
    `executes` (whether this `prod` runs a driver, and so may hold the
    writer lock), and `restarting`. With `"executes":false` and no pause,
-   `prod` holds no lock and needs no pause. An error that no daemon is
-   running means `prod` is stopped; start it first, since the clients use
-   it through the run.
+   `prod` holds no lock, and needs no pause unless its driverless card is
+   `app_authority_in_use`. An `app_authority_in_use` `prod` takes the
+   authority back on its own as soon as the writer lock is free and no rig
+   lease manifest exists, so pause it before running further passes. An error
+   that no daemon is running means `prod` is stopped; start it first, since
+   the clients use it through the run.
 2. **Pause before the first command that takes the App authority:** an
    exit run's first `exit-root.sh` pass or `prelaunch`, an `onboard`, or
    the deputy. `execution pause` prints the status JSON on stdout when it
@@ -5973,13 +5976,13 @@ Hand over in this order:
   nothing to pause.
 - **`resume`** clears the pause and concludes its cards. A `prod` running
   without execution then restarts and runs its start order again; that
-  includes one that came up without execution beside a deputy run. An
-  executing `prod`, whose requested pause has not released yet, keeps
-  running, so resume cancels a pause without interrupting the work it was
-  waiting on. With no daemon running it clears the pause in the database,
-  and the next start reads it. Run it after the deputy run ends: while a rig
-  lease manifest exists it warns that `prod` will come back without
-  execution.
+  includes one waiting on `rig_lease_present` or an `app_authority_in_use`
+  `prod` you want to retry at once. An executing `prod`, whose requested
+  pause has not released yet, keeps running, so resume cancels a pause
+  without interrupting the work it was waiting on. With no daemon running it
+  clears the pause in the database, and the next start reads it. Run it after
+  the deputy run ends: while a rig lease manifest exists it warns that `prod`
+  will come back without execution.
 - **`status`** prints the pause and `prod`'s restart readiness, and changes
   nothing. It needs a running `prod`.
 
@@ -5993,13 +5996,25 @@ writer lock, then look for a rig lease manifest. The deputy takes the lease,
 then the lock, so however their starts interleave one of them sees the
 other. When `prod` can't execute it releases any lock it took, serves
 without a driver, and raises one blocking `system_health` card naming why
-and how to restart it with execution:
+and how execution resumes:
 
 | Code | Why |
 | --- | --- |
 | `execution_paused` | The pause is released. |
-| `app_authority_in_use` | Another process, most likely a deputy run, held the writer lock. |
+| `app_authority_in_use` | Another process held the writer lock. `prod` retries on its own once the lock is free and no rig lease exists; `freesided execution resume` retries at once. |
 | `rig_lease_present` | A rig lease manifest existed, live or stale. A stale one needs `freesided rig recover` first. |
+
+**Retrying a freed authority lock.** Only a `prod` that started
+`app_authority_in_use` retries on its own. Every five seconds it checks that
+no execution pause is in force, that no production rig lease manifest exists,
+and then that the writer lock can be taken, releasing it at once without
+opening the authority. While a pause is in force, a manifest exists (live or
+stale), or the lock is held, it waits and keeps serving. Once all three are
+clear it asks for the same restart `execution resume` asks for, and the
+restarted `prod` runs its full start order again, concluding the
+`app_authority_in_use` card when it executes. A `prod` in
+`execution_paused`, `rig_lease_present`, or any other driverless state never
+retries on its own.
 
 **A forgotten pause.** Once a released pause has gone an hour with no rig
 lease manifest, `prod` raises an advisory `execution_pause_unused` card
