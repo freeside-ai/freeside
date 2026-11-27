@@ -51,6 +51,8 @@ var holdRecorders = map[string]bool{
 var holdlessPauseExits = map[string]string{
 	// Task cancellation in progress: a task being cancelled is not held, it
 	// is ending, and the cancellation owns what the operator sees.
+	"alternate_agent_retry.go:Engine.reconcileAlternateAgentRetries":    cancellationInProgress,
+	"capability_retry.go:Engine.reconcileCapabilityRetries":             cancellationInProgress,
 	"external_review_reentry.go:planExternalReviewReentry":              cancellationInProgress,
 	"failure_retry.go:Engine.reconcileFailureRetries":                   cancellationInProgress,
 	"check_failure_reentry.go:planCheckFailureReentry":                  cancellationInProgress,

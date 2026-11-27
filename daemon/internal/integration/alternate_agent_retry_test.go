@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -155,13 +156,20 @@ func openAlternateAgentFixture(
 	t *testing.T, main, second alternateAgentIdentity,
 ) (*workflowFixture, engine.AgentSelection) {
 	t.Helper()
+	return openAlternateAgentFixtureWithEgress(t, main, second, domain.EgressProviderOnly)
+}
+
+func openAlternateAgentFixtureWithEgress(
+	t *testing.T, main, second alternateAgentIdentity, enforceable ...domain.EgressProfile,
+) (*workflowFixture, engine.AgentSelection) {
+	t.Helper()
 	ctx := context.Background()
 	var selection engine.AgentSelection
 	f := openUnattendedFixtureWith(t, t.TempDir(), true, testIdentity, testPoolLimit,
 		func(env *engine.AdmissionEnvironment) {
 			selection = alternateAgentSelection(t, main, second, env.PromptPackageDigest)
 			env.AuthIdentityID, env.Agents = nil, &selection
-			env.EnforceableEgressProfiles = []domain.EgressProfile{domain.EgressProviderOnly}
+			env.EnforceableEgressProfiles = enforceable
 		},
 		func(st *store.Store, blobs *signet.BlobStore) []engine.Option {
 			fetcher, err := specify.NewFetcher(st, blobs, nil)
@@ -310,6 +318,179 @@ func TestAlternateAgentRetryAdmitsTheChosenAgent(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestTaskStopPreventsAcceptedAlternateAgentRetry: a Stop recorded after an
+// alternate-agent retry is accepted fences attempt allocation without failing
+// Engine.Reconcile.
+func TestTaskStopPreventsAcceptedAlternateAgentRetry(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	main := newAlternateAgentIdentity("claude-main", "acct-alternate-0001")
+	second := newAlternateAgentIdentity("claude-second", "acct-alternate-0002")
+	f, selection := openAlternateAgentFixture(t, main, second)
+	failure := driveImplementationFailure(t, f, capabilityRetryManifest(t), fake.StageScript{
+		Outcome: fake.OutcomeFail,
+		Result: exec.StageResult{
+			Summary: "The provider refused the agent's credential.", Cause: domain.FailureCauseCredentialExpired,
+		},
+	})
+	card := failure.card
+	operator := signet.NewService(f.store, signet.WithBlobStore(f.blobs),
+		signet.WithClock(func() time.Time { return admittedAt.Add(time.Minute) }),
+		signet.WithAlternateAgentRetrier(selection.AcceptAlternateAgentRetryTx))
+	if _, err := operator.Submit(ctx, signet.ClientCommand{
+		CommandID: alternateRetryCommandID, DeviceID: deviceA, ExpectedEntityVersion: card.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: card.Item.ID, Action: domain.ActionRetryWithAlternateAgent,
+			ItemVersion:          card.Item.ItemVersion,
+			AlternateAgentChoice: &signet.AlternateAgentChoice{EnrollmentID: second.enrollment.ID},
+		},
+	}); err != nil {
+		t.Fatalf("submit retry_with_alternate_agent: %v", err)
+	}
+	state, err := f.store.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(ctx, capabilityRetryRunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.StopTask(ctx, domain.StopTaskRequest{
+			CommandID: "command-stop-alternate-retry", DeviceID: deviceA,
+			TaskID: task.ID, ProjectID: task.ProjectID,
+			ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+		}, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatalf("stop task: %v", err)
+	}
+
+	retryInvocation := productionInvocationForRun(failure.retryRunID)
+	f.driver.Script(retryInvocation, fake.StageScript{
+		Outcome: fake.OutcomeFail,
+		Result:  exec.StageResult{Summary: "The retry ran under the chosen agent."},
+	})
+	pass, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("reconcile accepted alternate-agent retry after Stop: %v", err)
+	}
+	if pass.InvocationsStarted != 0 {
+		t.Fatalf("reconcile pass started %d invocations after Stop, want 0", pass.InvocationsStarted)
+	}
+	if _, started := f.driver.StartSpec(retryInvocation); started {
+		t.Fatal("accepted alternate-agent retry started after Stop")
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		latest, err := tx.LatestProductionAttempt(ctx, failure.campaignID)
+		if err != nil {
+			return err
+		}
+		if latest.AttemptNumber != 1 {
+			t.Fatalf("accepted alternate-agent retry allocated attempt %d after Stop", latest.AttemptNumber)
+		}
+		if _, err := tx.GetRun(ctx, failure.retryRunID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("retry run exists after Stop: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStoppedTaskImplementationCardOmitsAllRetries: an implementer failure that
+// would otherwise offer plain Retry, a capability retry, or an alternate agent
+// raises a card with only Discuss and Stop, no offered_manifests, and no
+// alternate offers when its task already has a Stop, while keeping failure
+// facts unchanged.
+func TestStoppedTaskImplementationCardOmitsAllRetries(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		cause domain.FailureCause
+	}{
+		// Unknown cause on a wide-egress campaign would offer plain Retry and capability retry.
+		{name: "plain and capability retry", cause: domain.FailureCauseUnknown},
+		// Credential expired would offer alternate-agent retry and capability retry.
+		{name: "alternate agent and capability retry", cause: domain.FailureCauseCredentialExpired},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			main := newAlternateAgentIdentity("claude-main", "acct-alternate-0001")
+			second := newAlternateAgentIdentity("claude-second", "acct-alternate-0002")
+			f, _ := openAlternateAgentFixtureWithEgress(t, main, second,
+				domain.EgressProviderOnly, domain.EgressProviderWebRead)
+			// RunningInspects: 2 keeps the implementation invocation live through
+			// driveImplementationTerminal's dispatch and third pass so we can stop
+			// the task before the failure is collected and its card is raised.
+			failure := driveImplementationTerminal(t, f, capabilityRetryManifest(t), fake.StageScript{
+				RunningInspects: 2,
+				Outcome:         fake.OutcomeFail,
+				Result: exec.StageResult{
+					Summary: "The implementation stage failed.", Cause: tc.cause,
+				},
+			})
+			cardID := domain.ItemID("execution-failure-" + string(failure.invocation))
+			if _, err := f.signet.GetAttentionItem(ctx, cardID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("failure card existed before Stop: %v", err)
+			}
+			state, err := f.store.ServerState(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+				run, err := tx.GetRun(ctx, capabilityRetryRunID)
+				if err != nil {
+					return err
+				}
+				task, err := tx.GetTask(ctx, run.TaskID)
+				if err != nil {
+					return err
+				}
+				_, _, err = tx.StopTask(ctx, domain.StopTaskRequest{
+					CommandID: "command-stop-before-failure-card", DeviceID: deviceA,
+					TaskID: task.ID, ProjectID: task.ProjectID,
+					ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+				}, time.Now().UTC())
+				return err
+			}); err != nil {
+				t.Fatalf("stop task: %v", err)
+			}
+
+			reconcileCapabilityRetryPass(t, f, "stopped implementation failure")
+			card, err := f.signet.GetAttentionItem(ctx, cardID)
+			if err != nil {
+				t.Fatalf("get failure card: %v", err)
+			}
+			wantActions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+			if !slices.Equal(card.Item.RequestedDecision, wantActions) {
+				t.Fatalf("stopped implementation card actions = %v, want %v",
+					card.Item.RequestedDecision, wantActions)
+			}
+			if card.Item.ExecutionFailure == nil || card.Item.ExecutionFailure.Outcome != domain.ExecutionOutcomeFailed ||
+				card.Item.ExecutionFailure.Cause != tc.cause ||
+				card.Item.ExecutionFailure.RetryOutlook != domain.RetryOutlookMaySucceed {
+				t.Fatalf("stopped implementation card facts = %+v, want unchanged failed/%s/may_succeed",
+					card.Item.ExecutionFailure, tc.cause)
+			}
+			if len(card.Item.ExecutionFailure.OfferedManifests) != 0 {
+				t.Fatalf("stopped implementation card offered_manifests = %+v, want empty",
+					card.Item.ExecutionFailure.OfferedManifests)
+			}
+			if len(card.Item.AlternateAgents) != 0 {
+				t.Fatalf("stopped implementation card alternate_agents = %+v, want empty",
+					card.Item.AlternateAgents)
+			}
+		})
 	}
 }
 

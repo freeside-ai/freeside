@@ -504,6 +504,64 @@ func TestWorkflowClosurePreventsAcceptedCapabilityRetry(t *testing.T) {
 	assertSuppressed(openWideCapabilityRetryFixture(t, root, false))
 }
 
+// TestTaskStopPreventsAcceptedCapabilityRetry: a Stop recorded after a
+// capability retry is accepted fences attempt allocation without failing
+// Engine.Reconcile.
+func TestTaskStopPreventsAcceptedCapabilityRetry(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	f := openWideCapabilityRetryFixture(t, t.TempDir(), true)
+	selection := driveCapabilityRetrySelection(t, f)
+	state, err := f.store.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(ctx, capabilityRetryRunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(ctx, run.TaskID)
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.StopTask(ctx, domain.StopTaskRequest{
+			CommandID: "command-stop-capability-retry", DeviceID: deviceA,
+			TaskID: task.ID, ProjectID: task.ProjectID,
+			ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+		}, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatalf("stop task: %v", err)
+	}
+	scriptCapabilityRetryStage(f, selection)
+	pass, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("reconcile accepted capability retry after Stop: %v", err)
+	}
+	if pass.InvocationsStarted != 0 {
+		t.Fatalf("reconcile pass started %d invocations after Stop, want 0", pass.InvocationsStarted)
+	}
+	if _, started := f.driver.StartSpec(selection.retryInvocation); started {
+		t.Fatal("accepted capability retry started after Stop")
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		latest, err := tx.LatestProductionAttempt(ctx, selection.campaignID)
+		if err != nil {
+			return err
+		}
+		if latest.AttemptNumber != 1 {
+			t.Fatalf("accepted capability retry allocated attempt %d after Stop", latest.AttemptNumber)
+		}
+		if _, err := tx.GetRun(ctx, selection.retryRunID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("retry run exists after Stop: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestCapabilityRetryAdmitsOnceAcrossARestartBeforeAdmission covers the crash
 // window the allocation opens: attempt 2 is committed and its production
 // intent is pending when the daemon dies. The restarted engine resumes that

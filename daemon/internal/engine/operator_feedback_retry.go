@@ -65,13 +65,21 @@ func (e *Engine) offerOperatorFeedbackRetry(ctx context.Context, id domain.ItemI
 		if item.Status != domain.StatusOpen || item.Offers(domain.ActionRetry) {
 			return nil
 		}
-		if _, err := tx.OperatorFeedbackRetryParent(ctx, item); err != nil {
+		parent, err := tx.OperatorFeedbackRetryParent(ctx, item)
+		if err != nil {
 			// A pre-publication question or a damaged lineage is not an offer.
 			// Dispatch still diagnoses any invalid retained execution markers.
 			if errors.Is(err, store.ErrNotFound) || errors.Is(err, domain.ErrParentKeyMismatch) || errors.Is(err, domain.ErrImmutableTransition) {
 				return nil
 			}
 			return err
+		}
+		stopped, err := runTaskHasStop(ctx, &tx.ReadTx, parent.RunID)
+		if err != nil {
+			return err
+		}
+		if stopped {
+			return nil
 		}
 		item.RequestedDecision = append([]domain.Action{domain.ActionRetry}, item.RequestedDecision...)
 		item.ItemVersion++

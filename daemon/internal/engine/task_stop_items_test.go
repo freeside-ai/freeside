@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -494,4 +495,46 @@ func TestCanceledByStop(t *testing.T) {
 			t.Errorf("%s: canceledByStop = %v, want %v", tc.name, got, tc.want)
 		}
 	}
+}
+
+// TestStoppedTaskSpecificationCardOmitsRetry: a canceled specification result
+// collected while its task has a Stop raises a card offering only Discuss and
+// Stop, with its failure facts unchanged; the same result with no Stop still
+// offers Retry first.
+func TestStoppedTaskSpecificationCardOmitsRetry(t *testing.T) {
+	t.Parallel()
+	requestedAt := time.Now().UTC().Add(-time.Minute)
+
+	t.Run("with stop", func(t *testing.T) {
+		t.Parallel()
+		s := newStoppedSpecification(t, canceledSpecificationScript(100), requestedAt.Add(time.Second))
+		s.reconcile(t, 1)
+		s.requestStop(t, requestedAt)
+		if err := s.driver.Cancel(t.Context(), s.invocation); err != nil {
+			t.Fatal(err)
+		}
+		s.reconcile(t, 1)
+		card := s.item(t)
+		wantActions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+		if card.Status != domain.StatusOpen || !slices.Equal(card.RequestedDecision, wantActions) {
+			t.Fatalf("stopped card = status %s actions %v, want open with %v",
+				card.Status, card.RequestedDecision, wantActions)
+		}
+		if card.ExecutionFailure == nil || card.ExecutionFailure.Outcome != domain.ExecutionOutcomeCanceled ||
+			card.ExecutionFailure.RetryOutlook != domain.RetryOutlookMaySucceed {
+			t.Fatalf("stopped card facts = %+v, want unchanged canceled/may_succeed facts", card.ExecutionFailure)
+		}
+	})
+
+	t.Run("without stop", func(t *testing.T) {
+		t.Parallel()
+		s := newStoppedSpecification(t, canceledSpecificationScript(0), requestedAt.Add(time.Second))
+		s.reconcile(t, 1)
+		card := s.item(t)
+		wantActions := []domain.Action{domain.ActionRetry, domain.ActionDiscuss, domain.ActionStop}
+		if card.Status != domain.StatusOpen || !slices.Equal(card.RequestedDecision, wantActions) {
+			t.Fatalf("unstopped card = status %s actions %v, want open with %v",
+				card.Status, card.RequestedDecision, wantActions)
+		}
+	})
 }

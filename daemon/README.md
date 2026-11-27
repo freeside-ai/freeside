@@ -8294,7 +8294,13 @@ left open by an older daemon. A Stop leaves every other card open, and
 retires nothing while it is `requested` or `failed_to_stop`. Card cleanup
 never holds back the confirmation: if it fails, the Stop is confirmed without
 it and Reconcile retries the cards. The terminal result and execution outcome
-stay as history.
+stay as history. A failure card raised while its task has a Stop, in any state,
+offers no retry (`retry`, `retry_with_capabilities`, or
+`retry_with_alternate_agent`) and carries no capability or alternate-agent
+offers; an operator feedback card on a stopped task is not given `retry`. A
+card that was already open when the Stop arrived keeps showing its retry
+actions, and signet refuses any retry on a stopped task's failure card with
+400 and no recorded command.
 Explicit abandonment projects `abandoned` without claiming that
 execution stopped. `freesided abandon -db <database> -task <task-id>` commits
 slot release, durable workflow closure, and card cleanup in that order, as

@@ -31,7 +31,7 @@ func (e *Engine) reconcileCapabilityRetries(ctx context.Context) (int, error) {
 		}
 		seen[candidate.ItemID] = struct{}{}
 		made, err := e.reconcileCapabilityRetry(ctx, candidate)
-		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+		if errors.Is(err, store.ErrTaskWorkflowClosed) || errors.Is(err, store.ErrTaskCancellationFenced) {
 			continue
 		}
 		if err != nil {

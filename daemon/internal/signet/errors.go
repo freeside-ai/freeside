@@ -75,6 +75,11 @@ var ErrAlternateAgentSelectionUnserved = errors.New("the alternate's model or ef
 // started, or the task closed.
 var ErrTaskNotParked = errors.New("the task has no attempt parked on an exhausted quota window")
 
+// ErrTaskStopped refuses a retry decision on an execution-failure card whose
+// task has a Stop in any state. The accepting transaction rolls back before
+// recording the command, so the card stays open and nothing is written.
+var ErrTaskStopped = errors.New("the task was stopped, so a retry can't start")
+
 // ErrCapabilityNotRegistered is returned when the action surface is requested
 // for a device that has not registered a capability contract: the daemon
 // cannot derive the offered-action intersection without it, so the client must
