@@ -2,7 +2,7 @@ package collector
 
 import "time"
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Repository struct {
 	Host  string
@@ -98,11 +98,13 @@ type TrackerEntry struct {
 
 type UnitEvidence struct {
 	Number              int               `json:"number"`
+	Kind                string            `json:"kind"`
 	Title               string            `json:"title"`
 	State               string            `json:"state"`
 	Body                string            `json:"body"`
 	DependenciesSection string            `json:"dependencies_section"`
 	Stamp               ForgeStamp        `json:"stamp"`
+	PullRequest         *PullRequestRef   `json:"pull_request"`
 	ClosingPullRequests []PullRequestRef  `json:"closing_pull_requests"`
 	StackedOn           []StackedEvidence `json:"stacked_on"`
 }
