@@ -43,6 +43,9 @@
 #
 # Team ID, in resolution order:
 #   FREESIDE_IOS_TEAM_ID  explicit 10-character Apple Developer team ID
+#                         (capital letters and digits); the script checks this
+#                         shape and refuses any other non-empty value before
+#                         device discovery or building
 #   otherwise             the organizational unit of the sole
 #                         "Apple Development:" identity's certificate
 #                         (Xcode's free personal team mints one once an
@@ -241,6 +244,9 @@ mkdir -p "$build_dir"
 if [[ "$launch_only" != true ]]; then
     if [[ -n "${FREESIDE_IOS_TEAM_ID:-}" ]]; then
         team_id="$FREESIDE_IOS_TEAM_ID"
+        [[ "$team_id" =~ ^[A-Z0-9]{10}$ ]] ||
+            die "FREESIDE_IOS_TEAM_ID must be a 10-character Team ID of capital
+  letters and digits (the certificate's OU); got '$FREESIDE_IOS_TEAM_ID'."
     else
         identity=$(resolve_identity) || exit 1
         team_id=$(team_id_of_identity "$identity")
