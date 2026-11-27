@@ -458,28 +458,15 @@ func (r *intakeReconciler) admit(
 }
 
 // intakePolicyKeys overlays the store's workflow policy layers on the
-// initiator's configured keys (engine.ResolveWorkflowPolicyKeys). A crash
-// after the run was reserved re-runs admission; the reserved run's stored
-// policy then supplies the workflow keys it was resolved with, so a settings
-// change in between converges on that immutable policy instead of conflicting
-// with it, as the stored attempt's publication does below.
+// initiator's configured keys, or preserves the reserved run's stored workflow
+// keys across crash recovery (engine.ResolveRunWorkflowPolicyKeys).
 func (r *intakeReconciler) intakePolicyKeys(
 	ctx context.Context, init IntakeInitiator, specificationRunID domain.RunID,
 ) ([]domain.PolicyKey, error) {
 	var keys []domain.PolicyKey
 	err := r.store.Read(ctx, func(tx *store.ReadTx) error {
-		stored, err := tx.GetResolvedPolicy(ctx, specificationRunID)
-		if err == nil {
-			reserved := slices.DeleteFunc(slices.Clone(stored.Keys), func(k domain.PolicyKey) bool {
-				return !domain.IsWorkflowPolicyKey(k.Key)
-			})
-			keys = append(domain.WithoutWorkflowPolicyKeys(init.PolicyKeys), reserved...)
-			return nil
-		}
-		if !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		keys, err = engine.ResolveWorkflowPolicyKeys(ctx, tx, init.ProjectID, init.PolicyKeys)
+		var err error
+		keys, err = engine.ResolveRunWorkflowPolicyKeys(ctx, tx, init.ProjectID, init.PolicyKeys, specificationRunID)
 		return err
 	})
 	return keys, err

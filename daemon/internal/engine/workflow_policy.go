@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -23,6 +25,29 @@ func ResolveWorkflowPolicyKeys(
 		return nil, err
 	}
 	return layers.Overlay(project, base), nil
+}
+
+// ResolveRunWorkflowPolicyKeys overlays the store's workflow policy layers on
+// base for specificationRunID (ResolveWorkflowPolicyKeys), except when a
+// resolved policy is already stored for that run: the stored policy's workflow
+// keys then replace base's so a replay or crash recovery converges on the
+// run's immutable policy instead of conflicting with it after a settings
+// change, including a historical run whose workflow key came from a file.
+func ResolveRunWorkflowPolicyKeys(
+	ctx context.Context, tx *store.ReadTx, project domain.ProjectID, base []domain.PolicyKey,
+	specificationRunID domain.RunID,
+) ([]domain.PolicyKey, error) {
+	stored, err := tx.GetResolvedPolicy(ctx, specificationRunID)
+	if err == nil {
+		reserved := slices.DeleteFunc(slices.Clone(stored.Keys), func(k domain.PolicyKey) bool {
+			return !domain.IsWorkflowPolicyKey(k.Key)
+		})
+		return append(domain.WithoutWorkflowPolicyKeys(base), reserved...), nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	return ResolveWorkflowPolicyKeys(ctx, tx, project, base)
 }
 
 // SetWorkflowPolicyRequest is one operator change to one layer of one

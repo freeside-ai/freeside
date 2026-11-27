@@ -54,13 +54,5 @@
       "source": "override",
       "digest": "sha256:107f41ed92e01eb58d3a28ed9f2bb1c4094d3cbd74ff828bb4c85186079d6d79"
     }
-  },
-  {
-    "key": "gates.source_issue_closure",
-    "value": "false",
-    "provenance": {
-      "source": "override",
-      "digest": "sha256:fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
-    }
   }
 ]

@@ -116,7 +116,7 @@ func TestSubmitCommandRecordsAttachments(t *testing.T) {
 		t.Fatalf("journal = %s, want attachment references only", journal)
 	}
 	// The fingerprint covers the references in order under their wire names.
-	lineLess := lineLessFingerprint(t, cfg.ProjectID, first)
+	lineLess := lineLessFingerprint(t, cfg.ProjectID, cfg.PolicyPath, first)
 	pinned := string(lineLess[:len(lineLess)-1]) + `,"Attachments":[` +
 		`{"digest":"` + string(want[0].Digest) + `","name":"screenshot.png","media_type":"image/png"},` +
 		`{"digest":"` + string(want[1].Digest) + `","name":"notes.json","media_type":"` + want[1].ClaimedMediaType + `"}]}`
