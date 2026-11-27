@@ -110,8 +110,8 @@ import Testing
                 DaemonMenuPanel(
                     state: .unsupervised, actionError: nil, needsYou: nil, systemHealth: count,
                     actions: .init(
-                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
-                        openApprovalSettings: {}, quit: {}))
+                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, openStopItem: { _ in }, pairDevice: {},
+                        start: {}, stop: {}, openApprovalSettings: {}, quit: {}))
             }
             #expect(panel(nil).openFindings == nil)
             #expect(panel(.init(open: 0)).openFindings == nil)
@@ -125,8 +125,8 @@ import Testing
                 DaemonMenuPanel(
                     state: state, actionError: nil, needsYou: nil,
                     actions: .init(
-                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
-                        openApprovalSettings: {}, quit: {}))
+                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, openStopItem: { _ in }, pairDevice: {},
+                        start: {}, stop: {}, openApprovalSettings: {}, quit: {}))
             }
             let running = panel(.running(DaemonHealth(version: "1.0.0", startedAt: .now), restartObserved: false))
             #expect(running.offersPairDevice && running.canPairDevice)
@@ -135,6 +135,104 @@ import Testing
                 #expect(!panel(state).canPairDevice)
             }
             #expect(!panel(.unsupervised).offersPairDevice)
+        }
+
+        /// The panel's stopped notice comes straight from the in-window
+        /// presentation, so sentence, action label, and target item never
+        /// diverge, and it is nil while admission is open.
+        @Test func thePanelsStoppedNoticeMatchesTheInWindowPresentation() async throws {
+            let server = MockServer(
+                items: AttentionFixtures.defaultInbox().filter {
+                    $0.item.id != AttentionFixtures.blockingSystemHealth().item.id
+                })
+            let coordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+            await coordinator.bootstrap()
+            let now = Date()
+            #expect(DaemonMenuPanel.StoppedNotice(coordinator: coordinator, now: now) == nil)
+
+            let snapshot = try #require(await server.snapshot(itemID: "item-system_health"))
+            let command = Components.Schemas.ClientCommand(
+                command_id: "cmd-stop",
+                device_id: coordinator.store.device.deviceID,
+                expected_entity_version: snapshot.entity_version,
+                expected_bindings: .init(additionalProperties: [:]),
+                payload: .decision(
+                    .init(
+                        kind: .decision, item_id: "item-system_health", action: .stop_unattended,
+                        item_version: snapshot.item.item_version,
+                        pr_head_sha: snapshot.item.pr_head_sha,
+                        artifact_digests: snapshot.item.artifact_digests)))
+            _ = try await coordinator.store.client.submitCommand(body: .json(command)).ok.body.json
+            await coordinator.heartbeat()
+
+            let stoppedAt = Date()
+            let notice = try #require(DaemonMenuPanel.StoppedNotice(coordinator: coordinator, now: stoppedAt))
+            let presentation = try #require(
+                UnattendedStoppedPresentation.make(
+                    operation: coordinator.unattendedOperation,
+                    freshness: coordinator.store.freshness,
+                    lastUpdatedAt: coordinator.lastUpdatedAt, now: stoppedAt,
+                    reason: { coordinator.store.openItemReason($0) }))
+            #expect(notice.sentence == presentation.message)
+            #expect(notice.actionTitle == presentation.actionTitle)
+            #expect(notice.itemID == presentation.itemID)
+            #expect(notice.itemID != nil)
+        }
+
+        /// The stopped notice's action forwards the open item's id when one
+        /// is named and nil otherwise, and picks up the keyboard highlight.
+        @Test(
+            arguments: [
+                ("Review to Resume", "item-stop-notice"),
+                ("Open System Health", nil),
+            ] as [(String, String?)])
+        func theStoppedActionForwardsTheTargetItemID(title: String, itemID: String?) {
+            var received: [String?] = []
+            let notice = DaemonMenuPanel.StoppedNotice(
+                sentence: "Unattended operation is stopped by operator decision.",
+                actionTitle: title,
+                itemID: itemID)
+            let panel = DaemonMenuPanel(
+                state: .unsupervised, actionError: nil, needsYou: nil, unattendedStopped: notice,
+                actions: .init(
+                    openApp: {}, showNeedsYou: {}, showSystemHealth: {},
+                    openStopItem: { received.append($0) }, pairDevice: {}, start: {}, stop: {},
+                    openApprovalSettings: {}, quit: {}))
+            let action = panel.stopAction(for: notice)
+            #expect(action.label == title)
+            #expect(!action.isHighlighted)
+            action.handler()
+            #expect(received == [itemID])
+
+            let highlighted = panel.screenshotHighlighting(.stopAction).stopAction(for: notice)
+            #expect(highlighted.isHighlighted)
+        }
+
+        /// The stopped notice's button sits in arrow-key order directly
+        /// before the lifecycle control, and is absent without a notice.
+        @Test func keyboardOrderPlacesTheStopActionBeforeTheLifecycleControl() throws {
+            let running = DaemonMenuState.running(
+                DaemonHealth(version: "1.0.0", startedAt: .now), restartObserved: false)
+            let notice = DaemonMenuPanel.StoppedNotice(
+                sentence: "Unattended operation is stopped by operator decision.",
+                actionTitle: "Review to Resume",
+                itemID: "item-stop-notice")
+            func panel(stopped: DaemonMenuPanel.StoppedNotice?) -> DaemonMenuPanel {
+                DaemonMenuPanel(
+                    state: running, actionError: nil, needsYou: .init(rows: 1),
+                    unattendedStopped: stopped,
+                    actions: .init(
+                        openApp: {}, showNeedsYou: {}, showSystemHealth: {}, openStopItem: { _ in },
+                        pairDevice: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {}))
+            }
+            let withStop = panel(stopped: notice).keyboardOrder
+            let stopIndex = try #require(withStop.firstIndex(of: .stopAction))
+            let controlIndex = try #require(withStop.firstIndex(of: .control))
+            #expect(controlIndex == stopIndex + 1)
+
+            let withoutStop = panel(stopped: nil).keyboardOrder
+            #expect(!withoutStop.contains(.stopAction))
         }
     #endif
 

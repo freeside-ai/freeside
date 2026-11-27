@@ -194,3 +194,24 @@ extension SyncCoordinator {
         )?.message
     }
 }
+
+#if os(macOS)
+    extension DaemonMenuPanel.StoppedNotice {
+        /// The panel's stopped notice for this session, or nil when admission
+        /// is open or unknown.
+        @MainActor
+        public init?(coordinator: SyncCoordinator, now: Date = .now) {
+            guard
+                let presentation = UnattendedStoppedPresentation.make(
+                    operation: coordinator.unattendedOperation,
+                    freshness: coordinator.store.freshness,
+                    lastUpdatedAt: coordinator.lastUpdatedAt, now: now,
+                    reason: { [store = coordinator.store] in store.openItemReason($0) })
+            else { return nil }
+            self.init(
+                sentence: presentation.message,
+                actionTitle: presentation.actionTitle,
+                itemID: presentation.itemID)
+        }
+    }
+#endif

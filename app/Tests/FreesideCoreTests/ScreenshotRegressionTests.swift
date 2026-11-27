@@ -4863,8 +4863,8 @@
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
                 compatibilityLevel: 1_000, compatibilityFloor: 1_000)
             let panelActions = DaemonMenuPanel.Actions(
-                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, pairDevice: {}, start: {}, stop: {},
-                openApprovalSettings: {}, quit: {})
+                openApp: {}, showNeedsYou: {}, showSystemHealth: {}, openStopItem: { _ in }, pairDevice: {},
+                start: {}, stop: {}, openApprovalSettings: {}, quit: {})
             surfaces.append(
                 Surface(
                     name: "menu-panel-running",
@@ -4877,20 +4877,26 @@
                             actions: panelActions
                         )
                         .screenshotHovering(.showNeedsYou))))
-            // A healthy daemon whose unattended operation is stopped (#980):
-            // the Running block stands and the wax card says what is stopped.
-            surfaces.append(
-                Surface(
-                    name: "menu-panel-unattended-stopped",
-                    width: 320,
-                    view: AnyView(
-                        DaemonMenuPanel(
-                            state: .running(panelHealth, restartObserved: false),
-                            actionError: nil,
-                            needsYou: .init(rows: 6),
-                            unattendedStopped:
-                                "Unattended operation is stopped by operator decision.",
-                            actions: panelActions))))
+            // A healthy daemon whose unattended operation is stopped (#980,
+            // #1909): the Running block stands and the wax card says what is
+            // stopped with its reopening action.
+            for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "menu-panel-unattended-stopped" + suffix,
+                        width: 320,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            DaemonMenuPanel(
+                                state: .running(panelHealth, restartObserved: false),
+                                actionError: nil,
+                                needsYou: .init(rows: 6),
+                                unattendedStopped: .init(
+                                    sentence: "Unattended operation is stopped by operator decision.",
+                                    actionTitle: "Review to Resume",
+                                    itemID: "system-health-unattended-stopped-operator"),
+                                actions: panelActions))))
+            }
             // Open findings (#2921): the System Health line after Show Needs
             // You with the pane's open count, here beside the stop a
             // blocking finding raised.
@@ -4906,8 +4912,10 @@
                                 actionError: nil,
                                 needsYou: .init(rows: 6),
                                 systemHealth: .init(open: 2),
-                                unattendedStopped:
-                                    "Unattended operation is stopped by a system health finding.",
+                                unattendedStopped: .init(
+                                    sentence: "Unattended operation is stopped by a system health finding.",
+                                    actionTitle: "Open Finding",
+                                    itemID: AttentionFixtures.blockingSystemHealth().item.id),
                                 actions: panelActions))))
             }
             surfaces.append(
@@ -5565,6 +5573,23 @@
                         )
                         .screenshotHovering(.showNeedsYou)
                         .screenshotHighlighting(.control))))
+            // The stopped notice's action under the keyboard ring (#1909).
+            surfaces.append(
+                Surface(
+                    name: "menu-panel-keyboard-stop-action",
+                    width: 320,
+                    view: AnyView(
+                        DaemonMenuPanel(
+                            state: .running(panelHealth, restartObserved: false),
+                            actionError: nil,
+                            needsYou: .init(rows: 6),
+                            unattendedStopped: .init(
+                                sentence: "Unattended operation is stopped by operator decision.",
+                                actionTitle: "Review to Resume",
+                                itemID: "system-health-unattended-stopped-operator"),
+                            actions: panelActions
+                        )
+                        .screenshotHighlighting(.stopAction))))
             surfaces.append(contentsOf: try pendingStopsSurfaces())
             // A finding whose message carries Markdown, on the dispute card
             // and the adjudication card: the title, then a code span and a

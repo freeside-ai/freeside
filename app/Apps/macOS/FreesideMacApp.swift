@@ -291,11 +291,12 @@ private struct DaemonMenu: View {
             actionError: model?.actionError,
             needsYou: coordinator.flatMap(DaemonMenuPanel.NeedsYouCount.init(coordinator:)),
             systemHealth: coordinator.flatMap(DaemonMenuPanel.SystemHealthCount.init(coordinator:)),
-            unattendedStopped: coordinator?.unattendedStoppedMessage(),
+            unattendedStopped: coordinator.flatMap { DaemonMenuPanel.StoppedNotice(coordinator: $0) },
             actions: DaemonMenuPanel.Actions(
                 openApp: showApp,
                 showNeedsYou: showApp,
-                showSystemHealth: showSystemHealth,
+                showSystemHealth: { showSystemHealth() },
+                openStopItem: { showSystemHealth(finding: $0) },
                 pairDevice: showPairDevice,
                 start: { Task { await model?.start() } },
                 stop: { Task { await model?.stop() } },
@@ -312,12 +313,13 @@ private struct DaemonMenu: View {
         showMainWindow(openWindow)
     }
 
-    /// The Settings window on System Health, the way the sidebar gear
-    /// opens it. The app activates first: from the menu bar panel it is
-    /// not active, so Settings would otherwise open behind the frontmost
-    /// app.
-    private func showSystemHealth() {
-        navigation.openSystemHealth()
+    /// The Settings window on System Health, seating the named item's card
+    /// when one is supplied, the way the sidebar gear and the in-window
+    /// stopped indicator open it. The app activates first: from the menu bar
+    /// panel it is not active, so Settings would otherwise open behind the
+    /// frontmost app.
+    private func showSystemHealth(finding itemID: String? = nil) {
+        navigation.openSystemHealth(finding: itemID)
         NSApplication.shared.activate()
         openSettings()
     }
