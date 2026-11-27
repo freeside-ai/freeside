@@ -75,4 +75,41 @@ import Testing
         #expect(SystemHealthFindings.keyword(closed("expired", cause: .expired, after: 0).item) == "Expired")
         #expect(SystemHealthFindings.keyword(closed("superseded", cause: .superseded, after: 0).item) == "Superseded")
     }
+
+    /// An advisory finding's effect names the capability it affects and
+    /// says it does not stop admission (#3678), one row per capability so
+    /// a new member must state its own.
+    static let advisoryEffects: [(Components.Schemas.ImpairedCapability, String)] = [
+        (.unattended_admission, "affects unattended admission · does not stop admission"),
+        (.run_visibility, "affects run visibility · does not stop admission"),
+        (.agent_credential, "affects agent credential · does not stop admission"),
+        (.unknown, "affects an unrecognized capability · does not stop admission"),
+        (.none, "does not stop admission"),
+    ]
+
+    @Test func everyCapabilityHasAnAdvisoryEffect() {
+        #expect(
+            Set(Self.advisoryEffects.map(\.0))
+                == Set(Components.Schemas.ImpairedCapability.allCases))
+    }
+
+    @Test(arguments: advisoryEffects)
+    func anAdvisoryFindingNamesWhatItAffects(capability: Components.Schemas.ImpairedCapability, effect: String) {
+        var item = finding("advisory").item
+        item.health_diagnostic = .init(value1: .init(code: "work_held", impairs: capability))
+        #expect(SystemHealthFindings.effect(item) == effect)
+    }
+
+    /// A blocking finding, or one whose posture this build doesn't know,
+    /// stops admission whatever it impairs; one with no diagnostic stops
+    /// nothing it can name; a closed one has no effect at all.
+    @Test func theEffectFollowsPostureAndStatus() {
+        #expect(
+            SystemHealthFindings.effect(finding("blocking", posture: .blocking).item) == "stops unattended admission")
+        #expect(SystemHealthFindings.effect(finding("unknown", posture: .unknown).item) == "stops unattended admission")
+        var undiagnosed = finding("undiagnosed", posture: nil).item
+        undiagnosed.health_diagnostic = nil
+        #expect(SystemHealthFindings.effect(undiagnosed) == "does not stop admission")
+        #expect(SystemHealthFindings.effect(closed("resolved", cause: .resolved_by_daemon, after: 0).item) == nil)
+    }
 }

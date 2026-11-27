@@ -6,6 +6,9 @@ import SwiftUI
 /// bootstrap snapshot and freshness as the standing stopped indicator
 /// (`UnattendedStoppedPresentation`), so the two never disagree, and like
 /// the indicator it reports a non-current snapshot as the last known state.
+/// It is the pane's one statement of admission (#3678): a stop by blocking
+/// findings counts the snapshot's blocking stops, one per open blocking
+/// finding, and points at the rows below rather than restating them.
 struct UnattendedGatePresentation: Equatable {
     enum Chip: Equatable {
         case open
@@ -52,21 +55,33 @@ struct UnattendedGatePresentation: Equatable {
                     ? "New unattended work is admitted."
                     : "At the last successful refresh, new unattended work was admitted.")
         }
-        let cause =
-            switch stop.cause {
-            case .operatorStop: " by operator decision"
-            case .blockingFinding: " by a system health finding"
-            case .unspecified: ""
-            }
-        let age = operation.stops.first?.since.map {
-            " " + AttentionDisplay.relativeRowTime($0, now: now) + " ago"
+        let lead = stop.isCurrent ? "Stopped" : "At the last successful refresh, stopped"
+        func age(_ since: Date?) -> String {
+            since.map { " " + AttentionDisplay.relativeRowTime($0, now: now) + " ago" } ?? ""
         }
-        var line =
-            (stop.isCurrent ? "Stopped" : "At the last successful refresh, stopped") + cause + (age ?? "") + "."
-        if stop.additionalStops == 1 {
+        var line: String
+        let otherStops: Int
+        switch stop.cause {
+        case .blockingFinding:
+            // One stop per open blocking finding, so the count names the
+            // rows below that stop admission; the other stops are the rest.
+            // The daemon lists blocking stops in no time order, so the age
+            // is the oldest one's: how long the findings have held admission.
+            let blocking = operation.stops.filter { $0.kind == .blocking_system_health }
+            let findings = blocking.count == 1 ? "finding" : "findings"
+            line = lead + age(blocking.compactMap(\.since).min()) + " by \(blocking.count) blocking \(findings) below."
+            otherStops = operation.stops.count - blocking.count
+        case .operatorStop:
+            line = lead + " by operator decision" + age(operation.stops.first?.since) + "."
+            otherStops = stop.additionalStops
+        case .unspecified:
+            line = lead + age(operation.stops.first?.since) + "."
+            otherStops = stop.additionalStops
+        }
+        if otherStops == 1 {
             line += " 1 other stop is in force."
-        } else if stop.additionalStops > 1 {
-            line += " \(stop.additionalStops) other stops are in force."
+        } else if otherStops > 1 {
+            line += " \(otherStops) other stops are in force."
         }
         return .init(chip: .stopped, isWax: stop.isCurrent, line: line)
     }
@@ -175,10 +190,12 @@ struct SystemHealthPane: View {
 
 /// One finding on the scanning row (R31): its posture, or its outcome once
 /// closed, on the keyword line, where the list puts the type, since every
-/// row here is the same type; the sentence its typed fields make, with the
-/// daemon's reason in full under it, since the reason is what names the
-/// held run and the refused check (#3026); and what it is about, its task
-/// or else its project, with the time it opened or closed.
+/// row here is the same type, with an open finding's effect on admission
+/// beside it (#3678); the finding's name, with the daemon's reason in full
+/// under it, since the reason is what names the held run and the refused
+/// check (#3026); and what it is about, its task or else its project, with
+/// the time it opened or closed. An accent chevron, centered on the row,
+/// says the row opens the finding's card.
 ///
 /// An open blocking finding is marked in wax (#3356): its keyword in wax
 /// semibold and a 3pt wax rule down its leading edge, the color the
@@ -189,6 +206,9 @@ struct FindingRow: View {
     /// grouped row's 14pt padding, keeps 10pt from it.
     static let ruleWidth: CGFloat = 3
     static let ruleInset: CGFloat = 1
+    /// The chevron's inset from the group's trailing edge: the grouped
+    /// row's padding, so it lines up with the content's leading inset.
+    static let chevronTrailingPadding: CGFloat = 14
     /// `SettingsGroup`'s corner radius, which the rule follows.
     static let groupCornerRadius: CGFloat = 8
 
@@ -209,29 +229,15 @@ struct FindingRow: View {
 
     var body: some View {
         let marked = Self.isMarkedBlocking(item)
-        SidebarRow(
-            keyword: .init(
-                text: SystemHealthFindings.keyword(item), color: marked ? .waxText : .inkDim, isStrong: marked),
-            time: time, grouped: true
-        ) {
-            EmptyView()
-        } title: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(AttentionDisplay.rowSummary(item))
-                    .font(FreesideFont.rowTitle)
-                    .foregroundStyle(Color.ink)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                if !item.reason.isEmpty {
-                    Text(item.reason)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        } context: {
-            SidebarRowContext(text: Self.context(item))
-        } closing: {
-            EmptyView()
+        HStack(alignment: .center, spacing: 0) {
+            row(marked: marked)
+            // Says the row opens the finding's card; the row is already a
+            // button to VoiceOver.
+            Text("›")
+                .font(FreesideFont.factLabel)
+                .foregroundStyle(Color.accentText)
+                .padding(.trailing, Self.chevronTrailingPadding)
+                .accessibilityHidden(true)
         }
         // A background, so the rule takes the row's full height without
         // moving its content. Only the rule clips to the group's corner, as
@@ -253,6 +259,34 @@ struct FindingRow: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private func row(marked: Bool) -> some View {
+        SidebarRow(
+            keyword: .init(
+                text: SystemHealthFindings.keyword(item), color: marked ? .waxText : .inkDim, isStrong: marked,
+                effect: SystemHealthFindings.effect(item)),
+            time: time, grouped: true
+        ) {
+            EmptyView()
+        } title: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(AttentionDisplay.findingName(item))
+                    .font(FreesideFont.rowTitle)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                if !item.reason.isEmpty {
+                    Text(item.reason)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } context: {
+            SidebarRowContext(text: Self.context(item))
+        } closing: {
+            EmptyView()
+        }
     }
 
     /// The task a finding is about by the name the Unified List gives it,

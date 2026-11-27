@@ -43,6 +43,27 @@ package struct SystemHealthFindings: Equatable {
         return AttentionDisplay.label(item.posture?.value1 ?? .advisory)
     }
 
+    /// What an open finding does to unattended admission, read beside its
+    /// keyword: a blocking finding stops it, an advisory one names the
+    /// capability it affects and says it does not stop it. Only the pane's
+    /// header states whether admission is open (#3678). A closed finding
+    /// has none: its keyword is its outcome, and it stops nothing.
+    package static func effect(_ item: Components.Schemas.AttentionItem) -> String? {
+        guard item.status == .open else { return nil }
+        guard !isBlocking(item) else { return "stops unattended admission" }
+        let unstopped = "does not stop admission"
+        guard let capability = item.health_diagnostic?.value1.impairs else { return unstopped }
+        let affected: String
+        switch capability {
+        case .unattended_admission: affected = "unattended admission"
+        case .run_visibility: affected = "run visibility"
+        case .agent_credential: affected = "agent credential"
+        case .unknown: affected = "an unrecognized capability"
+        case .none: return unstopped
+        }
+        return "affects \(affected) · \(unstopped)"
+    }
+
     /// When a closed finding closed: its conclusion's instant, which a
     /// daemon resolution carries with no `decided_at`; else the decision's,
     /// else its creation, for an item recorded before conclusions were.

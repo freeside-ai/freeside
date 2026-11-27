@@ -283,7 +283,9 @@ import Testing
 
             #expect(!summary.isEmpty)
             #expect(summary.first?.isUppercase == true)
-            #expect(summary.hasSuffix("."))
+            // A system-health finding's row is its name, not a sentence
+            // (#3678); every other summary is one.
+            #expect(type == .system_health || summary.hasSuffix("."))
             #expect(summary != item.reason)
         }
         #expect(
@@ -306,29 +308,7 @@ import Testing
     @Test func mechanicalRowSummariesComeFromTypedFactsNotProse() {
         var systemHealth = AttentionFixtures.fixture(type: .system_health).item
         systemHealth.reason = "any prose at all"
-        #expect(
-            AttentionDisplay.rowSummary(systemHealth)
-                == "Run projection unavailable. Warns about run visibility; admission stays open.")
-
-        systemHealth.posture = .init(value1: .blocking)
-        #expect(
-            AttentionDisplay.rowSummary(systemHealth)
-                == "Run projection unavailable. Run visibility is impaired.")
-
-        systemHealth.health_diagnostic = .init(
-            value1: .init(code: "backup_age.stale", impairs: .none))
-        #expect(
-            AttentionDisplay.rowSummary(systemHealth)
-                == "Backup age stale. No capability is impaired.")
-        systemHealth.posture = .init(value1: .advisory)
-        #expect(
-            AttentionDisplay.rowSummary(systemHealth)
-                == "Backup age stale. No capability is impaired.")
-
-        systemHealth.health_diagnostic = nil
-        #expect(
-            AttentionDisplay.rowSummary(systemHealth)
-                == "A system-health condition needs attention.")
+        #expect(AttentionDisplay.rowSummary(systemHealth) == "Run projection unavailable")
 
         // blocked is retired: only a closed item exists, and its row says so
         // instead of naming a wait nothing is on any more.
@@ -336,18 +316,17 @@ import Testing
         #expect(AttentionDisplay.rowSummary(blocked) == "This blocked item is superseded.")
     }
 
-    /// Held work (#3026): an advisory finding reads as a warning that
-    /// leaves admission open, beside the Admission row's "Open", and a
-    /// finding with no posture reads as advisory, as the pane orders it.
-    @Test func anAdvisoryFindingSaysAdmissionStaysOpen() {
+    /// A finding's row is its name alone (#3678): the pane's header states
+    /// admission and the effect line states the finding's part in it, so
+    /// the title says neither, whatever the posture.
+    @Test func aSystemHealthRowIsTheFindingsName() {
         var held = AttentionFixtures.heldWorkSystemHealth().item
-        #expect(
-            AttentionDisplay.rowSummary(held)
-                == "Work held. Warns about unattended admission; admission stays open.")
-        held.posture = nil
-        #expect(
-            AttentionDisplay.rowSummary(held)
-                == "Work held. Warns about unattended admission; admission stays open.")
+        #expect(AttentionDisplay.rowSummary(held) == "Work held")
+        held.posture = .init(value1: .blocking)
+        #expect(AttentionDisplay.rowSummary(held) == "Work held")
+        held.health_diagnostic = nil
+        #expect(AttentionDisplay.rowSummary(held) == "System health finding")
+        #expect(AttentionDisplay.findingName(held) == "System health finding")
     }
 
     /// Codes are free-form, so one rule names every one, including those

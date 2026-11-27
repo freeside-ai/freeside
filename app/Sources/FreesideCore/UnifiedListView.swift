@@ -983,12 +983,14 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
     /// text sizes; left flexible, the stacked header truncated it. The
     /// keyword's marks (Agent, `+N`) sit beside it where they fit on one
     /// line and under it otherwise, so a long status wraps at its words,
-    /// never inside one.
+    /// never inside one. The effect follows the marks the same way and
+    /// takes its own line in the narrow fallback. VoiceOver reads the
+    /// effect right after the keyword and its marks.
     private var keywordLine: some View {
         let word = KeywordLabel(text: keyword.text, color: keyword.color, isStrong: keyword.isStrong)
             .fixedSize(horizontal: false, vertical: true)
         return Group {
-            if keyword.marksAgent || keyword.moreDecisions > 0 {
+            if keyword.marksAgent || keyword.moreDecisions > 0 || keyword.effect != nil {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         word
@@ -1006,24 +1008,35 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
         .accessibilityHidden(!keyword.isSpoken)
     }
 
-    private var keywordMarks: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if keyword.marksAgent {
-                KeywordLabel(text: "Agent")
+    /// The marks stay one unit, so the narrow fallback keeps Agent and
+    /// `+N` on one line; the effect is its own element after them, so it
+    /// wraps onto its own line there.
+    @ViewBuilder private var keywordMarks: some View {
+        if keyword.marksAgent || keyword.moreDecisions > 0 {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if keyword.marksAgent {
+                    KeywordLabel(text: "Agent")
+                }
+                if keyword.moreDecisions > 0 {
+                    // The attention chip's face and colors without its vertical
+                    // padding, so the mark doesn't make the row taller.
+                    Text("+\(keyword.moreDecisions)")
+                        .font(FreesideFont.chip)
+                        .foregroundStyle(StateChipCut.attention.text)
+                        .padding(.horizontal, 5)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3).strokeBorder(StateChipCut.attention.border, lineWidth: 1)
+                        )
+                        .fixedSize()
+                        .accessibilityLabel(UnifiedRow.moreDecisionsSpoken(keyword.moreDecisions))
+                }
             }
-            if keyword.moreDecisions > 0 {
-                // The attention chip's face and colors without its vertical
-                // padding, so the mark doesn't make the row taller.
-                Text("+\(keyword.moreDecisions)")
-                    .font(FreesideFont.chip)
-                    .foregroundStyle(StateChipCut.attention.text)
-                    .padding(.horizontal, 5)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 3).strokeBorder(StateChipCut.attention.border, lineWidth: 1)
-                    )
-                    .fixedSize()
-                    .accessibilityLabel(UnifiedRow.moreDecisionsSpoken(keyword.moreDecisions))
-            }
+        }
+        if let effect = keyword.effect {
+            Text(effect)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1064,7 +1077,8 @@ struct UnviewedDot: View {
 }
 
 /// A sidebar row's keyword line: the leading word, with `AGENT` after it
-/// when the row's serif line is agent prose (plan §9).
+/// when the row's serif line is agent prose (plan §9), and the row's
+/// effect after that when it has one.
 struct SidebarRowKeyword {
     let text: String
     var color: Color = .inkDim
@@ -1074,6 +1088,10 @@ struct SidebarRowKeyword {
     /// The task's other open decisions (#3670), drawn as `+N` beside the
     /// word; 0 draws nothing.
     var moreDecisions = 0
+    /// What the row's subject does, in dim mono beside the keyword, as a
+    /// System Health finding states its part in admission (#3678). Nil,
+    /// the default, draws the keyword line as before.
+    var effect: String? = nil
     /// False where the row speaks this line elsewhere, in its own order.
     var isSpoken = true
 }
