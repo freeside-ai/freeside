@@ -40,6 +40,7 @@ outputs=(
     app/Sources/FreesideAPI/TolerantEnums.swift
     app/Sources/FreesideAPI/ContractDigest.swift
     daemon/internal/signet/contract_digest.go
+    daemon/internal/signet/openapi.yaml
 )
 
 # list_output_files <root>: every file under the outputs that exist in <root>,
@@ -80,8 +81,9 @@ if [[ $in_git == 0 ]]; then
 fi
 
 cp "$repo_dir/api/openapi.yaml" "$schema_mirror"
-# Regenerate the compiled-in contract-digest constants from the same spec, so
-# a spec change that forgets them is drift here (and in the pre-commit hook).
+# Regenerate the compiled-in contract compatibility constants and daemon spec
+# copy from the same spec, so a spec change that forgets them is drift here
+# (and in the pre-commit hook).
 bash "$repo_dir/scripts/api-contract-digest.sh" --write
 swift package \
     --package-path "$app_dir" \

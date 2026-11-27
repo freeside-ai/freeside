@@ -100,10 +100,10 @@ STUB
 }
 
 # setup_repo builds a fresh in-sync fixture and sets REPO, BINDIR, ARGSFILE.
-# fixture_spec <schema>: a spec body api-contract-digest.sh accepts, which
-# needs the compatibility level and floor under info (#3109).
+# fixture_spec <schema> [<level>]: a spec body api-contract-digest.sh accepts,
+# which needs the compatibility level and floor under info (#3109).
 fixture_spec() {
-  printf 'info:\n  x-compatibility-level: 0\n  x-compatibility-floor: 0\nschema: %s\n' "$1"
+  printf 'info:\n  x-compatibility-level: %s\n  x-compatibility-floor: 0\nschema: %s\n' "${2:-0}" "$1"
 }
 
 # The initial commit predates core.hooksPath, so it bypasses the hook.
@@ -136,9 +136,10 @@ setup_repo() {
   cp "$ROOT/app/scripts/generate-api-client.sh" \
     "$REPO/app/scripts/generate-api-client.sh"
   chmod +x "$REPO/app/scripts/generate-api-client.sh"
-  # generate-api-client.sh regenerates the contract-digest constants through
-  # this helper, so the fixture needs it and its output dirs (created above)
-  # for a schema-changing case to reach the generator instead of aborting.
+  # generate-api-client.sh regenerates the compatibility constants and the
+  # daemon spec copy through this helper, so the fixture needs it and its
+  # output dirs (created above) for a schema-changing case to reach the
+  # generator instead of aborting.
   cp "$ROOT/scripts/api-contract-digest.sh" \
     "$REPO/scripts/api-contract-digest.sh"
   chmod +x "$REPO/scripts/api-contract-digest.sh"
@@ -167,9 +168,9 @@ commit_git() { # <git-args...>; runs in REPO with the stub on PATH, sets OUT/RC
 }
 
 # setup_export builds the in-sync fixture, exports its commit to a tree with
-# no .git, and sets EXPORT. The fixture commits no contract-digest constants,
-# so they are written here (into the directory the export drops for being
-# empty) to make the export a tree regeneration leaves unchanged.
+# no .git, and sets EXPORT. The fixture commits no compatibility constants or
+# daemon spec copy, so they are written here (into the directory the export
+# drops for being empty) to make the export a tree regeneration leaves unchanged.
 setup_export() {
   local digest_out
   setup_repo
@@ -321,8 +322,17 @@ assert_rc 1
 assert_contains 'Generated API client changed'
 assert_contains 'app/Sources/FreesideAPI/openapi.yaml'
 assert_contains 'app/Sources/FreesideAPI/GeneratedSources/Types.swift'
+assert_contains 'daemon/internal/signet/openapi.yaml'
+
+begin_case "no-git: a compatibility-level edit without regeneration is drift"
+setup_export
+fixture_spec v2 1 >"$EXPORT/api/openapi.yaml"
+generate_export
+assert_rc 1
+assert_contains 'Generated API client changed'
 assert_contains 'app/Sources/FreesideAPI/ContractDigest.swift'
 assert_contains 'daemon/internal/signet/contract_digest.go'
+assert_contains 'daemon/internal/signet/openapi.yaml'
 
 begin_case "no-git: a stale schema mirror is drift"
 setup_export

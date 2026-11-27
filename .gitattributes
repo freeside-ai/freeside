@@ -1,1 +1,2 @@
 app/Sources/FreesideAPI/GeneratedSources/** linguist-generated=true
+daemon/internal/signet/openapi.yaml linguist-generated=true

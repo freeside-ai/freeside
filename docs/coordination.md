@@ -405,8 +405,9 @@ still verified, and a golden's diff is still reviewed
 (`daemon/README.md`):
 
 - the generated API client under
-  `app/Sources/FreesideAPI/GeneratedSources/`, with the schema mirror and
-  the contract-digest constants regenerated alongside it
+  `app/Sources/FreesideAPI/GeneratedSources/`, with the app schema mirror,
+  the daemon spec copy (`daemon/internal/signet/openapi.yaml`), and the
+  contract compatibility constants regenerated alongside it
   (`bash scripts/check.sh app generate`);
 - golden files rewritten by `go test -update`
   (`daemon/internal/golden`);
@@ -417,8 +418,7 @@ Estimate the authored lines against the repository's known size
 amplifiers, not the core change alone; a unit touching two or more is
 presumed over budget:
 
-- a new migration, which also joins every migration-subset exclusion
-  list;
+- a new migration;
 - a sync-carried contract field, which is `kind:contract` and adds the
   API schema edit; its generated app client is regenerated output and
   stays out of the count;

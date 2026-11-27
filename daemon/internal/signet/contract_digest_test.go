@@ -1,6 +1,7 @@
 package signet_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,15 +17,19 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 )
 
-// TestContractDigestMatchesSpec is the daemon-side drift gate: the
-// compiled-in APIContractDigest must equal the SHA-256 of the spec's exact
-// bytes, so a spec edit that forgets to regenerate the constant fails here
-// (daemon-ci.yml runs on any daemon/** change).
+// TestContractDigestMatchesSpec is the daemon-side drift gate: the embedded
+// copy of api/openapi.yaml must equal the repo spec byte for byte, and
+// APIContractDigest must equal the SHA-256 of those exact bytes, so a spec
+// edit that forgets to refresh the copy (or a hand edit to the copy) fails
+// here (daemon-ci.yml runs on any daemon/** change).
 func TestContractDigestMatchesSpec(t *testing.T) {
 	t.Parallel()
 	body, err := os.ReadFile("../../../api/openapi.yaml")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(signet.EmbeddedOpenAPISpec(), body) {
+		t.Fatalf("embedded openapi.yaml differs from api/openapi.yaml (run scripts/api-contract-digest.sh --write)")
 	}
 	sum := sha256.Sum256(body)
 	want := "sha256:" + hex.EncodeToString(sum[:])
