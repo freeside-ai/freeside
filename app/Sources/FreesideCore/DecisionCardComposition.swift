@@ -764,6 +764,20 @@ struct DecisionCardComposition: Equatable {
         stop.excerpts.first { $0.side == .head && $0.text != nil }
     }
 
+    /// The pull request URL the final-review card's copy control writes to the
+    /// clipboard, or nil when no copy control should draw. Returns the exact
+    /// string `DecisionModel.pullRequestURL(for:)` builds so the copied link
+    /// always matches what View PR opens. Limited to `ready_for_final_review`
+    /// because other cards that offer View PR (`publish_blocked`) keep their
+    /// current control group without a copy control.
+    @MainActor
+    static func copyablePullRequestLink(_ item: Components.Schemas.AttentionItem) -> String? {
+        guard item._type == .ready_for_final_review,
+            let reference = item.pr_reference?.value1
+        else { return nil }
+        return DecisionModel.pullRequestURL(for: reference)?.absoluteString
+    }
+
     /// Whether a final review's verdict no longer describes what the pull
     /// request holds: the daemon superseded the binding. That is a daemon
     /// fact; the client compares nothing.
