@@ -1226,6 +1226,7 @@ package enum AttentionDisplay {
         case .invalid_evidence: return "Invalid evidence"
         case .handoff_check: return "Handoff check refused"
         case .export_rejected: return "Export rejected"
+        case .base_left_branch: return "Base left its branch"
         case .unknown: return "Unknown"
         }
     }

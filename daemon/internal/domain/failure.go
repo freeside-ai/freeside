@@ -48,6 +48,11 @@ const (
 	// export (domain.ExportRejection). The findings are in the task's
 	// export_rejections row; the card carries the first few.
 	FailureCauseExportRejected FailureCause = "export_rejected"
+	// FailureCauseBaseLeftBranch: the run's recorded base is no longer on its
+	// base branch (as after a force-push past it). A retry that keeps the run
+	// keeps that base and repeats the failure; an implementation retry starts
+	// a new run at the branch tip.
+	FailureCauseBaseLeftBranch FailureCause = "base_left_branch"
 	FailureCauseUnknown        FailureCause = "unknown"
 )
 
@@ -65,6 +70,7 @@ var AllFailureCauses = []FailureCause{
 	FailureCauseInvalidEvidence,
 	FailureCauseHandoffCheck,
 	FailureCauseExportRejected,
+	FailureCauseBaseLeftBranch,
 	FailureCauseUnknown,
 }
 
@@ -74,7 +80,7 @@ func (c FailureCause) valid() bool {
 		FailureCauseServiceCapacity, FailureCauseProviderUnavailable,
 		FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
 		FailureCauseMemoryLimit, FailureCauseInvalidEvidence, FailureCauseHandoffCheck,
-		FailureCauseExportRejected, FailureCauseUnknown:
+		FailureCauseExportRejected, FailureCauseBaseLeftBranch, FailureCauseUnknown:
 		return true
 	default:
 		return false
@@ -185,7 +191,7 @@ func DecideFailureDisposition(cause FailureCause, facts FailureFacts) FailureDis
 	case FailureCauseProviderUnavailable:
 		return FailureDispositionRetrySameAgent
 	case FailureCauseInvalidConfiguration, FailureCauseInvalidEvidence, FailureCauseHandoffCheck,
-		FailureCauseExportRejected, FailureCauseUnknown:
+		FailureCauseExportRejected, FailureCauseBaseLeftBranch, FailureCauseUnknown:
 		return FailureDispositionAttention
 	case FailureCauseContractContradiction:
 		return FailureDispositionFailLoud

@@ -129,8 +129,30 @@ func TestDecideRetryOutlook(t *testing.T) {
 		"provider unavailable":     {ExecutionOutcomeFailed, FailureCauseProviderUnavailable, nil, RetryOutlookMaySucceed},
 		"unknown":                  {ExecutionOutcomeFailed, FailureCauseUnknown, nil, RetryOutlookMaySucceed},
 	} {
-		if got := DecideRetryOutlook(tc.outcome, tc.cause, tc.check); got != tc.want {
-			t.Errorf("%s: outlook = %q, want %q", name, got, tc.want)
+		for _, stage := range AllStageNames {
+			if got := DecideRetryOutlook(stage, tc.outcome, tc.cause, tc.check); got != tc.want {
+				t.Errorf("%s (%s): outlook = %q, want %q", name, stage, got, tc.want)
+			}
+		}
+	}
+	for _, stage := range AllStageNames {
+		want := RetryOutlookWouldRepeat
+		if stage == StageNameImplementation {
+			want = RetryOutlookMaySucceed
+		}
+		if got := DecideRetryOutlook(stage, ExecutionOutcomeFailed, FailureCauseBaseLeftBranch, nil); got != want {
+			t.Errorf("base_left_branch (%s): outlook = %q, want %q", stage, got, want)
+		}
+	}
+	for _, cause := range AllFailureCauses {
+		if cause == FailureCauseBaseLeftBranch {
+			continue
+		}
+		first := DecideRetryOutlook(AllStageNames[0], ExecutionOutcomeFailed, cause, nil)
+		for _, stage := range AllStageNames[1:] {
+			if got := DecideRetryOutlook(stage, ExecutionOutcomeFailed, cause, nil); got != first {
+				t.Errorf("cause %q changed outlook from %q (%s) to %q (%s)", cause, first, AllStageNames[0], got, stage)
+			}
 		}
 	}
 }
@@ -143,23 +165,26 @@ func TestOffersSameAgentRetry(t *testing.T) {
 		if role != nil {
 			f.Admitted = &InvocationAdmissionFacts{Role: role}
 		}
-		f.RetryOutlook = DecideRetryOutlook(outcome, cause, nil)
+		f.RetryOutlook = DecideRetryOutlook(stage, outcome, cause, nil)
 		return f
 	}
 	for name, tc := range map[string]struct {
 		facts ExecutionFailureFacts
 		want  bool
 	}{
-		"lost specification":         {facts(StageNameSpecification, nil, ExecutionOutcomeLost, ""), true},
-		"canceled implementer":       {facts(StageNameImplementation, &implementer, ExecutionOutcomeCanceled, ""), true},
-		"provider unavailable":       {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseProviderUnavailable), true},
-		"unknown failure":            {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseUnknown), true},
-		"quota has its own remedy":   {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseQuota), false},
-		"would repeat":               {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseExportRejected), false},
-		"remediation round":          {facts(StageNameImplementation, &reviewer, ExecutionOutcomeLost, ""), false},
-		"implementation without one": {facts(StageNameImplementation, nil, ExecutionOutcomeLost, ""), false},
-		"review stage":               {facts(StageNameReview, nil, ExecutionOutcomeLost, ""), false},
-		"older card without outlook": {ExecutionFailureFacts{Outcome: ExecutionOutcomeLost, Stage: StageNameSpecification, InvocationID: "inv"}, false},
+		"lost specification":             {facts(StageNameSpecification, nil, ExecutionOutcomeLost, ""), true},
+		"canceled implementer":           {facts(StageNameImplementation, &implementer, ExecutionOutcomeCanceled, ""), true},
+		"provider unavailable":           {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseProviderUnavailable), true},
+		"unknown failure":                {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseUnknown), true},
+		"base left branch specification": {facts(StageNameSpecification, nil, ExecutionOutcomeFailed, FailureCauseBaseLeftBranch), false},
+		"base left branch implementer":   {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseBaseLeftBranch), true},
+		"base left branch remediation":   {facts(StageNameImplementation, &reviewer, ExecutionOutcomeFailed, FailureCauseBaseLeftBranch), false},
+		"quota has its own remedy":       {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseQuota), false},
+		"would repeat":                   {facts(StageNameImplementation, &implementer, ExecutionOutcomeFailed, FailureCauseExportRejected), false},
+		"remediation round":              {facts(StageNameImplementation, &reviewer, ExecutionOutcomeLost, ""), false},
+		"implementation without one":     {facts(StageNameImplementation, nil, ExecutionOutcomeLost, ""), false},
+		"review stage":                   {facts(StageNameReview, nil, ExecutionOutcomeLost, ""), false},
+		"older card without outlook":     {ExecutionFailureFacts{Outcome: ExecutionOutcomeLost, Stage: StageNameSpecification, InvocationID: "inv"}, false},
 	} {
 		if got := tc.facts.OffersSameAgentRetry(); got != tc.want {
 			t.Errorf("%s: offers = %t, want %t", name, got, tc.want)

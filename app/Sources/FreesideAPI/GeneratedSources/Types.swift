@@ -7616,7 +7616,7 @@ public enum Components {
             case blocked = "blocked"
             case unknown = "unknown"
         }
-        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure. invalid_evidence: import refused what the run wrote to its evidence channel (a malformed entry, or bytes that are not the declared media type), so no other agent escapes it. handoff_check: a ward handoff check refused the run's workspace or export; the facts' handoff_check names it. export_rejected: the gauntlet definitively rejected the export; the facts' export_rejection carries the first findings.
+        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure. invalid_evidence: import refused what the run wrote to its evidence channel (a malformed entry, or bytes that are not the declared media type), so no other agent escapes it. handoff_check: a ward handoff check refused the run's workspace or export; the facts' handoff_check names it. export_rejected: the gauntlet definitively rejected the export; the facts' export_rejection carries the first findings. base_left_branch: the run's recorded base commit is no longer on its base branch, so any retry that keeps the run keeps that base.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/FailureCause`.
@@ -7632,6 +7632,7 @@ public enum Components {
             case invalid_evidence = "invalid_evidence"
             case handoff_check = "handoff_check"
             case export_rejected = "export_rejected"
+            case base_left_branch = "base_left_branch"
             case unknown = "unknown"
         }
         /// The ward handoff check that refused a run's workspace or export. A client decodes a check it doesn't know as unknown; the daemon never sends unknown.
@@ -7741,7 +7742,7 @@ public enum Components {
                 case path
             }
         }
-        /// Whether a retry of the failed attempt on the same agent could succeed, derived by the daemon from the recorded failure. would_repeat: the failure follows from what the run produced or from its configuration, so a retry would fail the same way. may_succeed: nothing recorded shows the failure would recur. A client decodes an outlook it doesn't know as unknown; the daemon never sends unknown.
+        /// Whether a retry of the failed attempt on the same agent could succeed, derived by the daemon from the stage, outcome, cause, and handoff check. would_repeat: the failure follows from what the run produced, its configuration, or a run binding that a retry of this stage keeps (such as base_left_branch on a specification retry), so a retry would fail the same way. may_succeed: nothing recorded shows the failure would recur (including base_left_branch on an implementation retry, which starts a new run at the branch tip). A client decodes an outlook it doesn't know as unknown; the daemon never sends unknown.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RetryOutlook`.
