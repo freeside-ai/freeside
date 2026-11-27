@@ -142,10 +142,14 @@ then print the reference.
 ## Agent Claude
 
 The agent base carrying the pinned Claude CLI (plan §5.4 and §5.7's canonical
-image-shape contract), built by `scripts/build-agent-claude-image.sh` and checked
-against the ward's post-create allowlist by `scripts/check-agent-image.sh`. Its
-README records this implementation's pins and measured runtime details; the plan
-is authoritative for why no contributed or inherited `ENV`, `WORKDIR`,
+image-shape contract) and the static `/usr/local/bin/freeside-commit-plan`
+validator binary, built by `scripts/build-agent-claude-image.sh` and checked
+against the ward's post-create allowlist by `scripts/check-agent-image.sh`. The
+copied `freeside-commit-plan` binary is a build artifact and is gitignored.
+Warded writers get `freeside-commit-plan` only after the operator rebuilds and
+re-pins the agent base and project images are rebuilt on it. Its README records
+this implementation's pins and measured runtime details; the plan is
+authoritative for why no contributed or inherited `ENV`, `WORKDIR`,
 `ENTRYPOINT`, `CMD`, `USER`, or `VOLUME` may change ward's required realized
 shape.
 

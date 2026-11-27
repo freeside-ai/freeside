@@ -220,6 +220,9 @@ func main() {
 		case "cordon":
 			runCordonMain(os.Args[2:])
 			return
+		case "commit-plan":
+			runCommitPlanMain(os.Args[2:])
+			return
 		case "deputy":
 			runDeputyMain(os.Args[2:])
 			return

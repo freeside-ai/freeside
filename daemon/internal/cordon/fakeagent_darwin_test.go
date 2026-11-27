@@ -4,6 +4,7 @@ package cordon
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/commitplancheck"
 )
 
 // fakeAgentArg makes the test binary the fake agent CLI a darwin test
@@ -37,6 +40,10 @@ func TestMain(m *testing.M) {
 	// test is this binary.
 	if len(args) >= len(superviseVerb) && slices.Equal(args[:len(superviseVerb)], superviseVerb) {
 		os.Exit(RunSupervisor(args[len(superviseVerb):]))
+	}
+	// A launch's freeside-commit-plan shim execs this binary with "commit-plan".
+	if len(args) > 0 && args[0] == "commit-plan" {
+		os.Exit(commitplancheck.Run(context.Background(), args[1:], os.Stdout, os.Stderr))
 	}
 	// A launch passes the CLI's fixed settings and input format first
 	// (agentArgs).
@@ -98,6 +105,19 @@ func fakeAgent(args []string) int {
 			return 1
 		}
 		fmt.Println(args[2])
+		return 0
+	case "exec":
+		cmd := exec.Command(args[1], args[2:]...) //nolint:gosec // G204: test fake agent invokes the command named by its own test
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return exitErr.ExitCode()
+			}
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
 		return 0
 	case "idle":
 		select {}

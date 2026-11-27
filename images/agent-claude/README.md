@@ -44,10 +44,21 @@ Current) has both.
 and `ripgrep` come from Debian's archive and are **recorded, not pinned**: their
 observed versions are written into
 `/usr/local/share/freeside/image-manifest.txt` in the image, along with the
-resolved Node, npm, Claude, jq, and ripgrep versions. An exact apt pin turns
+resolved Node, npm, Claude, jq, and ripgrep versions and the SHA-256 of
+`/usr/local/bin/freeside-commit-plan`. An exact apt pin turns
 unbuildable once Debian drops the superseded version from its mirror. Ripgrep
 serves Bash usage; the Claude CLI's Grep tool vendors its own ripgrep, so the
 PATH installation is an agent convenience rather than a CLI dependency.
+
+`/usr/local/bin/freeside-commit-plan` is cross-compiled from
+`daemon/cmd/freeside-commit-plan` as a static `linux/arm64` binary by
+`scripts/build-agent-claude-image.sh` (the copied file in this directory is
+gitignored and removed on exit). After building, the script runs
+`freeside-commit-plan validate` by name inside the built image as uid 1001 with
+networking disabled against a throwaway repository and fails the build unless
+it reports the expected JSON result. The binary is a writer convenience that
+grants no authority. Warded writers get it only after the operator rebuilds and
+re-pins this agent base and project images are rebuilt on it.
 
 "Reproducible" therefore means pinned inputs plus a recorded digest, not a
 bit-identical image: Apple container's build metadata varies between otherwise

@@ -389,13 +389,16 @@ func TestLaunchEnvironmentIsTheFixedList(t *testing.T) {
 			t.Fatalf("Launch: %v", err)
 		}
 		lay := layoutFor(cfg.RunsRoot, "run-env")
-		path := "PATH=" + filepath.Dir(cfg.AgentCLI) + ":/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:" +
+		path := "PATH=" + lay.tools + ":" + filepath.Dir(cfg.AgentCLI) + ":/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:" +
 			cfg.Home + "/.cargo/bin:" + cfg.Home + "/.local/bin:" + cfg.Home + "/.local/share/mise/shims:" +
 			"/usr/bin:/bin:/usr/sbin:/sbin"
 		want := []string{
 			"HOME=" + cfg.Home, path, "TMPDIR=" + lay.tmp, "CLAUDE_CONFIG_DIR=" + lay.config,
 			"MISE_STATE_DIR=" + lay.miseState, "DISABLE_AUTOUPDATER=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		}
+		if info, err := os.Stat(filepath.Join(lay.tools, "freeside-commit-plan")); err != nil || info.Mode()&0o100 == 0 {
+			t.Fatalf("tools shim stat = %v, %v; want executable file", info, err)
 		}
 		if len(l.specs) != 2 {
 			t.Fatalf("started %d processes, want the canary and the agent", len(l.specs))

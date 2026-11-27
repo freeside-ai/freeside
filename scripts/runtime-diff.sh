@@ -28,7 +28,8 @@
 #     and the verdict is "changed": a lost pass, never a wrong carry. A
 #     changed go.mod toolchain line changes the binary the same way.
 #   - The diff touches no image source (images/, scripts/build-*-image.sh,
-#     daemon/cmd/freeside-export/), no prompts/ path, and no policy/ path.
+#     daemon/cmd/freeside-export/, daemon/cmd/freeside-commit-plan/), no
+#     prompts/ path, and no policy/ path.
 #     The settings pin the images, the role prompts are Go constants in the
 #     daemon (nothing reads prompts/ yet), and the agent tree lives in its
 #     own repository, so this is a conservative flag, not a proof about
@@ -107,7 +108,7 @@ sed 's/^/  /' "$TMP/name-status"
 reasons=()
 while IFS= read -r -d '' path; do
   case $path in
-    images/* | prompts/* | policy/* | daemon/cmd/freeside-export/* | scripts/build-*-image.sh)
+    images/* | prompts/* | policy/* | daemon/cmd/freeside-export/* | daemon/cmd/freeside-commit-plan/* | scripts/build-*-image.sh)
       reasons+=("path $path")
       ;;
   esac
