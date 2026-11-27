@@ -823,6 +823,34 @@
             }
         }
 
+        @Test func dumpDirectoryIsolatesDefaultRunsAndHonorsOverride() {
+            let temporaryDirectory = URL(
+                fileURLWithPath: "/tmp/freeside-test-tmp", isDirectory: true)
+            let override = "/tmp/freeside-explicit-output"
+            #expect(
+                Self.dumpDirectory(
+                    environment: ["FREESIDE_SCREENSHOT_OUTPUT": override],
+                    temporaryDirectory: temporaryDirectory,
+                    runID: "1700000000-101"
+                ) == URL(fileURLWithPath: override, isDirectory: true))
+
+            let first = Self.dumpDirectory(
+                environment: [:],
+                temporaryDirectory: temporaryDirectory,
+                runID: "1700000000-101")
+            let second = Self.dumpDirectory(
+                environment: [:],
+                temporaryDirectory: temporaryDirectory,
+                runID: "1700000000-202")
+            #expect(
+                first
+                    == temporaryDirectory
+                    .appendingPathComponent("freeside-screenshot-regressions", isDirectory: true)
+                    .appendingPathComponent("1700000000-101", isDirectory: true))
+            #expect(first != second)
+            #expect(!Self.dumpRunID.isEmpty)
+        }
+
         /// Mirrors the mock's read-time availability projection so the store's
         /// pre-loaded phases match what production renders after sync: an image
         /// or referenced claim is available only when its digest's bytes are
@@ -6540,15 +6568,33 @@
             return "macOS-\(version.majorVersion).\(version.minorVersion)"
         }
 
-        private func dump(_ image: CGImage, named name: String) throws -> URL {
-            // Separate evidence from concurrent worktrees without changing
-            // which pixels are compared or accepted.
-            let directory =
-                ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_OUTPUT"].map {
-                    URL(fileURLWithPath: $0, isDirectory: true)
-                }
-                ?? FileManager.default.temporaryDirectory
+        /// Process-scoped folder name so concurrent test runs cannot overwrite
+        /// each other's dumped PNGs when `FREESIDE_SCREENSHOT_OUTPUT` is unset.
+        private static let dumpRunID =
+            "\(Int(Date().timeIntervalSince1970))-\(ProcessInfo.processInfo.processIdentifier)"
+
+        /// Separate evidence from concurrent worktrees without changing which
+        /// pixels are compared or accepted: honor an explicit output directory,
+        /// and otherwise nest each process's dumps under its own run id.
+        private static func dumpDirectory(
+            environment: [String: String],
+            temporaryDirectory: URL,
+            runID: String
+        ) -> URL {
+            if let output = environment["FREESIDE_SCREENSHOT_OUTPUT"] {
+                return URL(fileURLWithPath: output, isDirectory: true)
+            }
+            return
+                temporaryDirectory
                 .appendingPathComponent("freeside-screenshot-regressions", isDirectory: true)
+                .appendingPathComponent(runID, isDirectory: true)
+        }
+
+        private func dump(_ image: CGImage, named name: String) throws -> URL {
+            let directory = Self.dumpDirectory(
+                environment: ProcessInfo.processInfo.environment,
+                temporaryDirectory: FileManager.default.temporaryDirectory,
+                runID: Self.dumpRunID)
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
             let url = directory.appendingPathComponent("\(name).png")

@@ -561,6 +561,11 @@ runner's `screenshot-mismatches` artifact, move CI to a matching image and
 Xcode in `convergence-ci.yml` and `app-ci.yml`, and confirm both screenshot
 slices pass with `ScreenshotDigestOverrides.json` still `{}`.
 
+A mismatch writes its render under `freeside-screenshot-regressions/<run-id>/`
+in the temporary directory unless `FREESIDE_SCREENSHOT_OUTPUT` is set, and the
+failure message names that exact file. CI uploads the parent directory as the
+`screenshot-mismatches` artifact, which holds one `<run-id>` folder per slice.
+
 ## Structure
 
 - `Freeside.xcodeproj` contains the two application targets. Both consume the local `FreesideCore` Swift package product.
