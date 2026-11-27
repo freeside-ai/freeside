@@ -19,6 +19,8 @@ func TestFramesCarryOnlyTheirKindsFields(t *testing.T) {
 		{Kind: kindHello, Hello: &helloBody{Build: "b"}},
 		{Kind: kindStarted, RunID: "run-1"},
 		{Kind: kindExport, Export: &exportRequestBody{RunID: "run-1"}},
+		{Kind: kindCheck, Check: &checkBody{RunID: "run-1"}},
+		{Kind: kindRecoverCheck, RecoverCheck: &recoverCheckBody{RunID: "run-1"}},
 		{Kind: kindReleaseFinished, RunIDs: []string{"run-1"}},
 		{Kind: kindCancel},
 		{Kind: kindReply, Reply: &replyBody{}},
@@ -38,6 +40,8 @@ func TestFramesCarryOnlyTheirKindsFields(t *testing.T) {
 		{Kind: kindStarted, RunID: "run-1", Export: &exportRequestBody{RunID: "run-1"}},
 		{Kind: kindExport, RunID: "run-1"},
 		{Kind: kindCancel, RunID: "run-1"},
+		{Kind: kindCheck, RunID: "run-1"},
+		{Kind: kindRecoverCheck, Check: &checkBody{RunID: "run-1"}},
 		{Kind: kindReply, Reply: &replyBody{}, Hello: &helloBody{Build: "b"}},
 	}
 	for _, f := range bad {
@@ -201,5 +205,43 @@ func TestCheckEndRefusesAnImplausibleReport(t *testing.T) {
 		if !tc.ok && !errors.Is(err, ErrProtocol) {
 			t.Errorf("%s = %v, want ErrProtocol", name, err)
 		}
+	}
+}
+
+func TestCheckResultRefusesAnImplausibleReport(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		reply    replyBody
+		recovery bool
+		ok       bool
+	}{
+		"failed with output": {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited, ExitCode: 2, Output: []byte("1234")}}, ok: true},
+		"recovery lost": {
+			reply:    replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByLost, ExitCode: -1, Reason: "gone"}},
+			recovery: true, ok: true,
+		},
+		"no check end":        {reply: replyBody{End: &endBody{EndedBy: cordon.EndedByExited}}},
+		"both ends":           {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited}, End: &endBody{EndedBy: cordon.EndedByExited}}},
+		"unknown end":         {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: "vanished"}}},
+		"exit status 256":     {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited, ExitCode: 256}}},
+		"check lost":          {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByLost, ExitCode: -1, Reason: "gone"}}},
+		"lost with no reason": {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByLost, ExitCode: -1}}, recovery: true},
+		"reason not lost":     {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited, Reason: "why"}}},
+		"output past bound":   {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited, Output: []byte("12345")}}},
+		"with an export":      {reply: replyBody{CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited}, Export: &exportReplyBody{BaseSHA: "x"}}},
+	}
+	for name, tc := range cases {
+		_, err := checkResult(&tc.reply, tc.recovery, 4)
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if !tc.ok && !errors.Is(err, ErrProtocol) {
+			t.Errorf("%s = %v, want ErrProtocol", name, err)
+		}
+	}
+	// A launch's end checker refuses a check's end beside its own.
+	reply := replyBody{End: &endBody{EndedBy: cordon.EndedByExited}, CheckEnd: &checkEndBody{EndedBy: cordon.EndedByExited}}
+	if _, err := checkEnd(&reply, false); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("a launch end with a check end = %v, want ErrProtocol", err)
 	}
 }

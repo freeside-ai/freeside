@@ -43,11 +43,13 @@ func shortDir(t *testing.T) string {
 
 // fakeServed stands in for a backend and its suite.
 type fakeServed struct {
-	digest  domain.Digest
-	launch  func(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
-	recover func(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
-	export  func(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
-	full    func(context.Context) error
+	digest       domain.Digest
+	launch       func(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
+	check        func(context.Context, cordon.CheckRequest) (cordon.CheckResult, error)
+	recover      func(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
+	recoverCheck func(context.Context, cordon.CheckRecoverRequest) (cordon.CheckResult, error)
+	export       func(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
+	full         func(context.Context) error
 
 	mu       sync.Mutex
 	launches int
@@ -59,6 +61,14 @@ func (f *fakeServed) Launch(ctx context.Context, req cordon.LaunchRequest) (cord
 	f.launches++
 	f.mu.Unlock()
 	return f.launch(ctx, req)
+}
+
+func (f *fakeServed) Check(ctx context.Context, req cordon.CheckRequest) (cordon.CheckResult, error) {
+	return f.check(ctx, req)
+}
+
+func (f *fakeServed) RecoverCheck(ctx context.Context, req cordon.CheckRecoverRequest) (cordon.CheckResult, error) {
+	return f.recoverCheck(ctx, req)
 }
 
 func (f *fakeServed) Started(context.Context, string) (bool, error)     { return true, nil }
@@ -195,6 +205,13 @@ func launchRequest(t *testing.T, runID string) cordon.LaunchRequest {
 	return cordon.LaunchRequest{
 		RunID: runID, Repository: "owner/repo", BaseRef: "main", BaseSHA: "0123456789abcdef0123456789abcdef01234567",
 		Prompt: []byte("the prompt"), Args: []string{"-p"}, Token: token,
+	}
+}
+
+func checkRequest(runID string) cordon.CheckRequest {
+	return cordon.CheckRequest{
+		RunID: runID, Repository: "owner/repo", BaseRef: "main", BaseSHA: "0123456789abcdef0123456789abcdef01234567",
+		Argv: []string{"make", "test"}, MaxOutputBytes: 1 << 10,
 	}
 }
 
@@ -669,5 +686,175 @@ func TestClientRefusesAMessageAsNotStreamed(t *testing.T) {
 	err := (&Client{}).SendMessage(t.Context(), "run-1", 1, "cmd-1", "steer")
 	if !errors.Is(err, ErrMessageUnsupported) || !errors.Is(err, cordon.ErrNotStreamed) {
 		t.Fatalf("SendMessage = %v, want ErrMessageUnsupported wrapping cordon.ErrNotStreamed", err)
+	}
+}
+
+// TestServedCheckSeedsFromTheConnection shows the check the backend gets
+// carries the request's argv and bound and seeds from what the client
+// streamed, its end and output return to the client, and the staged seed
+// is gone after.
+func TestServedCheckSeedsFromTheConnection(t *testing.T) {
+	t.Parallel()
+	runs := t.TempDir()
+	backend := &fakeServed{digest: digestOf("config")}
+	backend.check = func(ctx context.Context, req cordon.CheckRequest) (cordon.CheckResult, error) {
+		if !slices.Equal(req.Argv, []string{"make", "test"}) || req.MaxOutputBytes != 1<<10 || req.Seeder == nil {
+			return cordon.CheckResult{}, fmt.Errorf("the request arrived as %+v", req)
+		}
+		worktree := filepath.Join(runs, req.RunID)
+		if err := req.Seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, worktree); err != nil {
+			return cordon.CheckResult{}, err
+		}
+		if got, err := os.ReadFile(filepath.Join(worktree, "README")); err != nil || string(got) != "the base\n" { //nolint:gosec // G304: the test's own worktree
+			return cordon.CheckResult{}, fmt.Errorf("the seed: %q, %w", got, err)
+		}
+		return cordon.CheckResult{ExitCode: 2, EndedBy: cordon.EndedByExited, Output: []byte("FAIL x\n"), Truncated: true}, nil
+	}
+	s := serve(t, "build", backend)
+	c := newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
+	got, err := c.Check(t.Context(), checkRequest("check-1"))
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if got.EndedBy != cordon.EndedByExited || got.ExitCode != 2 || string(got.Output) != "FAIL x\n" || !got.Truncated {
+		t.Fatalf("Check = %+v", got)
+	}
+	if entries, err := os.ReadDir(s.seeds); err != nil || len(entries) != 0 {
+		t.Fatalf("the seed root keeps %v, %v", entries, err)
+	}
+}
+
+// TestACheckOutputBoundAReplyCantCarryIsRefused shows a check whose output
+// bound is past MaxCheckOutputBytes is refused by the client before it
+// connects, and by the launcher before it reads the seed or checks.
+func TestACheckOutputBoundAReplyCantCarryIsRefused(t *testing.T) {
+	t.Parallel()
+	backend := &fakeServed{digest: digestOf("config")}
+	backend.check = func(context.Context, cordon.CheckRequest) (cordon.CheckResult, error) {
+		return cordon.CheckResult{}, errors.New("a check past the bound ran")
+	}
+	s := serve(t, "build", backend)
+	c := newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
+	req := checkRequest("check-big")
+	req.MaxOutputBytes = MaxCheckOutputBytes + 1
+	if _, err := c.Check(t.Context(), req); err == nil || !strings.Contains(err.Error(), "output bound") {
+		t.Fatalf("Check = %v, want the bound's refusal", err)
+	}
+	if _, err := c.RecoverCheck(t.Context(), cordon.CheckRecoverRequest{RunID: "check-big", MaxOutputBytes: 0}); err == nil {
+		t.Fatal("RecoverCheck with no output bound was accepted")
+	}
+	if got := s.kinds(); len(got) != 0 {
+		t.Fatalf("the client sent %v past a refused bound", got)
+	}
+
+	conn, err := net.Dial("unix", s.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// A launcher that reads the seed instead of refusing waits for bytes
+	// this client never sends; the deadline fails the test instead.
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []frame{
+		{Kind: kindHello, Hello: &helloBody{Build: "build"}},
+		{Kind: kindCheck, Check: &checkBody{RunID: "check-big", MaxOutputBytes: MaxCheckOutputBytes + 1}},
+	} {
+		if err := writeFrame(conn, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := readFrame(conn, true); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := readFrame(conn, false)
+	if err != nil || reply.Reply == nil || reply.Reply.Error == nil || !strings.Contains(reply.Reply.Error.Message, "output bound") {
+		t.Fatalf("the launcher's reply = %+v, %v, want the bound's refusal", reply.Reply, err)
+	}
+	if entries, err := os.ReadDir(s.seeds); err != nil || len(entries) != 0 {
+		t.Fatalf("the seed root keeps %v, %v", entries, err)
+	}
+}
+
+// TestACheckEndsOnlyOnItsCancellation shows a client that detaches leaves
+// its check running on the launcher, as a launch's does, and one whose
+// context ends cancels it.
+func TestACheckEndsOnlyOnItsCancellation(t *testing.T) {
+	t.Parallel()
+	started := make(chan *connection, 1)
+	release := make(chan struct{})
+	canceledEarly := make(chan bool, 1)
+	backend := &fakeServed{digest: digestOf("config")}
+	backend.check = func(ctx context.Context, req cordon.CheckRequest) (cordon.CheckResult, error) {
+		conn, _ := ctx.Value(connKey{}).(*connection)
+		started <- conn
+		if req.RunID == "check-canceled" {
+			<-ctx.Done()
+			return cordon.CheckResult{EndedBy: cordon.EndedByCanceled, ExitCode: -1}, nil
+		}
+		<-release
+		canceledEarly <- ctx.Err() != nil
+		return cordon.CheckResult{EndedBy: cordon.EndedByExited}, nil
+	}
+	s := serve(t, "build", backend)
+
+	c := newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Check(t.Context(), checkRequest("check-detached"))
+		done <- err
+	}()
+	conn := <-started
+	c.Detach()
+	if err := <-done; !errors.Is(err, cordon.ErrDetached) {
+		t.Fatalf("a detached Check = %v, want ErrDetached", err)
+	}
+	<-conn.gone
+	close(release)
+	if <-canceledEarly {
+		t.Fatal("a client that detached canceled its check")
+	}
+
+	c = newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		res, err := c.Check(ctx, checkRequest("check-canceled"))
+		if err == nil && res.EndedBy != cordon.EndedByCanceled {
+			err = fmt.Errorf("ended %s", res.EndedBy)
+		}
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("a canceled Check: %v", err)
+	}
+}
+
+// TestRecoverCheckCarriesItsEndAndRefusals shows a recovered check's lost
+// end returns with its reason and output, and a run the launcher has no
+// directory for comes back as cordon.ErrNoRun.
+func TestRecoverCheckCarriesItsEndAndRefusals(t *testing.T) {
+	t.Parallel()
+	backend := &fakeServed{digest: digestOf("config")}
+	backend.recoverCheck = func(_ context.Context, req cordon.CheckRecoverRequest) (cordon.CheckResult, error) {
+		if req.RunID == "check-missing" {
+			return cordon.CheckResult{}, fmt.Errorf("%w: %s", cordon.ErrNoRun, req.RunID)
+		}
+		return cordon.CheckResult{EndedBy: cordon.EndedByLost, ExitCode: -1, Output: []byte("partial\n"), Reason: "the supervisor died"}, nil
+	}
+	s := serve(t, "build", backend)
+	c := newTestClient(t, s.socket, "build", &countingSeeder{}, &collectingRecorder{})
+	got, err := c.RecoverCheck(t.Context(), cordon.CheckRecoverRequest{RunID: "check-1", MaxOutputBytes: 1 << 10})
+	if err != nil {
+		t.Fatalf("RecoverCheck: %v", err)
+	}
+	if got.EndedBy != cordon.EndedByLost || got.ExitCode != -1 || string(got.Output) != "partial\n" || got.Reason != "the supervisor died" {
+		t.Fatalf("RecoverCheck = %+v", got)
+	}
+	_, err = c.RecoverCheck(t.Context(), cordon.CheckRecoverRequest{RunID: "check-missing", MaxOutputBytes: 1 << 10})
+	if !errors.Is(err, cordon.ErrNoRun) {
+		t.Fatalf("RecoverCheck of a missing run = %v, want ErrNoRun", err)
 	}
 }

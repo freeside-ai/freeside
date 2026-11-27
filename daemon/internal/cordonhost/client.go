@@ -188,8 +188,8 @@ func (cc *clientConn) await(ctx context.Context) (*replyBody, error) {
 			if err := cc.write(frame{Kind: kindRecorded, Recorded: &answer}); err != nil {
 				return nil, err
 			}
-		case kindHello, kindLaunch, kindCancel, kindRecorded, kindStarted, kindRequestCancellation, kindRecover,
-			kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob:
+		case kindHello, kindLaunch, kindCheck, kindCancel, kindRecorded, kindStarted, kindRequestCancellation,
+			kindRecover, kindRecoverCheck, kindReleaseFinished, kindExport, kindFull, kindProbeBeforeJob:
 			return nil, fmt.Errorf("%w: the launcher sent a %s frame", ErrProtocol, f.Kind)
 		}
 	}
@@ -259,7 +259,7 @@ func expectEmpty(reply *replyBody, runID string) error {
 	if reply.Error != nil {
 		return decodeError(reply.Error, runID)
 	}
-	if reply.End != nil || reply.Started != nil || reply.Export != nil {
+	if reply.End != nil || reply.CheckEnd != nil || reply.Started != nil || reply.Export != nil {
 		return fmt.Errorf("%w: an answer where none belongs", ErrProtocol)
 	}
 	return nil
@@ -287,14 +287,73 @@ func (c *Client) Launch(ctx context.Context, req cordon.LaunchRequest) (cordon.L
 	if req.Seeder != nil {
 		return cordon.LaunchResult{}, errors.New("cordonhost: a launch on a host seeds from the client's seeder")
 	}
-	cc, err := c.dial(ctx)
+	reply, err := c.start(ctx, req.RunID, req.Repository, req.BaseRef, req.BaseSHA, func(cc *clientConn, seed string) error {
+		// The token's one crossing, cleared once written.
+		token := req.Token.Reveal()
+		defer clear(token)
+		return cc.send(frame{Kind: kindLaunch, Launch: &launchBody{
+			RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
+			Prompt: req.Prompt, Args: req.Args, Token: token, RequireProof: req.RequireProof,
+		}}, seed)
+	})
 	if err != nil {
 		return cordon.LaunchResult{}, err
 	}
-	defer cc.close()
-	seed, err := c.seed(ctx, req)
+	end, err := checkEnd(reply, false)
 	if err != nil {
 		return cordon.LaunchResult{}, err
+	}
+	res := cordon.LaunchResult{ExitCode: end.ExitCode, EndedBy: end.EndedBy}
+	res.TranscriptPath, res.StderrPath, err = c.keepFailure(req.RunID, end)
+	return res, err
+}
+
+// Check runs req on the launcher as Launch runs a launch: the client seeds
+// req's base with its own seeder and streams it, canceling ctx cancels the
+// run for good, and a connection that closes mid-check returns an error
+// wrapping cordon.ErrDetached and leaves the run running, for RecoverCheck
+// to adopt. req.MaxOutputBytes is at most MaxCheckOutputBytes, the most
+// one reply carries. The result's Output is the command's own bytes, so it
+// is untrusted.
+func (c *Client) Check(ctx context.Context, req cordon.CheckRequest) (cordon.CheckResult, error) {
+	if !cordon.ValidRunID(req.RunID) {
+		return cordon.CheckResult{}, fmt.Errorf("cordonhost: run id %q is not one plain path component", req.RunID)
+	}
+	if req.Seeder != nil {
+		return cordon.CheckResult{}, errors.New("cordonhost: a check on a host seeds from the client's seeder")
+	}
+	if err := checkOutputBound(req.MaxOutputBytes); err != nil {
+		return cordon.CheckResult{}, err
+	}
+	reply, err := c.start(ctx, req.RunID, req.Repository, req.BaseRef, req.BaseSHA, func(cc *clientConn, seed string) error {
+		return cc.send(frame{Kind: kindCheck, Check: &checkBody{
+			RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
+			Argv: req.Argv, MaxOutputBytes: req.MaxOutputBytes, RequireProof: req.RequireProof,
+		}}, seed)
+	})
+	if err != nil {
+		return cordon.CheckResult{}, err
+	}
+	return checkResult(reply, false, req.MaxOutputBytes)
+}
+
+// start runs an operation that starts a run, a launch or a check: it seeds
+// the base with the client's seeder, writes the request and the seed
+// through send, and reads the launcher's reply, returning its refusal as
+// the backend's error. The launcher cancels the run only on the cancel
+// frame ctx's end sends; a connection that closes before the reply leaves
+// the run running.
+func (c *Client) start(
+	ctx context.Context, runID, repository, baseRef, baseSHA string, send func(*clientConn, string) error,
+) (*replyBody, error) {
+	cc, err := c.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cc.close()
+	seed, err := c.seed(ctx, runID, repository, baseRef, baseSHA)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(seed) }()
 	// The launcher cancels the run only on this frame, never on a
@@ -308,7 +367,7 @@ func (c *Client) Launch(ctx context.Context, req cordon.LaunchRequest) (cordon.L
 		}
 	})
 	defer stop()
-	err = cc.send(req, seed)
+	err = send(cc, seed)
 	if err != nil {
 		// End the stream, so a launcher still reading the seed sees it
 		// end short and refuses instead of waiting for more.
@@ -319,36 +378,25 @@ func (c *Client) Launch(ctx context.Context, req cordon.LaunchRequest) (cordon.L
 	reply, readErr := cc.await(ctx)
 	if readErr != nil {
 		if err != nil {
-			return cordon.LaunchResult{}, c.lost(err)
+			return nil, c.lost(err)
 		}
-		return cordon.LaunchResult{}, c.launchLost(readErr)
+		return nil, c.launchLost(readErr)
 	}
 	if reply.Error != nil {
-		return cordon.LaunchResult{}, decodeError(reply.Error, req.RunID)
+		return nil, decodeError(reply.Error, runID)
 	}
 	if err != nil {
-		return cordon.LaunchResult{}, c.lost(err)
+		return nil, c.lost(err)
 	}
-	end, err := checkEnd(reply, false)
-	if err != nil {
-		return cordon.LaunchResult{}, err
-	}
-	res := cordon.LaunchResult{ExitCode: end.ExitCode, EndedBy: end.EndedBy}
-	res.TranscriptPath, res.StderrPath, err = c.keepFailure(req.RunID, end)
-	return res, err
+	return reply, nil
 }
 
-// send writes the launch frame, with the token's one crossing, and the
-// seed stream after it, together under the write lock.
-func (cc *clientConn) send(req cordon.LaunchRequest, seed string) error {
+// send writes a request frame and the seed stream after it, together
+// under the write lock, so a cancel frame can't land inside the seed.
+func (cc *clientConn) send(f frame, seed string) error {
 	cc.writeMu.Lock()
 	defer cc.writeMu.Unlock()
-	token := req.Token.Reveal()
-	defer clear(token)
-	if err := writeFrame(cc.conn, frame{Kind: kindLaunch, Launch: &launchBody{
-		RunID: req.RunID, Repository: req.Repository, BaseRef: req.BaseRef, BaseSHA: req.BaseSHA,
-		Prompt: req.Prompt, Args: req.Args, Token: token, RequireProof: req.RequireProof,
-	}}); err != nil {
+	if err := writeFrame(cc.conn, f); err != nil {
 		return err
 	}
 	return writeTree(cc.conn, seed)
@@ -369,20 +417,20 @@ func (c *Client) launchLost(err error) error {
 	return fmt.Errorf("%w: the launcher's connection closed mid-launch; the run keeps running: %w", cordon.ErrDetached, err)
 }
 
-// seed fills the client's seed directory for req with the daemon's own
+// seed fills the client's seed directory for runID with the daemon's own
 // seeder, removing what an earlier attempt at the same run left.
-func (c *Client) seed(ctx context.Context, req cordon.LaunchRequest) (string, error) {
+func (c *Client) seed(ctx context.Context, runID, repository, baseRef, baseSHA string) (string, error) {
 	seeds := filepath.Join(c.cfg.ScratchRoot, "seeds")
 	if err := os.MkdirAll(seeds, 0o700); err != nil {
 		return "", fmt.Errorf("cordonhost: seed directory: %w", err)
 	}
-	dir := filepath.Join(seeds, req.RunID)
+	dir := filepath.Join(seeds, runID)
 	if err := os.RemoveAll(dir); err != nil {
 		return "", fmt.Errorf("cordonhost: remove an earlier seed: %w", err)
 	}
-	if err := c.cfg.Seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, dir); err != nil {
+	if err := c.cfg.Seeder.FetchBaseWorktree(ctx, repository, baseRef, baseSHA, dir); err != nil {
 		_ = os.RemoveAll(dir)
-		return "", fmt.Errorf("cordonhost: seed %s: %w", req.RunID, err)
+		return "", fmt.Errorf("cordonhost: seed %s: %w", runID, err)
 	}
 	return dir, nil
 }
@@ -393,7 +441,7 @@ func (c *Client) seed(ctx context.Context, req cordon.LaunchRequest) (string, er
 // failure's transcript only with a failed end, within its bound.
 func checkEnd(reply *replyBody, recovery bool) (*endBody, error) {
 	end := reply.End
-	if end == nil || reply.Started != nil {
+	if end == nil || reply.CheckEnd != nil || reply.Started != nil {
 		return nil, fmt.Errorf("%w: a reply with no end", ErrProtocol)
 	}
 	if !slices.Contains(cordon.AllEndedBy, end.EndedBy) || end.ExitCode < -1 || end.ExitCode > 255 || !shortText(end.Reason) {
@@ -423,6 +471,32 @@ func checkEnd(reply *replyBody, recovery bool) (*endBody, error) {
 		}
 	}
 	return end, nil
+}
+
+// checkResult checks a launcher's report of how a check ended before
+// anything reads it, as checkEnd checks a launch's: a known end with a
+// plausible exit status, a check's never lost, a reason with a lost end
+// alone, and output within the bound the request set.
+func checkResult(reply *replyBody, recovery bool, maxBytes int64) (cordon.CheckResult, error) {
+	end := reply.CheckEnd
+	if end == nil || reply.End != nil || reply.Started != nil || reply.Export != nil {
+		return cordon.CheckResult{}, fmt.Errorf("%w: a reply with no check end", ErrProtocol)
+	}
+	if !slices.Contains(cordon.AllEndedBy, end.EndedBy) || end.ExitCode < -1 || end.ExitCode > 255 || !shortText(end.Reason) {
+		return cordon.CheckResult{}, fmt.Errorf("%w: a check end of %q with exit status %d", ErrProtocol, end.EndedBy, end.ExitCode)
+	}
+	lost := end.EndedBy == cordon.EndedByLost
+	switch {
+	case lost && !recovery:
+		return cordon.CheckResult{}, fmt.Errorf("%w: a check that ended lost", ErrProtocol)
+	case lost != (end.Reason != ""):
+		return cordon.CheckResult{}, fmt.Errorf("%w: a check end of %q with reason %q", ErrProtocol, end.EndedBy, end.Reason)
+	case int64(len(end.Output)) > maxBytes:
+		return cordon.CheckResult{}, fmt.Errorf("%w: %d bytes of output over the %d asked for", ErrProtocol, len(end.Output), maxBytes)
+	}
+	return cordon.CheckResult{
+		ExitCode: end.ExitCode, EndedBy: end.EndedBy, Output: end.Output, Truncated: end.Truncated, Reason: end.Reason,
+	}, nil
 }
 
 // keepFailure writes a failed end's transcript and stderr under
@@ -536,7 +610,7 @@ func (c *Client) Started(ctx context.Context, runID string) (bool, error) {
 	if reply.Error != nil {
 		return false, decodeError(reply.Error, runID)
 	}
-	if reply.Started == nil || reply.End != nil || reply.Export != nil {
+	if reply.Started == nil || reply.End != nil || reply.CheckEnd != nil || reply.Export != nil {
 		return false, fmt.Errorf("%w: a Started reply with no answer", ErrProtocol)
 	}
 	return *reply.Started, nil
@@ -591,6 +665,29 @@ func (c *Client) Recover(ctx context.Context, req cordon.RecoverRequest) (cordon
 	}
 	res.TranscriptPath, res.StderrPath, err = c.keepFailure(req.RunID, end)
 	return res, err
+}
+
+// RecoverCheck finds how a check ended on the launcher, waiting while it
+// runs, as the backend's RecoverCheck does: it never exports, and
+// canceling ctx stops the wait and leaves the run running.
+// req.MaxOutputBytes is at most MaxCheckOutputBytes.
+func (c *Client) RecoverCheck(ctx context.Context, req cordon.CheckRecoverRequest) (cordon.CheckResult, error) {
+	if !cordon.ValidRunID(req.RunID) {
+		return cordon.CheckResult{}, fmt.Errorf("cordonhost: run id %q is not one plain path component", req.RunID)
+	}
+	if err := checkOutputBound(req.MaxOutputBytes); err != nil {
+		return cordon.CheckResult{}, err
+	}
+	reply, err := c.call(ctx, frame{Kind: kindRecoverCheck, RecoverCheck: &recoverCheckBody{
+		RunID: req.RunID, MaxOutputBytes: req.MaxOutputBytes,
+	}})
+	if err != nil {
+		return cordon.CheckResult{}, err
+	}
+	if reply.Error != nil {
+		return cordon.CheckResult{}, decodeError(reply.Error, req.RunID)
+	}
+	return checkResult(reply, true, req.MaxOutputBytes)
 }
 
 // ReleaseFinished releases runIDs on the launcher, which removes each

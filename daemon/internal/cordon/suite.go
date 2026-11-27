@@ -914,7 +914,7 @@ func (s *Suite) runProbe(ctx context.Context, l layout, probe string, build func
 	// The probe gets the launch's environment, not the agent's: it
 	// receives no token, so it names no token descriptor.
 	res, err := s.b.supervise(ctx, l, supervisorRequest{
-		RunID: filepath.Base(l.dir),
+		RunID: filepath.Base(l.dir), Kind: kindProbe,
 		Program: supervisedProcess{
 			Argv: confinedArgv(s.b.cfg, l, probe, args...),
 			Dir:  l.runRoot,

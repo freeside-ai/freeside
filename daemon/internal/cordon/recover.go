@@ -201,62 +201,75 @@ func (b *Backend) Recover(ctx context.Context, req RecoverRequest) (RecoveryResu
 		}
 		return b.recoveredExport(ctx, l, req.RunID)
 	}
-	host, err := b.newHost()
+	end, reason, err := b.awaitEnd(ctx, l, req.RunID)
 	if err != nil {
 		return RecoveryResult{}, err
 	}
+	return b.recoverEnded(ctx, l, req, end, reason)
+}
+
+// awaitEnd returns runID's end record once it has one, waiting while its
+// supervisor is alive and ending it lost when no supervisor will record an
+// end: Recover's states but the export. reason says why recovery ended the
+// run lost, and is empty when a supervisor recorded the end.
+func (b *Backend) awaitEnd(ctx context.Context, l layout, runID string) (endRecord, string, error) {
+	host, err := b.newHost()
+	if err != nil {
+		return endRecord{}, "", err
+	}
 	for {
-		end, err := readEndRecord(l, req.RunID)
+		end, err := readEndRecord(l, runID)
 		if err == nil {
-			return b.recoverEnded(ctx, l, req, end, "")
+			return end, "", nil
 		}
 		if !errors.Is(err, ErrNoEndRecord) {
-			return RecoveryResult{}, err
+			return endRecord{}, "", err
 		}
-		claim, err := readClaim(l, req.RunID)
+		claim, err := readClaim(l, runID)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			// A launch claims ctl/ before its supervisor can start, but a
 			// daemon that died mid-claim may have left none.
 			if err := os.Mkdir(l.ctl, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-				return RecoveryResult{}, fmt.Errorf("cordon: create %s: %w", l.ctl, err)
+				return endRecord{}, "", fmt.Errorf("cordon: create %s: %w", l.ctl, err)
 			}
-			won, err := claimRun(l, req.RunID, nil)
+			won, err := claimRun(l, runID, nil)
 			if err != nil {
-				return RecoveryResult{}, err
+				return endRecord{}, "", err
 			}
 			if !won {
 				continue // a supervisor claimed it meanwhile
 			}
-			return b.endLost(ctx, l, req, nil, "no supervisor started it")
+			return b.endLost(ctx, l, runID, nil, "no supervisor started it")
 		case err != nil:
-			return RecoveryResult{}, err
+			return endRecord{}, "", err
 		case claim.Supervisor == nil:
-			return b.endLost(ctx, l, req, nil, "no supervisor started it")
+			return b.endLost(ctx, l, runID, nil, "no supervisor started it")
 		}
 		sup := claim.Supervisor.hostProcess()
 		alive, err := host.same(sup)
 		if err != nil {
-			return RecoveryResult{}, err
+			return endRecord{}, "", err
 		}
 		if !alive {
-			return b.endLost(ctx, l, req, host, "its supervisor ended before it recorded an end")
+			return b.endLost(ctx, l, runID, host, "its supervisor ended before it recorded an end")
 		}
 		gone := func() (bool, error) {
 			alive, err := host.same(sup)
 			return !alive, err
 		}
-		if _, err := b.awaitSupervisor(ctx, req.RunID, nil, gone, false); err != nil {
-			return RecoveryResult{}, err
+		if _, err := b.awaitSupervisor(ctx, runID, nil, gone, false); err != nil {
+			return endRecord{}, "", err
 		}
 	}
 }
 
-// endLost records a lost end for a run no supervisor will record one for.
-// With host set, it first proves the run ended: a fresh canary under the
-// run's rule file reads as a member as the original did, so the proof finds
-// and ends whatever of the run is still alive.
-func (b *Backend) endLost(ctx context.Context, l layout, req RecoverRequest, host hostProcesses, reason string) (RecoveryResult, error) {
+// endLost records a lost end for a run no supervisor will record one for
+// and returns the run's end record. With host set, it first proves the run
+// ended: a fresh canary under the run's rule file reads as a member as the
+// original did, so the proof finds and ends whatever of the run is still
+// alive.
+func (b *Backend) endLost(ctx context.Context, l layout, runID string, host hostProcesses, reason string) (endRecord, string, error) {
 	if host != nil {
 		target := proofTarget{tag: l.tag, control: l.control}
 		c, err := startCanary(b.start, host, &target,
@@ -266,23 +279,32 @@ func (b *Backend) endLost(ctx context.Context, l layout, req RecoverRequest, hos
 			c.close()
 		}
 		if err != nil {
-			return RecoveryResult{}, &BlockedError{RunID: req.RunID, EndedBy: EndedByLost, Err: err}
+			return endRecord{}, "", &BlockedError{RunID: runID, EndedBy: EndedByLost, Err: err}
 		}
 	}
-	err := writeEndRecord(l, endRecord{RunID: req.RunID, EndedBy: EndedByLost, ExitCode: -1})
+	err := writeEndRecord(l, endRecord{RunID: runID, EndedBy: EndedByLost, ExitCode: -1})
 	switch {
 	case errors.Is(err, fs.ErrExist):
 		// The supervisor recorded its end between this run's last read and
 		// its exit; that record is the run's end.
 		reason = ""
 	case err != nil:
-		return RecoveryResult{}, err
+		return endRecord{}, "", err
 	}
-	end, err := readEndRecord(l, req.RunID)
+	end, err := readEndRecord(l, runID)
 	if err != nil {
-		return RecoveryResult{}, err
+		return endRecord{}, "", err
 	}
-	return b.recoverEnded(ctx, l, req, end, reason)
+	return end, reason, nil
+}
+
+// lostReason is a lost run's reason, or the generic one when a supervisor
+// recorded the end.
+func lostReason(reason string) string {
+	if reason == "" {
+		return "no supervisor recorded its end"
+	}
+	return reason
 }
 
 // recoverEnded maps a run's end record to its outcome, exporting a clean
@@ -294,10 +316,7 @@ func (b *Backend) recoverEnded(ctx context.Context, l layout, req RecoverRequest
 		res.Outcome = RecoveryCanceled
 		return res, nil
 	case EndedByLost:
-		res.Outcome, res.Reason = RecoveryLost, reason
-		if reason == "" {
-			res.Reason = "no supervisor recorded its end"
-		}
+		res.Outcome, res.Reason = RecoveryLost, lostReason(reason)
 		return res, nil
 	case EndedByStalled:
 		res.Outcome = RecoveryFailed

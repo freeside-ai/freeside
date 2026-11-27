@@ -24,8 +24,9 @@ import (
 
 var (
 	// ErrNotExportable refuses a launch whose end record says it was
-	// canceled, stalled, lost, or exited nonzero, or that is a probe's: only
-	// a writer's clean exit exports. A canceled launch's refusal also
+	// canceled, stalled, lost, or exited nonzero, or whose supervisor
+	// request isn't a writer's, such as a check's or a probe's: only a
+	// writer's clean exit exports. A canceled launch's refusal also
 	// matches ErrCanceled.
 	ErrNotExportable = errors.New("cordon: the launch did not exit cleanly")
 	// ErrCanceled refuses a launch whose cancellation was requested. The run
@@ -124,10 +125,20 @@ func (b *Backend) Export(ctx context.Context, req ExportRequest) (ExportResult, 
 	if end.EndedBy != EndedByExited || end.ExitCode != 0 {
 		return ExportResult{}, fmt.Errorf("%w: %s %s with exit code %d", ErrNotExportable, req.RunID, end.EndedBy, end.ExitCode)
 	}
-	// A probe launch records its end too, with no base: only a writer's
-	// launch exports.
-	if end.BaseSHA == "" {
-		return ExportResult{}, fmt.Errorf("%w: %s is not a writer's launch", ErrNotExportable, req.RunID)
+	// A check's and a probe's launch record their ends too: only a
+	// writer's exports. A missing request, or one that isn't this run's,
+	// such as a v1 request a forced update left, refuses for good as well;
+	// a failed read doesn't, since Recover's caller retries what isn't
+	// ErrNotExportable.
+	kind, err := readRequestKind(l, req.RunID)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, errMalformedRecord) {
+		return ExportResult{}, fmt.Errorf("%w: %s: %w", ErrNotExportable, req.RunID, err)
+	}
+	if err != nil {
+		return ExportResult{}, err
+	}
+	if kind != kindWriter {
+		return ExportResult{}, fmt.Errorf("%w: %s is a %s launch, not a writer's", ErrNotExportable, req.RunID, kind)
 	}
 	if _, err := os.Lstat(l.exportRecord); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {

@@ -352,7 +352,7 @@ func passingProbe(spec processSpec, p *fakeProcess) {
 // checks run while the launch's directory, where the stand-ins leave their
 // traces, still exists, and that the directory is gone afterwards. The
 // probe shares the writer's launch path, supervisor included, but gets no
-// token and no token descriptor, and its end record names no base, so it
+// token and no token descriptor, and its request names it a probe, so it
 // never exports.
 func TestProbeLaunchChecksEffectsBeforeItRemovesTheLaunch(t *testing.T) {
 	t.Parallel()

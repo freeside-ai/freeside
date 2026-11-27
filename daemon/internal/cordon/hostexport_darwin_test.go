@@ -34,6 +34,11 @@ func HostRequest(runID, prompt string, args ...string) LaunchRequest {
 	return hostRequest(runID, prompt, args...)
 }
 
+// HostCheck is a check whose command is the fake agent in mode args.
+func HostCheck(cfg Config, runID string, args ...string) CheckRequest {
+	return hostCheck(cfg, runID, args...)
+}
+
 // GitSeeder seeds by cloning base at the requested commit.
 func GitSeeder(base string) Seeder { return gitSeeder{base: base} }
 

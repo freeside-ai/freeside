@@ -216,9 +216,14 @@ const sandboxExec = "/usr/bin/sandbox-exec"
 // run's rule file, which reads as a member just the same.
 const canaryProgram = "/bin/cat"
 
+// confinedArgv is program under the launch's rule file. The "--" ends
+// sandbox-exec's options: without it, a program named "-D" would be read
+// as one more parameter, and a later -D overrides an earlier one, so a
+// check's argv taken from a recipe could rewrite the rule file's HOME or
+// the proof's tag.
 func confinedArgv(cfg Config, l layout, program string, args ...string) []string {
 	argv := append([]string{sandboxExec, "-f", l.rules}, sandboxParams(cfg, l.runRoot, l.tag)...)
-	return append(append(argv, program), args...)
+	return append(append(argv, "--", program), args...)
 }
 
 // cliSettings is the agent CLI's one settings object. It turns the CLI's
@@ -276,11 +281,7 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 		return LaunchResult{}, err
 	}
 	if req.RequireProof {
-		suite := b.suite.Load()
-		if suite == nil {
-			return LaunchResult{}, failure("declaration", "no conformance suite is attached to the backend")
-		}
-		if err := suite.ProbeBeforeJob(ctx); err != nil {
+		if err := b.probeBeforeJob(ctx); err != nil {
 			return LaunchResult{}, err
 		}
 	}
@@ -288,7 +289,7 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 	if err != nil {
 		return LaunchResult{}, err
 	}
-	if err := b.seed(ctx, req, l); err != nil {
+	if err := b.seed(ctx, req.Seeder, req.Repository, req.BaseRef, req.BaseSHA, l); err != nil {
 		return LaunchResult{}, err
 	}
 	if err := writeExclusive(l.prompt, req.Prompt); err != nil {
@@ -306,7 +307,7 @@ func (b *Backend) Launch(ctx context.Context, req LaunchRequest) (LaunchResult, 
 			Dir:  l.worktree,
 			Env:  agentEnv(b.cfg, l),
 		},
-		Prompt: true, Secret: true,
+		Kind: kindWriter,
 	}, token)
 }
 
@@ -333,6 +334,16 @@ func (r LaunchRequest) validate() error {
 		return errors.New("cordon: a launch needs the identity's setup token")
 	}
 	return nil
+}
+
+// probeBeforeJob runs the attached suite's pre-job probe, refusing when no
+// suite is attached (LaunchRequest.RequireProof).
+func (b *Backend) probeBeforeJob(ctx context.Context) error {
+	suite := b.suite.Load()
+	if suite == nil {
+		return failure("declaration", "no conformance suite is attached to the backend")
+	}
+	return suite.ProbeBeforeJob(ctx)
 }
 
 // claimLaunch refuses before claiming anything when the backend is
@@ -377,14 +388,16 @@ func (b *Backend) prepare(l layout) error {
 	return nil
 }
 
-// seed is a writer launch's preparation: it seeds the worktree and gives
-// it the evidence directory the agent stages evidence in.
-func (b *Backend) seed(ctx context.Context, req LaunchRequest, l layout) error {
+// seed is a writer's or a check's preparation: it seeds the worktree and
+// gives it the evidence directory a writer stages evidence in, so a check
+// runs in the tree a writer starts from. A non-nil override seeds in place
+// of the backend's own seeder.
+func (b *Backend) seed(ctx context.Context, override Seeder, repository, baseRef, baseSHA string, l layout) error {
 	seeder := b.seeder
-	if req.Seeder != nil {
-		seeder = req.Seeder
+	if override != nil {
+		seeder = override
 	}
-	if err := seeder.FetchBaseWorktree(ctx, req.Repository, req.BaseRef, req.BaseSHA, l.worktree); err != nil {
+	if err := seeder.FetchBaseWorktree(ctx, repository, baseRef, baseSHA, l.worktree); err != nil {
 		return fmt.Errorf("cordon: seed worktree: %w", err)
 	}
 	if err := os.Mkdir(filepath.Join(l.worktree, export.EvidenceWorkspaceDir), 0o700); err != nil {

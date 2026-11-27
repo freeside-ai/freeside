@@ -29,8 +29,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
 
-// The host launcher's contract suite: the same launch, cancellation,
-// recovery, and export cases run at the backend seam against *cordon.Backend in this
+// The host launcher's contract suite: the same launch, check,
+// cancellation, recovery, and export cases run at the backend seam against *cordon.Backend in this
 // process and against a cordonhost.Client talking to a served backend over
 // a Unix socket, so a launch behind the launcher ends, fails, and recovers
 // as a local one does. It sits in this package's tests, not cordonhost's,
@@ -49,9 +49,11 @@ func init() { cordon.RegisterTestVerb(serveVerb, serveForTest) }
 // seam is the part of the backend seam the shared cases drive.
 type seam interface {
 	Launch(context.Context, cordon.LaunchRequest) (cordon.LaunchResult, error)
+	Check(context.Context, cordon.CheckRequest) (cordon.CheckResult, error)
 	Recover(context.Context, cordon.RecoverRequest) (cordon.RecoveryResult, error)
 	Export(context.Context, cordon.ExportRequest) (cordon.ExportResult, error)
 	AuthenticateReleasedExport(ctx context.Context, runID, dir string) error
+	RecoverCheck(context.Context, cordon.CheckRecoverRequest) (cordon.CheckResult, error)
 	Detach()
 }
 
@@ -215,6 +217,68 @@ func TestTheSeamsKeepOneContract(t *testing.T) {
 				}
 				requireSurvivorsDead(t, cfg, "detached")
 			})
+			t.Run("check output", func(t *testing.T) {
+				t.Parallel()
+				cfg := cordon.HostConfig(t)
+				got, err := open(t, cfg, moduleSeeder{})().Check(t.Context(), cordon.HostCheck(cfg, "check-failed", "exit", "3", "the", "failure"))
+				if err != nil {
+					t.Fatalf("Check: %v", err)
+				}
+				if got.EndedBy != cordon.EndedByExited || got.ExitCode != 3 || string(got.Output) != "the failure\n" {
+					t.Fatalf("Check = %+v, want exit 3 with its output", got)
+				}
+			})
+			t.Run("check cancellation", func(t *testing.T) {
+				t.Parallel()
+				cfg := cordon.HostConfig(t)
+				checker := open(t, cfg, moduleSeeder{})()
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go func() {
+					awaitFile(t, filepath.Join(cordon.Worktree(cfg, "check-canceled"), "pids"))
+					cancel()
+				}()
+				got, err := checker.Check(ctx, cordon.HostCheck(cfg, "check-canceled", "spawn", "chatter"))
+				if err != nil {
+					t.Fatalf("Check: %v", err)
+				}
+				if got.EndedBy != cordon.EndedByCanceled {
+					t.Fatalf("Check = %+v, want canceled", got)
+				}
+				requireSurvivorsDead(t, cfg, "check-canceled")
+			})
+			t.Run("check recovery after detach", func(t *testing.T) {
+				t.Parallel()
+				cfg := cordon.HostConfig(t)
+				seams := open(t, cfg, moduleSeeder{})
+				first := seams()
+				checked := make(chan error, 1)
+				go func() {
+					_, err := first.Check(t.Context(), cordon.HostCheck(cfg, "check-detached", "spawn", "release", "3"))
+					checked <- err
+				}()
+				command := startedAgent(t, cfg, "check-detached")
+				first.Detach()
+				if err := <-checked; !errors.Is(err, cordon.ErrDetached) {
+					t.Fatalf("Check after Detach = %v, want ErrDetached", err)
+				}
+				if !cordon.ProcessLive(t, command) {
+					t.Fatal("the command died with the detach")
+				}
+				got := recoverReleasedCheck(t, seams(), cfg, "check-detached")
+				if got.EndedBy != cordon.EndedByExited || got.ExitCode != 3 || !bytes.Contains(got.Output, []byte("working\n")) {
+					t.Fatalf("RecoverCheck = %+v, want exit 3 with the run's output", got)
+				}
+				requireSurvivorsDead(t, cfg, "check-detached")
+			})
+			t.Run("recover check of no run", func(t *testing.T) {
+				t.Parallel()
+				cfg := cordon.HostConfig(t)
+				_, err := open(t, cfg, moduleSeeder{})().RecoverCheck(t.Context(), cordon.CheckRecoverRequest{RunID: "never", MaxOutputBytes: 1 << 10})
+				if !errors.Is(err, cordon.ErrNoRun) {
+					t.Fatalf("RecoverCheck = %v, want ErrNoRun", err)
+				}
+			})
 		})
 	}
 }
@@ -366,9 +430,9 @@ func TestAServedLaunchSeedsTheExactBaseAndCarriesNoToken(t *testing.T) {
 }
 
 // TestAServedRefusalIsTheBackendsTypedFailure holds an approval on the
-// launcher's side: the hello says so, and a launch and a full pass come
-// back as the backend's own *cordon.ConformanceFailure, its check named,
-// with no run directory claimed.
+// launcher's side: the hello says so, and a launch, a check, and a full
+// pass come back as the backend's own *cordon.ConformanceFailure, its
+// check named, with no run directory claimed.
 func TestAServedRefusalIsTheBackendsTypedFailure(t *testing.T) {
 	t.Parallel()
 	cfg := cordon.PinnedConfig(t)
@@ -385,8 +449,12 @@ func TestAServedRefusalIsTheBackendsTypedFailure(t *testing.T) {
 	}
 	_, err = client.Launch(t.Context(), cordon.HostRequest("refused", "", "exit", "0"))
 	requireApprovalRefusal(t, "Launch", err)
-	if _, err := os.Stat(cordon.Worktree(cfg, "refused")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("a refused launch claimed its directory: %v", err)
+	_, err = client.Check(t.Context(), cordon.HostCheck(cfg, "refused-check", "exit", "0"))
+	requireApprovalRefusal(t, "Check", err)
+	for _, id := range []string{"refused", "refused-check"} {
+		if _, err := os.Stat(cordon.Worktree(cfg, id)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("a refused launch claimed %s's directory: %v", id, err)
+		}
 	}
 	requireApprovalRefusal(t, "Full", client.Full(t.Context()))
 }
@@ -719,6 +787,31 @@ func recoverReleased(t *testing.T, s seam, cfg cordon.Config, runID string) cord
 	got := <-done
 	if got.err != nil {
 		t.Fatalf("Recover: %v", got.err)
+	}
+	return got.res
+}
+
+// recoverReleasedCheck recovers runID's check through s while its
+// command, started with spawn release 3, is released to exit.
+func recoverReleasedCheck(t *testing.T, s seam, cfg cordon.Config, runID string) cordon.CheckResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	type recovered struct {
+		res cordon.CheckResult
+		err error
+	}
+	done := make(chan recovered, 1)
+	go func() {
+		res, err := s.RecoverCheck(ctx, cordon.CheckRecoverRequest{RunID: runID, MaxOutputBytes: 1 << 20})
+		done <- recovered{res, err}
+	}()
+	if err := os.WriteFile(filepath.Join(cordon.Worktree(cfg, runID), "release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil {
+		t.Fatalf("RecoverCheck: %v", got.err)
 	}
 	return got.res
 }

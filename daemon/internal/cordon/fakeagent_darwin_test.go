@@ -50,8 +50,8 @@ func TestMain(m *testing.M) {
 	if len(args) > 0 && args[0] == fakeAgentArg {
 		os.Exit(fakeAgent(args[1:]))
 	}
-	if len(args) == 3 && args[0] == daemonStandInArg {
-		os.Exit(daemonStandIn(args[1], args[2]))
+	if (len(args) == 3 || len(args) == 4 && args[3] == "check") && args[0] == daemonStandInArg {
+		os.Exit(daemonStandIn(args[1], args[2], len(args) == 4))
 	}
 	os.Exit(m.Run())
 }
@@ -67,8 +67,10 @@ func TestMain(m *testing.M) {
 //	                 never its bytes; then print the first message on stdin
 //	witness          print each argument and each environment variable,
 //	                 one a line, then do what token does
-//	probe            run each probe line of the first message on stdin;
-//	                 print ok or FAIL
+//	probe [file]     run each probe line, from ./probes with file and the
+//	                 first message on stdin otherwise; print ok or FAIL
+//	fd3              print whether descriptor 3 is a pipe and the value of
+//	                 CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
 //	steer            print each message on stdin as "got TEXT", and after
 //	                 one whose text is "end turn" a result record; print eof
 //	                 once stdin closes and exit 0
@@ -115,7 +117,27 @@ func fakeAgent(args []string) int {
 		}
 		return readToken()
 	case "probe":
-		return runProbes()
+		if len(args) > 1 && args[1] == "file" {
+			// A check's stdin is /dev/null, so its seeder writes the lines.
+			lines, err := os.Open("probes")
+			if err != nil {
+				fmt.Println("FAIL probes:", err)
+				return 1
+			}
+			defer func() { _ = lines.Close() }()
+			return runProbes(lines)
+		}
+		_, lines, err := readFrame(bufio.NewReader(os.Stdin))
+		if err != nil {
+			fmt.Println("FAIL stdin read:", err)
+			return 1
+		}
+		return runProbes(strings.NewReader(lines))
+	case "fd3":
+		var st syscall.Stat_t
+		pipe := syscall.Fstat(tokenFD, &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFIFO
+		fmt.Printf("fd3 pipe %v\ntoken-env %q\n", pipe, os.Getenv("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"))
+		return 0
 	case "steer":
 		return steer()
 	case "hop":
@@ -247,14 +269,9 @@ func startHopChain() error {
 // runProbes reads tab-separated probe lines, "deny|allow|any KIND ARG...",
 // and prints "ok LINE" when the outcome matches or "FAIL LINE: DETAIL" when
 // it doesn't. "any" is for a probe whose effect the test checks itself.
-func runProbes() int {
+func runProbes(lines io.Reader) int {
 	status := 0
-	_, lines, err := readFrame(bufio.NewReader(os.Stdin))
-	if err != nil {
-		fmt.Println("FAIL stdin read:", err)
-		return 1
-	}
-	scanner := bufio.NewScanner(strings.NewReader(lines))
+	scanner := bufio.NewScanner(lines)
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Split(line, "\t")
