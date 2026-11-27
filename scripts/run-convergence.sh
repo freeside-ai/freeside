@@ -32,6 +32,12 @@
 # the core count and 2, because on the three-core runner two slices beat
 # three, whose extra process slowed the other suites more than it sped the
 # matrix (#2292); 1 runs the suite whole in one process.
+# CONVERGENCE_TEST_TIMEOUT bounds the concurrent test phase in seconds
+# (from when the runs start, default 1200): if any run is still
+# alive past the deadline, the script prints the stalled runs, their live
+# process tree, and every run's log, stops those processes, and exits 1.
+# Ending itself guarantees the logs print even when an external cancel
+# signal would never let the EXIT trap finish (#3311).
 #
 # --skip-build runs the test bundle already in app/.build instead of
 # building one. CI sets it only on an exact hit of the Swift build cache,
@@ -119,11 +125,17 @@ if [[ "$(uname)" != "Darwin" ]]; then
 fi
 
 shards=""
+test_timeout=""
 if [[ -n "$all_tests" ]]; then
   cores="$(sysctl -n hw.ncpu)"
   shards="${CONVERGENCE_SCREENSHOT_SHARDS:-$((cores < 2 ? cores : 2))}"
   if [[ ! "$shards" =~ ^[1-9][0-9]*$ ]]; then
     echo "run-convergence: CONVERGENCE_SCREENSHOT_SHARDS must be a positive integer, got: $shards" >&2
+    exit 2
+  fi
+  test_timeout="${CONVERGENCE_TEST_TIMEOUT:-1200}"
+  if [[ ! "$test_timeout" =~ ^[1-9][0-9]*$ ]]; then
+    echo "run-convergence: CONVERGENCE_TEST_TIMEOUT must be a positive integer, got: $test_timeout" >&2
     exit 2
   fi
 fi
@@ -180,7 +192,98 @@ print_logs() {
   done
 }
 
+# Collect every descendant PID recursively so timeout diagnostics and
+# termination cover grandchildren such as swiftpm-testing-helper, not
+# just the subshell's direct child.
+descendants() {
+  local children child
+  children="$(pgrep -P "$1" 2>/dev/null || true)"
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+    echo "$child"
+    descendants "$child"
+  done <<<"$children"
+}
+
+# Poll until every listed PID has exited or tenths*0.1s have elapsed.
+wait_gone() {
+  local tenths="$1"
+  shift
+  local i pid alive
+  for ((i = 0; i < tenths; i++)); do
+    alive=""
+    for pid in "$@"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+        break
+      fi
+    done
+    if [[ -z "$alive" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# Report stalled --all-tests runs, print every log, stop their process
+# trees, and exit 1.
+abort_stalled_runs() {
+  echo "$(date +%T) run-convergence: test runs still going after ${test_timeout}s: ${alive_names[*]}" >&2
+  local pid desc child ps_pids
+  local tree_pids=()
+  local survivors=()
+  for pid in "${alive_pids[@]}"; do
+    tree_pids+=("$pid")
+    desc="$(descendants "$pid")"
+    while IFS= read -r child; do
+      [[ -n "$child" ]] || continue
+      tree_pids+=("$child")
+    done <<<"$desc"
+  done
+  ps_pids="$(IFS=,; echo "${tree_pids[*]}")"
+  ps -ww -o pid=,ppid=,etime=,command= -p "$ps_pids" >&2 || true
+  print_logs
+  # Re-list descendants right before signalling: a slow run that was still
+  # making progress can spawn a new child (for example a second
+  # swiftpm-testing-helper) while print_logs is dumping the logs.
+  for pid in "${alive_pids[@]}"; do
+    desc="$(descendants "$pid")"
+    while IFS= read -r child; do
+      [[ -n "$child" ]] || continue
+      tree_pids+=("$child")
+    done <<<"$desc"
+  done
+  # Suppress stderr while stopping and reaping so bash's background-job
+  # termination notices do not land under the last printed log section.
+  {
+    kill -TERM "${tree_pids[@]}" || true
+    wait_gone 100 "${tree_pids[@]}" || true
+    for pid in "${tree_pids[@]}"; do
+      if kill -0 "$pid"; then
+        survivors+=("$pid")
+      fi
+    done
+    if ((${#survivors[@]} > 0)); then
+      kill -KILL "${survivors[@]}" || true
+    fi
+    for pid in "${run_pids[@]}"; do
+      wait "$pid" || true
+    done
+    if ((${#survivors[@]} > 0)); then
+      wait_gone 10 "${survivors[@]}" || true
+    fi
+  } 2>/dev/null
+  run_pids=()
+  exit 1
+}
+
 cleanup() {
+  # Print logs before stopping runs so a cancel or early failure that
+  # reaches this trap dumps buffered output even if stopping blocks.
+  if [[ -z "$logs_printed" ]] && ((${#run_logs[@]} > 0)); then
+    print_logs
+  fi
   if ((${#run_pids[@]} > 0)); then
     local pid
     for pid in "${run_pids[@]}"; do
@@ -188,9 +291,6 @@ cleanup() {
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     done
-  fi
-  if [[ -z "$logs_printed" ]] && ((${#run_logs[@]} > 0)); then
-    print_logs
   fi
   if [[ -n "$harness_pid" ]] && kill -0 "$harness_pid" 2>/dev/null; then
     kill "$harness_pid" 2>/dev/null || true
@@ -309,9 +409,14 @@ if [[ -n "$clone_failed" ]]; then
 fi
 echo "cloned app/.build $shards times in $((SECONDS - clone_start))s" >&2
 
+# Redirected to a file, the test process's stdout is block-buffered, so a
+# stopped run would lose its unflushed tail (including the hung test's
+# `started` line); CoreFoundation reads NSUnbufferedIO=YES at startup and
+# unbuffers it.
 echo "$(date +%T) starting: swift test ${main_args[*]}" >&2
 (
   cd "$repo_root/app" &&
+    NSUnbufferedIO=YES \
     FREESIDE_CONVERGENCE_URL="$api_url" \
     FREESIDE_CONVERGENCE_CONTROL_URL="$control_url" \
     swift test "${main_args[@]}"
@@ -340,10 +445,32 @@ for ((i = 0; i < shards; i++)); do
     if [[ -n "$selector" ]]; then
       export FREESIDE_SCREENSHOT_SHARD="$selector"
     fi
-    swift test "${shard_args[@]}"
+    NSUnbufferedIO=YES swift test "${shard_args[@]}"
   ) >"$workdir/shard-$i.log" 2>&1 &
   run_pids+=($!)
   run_logs+=("$workdir/shard-$i.log")
+done
+
+# Poll until every run finishes or the test phase outlives its deadline,
+# so a hung swift test ends here with process diagnostics and every log
+# instead of waiting on an external cancel that may never reach cleanup.
+deadline=$((SECONDS + test_timeout))
+while true; do
+  alive_pids=()
+  alive_names=()
+  for index in "${!run_pids[@]}"; do
+    if kill -0 "${run_pids[$index]}" 2>/dev/null; then
+      alive_pids+=("${run_pids[$index]}")
+      alive_names+=("${run_logs[$index]##*/}")
+    fi
+  done
+  if ((${#alive_pids[@]} == 0)); then
+    break
+  fi
+  if ((SECONDS >= deadline)); then
+    abort_stalled_runs
+  fi
+  sleep 2
 done
 
 # Wait for every run before printing, so one failure doesn't cut the
