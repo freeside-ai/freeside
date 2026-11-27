@@ -125,3 +125,29 @@ func (r *CommitReader) ReadFile(ctx context.Context, commitSHA, path string, max
 		"%s at %s is non-regular or over the %d-byte limit: %w",
 		path, commitSHA, max, ErrCommitFileUnreadable)
 }
+
+// TreeAt returns the object ID of the tree at path in commitSHA, or present
+// false when the commit holds nothing there. An entry that is not a tree
+// fails with ErrCommitFileUnreadable. Agent-base upkeep keys a base on its
+// source directory's tree, so a tip that changes nothing under it needs no
+// build.
+func (r *CommitReader) TreeAt(ctx context.Context, commitSHA, path string) (string, bool, error) {
+	if !pathfold.ValidSHA1Hex(commitSHA) {
+		return "", false, fmt.Errorf("commit %q: %w", commitSHA, ErrInvalidOptions)
+	}
+	if path == "" {
+		return "", false, fmt.Errorf("tree path: %w", ErrInvalidOptions)
+	}
+	oid, state, err := r.runner.treeAt(ctx, commitSHA, path)
+	if err != nil {
+		return "", false, fmt.Errorf("read tree %s at %s: %w", path, commitSHA, err)
+	}
+	switch state {
+	case blobPresent:
+		return oid, true, nil
+	case blobAbsent:
+		return "", false, nil
+	case blobNotRegular, blobTooLarge:
+	}
+	return "", false, fmt.Errorf("%s at %s is not a tree: %w", path, commitSHA, ErrCommitFileUnreadable)
+}

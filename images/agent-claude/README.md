@@ -18,6 +18,20 @@ against the ward's post-create allowlist with `scripts/check-agent-image.sh`.
 Use `--registry HOST[/PATH]` instead for a shared image. The image is
 `linux/arm64` only: Apple `container` on Apple silicon is the Phase 1A runtime.
 
+## Built by the Daemon
+
+A daemon whose `agent_base` instance setting names this repository builds
+this directory itself (plan §5.7, **Agent-base upkeep**): at the default
+branch's tip, only when the Containerfile's `CLAUDE_CODE_VERSION` equals the
+daemon's `ClaudeCodeHarnessBuild` and every image it reads (a `FROM`, a
+`COPY` or `ADD --from`, a `RUN --mount` from) is digest pinned, directly or
+through an `ARG` default declared before the first `FROM`, with no
+`# syntax` or `# escape` directive. It runs the
+same checks as `scripts/check-agent-image.sh` and the build script's version
+and managed-settings assertions, then rebuilds the project image on the base.
+A weekly bump task moves the CLI pin; `daemon/README.md` (Keep Project Images
+Current) has both.
+
 ## Pinned Inputs
 
 | Input | Pin |

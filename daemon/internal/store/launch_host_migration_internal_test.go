@@ -12,6 +12,7 @@ import (
 // conventions); the rewind keeps the earlier migrations' tests at head.
 func rewindLaunchHost(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindAdmittedAgentBases(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE execution_admissions DROP COLUMN execution_host_id`,
 		`ALTER TABLE run_hold_observations DROP COLUMN cordoned_launch`,

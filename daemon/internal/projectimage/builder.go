@@ -145,6 +145,9 @@ type Options struct {
 	// already-recorded digest cannot destroy the prior row's artifact; nil
 	// skips the guard (no store implies no rows to protect).
 	LookupRecordedRef func(context.Context, string) (bool, error)
+	// LookupRecordedBase is LookupRecordedRef for agent bases: it reports
+	// whether a published reference backs a recorded admitted agent base.
+	LookupRecordedBase func(context.Context, string) (bool, error)
 	// Registry reserves memory for a loopback registry a build starts. The
 	// daemon sets it; nil reserves nothing, for an operator's build.
 	Registry RegistryMemory
@@ -174,10 +177,13 @@ type Builder struct {
 	backend           backend
 	record            func(context.Context, domain.ProjectImage) error
 	lookupRecordedRef func(context.Context, string) (bool, error)
-	tempDir           string
-	log               io.Writer
-	logDir            string
-	heartbeat         time.Duration
+	// lookupRecordedBase guards a recorded agent base's publication as
+	// lookupRecordedRef guards a project image's.
+	lookupRecordedBase func(context.Context, string) (bool, error)
+	tempDir            string
+	log                io.Writer
+	logDir             string
+	heartbeat          time.Duration
 }
 
 type source interface {
@@ -197,6 +203,11 @@ type backend interface {
 }
 
 type buildSpec struct {
+	// AgentBase builds an agent base: the Containerfile pins its own base
+	// image, so the build gets only the proxy arguments, never the project
+	// image's BASE_IMAGE and PROJECT_* arguments, which would override that
+	// pin. The fields below LocalRef up to DNS are then empty.
+	AgentBase    bool
 	ContextDir   string
 	LocalRef     string
 	BaseRef      string
@@ -306,12 +317,13 @@ func New(opts Options) (*Builder, error) {
 		backend: appleBackend{
 			containerPath: container, runner: runner, registryMemory: opts.Registry, manageBuilder: opts.ManageBuilder,
 		},
-		record:            opts.Record,
-		lookupRecordedRef: opts.LookupRecordedRef,
-		tempDir:           opts.TempDir,
-		log:               opts.Log,
-		logDir:            opts.LogDir,
-		heartbeat:         opts.Heartbeat,
+		record:             opts.Record,
+		lookupRecordedRef:  opts.LookupRecordedRef,
+		lookupRecordedBase: opts.LookupRecordedBase,
+		tempDir:            opts.TempDir,
+		log:                opts.Log,
+		logDir:             opts.LogDir,
+		heartbeat:          opts.Heartbeat,
 	}, nil
 }
 

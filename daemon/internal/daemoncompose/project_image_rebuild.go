@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
@@ -53,6 +54,15 @@ func newProjectImageRebuild(
 				return err
 			})
 			return recorded, err
+		},
+		LookupRecordedBase: func(ctx context.Context, ref string) (bool, error) {
+			found := false
+			err := st.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				_, found, err = tx.FindAdmittedAgentBaseByImage(ctx, domain.ImageRef(ref))
+				return err
+			})
+			return found, err
 		},
 		Registry:      registryMemory{memory: memory},
 		ManageBuilder: true,
@@ -253,6 +263,22 @@ func composeImageUpkeep(
 		}
 	}
 	upkeep.AdoptionPending = upkeep.PendingAdoption
+	// The agent base is one daemon-wide pointer built from the one repository
+	// the agent_base setting may name, the daemon's configured repository, so
+	// only that repository's upkeep keeps it. Another repository's upkeep has
+	// no keeper and leaves its image on the base it has. The daemon's builder
+	// builds agent bases too; a test double that cannot leaves it off.
+	if rebuild != nil && loop.RepositoryID == cfg.Claude.RepositoryID {
+		if builder, ok := rebuild.Builder.(engine.AgentBaseBuilder); ok {
+			upkeep.AgentBase = &engine.AgentBaseUpkeep{
+				Builder: builder, Source: agentBaseSourceSetting(st),
+				Repository: loop.Repo, HarnessBuild: agentbaseline.ClaudeCodeHarnessBuild,
+				LocalDigest: func(ctx context.Context, ref string) (string, error) {
+					return projectimage.InspectImageDigest(ctx, cfg.Claude.ContainerBin, ref)
+				},
+			}
+		}
+	}
 	return upkeep
 }
 

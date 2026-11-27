@@ -184,15 +184,18 @@ func (a appleBackend) Build(ctx context.Context, spec buildSpec) (err error) {
 	args = append(args,
 		"--build-arg", "HTTP_PROXY="+proxyURL,
 		"--build-arg", "HTTPS_PROXY="+proxyURL,
-		"--build-arg", "BASE_IMAGE="+spec.BaseRef,
-		"--build-arg", "BASE_DIGEST="+spec.BaseDigest,
-		"--build-arg", "PROJECT_REPOSITORY="+spec.Repository,
-		"--build-arg", "PROJECT_REPOSITORY_ID="+strconv.FormatInt(spec.RepositoryID, 10),
-		"--build-arg", "PROJECT_COMMIT="+spec.CommitSHA,
-		"--build-arg", "PROJECT_RECIPE_DIGEST="+string(spec.RecipeDigest),
-		"--tag", spec.LocalRef,
-		spec.ContextDir,
 	)
+	if !spec.AgentBase {
+		args = append(args,
+			"--build-arg", "BASE_IMAGE="+spec.BaseRef,
+			"--build-arg", "BASE_DIGEST="+spec.BaseDigest,
+			"--build-arg", "PROJECT_REPOSITORY="+spec.Repository,
+			"--build-arg", "PROJECT_REPOSITORY_ID="+strconv.FormatInt(spec.RepositoryID, 10),
+			"--build-arg", "PROJECT_COMMIT="+spec.CommitSHA,
+			"--build-arg", "PROJECT_RECIPE_DIGEST="+string(spec.RecipeDigest),
+		)
+	}
+	args = append(args, "--tag", spec.LocalRef, spec.ContextDir)
 	// A daemon build runs in the builder VM, started here at a declared size
 	// and stopped once the build returns, so no VM outlives the build and its
 	// probes boot theirs only after the builder's is gone. The build holds

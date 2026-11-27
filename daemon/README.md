@@ -3153,7 +3153,8 @@ freesided settings import -db "$DB" -settings "$ROOT/daemon/settings.json" \
   `seed_root`, `prompts`, `agent_tree`, `review`, `judgment`, `timeouts`,
   `manual_submission_config`, `build`, `macos_verification`,
   `cordoned_launches` (`max_concurrent`), `image_builds`
-  (`max_concurrent`), and `execution`; a project holds `repository`
+  (`max_concurrent`), `execution`, and `agent_base` (`repository_id`,
+  `repository`; Keep Project Images Current); a project holds `repository`
   (`repo`, `repository_id`, `base_ref`), `allowed_paths`,
   `approved_recipe`, `agent_image`, `recipe_binding`, `hand_back_label`,
   `writer_class`, and `enabled`. A value takes the fields its `settings.json` key
@@ -5533,25 +5534,29 @@ at the new head when nothing it covers changed there.
   the project image's baked mirrors and, as for a human, exits 1 until the
   regenerated files are committed. The recipe's `app generate` and
   `api digest` steps fail a change that skips it.
-- **Image changes:** a task may edit `images/`, but nothing in Freeside
-  builds or adopts an image from it (plan §11, revision 120). The recipe
-  checks an image change only through `TestHarnessBuildsMatchTheImagePins`
-  and `TestClaudeImageDisablesEveryBuiltinPlugin` in `scripts/check.sh
+- **Image changes:** a task may edit `images/`, and no task builds or
+  adopts the image it runs in (plan §11). The recipe checks an image
+  change only through `TestHarnessBuildsMatchTheImagePins` and
+  `TestClaudeImageDisablesEveryBuiltinPlugin` in `scripts/check.sh
   daemon`, which read the agent bases' CLI pins and the Claude base's
-  managed settings; nothing in a ward builds an image. A merged change
-  reaches use only when the operator runs the matching
-  `scripts/build-*-image.sh`, checks an agent base with
+  managed settings; nothing in a ward builds an image. With the instance's
+  `agent_base` section naming this repository, a merged change to
+  `images/agent-claude/` reaches use without the operator: once a daemon
+  carrying the same CLI pin is installed, upkeep builds, proves, and
+  admits the base and rebuilds the project image on it (Keep Project
+  Images Current). Every other image reaches use only when the operator
+  runs the matching `scripts/build-*-image.sh`, checks an agent base with
   `scripts/check-agent-image.sh`, and re-pins it in the deputy's settings:
   the exporter in `images.exporter`, and the reviewer's base in
   `images.review` (the Codex base unless `agent_tree.review_harness` is
-  `claude_code`). A new Claude base reaches a writer only through a
-  project image onboarded on it; `images.agent` only seeds an absent
-  admitted-image pointer, so setting the bare base there changes nothing
-  for an onboarded repository. Preflight refuses an agent image whose CLI
-  disagrees with the daemon's pin. A Claude CLI bump also needs the new
-  bundle's built-in plugins measured from the binary, which a writer's
-  room under `provider_only` egress can't fetch, and a live adapter
-  re-proof; both stay operator steps until agent-base upkeep (#2338).
+  `claude_code`). Without the section, a new Claude base reaches a writer
+  only through a project image onboarded on it; `images.agent` only seeds
+  an absent admitted-image pointer, so setting the bare base there changes
+  nothing for an onboarded repository. Preflight refuses an agent image
+  whose CLI disagrees with the daemon's pin. A Claude CLI bump also needs
+  the new bundle's built-in plugins measured from the binary, which a
+  writer's room under `provider_only` egress can't fetch, so the weekly
+  bump task opens only for a cordoned writer.
 
 ### Run An Unreleased Build With The Deputy
 
@@ -6619,6 +6624,67 @@ Upkeep waits for the turn with its one-hour bound paused. A publication
 rebuild that finds the turn held stays queued, as one that finds every slot
 held does. Under a raised limit, builds therefore overlap in their recipe
 reads and probes while their builder steps take turns.
+
+**Agent base.** When the instance's `agent_base` section names the
+daemon's configured repository, by ID and slug, each of that repository's
+passes first keeps the Claude agent base current (`docs/plan.md` §5.7,
+**Agent-base upkeep**). The admitted base is one pointer for the daemon,
+so only the configured repository's upkeep keeps it; another repository's
+upkeep leaves its image on the base it has. A pass reads `images/agent-claude/` at the tip: the directory's tree, and the
+`CLAUDE_CODE_VERSION` default of a Containerfile whose every image (a
+`FROM`, a `COPY` or `ADD --from`, a `RUN --mount` from) is digest pinned
+and that has no `# syntax` or `# escape` directive. A section naming
+another repository builds nothing and raises a fault. Otherwise one of
+three things happens:
+
+- **The admitted base is current.** It was built from the same tree and
+  pin, and its local tag, `freeside-agent-claude:admitted-` and the first
+  12 hex digits of its digest, still names it. Nothing builds.
+- **The tip pins a release this daemon doesn't.** The daemon compiles in
+  the CLI build it accepts (`agentbaseline.ClaudeCodeHarnessBuild`), so
+  nothing builds and the pass raises a fault that the base waits for a
+  daemon update. A merged bump takes effect once a daemon built at or
+  after the merge is installed.
+- **The source is new.** The pass builds the base behind the build proxy,
+  under a build slot, the builder VM's turn, and a memory reservation, and
+  proves it: the ward's allowlist on the local and the published image,
+  `claude --version` with no network equal to the pin, and managed
+  settings that disable every built-in plugin and that the agent user can
+  read. It publishes the base as `freeside-agent-claude` in the pointed-to
+  project image's registry, tags it locally, records it, and advances the
+  admitted agent-base pointer. The repository's other pass waits behind it
+  and finds the base admitted. A failed build raises a fault. One the
+  source caused (it isn't buildable, its install failed, or a probe refused
+  the image) isn't tried again for the same tree and pin until the daemon
+  restarts; a host fault or the one-hour bound is tried again at the next
+  pass.
+
+A pointed-to image on another base isn't current: the pass rebuilds it at
+the tip FROM the admitted base, through its local tag, under the same gate
+as any rebuild. The new image has no conformance proof yet, so an
+unattended writer start on it waits while the Claude adapter's proof runs,
+as for any new admitted image. A run's own publication rebuild still
+refuses a base change, so upkeep is the only path that moves the base.
+The admitted base applies only while the section names the repository it
+was built from and the base carries this daemon's pin. Without the section,
+while it names another repository, while the base carries another pin (as
+after an older daemon is installed), or before a base is admitted, upkeep
+runs as before and an image keeps the base it has. Agent-base faults join the pass's fault in the
+`image_upkeep_host_fault` item.
+
+**Bump schedule.** When a project on the configured repository takes
+manual submissions, the daemon arms `schedule-agent-base-bump`, a weekly
+trusted-config job, in the project that repository's maintenance tasks go
+to (as the repair task does). Each fire reads the `agent_base` section and
+opens nothing unless it names this daemon's repository. It also opens
+nothing when the project's `writer_class` isn't cordoned: the task's writer
+must reach the npm registry, which a warded writer can't, so the fire logs
+a warning. Otherwise it reads the release npm's `latest` tag names, and
+opens the fixed bump task, with a daemon origin, only when that is a plain
+release newer than both this daemon's pin and the pin at the tip that
+repository's upkeep last read. The registry's answer decides only whether a
+task opens, never what it asks. At most one bump task is open; a fire while
+one is open opens nothing.
 
 **Registry set.** Upkeep reads each repository's registry set from that
 repository's projects in the manual-submission config. A production driver

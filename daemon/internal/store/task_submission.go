@@ -49,22 +49,40 @@ INSERT INTO task_submission_commands
 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
 
 // ErrDaemonSubmissionUnsourced is returned (wrapped) when a daemon-origin
-// task submission does not name a recorded repair-class image upkeep refusal
-// for its project's repository.
-var ErrDaemonSubmissionUnsourced = errors.New("daemon-origin task submission names no repair-class image upkeep refusal for its project")
+// task submission does not name the source its kind requires: a recorded
+// repair-class image upkeep refusal for its project's repository, or an
+// agent_base_bump schedule occurrence and the bump task's fixed text.
+var ErrDaemonSubmissionUnsourced = errors.New("daemon-origin task submission names no source its kind accepts")
 
 // gateDaemonSubmissionSource is the trust gate for a daemon-origin
-// submission, run on every write and decode. Only project-image upkeep
-// submits one, and only for a refusal that needs a repository repair (plan
-// §5.7, Project-image upkeep), so the refusal record its SourceDigest names
-// must exist, be a repair, and name the repository of the submission's
-// project. The origin and source are body and column values, never trusted
-// on their own. A device submission passes through.
+// submission, run on every write and decode. The daemon submits two kinds
+// of task (plan §5.7), told apart by the command ID's namespace:
+//
+//   - Project-image upkeep's maintenance task, only for a refusal that
+//     needs a repository repair, so the refusal record its SourceDigest
+//     names must exist, be a repair, and name the repository of the
+//     submission's project.
+//   - The agent-base bump task, whose command ID names the schedule
+//     occurrence that opened it. The occurrence must be recorded for an
+//     agent_base_bump schedule. On write, SourceDigest must also be the
+//     digest of the task text this build fixes, so the task asks nothing
+//     else; decode leaves that check out, because a row keeps the text of
+//     the build that wrote it and a later build may word it differently.
+//
+// Any other daemon namespace is refused. The origin, command ID, and source
+// are body and column values, never trusted on their own. A device
+// submission passes through.
 func (tx *ReadTx) gateDaemonSubmissionSource(ctx context.Context, submission domain.TaskSubmission) error {
 	switch submission.Origin {
 	case domain.TaskSubmissionOriginDevice:
 		return nil
 	case domain.TaskSubmissionOriginDaemon:
+		if _, _, _, ok := domain.ParseAgentBaseBumpSubmissionIdentity(submission.CommandID); ok {
+			return tx.gateAgentBaseBumpSource(ctx, submission)
+		}
+		if !domain.IsImageUpkeepSubmission(submission.CommandID) {
+			return fmt.Errorf("command %q: %w", submission.CommandID, ErrDaemonSubmissionUnsourced)
+		}
 		refusal, err := tx.GetImageUpkeepRefusal(ctx, submission.SourceDigest)
 		if errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("source %q: %w", submission.SourceDigest, ErrDaemonSubmissionUnsourced)
@@ -86,6 +104,29 @@ func (tx *ReadTx) gateDaemonSubmissionSource(ctx context.Context, submission dom
 		return nil
 	}
 	return fmt.Errorf("origin %q: %w", submission.Origin, domain.ErrInvalidTaskSubmissionOrigin)
+}
+
+// gateAgentBaseBumpSource is gateDaemonSubmissionSource's check of a bump
+// submission.
+func (tx *ReadTx) gateAgentBaseBumpSource(ctx context.Context, submission domain.TaskSubmission) error {
+	scheduleID, generation, nominal, _ := domain.ParseAgentBaseBumpSubmissionIdentity(submission.CommandID)
+	if _, err := tx.GetScheduleOccurrence(ctx, scheduleID, generation, nominal); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("bump occurrence %s/%d: %w", scheduleID, generation, ErrDaemonSubmissionUnsourced)
+		}
+		return err
+	}
+	schedule, _, err := tx.GetScheduleSnapshot(ctx, scheduleID)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("bump schedule %s: %w", scheduleID, ErrDaemonSubmissionUnsourced)
+	}
+	if err != nil {
+		return err
+	}
+	if schedule.Kind != domain.ScheduleAgentBaseBump {
+		return fmt.Errorf("bump schedule %s of kind %q: %w", scheduleID, schedule.Kind, ErrDaemonSubmissionUnsourced)
+	}
+	return nil
 }
 
 // PutTaskSubmission write-once records one accepted submit_task command
@@ -131,12 +172,56 @@ func (tx *WriteTx) PutTaskSubmission(ctx context.Context, submission domain.Task
 	if err := tx.gateDaemonSubmissionSource(ctx, submission); err != nil {
 		return fmt.Errorf("put task submission %q: %w", submission.CommandID, err)
 	}
+	if _, _, _, bump := domain.ParseAgentBaseBumpSubmissionIdentity(submission.CommandID); bump &&
+		submission.Origin == domain.TaskSubmissionOriginDaemon &&
+		submission.SourceDigest != domain.AgentBaseBumpSourceDigest() {
+		return fmt.Errorf("put task submission %q: bump source %q: %w",
+			submission.CommandID, submission.SourceDigest, ErrDaemonSubmissionUnsourced)
+	}
 	if _, err := tx.tx.ExecContext(ctx, putTaskSubmissionSQL,
 		submission.CommandID, submission.Origin, submission.DeviceID, submission.ProjectID,
 		submission.TaskID, submission.SpecificationRunID, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put task submission %q: %w", submission.CommandID, err)
 	}
 	return nil
+}
+
+// ListAgentBaseBumpSubmissions returns the project's agent-base bump
+// submissions (domain.AgentBaseBumpSubmissionIdentity) in command-ID order,
+// each read through GetTaskSubmission, so each is gated as any read is.
+func (tx *ReadTx) ListAgentBaseBumpSubmissions(
+	ctx context.Context, projectID domain.ProjectID,
+) ([]domain.TaskSubmission, error) {
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT command_id FROM task_submission_commands
+WHERE origin = ? AND project_id = ? AND substr(command_id, 1, ?) = ?
+ORDER BY command_id`,
+		domain.TaskSubmissionOriginDaemon, projectID,
+		len(domain.AgentBaseBumpSubmissionPrefix), domain.AgentBaseBumpSubmissionPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list agent base bump submissions: %w", err)
+	}
+	var commandIDs []string
+	for rows.Next() {
+		var commandID string
+		if err := rows.Scan(&commandID); err != nil {
+			_ = rows.Close() // the scan error is the one returned
+			return nil, fmt.Errorf("list agent base bump submissions: %w", err)
+		}
+		commandIDs = append(commandIDs, commandID)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("list agent base bump submissions: %w", err)
+	}
+	submissions := make([]domain.TaskSubmission, 0, len(commandIDs))
+	for _, commandID := range commandIDs {
+		submission, err := tx.GetTaskSubmission(ctx, commandID)
+		if err != nil {
+			return nil, err
+		}
+		submissions = append(submissions, submission)
+	}
+	return submissions, nil
 }
 
 // GetTaskSubmission returns the recorded submission for a command id.

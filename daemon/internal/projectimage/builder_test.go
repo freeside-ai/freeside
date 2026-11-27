@@ -104,7 +104,9 @@ type fakeBackend struct {
 	// recipeOutput, when set, is the failing recipe command's whole output.
 	recipeOutput []byte
 	// runFault, when it holds for a run, makes the runtime fail to run it.
-	runFault      func(runSpec) bool
+	runFault func(runSpec) bool
+	// runAnswer, when it answers a run, replaces the fake's default result.
+	runAnswer     func(runSpec) (runResult, bool)
 	preflightExit int
 	buildErr      error
 	// buildDelay is how long the fake build takes.
@@ -192,6 +194,11 @@ func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 	f.runs = append(f.runs, spec)
 	if f.runFault != nil && f.runFault(spec) {
 		return runResult{}, errors.New("runtime did not run the container")
+	}
+	if f.runAnswer != nil {
+		if result, ok := f.runAnswer(spec); ok {
+			return result, nil
+		}
 	}
 	if slices.Equal(spec.Argv, []string{"true"}) {
 		return runResult{ExitCode: f.preflightExit}, nil

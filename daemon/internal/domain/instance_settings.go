@@ -48,6 +48,10 @@ const (
 	// at once (#3210). Unset reads as one. The daemon reads it only at
 	// start.
 	InstanceSectionImageBuilds InstanceSettingsSection = "image_builds"
+	// InstanceSectionAgentBase names the one repository the daemon may build
+	// the Claude agent base from (plan §5.7, Agent-base upkeep). Unset, no
+	// base is built and project images keep the base they have.
+	InstanceSectionAgentBase InstanceSettingsSection = "agent_base"
 )
 
 // AllInstanceSettingsSections lists every InstanceSettingsSection in the
@@ -57,7 +61,7 @@ var AllInstanceSettingsSections = []InstanceSettingsSection{
 	InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 	InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
 	InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
-	InstanceSectionImageBuilds,
+	InstanceSectionImageBuilds, InstanceSectionAgentBase,
 }
 
 func (s InstanceSettingsSection) valid() bool {
@@ -66,7 +70,7 @@ func (s InstanceSettingsSection) valid() bool {
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionJudgment, InstanceSectionTimeouts,
 		InstanceSectionManualSubmissionConfig, InstanceSectionBuild, InstanceSectionMacosVerification,
 		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
-		InstanceSectionImageBuilds:
+		InstanceSectionImageBuilds, InstanceSectionAgentBase:
 		return true
 	default:
 		return false
@@ -87,7 +91,7 @@ func (s InstanceSettingsSection) Optional() bool {
 	switch s {
 	case InstanceSectionJudgment, InstanceSectionManualSubmissionConfig, InstanceSectionMacosVerification,
 		InstanceSectionExecutionPause, InstanceSectionCordonedLaunches, InstanceSectionExecution,
-		InstanceSectionImageBuilds:
+		InstanceSectionImageBuilds, InstanceSectionAgentBase:
 		return true
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
@@ -287,6 +291,15 @@ type EnabledSettings struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AgentBaseSettings is the agent_base section's value: the forge identity
+// and slug of the repository whose AgentBaseSourceDir defines the Claude
+// agent base. The ID is the binding; the slug is what the daemon compares
+// with its own project's repository and shows the operator.
+type AgentBaseSettings struct {
+	RepositoryID int64  `json:"repository_id"`
+	Repository   string `json:"repository"`
+}
+
 // InstanceSettings is every instance section's value. An optional section is
 // a pointer, nil when unset. The rules here are shape rules only; the rules
 // of the packages that use a value (the allowed review auth modes, the build
@@ -307,6 +320,7 @@ type InstanceSettings struct {
 	CordonedLaunches       *CordonedLaunchSettings    `json:"cordoned_launches"`
 	Execution              *EnabledSettings           `json:"execution"`
 	ImageBuilds            *ImageBuildSettings        `json:"image_builds"`
+	AgentBase              *AgentBaseSettings         `json:"agent_base"`
 }
 
 // Validate checks every section that is set and that every required one
@@ -340,6 +354,8 @@ func (s InstanceSettings) unset(section InstanceSettingsSection) bool {
 		return s.Execution == nil
 	case InstanceSectionImageBuilds:
 		return s.ImageBuilds == nil
+	case InstanceSectionAgentBase:
+		return s.AgentBase == nil
 	case InstanceSectionHostTools, InstanceSectionImages, InstanceSectionSeedRoot, InstanceSectionPrompts,
 		InstanceSectionAgentTree, InstanceSectionReview, InstanceSectionTimeouts, InstanceSectionBuild:
 		return false
@@ -424,6 +440,14 @@ func (s InstanceSettings) ValidateSection(section InstanceSettingsSection) error
 		}
 		if s.ImageBuilds.MaxConcurrent < 1 {
 			return fmt.Errorf("image_builds.max_concurrent %d must be at least 1", s.ImageBuilds.MaxConcurrent)
+		}
+		return nil
+	case InstanceSectionAgentBase:
+		if s.AgentBase == nil {
+			return errors.New("agent_base is required")
+		}
+		if err := validAgentBaseSource(s.AgentBase.RepositoryID, s.AgentBase.Repository); err != nil {
+			return fmt.Errorf("agent_base: %w", err)
 		}
 		return nil
 	}
@@ -512,6 +536,8 @@ func (s *InstanceSettings) field(section InstanceSettingsSection) any {
 		return &s.Execution
 	case InstanceSectionImageBuilds:
 		return &s.ImageBuilds
+	case InstanceSectionAgentBase:
+		return &s.AgentBase
 	}
 	return nil
 }
@@ -696,6 +722,14 @@ func (r InstanceSettingsRecord) CordonedLaunches() (*CordonedLaunchSettings, err
 func (r InstanceSettingsRecord) ExecutionEnabled() (bool, error) {
 	settings, err := r.sectionAlone(InstanceSectionExecution)
 	return settings.Execution != nil && settings.Execution.Enabled, err
+}
+
+// AgentBase is the agent-base source the record names, or nil when none is
+// set. It reads only that section, so agent-base upkeep works on a record
+// that lacks the sections a run needs.
+func (r InstanceSettingsRecord) AgentBase() (*AgentBaseSettings, error) {
+	settings, err := r.sectionAlone(InstanceSectionAgentBase)
+	return settings.AgentBase, err
 }
 
 // sectionAlone decodes and validates one section of the record into an

@@ -5519,6 +5519,7 @@ components:
         - doctor
         - janitor
         - image_upkeep
+        - agent_base_bump
         - unknown
 
     ElapsedDeadline:
@@ -7301,10 +7302,14 @@ components:
       type: string
       description: >
         Who recorded a task submission (mirrors domain.TaskSubmissionOrigin).
-        device is a paired device's submit_task command. daemon is project-image
-        upkeep's repair task, which the daemon accepts only against a recorded
-        repair-class upkeep refusal for the project's repository and re-checks
-        whenever it reads the record back. Widening it is a contract change.
+        device is a paired device's submit_task command. daemon is a task the
+        daemon opened itself: project-image upkeep's repair task, which it
+        accepts only against a recorded repair-class upkeep refusal for the
+        project's repository, or the agent-base bump task, which it accepts
+        only against a recorded agent_base_bump schedule occurrence, and
+        against its fixed text when first recorded. It re-checks the refusal
+        or the occurrence whenever it reads the record back.
+        Widening it is a contract change.
       enum: [device, daemon, unknown]
 
     TaskSubmissionRecord:

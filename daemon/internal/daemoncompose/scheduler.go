@@ -292,6 +292,28 @@ func newClaudeScheduler(
 			return failures.consumption(domain.ScheduleImageUpkeep, nil)
 		}},
 	}
+	// The bump kind registers even when this start composed no bump (no
+	// manual project), because a schedule an earlier start armed persists
+	// and still fires; that fire opens nothing.
+	bump := wiring.agentBaseBump
+	kinds[domain.ScheduleAgentBaseBump] = scheduler.Registration{Handle: func(
+		ctx context.Context, event domain.ScheduleEvent, _ domain.Schedule,
+	) (scheduler.Consumption, error) {
+		if bump == nil {
+			upkeepLogger.Info("agent base bump: no project takes manual submissions; opened no task")
+			return failures.consumption(domain.ScheduleAgentBaseBump, nil)
+		}
+		// As with upkeep, a failed fire is logged and the next retries;
+		// nothing was opened, and the pin stays where it is.
+		if err := bump.handle(ctx, event); err != nil {
+			if ctx.Err() != nil {
+				return scheduler.Consumption{}, err
+			}
+			upkeepLogger.Warn("scheduled agent base bump failed", "error", err)
+			return scheduler.Consumption{Outcome: domain.OutcomeObserveFailed}, nil
+		}
+		return failures.consumption(domain.ScheduleAgentBaseBump, nil)
+	}}
 	// The installation-poll kind registers with the daemon too: a pending
 	// intent recorded by the onboarding CLI keeps its durable observation
 	// (and its expiry gets recorded) even when the operator never resumes.
@@ -307,20 +329,30 @@ func newClaudeScheduler(
 // a restart preserves cadence (a missed fire coalesces with a recorded gap
 // rather than resetting); a reconfigured interval re-arms under the next
 // generation.
-func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg ClaudeStartupConfig) error {
+func armTrustedConfigJobs(
+	ctx context.Context, sched *scheduler.Scheduler, cfg ClaudeStartupConfig, wiring *ClaudeComposition,
+) error {
 	now := time.Now().UTC()
-	for _, job := range []struct {
+	type trustedJob struct {
 		id       domain.ScheduleID
 		kind     domain.ScheduleKind
 		interval time.Duration
-	}{
+	}
+	jobs := []trustedJob{
 		{DoctorScheduleID, domain.ScheduleDoctor, cfg.DoctorInterval},
 		{janitorScheduleID, domain.ScheduleJanitor, defaultJanitorInterval},
 		// Upkeep's start pass runs beside startup rather than before it, and
 		// its scheduled pass is the retry for a host fault, at the doctor's
 		// cadence.
 		{imageUpkeepScheduleID, domain.ScheduleImageUpkeep, cfg.DoctorInterval},
-	} {
+	}
+	// The bump is armed only where its handler is registered. Whether a fire
+	// opens a task is read at the fire (agentBaseBump.handle), so a setting
+	// change takes effect without a restart.
+	if wiring != nil && wiring.agentBaseBump != nil {
+		jobs = append(jobs, trustedJob{agentBaseBumpScheduleID, domain.ScheduleAgentBaseBump, agentBaseBumpInterval})
+	}
+	for _, job := range jobs {
 		seconds := int64(job.interval / time.Second)
 		schedule, err := domain.NewSchedule(domain.ScheduleInput{
 			ID: job.id, ProjectID: SchedulerSystemProjectID, Kind: job.kind,

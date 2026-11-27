@@ -26,8 +26,8 @@ import (
 const settingsRoute = "/settings"
 
 // settingsTakeEffect is when a section the installed daemon composes from at
-// start applies: every instance section but the cordoned launch cap, and
-// the project's agent_image and enabled.
+// start applies: every instance section but the cordoned launch cap and the
+// agent-base source, and the project's agent_image and enabled.
 const settingsTakeEffect = "at the daemon's next start"
 
 // nextAdmissionTakeEffect is when a section the admitting transaction reads
@@ -51,11 +51,18 @@ const repositoryTakeEffect = nextGateTakeEffect + "; the tip watch and readiness
 const recipeTakeEffect = nextGateTakeEffect + "; work on an image built from the old recipe blocks at publication, " +
 	"and readiness follows at the daemon's next start"
 
+// nextUpkeepTakeEffect is when the agent-base source applies: image upkeep
+// reads it from the stored record on each pass (#2338).
+const nextUpkeepTakeEffect = "at the next image upkeep pass"
+
 // settingsSetTakesEffect is when a set of the named section applies.
 func settingsSetTakesEffect(project domain.ProjectID, section string) string {
 	if project == "" {
-		if section == string(domain.InstanceSectionCordonedLaunches) {
+		switch section {
+		case string(domain.InstanceSectionCordonedLaunches):
 			return nextAdmissionTakeEffect
+		case string(domain.InstanceSectionAgentBase):
+			return nextUpkeepTakeEffect
 		}
 		return settingsTakeEffect
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // gitRunner runs git plumbing against the daemon-owned checkout under
@@ -110,6 +111,30 @@ const (
 	// blobTooLarge: a blob beyond the read cap; content not read.
 	blobTooLarge
 )
+
+// treeAt lists one path in commitSHA's tree and returns its object ID when
+// it is a tree, reusing blobAt's states: present for a tree, absent for no
+// entry, and not regular for any other entry. commitSHA and path are
+// daemon-supplied, never candidate bytes.
+func (g *gitRunner) treeAt(ctx context.Context, commitSHA, path string) (string, blobState, error) {
+	out, err := g.run(ctx, nil, "ls-tree", "-z", "--full-tree", commitSHA, "--", path)
+	if err != nil {
+		return "", blobAbsent, err
+	}
+	rec, _, _ := strings.Cut(string(out), "\x00")
+	if rec == "" {
+		return "", blobAbsent, nil
+	}
+	meta, name, ok := strings.Cut(rec, "\t")
+	fields := strings.Fields(meta)
+	if !ok || len(fields) != 3 || name != path {
+		return "", blobAbsent, fmt.Errorf("unparseable ls-tree record %q: %w", rec, ErrGitPlumbing)
+	}
+	if fields[0] != "040000" || fields[1] != "tree" || !pathfold.ValidSHA1Hex(fields[2]) {
+		return "", blobNotRegular, nil
+	}
+	return fields[2], blobPresent, nil
+}
 
 // blobAt reads the regular blob at path in commitSHA's tree, bounded by
 // max bytes. commitSHA and path are daemon-supplied (validated
